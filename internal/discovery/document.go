@@ -89,6 +89,19 @@ type Document struct {
 	// "request_uri" (JAR). It is false unless JAR is enabled.
 	RequestURIParameterSupported bool `json:"request_uri_parameter_supported"`
 
+	// RequireRequestURIRegistration reports whether the OP requires
+	// every "request_uri" value to appear in the client's preregistered
+	// allowlist. The library enforces this unconditionally when JAR is
+	// enabled (FAPI 2.0 Message Signing posture); the field is true
+	// only when JAR is on so RPs can plan accordingly.
+	RequireRequestURIRegistration bool `json:"require_request_uri_registration,omitempty"`
+
+	// RequestObjectSigningAlgValuesSupported lists the JWS alg values
+	// the OP accepts on a JAR request object (RFC 9101 §10.1). Only
+	// emitted when the JAR feature is enabled; the list mirrors the
+	// project-wide allow-list.
+	RequestObjectSigningAlgValuesSupported []string `json:"request_object_signing_alg_values_supported,omitempty"`
+
 	// RequirePushedAuthorizationRequests reports whether the OP requires
 	// /par for every authorization request (FAPI 2.0 mandates it).
 	RequirePushedAuthorizationRequests bool `json:"require_pushed_authorization_requests,omitempty"`

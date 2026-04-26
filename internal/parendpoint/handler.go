@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -93,6 +94,14 @@ type Deps struct {
 	// TTL overrides the lifetime of issued request_uri values. Zero or
 	// negative falls back to [DefaultTTL].
 	TTL time.Duration
+
+	// JAR, when non-nil, makes the PAR endpoint accept a "request"
+	// parameter (RFC 9101 §6) inside the request body. The verifier
+	// merges the request object's claims onto the wire form before
+	// the standard PAR validation path. A nil value rejects "request"
+	// with invalid_request_object; "request_uri" inside a /par body
+	// is always rejected per RFC 9126 §3.
+	JAR *jar.Verifier
 }
 
 // Handler returns the HTTP handler the OP mounts at its PAR endpoint. The

@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -176,7 +177,9 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	if err := mountAuthorizeHandlers(mux, cfg, scopes, keySet); err != nil {
 		return nil, err
 	}
-	mountPAREndpoint(mux, cfg, scopes)
+	if err := mountPAREndpoint(mux, cfg, scopes); err != nil {
+		return nil, err
+	}
 	mountRegistrationEndpoint(mux, cfg, scopes)
 	return mux, nil
 }
@@ -230,6 +233,37 @@ func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "mTLS verifier construction failed",
+			Cause:       err,
+		}
+	}
+	return v, nil
+}
+
+// buildJARVerifier constructs the JAR verifier when the [feature.JAR]
+// flag is enabled. The shape mirrors [buildDPoPVerifier] /
+// [buildMTLSVerifier]: nil verifier means "feature off" everywhere
+// downstream, and the (*jar.Verifier, error) signature returns
+// (nil, nil) on the "feature off" path on purpose.
+//
+// The verifier uses the default in-process JWKS resolver, which pulls
+// inline JWKs from [op/store.Client.JWKs] first and falls back to
+// [op/store.Client.JWKsURI] (with hardened HTTP fetch + caching) when
+// the inline value is absent.
+//
+//nolint:nilnil // (nil, nil) is the documented "JAR not enabled" signal.
+func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
+	if !featureEnabled(cfg.features, feature.JAR) {
+		return nil, nil
+	}
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:   cfg.issuer,
+		Resolver: jar.NewDefaultResolver(cfg.clock),
+		Clock:    cfg.clock,
+	})
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "JAR verifier construction failed",
 			Cause:       err,
 		}
 	}
@@ -357,6 +391,7 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 		DefaultACRValues:         m.DefaultACRValues,
 		InitiateLoginURI:         m.InitiateLoginURI,
 		RequestURIs:              m.RequestURIs,
+		RequestObjectSigningAlg:  m.RequestObjectSigningAlg,
 	}
 }
 
@@ -364,9 +399,13 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 // is enabled. Without the flag the route is absent — discovery already
 // gates the advertisement on the same flag, so the OP cannot tell clients
 // the endpoint exists while quietly serving 404.
-func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) {
+func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) error {
 	if !featureEnabled(cfg.features, feature.PAR) {
-		return
+		return nil
+	}
+	jarVerifier, err := buildJARVerifier(cfg)
+	if err != nil {
+		return err
 	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
@@ -376,8 +415,10 @@ func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Reg
 			PARs:    cfg.store.PushedAuthRequests(),
 			Scopes:  scopes,
 			Clock:   cfg.clock,
+			JAR:     jarVerifier,
 		}),
 	)
+	return nil
 }
 
 // featureEnabled reports whether flag is in the configured feature list.
@@ -401,6 +442,10 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		return nil
 	}
 	jarmSigner, err := buildJARMSigner(cfg, keySet)
+	if err != nil {
+		return err
+	}
+	jarVerifier, err := buildJARVerifier(cfg)
 	if err != nil {
 		return err
 	}
@@ -461,6 +506,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		Interactions:    cfg.store.Interactions(),
 		PARs:            authorizePARStore(cfg),
 		JARM:            jarmSigner,
+		JAR:             jarVerifier,
 		Sessions:        sessMgr,
 		CookieCodec:     cookieCodec,
 		CSRF:            csrfSigner,

@@ -8,11 +8,12 @@ import (
 // RFC 6749 §5.2 wire codes the handler emits. The list is closed; ad-hoc
 // codes are forbidden so the discoverable error surface stays auditable.
 const (
-	errInvalidRequest     = "invalid_request"
-	errInvalidClient      = "invalid_client"
-	errUnauthorizedClient = "unauthorized_client"
-	errInvalidScope       = "invalid_scope"
-	errServerError        = "server_error"
+	errInvalidRequest       = "invalid_request"
+	errInvalidClient        = "invalid_client"
+	errUnauthorizedClient   = "unauthorized_client"
+	errInvalidScope         = "invalid_scope"
+	errServerError          = "server_error"
+	errInvalidRequestObject = "invalid_request_object"
 )
 
 // errorResponse is the JSON envelope the PAR endpoint returns for every

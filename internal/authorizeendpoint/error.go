@@ -20,6 +20,8 @@ const (
 	errUnsupportedResponseType  = "unsupported_response_type"
 	errUnsupportedResponseMode  = "unsupported_response_mode"
 	errInvalidScope             = "invalid_scope"
+	errInvalidRequestObject     = "invalid_request_object"
+	errInvalidRequestURI        = "invalid_request_uri"
 )
 
 // errorResponse mirrors the token endpoint's failure envelope so embedders

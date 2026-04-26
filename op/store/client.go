@@ -183,6 +183,13 @@ type Client struct {
 	// values the client may reference in authorization requests
 	// (OIDC Dynamic Client Registration 1.0 §2).
 	RequestURIs []string
+
+	// RequestObjectSigningAlg restricts the JWS "alg" the client may
+	// use when signing authorization request objects (RFC 9101 §4 /
+	// OIDC Dynamic Client Registration 1.0 §2). Empty means "any alg
+	// the OP allows for request objects." When non-empty the verifier
+	// rejects request objects whose header alg does not match.
+	RequestObjectSigningAlg string
 }
 
 // ClientStore is the read-only contract every OP backend MUST satisfy.

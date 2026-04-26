@@ -62,12 +62,11 @@ func resolvePARIfNeeded(
 		return nil, false
 	}
 	if !strings.HasPrefix(uri, parRequestURIPrefix) {
-		// JAR's request_uri parameter is not implemented yet. Surface
-		// invalid_request_uri so callers see a stable wire code; the
-		// follow-up that adds JAR will widen this branch.
-		// TODO(jar): RFC 9101 request_uri support.
-		renderAuthorizeError(w, authorize.ErrInvalidRequestURI)
-		return nil, true
+		// Not a PAR URN: leave the value intact so the downstream JAR
+		// consumer can pick it up (a non-PAR request_uri is a JAR
+		// reference per RFC 9101 §5.2.2). When JAR is also disabled,
+		// the JAR consumer surfaces invalid_request itself.
+		return nil, false
 	}
 	if deps.PARs == nil {
 		renderAuthorizeError(w, errPARDisabled)

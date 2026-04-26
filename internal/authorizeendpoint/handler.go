@@ -6,6 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
@@ -87,6 +88,13 @@ type Deps struct {
 	// and emitted as a plain redirect (success / error). The library
 	// wires this only when the [feature.JARM] flag is enabled.
 	JARM *jarm.Signer
+
+	// JAR is the verifier for RFC 9101 signed authorization requests.
+	// A nil value means "feature off": "request" / "request_uri"
+	// parameters at /authorize are rejected with invalid_request and
+	// the corresponding metadata is suppressed in discovery. The
+	// library wires this only when the [feature.JAR] flag is enabled.
+	JAR *jar.Verifier
 
 	// Sessions is the chooser-group session manager. The handler reads
 	// the active session via [sessions.Manager.Resolve] before deciding

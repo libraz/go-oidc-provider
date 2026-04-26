@@ -163,6 +163,21 @@ var (
 	// "form_post.jwt", "jwt"}; anything else fires this sentinel. Maps
 	// to "unsupported_response_mode".
 	ErrResponseModeUnsupported = newErr("unsupported_response_mode", "response_mode is not supported")
+
+	// ErrRequestAndRequestURI indicates the wire form carried both
+	// "request" and "request_uri". RFC 9101 §6.1 forbids the
+	// combination; the OP cannot tell which envelope is authoritative.
+	// Maps to invalid_request and is NOT redirect-safe (no trusted
+	// redirect target yet).
+	ErrRequestAndRequestURI = newErr("invalid_request", "request and request_uri are mutually exclusive")
+
+	// ErrRequestObjectInvalid indicates a structural problem with the
+	// JAR "request" parameter (typically malformed JWT). The HTTP
+	// layer maps richer JAR-specific errors via the [internal/jar]
+	// sentinels; this validator-level sentinel exists so the parser
+	// can surface bare empty / non-JWS values uniformly. Maps to
+	// invalid_request_object.
+	ErrRequestObjectInvalid = newErr("invalid_request_object", "request object is malformed")
 )
 
 // IsRedirectSafe reports whether err arose AFTER redirect_uri validation
@@ -182,7 +197,8 @@ func IsRedirectSafe(err error) bool {
 		return false
 	}
 	switch e {
-	case ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid, ErrInvalidRequestURI:
+	case ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid, ErrInvalidRequestURI,
+		ErrRequestAndRequestURI, ErrRequestObjectInvalid:
 		return false
 	default:
 		return true

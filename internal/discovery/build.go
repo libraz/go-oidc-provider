@@ -99,6 +99,18 @@ func Build(in Input) Document {
 	if in.Features.JAR {
 		doc.RequestParameterSupported = true
 		doc.RequestURIParameterSupported = true
+		// RFC 9101 §5.2.2 leaves the registration policy to the OP;
+		// the library is strict (FAPI 2.0 Message Signing posture)
+		// and refuses any request_uri the client has not preregistered.
+		doc.RequireRequestURIRegistration = true
+		// RFC 9101 §10.1: advertise the JWS alg values the verifier
+		// accepts on request objects. The list mirrors the project-
+		// wide allow-list ([internal/jose]); operators that want to
+		// pin a narrower set per-client use
+		// [op/store.Client.RequestObjectSigningAlg].
+		doc.RequestObjectSigningAlgValuesSupported = []string{
+			"RS256", "PS256", "ES256", "EdDSA",
+		}
 	}
 	if in.Features.DPoP {
 		// RFC 9449 §5.1: emit the alg values the OP accepts on

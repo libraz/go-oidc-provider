@@ -49,6 +49,7 @@ type ClientMetadata struct {
 	DefaultACRValues         []string
 	InitiateLoginURI         string
 	RequestURIs              []string
+	RequestObjectSigningAlg  string
 }
 
 // metadataWire is the JSON shape RFC 7591 §2 / OIDC Dynamic Client
@@ -78,6 +79,7 @@ type metadataWire struct {
 	DefaultACRValues         []string        `json:"default_acr_values,omitempty"`
 	InitiateLoginURI         string          `json:"initiate_login_uri,omitempty"`
 	RequestURIs              []string        `json:"request_uris,omitempty"`
+	RequestObjectSigningAlg  string          `json:"request_object_signing_alg,omitempty"`
 
 	// SoftwareStatement is parsed only so the handler can detect its
 	// presence and reject with invalid_software_statement; v1.0 does
@@ -135,6 +137,7 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		DefaultACRValues:         cloneStrings(w.DefaultACRValues),
 		InitiateLoginURI:         w.InitiateLoginURI,
 		RequestURIs:              cloneStrings(w.RequestURIs),
+		RequestObjectSigningAlg:  w.RequestObjectSigningAlg,
 	}
 	extras := metadataExtras{
 		SoftwareStatement: w.SoftwareStatement,

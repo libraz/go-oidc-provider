@@ -187,6 +187,12 @@ type ClientMetadata struct {
 	// RequestURIs lists the request_uri values the client pre-registers
 	// for JAR (RFC 9101).
 	RequestURIs []string
+
+	// RequestObjectSigningAlg is the JWS "alg" the client commits to
+	// using when it signs authorization request objects (RFC 9101 §4 /
+	// OIDC Dynamic Client Registration 1.0 §2). Empty leaves the choice
+	// to the OP's allow-list.
+	RequestObjectSigningAlg string
 }
 
 // InitialAccessTokenSpec configures the IAT issued by

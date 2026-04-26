@@ -94,11 +94,16 @@ func extractAuthorizeValues(r *http.Request) (url.Values, error) {
 	return r.URL.Query(), nil
 }
 
-// resolveAuthorizeRequest is the parse + PAR-consumption gate. When the
-// request carries a recognised PAR request_uri the parameters are sourced
-// from the persisted record (and every other parameter except client_id
-// is ignored per RFC 9126 §2.3); otherwise the function delegates to
-// [authorize.ParseValues] over the request's own values.
+// resolveAuthorizeRequest is the parse + PAR / JAR-consumption gate.
+// The order is:
+//
+//  1. PAR: a "request_uri" matching the urn:ietf:params:oauth:request_uri:
+//     prefix is consumed from the persisted record (RFC 9126 §2.3) and
+//     every other parameter except client_id is ignored.
+//  2. JAR: a "request" parameter or a non-PAR "request_uri" is verified
+//     and merged onto the wire values per RFC 9101 §6.1; the merged
+//     values are then re-parsed.
+//  3. Bare wire form: the values feed straight to [authorize.ParseValues].
 //
 // The returned bool reports whether processing should continue: false
 // means the function already wrote the response.
@@ -113,6 +118,13 @@ func resolveAuthorizeRequest(
 		return nil, false
 	} else if parReq != nil {
 		return parReq, true
+	}
+	merged, jarHandled, jarStop := resolveJARRequestIfNeeded(r.Context(), w, deps, queryClientID, values)
+	if jarStop {
+		return nil, false
+	}
+	if jarHandled {
+		values = merged
 	}
 	req, err := authorize.ParseValues(values)
 	if err != nil {

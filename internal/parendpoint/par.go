@@ -12,6 +12,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -50,6 +51,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	values := stripAuthFields(r.PostForm)
+	values, ok = consumeJARRequestObject(r.Context(), w, deps, client, values)
+	if !ok {
+		return
+	}
 	req, ok := parseAuthorizeRequest(w, values, client.ID)
 	if !ok {
 		return
@@ -59,6 +64,92 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	persist(r.Context(), w, deps, req)
+}
+
+// consumeJARRequestObject inspects the (post-strip) PAR form values for
+// a "request" parameter. When present it verifies the JWT against the
+// authenticated client and merges the claims onto the form values per
+// RFC 9101 §6.1. A nil [Deps.JAR] means the OP has not enabled JAR; the
+// request is rejected with invalid_request_object.
+//
+// "request_uri" inside a /par body is forbidden by RFC 9126 §3 — the
+// downstream parser ([parseAuthorizeRequest]) enforces that rule, so
+// this function does not need to repeat it.
+//
+// The returned bool is false when the function wrote the response; the
+// caller then stops processing.
+func consumeJARRequestObject(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	client *store.Client,
+	values url.Values,
+) (url.Values, bool) {
+	raw := values.Get("request")
+	if raw == "" {
+		return values, true
+	}
+	if deps.JAR == nil {
+		writeError(w, http.StatusBadRequest, errInvalidRequestObject,
+			"request is not supported by this OP")
+		return nil, false
+	}
+	obj, err := deps.JAR.Verify(ctx, raw, client.ID, client)
+	if err != nil {
+		writeJARError(w, err)
+		return nil, false
+	}
+	merged, err := jar.Merge(values, obj)
+	if err != nil {
+		writeJARError(w, err)
+		return nil, false
+	}
+	return merged, true
+}
+
+// writeJARError translates a [jar] sentinel into the OAuth wire
+// envelope. The taxonomy mirrors the authorize endpoint (alg /
+// signature / claim failures map to invalid_request_object;
+// client_id mismatches map to invalid_request) so embedders see a
+// uniform shape across the two surfaces.
+func writeJARError(w http.ResponseWriter, err error) {
+	if errors.Is(err, jar.ErrClientIDMismatch) {
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "client_id mismatch in request object")
+		return
+	}
+	writeError(w, http.StatusBadRequest, errInvalidRequestObject, jarDescriptionFor(err))
+}
+
+// jarDescriptionFor returns a short description for a JAR sentinel.
+// The catalogue mirrors the authorize endpoint's helper; duplicated
+// here so the parendpoint package does not import authorizeendpoint.
+func jarDescriptionFor(err error) string {
+	switch {
+	case errors.Is(err, jar.ErrAlgNotAllowed):
+		return "request object alg is not allowed"
+	case errors.Is(err, jar.ErrSigInvalid):
+		return "request object signature is invalid"
+	case errors.Is(err, jar.ErrIssMismatch):
+		return "request object iss does not match client_id"
+	case errors.Is(err, jar.ErrAudMismatch):
+		return "request object aud does not match issuer"
+	case errors.Is(err, jar.ErrExpired):
+		return "request object is expired or too old"
+	case errors.Is(err, jar.ErrNotYetValid):
+		return "request object is not yet valid"
+	case errors.Is(err, jar.ErrNestedRequest):
+		return "request object must not contain nested request parameters"
+	case errors.Is(err, jar.ErrJWKSFetch):
+		return "client jwks fetch failed"
+	case errors.Is(err, jar.ErrNoMatchingJWK):
+		return "no matching client jwk"
+	case errors.Is(err, jar.ErrJWKSConfigured):
+		return "client has no JWKs or JWKsURI"
+	case errors.Is(err, jar.ErrParse):
+		return "request object is malformed"
+	default:
+		return "request object verification failed"
+	}
 }
 
 // stripAuthFields returns a copy of in with the credential-bearing keys

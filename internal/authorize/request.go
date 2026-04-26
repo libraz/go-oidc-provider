@@ -81,6 +81,19 @@ type Request struct {
 	// HTTP layer's responsibility — the [feature.JARM] gate is checked
 	// there because the validator does not know feature flags.
 	ResponseMode string
+
+	// RequestObject is the raw JAR "request" parameter (RFC 9101 §6.1)
+	// when the wire form carried one, before signature verification.
+	// The validator does not verify it — that requires JWKS access only
+	// available at the HTTP layer — but does enforce structural rules
+	// (mutually exclusive with RequestURI, non-empty when present).
+	RequestObject string
+
+	// RequestURI is the raw JAR "request_uri" parameter (RFC 9101 §5.2.2
+	// or RFC 9126 §2.2). The HTTP layer disambiguates between the JAR
+	// and PAR forms by inspecting the URN prefix; the validator only
+	// enforces that the value parses as a URI when present.
+	RequestURI string
 }
 
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
@@ -105,55 +118,11 @@ func ParseRequest(r *http.Request) (*Request, error) {
 // exported so tests and adjacent packages (PAR, JAR) can reuse the parser
 // without constructing a real *http.Request.
 func ParseValues(v url.Values) (*Request, error) {
-	clientID, err := singleValue(v, "client_id")
+	singles, err := parseSingleValues(v)
 	if err != nil {
 		return nil, err
 	}
-	responseType, err := singleValue(v, "response_type")
-	if err != nil {
-		return nil, err
-	}
-	redirectURI, err := singleValue(v, "redirect_uri")
-	if err != nil {
-		return nil, err
-	}
-	state, err := singleValue(v, "state")
-	if err != nil {
-		return nil, err
-	}
-	nonce, err := singleValue(v, "nonce")
-	if err != nil {
-		return nil, err
-	}
-	codeChallenge, err := singleValue(v, "code_challenge")
-	if err != nil {
-		return nil, err
-	}
-	codeChallengeMethod, err := singleValue(v, "code_challenge_method")
-	if err != nil {
-		return nil, err
-	}
-	loginHint, err := singleValue(v, "login_hint")
-	if err != nil {
-		return nil, err
-	}
-	responseMode, err := singleValue(v, "response_mode")
-	if err != nil {
-		return nil, err
-	}
-	scope, err := multiValue(v, "scope")
-	if err != nil {
-		return nil, err
-	}
-	promptRaw, err := singleEntry(v, "prompt")
-	if err != nil {
-		return nil, err
-	}
-	uiLocales, err := multiValue(v, "ui_locales")
-	if err != nil {
-		return nil, err
-	}
-	acrValues, err := multiValue(v, "acr_values")
+	multis, err := parseMultiValues(v)
 	if err != nil {
 		return nil, err
 	}
@@ -162,21 +131,88 @@ func ParseValues(v url.Values) (*Request, error) {
 		return nil, err
 	}
 	return &Request{
-		ClientID:            clientID,
-		ResponseType:        responseType,
-		RedirectURI:         redirectURI,
-		Scope:               dedupePreserve(strings.Fields(scope)),
-		State:               state,
-		Nonce:               nonce,
-		CodeChallenge:       codeChallenge,
-		CodeChallengeMethod: codeChallengeMethod,
-		Prompt:              splitPrompt(promptRaw),
+		ClientID:            singles["client_id"],
+		ResponseType:        singles["response_type"],
+		RedirectURI:         singles["redirect_uri"],
+		Scope:               dedupePreserve(strings.Fields(multis["scope"])),
+		State:               singles["state"],
+		Nonce:               singles["nonce"],
+		CodeChallenge:       singles["code_challenge"],
+		CodeChallengeMethod: singles["code_challenge_method"],
+		Prompt:              splitPrompt(multis["prompt"]),
 		MaxAge:              maxAge,
-		LoginHint:           loginHint,
-		UILocales:           strings.Fields(uiLocales),
-		ACRValues:           strings.Fields(acrValues),
-		ResponseMode:        responseMode,
+		LoginHint:           singles["login_hint"],
+		UILocales:           strings.Fields(multis["ui_locales"]),
+		ACRValues:           strings.Fields(multis["acr_values"]),
+		ResponseMode:        singles["response_mode"],
+		RequestObject:       singles["request"],
+		RequestURI:          singles["request_uri"],
 	}, nil
+}
+
+// singleParseFields is the closed list of single-valued parameters
+// [parseSingleValues] reads. Centralising the list keeps the parser
+// loop short enough to stay under the project complexity gate.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var singleParseFields = []string{
+	"client_id",
+	"response_type",
+	"redirect_uri",
+	"state",
+	"nonce",
+	"code_challenge",
+	"code_challenge_method",
+	"login_hint",
+	"response_mode",
+	"request",
+	"request_uri",
+}
+
+// parseSingleValues extracts every single-valued parameter from v,
+// surfacing [ErrDuplicateParameter] on the first conflict it finds.
+func parseSingleValues(v url.Values) (map[string]string, error) {
+	out := make(map[string]string, len(singleParseFields))
+	for _, name := range singleParseFields {
+		val, err := singleValue(v, name)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = val
+	}
+	return out, nil
+}
+
+// multiParseFields lists the multi-valued parameters [parseMultiValues]
+// reads. Each member is admitted at most once in the wire form
+// (multi-valued semantics live inside the value, not the [url.Values]
+// entry); the helpers below enforce that contract.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var multiParseFields = []string{"scope", "prompt", "ui_locales", "acr_values"}
+
+// parseMultiValues extracts every multi-valued parameter from v.
+// "scope" / "ui_locales" / "acr_values" are read via [multiValue] and
+// "prompt" is read via [singleEntry]; the difference is documented on
+// the helpers themselves.
+func parseMultiValues(v url.Values) (map[string]string, error) {
+	out := make(map[string]string, len(multiParseFields))
+	for _, name := range multiParseFields {
+		var (
+			val string
+			err error
+		)
+		if name == "prompt" {
+			val, err = singleEntry(v, name)
+		} else {
+			val, err = multiValue(v, name)
+		}
+		if err != nil {
+			return nil, err
+		}
+		out[name] = val
+	}
+	return out, nil
 }
 
 // Validate cross-checks the parsed [Request] against the registered client

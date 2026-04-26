@@ -152,6 +152,7 @@ func rotateAndUpdate(
 		DefaultACRValues:         slices.Clone(m.DefaultACRValues),
 		InitiateLoginURI:         m.InitiateLoginURI,
 		RequestURIs:              slices.Clone(m.RequestURIs),
+		RequestObjectSigningAlg:  m.RequestObjectSigningAlg,
 	}
 	if err := deps.Clients.UpdateClient(ctx, updated); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -263,5 +264,6 @@ func clientToResponse(c *store.Client, deps Deps, rotatedRAT string) registratio
 		DefaultACRValues:        slices.Clone(c.DefaultACRValues),
 		InitiateLoginURI:        c.InitiateLoginURI,
 		RequestURIs:             slices.Clone(c.RequestURIs),
+		RequestObjectSigningAlg: c.RequestObjectSigningAlg,
 	}
 }
