@@ -170,11 +170,13 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 		t.Fatalf("Do POST /interaction: %v", err)
 	}
 	defer postResp.Body.Close()
-	if postResp.StatusCode != http.StatusFound {
-		dump, _ := io.ReadAll(postResp.Body)
-		t.Fatalf("POST /interaction status=%d body=%s", postResp.StatusCode, dump)
+	finalResp := completeConsentIfPromptedPAR(t, client, tk.Server.URL+location.Path, tk.Issuer, csrfCookie.Value, postResp)
+	defer finalResp.Body.Close()
+	if finalResp.StatusCode != http.StatusFound {
+		dump, _ := io.ReadAll(finalResp.Body)
+		t.Fatalf("POST /interaction status=%d body=%s", finalResp.StatusCode, dump)
 	}
-	rpRedirect, err := postResp.Location()
+	rpRedirect, err := finalResp.Location()
 	if err != nil {
 		t.Fatalf("Location: %v", err)
 	}
@@ -335,6 +337,44 @@ func TestEndToEnd_PAR_DiscoveryAdvertisement(t *testing.T) {
 	if !strings.HasSuffix(endpoint, "/oidc/par") {
 		t.Errorf("PAR endpoint=%q does not match /oidc/par suffix", endpoint)
 	}
+}
+
+// completeConsentIfPromptedPAR submits the built-in consent screen
+// with every requested scope approved when prior is a consent prompt.
+// Returns prior unchanged when it is already a redirect or a non-
+// consent response.
+func completeConsentIfPromptedPAR(t testing.TB, client *http.Client, interactionURL, origin, csrf string, prior *http.Response) *http.Response {
+	t.Helper()
+	consent, env, err := testkit.IsConsentPrompt(prior)
+	if err != nil {
+		t.Fatalf("inspect consent prompt: %v", err)
+	}
+	if !consent {
+		return prior
+	}
+	stateRef, _ := env["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatal("consent prompt missing state_ref")
+	}
+	approved := approvedScopesFromPromptPAR(env)
+	return testkit.PostConsentApproval(t, client, interactionURL, origin, csrf, stateRef, approved)
+}
+
+// approvedScopesFromPromptPAR extracts the requested scope names from
+// the consent prompt envelope and returns them as a space-delimited
+// string.
+func approvedScopesFromPromptPAR(env map[string]any) string {
+	data, _ := env["data"].(map[string]any)
+	scopesAny, _ := data["Scopes"].([]any)
+	out := make([]string, 0, len(scopesAny))
+	for _, s := range scopesAny {
+		entry, _ := s.(map[string]any)
+		name, _ := entry["Name"].(string)
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // getAuthorize issues a GET /authorize with the supplied client_id and

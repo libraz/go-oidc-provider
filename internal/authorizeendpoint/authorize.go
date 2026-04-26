@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
@@ -229,7 +230,7 @@ func dispatchAuthorize(
 	case decisionInteractionRequired:
 		emitAuthorizeError(w, r, deps, req, errInteractionRequired, "interaction is required")
 	case decisionInteract:
-		startInteraction(w, r, deps, req, client, active, hint.prompt)
+		startInteraction(w, r, deps, req, client, active, hint.grant)
 	case decisionMint:
 		mintAndRedirect(w, r, deps, req, client, active, hint.grant)
 	}
@@ -346,12 +347,15 @@ func decideHintPromptNone(s hintState) authorizeHint {
 
 // decideHintInteractive resolves the matrix when prompt!=none. The
 // outcome is either a silent code mint or an interaction redirect.
+// The existing grant is forwarded on the interact path so
+// [startInteraction] can pre-mark the consent step as already covered
+// when the cached grant subsumes the requested scope.
 func decideHintInteractive(s hintState) authorizeHint {
 	switch {
 	case !s.hasSession, s.forceLogin:
-		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptLogin}
+		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptLogin, grant: s.existing}
 	case s.needConsent:
-		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptConsent}
+		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptConsent, grant: s.existing}
 	default:
 		return authorizeHint{decision: decisionMint, grant: s.existing}
 	}
@@ -362,6 +366,13 @@ func decideHintInteractive(s hintState) authorizeHint {
 // __Host-oidc_interaction cookie, and redirects the browser to
 // /interaction/{uid}. The orchestrator runs on the first GET and
 // emits the initial prompt.
+//
+// existing is the grant the dispatcher resolved for (subject,
+// client_id), or nil when no cached grant covers this attempt. When
+// existing is non-nil and already covers the requested scope, the
+// helper pre-marks the built-in consent interaction as already run
+// so the user is not prompted to re-confirm scopes they have already
+// granted.
 func startInteraction(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -369,7 +380,7 @@ func startInteraction(
 	req *authorize.Request,
 	client *store.Client,
 	active *sessions.Active,
-	_ string,
+	existing *store.Grant,
 ) {
 	if deps.Authn == nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "interaction is not configured")
@@ -381,6 +392,10 @@ func startInteraction(
 		return
 	}
 	now := deps.now().UTC()
+	interactionsRun := map[string]bool{}
+	if existing != nil && scopeIsSubset(req.Scope, existing.Scope) {
+		interactionsRun[consent.Name] = true
+	}
 	authnState := authn.State{
 		InteractionUID:  uid,
 		ClientID:        client.ID,
@@ -390,7 +405,8 @@ func startInteraction(
 		AuthTime:        now,
 		ActiveFactorIdx: -1,
 		Phase:           authn.PhaseBeforeAuthn,
-		InteractionsRun: map[string]bool{},
+		InteractionsRun: interactionsRun,
+		RequestedScopes: append([]string(nil), req.Scope...),
 	}
 	authnRaw, err := encodeAuthnState(authnState)
 	if err != nil {

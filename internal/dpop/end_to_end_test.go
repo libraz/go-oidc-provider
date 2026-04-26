@@ -106,6 +106,44 @@ func pkcePair(_ testing.TB) (verifier, challenge string) {
 	return verifier, challenge
 }
 
+// completeConsentIfPrompted submits the built-in consent screen with
+// every requested scope approved when prior is a consent prompt.
+// Returns prior unchanged when it is already a redirect or a non-
+// consent response.
+func completeConsentIfPrompted(t testing.TB, client *http.Client, interactionURL, origin, csrf string, prior *http.Response) *http.Response {
+	t.Helper()
+	consent, env, err := testkit.IsConsentPrompt(prior)
+	if err != nil {
+		t.Fatalf("inspect consent prompt: %v", err)
+	}
+	if !consent {
+		return prior
+	}
+	stateRef, _ := env["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatal("consent prompt missing state_ref")
+	}
+	approved := approvedScopesFromPrompt(env)
+	return testkit.PostConsentApproval(t, client, interactionURL, origin, csrf, stateRef, approved)
+}
+
+// approvedScopesFromPrompt extracts the requested scope names from
+// the consent prompt envelope and returns them as a space-delimited
+// string.
+func approvedScopesFromPrompt(env map[string]any) string {
+	data, _ := env["data"].(map[string]any)
+	scopesAny, _ := data["Scopes"].([]any)
+	out := make([]string, 0, len(scopesAny))
+	for _, s := range scopesAny {
+		entry, _ := s.(map[string]any)
+		name, _ := entry["Name"].(string)
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // requireCSRFCookieValue returns the value of the __Host-oidc_csrf
 // cookie, failing the test if absent. Returning a string (rather
 // than the cookie pointer) lets the caller skip a follow-up nil
@@ -210,11 +248,13 @@ func runAuthorize(t testing.TB, tk *testkit.Provider, clientID, redirectURI, cha
 		t.Fatalf("Do /interaction POST: %v", err)
 	}
 	defer postResp.Body.Close()
-	if postResp.StatusCode != http.StatusFound {
-		dump, _ := io.ReadAll(postResp.Body)
-		t.Fatalf("/interaction POST status=%d body=%s", postResp.StatusCode, dump)
+	finalResp := completeConsentIfPrompted(t, client, tk.Server.URL+loc.Path, tk.Issuer, csrfValue, postResp)
+	defer finalResp.Body.Close()
+	if finalResp.StatusCode != http.StatusFound {
+		dump, _ := io.ReadAll(finalResp.Body)
+		t.Fatalf("/interaction POST status=%d body=%s", finalResp.StatusCode, dump)
 	}
-	rpRedirect, err := postResp.Location()
+	rpRedirect, err := finalResp.Location()
 	if err != nil {
 		t.Fatalf("Location: %v", err)
 	}

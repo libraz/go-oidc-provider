@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -27,6 +28,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/userinfo"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -541,6 +543,13 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 // against an externally-issued code) do not need the chain runner,
 // and the handler treats a nil orchestrator as "interaction
 // disabled".
+//
+// The orchestrator's Interaction list is the registered
+// [WithInteractions] slice prepended with the built-in consent
+// interaction. Prepending preserves user-extension ordering relative
+// to consent: consent always runs first at [TriggerAfterAuthn] so the
+// authorize-code mint observes the approved scope subset before any
+// user-extension can short-circuit the chain.
 func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 	if len(cfg.authenticators) == 0 {
 		return nil, nil //nolint:nilnil // documented "no orchestrator configured" sentinel
@@ -553,9 +562,10 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 			Cause:       err,
 		}
 	}
+	interactions := buildBuiltInInteractions(cfg)
 	orch, err := authn.New(authn.Config{
 		Authenticators: cfg.authenticators,
-		Interactions:   cfg.interactions,
+		Interactions:   interactions,
 		Risk:           cfg.risk,
 		Captcha:        cfg.captcha,
 		Observers:      cfg.loginObservers,
@@ -569,6 +579,36 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 		}
 	}
 	return orch, nil
+}
+
+// buildBuiltInInteractions prepends the library-built-in interactions
+// (today: consent only) to the user-supplied [WithInteractions] slice.
+// Names already taken by user extensions win — [authn.New] de-duplicates
+// by [Interaction.Name] and keeps the first occurrence — so an embedder
+// who registers a custom "consent" interaction (rare but supported)
+// silently overrides the built-in.
+func buildBuiltInInteractions(cfg *config) []Interaction {
+	out := make([]Interaction, 0, len(cfg.interactions)+1)
+	out = append(out, consent.New(consentCatalog(cfg.scopes)))
+	out = append(out, cfg.interactions...)
+	return out
+}
+
+// consentCatalog projects the public [Scope] catalogue onto the slim
+// [interaction.ConsentScope] shape the consent screen renders. UI
+// metadata that the SPA owns (Title, Icon, Category, I18n, Claims,
+// AllowedClients) is dropped at the boundary; the consent prompt
+// surfaces only the fields the design fixes.
+func consentCatalog(scopes []Scope) []interaction.ConsentScope {
+	out := make([]interaction.ConsentScope, 0, len(scopes))
+	for _, s := range scopes {
+		out = append(out, interaction.ConsentScope{
+			Name:        s.Name,
+			Description: s.Description,
+			Required:    s.Required,
+		})
+	}
+	return out
 }
 
 // authorizePARStore returns the substore the authorize handler should use

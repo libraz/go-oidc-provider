@@ -306,7 +306,8 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not establish session")
 		return
 	}
-	grant, err := upsertGrant(r.Context(), deps, result.Subject, rec.ClientID, append([]string(nil), req.Scope...), deps.now())
+	grantScope := chooseGrantScope(result.Scope, req.Scope)
+	grant, err := upsertGrant(r.Context(), deps, result.Subject, rec.ClientID, grantScope, deps.now())
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not record grant")
 		return
@@ -323,7 +324,7 @@ func terminateInteraction(
 		Subject:             result.Subject,
 		GrantID:             grant.ID,
 		RedirectURI:         req.RedirectURI,
-		Scope:               append([]string(nil), req.Scope...),
+		Scope:               append([]string(nil), grantScope...),
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
 		Nonce:               req.Nonce,
@@ -372,6 +373,21 @@ func ensureSession(
 	}
 	http.SetCookie(w, c)
 	return nil
+}
+
+// chooseGrantScope picks the scope slice the authorize-code mint
+// records into the grant and the authorization code. The orchestrator
+// stamps the consent-approved subset on
+// [interaction.Result.Scope]; when present it wins, otherwise the
+// helper falls back to the original request scope. The fallback
+// preserves backward-compatible behaviour for chains that skip the
+// built-in consent screen (existing grant covered, or the embedder
+// suppressed consent).
+func chooseGrantScope(approved, requested []string) []string {
+	if len(approved) > 0 {
+		return append([]string(nil), approved...)
+	}
+	return append([]string(nil), requested...)
 }
 
 // upsertGrant ensures a grant exists for (subject, clientID) covering

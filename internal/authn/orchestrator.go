@@ -150,6 +150,22 @@ type State struct {
 	// [ContinueInput.Scratch]. It is cleared automatically when the
 	// active factor terminates (Result or hard error).
 	FactorScratch []byte `json:"factor_scratch,omitempty"`
+
+	// RequestedScopes is the scope list the relying party asked for
+	// in the authorize request. The HTTP layer populates it when
+	// initialising the chain; the orchestrator forwards it through
+	// every [BeginInput.RequestedScopes] / [ContinueInput.RequestedScopes]
+	// so the consent interaction (and any user extension that needs
+	// the same surface) can read it without re-querying the request.
+	RequestedScopes []string `json:"requested_scopes,omitempty"`
+
+	// ApprovedScopes is the scope subset the user accepted at the
+	// consent screen, recorded from the most recent
+	// [interaction.Result.Scope] the orchestrator observed. The
+	// terminal [Tick] result echoes the value so the HTTP layer can
+	// mint the authorization code with the approved scope rather
+	// than the full requested set.
+	ApprovedScopes []string `json:"approved_scopes,omitempty"`
 }
 
 // Input is the per-tick payload the HTTP layer hands to
@@ -410,11 +426,12 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	}
 	auth := o.cfg.Authenticators[st.ActiveFactorIdx]
 	step, err := auth.Continue(ctx, ContinueInput{
-		Subject:    st.Subject,
-		ClientID:   st.ClientID,
-		AuthTime:   st.AuthTime,
-		Submission: *in.Submission,
-		Scratch:    st.FactorScratch,
+		Subject:         st.Subject,
+		ClientID:        st.ClientID,
+		AuthTime:        st.AuthTime,
+		Submission:      *in.Submission,
+		Scratch:         st.FactorScratch,
+		RequestedScopes: st.RequestedScopes,
 	})
 	if err != nil {
 		o.observeFailure(ctx, st, in.Now, auth.Type())
@@ -455,10 +472,11 @@ func (o *Orchestrator) handleInteractionSubmission(ctx context.Context, st State
 	}
 	ix := o.cfg.Interactions[idx]
 	step, err := ix.Continue(ctx, ContinueInput{
-		Subject:    st.Subject,
-		ClientID:   st.ClientID,
-		AuthTime:   st.AuthTime,
-		Submission: *in.Submission,
+		Subject:         st.Subject,
+		ClientID:        st.ClientID,
+		AuthTime:        st.AuthTime,
+		Submission:      *in.Submission,
+		RequestedScopes: st.RequestedScopes,
 	})
 	if err != nil {
 		return st, interaction.Step{}, err
@@ -473,6 +491,7 @@ func (o *Orchestrator) handleInteractionSubmission(ctx context.Context, st State
 	if step.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
 	}
+	st = recordInteractionResult(st, *step.Result)
 	st.InteractionsRun[ix.Name()] = true
 	st.ActiveInteractionName = ""
 	return st, interaction.Step{}, nil
@@ -549,9 +568,10 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 			continue
 		}
 		step, err := ix.Begin(ctx, BeginInput{
-			Subject:  st.Subject,
-			ClientID: st.ClientID,
-			AuthTime: now,
+			Subject:         st.Subject,
+			ClientID:        st.ClientID,
+			AuthTime:        now,
+			RequestedScopes: st.RequestedScopes,
 		})
 		if err != nil {
 			return st, interaction.Step{}, false, err
@@ -566,6 +586,7 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 		if step.Result == nil {
 			return st, interaction.Step{}, false, ErrInvalidStep
 		}
+		st = recordInteractionResult(st, *step.Result)
 		st.InteractionsRun[ix.Name()] = true
 	}
 	return st, interaction.Step{}, true, nil
@@ -598,9 +619,10 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 
 	idx, auth := candidates[0].idx, candidates[0].auth
 	step, err := auth.Begin(ctx, BeginInput{
-		Subject:  st.Subject,
-		ClientID: st.ClientID,
-		AuthTime: now,
+		Subject:         st.Subject,
+		ClientID:        st.ClientID,
+		AuthTime:        now,
+		RequestedScopes: st.RequestedScopes,
 	})
 	if err != nil {
 		return st, interaction.Step{}, err
@@ -720,15 +742,30 @@ func (o *Orchestrator) emitInteractionPrompt(st State, ix Interaction, prompt in
 }
 
 // emitTerminal returns the chain-complete Step the HTTP layer hands
-// back to the SPA. The Result carries the final Subject and the
-// AuthTime of the last factor (the orchestrator stores the latter on
-// State while folding factors).
+// back to the SPA. The Result carries the final Subject, the
+// AuthTime of the last factor, and the consent-approved scope subset
+// the orchestrator stamped onto [State.ApprovedScopes] (empty when no
+// consent-shaped Interaction ran).
 func (o *Orchestrator) emitTerminal(st State) (State, interaction.Step, error) {
 	res := interaction.Result{
 		Subject:  st.Subject,
 		AuthTime: st.AuthTime,
+		Scope:    append([]string(nil), st.ApprovedScopes...),
 	}
 	return st, interaction.Step{Result: &res}, nil
+}
+
+// recordInteractionResult folds a non-authn [interaction.Result] into
+// [State]. The function exists so the Begin-completes-immediately path
+// (advanceInteractions) and the Continue-completes path
+// (handleInteractionSubmission) record the same fields. Today only
+// Result.Scope is folded; future per-interaction return shapes can
+// extend the helper without re-touching every call site.
+func recordInteractionResult(st State, res interaction.Result) State {
+	if len(res.Scope) > 0 {
+		st.ApprovedScopes = append([]string(nil), res.Scope...)
+	}
+	return st
 }
 
 // appendFactor is the single point where the orchestrator records a

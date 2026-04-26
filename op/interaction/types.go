@@ -125,6 +125,15 @@ type Result struct {
 	// [op.BeginInput.AuthTime] or the orchestrator [op.Clock];
 	// direct [time.Now] calls are forbidden by depguard.
 	AuthTime time.Time
+
+	// Scope is the scope subset the user approved. It is meaningful
+	// only for the built-in consent interaction (and any user
+	// extension that emulates the same shape); the orchestrator
+	// records the value into [authn.State.ApprovedScopes] so the
+	// terminal Result carries it back to the HTTP layer for grant /
+	// authorization-code minting. Authenticator factors leave it
+	// nil.
+	Scope []string
 }
 
 // FormSubmission is the SPA's reply to a [Prompt]. The orchestrator

@@ -98,6 +98,14 @@ type BeginInput struct {
 	// AuthTime is the reference time for this attempt (typically the
 	// interaction creation time).
 	AuthTime time.Time
+
+	// RequestedScopes is the scope list the relying party asked for
+	// in the authorize request. Authenticator factors usually ignore
+	// it; the built-in consent interaction reads it to render the
+	// per-scope approval prompt. The slice is empty when the HTTP
+	// layer has not populated [State.RequestedScopes] (legacy
+	// chains, non-authorize entry points).
+	RequestedScopes []string
 }
 
 // ContinueInput carries the per-submission context an [Authenticator]
@@ -140,6 +148,12 @@ type ContinueInput struct {
 	// It is empty when the active factor never emitted a Scratch
 	// payload; stateless adapters can ignore the field.
 	Scratch []byte
+
+	// RequestedScopes mirrors [BeginInput.RequestedScopes] for the
+	// matching submission. The built-in consent interaction reads it
+	// to validate that every approved scope was actually in the
+	// request set; authenticator factors usually ignore the field.
+	RequestedScopes []string
 }
 
 // Authenticator is the protocol-side state machine for a single

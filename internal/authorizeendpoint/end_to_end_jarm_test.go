@@ -158,7 +158,7 @@ func (h *jarmHarness) runHappyPathInteraction(t *testing.T, mode string) *http.R
 	if err != nil {
 		t.Fatalf("POST interaction: %v", err)
 	}
-	return postResp
+	return completeConsentIfPrompted(t, h.httpClient, h.tk.Server.URL+location.Path, h.tk.Issuer, csrfCookie.Value, postResp)
 }
 
 // verifyJARMClaims validates the signature against the OP's JWK and
