@@ -17,10 +17,22 @@ import (
 // a code path that actually uses them is forced to substitute a real store.
 type stubStore struct{}
 
-func (stubStore) Clients() store.ClientStore                       { panic("not implemented") }
-func (stubStore) AuthorizationCodes() store.AuthorizationCodeStore { panic("not implemented") }
-func (stubStore) RefreshTokens() store.RefreshTokenStore           { panic("not implemented") }
-func (stubStore) Grants() store.GrantStore                         { panic("not implemented") }
+// Clients is invoked eagerly by buildRouter to wire the /token handler;
+// returning a no-op substore lets construction tests exercise op.New
+// without seeding a real backend. The stub returns ErrNotFound for every
+// lookup so any test that actually issues a /token request would still
+// observe the missing-client behaviour.
+func (stubStore) Clients() store.ClientStore { return stubClientStore{} }
+
+// AuthorizationCodes is invoked eagerly by buildRouter to wire /token.
+func (stubStore) AuthorizationCodes() store.AuthorizationCodeStore { return stubAuthCodeStore{} }
+
+// RefreshTokens is invoked eagerly by buildRouter to wire /token.
+func (stubStore) RefreshTokens() store.RefreshTokenStore { return stubRefreshStore{} }
+
+// Grants is invoked eagerly by buildRouter to wire /token.
+func (stubStore) Grants() store.GrantStore { return stubGrantStore{} }
+
 func (stubStore) Sessions() store.SessionStore                     { panic("not implemented") }
 func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { panic("not implemented") }
 func (stubStore) Interactions() store.InteractionStore             { panic("not implemented") }
@@ -37,6 +49,62 @@ type stubUserStore struct{}
 
 func (stubUserStore) FindBySubject(context.Context, string) (*store.User, error) {
 	return nil, store.ErrNotFound
+}
+
+type stubClientStore struct{}
+
+func (stubClientStore) GetClient(context.Context, string) (*store.Client, error) {
+	return nil, store.ErrNotFound
+}
+
+type stubAuthCodeStore struct{}
+
+func (stubAuthCodeStore) Save(context.Context, *store.AuthorizationCode) error {
+	return store.ErrNotFound
+}
+
+func (stubAuthCodeStore) Find(context.Context, string) (*store.AuthorizationCode, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubAuthCodeStore) Consume(context.Context, string) (*store.AuthorizationCode, error) {
+	return nil, store.ErrNotFound
+}
+
+type stubRefreshStore struct{}
+
+func (stubRefreshStore) Save(context.Context, *store.RefreshToken) error {
+	return store.ErrNotFound
+}
+
+func (stubRefreshStore) Find(context.Context, string) (*store.RefreshToken, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubRefreshStore) Consume(context.Context, string) (*store.RefreshToken, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubRefreshStore) RevokeChain(context.Context, string) error {
+	return store.ErrNotFound
+}
+
+type stubGrantStore struct{}
+
+func (stubGrantStore) Save(context.Context, *store.Grant) error {
+	return store.ErrNotFound
+}
+
+func (stubGrantStore) Find(context.Context, string) (*store.Grant, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubGrantStore) FindBySubjectClient(context.Context, string, string) (*store.Grant, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubGrantStore) Delete(context.Context, string) error {
+	return store.ErrNotFound
 }
 
 const validIssuer = "https://idp.example.com"

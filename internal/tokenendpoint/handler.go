@@ -1,0 +1,370 @@
+package tokenendpoint
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op/store"
+)
+
+// Default token TTLs. These match the product design's §A.12.4 numbers and
+// the existing internal grant defaults; they are duplicated here so a
+// caller that constructs [Deps] without filling the TTL fields gets a
+// sensible response shape without having to import the grant packages.
+const (
+	defaultAccessTokenTTL  = 5 * time.Minute
+	defaultIDTokenTTL      = 10 * time.Minute
+	defaultRefreshTokenTTL = 30 * 24 * time.Hour
+
+	// jtiByteLength is the entropy of the access-token "jti" claim. 16
+	// bytes (128 bits) is well above the birthday bound for any single
+	// deployment and matches the RFC 9068 §4 guidance.
+	jtiByteLength = 16
+
+	// scopeOpenID is duplicated here so the handler can decide whether
+	// id_tokens are issued without taking a dependency on
+	// [internal/userinfo].
+	scopeOpenID = "openid"
+
+	// maxFormBytes caps the size of a token-endpoint request body. The
+	// endpoint accepts only the form-encoded shape RFC 6749 §3.2
+	// describes; a 64 KiB ceiling is far above any legitimate request
+	// (the largest field, a private_key_jwt assertion, comfortably fits
+	// in a few KiB) while bounding memory use against pathological
+	// inputs (gosec G120).
+	maxFormBytes = 64 * 1024
+)
+
+// Clock is the package-local view of the wall clock. It mirrors the
+// userinfo handler's posture: a structurally-typed interface so a value
+// satisfying [github.com/libraz/go-oidc-provider/op.Clock] flows through
+// without an explicit adapter, and a nil falls back to the system clock.
+type Clock interface {
+	Now() time.Time
+}
+
+// Deps bundles the runtime dependencies the token endpoint needs. The
+// HTTP layer constructs a [Deps] once at startup and passes it to
+// [Handler]; the handler is otherwise self-contained.
+type Deps struct {
+	// Issuer is the OP issuer URL. It is written into the "iss" claim of
+	// every issued JWT and MUST match the value advertised in discovery.
+	Issuer string
+
+	// Clients is the read-only client registry. The handler looks the
+	// authenticated client_id up here before delegating to [authn].
+	Clients store.ClientStore
+
+	// Codes is the substore for authorization codes. The handler wires
+	// it into an [authcode.Exchanger] on every request.
+	Codes store.AuthorizationCodeStore
+
+	// RefreshTokens is the substore for refresh tokens. The handler
+	// wires it into both a [refresh.Exchanger] and a [refresh.Issuer].
+	RefreshTokens store.RefreshTokenStore
+
+	// Grants is the consent substore. Used for "auth_time" lookups when
+	// minting the id_token.
+	Grants store.GrantStore
+
+	// Keys is the active OP keyset. The first entry signs newly-issued
+	// JWTs; retiring entries are advertised in JWKS only.
+	Keys *keys.Set
+
+	// Clock supplies the current wall-clock reading. A nil Clock falls
+	// back to [internal/timex.SystemClock].
+	Clock Clock
+
+	// AccessTokenTTL is the lifetime of issued access tokens. Zero or
+	// negative falls back to [defaultAccessTokenTTL].
+	AccessTokenTTL time.Duration
+
+	// IDTokenTTL is the lifetime of issued id_tokens. Zero or negative
+	// falls back to [defaultIDTokenTTL].
+	IDTokenTTL time.Duration
+
+	// RefreshTokenTTL is the lifetime of issued refresh tokens. Zero or
+	// negative falls back to [defaultRefreshTokenTTL].
+	RefreshTokenTTL time.Duration
+
+	// SecretVerifier verifies confidential-client secrets. A nil value
+	// installs the library default ([authn.Argon2id]) so deployments
+	// that follow the reference posture need not wire one explicitly.
+	SecretVerifier authn.SecretVerifier
+
+	// AssertionVerifier verifies private_key_jwt assertions. A nil value
+	// disables private_key_jwt support: requests that arrive with a
+	// "client_assertion" parameter are rejected as invalid_client. Wire
+	// an [authn.PrivateKeyJWTVerifier] (or a custom implementation) to
+	// support the asymmetric authentication path.
+	AssertionVerifier authn.AssertionVerifier
+}
+
+// Handler returns the HTTP handler the OP mounts at its token endpoint.
+// The returned handler is safe for concurrent use; deps MUST NOT be
+// mutated after the call.
+func Handler(deps Deps) http.Handler {
+	resolved := resolveDeps(deps)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serve(w, r, resolved)
+	})
+}
+
+// serve is the request-scoped entry point. It validates the request
+// shape, parses the form body, dispatches on grant_type, and writes the
+// response. Decomposing the body keeps the function under cyclop's
+// max-complexity gate while remaining readable.
+func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		stampNoStore(w)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !isFormContent(r.Header.Get("Content-Type")) {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"content-type must be application/x-www-form-urlencoded")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		return
+	}
+	switch r.PostForm.Get("grant_type") {
+	case "":
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_type is required")
+	case "authorization_code":
+		handleAuthorizationCode(w, r, deps)
+	case "refresh_token":
+		handleRefreshToken(w, r, deps)
+	default:
+		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
+			"grant_type is not supported")
+	}
+}
+
+// resolveDeps fills in defaults the caller chose to omit. The returned
+// value is a fresh copy; the caller's [Deps] is not mutated.
+func resolveDeps(d Deps) Deps {
+	if d.AccessTokenTTL <= 0 {
+		d.AccessTokenTTL = defaultAccessTokenTTL
+	}
+	if d.IDTokenTTL <= 0 {
+		d.IDTokenTTL = defaultIDTokenTTL
+	}
+	if d.RefreshTokenTTL <= 0 {
+		d.RefreshTokenTTL = defaultRefreshTokenTTL
+	}
+	if d.SecretVerifier == nil {
+		d.SecretVerifier = &authn.Argon2id{}
+	}
+	return d
+}
+
+// now returns the wall-clock reading for this request, falling back to
+// the system clock when [Deps.Clock] is nil.
+func (d *Deps) now() time.Time {
+	if d.Clock == nil {
+		return timex.SystemClock.Now()
+	}
+	return d.Clock.Now()
+}
+
+// clockFunc adapts [Deps.Clock] to the func()-shaped clock the grant
+// packages consume. A nil Clock yields nil so the grant packages fall
+// back to their own [timex.SystemClock] default.
+func (d *Deps) clockFunc() func() time.Time {
+	if d.Clock == nil {
+		return nil
+	}
+	return d.Clock.Now
+}
+
+// successResponse is the §5.1 token-endpoint response body shared by
+// every successful grant. Optional fields (refresh_token, id_token) are
+// omitempty so the wire form matches the spec's "MUST/MAY" guidance.
+type successResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	IDToken      string `json:"id_token,omitempty"`
+	Scope        string `json:"scope"`
+}
+
+// writeSuccess marshals body and writes it with the cache-control and
+// content-type headers the token endpoint owes every response.
+func writeSuccess(w http.ResponseWriter, body successResponse) {
+	stampNoStore(w)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	// gosec G117 flags the AccessToken field name as "secret-shaped";
+	// the field name is required by RFC 6749 §5.1 and the token is the
+	// purpose of this response. There is no leak: the value is delivered
+	// over TLS to the authenticated client only.
+	_ = json.NewEncoder(w).Encode(body) //nolint:gosec // RFC 6749 §5.1 mandates the field name.
+}
+
+// authenticate resolves the client credentials carried by the request,
+// looks the client up in the registry, and verifies the credentials. The
+// boolean second return reports whether the request used HTTP Basic so
+// callers can decide whether the 401 path needs a WWW-Authenticate.
+//
+// The function emits its own response on every failure path so the
+// caller only checks the bool: false means "stop, response written".
+func authenticate(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	deps Deps,
+) (*store.Client, *authn.Credentials, bool) {
+	creds, err := authn.Parse(r)
+	usedBasic := r.Header.Get("Authorization") != ""
+	if err != nil {
+		writeAuthnError(w, err, usedBasic)
+		return nil, nil, false
+	}
+	if creds.Method == authn.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
+		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
+		return nil, nil, false
+	}
+	client, err := lookupClient(ctx, deps.Clients, creds.ClientID)
+	if err != nil {
+		writeAuthnError(w, err, usedBasic)
+		return nil, nil, false
+	}
+	if _, err := authn.VerifyClient(ctx, creds, client, authn.VerifyOpts{
+		SecretVerifier:    deps.SecretVerifier,
+		AssertionVerifier: deps.AssertionVerifier,
+	}); err != nil {
+		writeAuthnError(w, err, usedBasic)
+		return nil, nil, false
+	}
+	return client, creds, true
+}
+
+// lookupClient resolves the registered client for id, mapping
+// [store.ErrNotFound] to [authn.ErrCredentialsInvalid] so the caller
+// cannot tell "unknown client" apart from "wrong secret" through the
+// error surface.
+func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*store.Client, error) {
+	if id == "" {
+		return nil, authn.ErrCredentialsInvalid
+	}
+	c, err := clients.GetClient(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, authn.ErrCredentialsInvalid
+		}
+		return nil, err
+	}
+	return c, nil
+}
+
+// writeAuthnError maps an authentication error onto the wire response.
+// The mapping is the canonical RFC 6749 §5.2 table augmented by this
+// library's sentinel discrimination.
+func writeAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
+	switch {
+	case errors.Is(err, authn.ErrNoCredentials):
+		// No credentials at all: the request reached the token endpoint
+		// without any way to authenticate a confidential client and
+		// without claiming a public-client identity. Surface 401 with a
+		// challenge so RP libraries retry intelligently.
+		writeInvalidClient(w, usedBasic, "client authentication required")
+	case errors.Is(err, authn.ErrAmbiguousCredentials),
+		errors.Is(err, authn.ErrUnsupportedMethod):
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"client authentication parameters are malformed")
+	case errors.Is(err, authn.ErrClientMismatch),
+		errors.Is(err, authn.ErrCredentialsInvalid),
+		errors.Is(err, authn.ErrAssertionMalformed),
+		errors.Is(err, authn.ErrAssertionReplayed):
+		writeInvalidClient(w, usedBasic, "client authentication failed")
+	default:
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+	}
+}
+
+// isFormContent reports whether ct is application/x-www-form-urlencoded.
+// Parameters (charset, etc.) are tolerated so the handler accepts the
+// shape RP libraries actually send.
+func isFormContent(ct string) bool {
+	if ct == "" {
+		return false
+	}
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
+}
+
+// scopeContainsOpenID reports whether scopes lists "openid". The check
+// is case-sensitive per OIDC Core 1.0 §3.1.2.1: scope tokens are not
+// normalised by the server.
+func scopeContainsOpenID(scopes []string) bool {
+	for _, s := range scopes {
+		if s == scopeOpenID {
+			return true
+		}
+	}
+	return false
+}
+
+// clientPermitsRefresh reports whether the registered client may receive
+// refresh tokens. The library's posture is conservative: a refresh token
+// is only issued when "refresh_token" is in the client's GrantTypes AND
+// the granted scope includes "openid". The §A.12.4 design wires refresh
+// to the OIDC profile so non-OIDC clients do not silently accumulate
+// long-lived credentials.
+func clientPermitsRefresh(c *store.Client, scope []string) bool {
+	if !scopeContainsOpenID(scope) {
+		return false
+	}
+	for _, g := range c.GrantTypes {
+		if g == "refresh_token" {
+			return true
+		}
+	}
+	return false
+}
+
+// activeSigningKey returns the package-local signing key the handler
+// uses to mint id_tokens and access tokens. It is recomputed on every
+// request because the keyset is immutable per construction; the helper
+// exists so the call sites do not duplicate the boundary copy.
+func activeSigningKey(deps Deps) tokens.SigningKey {
+	return tokens.FromInternalEntry(deps.Keys.Active())
+}
+
+// newJTI returns a base64url-no-pad encoded random identifier suitable
+// for the "jti" claim of access tokens (RFC 9068 §4). The function
+// satisfies the depguard crypto/rand allow-list because internal/grants
+// also uses crypto/rand directly; if the allow-list expands later this
+// helper can be replaced with a shared utility.
+func newJTI() (string, error) {
+	buf := make([]byte, jtiByteLength)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("tokenendpoint: read random: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// joinScope is the canonical RFC 6749 §3.3 space-delimited form. The
+// helper exists so the success-response builder doesn't grow a strings
+// import in two places.
+func joinScope(scope []string) string {
+	return strings.Join(scope, " ")
+}

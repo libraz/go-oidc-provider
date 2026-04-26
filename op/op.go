@@ -7,6 +7,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
 	"github.com/libraz/go-oidc-provider/internal/userinfo"
 	"github.com/libraz/go-oidc-provider/op/feature"
 )
@@ -103,6 +104,18 @@ func buildRouter(cfg *config, keySet *keys.Set) (*http.ServeMux, error) {
 			UserStore: cfg.store.Users(),
 			Clock:     cfg.clock,
 			Leeway:    defaultUserInfoLeeway,
+		}),
+	)
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.Token),
+		tokenendpoint.Handler(tokenendpoint.Deps{
+			Issuer:        cfg.issuer,
+			Clients:       cfg.store.Clients(),
+			Codes:         cfg.store.AuthorizationCodes(),
+			RefreshTokens: cfg.store.RefreshTokens(),
+			Grants:        cfg.store.Grants(),
+			Keys:          keySet,
+			Clock:         cfg.clock,
 		}),
 	)
 	return mux, nil

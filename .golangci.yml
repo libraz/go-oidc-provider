@@ -97,6 +97,7 @@ linters:
             - "!**/internal/cookie/**"
             - "!**/internal/sessions/**"
             - "!**/internal/tokens/**"
+            - "!**/internal/tokenendpoint/**"
             - "!**/internal/grants/**"
             - "!**/internal/authn/**"
             - "!**/*_test.go"
