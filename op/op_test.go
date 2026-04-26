@@ -115,6 +115,7 @@ func validBaseOpts(tb testing.TB) []op.Option {
 		op.WithIssuer(validIssuer),
 		op.WithStore(stubStore{}),
 		op.WithKeyset(validKeyset(tb)),
+		op.WithCookieKey(newRandomCookieKey(tb)),
 	}
 }
 

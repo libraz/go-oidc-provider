@@ -126,6 +126,9 @@ func (c *config) validate() error {
 	if err := validateCookieKeys(c.cookieKeys); err != nil {
 		return err
 	}
+	if err := validateCookieKeysRequired(c.grants, c.cookieKeys); err != nil {
+		return err
+	}
 	if _, err := proxy.NewTrust(c.trustedProxies); err != nil {
 		return &Error{
 			Code:        codeConfiguration,
@@ -162,6 +165,24 @@ func validateCookieKeys(keys [][]byte) error {
 // codec. The value is duplicated here so option-level validation can return
 // a stable [*Error] without instantiating the codec.
 const cookieKeyLen = 32
+
+// validateCookieKeysRequired enforces the rule that any grant which depends
+// on the authorize endpoint setting encrypted cookies (interaction binding,
+// session resumption) MUST be paired with at least one cookie key. The
+// authorization_code grant is the only one in v0.x that imposes the
+// requirement; the rule is centralised here so future grants can opt in by
+// adding themselves to the switch.
+func validateCookieKeysRequired(grants []grant.Type, keys [][]byte) error {
+	if len(keys) > 0 {
+		return nil
+	}
+	for _, g := range grants {
+		if g == grant.AuthorizationCode {
+			return ErrCookieKeysRequired
+		}
+	}
+	return nil
+}
 
 // validateKeyset enforces the v1.0 alg policy: every entry MUST be ECDSA on
 // curve P-256 (so the OP can sign ES256). It also rejects empty key IDs

@@ -1,5 +1,7 @@
 package interaction
 
+import "time"
+
 // Prompt names recognised by the library. The set is closed: a Driver MUST
 // switch over the constants below and surface unknowns via the default arm.
 const (
@@ -59,6 +61,13 @@ type Step struct {
 // Result is the outcome the SPA POSTs back to the OP after the user
 // completes a step. It is intentionally a tagged union encoded as a
 // struct: only fields relevant to the [Hint.Prompt] kind are read.
+//
+// AuthTime, AMR, and ACR are consumed by the library when a fresh login
+// completes: they are forwarded to the session manager so the resulting
+// [op/store.Session] carries the authentication context the OP later
+// surfaces in id_token claims. Drivers handling [PromptConsent] alone may
+// leave them zero — the library only reads them when the result triggers
+// a new session record.
 type Result struct {
 	// SubjectHint is the canonical subject the Driver authenticated.
 	// For PromptLogin it is required; for PromptConsent it is informational.
@@ -78,6 +87,22 @@ type Result struct {
 	// The library translates this to access_denied at the authorization
 	// endpoint per OpenID Connect Core 1.0 §3.1.2.6.
 	Aborted bool
+
+	// AuthTime is the wall-clock time at which the Driver authenticated
+	// the user. It is the value the library copies into the session's
+	// auth_time and into the id_token's auth_time claim. The library only
+	// reads this on a fresh-login terminal result.
+	AuthTime time.Time
+
+	// AMR lists the authenticator method references the Driver used
+	// (RFC 8176, e.g. "pwd", "otp", "hwk"). Forwarded to the session
+	// record on a fresh login.
+	AMR []string
+
+	// ACR is the authentication context class reference the Driver
+	// asserts (e.g. "urn:mace:incommon:iap:silver"). Forwarded to the
+	// session record on a fresh login.
+	ACR string
 }
 
 // Decision is the verdict the [Driver] returns to the OP after processing

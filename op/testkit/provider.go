@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"crypto"
+	"crypto/rand"
 	"net/http/httptest"
 	"testing"
 
@@ -9,6 +10,11 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
+
+// cookieKeyLen is the AES-256-GCM key length the cookie codec expects. The
+// constant is duplicated here so the testkit need not import the internal
+// cookie package.
+const cookieKeyLen = 32
 
 // DefaultIssuer is the issuer URL the testkit advertises in the discovery
 // document when the caller does not override it. It is a fixed RFC 2606
@@ -120,10 +126,14 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(store),
 		op.WithKeyset(op.Keyset{signKey}),
+		op.WithCookieKey(generateCookieKey(tb)),
+		op.WithInteraction(AutoConsentDriver{}),
 	}
 	if cfg.clock != nil {
 		baseOpts = append(baseOpts, op.WithClock(cfg.clock))
 	}
+	// cfg.extra is appended last so caller-supplied options can override
+	// any default the testkit installed (cookie keys, driver, clock, ...).
 	baseOpts = append(baseOpts, cfg.extra...)
 
 	provider, err := op.New(baseOpts...)
@@ -153,6 +163,18 @@ func generateSigningKey(tb testing.TB, kid string) op.SigningKey {
 		tb.Fatalf("testkit: generate signing key: %v", err)
 	}
 	return op.SigningKey{KeyID: entry.KeyID, Signer: entry.Signer}
+}
+
+// generateCookieKey returns a fresh 32-byte cookie key suitable for
+// satisfying [op.WithCookieKey]. The key is generated per [NewProvider]
+// call so parallel tests do not share secret material.
+func generateCookieKey(tb testing.TB) []byte {
+	tb.Helper()
+	key := make([]byte, cookieKeyLen)
+	if _, err := rand.Read(key); err != nil {
+		tb.Fatalf("testkit: generate cookie key: %v", err)
+	}
+	return key
 }
 
 // Signer returns the [crypto.Signer] backing the active signing key.

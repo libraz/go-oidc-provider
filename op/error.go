@@ -135,3 +135,13 @@ var ErrKeysetRequired = &Error{
 	Code:        codeConfiguration,
 	Description: "WithKeyset is required",
 }
+
+// ErrCookieKeysRequired is returned by [New] when [WithCookieKey] /
+// [WithCookieKeys] was not supplied but a configured grant requires the
+// authorize endpoint to set encrypted cookies (e.g. AuthorizationCode).
+// The default grant set includes AuthorizationCode, so the typical caller
+// MUST supply at least one cookie key.
+var ErrCookieKeysRequired = &Error{
+	Code:        codeConfiguration,
+	Description: "WithCookieKey/WithCookieKeys is required when the authorization_code grant is enabled",
+}
