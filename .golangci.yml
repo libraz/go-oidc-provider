@@ -95,6 +95,7 @@ linters:
             - "!**/internal/dpop/**"
             - "!**/internal/csrf/**"
             - "!**/internal/cookie/**"
+            - "!**/internal/sessions/**"
             - "!**/internal/tokens/**"
             - "!**/internal/authn/recovery/**"
             - "!**/*_test.go"
