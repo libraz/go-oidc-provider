@@ -45,5 +45,16 @@
     "ES256",
     "EdDSA"
   ],
-  "tls_client_certificate_bound_access_tokens": true
+  "tls_client_certificate_bound_access_tokens": true,
+  "response_modes_supported": [
+    "query",
+    "form_post",
+    "query.jwt",
+    "fragment.jwt",
+    "form_post.jwt",
+    "jwt"
+  ],
+  "authorization_signing_alg_values_supported": [
+    "ES256"
+  ]
 }

@@ -60,7 +60,17 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		return
 	}
 	if err := req.Validate(client, deps.Scopes); err != nil {
-		writeAuthorizeValidationError(w, r, req, err)
+		writeAuthorizeValidationError(w, r, req, deps, err)
+		return
+	}
+	if jarmFeatureRequested(req) && deps.JARM == nil {
+		// The request asked for a JARM mode but the OP did not opt in
+		// to the feature. Surface "unsupported_response_mode" via the
+		// legacy redirect — JARM cannot be used to convey "JARM is not
+		// supported by this OP". emitAuthorizeError implements the same
+		// fallback for the post-Validate paths.
+		emitAuthorizeError(w, r, deps, req, errUnsupportedResponseMode,
+			"response_mode is not supported by this OP")
 		return
 	}
 	dispatchAuthorize(w, r, deps, req, client)
@@ -145,8 +155,9 @@ func writeAuthorizeParseError(w http.ResponseWriter, _ *http.Request, err error)
 
 // writeAuthorizeValidationError translates a [authorize.Validate] failure
 // into either a redirect or a JSON envelope, depending on whether the
-// redirect target has been trusted yet.
-func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *authorize.Request, err error) {
+// redirect target has been trusted yet. JARM-mode requests get the
+// signed-JWT envelope automatically via [emitAuthorizeError].
+func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *authorize.Request, deps resolved, err error) {
 	var ae *authorize.Error
 	if !errors.As(err, &ae) {
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "")
@@ -156,7 +167,7 @@ func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *
 		renderJSONError(w, http.StatusBadRequest, ae.Code, ae.Description)
 		return
 	}
-	redirectError(w, r, req.RedirectURI, ae.Code, ae.Description, req.State)
+	emitAuthorizeError(w, r, deps, req, ae.Code, ae.Description)
 }
 
 // authorizeDecision captures the four outcomes the dispatcher chooses
@@ -189,7 +200,7 @@ func dispatchAuthorize(
 		// RP knows the failure was on the OP's side. The redirect_uri is
 		// already trusted at this point (Validate returned nil), hence
 		// safe to redirect.
-		redirectError(w, r, req.RedirectURI, errServerError, "session backend unavailable", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "session backend unavailable")
 		return
 	}
 	if errors.Is(sessErr, sessions.ErrCurrentSessionExpired) {
@@ -198,11 +209,11 @@ func dispatchAuthorize(
 	hint := computeAuthorizeHint(r.Context(), deps, req, client, active, now)
 	switch hint.decision {
 	case decisionLoginRequired:
-		redirectError(w, r, req.RedirectURI, errLoginRequired, "user authentication is required", req.State)
+		emitAuthorizeError(w, r, deps, req, errLoginRequired, "user authentication is required")
 	case decisionConsentRequired:
-		redirectError(w, r, req.RedirectURI, errConsentRequired, "user consent is required", req.State)
+		emitAuthorizeError(w, r, deps, req, errConsentRequired, "user consent is required")
 	case decisionInteractionRequired:
-		redirectError(w, r, req.RedirectURI, errInteractionRequired, "interaction is required", req.State)
+		emitAuthorizeError(w, r, deps, req, errInteractionRequired, "interaction is required")
 	case decisionInteract:
 		startInteraction(w, r, deps, req, client, active, hint.prompt)
 	case decisionMint:
@@ -346,14 +357,14 @@ func startInteraction(
 ) {
 	uid, err := newRandomB64(uidByteLength)
 	if err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not allocate interaction id", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate interaction id")
 		return
 	}
 	now := deps.now().UTC()
 	state := authorize.RequestState{Library: authorize.SnapshotFrom(req, now)}
 	raw, err := authorize.MarshalState(state)
 	if err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not marshal interaction state", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not marshal interaction state")
 		return
 	}
 	rec := &store.Interaction{
@@ -366,11 +377,11 @@ func startInteraction(
 		UpdatedAt: now,
 	}
 	if err := deps.Interactions.Save(r.Context(), rec); err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not persist interaction", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist interaction")
 		return
 	}
 	if err := setInteractionCookie(w, deps, uid); err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not set interaction cookie", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not set interaction cookie")
 		return
 	}
 	// Inform the Driver so it can pre-render UI state. Errors from the
@@ -412,12 +423,12 @@ func mintAndRedirect(
 		// Defensive: the dispatcher only reaches mintAndRedirect when
 		// both are non-nil. Surface a server_error redirect so a
 		// future regression is observable.
-		redirectError(w, r, req.RedirectURI, errServerError, "missing session or grant for silent mint", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "missing session or grant for silent mint")
 		return
 	}
 	codeID, err := newRandomB64(codeByteLength)
 	if err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not allocate code", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
 		return
 	}
 	now := deps.now().UTC()
@@ -436,11 +447,10 @@ func mintAndRedirect(
 		CreatedAt:           now,
 	}
 	if err := deps.Codes.Save(r.Context(), rec); err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not persist authorization code", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist authorization code")
 		return
 	}
-	stampNoStore(w)
-	http.Redirect(w, r, buildSuccessRedirect(req.RedirectURI, codeID, req.State), http.StatusFound)
+	emitAuthorizeSuccess(w, r, deps, req, codeID)
 }
 
 // buildSuccessRedirect composes the success redirect target. It is split

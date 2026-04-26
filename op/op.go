@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
@@ -20,6 +21,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/internal/userinfo"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -171,7 +173,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			MTLS:          mtlsVerifier,
 		}),
 	)
-	if err := mountAuthorizeHandlers(mux, cfg, scopes); err != nil {
+	if err := mountAuthorizeHandlers(mux, cfg, scopes, keySet); err != nil {
 		return nil, err
 	}
 	mountPAREndpoint(mux, cfg, scopes)
@@ -232,6 +234,37 @@ func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
 		}
 	}
 	return v, nil
+}
+
+// buildJARMSigner constructs the JARM signer when the [feature.JARM]
+// flag is enabled. The shape mirrors [buildDPoPVerifier] /
+// [buildMTLSVerifier]: nil means "feature off" everywhere downstream,
+// and the (*jarm.Signer, error) signature returns (nil, nil) on that
+// path on purpose.
+//
+// The signer reuses the OP's active id_token / access_token signing
+// key. v0.x ships with ES256 only; the JARM spec accepts the same
+// algorithm without negotiation, so a separate keyset would only
+// duplicate state without adding security.
+//
+//nolint:nilnil // (nil, nil) is the documented "JARM not enabled" signal.
+func buildJARMSigner(cfg *config, keySet *keys.Set) (*jarm.Signer, error) {
+	if !featureEnabled(cfg.features, feature.JARM) {
+		return nil, nil
+	}
+	signer, err := jarm.NewSigner(jarm.SignerConfig{
+		Key:    tokens.FromInternalEntry(keySet.Active()),
+		Issuer: cfg.issuer,
+		Clock:  cfg.clock,
+	})
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "JARM signer construction failed",
+			Cause:       err,
+		}
+	}
+	return signer, nil
 }
 
 // mountRegistrationEndpoint registers the /register and
@@ -363,9 +396,13 @@ func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
 // the configuration includes a grant that needs them (currently only
 // AuthorizationCode). The handler shares an internal mux so a single
 // instance services both paths; see [internal/authorizeendpoint.Handler].
-func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) error {
+func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, keySet *keys.Set) error {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil
+	}
+	jarmSigner, err := buildJARMSigner(cfg, keySet)
+	if err != nil {
+		return err
 	}
 	cookieCodec, err := cookie.NewCodec(cfg.cookieKeys[0], cfg.cookieKeys[1:]...)
 	if err != nil {
@@ -423,6 +460,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		Grants:          cfg.store.Grants(),
 		Interactions:    cfg.store.Interactions(),
 		PARs:            authorizePARStore(cfg),
+		JARM:            jarmSigner,
 		Sessions:        sessMgr,
 		CookieCodec:     cookieCodec,
 		CSRF:            csrfSigner,

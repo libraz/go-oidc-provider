@@ -58,6 +58,11 @@ type RequestSnapshot struct {
 	// LoginHint mirrors [Request.LoginHint].
 	LoginHint string `json:"login_hint,omitempty"`
 
+	// ResponseMode mirrors [Request.ResponseMode]. The field round-trips
+	// across the interaction redirect so the post-interaction success /
+	// error emitter can dispatch JARM as the original request asked.
+	ResponseMode string `json:"response_mode,omitempty"`
+
 	// CreatedUnix is the unix-seconds timestamp at which the snapshot was
 	// taken. The HTTP layer uses it for diagnostic logging; the field is
 	// not consumed by [RequestSnapshot.ToRequest].
@@ -94,6 +99,7 @@ func SnapshotFrom(req *Request, now time.Time) RequestSnapshot {
 		UILocales:           slices.Clone(req.UILocales),
 		MaxAge:              maxAge,
 		LoginHint:           req.LoginHint,
+		ResponseMode:        req.ResponseMode,
 		CreatedUnix:         now.UTC().Unix(),
 	}
 }
@@ -121,6 +127,7 @@ func (s RequestSnapshot) ToRequest() *Request {
 		UILocales:           slices.Clone(s.UILocales),
 		MaxAge:              maxAge,
 		LoginHint:           s.LoginHint,
+		ResponseMode:        s.ResponseMode,
 	}
 }
 

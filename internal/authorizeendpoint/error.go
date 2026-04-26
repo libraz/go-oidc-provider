@@ -18,6 +18,7 @@ const (
 	errAccountSelectionRequired = "account_selection_required"
 	errServerError              = "server_error"
 	errUnsupportedResponseType  = "unsupported_response_type"
+	errUnsupportedResponseMode  = "unsupported_response_mode"
 	errInvalidScope             = "invalid_scope"
 )
 

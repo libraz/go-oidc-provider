@@ -126,6 +126,18 @@ func Build(in Input) Document {
 		doc.RegistrationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Register)
 		doc.RegistrationEndpointAuthMethodsSupported = []string{"initial_access_token"}
 	}
+	if in.Features.JARM {
+		// JARM (OpenID FAPI WG): advertise the four *.jwt response
+		// modes alongside the legacy "query" / "form_post" so clients
+		// can discover the protection without trial-and-error.
+		doc.ResponseModesSupported = []string{
+			"query", "form_post",
+			"query.jwt", "fragment.jwt", "form_post.jwt", "jwt",
+		}
+		// v1.0 signs with ES256 only; keep the field single-valued so
+		// embedders that grow the algorithm list see a stable shape.
+		doc.AuthorizationSigningAlgValuesSupported = []string{"ES256"}
+	}
 	return doc
 }
 

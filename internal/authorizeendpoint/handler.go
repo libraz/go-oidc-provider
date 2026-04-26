@@ -6,6 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -79,6 +80,13 @@ type Deps struct {
 	// the [feature.PAR] flag is enabled; embedders that build the handler
 	// directly may leave the field nil to opt out.
 	PARs store.PushedAuthRequestStore
+
+	// JARM is the signer the handler uses when the request opts into a
+	// JARM response_mode. A nil value means "feature off": JARM modes
+	// are rejected with the OAuth wire code "unsupported_response_mode"
+	// and emitted as a plain redirect (success / error). The library
+	// wires this only when the [feature.JARM] flag is enabled.
+	JARM *jarm.Signer
 
 	// Sessions is the chooser-group session manager. The handler reads
 	// the active session via [sessions.Manager.Resolve] before deciding

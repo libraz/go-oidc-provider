@@ -72,6 +72,15 @@ type Request struct {
 
 	// ACRValues is the OIDC acr_values list, split on ASCII whitespace.
 	ACRValues []string
+
+	// ResponseMode is the OAuth response_mode parameter, verbatim. The
+	// validator accepts the empty string (the response_type-implied
+	// default), the legacy "query" / "form_post" values, and the four
+	// JARM values ("query.jwt", "fragment.jwt", "form_post.jwt", "jwt").
+	// Whether a JARM mode is actually permitted at the wire layer is the
+	// HTTP layer's responsibility — the [feature.JARM] gate is checked
+	// there because the validator does not know feature flags.
+	ResponseMode string
 }
 
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
@@ -128,6 +137,10 @@ func ParseValues(v url.Values) (*Request, error) {
 	if err != nil {
 		return nil, err
 	}
+	responseMode, err := singleValue(v, "response_mode")
+	if err != nil {
+		return nil, err
+	}
 	scope, err := multiValue(v, "scope")
 	if err != nil {
 		return nil, err
@@ -162,6 +175,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		LoginHint:           loginHint,
 		UILocales:           strings.Fields(uiLocales),
 		ACRValues:           strings.Fields(acrValues),
+		ResponseMode:        responseMode,
 	}, nil
 }
 
@@ -184,6 +198,9 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 		return err
 	}
 	if err := req.validateResponseType(); err != nil {
+		return err
+	}
+	if err := req.validateResponseMode(); err != nil {
 		return err
 	}
 	if err := req.validateState(); err != nil {
@@ -227,6 +244,23 @@ func (req *Request) validateResponseType() error {
 		return ErrResponseTypeUnsupported
 	}
 	return nil
+}
+
+// validateResponseMode rejects unknown response_mode values. The empty
+// string (default for the response_type) and the v0.x-supported set
+// {"query", "form_post"} pass; the four JARM values
+// {"query.jwt", "fragment.jwt", "form_post.jwt", "jwt"} pass too. The
+// HTTP layer is still expected to enforce the [feature.JARM] gate
+// before honouring a JARM mode — this validator only filters the
+// catalogue of known names.
+func (req *Request) validateResponseMode() error {
+	switch req.ResponseMode {
+	case "", "query", "form_post",
+		"query.jwt", "fragment.jwt", "form_post.jwt", "jwt":
+		return nil
+	default:
+		return ErrResponseModeUnsupported
+	}
 }
 
 // validateState enforces the FAPI-2.0 upgrade of OIDC's RECOMMENDED state

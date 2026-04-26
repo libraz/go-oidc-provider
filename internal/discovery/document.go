@@ -104,4 +104,16 @@ type Document struct {
 	// enabled; clients consult it to decide whether to present a
 	// client certificate at /token.
 	TLSClientCertificateBoundAccessTokens bool `json:"tls_client_certificate_bound_access_tokens,omitempty"`
+
+	// ResponseModesSupported lists the response_mode values the OP
+	// accepts at /authorize. The default v1.0 set is omitted from the
+	// wire (the spec defines well-known defaults); the field becomes
+	// non-empty when the JARM feature is enabled so clients can
+	// discover the *.jwt variants.
+	ResponseModesSupported []string `json:"response_modes_supported,omitempty"`
+
+	// AuthorizationSigningAlgValuesSupported lists the alg values the
+	// OP uses when signing JARM responses. v1.0 is "ES256" only.
+	// Emitted only when the JARM feature is enabled.
+	AuthorizationSigningAlgValuesSupported []string `json:"authorization_signing_alg_values_supported,omitempty"`
 }

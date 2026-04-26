@@ -156,6 +156,13 @@ var (
 	// redirect-safe — without a trusted PAR record we cannot trust the
 	// redirect_uri the client claims either.
 	ErrInvalidRequestURI = newErr("invalid_request_uri", "request_uri is invalid, expired, or already consumed")
+
+	// ErrResponseModeUnsupported indicates the response_mode parameter
+	// is set to a value the OP does not recognise. The catalogue is
+	// {"" (default), "query", "form_post", "query.jwt", "fragment.jwt",
+	// "form_post.jwt", "jwt"}; anything else fires this sentinel. Maps
+	// to "unsupported_response_mode".
+	ErrResponseModeUnsupported = newErr("unsupported_response_mode", "response_mode is not supported")
 )
 
 // IsRedirectSafe reports whether err arose AFTER redirect_uri validation

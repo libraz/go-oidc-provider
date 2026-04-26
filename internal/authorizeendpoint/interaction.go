@@ -352,7 +352,7 @@ func terminateInteraction(
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
-		redirectError(w, r, req.RedirectURI, errAccessDenied, "user aborted the interaction", req.State)
+		emitAuthorizeError(w, r, deps, req, errAccessDenied, "user aborted the interaction")
 		return
 	}
 	if err := finalizeInteraction(w, r, deps, rec, req, result); err != nil {
@@ -380,7 +380,7 @@ func finalizeInteraction(
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
-		redirectError(w, r, req.RedirectURI, errAccessDenied, "subject was not authenticated", req.State)
+		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
 		return errors.New("missing subject hint")
 	}
 	subject := result.SubjectHint
@@ -388,17 +388,17 @@ func finalizeInteraction(
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
-		redirectError(w, r, req.RedirectURI, errServerError, "could not establish session", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not establish session")
 		return err
 	}
 	grant, err := upsertGrant(r.Context(), deps, subject, rec.ClientID, finalScope(result, req), deps.now())
 	if err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not record grant", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not record grant")
 		return err
 	}
 	codeID, err := newRandomB64(codeByteLength)
 	if err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not allocate code", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
 		return err
 	}
 	now := deps.now().UTC()
@@ -417,14 +417,13 @@ func finalizeInteraction(
 		CreatedAt:           now,
 	}
 	if err := deps.Codes.Save(r.Context(), authCode); err != nil {
-		redirectError(w, r, req.RedirectURI, errServerError, "could not persist authorization code", req.State)
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist authorization code")
 		return err
 	}
 	_ = deps.Interactions.Delete(r.Context(), rec.ID)
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
-	stampNoStore(w)
-	http.Redirect(w, r, buildSuccessRedirect(req.RedirectURI, codeID, req.State), http.StatusFound)
+	emitAuthorizeSuccess(w, r, deps, req, codeID)
 	return nil
 }
 
