@@ -1,0 +1,190 @@
+package recovery
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
+)
+
+// PromptType is the [op.Prompt.Type] the adapter emits, fixed by
+// docs/plans/002-product-design.md §E.2.
+const PromptType = "auth.recovery_code"
+
+// CodeFieldName is the [op.FieldSpec.Name] the adapter expects in
+// [op.FormSubmission.Values]. Exported so SPA documentation can
+// reference the canonical key without a stringly-typed copy.
+const CodeFieldName = "code"
+
+// codeMaxLen / codeMinLen are the byte-length bounds the adapter
+// applies on the input. The plaintext format is XXXXX-XXXXX (11 bytes
+// including the hyphen); we accept the no-hyphen short form as a
+// usability concession (the hash check normalises). 32 bytes is well
+// above any plausible code length and bounds the input against the
+// orchestrator's per-field cap.
+const (
+	codeMinLen = 10
+	codeMaxLen = 32
+)
+
+// ErrSubjectRequired is returned by [Authenticator.Begin] /
+// [Authenticator.Continue] when the orchestrator passes an empty
+// subject. Recovery codes are always a substitute factor: the chain
+// is mis-wired if it reaches the adapter without a subject bound.
+var ErrSubjectRequired = errors.New("recovery: subject is required")
+
+// ErrCodeMissing is returned by [Authenticator.Continue] when the
+// submission omits the code field. The orchestrator's [op.FieldSpec]
+// validation should already have caught this; the adapter re-checks
+// at the trust boundary.
+var ErrCodeMissing = errors.New("recovery: code field is missing")
+
+// Authenticator is the [op.Authenticator] adapter for the single-use
+// recovery-code factor. It binds a [Verifier] (the primitive that
+// hashes / matches / consumes codes) to a [store.RecoveryStore] (the
+// persisted batch) so the orchestrator can drive the factor without
+// knowing about either.
+//
+// Construct through [NewAuthenticator]; the zero value is not usable.
+type Authenticator struct {
+	verifier *Verifier
+	store    store.RecoveryStore
+}
+
+// ErrVerifierRequired / ErrStoreRequired are returned by
+// [NewAuthenticator] when one of its arguments is nil. Surfacing the
+// configuration error at construction is preferred to a runtime panic
+// on the first Begin / Continue.
+var (
+	ErrVerifierRequired = errors.New("recovery: verifier is required")
+	ErrStoreRequired    = errors.New("recovery: store is required")
+)
+
+// NewAuthenticator constructs an [Authenticator]. Both arguments are
+// required; the function returns an error rather than panicking on a
+// nil dependency so callers can surface the misconfiguration through
+// their normal startup error path.
+func NewAuthenticator(verifier *Verifier, recoveryStore store.RecoveryStore) (*Authenticator, error) {
+	if verifier == nil {
+		return nil, ErrVerifierRequired
+	}
+	if recoveryStore == nil {
+		return nil, ErrStoreRequired
+	}
+	return &Authenticator{verifier: verifier, store: recoveryStore}, nil
+}
+
+// Type implements [op.Authenticator]. Always returns
+// [op.FactorRecoveryCode].
+func (*Authenticator) Type() op.FactorType { return op.FactorRecoveryCode }
+
+// AAL implements [op.Authenticator]. Recovery codes are a substitute
+// for AAL2 — the primary MFA factor the user lost.
+func (*Authenticator) AAL() op.AAL { return op.AAL2 }
+
+// AMR implements [op.Authenticator]. Recovery codes map to RFC 8176
+// §2 "otp" (single-use shared-secret-derived code).
+func (*Authenticator) AMR() string { return "otp" }
+
+// Prompts implements [op.Authenticator]. The adapter emits a single
+// prompt type; the slice is read-only by contract.
+func (*Authenticator) Prompts() []string { return []string{PromptType} }
+
+// Begin implements [op.Authenticator]. It reads the persisted batch
+// to surface [op.RecoveryCodePromptData.AttemptsRemaining] (the count
+// of unconsumed slots) and emits the [PromptType] prompt. Begin
+// surfaces [store.ErrNotFound] when the user has no batch generated
+// so the orchestrator can stop the chain rather than silently rolling
+// over to the next factor.
+func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (op.Step, error) {
+	if in.Subject == "" {
+		return op.Step{}, ErrSubjectRequired
+	}
+	batch, err := a.store.Get(ctx, in.Subject)
+	if err != nil {
+		return op.Step{}, fmt.Errorf("recovery: load batch: %w", err)
+	}
+	if batch == nil {
+		return op.Step{}, store.ErrNotFound
+	}
+	return op.Step{Prompt: a.prompt(batch)}, nil
+}
+
+// Continue implements [op.Authenticator]. It loads the batch,
+// verifies the submitted code through the [Verifier], persists the
+// mutated batch on success, and returns the matching [op.Step]:
+//
+//   - On [OutcomeSuccess]: [op.Step.Result] is populated with the
+//     bound subject and the orchestrator's
+//     [op.ContinueInput.AuthTime]. The persisted batch carries the
+//     stamped ConsumedAt on the matched slot.
+//   - On [OutcomeInvalid]: [op.Step.Prompt] is re-emitted with
+//     [op.RecoveryCodePromptData.AttemptsRemaining] unchanged (no slot
+//     was consumed).
+//   - On [OutcomeAllConsumed] / [OutcomeNoCodes]: the matching error
+//     is returned so the orchestrator stops the chain.
+func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (op.Step, error) {
+	if in.Subject == "" {
+		return op.Step{}, ErrSubjectRequired
+	}
+	code, ok := in.Submission.Values[CodeFieldName]
+	if !ok || code == "" {
+		return op.Step{}, ErrCodeMissing
+	}
+	batch, err := a.store.Get(ctx, in.Subject)
+	if err != nil {
+		return op.Step{}, fmt.Errorf("recovery: load batch: %w", err)
+	}
+	if batch == nil {
+		return op.Step{}, store.ErrNotFound
+	}
+
+	res, verr := a.verifier.Verify(ctx, batch, code)
+	if verr == nil && res != nil && res.Batch != nil {
+		if perr := a.store.Put(ctx, res.Batch); perr != nil {
+			return op.Step{}, fmt.Errorf("recovery: persist batch: %w", perr)
+		}
+	}
+
+	switch {
+	case verr == nil:
+		return op.Step{Result: &op.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+	case errors.Is(verr, ErrCodeInvalid):
+		return op.Step{Prompt: a.prompt(batch)}, nil
+	default:
+		// ErrAllConsumed / ErrNoCodes / hash-format failures flow
+		// through verbatim so the orchestrator can dispatch to the
+		// out-of-band recovery branch.
+		return op.Step{}, verr
+	}
+}
+
+// prompt builds the [op.Prompt] the adapter emits on Begin and on
+// the wrong-code re-emit branch of Continue. Centralising the shape
+// here keeps the two call sites in sync.
+func (*Authenticator) prompt(batch *store.RecoveryBatch) *op.Prompt {
+	remaining := 0
+	for _, slot := range batch.Codes {
+		if slot.ConsumedAt.IsZero() {
+			remaining++
+		}
+	}
+	return &op.Prompt{
+		Type: PromptType,
+		Data: op.RecoveryCodePromptData{AttemptsRemaining: remaining},
+		Inputs: []op.FieldSpec{{
+			Name:     CodeFieldName,
+			Kind:     op.FieldText,
+			Label:    "auth.recovery_code.code",
+			Required: true,
+			MinLen:   codeMinLen,
+			MaxLen:   codeMaxLen,
+		}},
+	}
+}
+
+// Compile-time confirmation that *Authenticator satisfies the public
+// interface.
+var _ op.Authenticator = (*Authenticator)(nil)

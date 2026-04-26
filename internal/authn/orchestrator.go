@@ -401,7 +401,12 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 		return st, op.Step{}, ErrInvalidStateRef
 	}
 	auth := o.cfg.Authenticators[st.ActiveFactorIdx]
-	step, err := auth.Continue(ctx, *in.Submission)
+	step, err := auth.Continue(ctx, op.ContinueInput{
+		Subject:    st.Subject,
+		ClientID:   st.ClientID,
+		AuthTime:   st.AuthTime,
+		Submission: *in.Submission,
+	})
 	if err != nil {
 		o.observeFailure(ctx, st, in.Now, auth.Type())
 		return st, op.Step{}, err
@@ -438,7 +443,12 @@ func (o *Orchestrator) handleInteractionSubmission(ctx context.Context, st State
 		return st, op.Step{}, ErrInvalidStateRef
 	}
 	ix := o.cfg.Interactions[idx]
-	step, err := ix.Continue(ctx, *in.Submission)
+	step, err := ix.Continue(ctx, op.ContinueInput{
+		Subject:    st.Subject,
+		ClientID:   st.ClientID,
+		AuthTime:   st.AuthTime,
+		Submission: *in.Submission,
+	})
 	if err != nil {
 		return st, op.Step{}, err
 	}

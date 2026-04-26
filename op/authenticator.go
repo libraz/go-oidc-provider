@@ -98,6 +98,41 @@ type BeginInput struct {
 	AuthTime time.Time
 }
 
+// ContinueInput carries the per-submission context an [Authenticator]
+// needs to advance a ceremony. The orchestrator populates Subject from
+// the chain state (the previous factor's [Result.Subject], or "" for a
+// first-factor identification step that binds the subject); stateless
+// adapters use Subject to look up the user's persisted credentials
+// (TOTP record, WebAuthn credentials, recovery batch) without keeping
+// per-interaction state of their own.
+//
+// AuthTime is the same reference clock [BeginInput.AuthTime] carries
+// for this attempt; threading it through Continue lets the adapter
+// stamp [Result.AuthTime] consistently regardless of how many
+// submissions a multi-screen factor takes.
+type ContinueInput struct {
+	// Subject is the canonical OP-internal subject identifier the
+	// orchestrator has bound to the chain. For the first factor in a
+	// chain (the identifying factor) this MAY be empty until that
+	// factor's Continue populates it through [Result.Subject].
+	Subject string
+
+	// ClientID is the OAuth client_id of the relying party that
+	// started the authorization request.
+	ClientID string
+
+	// AuthTime is the reference time for this attempt (typically the
+	// interaction creation time). The value is identical to the one
+	// passed to [BeginInput.AuthTime] for the same attempt.
+	AuthTime time.Time
+
+	// Submission is the SPA's reply to the previous [Prompt]. The
+	// orchestrator has already validated [FormSubmission.StateRef]
+	// against the active factor; the adapter is responsible for any
+	// per-input validation beyond the [FieldSpec] constraints.
+	Submission FormSubmission
+}
+
 // Authenticator is the protocol-side state machine for a single
 // authentication factor. Implementations are stateless across calls;
 // per-attempt state is carried by [Prompt.StateRef].
@@ -151,7 +186,7 @@ type Authenticator interface {
 	// Continue advances the ceremony with the SPA's submission. A
 	// nil-Prompt nil-Result Step is invalid and rejected by the
 	// orchestrator.
-	Continue(ctx context.Context, sub FormSubmission) (Step, error)
+	Continue(ctx context.Context, in ContinueInput) (Step, error)
 }
 
 // Interaction is a non-authentication screen unit (T&C acceptance,
@@ -183,7 +218,10 @@ type Interaction interface {
 	Begin(ctx context.Context, in BeginInput) (Step, error)
 
 	// Continue advances the interaction with the SPA's submission.
-	Continue(ctx context.Context, sub FormSubmission) (Step, error)
+	// [ContinueInput.Subject] is always non-empty for an Interaction
+	// because the subject has already been bound by the time the
+	// interaction phase runs.
+	Continue(ctx context.Context, in ContinueInput) (Step, error)
 }
 
 // InteractionTrigger declares when the orchestrator inserts an

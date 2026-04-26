@@ -58,7 +58,7 @@ type stubAuthenticator struct {
 	amr        string
 	prompts    []string
 	beginFn    func(ctx context.Context, in op.BeginInput) (op.Step, error)
-	continueFn func(ctx context.Context, sub op.FormSubmission) (op.Step, error)
+	continueFn func(ctx context.Context, in op.ContinueInput) (op.Step, error)
 }
 
 func (s *stubAuthenticator) Type() op.FactorType { return s.typeID }
@@ -69,8 +69,8 @@ func (s *stubAuthenticator) Begin(ctx context.Context, in op.BeginInput) (op.Ste
 	return s.beginFn(ctx, in)
 }
 
-func (s *stubAuthenticator) Continue(ctx context.Context, sub op.FormSubmission) (op.Step, error) {
-	return s.continueFn(ctx, sub)
+func (s *stubAuthenticator) Continue(ctx context.Context, in op.ContinueInput) (op.Step, error) {
+	return s.continueFn(ctx, in)
 }
 
 // stubInteraction is a hand-rolled op.Interaction.
@@ -78,7 +78,7 @@ type stubInteraction struct {
 	name       string
 	trigger    op.InteractionTrigger
 	beginFn    func(ctx context.Context, in op.BeginInput) (op.Step, error)
-	continueFn func(ctx context.Context, sub op.FormSubmission) (op.Step, error)
+	continueFn func(ctx context.Context, in op.ContinueInput) (op.Step, error)
 }
 
 func (i *stubInteraction) Name() string                   { return i.name }
@@ -87,8 +87,8 @@ func (i *stubInteraction) Begin(ctx context.Context, in op.BeginInput) (op.Step,
 	return i.beginFn(ctx, in)
 }
 
-func (i *stubInteraction) Continue(ctx context.Context, sub op.FormSubmission) (op.Step, error) {
-	return i.continueFn(ctx, sub)
+func (i *stubInteraction) Continue(ctx context.Context, in op.ContinueInput) (op.Step, error) {
+	return i.continueFn(ctx, in)
 }
 
 // stubRisk is a hand-rolled op.RiskAssessor whose Assess returns a
@@ -151,7 +151,7 @@ func TestTickSinglePasswordSuccess(t *testing.T) {
 		beginFn: func(_ context.Context, _ op.BeginInput) (op.Step, error) {
 			return op.Step{Prompt: passwordPrompt()}, nil
 		},
-		continueFn: func(_ context.Context, _ op.FormSubmission) (op.Step, error) {
+		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
 			return op.Step{Result: &op.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
 		},
 	}
@@ -217,7 +217,7 @@ func TestTickMultiStepEmailOTP(t *testing.T) {
 				Data: op.EmailOTPSendPromptData{},
 			}}, nil
 		},
-		continueFn: func(_ context.Context, _ op.FormSubmission) (op.Step, error) {
+		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
 			step++
 			if step == 1 {
 				return op.Step{Prompt: &op.Prompt{
@@ -533,7 +533,7 @@ func TestTickInteractionBeforeAuthn(t *testing.T) {
 				Data: op.PasswordPromptData{},
 			}}, nil
 		},
-		continueFn: func(_ context.Context, _ op.FormSubmission) (op.Step, error) {
+		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
 			return op.Step{Result: &op.Result{}}, nil
 		},
 	}
@@ -569,7 +569,7 @@ func TestTickInteractionAfterAuthn(t *testing.T) {
 				Data: op.ConsentScopePromptData{},
 			}}, nil
 		},
-		continueFn: func(_ context.Context, _ op.FormSubmission) (op.Step, error) {
+		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
 			return op.Step{Result: &op.Result{}}, nil
 		},
 	}
@@ -666,7 +666,7 @@ func buildSuccessAuthenticator(t op.FactorType, aal op.AAL, amr string) *stubAut
 		beginFn: func(_ context.Context, _ op.BeginInput) (op.Step, error) {
 			return op.Step{Prompt: &prompt}, nil
 		},
-		continueFn: func(_ context.Context, _ op.FormSubmission) (op.Step, error) {
+		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
 			return op.Step{Result: &op.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
 		},
 	}

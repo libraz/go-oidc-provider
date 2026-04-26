@@ -84,7 +84,7 @@ func (s stubAuthenticator) Begin(_ context.Context, _ op.BeginInput) (op.Step, e
 	return op.Step{}, nil
 }
 
-func (s stubAuthenticator) Continue(_ context.Context, _ op.FormSubmission) (op.Step, error) {
+func (s stubAuthenticator) Continue(_ context.Context, _ op.ContinueInput) (op.Step, error) {
 	return op.Step{}, nil
 }
 
@@ -102,7 +102,7 @@ func (s stubInteraction) Begin(_ context.Context, _ op.BeginInput) (op.Step, err
 	return op.Step{}, nil
 }
 
-func (s stubInteraction) Continue(_ context.Context, _ op.FormSubmission) (op.Step, error) {
+func (s stubInteraction) Continue(_ context.Context, _ op.ContinueInput) (op.Step, error) {
 	return op.Step{}, nil
 }
 
