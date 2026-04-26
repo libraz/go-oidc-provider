@@ -2,7 +2,6 @@ package authorizeendpoint
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -202,15 +201,4 @@ func scopeIsSubset(want, have []string) bool {
 		}
 	}
 	return true
-}
-
-// trimTrailingSlash returns p without a trailing slash, except for the
-// single-slash root path which is preserved verbatim. The helper exists so
-// callers passing "/oidc/interaction" or "/oidc/interaction/" both produce
-// the same mux pattern.
-func trimTrailingSlash(p string) string {
-	if p == "/" {
-		return p
-	}
-	return strings.TrimRight(p, "/")
 }

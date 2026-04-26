@@ -232,7 +232,9 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid 
 	header := r.Header.Get("X-CSRF-Token")
 	if header == "" {
 		// Form fallback so SPA frameworks that prefer a hidden input
-		// can still drive the endpoint.
+		// can still drive the endpoint. Bound the body before parsing
+		// so a malicious caller cannot exhaust memory.
+		r.Body = http.MaxBytesReader(w, r.Body, maxInteractionBodyBytes)
 		if err := r.ParseForm(); err == nil {
 			header = r.PostForm.Get("csrf_token")
 		}

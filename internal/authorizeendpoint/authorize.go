@@ -174,7 +174,13 @@ type authorizeHint struct {
 // returned to the caller so it can clear the cookie when appropriate.
 func resolveSession(r *http.Request, deps resolved) (*sessions.Active, error) {
 	c, err := r.Cookie(cookie.SessionProfile.Name)
-	if err != nil || c == nil || c.Value == "" {
+	if err != nil {
+		// http.ErrNoCookie is the only documented error from r.Cookie;
+		// any return value here is treated as "no session" because we
+		// cannot decode what the browser did not send.
+		return nil, nil //nolint:nilerr,nilnil // documented "no session" sentinel
+	}
+	if c == nil || c.Value == "" {
 		return nil, nil //nolint:nilnil // documented "no session" sentinel
 	}
 	return deps.Sessions.Resolve(r.Context(), c.Value)
@@ -193,39 +199,86 @@ func computeAuthorizeHint(
 	active *sessions.Active,
 	now time.Time,
 ) authorizeHint {
-	hasSession := active != nil
-	forceLogin := containsString(req.Prompt, interaction.PromptLogin)
-	if !forceLogin && hasSession && req.MaxAge != nil {
+	state := buildHintState(ctx, deps, req, client, active, now)
+	if state.promptNone {
+		return decideHintPromptNone(state)
+	}
+	return decideHintInteractive(state)
+}
+
+// hintState collects the pre-computed flags that drive
+// [computeAuthorizeHint]. It is a value type because the per-request flag
+// set is small enough to copy and the readability win is worth more than
+// the marginal allocation.
+type hintState struct {
+	hasSession  bool
+	forceLogin  bool
+	needConsent bool
+	promptNone  bool
+	selectAcct  bool
+	existing    *store.Grant
+}
+
+// buildHintState computes the orthogonal flag set used by the decision
+// matrix. The function is pure aside from the grant lookup; tests that
+// need to exercise the matrix in isolation can construct hintState
+// directly.
+func buildHintState(
+	ctx context.Context,
+	deps resolved,
+	req *authorize.Request,
+	client *store.Client,
+	active *sessions.Active,
+	now time.Time,
+) hintState {
+	out := hintState{
+		hasSession: active != nil,
+		forceLogin: containsString(req.Prompt, interaction.PromptLogin),
+		promptNone: containsString(req.Prompt, "none"),
+		selectAcct: containsString(req.Prompt, interaction.PromptSelectAccount),
+	}
+	if !out.forceLogin && out.hasSession && req.MaxAge != nil {
 		if now.UTC().Sub(active.Session.AuthTime.UTC()) > time.Duration(*req.MaxAge)*time.Second {
-			forceLogin = true
+			out.forceLogin = true
 		}
 	}
-	var existing *store.Grant
-	if hasSession {
-		g, err := deps.Grants.FindBySubjectClient(ctx, active.Session.Subject, client.ID)
-		if err == nil {
-			existing = g
+	if out.hasSession {
+		if g, err := deps.Grants.FindBySubjectClient(ctx, active.Session.Subject, client.ID); err == nil {
+			out.existing = g
 		}
 	}
-	needConsent := containsString(req.Prompt, interaction.PromptConsent) ||
-		existing == nil ||
-		!scopeIsSubset(req.Scope, existing.Scope)
-	promptNone := containsString(req.Prompt, "none")
+	out.needConsent = containsString(req.Prompt, interaction.PromptConsent) ||
+		out.existing == nil ||
+		!scopeIsSubset(req.Scope, out.existing.Scope)
+	return out
+}
+
+// decideHintPromptNone resolves the matrix when prompt=none is present.
+// The OIDC spec requires the OP to surface one of the *_required errors
+// rather than start an interaction.
+func decideHintPromptNone(s hintState) authorizeHint {
 	switch {
-	case promptNone && !hasSession:
+	case !s.hasSession, s.forceLogin:
 		return authorizeHint{decision: decisionLoginRequired}
-	case promptNone && forceLogin:
-		return authorizeHint{decision: decisionLoginRequired}
-	case promptNone && needConsent:
+	case s.needConsent:
 		return authorizeHint{decision: decisionConsentRequired}
-	case promptNone && containsString(req.Prompt, interaction.PromptSelectAccount):
+	case s.selectAcct:
 		return authorizeHint{decision: decisionInteractionRequired}
-	case !hasSession || forceLogin:
+	default:
+		return authorizeHint{decision: decisionMint, grant: s.existing}
+	}
+}
+
+// decideHintInteractive resolves the matrix when prompt!=none. The
+// outcome is either a silent code mint or an interaction redirect.
+func decideHintInteractive(s hintState) authorizeHint {
+	switch {
+	case !s.hasSession, s.forceLogin:
 		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptLogin}
-	case needConsent:
+	case s.needConsent:
 		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptConsent}
 	default:
-		return authorizeHint{decision: decisionMint, grant: existing}
+		return authorizeHint{decision: decisionMint, grant: s.existing}
 	}
 }
 

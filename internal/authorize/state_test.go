@@ -10,7 +10,7 @@ import (
 
 // fixedNow is the canonical wall-clock reading the snapshot tests use. A
 // constant time keeps "CreatedUnix" comparisons readable.
-var fixedNow = time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC) //nolint:gochecknoglobals // shared test fixture.
+var fixedNow = time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 
 func TestSnapshotFrom_NilRequest(t *testing.T) {
 	t.Parallel()
