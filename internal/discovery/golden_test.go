@@ -37,6 +37,7 @@ func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 			"client_secret_post",
 			"private_key_jwt",
 		},
+		ScopesSupported: []string{"openid", "profile", "email", "address", "phone", "offline_access"},
 	})
 	golden.JSON(t, doc, "testdata/discovery_full.golden.json")
 }
@@ -58,6 +59,7 @@ func TestDiscovery_Golden_MinimalProfile(t *testing.T) {
 			UserInfo:  "/userinfo",
 		},
 		GrantsSupported: []string{"authorization_code"},
+		ScopesSupported: []string{"openid", "profile", "email", "address", "phone", "offline_access"},
 	})
 	golden.JSON(t, doc, "testdata/discovery_minimal.golden.json")
 }

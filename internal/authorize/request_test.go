@@ -63,7 +63,7 @@ func TestParseRequest_HappyGET(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	if err := req.Validate(goodClient()); err != nil {
+	if err := req.Validate(goodClient(), nil); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestParseRequest_HappyPOST(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	if err := req.Validate(goodClient()); err != nil {
+	if err := req.Validate(goodClient(), nil); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }
@@ -204,7 +204,7 @@ func TestValidate_SentinelTable(t *testing.T) {
 			case parseErr != nil:
 				gotErr = parseErr
 			default:
-				gotErr = req.Validate(goodClient())
+				gotErr = req.Validate(goodClient(), nil)
 			}
 			if !errors.Is(gotErr, tc.want) {
 				t.Fatalf("err=%v want %v", gotErr, tc.want)
@@ -230,7 +230,7 @@ func TestParseValues_DuplicateParameter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseValues: %v", err)
 		}
-		if err := req.Validate(goodClient()); err != nil {
+		if err := req.Validate(goodClient(), nil); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
 	})
@@ -311,7 +311,7 @@ func TestParseValues_MaxAgeBoundaries(t *testing.T) {
 		if req.MaxAge == nil || *req.MaxAge != 0 {
 			t.Errorf("MaxAge=%v want pointer to 0", req.MaxAge)
 		}
-		if err := req.Validate(goodClient()); err != nil {
+		if err := req.Validate(goodClient(), nil); err != nil {
 			t.Errorf("Validate: %v", err)
 		}
 	})
@@ -329,7 +329,7 @@ func TestValidate_PromptCombinations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseValues: %v", err)
 	}
-	if err := req.Validate(goodClient()); err != nil {
+	if err := req.Validate(goodClient(), nil); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
 }

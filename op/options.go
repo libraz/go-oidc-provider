@@ -67,6 +67,20 @@ type config struct {
 	// crossSiteFlow is the §F.3 opt-in for SameSite=None on session
 	// cookies. Off by default per the production-grade posture.
 	crossSiteFlow bool
+
+	// scopes captures the [Scope] values registered through
+	// [WithScope] in the order they were supplied. Order is preserved
+	// so a later mutation of the slice does not silently change the
+	// registered set, and so applyDefaults can deterministically
+	// decide whether to emit a built-in entry for an unregistered
+	// standard scope.
+	scopes []Scope
+
+	// scopeIndex is the Name → Scope lookup built by [validate]
+	// after duplicate detection has run. It is nil before validate
+	// returns; consumers MUST go through [config.scopeIndex] only on
+	// the post-validate config.
+	scopeIndex map[string]Scope
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -105,6 +119,53 @@ func (c *config) applyDefaults() {
 	if len(c.grants) == 0 {
 		c.grants = []grant.Type{grant.AuthorizationCode, grant.RefreshToken}
 	}
+	c.fillStandardScopes()
+}
+
+// fillStandardScopes appends a built-in entry for every OIDC standard
+// scope (openid, profile, email, address, phone, offline_access) that
+// the caller has not already registered through [WithScope]. The
+// built-in entries carry only the Name and Public: true; embedders who
+// want translations or icons supply them by calling [WithScope] with a
+// matching Name.
+func (c *config) fillStandardScopes() {
+	registered := make(map[string]struct{}, len(c.scopes))
+	for _, s := range c.scopes {
+		registered[s.Name] = struct{}{}
+	}
+	for _, name := range standardScopeNames {
+		if _, ok := registered[name]; ok {
+			continue
+		}
+		c.scopes = append(c.scopes, Scope{Name: name, Public: true})
+	}
+}
+
+// standardScopeNames lists the OIDC standard scope identifiers the
+// library always recognises. Order is the canonical OIDC §5.4 listing
+// so the discovery document keeps a familiar shape when the embedder
+// registers no custom scopes.
+//
+//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
+var standardScopeNames = []string{
+	string(ScopeNameOpenID),
+	string(ScopeNameProfile),
+	string(ScopeNameEmail),
+	string(ScopeNameAddress),
+	string(ScopeNamePhone),
+	string(ScopeNameOfflineAccess),
+}
+
+// isStandardScope reports whether name is one of the OIDC standard
+// scope identifiers. Used by [config.validate] to enforce the rule
+// that standard scopes cannot be registered with Public: false.
+func isStandardScope(name string) bool {
+	for _, n := range standardScopeNames {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // validate checks that required fields are set and that combinations of
@@ -142,6 +203,46 @@ func (c *config) validate() error {
 			Description: "WithCORSOrigins rejected by parser",
 			Cause:       err,
 		}
+	}
+	if err := c.validateScopes(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateScopes enforces the [WithScope] invariants and builds
+// [config.scopeIndex] for the post-validate config:
+//
+//   - every registered Scope has a non-empty Name
+//   - no two registrations share a Name
+//   - no OIDC standard scope is registered with Public: false (the
+//     discovery document MUST/SHOULD list them per §3)
+//
+// The check runs after [config.applyDefaults] so the standard-scope
+// fill never produces a duplicate; embedder-registered standard
+// scopes always win over the built-in placeholder.
+func (c *config) validateScopes() error {
+	c.scopeIndex = make(map[string]Scope, len(c.scopes))
+	for _, s := range c.scopes {
+		if s.Name == "" {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithScope: Name must not be empty",
+			}
+		}
+		if _, dup := c.scopeIndex[s.Name]; dup {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithScope: duplicate scope " + s.Name,
+			}
+		}
+		if isStandardScope(s.Name) && !s.Public {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "standard OIDC scope " + s.Name + " cannot be registered with Public: false",
+			}
+		}
+		c.scopeIndex[s.Name] = s
 	}
 	return nil
 }
@@ -555,6 +656,36 @@ func WithCORSOrigins(origins ...string) Option {
 			}
 		}
 		c.corsOrigins = append(c.corsOrigins, origins...)
+		return nil
+	})
+}
+
+// WithScope registers metadata for a single OAuth scope. Calling the
+// option multiple times accumulates entries; duplicate Name values
+// across calls are rejected at [New] construction time.
+//
+// Standard OIDC scopes (openid, profile, email, address, phone,
+// offline_access) are recognised automatically with built-in defaults
+// (Public: true, no UI text). Registering a standard scope through
+// [WithScope] overrides the built-in entry — typically to attach
+// translations or claim mappings — but registering one with
+// Public: false fails [New] so the discovery document never violates
+// OpenID Connect Discovery 1.0 §3.
+//
+// AllowedClients is enforced at the authorize and token endpoints: a
+// non-empty list restricts the scope to the listed client_id values
+// and any other client receives invalid_scope per RFC 6749 §5.2.
+//
+// Stable since v0.1.
+func WithScope(s Scope) Option {
+	return optionFunc(func(c *config) error {
+		if s.Name == "" {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithScope: Name must not be empty",
+			}
+		}
+		c.scopes = append(c.scopes, s)
 		return nil
 	})
 }

@@ -28,11 +28,40 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
+	if !checkRefreshScopeAllowlist(w, deps, client.ID, in.RequestedScope) {
+		return
+	}
 	exchanged, ok := exchangeRefresh(ctx, w, deps, client.ID, in)
 	if !ok {
 		return
 	}
 	issueRefreshResponse(ctx, w, deps, client, exchanged)
+}
+
+// checkRefreshScopeAllowlist enforces the per-scope AllowedClients
+// allowlist for any scope the RP explicitly requested at /token. The
+// check runs before [refresh.Exchanger.Exchange] so an allowlist
+// violation does not consume the presented refresh token. An empty
+// requested-scope list bypasses the check; the rotated token reuses
+// the bound scope, which was already validated when the originating
+// authorization code was issued.
+func checkRefreshScopeAllowlist(
+	w http.ResponseWriter,
+	deps Deps,
+	clientID string,
+	requested []string,
+) bool {
+	if deps.Scopes == nil || len(requested) == 0 {
+		return true
+	}
+	for _, s := range requested {
+		if !deps.Scopes.Allows(s, clientID) {
+			writeError(w, http.StatusBadRequest, errInvalidScope,
+				"scope is restricted to a different client")
+			return false
+		}
+	}
+	return true
 }
 
 // refreshInputs is the de-structured view of the form parameters the

@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -109,6 +110,11 @@ type Deps struct {
 	// an [authn.PrivateKeyJWTVerifier] (or a custom implementation) to
 	// support the asymmetric authentication path.
 	AssertionVerifier authn.AssertionVerifier
+
+	// Scopes is the read-only scope registry the handler consults
+	// when accepting a refresh-time scope override. A nil value
+	// disables only the per-scope AllowedClients allowlist check.
+	Scopes *scoperegistry.Registry
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.

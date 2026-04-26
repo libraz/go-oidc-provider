@@ -55,8 +55,11 @@ type Document struct {
 	// to sign ID tokens. v1.0 is "ES256" only.
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
 
-	// ScopesSupported lists the scope values the OP recognises. v1.0
-	// ships with the OpenID Connect Core 1.0 §5.4 set.
+	// ScopesSupported lists the scope values the OP advertises in
+	// discovery. The op layer assembles the list from the OpenID
+	// Connect Core 1.0 §5.4 standard scopes plus every embedder-
+	// registered scope whose Public flag is true; non-public scopes
+	// are intentionally absent from the wire.
 	ScopesSupported []string `json:"scopes_supported"`
 
 	// CodeChallengeMethodsSupported lists the PKCE methods the OP

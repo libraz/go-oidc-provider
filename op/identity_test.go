@@ -39,13 +39,13 @@ func TestParseScopeSet_AndStringRoundtrip(t *testing.T) {
 
 	in := "openid profile email"
 	set := op.ParseScopeSet(in)
-	if !set.Has(op.ScopeOpenID) {
-		t.Error("ScopeOpenID missing")
+	if !set.Has(op.ScopeNameOpenID) {
+		t.Error("ScopeNameOpenID missing")
 	}
-	if !set.Has(op.ScopeProfile) {
-		t.Error("ScopeProfile missing")
+	if !set.Has(op.ScopeNameProfile) {
+		t.Error("ScopeNameProfile missing")
 	}
-	if set.Has(op.ScopeOfflineAccess) {
+	if set.Has(op.ScopeNameOfflineAccess) {
 		t.Error("offline_access must not be present")
 	}
 	// String must be deterministic regardless of input order.

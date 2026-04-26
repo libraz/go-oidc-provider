@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -169,12 +170,16 @@ func ParseValues(v url.Values) (*Request, error) {
 // run first because the eventual HTTP layer cannot redirect errors back to
 // an RP whose redirect target it has not yet trusted.
 //
+// scopes is the OP's read-only scope registry. A nil value disables the
+// AllowedClients allowlist check; the registered-client scope intersection
+// still runs.
+//
 // Callers MUST consult [IsRedirectSafe] before deciding whether to redirect
 // on the returned error. The boundary is: every error produced before
 // redirect_uri verification (ErrClientIDRequired, ErrRedirectURIRequired,
 // ErrRedirectURIInvalid) is NOT redirect-safe; every error produced after
 // is.
-func (req *Request) Validate(client *store.Client) error {
+func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registry) error {
 	if err := req.validateRedirectTarget(client); err != nil {
 		return err
 	}
@@ -184,7 +189,7 @@ func (req *Request) Validate(client *store.Client) error {
 	if err := req.validateState(); err != nil {
 		return err
 	}
-	if err := req.validateScope(client); err != nil {
+	if err := req.validateScope(client, scopes); err != nil {
 		return err
 	}
 	if err := req.validateNonce(); err != nil {
@@ -233,16 +238,20 @@ func (req *Request) validateState() error {
 	return nil
 }
 
-// validateScope enforces the OIDC requirement that "openid" be present and
+// validateScope enforces the OIDC requirement that "openid" be present,
 // the policy that every requested scope appear in the client's registered
-// list.
-func (req *Request) validateScope(client *store.Client) error {
+// list, and the per-scope AllowedClients allowlist (op.Scope.AllowedClients
+// from the registry). A nil registry disables only the allowlist check.
+func (req *Request) validateScope(client *store.Client, scopes *scoperegistry.Registry) error {
 	if !slices.Contains(req.Scope, "openid") {
 		return ErrScopeMissingOpenID
 	}
 	for _, s := range req.Scope {
 		if !slices.Contains(client.Scopes, s) {
 			return ErrScopeNotPermitted
+		}
+		if !scopes.Allows(s, client.ID) {
+			return ErrScopeClientNotAllowed
 		}
 	}
 	return nil

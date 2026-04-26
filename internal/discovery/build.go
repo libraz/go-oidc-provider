@@ -33,6 +33,13 @@ type Input struct {
 	// authentication methods. Empty means the OP advertises a default
 	// set (client_secret_basic, client_secret_post).
 	AuthMethodsSupported []string
+
+	// ScopesSupported lists the scope identifiers the OP advertises
+	// in the discovery document. The op layer pre-filters this list
+	// (built-in standard scopes plus every registered scope whose
+	// Public flag is true) so the discovery builder does not need
+	// any policy of its own.
+	ScopesSupported []string
 }
 
 // EndpointPaths mirrors op.Endpoints with internal-friendly types.
@@ -74,7 +81,7 @@ func Build(in Input) Document {
 		GrantTypesSupported:               in.GrantsSupported,
 		SubjectTypesSupported:             []string{"public"},
 		IDTokenSigningAlgValuesSupported:  []string{"ES256"},
-		ScopesSupported:                   defaultScopes(),
+		ScopesSupported:                   append([]string(nil), in.ScopesSupported...),
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: defaultAuthMethods(in.AuthMethodsSupported),
 	}
@@ -112,13 +119,6 @@ func join(issuer, mountPrefix, endpoint string) string {
 		endpoint = "/" + endpoint
 	}
 	return issuer + mountPrefix + endpoint
-}
-
-// defaultScopes returns the OpenID Connect Core 1.0 §5.4 scope set the OP
-// recognises out of the box. Custom scopes registered via op.WithScope
-// (Phase 2) are appended to this list at higher layers.
-func defaultScopes() []string {
-	return []string{"openid", "profile", "email", "address", "phone", "offline_access"}
 }
 
 // defaultAuthMethods returns the auth-method advertisement, falling back to
