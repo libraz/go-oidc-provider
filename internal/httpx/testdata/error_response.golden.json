@@ -1,0 +1,14 @@
+{
+  "status": 400,
+  "content_type": "application/json; charset=utf-8",
+  "cache_control": "no-store",
+  "body": {
+    "error": "invalid_grant",
+    "error_description": "code already consumed"
+  },
+  "raw_body": {
+    "error": "invalid_grant",
+    "error_description": "code already consumed"
+  },
+  "headers": {}
+}

@@ -1,0 +1,5 @@
+{
+  "error": "invalid_grant",
+  "error_description": "code already consumed",
+  "error_uri": "https://idp.example.com/oidc/errors/invalid_grant"
+}

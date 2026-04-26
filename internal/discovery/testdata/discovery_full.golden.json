@@ -1,0 +1,42 @@
+{
+  "issuer": "https://idp.example.com",
+  "authorization_endpoint": "https://idp.example.com/oidc/auth",
+  "token_endpoint": "https://idp.example.com/oidc/token",
+  "userinfo_endpoint": "https://idp.example.com/oidc/userinfo",
+  "jwks_uri": "https://idp.example.com/oidc/jwks",
+  "end_session_endpoint": "https://idp.example.com/oidc/end_session",
+  "introspection_endpoint": "https://idp.example.com/oidc/introspect",
+  "revocation_endpoint": "https://idp.example.com/oidc/revoke",
+  "pushed_authorization_request_endpoint": "https://idp.example.com/oidc/par",
+  "response_types_supported": [
+    "code"
+  ],
+  "grant_types_supported": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "subject_types_supported": [
+    "public"
+  ],
+  "id_token_signing_alg_values_supported": [
+    "ES256"
+  ],
+  "scopes_supported": [
+    "openid",
+    "profile",
+    "email",
+    "address",
+    "phone",
+    "offline_access"
+  ],
+  "code_challenge_methods_supported": [
+    "S256"
+  ],
+  "token_endpoint_auth_methods_supported": [
+    "client_secret_basic",
+    "client_secret_post",
+    "private_key_jwt"
+  ],
+  "request_parameter_supported": true,
+  "request_uri_parameter_supported": true
+}
