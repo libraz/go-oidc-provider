@@ -92,10 +92,10 @@ type config struct {
 	dcr *RegistrationOption
 
 	// authenticators carries the [Authenticator] values registered
-	// through [WithAuthenticators]. The orchestrator (forthcoming)
-	// presents factors in this order when [RiskAssessor] does not
-	// override the choice. Order is preserved; duplicates by
-	// [Authenticator.Type] are rejected at construction time.
+	// through [WithAuthenticators]. The orchestrator presents factors
+	// in this order when [RiskAssessor] does not override the choice.
+	// Order is preserved; duplicates by [Authenticator.Type] are
+	// rejected at construction time.
 	authenticators []Authenticator
 
 	// captcha is the optional [CaptchaVerifier] the orchestrator
@@ -284,16 +284,16 @@ func (c *config) validate() error {
 }
 
 // validateAuthenticators enforces uniqueness of [Authenticator.Type]
-// across the registered set. The orchestrator (task B) layers further
-// rules on top — minimum cardinality, capability checks against the
-// risk engine — but the bare uniqueness invariant is owned here so
+// across the registered set. The orchestrator layers further rules on
+// top — minimum cardinality, capability checks against the risk
+// engine — but the bare uniqueness invariant is owned here so
 // duplicate registrations surface at [New] rather than the first
 // chain run.
 func (c *config) validateAuthenticators() error {
 	if len(c.authenticators) == 0 {
 		// Zero authenticators is permitted at this layer; the
-		// orchestrator is responsible for surfacing the missing-
-		// authenticator construction error once it lands.
+		// orchestrator surfaces the missing-authenticator
+		// construction error when [New] wires the chain runner.
 		return nil
 	}
 	seen := make(map[FactorType]struct{}, len(c.authenticators))
@@ -717,9 +717,9 @@ func WithProfile(p profile.Profile) Option {
 
 // WithInteraction registers the [interaction.Driver] that bridges the OP
 // state machine to the user-facing UI. If unset, the [Provider] uses
-// [interaction.NoopDriver], which fails closed: every interactive request
-// is rejected with the "no_driver_configured" reason so a misconfigured
-// deployment surfaces the missing UI rather than silently looping.
+// [interaction.JSONDriver], which speaks JSON over HTTP: every prompt
+// is written as a JSON envelope and every submission is decoded from a
+// JSON body. SSR or framework-specific Drivers replace it.
 //
 // Stable since v0.1.
 func WithInteraction(d interaction.Driver) Option {
@@ -895,13 +895,12 @@ func WithCrossSiteFlow() Option {
 // construction time.
 //
 // At least one authenticator is required for an interactive [Provider]
-// to mount /authorize. The construction error for the empty-set case
-// is surfaced by the orchestrator once it lands; this option only
-// stores the registered values.
+// to mount /authorize. The orchestrator surfaces the empty-set case
+// as a construction error at [New] time; this option only stores the
+// registered values.
 //
-// Experimental: the orchestrator that consumes this slice is being
-// designed; the option name and contract are stable but the exact
-// per-authenticator semantics may evolve.
+// Experimental: the option name and contract are stable but per-
+// authenticator semantics may still evolve before v1.0.
 func WithAuthenticators(a ...Authenticator) Option {
 	return optionFunc(func(c *config) error {
 		if len(a) == 0 {
@@ -932,8 +931,8 @@ func WithAuthenticators(a ...Authenticator) Option {
 //
 // See docs/plans/002-product-design.md §M.6.1.
 //
-// Experimental: the orchestrator that drives this verifier is being
-// designed.
+// Experimental: the verifier contract is stable but the orchestrator
+// trigger points around it may still evolve before v1.0.
 func WithCaptchaVerifier(v CaptchaVerifier) Option {
 	return optionFunc(func(c *config) error {
 		if v == nil {
@@ -960,8 +959,8 @@ func WithCaptchaVerifier(v CaptchaVerifier) Option {
 //
 // See docs/plans/002-product-design.md §M.6.2.
 //
-// Experimental: the orchestrator that drives this assessor is being
-// designed.
+// Experimental: the assessor contract is stable but the orchestrator
+// trigger points around it may still evolve before v1.0.
 func WithRiskAssessor(a RiskAssessor) Option {
 	return optionFunc(func(c *config) error {
 		if a == nil {
@@ -989,8 +988,8 @@ func WithRiskAssessor(a RiskAssessor) Option {
 //
 // See docs/plans/002-product-design.md §M.6.3.
 //
-// Experimental: the orchestrator that emits these events is being
-// designed.
+// Experimental: the observer contract is stable but the orchestrator
+// emission points around it may still evolve before v1.0.
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 	return optionFunc(func(c *config) error {
 		if o == nil {
@@ -1012,11 +1011,11 @@ func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 // time.
 //
 // The library-built-in consent screen is registered automatically by
-// the orchestrator (task B); user extensions ship with a unique
-// dotted [Interaction.Name] (e.g., "myorg.tos.accept").
+// the orchestrator; user extensions ship with a unique dotted
+// [Interaction.Name] (e.g., "myorg.tos.accept").
 //
-// Experimental: the orchestrator that drives these interactions is
-// being designed.
+// Experimental: the contract is stable but per-interaction semantics
+// may still evolve before v1.0.
 func WithInteractions(i ...Interaction) Option {
 	return optionFunc(func(c *config) error {
 		if len(i) == 0 {

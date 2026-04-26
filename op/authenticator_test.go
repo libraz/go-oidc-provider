@@ -65,10 +65,9 @@ func TestFactorType_String(t *testing.T) {
 }
 
 // stubAuthenticator is the minimal [op.Authenticator] used by option-
-// validation tests. Begin / Continue are never invoked in this task
-// (the orchestrator that exercises them lands in a follow-up task);
-// the stub returns zero values so the compile-time interface check is
-// the value the test extracts.
+// validation tests. Begin / Continue are never invoked from these
+// tests; the stub returns zero values so the compile-time interface
+// check is the value the test extracts.
 type stubAuthenticator struct {
 	typ     op.FactorType
 	aal     op.AAL

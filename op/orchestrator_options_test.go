@@ -11,9 +11,8 @@ import (
 )
 
 // stubCaptcha is the minimal [op.CaptchaVerifier] used by option-
-// validation tests. Verify is not invoked here (the orchestrator that
-// drives it lands in a follow-up task); the stub exists so [op.New]
-// can accept a non-nil interface value.
+// validation tests. Verify is not invoked at construction time; the
+// stub exists so [op.New] can accept a non-nil interface value.
 type stubCaptcha struct{}
 
 func (stubCaptcha) Verify(_ context.Context, _ op.CaptchaInput) error { return nil }
@@ -28,9 +27,10 @@ func (stubRisk) Assess(_ context.Context, _ op.RiskInput) (op.RiskOutcome, error
 
 // stubObserver is the minimal [op.LoginAttemptObserver] used by
 // option-validation tests. The fields capture invocation count so
-// fan-out tests can assert against it without race-prone shared state
-// (the orchestrator that drives Observe lands later, so the count
-// stays at zero in this task).
+// fan-out tests can assert against it without race-prone shared state.
+// The count stays at zero in option-validation tests because Observe
+// is only invoked from a live authentication chain, not at [op.New]
+// construction time.
 type stubObserver struct {
 	calls int
 }
@@ -209,9 +209,10 @@ func TestWithLoginAttemptObserver_AcceptsMultiple(t *testing.T) {
 	if provider == nil {
 		t.Fatal("expected non-nil provider")
 	}
-	// Orchestrator (task B) is responsible for invoking observers;
-	// the count is zero here — the assertion exists only to prove the
-	// stub field is reachable through the public surface.
+	// The orchestrator invokes observers from a live authentication
+	// chain; option-validation tests never run a chain, so the count
+	// stays zero. The assertion exists only to prove the stub field is
+	// reachable through the public surface.
 	if a.calls != 0 || b.calls != 0 {
 		t.Errorf("observers must not be invoked at construction time; got a=%d b=%d", a.calls, b.calls)
 	}
@@ -332,9 +333,8 @@ func TestPromptDataSealing(t *testing.T) {
 
 // TestRiskInput_FieldsAreReachable is a smoke test that the public
 // [op.RiskInput] / [op.RiskOutcome] / [op.LoginAttempt] surface stays
-// addressable. The orchestrator that drives them is in a later task;
-// the assertion exists so renames during this task surface
-// immediately.
+// addressable. The assertion exists so renames of the public types
+// surface immediately as a compile error here.
 func TestRiskInput_FieldsAreReachable(t *testing.T) {
 	t.Parallel()
 

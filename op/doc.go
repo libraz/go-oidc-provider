@@ -18,7 +18,8 @@
 //	handler, err := op.New(
 //	    op.WithIssuer("https://idp.example.com"),
 //	    op.WithKeyset(myKeyset),
-//	    op.WithClientStore(myClientStore),
+//	    op.WithStore(myStore),
+//	    op.WithCookieKeys(myAES256GCMKey),
 //	)
 //	if err != nil {
 //	    log.Fatal(err)
