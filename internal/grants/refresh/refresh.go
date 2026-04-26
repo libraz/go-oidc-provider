@@ -137,6 +137,13 @@ type IssueInput struct {
 	GrantID  string
 	Scope    []string
 	ParentID *string
+
+	// DPoPJKT is the RFC 7638 thumbprint of the DPoP key the
+	// associated access token is bound to (RFC 9449 §6.1). Non-empty
+	// values are persisted on the [store.RefreshToken] record; the
+	// rotation handler later requires a matching proof on every
+	// refresh request. Empty means the refresh chain is bearer.
+	DPoPJKT string
 }
 
 // Issue mints a new refresh token and persists it. It returns the opaque
@@ -160,6 +167,7 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 		ParentID:  cloneStringPtr(in.ParentID),
 		ExpiresAt: now.Add(i.ttl),
 		CreatedAt: now,
+		DPoPJKT:   in.DPoPJKT,
 	}
 	if err := i.store.Save(ctx, rec); err != nil {
 		return "", fmt.Errorf("refresh: save: %w", err)
@@ -247,6 +255,13 @@ type Exchanged struct {
 	// the consumption. It is populated by the store, not the exchanger's
 	// clock, so the audit trail reflects the persistence layer.
 	ConsumedAt time.Time
+
+	// DPoPJKT is the RFC 7638 thumbprint the chain was bound to at
+	// issuance, copied verbatim from the consumed record. Empty means
+	// the chain is bearer; non-empty means the rotation handler MUST
+	// require a DPoP proof whose JWK thumbprint equals this value
+	// before minting the next-generation token.
+	DPoPJKT string
 }
 
 // Exchange consumes the token, verifies the bindings, and returns the
@@ -282,6 +297,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		GrantID:    rec.GrantID,
 		Scope:      resolvedScope,
 		ConsumedAt: *rec.ConsumedAt,
+		DPoPJKT:    rec.DPoPJKT,
 	}, nil
 }
 

@@ -38,5 +38,9 @@
     "private_key_jwt"
   ],
   "request_parameter_supported": true,
-  "request_uri_parameter_supported": true
+  "request_uri_parameter_supported": true,
+  "dpop_signing_alg_values_supported": [
+    "ES256",
+    "EdDSA"
+  ]
 }

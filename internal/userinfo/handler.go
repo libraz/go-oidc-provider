@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -57,6 +58,12 @@ type HandlerDeps struct {
 	// it releases. Embedders register custom scopes via op.WithScope;
 	// the value is threaded through to [Build] verbatim.
 	CustomScopeClaims map[string][]string
+
+	// DPoP is the RFC 9449 proof verifier. A nil value disables
+	// DPoP enforcement entirely; tokens carrying cnf.jkt are then
+	// rejected to fail closed (silently downgrading a sender-
+	// constrained token to bearer would defeat the binding).
+	DPoP *dpop.Verifier
 }
 
 // Handler returns the /userinfo [http.Handler]. Behaviour follows
@@ -93,12 +100,73 @@ func Handler(deps HandlerDeps) http.Handler {
 			respondInvalidToken(w, err)
 			return
 		}
+		if !enforceCnfBinding(w, r, deps, claims, raw) {
+			return
+		}
 		out, ok := assembleClaims(r.Context(), w, deps, claims)
 		if !ok {
 			return
 		}
 		writeJSON(w, out)
 	})
+}
+
+// enforceCnfBinding verifies the DPoP proof on the request when the
+// access token carries a cnf.jkt confirmation (RFC 9449 §6.2). The
+// function emits a 401 with the appropriate WWW-Authenticate challenge
+// and returns false on any failure so the caller stops processing. A
+// missing cnf claim leaves the request on the bearer path; a present
+// cnf claim demands a proof, and the proof's thumbprint MUST equal
+// the bound value.
+func enforceCnfBinding(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps HandlerDeps,
+	claims *tokens.AccessTokenClaims,
+	rawAccessToken string,
+) bool {
+	jkt := ""
+	if claims.Confirmation != nil {
+		jkt = claims.Confirmation["jkt"]
+	}
+	if jkt == "" {
+		// Bearer token: nothing to enforce.
+		return true
+	}
+	if deps.DPoP == nil {
+		// Sender-constrained token presented at a verifier with DPoP
+		// disabled: fail closed. Echoing the cause via
+		// WWW-Authenticate gives the RP a clear remediation path.
+		respondDPoPInvalid(w, "DPoP verification is not enabled")
+		return false
+	}
+	header := r.Header.Get("DPoP")
+	if header == "" {
+		respondDPoPInvalid(w, "DPoP proof required")
+		return false
+	}
+	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, rawAccessToken)
+	if err != nil {
+		respondDPoPInvalid(w, "DPoP proof rejected")
+		return false
+	}
+	if res.JKT != jkt {
+		respondDPoPInvalid(w, "DPoP proof key does not match the bound thumbprint")
+		return false
+	}
+	return true
+}
+
+// respondDPoPInvalid writes the RFC 9449 §7.1 challenge for a token
+// that requires DPoP but failed verification. The library uses the
+// "invalid_token" code (rather than the spec's "invalid_dpop_proof")
+// so RP libraries that key off the OAuth-Bearer challenge taxonomy
+// continue to function; the description carries enough detail for
+// the operator to triage the failure from logs.
+func respondDPoPInvalid(w http.ResponseWriter, description string) {
+	w.Header().Set("WWW-Authenticate",
+		`DPoP error="invalid_token", error_description="`+description+`"`)
+	w.WriteHeader(http.StatusUnauthorized)
 }
 
 // methodAllowed reports whether method is one of the two verbs the

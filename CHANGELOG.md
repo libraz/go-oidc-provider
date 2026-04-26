@@ -13,3 +13,11 @@ in any minor release.
 
 - Initial repository scaffold (Apache-2.0 license, contribution guide, security
   policy, baseline `op` package skeleton).
+- RFC 9449 DPoP (Demonstrating Proof of Possession). Enabled via
+  `op.WithFeature(feature.DPoP)`. The token endpoint binds issued
+  access and refresh tokens to the proof's JWK thumbprint (`cnf.jkt`),
+  the userinfo endpoint enforces the binding, and refresh requests
+  must present a matching proof. Replay protection is wired through
+  the existing `store.ConsumedJTIStore`. Discovery advertises the
+  accepted proof signing algorithms via
+  `dpop_signing_alg_values_supported` (ES256, EdDSA).

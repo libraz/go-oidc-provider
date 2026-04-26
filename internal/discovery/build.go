@@ -98,6 +98,12 @@ func Build(in Input) Document {
 		doc.RequestParameterSupported = true
 		doc.RequestURIParameterSupported = true
 	}
+	if in.Features.DPoP {
+		// RFC 9449 §5.1: emit the alg values the OP accepts on
+		// proof JWTs. The list mirrors [internal/dpop] allowed
+		// algorithms; ES256 / EdDSA is the FAPI 2.0 baseline.
+		doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA"}
+	}
 	return doc
 }
 

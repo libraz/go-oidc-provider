@@ -18,6 +18,10 @@ import (
 // consumes the presented token), id_token re-issuance for OIDC grants,
 // and rotation (which mints a new refresh token whose ParentID points
 // at the just-consumed one).
+//
+// When the consumed refresh token was DPoP-bound the rotation path
+// requires a matching proof on the request and re-binds the issued
+// access / refresh tokens to the same thumbprint (RFC 9449 §5.2).
 func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	ctx := r.Context()
 	client, _, ok := authenticate(ctx, w, r, deps)
@@ -35,7 +39,11 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	issueRefreshResponse(ctx, w, deps, client, exchanged)
+	dpopOut, ok := requireDPoPMatch(w, r, deps, exchanged.DPoPJKT)
+	if !ok {
+		return
+	}
+	issueRefreshResponse(ctx, w, deps, client, exchanged, dpopOut.JKT)
 }
 
 // checkRefreshScopeAllowlist enforces the per-scope AllowedClients
@@ -160,16 +168,25 @@ func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 // refresh token (mints a fresh one whose ParentID is the just-consumed
 // id). Failure on any step writes a 500 because the exchange has
 // already committed; we cannot un-consume the presented token.
+//
+// dpopJKT is the thumbprint to bind on the rotated tokens. The caller
+// passes either the verified proof's thumbprint (when DPoP was
+// presented) or the consumed record's bound thumbprint (when the
+// presented refresh token was already DPoP-bound and the proof simply
+// matched). Both cases collapse to the same value because
+// [requireDPoPMatch] enforces the equivalence; passing it through
+// keeps a single source of truth on the wire.
 func issueRefreshResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	client *store.Client,
 	exchanged *refresh.Exchanged,
+	dpopJKT string,
 ) {
 	now := deps.now().UTC()
 	authTime := lookupAuthTime(ctx, deps, exchanged.GrantID)
-	accessToken, err := mintAccessToken(deps, exchanged.Subject, client.ID, exchanged.Scope, now, authTime)
+	accessToken, err := mintAccessToken(deps, exchanged.Subject, client.ID, exchanged.Scope, now, authTime, dpopJKT)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -185,14 +202,14 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	rotated, err := rotateRefreshToken(ctx, deps, client.ID, exchanged)
+	rotated, err := rotateRefreshToken(ctx, deps, client.ID, exchanged, dpopJKT)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	writeSuccess(w, successResponse{
 		AccessToken:  accessToken,
-		TokenType:    "Bearer",
+		TokenType:    tokenType(dpopJKT),
 		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
 		RefreshToken: rotated,
 		IDToken:      idToken,
@@ -235,12 +252,15 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 // rotateRefreshToken mints the next-generation refresh token whose
 // ParentID points at the just-consumed id. The library always rotates;
 // returning the original token would defeat the §2.2.2 replay defence
-// the exchanger already enforces.
+// the exchanger already enforces. dpopJKT is propagated onto the
+// rotated record so the binding survives across the chain (RFC 9449
+// §6.1).
 func rotateRefreshToken(
 	ctx context.Context,
 	deps Deps,
 	clientID string,
 	exchanged *refresh.Exchanged,
+	dpopJKT string,
 ) (string, error) {
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
@@ -257,5 +277,6 @@ func rotateRefreshToken(
 		GrantID:  exchanged.GrantID,
 		Scope:    append([]string(nil), exchanged.Scope...),
 		ParentID: &parent,
+		DPoPJKT:  dpopJKT,
 	})
 }

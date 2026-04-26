@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
+	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
@@ -130,6 +131,10 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Cause:       err,
 		}
 	}
+	dpopVerifier, err := buildDPoPVerifier(cfg)
+	if err != nil {
+		return nil, err
+	}
 	mux.Handle(cfg.endpoints.Discovery, discHandler)
 	mux.Handle(joinPath(cfg.mountPrefix, cfg.endpoints.JWKS), jwks.Handler(keySet))
 	mux.Handle(
@@ -140,6 +145,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			UserStore: cfg.store.Users(),
 			Clock:     cfg.clock,
 			Leeway:    defaultUserInfoLeeway,
+			DPoP:      dpopVerifier,
 		}),
 	)
 	mux.Handle(
@@ -153,6 +159,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Keys:          keySet,
 			Clock:         cfg.clock,
 			Scopes:        scopes,
+			DPoP:          dpopVerifier,
 		}),
 	)
 	if err := mountAuthorizeHandlers(mux, cfg, scopes); err != nil {
@@ -160,6 +167,33 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	}
 	mountPAREndpoint(mux, cfg, scopes)
 	return mux, nil
+}
+
+// buildDPoPVerifier constructs the RFC 9449 verifier when the [feature.DPoP]
+// flag is enabled, returning nil when the feature is off so call sites
+// can use a simple non-nil check to gate DPoP enforcement. The
+// (*dpop.Verifier, error) signature returns (nil, nil) on the
+// "feature off" path on purpose: callers branch on the verifier's
+// nilness, never on the error, so introducing a sentinel for the
+// "no verifier needed" case would only obscure the wiring.
+//
+//nolint:nilnil // (nil, nil) is the documented "DPoP not enabled" signal.
+func buildDPoPVerifier(cfg *config) (*dpop.Verifier, error) {
+	if !featureEnabled(cfg.features, feature.DPoP) {
+		return nil, nil
+	}
+	v, err := dpop.NewVerifier(dpop.VerifierConfig{
+		JTIs:  cfg.store.ConsumedJTIs(),
+		Clock: cfg.clock,
+	})
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "DPoP verifier construction failed",
+			Cause:       err,
+		}
+	}
+	return v, nil
 }
 
 // mountPAREndpoint registers the /par handler when the [feature.PAR] flag

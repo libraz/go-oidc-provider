@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -115,6 +116,14 @@ type Deps struct {
 	// when accepting a refresh-time scope override. A nil value
 	// disables only the per-scope AllowedClients allowlist check.
 	Scopes *scoperegistry.Registry
+
+	// DPoP is the RFC 9449 proof verifier. A nil value disables DPoP
+	// processing entirely: the handler ignores the "DPoP" header,
+	// issues bearer tokens, and accepts unbound refresh requests.
+	// When non-nil the handler verifies any presented proof, binds
+	// the issued access token via cnf.jkt, and (for refresh) enforces
+	// the proof against the bound thumbprint of the presented token.
+	DPoP *dpop.Verifier
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.

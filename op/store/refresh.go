@@ -54,6 +54,15 @@ type RefreshToken struct {
 	// CreatedAt is the wall-clock time at which the record was first
 	// persisted. It is supplied by the caller.
 	CreatedAt time.Time
+
+	// DPoPJKT is the RFC 7638 SHA-256 thumbprint of the DPoP key the
+	// access token paired with this refresh token was bound to (RFC
+	// 9449 §6 / §6.1). Empty means the chain is bearer; subsequent
+	// refresh requests then need not present a DPoP proof. Non-empty
+	// means every refresh request MUST present a proof whose JWK
+	// thumbprint equals this value, and the rotated access token is
+	// re-bound to the same thumbprint.
+	DPoPJKT string
 }
 
 // RefreshTokenStore is the substore for refresh_token records. It belongs to

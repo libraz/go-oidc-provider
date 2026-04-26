@@ -172,17 +172,18 @@ func (v *AccessTokenVerifier) now() time.Time {
 // space-delimited string form (RFC 6749 §3.3) which we split back into
 // the public slice shape.
 type accessTokenWire struct {
-	Issuer    string          `json:"iss"`
-	Subject   string          `json:"sub"`
-	Audience  json.RawMessage `json:"aud"`
-	ClientID  string          `json:"client_id"`
-	IssuedAt  int64           `json:"iat"`
-	ExpiresAt int64           `json:"exp"`
-	JTI       string          `json:"jti"`
-	Scope     string          `json:"scope"`
-	AuthTime  int64           `json:"auth_time"`
-	ACR       string          `json:"acr"`
-	AMR       []string        `json:"amr"`
+	Issuer       string            `json:"iss"`
+	Subject      string            `json:"sub"`
+	Audience     json.RawMessage   `json:"aud"`
+	ClientID     string            `json:"client_id"`
+	IssuedAt     int64             `json:"iat"`
+	ExpiresAt    int64             `json:"exp"`
+	JTI          string            `json:"jti"`
+	Scope        string            `json:"scope"`
+	AuthTime     int64             `json:"auth_time"`
+	ACR          string            `json:"acr"`
+	AMR          []string          `json:"amr"`
+	Confirmation map[string]string `json:"cnf"`
 }
 
 // decodeAccessTokenClaims parses payload into an [AccessTokenClaims].
@@ -203,17 +204,18 @@ func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 	}
 
 	out := &AccessTokenClaims{
-		Issuer:    w.Issuer,
-		Subject:   w.Subject,
-		Audience:  aud,
-		ClientID:  w.ClientID,
-		IssuedAt:  w.IssuedAt,
-		ExpiresAt: w.ExpiresAt,
-		JTI:       w.JTI,
-		Scope:     splitScope(w.Scope),
-		AuthTime:  w.AuthTime,
-		ACR:       w.ACR,
-		AMR:       w.AMR,
+		Issuer:       w.Issuer,
+		Subject:      w.Subject,
+		Audience:     aud,
+		ClientID:     w.ClientID,
+		IssuedAt:     w.IssuedAt,
+		ExpiresAt:    w.ExpiresAt,
+		JTI:          w.JTI,
+		Scope:        splitScope(w.Scope),
+		AuthTime:     w.AuthTime,
+		ACR:          w.ACR,
+		AMR:          w.AMR,
+		Confirmation: w.Confirmation,
 	}
 	return out, nil
 }

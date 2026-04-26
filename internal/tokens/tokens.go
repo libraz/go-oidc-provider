@@ -98,6 +98,14 @@ type AccessTokenClaims struct {
 	AuthTime  int64    `json:"auth_time,omitempty"`
 	ACR       string   `json:"acr,omitempty"`
 	AMR       []string `json:"amr,omitempty"`
+
+	// Confirmation is the RFC 7800 "cnf" claim. The OP populates it
+	// when a token is sender-constrained: "jkt" for DPoP-bound tokens
+	// (RFC 9449 §6) and, in a future task, "x5t#S256" for mTLS-bound
+	// tokens (RFC 8705 §3). Empty / nil means "bearer", which is the
+	// v1.0 default. The map shape keeps the wire format forward-
+	// compatible with both binding methods landing in the same claim.
+	Confirmation map[string]string `json:"-"`
 }
 
 // ErrSignerInvalid is returned when SignIDToken / SignAccessToken is
@@ -253,6 +261,30 @@ func mergeAccessTokenClaims(c AccessTokenClaims) map[string]any {
 	if len(c.AMR) > 0 {
 		out["amr"] = c.AMR
 	}
+	if cnf := encodeConfirmation(c.Confirmation); cnf != nil {
+		out["cnf"] = cnf
+	}
+	return out
+}
+
+// encodeConfirmation projects the typed [AccessTokenClaims.Confirmation]
+// map onto the wire shape RFC 7800 §3.1 prescribes. An empty / nil
+// input returns nil so the caller can guard the "cnf" assignment with
+// a simple non-nil check.
+func encodeConfirmation(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		if v == "" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }
 
@@ -284,8 +316,6 @@ func joinScope(scopes []string) string {
 // cached) because go-jose's signer holds a reference to the key plus
 // alg-specific state; sharing a signer across goroutines is allowed
 // but the per-call cost is negligible compared to the Sign step.
-//
-//nolint:ireturn // josev4.Signer is the third-party interface we wrap.
 func newSigner(key SigningKey) (josev4.Signer, error) {
 	sk := josev4.SigningKey{
 		Algorithm: josev4.ES256,

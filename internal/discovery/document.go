@@ -82,4 +82,9 @@ type Document struct {
 	// RequirePushedAuthorizationRequests reports whether the OP requires
 	// /par for every authorization request (FAPI 2.0 mandates it).
 	RequirePushedAuthorizationRequests bool `json:"require_pushed_authorization_requests,omitempty"`
+
+	// DPoPSigningAlgValuesSupported lists the JWS alg values the
+	// OP accepts on the "DPoP" header (RFC 9449 §5.1). Only emitted
+	// when the DPoP feature is enabled.
+	DPoPSigningAlgValuesSupported []string `json:"dpop_signing_alg_values_supported,omitempty"`
 }
