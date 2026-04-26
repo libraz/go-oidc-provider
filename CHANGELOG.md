@@ -13,6 +13,17 @@ in any minor release.
 
 - Initial repository scaffold (Apache-2.0 license, contribution guide, security
   policy, baseline `op` package skeleton).
+- Per-client scope registry (`op.Scope`, `op.WithScope`). Scopes carry
+  visibility (`Public` vs `AllowedClients`), descriptions, and consent
+  hints; the registry is consulted by `/authorize`, `/token`, and the
+  discovery document so scope listings agree across surfaces.
+- RFC 9126 Pushed Authorization Requests. Enabled via
+  `op.WithFeature(feature.PAR)`. The `/par` endpoint authenticates the
+  client, persists the request through `store.PushedAuthRequestStore`,
+  and returns a 60s-lifetime `request_uri`
+  (`urn:ietf:params:oauth:request_uri:<32-byte-b64url>`); `/authorize`
+  consumes it one-time and rehydrates the original request. Discovery
+  advertises `pushed_authorization_request_endpoint`.
 - RFC 9449 DPoP (Demonstrating Proof of Possession). Enabled via
   `op.WithFeature(feature.DPoP)`. The token endpoint binds issued
   access and refresh tokens to the proof's JWK thumbprint (`cnf.jkt`),
@@ -35,5 +46,39 @@ in any minor release.
   `internal/mtls.VerifyTLSClientAuth` /
   `internal/mtls.VerifySelfSignedTLSClientAuth`; full wiring at the
   token endpoint is deferred to a follow-up that lands the
-  `TLSClientAuth*` fields on `op/store.Client` alongside the
-  RFC 7591 dynamic-registration work.
+  `TLSClientAuth*` fields on `op/store.Client`.
+- JARM (JWT Authorization Response Mode). Enabled via
+  `op.WithFeature(feature.JARM)`. The `/authorize` endpoint emits the
+  authorization response as a single signed JWT in the
+  `query.jwt` / `fragment.jwt` / `form_post.jwt` / `jwt` response
+  modes; error responses follow the same path so they are tamper-proof.
+  The form-post variant ships with a strict CSP whose `script-src`
+  hash is derived from the inline auto-submit script at package init
+  so the header cannot drift from the body. Discovery advertises
+  `response_modes_supported` and
+  `authorization_signing_alg_values_supported: ["ES256"]`.
+- RFC 7591 / RFC 7592 Dynamic Client Registration. Enabled via
+  `op.WithDynamicRegistration(...)` plus
+  `op.WithFeature(feature.DynamicRegistration)`. The `/register`
+  endpoint accepts Initial Access Tokens minted via
+  `op.Provider.IssueInitialAccessToken`; registered clients receive a
+  `registration_access_token` for self-managed reads, updates, and
+  deletes through the `/register/{client_id}` management endpoint.
+  The store contract grew `InitialAccessTokens()` and
+  `RegistrationAccessTokens()` substores plus a write-side
+  `ClientRegistry` interface; the `inmem` adapter implements all three.
+- RFC 9101 JWT-Secured Authorization Requests (JAR). Enabled via
+  `op.WithFeature(feature.JAR)`. Both `/authorize` and `/par` accept a
+  `request=<JWT>` parameter; `/authorize` additionally accepts
+  preregistered `request_uri` references via `Client.RequestURIs`. The
+  verifier enforces the alg allow-list, JWS signature against the
+  client's `JWKs` / `JWKsURI`, RFC 9101 §6.1 claim checks
+  (`iss == client_id`, `aud == issuer`, `exp` / `nbf` / `iat` skew),
+  and the §6.1 merge rule (request-object claims override wire
+  parameters except `client_id`; nested `request` / `request_uri`
+  rejected). The JWKS fetcher caps response size at 256 KiB, denies
+  private-network URLs, respects `ETag` / `Cache-Control max-age`, and
+  caches by URL with a 5-minute default TTL. Discovery advertises
+  `request_parameter_supported`, `request_uri_parameter_supported`,
+  `require_request_uri_registration: true`, and
+  `request_object_signing_alg_values_supported`.
