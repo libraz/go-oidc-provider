@@ -98,6 +98,7 @@ type Store struct {
 	users        *userStore
 	iats         *iatStore
 	rats         *ratStore
+	totps        *totpStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -121,6 +122,7 @@ func New(opts ...Option) *Store {
 	s.users = newUserStore()
 	s.iats = newIATStore()
 	s.rats = newRATStore()
+	s.totps = newTOTPStore()
 	return s
 }
 
@@ -156,6 +158,13 @@ func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore { return s.i
 
 // RegistrationAccessTokens implements [store.Store].
 func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore { return s.rats }
+
+// TOTPs returns the [store.TOTPStore] backed by this Store. The
+// substore is not part of the aggregate [store.Store] interface (the
+// MFA wiring lives behind a future op option) but the accessor is
+// exposed here so the authn package and its tests can reach the
+// reference implementation without forking the in-memory backend.
+func (s *Store) TOTPs() store.TOTPStore { return s.totps }
 
 // PutUser seeds the in-memory user store with u so tests can drive
 // /userinfo and id_token claim assembly without standing up a real

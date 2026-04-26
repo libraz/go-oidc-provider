@@ -142,6 +142,7 @@ linters:
         - github.com/libraz/go-oidc-provider/op/feature\..*
         - github.com/libraz/go-oidc-provider/op/profile\..*
         - github.com/libraz/go-oidc-provider/internal/log\.Logger
+        - github.com/libraz/go-oidc-provider/internal/timex\.Clock
     nakedret:
       max-func-lines: 30
     nolintlint:
