@@ -100,6 +100,7 @@ type Store struct {
 	rats         *ratStore
 	totps        *totpStore
 	recoveries   *recoveryStore
+	passkeys     *passkeyStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -125,6 +126,7 @@ func New(opts ...Option) *Store {
 	s.rats = newRATStore()
 	s.totps = newTOTPStore()
 	s.recoveries = newRecoveryStore()
+	s.passkeys = newPasskeyStore()
 	return s
 }
 
@@ -175,6 +177,13 @@ func (s *Store) TOTPs() store.TOTPStore { return s.totps }
 // reach the reference implementation without forking the in-memory
 // backend.
 func (s *Store) RecoveryCodes() store.RecoveryStore { return s.recoveries }
+
+// Passkeys returns the [store.PasskeyStore] backed by this Store. The
+// substore is not part of the aggregate [store.Store] interface (the
+// passkey wiring lives behind a future op option) but the accessor is
+// exposed here so the authn package and its tests can reach the
+// reference implementation without forking the in-memory backend.
+func (s *Store) Passkeys() store.PasskeyStore { return s.passkeys }
 
 // PutUser seeds the in-memory user store with u so tests can drive
 // /userinfo and id_token claim assembly without standing up a real
