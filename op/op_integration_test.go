@@ -169,3 +169,50 @@ func TestIntegration_UnknownPath_Returns404(t *testing.T) {
 		t.Errorf("status=%d want 404", resp.StatusCode)
 	}
 }
+
+func TestIntegration_PAREndpointDisabledByDefault_Returns404(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t)
+
+	// /par is registered only when feature.PAR is enabled. Without the
+	// flag the route is absent and the OP serves the default 404.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		base+"/oidc/par", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status=%d want 404 when PAR feature is disabled", resp.StatusCode)
+	}
+}
+
+func TestIntegration_PAREndpointEnabled_AcceptsPost(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t, op.WithFeature(feature.PAR))
+
+	// A POST without body or credentials should reach the handler and
+	// return a 401 invalid_client envelope, confirming the route is
+	// mounted and the auth pipeline runs.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		base+"/oidc/par", strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status=%d want 401 invalid_client", resp.StatusCode)
+	}
+}

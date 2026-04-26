@@ -6,6 +6,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -72,6 +73,13 @@ type Deps struct {
 	// deletes it on terminal outcomes (cancel, success, abort).
 	Interactions store.InteractionStore
 
+	// PARs is the substore for pushed authorization request records. A
+	// nil value disables PAR consumption: requests carrying a request_uri
+	// are rejected as invalid_request. The library wires this only when
+	// the [feature.PAR] flag is enabled; embedders that build the handler
+	// directly may leave the field nil to opt out.
+	PARs store.PushedAuthRequestStore
+
 	// Sessions is the chooser-group session manager. The handler reads
 	// the active session via [sessions.Manager.Resolve] before deciding
 	// whether interaction is required, and calls [sessions.Manager.Issue]
@@ -92,6 +100,12 @@ type Deps struct {
 	// Driver is the [interaction.Driver] the handler delegates UI
 	// rendering and verification to. Required.
 	Driver interaction.Driver
+
+	// Scopes is the read-only scope registry the handler consults
+	// when validating the requested scope list. A nil value disables
+	// only the per-scope AllowedClients allowlist check; the
+	// client.Scopes intersection still runs.
+	Scopes *scoperegistry.Registry
 
 	// AuthorizePath is the mount-prefix-aware path of the /authorize
 	// endpoint. The handler dispatches its own internal mux against this

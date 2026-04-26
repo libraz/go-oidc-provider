@@ -37,7 +37,7 @@ func (stubStore) Grants() store.GrantStore { return stubGrantStore{} }
 // /authorize and /interaction handlers; returning no-op substores lets
 // construction tests exercise op.New without seeding a real backend.
 func (stubStore) Sessions() store.SessionStore                     { return stubSessionStore{} }
-func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { panic("not implemented") }
+func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { return stubPARStore{} }
 func (stubStore) Interactions() store.InteractionStore             { return stubInteractionStore{} }
 func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { panic("not implemented") }
 
@@ -60,6 +60,22 @@ func (stubSessionStore) ListByChooserGroup(context.Context, string) ([]*store.Se
 }
 
 type stubInteractionStore struct{}
+
+// stubPARStore is the no-op [store.PushedAuthRequestStore] used by
+// construction tests so [op.New] can wire the /par handler without
+// seeding a real backend. Every method returns ErrNotFound so a test that
+// actually drives /par would still observe the missing-record behaviour.
+type stubPARStore struct{}
+
+func (stubPARStore) Save(context.Context, *store.PushedAuthRequest) error { return store.ErrNotFound }
+
+func (stubPARStore) Find(context.Context, string) (*store.PushedAuthRequest, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubPARStore) Consume(context.Context, string) (*store.PushedAuthRequest, error) {
+	return nil, store.ErrNotFound
+}
 
 func (stubInteractionStore) Save(context.Context, *store.Interaction) error { return store.ErrNotFound }
 

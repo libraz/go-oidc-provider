@@ -99,6 +99,7 @@ linters:
             - "!**/internal/tokens/**"
             - "!**/internal/tokenendpoint/**"
             - "!**/internal/authorizeendpoint/**"
+            - "!**/internal/parendpoint/**"
             - "!**/internal/grants/**"
             - "!**/internal/authn/**"
             - "!**/op/testkit/**"

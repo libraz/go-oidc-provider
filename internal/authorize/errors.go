@@ -101,6 +101,11 @@ var (
 	// invalid_scope.
 	ErrScopeNotPermitted = newErr("invalid_scope", "scope is not granted to this client")
 
+	// ErrScopeClientNotAllowed indicates the request asked for a scope
+	// whose AllowedClients allowlist does not include the requesting
+	// client_id. Maps to invalid_scope per RFC 6749 §5.2.
+	ErrScopeClientNotAllowed = newErr("invalid_scope", "scope is restricted to a different client")
+
 	// ErrPKCERequired indicates the client omitted code_challenge. PKCE is
 	// mandatory regardless of client type per the product design
 	// (docs/plans/002-product-design.md §A.12.3). Maps to invalid_request.
@@ -144,6 +149,13 @@ var (
 	// parameter appeared in more than one url.Values entry. Maps to
 	// invalid_request.
 	ErrDuplicateParameter = newErr("invalid_request", "request parameter appeared more than once with different values")
+
+	// ErrInvalidRequestURI indicates the request_uri value presented at
+	// /authorize is unknown, expired, already consumed, or otherwise
+	// unredeemable. Maps to invalid_request_uri (RFC 9126 §2.3). NOT
+	// redirect-safe — without a trusted PAR record we cannot trust the
+	// redirect_uri the client claims either.
+	ErrInvalidRequestURI = newErr("invalid_request_uri", "request_uri is invalid, expired, or already consumed")
 )
 
 // IsRedirectSafe reports whether err arose AFTER redirect_uri validation
@@ -163,7 +175,7 @@ func IsRedirectSafe(err error) bool {
 		return false
 	}
 	switch e {
-	case ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid:
+	case ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid, ErrInvalidRequestURI:
 		return false
 	default:
 		return true

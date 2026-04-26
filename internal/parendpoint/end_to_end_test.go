@@ -1,0 +1,351 @@
+package parendpoint_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/testkit"
+)
+
+// TestEndToEnd_PAR_AuthorizeInteractionToken drives the full
+// /par → /authorize → /interaction → /token flow against a real testkit-
+// backed server. The shape mirrors the equivalent non-PAR end-to-end test
+// inside [internal/authorizeendpoint] so a regression in either path is
+// equally visible.
+func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	tk := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithFeature(feature.PAR)),
+	)
+	const secret = "rp-par-secret"
+	hasher := authn.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "rp-par-1",
+		SecretHash:              hash,
+		RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	// 1: POST /par with client_secret_basic.
+	verifier, challenge := pkcePair()
+	parForm := url.Values{
+		"client_id":             {rp.ID},
+		"response_type":         {"code"},
+		"redirect_uri":          {rp.RedirectURIs[0]},
+		"scope":                 {"openid profile email"},
+		"state":                 {"par-state"},
+		"nonce":                 {"par-nonce"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	parReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/par", strings.NewReader(parForm.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest /par: %v", err)
+	}
+	parReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	parReq.SetBasicAuth(rp.ID, secret)
+	parResp, err := http.DefaultClient.Do(parReq)
+	if err != nil {
+		t.Fatalf("Do /par: %v", err)
+	}
+	defer parResp.Body.Close()
+	if parResp.StatusCode != http.StatusCreated {
+		dump, _ := io.ReadAll(parResp.Body)
+		t.Fatalf("/par status=%d body=%s", parResp.StatusCode, dump)
+	}
+	parBody := decodeJSON(t, parResp)
+	requestURI, _ := parBody["request_uri"].(string)
+	if requestURI == "" {
+		t.Fatalf("request_uri missing: %v", parBody)
+	}
+
+	// 2: GET /authorize?client_id=...&request_uri=...
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := &http.Client{
+		Jar: jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	authorizeQuery := url.Values{
+		"client_id":   {rp.ID},
+		"request_uri": {requestURI},
+	}
+	authReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/oidc/auth?"+authorizeQuery.Encode(), http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest /authorize: %v", err)
+	}
+	authResp, err := client.Do(authReq)
+	if err != nil {
+		t.Fatalf("Do /authorize: %v", err)
+	}
+	defer authResp.Body.Close()
+	if authResp.StatusCode != http.StatusFound {
+		dump, _ := io.ReadAll(authResp.Body)
+		t.Fatalf("/authorize status=%d body=%s", authResp.StatusCode, dump)
+	}
+	location, err := authResp.Location()
+	if err != nil {
+		t.Fatalf("Location: %v", err)
+	}
+	if !strings.HasPrefix(location.Path, "/oidc/interaction/") {
+		t.Fatalf("Location=%s", location.String())
+	}
+
+	// 3: GET /interaction/{uid} → CSRF token.
+	stepReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+location.Path, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest /interaction: %v", err)
+	}
+	stepResp, err := client.Do(stepReq)
+	if err != nil {
+		t.Fatalf("Do /interaction: %v", err)
+	}
+	defer stepResp.Body.Close()
+	if stepResp.StatusCode != http.StatusOK {
+		t.Fatalf("/interaction GET status=%d", stepResp.StatusCode)
+	}
+	step := decodeJSON(t, stepResp)
+	csrfToken, _ := step["csrf"].(string)
+	if csrfToken == "" {
+		t.Fatal("csrf token missing")
+	}
+
+	// 4: POST /interaction/{uid} with subject hint + auth_time.
+	body := map[string]any{
+		"subject_hint":   "user-par",
+		"granted_scopes": []string{"openid", "profile", "email"},
+		"auth_time":      clock.now.UTC().Format(time.RFC3339),
+		"amr":            []string{"pwd"},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	postReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+location.Path, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("NewRequest POST /interaction: %v", err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("Origin", tk.Issuer)
+	postReq.Header.Set("X-CSRF-Token", csrfToken)
+	postResp, err := client.Do(postReq)
+	if err != nil {
+		t.Fatalf("Do POST /interaction: %v", err)
+	}
+	defer postResp.Body.Close()
+	if postResp.StatusCode != http.StatusFound {
+		dump, _ := io.ReadAll(postResp.Body)
+		t.Fatalf("POST /interaction status=%d body=%s", postResp.StatusCode, dump)
+	}
+	rpRedirect, err := postResp.Location()
+	if err != nil {
+		t.Fatalf("Location: %v", err)
+	}
+	code := rpRedirect.Query().Get("code")
+	if code == "" {
+		t.Fatalf("no code in %s", rpRedirect.String())
+	}
+	if rpRedirect.Query().Get("state") != "par-state" {
+		t.Errorf("state=%q want par-state", rpRedirect.Query().Get("state"))
+	}
+
+	// 5: POST /token to exchange the code for tokens.
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {rp.RedirectURIs[0]},
+		"code_verifier": {verifier},
+	}
+	tokenReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(tokenForm.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest /token: %v", err)
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenReq.SetBasicAuth(rp.ID, secret)
+	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	if err != nil {
+		t.Fatalf("Do /token: %v", err)
+	}
+	defer tokenResp.Body.Close()
+	if tokenResp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(tokenResp.Body)
+		t.Fatalf("/token status=%d body=%s", tokenResp.StatusCode, dump)
+	}
+	tokenBody := decodeJSON(t, tokenResp)
+	if at, _ := tokenBody["access_token"].(string); at == "" {
+		t.Errorf("access_token missing: %v", tokenBody)
+	}
+	if idt, _ := tokenBody["id_token"].(string); idt == "" {
+		t.Errorf("id_token missing: %v", tokenBody)
+	}
+}
+
+// TestEndToEnd_PAR_AuthorizeRejectsReplay confirms that a request_uri
+// consumed once at /authorize cannot be redeemed a second time.
+func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	tk := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithFeature(feature.PAR)),
+	)
+	const secret = "rp-replay-secret"
+	hasher := authn.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "rp-replay",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	_, challenge := pkcePair()
+	parForm := url.Values{
+		"client_id":             {rp.ID},
+		"response_type":         {"code"},
+		"redirect_uri":          {rp.RedirectURIs[0]},
+		"scope":                 {"openid profile email"},
+		"state":                 {"par-replay-state"},
+		"nonce":                 {"par-replay-nonce"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}
+	parReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/par", strings.NewReader(parForm.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest /par: %v", err)
+	}
+	parReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	parReq.SetBasicAuth(rp.ID, secret)
+	parResp, err := http.DefaultClient.Do(parReq)
+	if err != nil {
+		t.Fatalf("Do /par: %v", err)
+	}
+	defer parResp.Body.Close()
+	if parResp.StatusCode != http.StatusCreated {
+		t.Fatalf("/par status=%d", parResp.StatusCode)
+	}
+	requestURI, _ := decodeJSON(t, parResp)["request_uri"].(string)
+
+	// First /authorize redeems the URI cleanly (browser would follow the
+	// 302 to /interaction).
+	first := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
+	if first.StatusCode != http.StatusFound {
+		t.Fatalf("first /authorize status=%d want 302", first.StatusCode)
+	}
+	first.Body.Close()
+
+	// Second /authorize with the same URI must be rejected as
+	// invalid_request_uri.
+	second := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusBadRequest {
+		t.Fatalf("second /authorize status=%d want 400", second.StatusCode)
+	}
+	body := decodeJSON(t, second)
+	if body["error"] != "invalid_request_uri" {
+		t.Errorf("error=%v want invalid_request_uri", body["error"])
+	}
+}
+
+// TestEndToEnd_PAR_DisabledRejectsRequestURI confirms that an OP without
+// the [feature.PAR] flag enabled rejects a /authorize request carrying a
+// request_uri. Per RFC 9126 §2.3 the OP must NOT honour request_uri
+// unless it advertises the PAR endpoint.
+func TestEndToEnd_PAR_DisabledRejectsRequestURI(t *testing.T) {
+	t.Parallel()
+
+	tk := testkit.NewProvider(t)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{ID: "rp-no-par"})
+
+	resp := getAuthorize(t, tk.Server.URL, rp.ID,
+		"urn:ietf:params:oauth:request_uri:something")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+}
+
+// TestEndToEnd_PAR_DiscoveryAdvertisement confirms PAR discovery gating.
+// Without the flag the endpoint metadata is absent; with the flag it
+// surfaces under pushed_authorization_request_endpoint.
+func TestEndToEnd_PAR_DiscoveryAdvertisement(t *testing.T) {
+	t.Parallel()
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(op.WithFeature(feature.PAR)),
+	)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/.well-known/openid-configuration", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	doc := decodeJSON(t, resp)
+	endpoint, _ := doc["pushed_authorization_request_endpoint"].(string)
+	if !strings.HasSuffix(endpoint, "/oidc/par") {
+		t.Errorf("PAR endpoint=%q does not match /oidc/par suffix", endpoint)
+	}
+}
+
+// getAuthorize issues a GET /authorize with the supplied client_id and
+// request_uri. It returns the raw [http.Response]; the caller is
+// responsible for closing the body.
+func getAuthorize(tb testing.TB, base, clientID, requestURI string) *http.Response {
+	tb.Helper()
+	values := url.Values{"client_id": {clientID}, "request_uri": {requestURI}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		base+"/oidc/auth?"+values.Encode(), http.NoBody)
+	if err != nil {
+		tb.Fatalf("NewRequest: %v", err)
+	}
+	// Bypass the default redirect follower so the test sees the 302.
+	resp, err := (&http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}).Do(req)
+	if err != nil {
+		tb.Fatalf("Do: %v", err)
+	}
+	return resp
+}

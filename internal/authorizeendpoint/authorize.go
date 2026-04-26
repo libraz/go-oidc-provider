@@ -42,9 +42,13 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxAuthorizeFormBytes)
 	}
-	req, err := authorize.ParseRequest(r)
+	values, err := extractAuthorizeValues(r)
 	if err != nil {
 		writeAuthorizeParseError(w, r, err)
+		return
+	}
+	req, ok := resolveAuthorizeRequest(w, r, deps, values)
+	if !ok {
 		return
 	}
 	client, err := deps.Clients.GetClient(r.Context(), req.ClientID)
@@ -55,11 +59,57 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "client_id is not registered")
 		return
 	}
-	if err := req.Validate(client); err != nil {
+	if err := req.Validate(client, deps.Scopes); err != nil {
 		writeAuthorizeValidationError(w, r, req, err)
 		return
 	}
 	dispatchAuthorize(w, r, deps, req, client)
+}
+
+// extractAuthorizeValues returns the [url.Values] the request carries,
+// reading the URL query for GET and the form body for POST. It mirrors
+// the unexported helper inside [internal/authorize] so the authorize
+// endpoint can inspect the values once before deciding whether to honour
+// a request_uri (PAR) or parse the inline parameters.
+func extractAuthorizeValues(r *http.Request) (url.Values, error) {
+	if r == nil {
+		return nil, authorize.ErrClientIDRequired
+	}
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			return nil, err
+		}
+		return r.PostForm, nil
+	}
+	return r.URL.Query(), nil
+}
+
+// resolveAuthorizeRequest is the parse + PAR-consumption gate. When the
+// request carries a recognised PAR request_uri the parameters are sourced
+// from the persisted record (and every other parameter except client_id
+// is ignored per RFC 9126 §2.3); otherwise the function delegates to
+// [authorize.ParseValues] over the request's own values.
+//
+// The returned bool reports whether processing should continue: false
+// means the function already wrote the response.
+func resolveAuthorizeRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	values url.Values,
+) (*authorize.Request, bool) {
+	queryClientID := values.Get("client_id")
+	if parReq, handled := resolvePARIfNeeded(r.Context(), w, deps, queryClientID, values); handled {
+		return nil, false
+	} else if parReq != nil {
+		return parReq, true
+	}
+	req, err := authorize.ParseValues(values)
+	if err != nil {
+		writeAuthorizeParseError(w, r, err)
+		return nil, false
+	}
+	return req, true
 }
 
 // methodAllowed reports whether the HTTP method is one of GET / POST. The

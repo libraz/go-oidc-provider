@@ -12,11 +12,14 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/parendpoint"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
 	"github.com/libraz/go-oidc-provider/internal/userinfo"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // defaultUserInfoLeeway is the symmetric tolerance the /userinfo
@@ -39,9 +42,10 @@ const csrfDerivationLabel = "oidc-csrf-v1"
 // constructed. It must not be mutated after construction; configuration is
 // fixed via [Option] values passed to [New].
 type Provider struct {
-	cfg  *config
-	keys *keys.Set
-	mux  *http.ServeMux
+	cfg    *config
+	keys   *keys.Set
+	scopes *scoperegistry.Registry
+	mux    *http.ServeMux
 }
 
 // ServeHTTP routes incoming requests to the OIDC endpoints registered by the
@@ -74,11 +78,30 @@ func New(opts ...Option) (*Provider, error) {
 			Cause:       err,
 		}
 	}
-	mux, err := buildRouter(cfg, keySet)
+	scopes := scoperegistry.New(toScopeEntries(cfg.scopes))
+	mux, err := buildRouter(cfg, keySet, scopes)
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{cfg: cfg, keys: keySet, mux: mux}, nil
+	return &Provider{cfg: cfg, keys: keySet, scopes: scopes, mux: mux}, nil
+}
+
+// toScopeEntries projects the public [Scope] values onto the internal
+// [scoperegistry.Entry] shape. Only the protocol-relevant subset
+// crosses the boundary; UI metadata (Title, Description, Icon, Claims,
+// I18n) stays in op.config so internal handlers do not grow a
+// dependency on UI fields.
+func toScopeEntries(scopes []Scope) []scoperegistry.Entry {
+	out := make([]scoperegistry.Entry, 0, len(scopes))
+	for _, s := range scopes {
+		out = append(out, scoperegistry.Entry{
+			Name:           s.Name,
+			Public:         s.Public,
+			Required:       s.Required,
+			AllowedClients: append([]string(nil), s.AllowedClients...),
+		})
+	}
+	return out
 }
 
 // toKeyEntries converts the public [Keyset] to the internal slice the
@@ -96,9 +119,9 @@ func toKeyEntries(ks Keyset) []keys.Entry {
 // buildRouter assembles the [http.ServeMux] that backs [Provider.ServeHTTP].
 // In Phase 1 it registers the discovery and JWKS endpoints; subsequent
 // phases extend it with the authorization, token, and UserInfo handlers.
-func buildRouter(cfg *config, keySet *keys.Set) (*http.ServeMux, error) {
+func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
-	doc := discovery.Build(buildDiscoveryInput(cfg))
+	doc := discovery.Build(buildDiscoveryInput(cfg, scopes))
 	discHandler, err := discovery.Handler(doc)
 	if err != nil {
 		return nil, &Error{
@@ -129,19 +152,53 @@ func buildRouter(cfg *config, keySet *keys.Set) (*http.ServeMux, error) {
 			Grants:        cfg.store.Grants(),
 			Keys:          keySet,
 			Clock:         cfg.clock,
+			Scopes:        scopes,
 		}),
 	)
-	if err := mountAuthorizeHandlers(mux, cfg); err != nil {
+	if err := mountAuthorizeHandlers(mux, cfg, scopes); err != nil {
 		return nil, err
 	}
+	mountPAREndpoint(mux, cfg, scopes)
 	return mux, nil
+}
+
+// mountPAREndpoint registers the /par handler when the [feature.PAR] flag
+// is enabled. Without the flag the route is absent — discovery already
+// gates the advertisement on the same flag, so the OP cannot tell clients
+// the endpoint exists while quietly serving 404.
+func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) {
+	if !featureEnabled(cfg.features, feature.PAR) {
+		return
+	}
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
+		parendpoint.Handler(parendpoint.Deps{
+			Issuer:  cfg.issuer,
+			Clients: cfg.store.Clients(),
+			PARs:    cfg.store.PushedAuthRequests(),
+			Scopes:  scopes,
+			Clock:   cfg.clock,
+		}),
+	)
+}
+
+// featureEnabled reports whether flag is in the configured feature list.
+// Used by both /par mounting and the authorize PAR-consumption wiring so
+// the two stay in lock-step.
+func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
+	for _, f := range flags {
+		if f == flag {
+			return true
+		}
+	}
+	return false
 }
 
 // mountAuthorizeHandlers wires the /authorize and /interaction routes when
 // the configuration includes a grant that needs them (currently only
 // AuthorizationCode). The handler shares an internal mux so a single
 // instance services both paths; see [internal/authorizeendpoint.Handler].
-func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config) error {
+func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) error {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil
 	}
@@ -200,11 +257,13 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config) error {
 		Codes:           cfg.store.AuthorizationCodes(),
 		Grants:          cfg.store.Grants(),
 		Interactions:    cfg.store.Interactions(),
+		PARs:            authorizePARStore(cfg),
 		Sessions:        sessMgr,
 		CookieCodec:     cookieCodec,
 		CSRF:            csrfSigner,
 		Origins:         allow,
 		Driver:          cfg.interactionD,
+		Scopes:          scopes,
 		AuthorizePath:   authorizePath,
 		InteractionPath: interactionPath,
 		Clock:           cfg.clock,
@@ -212,6 +271,20 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config) error {
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)
 	return nil
+}
+
+// authorizePARStore returns the substore the authorize handler should use
+// to consume PAR records when the feature is enabled. When PAR is
+// disabled the helper returns nil, which the handler treats as
+// "request_uri is not supported".
+//
+// The function exists so the wiring at [mountAuthorizeHandlers] reads as
+// a flat field assignment rather than a multi-line conditional.
+func authorizePARStore(cfg *config) store.PushedAuthRequestStore {
+	if !featureEnabled(cfg.features, feature.PAR) {
+		return nil
+	}
+	return cfg.store.PushedAuthRequests()
 }
 
 // grantsRequireAuthorizeEndpoint reports whether any configured grant
@@ -239,7 +312,7 @@ func deriveCSRFKey(cookieKey []byte) []byte {
 
 // buildDiscoveryInput converts the public [config] to the internal
 // [discovery.Input] the discovery builder consumes.
-func buildDiscoveryInput(cfg *config) discovery.Input {
+func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.Input {
 	grantStrings := make([]string, 0, len(cfg.grants))
 	for _, g := range cfg.grants {
 		grantStrings = append(grantStrings, g.String())
@@ -261,6 +334,7 @@ func buildDiscoveryInput(cfg *config) discovery.Input {
 		},
 		Features:        buildFeatures(cfg.features),
 		GrantsSupported: grantStrings,
+		ScopesSupported: scopes.PublicNames(),
 	}
 }
 
