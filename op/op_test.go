@@ -12,8 +12,9 @@ import (
 )
 
 // stubStore is a minimal [store.Store] used by tests that need [op.New] to
-// pass validation but do not exercise persistence. The methods panic so that
-// any code path calling them in a test is forced to substitute a real store.
+// pass validation but do not exercise persistence. Methods that the router
+// constructor calls eagerly return a no-op substore; the rest panic so that
+// a code path that actually uses them is forced to substitute a real store.
 type stubStore struct{}
 
 func (stubStore) Clients() store.ClientStore                       { panic("not implemented") }
@@ -24,7 +25,19 @@ func (stubStore) Sessions() store.SessionStore                     { panic("not 
 func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { panic("not implemented") }
 func (stubStore) Interactions() store.InteractionStore             { panic("not implemented") }
 func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { panic("not implemented") }
-func (stubStore) Users() store.UserStore                           { panic("not implemented") }
+
+// Users is invoked eagerly by buildRouter to wire the /userinfo handler;
+// returning a no-op substore lets construction tests exercise op.New
+// without seeding a real backend. The stub returns ErrNotFound for every
+// lookup so any test that actually issues a /userinfo request would still
+// observe the missing-user behaviour.
+func (stubStore) Users() store.UserStore { return stubUserStore{} }
+
+type stubUserStore struct{}
+
+func (stubUserStore) FindBySubject(context.Context, string) (*store.User, error) {
+	return nil, store.ErrNotFound
+}
 
 const validIssuer = "https://idp.example.com"
 

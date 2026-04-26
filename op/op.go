@@ -2,12 +2,21 @@ package op
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/userinfo"
 	"github.com/libraz/go-oidc-provider/op/feature"
 )
+
+// defaultUserInfoLeeway is the symmetric tolerance the /userinfo
+// handler applies to the access-token "exp" / "iat" comparisons. The
+// value is well below the RFC 7519 §4.1.4 recommended ceiling so a
+// slow / clock-skewed RP retries quickly without amplifying replay
+// windows for stolen tokens.
+const defaultUserInfoLeeway = 30 * time.Second
 
 // Provider is the assembled OpenID Connect Provider. It implements
 // [http.Handler] and is the result of a successful [New] call.
@@ -86,6 +95,16 @@ func buildRouter(cfg *config, keySet *keys.Set) (*http.ServeMux, error) {
 	}
 	mux.Handle(cfg.endpoints.Discovery, discHandler)
 	mux.Handle(joinPath(cfg.mountPrefix, cfg.endpoints.JWKS), jwks.Handler(keySet))
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.UserInfo),
+		userinfo.Handler(userinfo.HandlerDeps{
+			Keys:      keySet,
+			Issuer:    cfg.issuer,
+			UserStore: cfg.store.Users(),
+			Clock:     cfg.clock,
+			Leeway:    defaultUserInfoLeeway,
+		}),
+	)
 	return mux, nil
 }
 
