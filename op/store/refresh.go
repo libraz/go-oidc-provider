@@ -63,6 +63,21 @@ type RefreshToken struct {
 	// thumbprint equals this value, and the rotated access token is
 	// re-bound to the same thumbprint.
 	DPoPJKT string
+
+	// MTLSCertThumbprint is the RFC 8705 §3.1 SHA-256 thumbprint of
+	// the client certificate the access token paired with this
+	// refresh token was bound to. The encoding mirrors the cnf
+	// claim: base64url, no padding. Empty means the chain is not
+	// mTLS-bound; non-empty means every refresh request MUST present
+	// a client cert whose DER bytes hash to this value, and the
+	// rotated access token is re-bound to the same thumbprint.
+	//
+	// MTLSCertThumbprint and DPoPJKT are mutually exclusive in
+	// practice: a chain is bound by one method or neither, never
+	// both. The wire format keeps the fields independent so a future
+	// release that admits dual binding does not need a contract
+	// change.
+	MTLSCertThumbprint string
 }
 
 // RefreshTokenStore is the substore for refresh_token records. It belongs to

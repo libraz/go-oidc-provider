@@ -22,6 +22,11 @@ import (
 // When the consumed refresh token was DPoP-bound the rotation path
 // requires a matching proof on the request and re-binds the issued
 // access / refresh tokens to the same thumbprint (RFC 9449 §5.2).
+// When the consumed refresh token was mTLS-bound the path additionally
+// requires a client cert whose RFC 8705 §3.1 thumbprint matches the
+// stored value; mTLS bindings are NOT auto-upgraded mid-chain (unlike
+// DPoP, which RFC 9449 §5.2 allows to bind opportunistically on
+// first refresh).
 func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	ctx := r.Context()
 	client, _, ok := authenticate(ctx, w, r, deps)
@@ -43,7 +48,14 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	issueRefreshResponse(ctx, w, deps, client, exchanged, dpopOut.JKT)
+	if !requireMTLSMatch(w, r, deps, exchanged.MTLSCertThumbprint) {
+		return
+	}
+	binding := tokenBinding{
+		DPoPJKT:        dpopOut.JKT,
+		MTLSThumbprint: exchanged.MTLSCertThumbprint,
+	}
+	issueRefreshResponse(ctx, w, deps, client, exchanged, binding)
 }
 
 // checkRefreshScopeAllowlist enforces the per-scope AllowedClients
@@ -169,24 +181,24 @@ func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 // id). Failure on any step writes a 500 because the exchange has
 // already committed; we cannot un-consume the presented token.
 //
-// dpopJKT is the thumbprint to bind on the rotated tokens. The caller
-// passes either the verified proof's thumbprint (when DPoP was
-// presented) or the consumed record's bound thumbprint (when the
-// presented refresh token was already DPoP-bound and the proof simply
-// matched). Both cases collapse to the same value because
-// [requireDPoPMatch] enforces the equivalence; passing it through
-// keeps a single source of truth on the wire.
+// binding is the sender-constraint summary the rotated tokens inherit.
+// For DPoP it is either the verified proof's thumbprint (request
+// presented a proof) or the consumed record's bound thumbprint
+// (chain was already bound and the proof simply matched); for mTLS
+// it is always the consumed record's thumbprint (mTLS does not
+// admit mid-chain upgrades). Both cases collapse to a single source
+// of truth on the wire and on the persisted rotated record.
 func issueRefreshResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	client *store.Client,
 	exchanged *refresh.Exchanged,
-	dpopJKT string,
+	binding tokenBinding,
 ) {
 	now := deps.now().UTC()
 	authTime := lookupAuthTime(ctx, deps, exchanged.GrantID)
-	accessToken, err := mintAccessToken(deps, exchanged.Subject, client.ID, exchanged.Scope, now, authTime, dpopJKT)
+	accessToken, err := mintAccessToken(deps, exchanged.Subject, client.ID, exchanged.Scope, now, authTime, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -202,14 +214,14 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	rotated, err := rotateRefreshToken(ctx, deps, client.ID, exchanged, dpopJKT)
+	rotated, err := rotateRefreshToken(ctx, deps, client.ID, exchanged, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	writeSuccess(w, successResponse{
 		AccessToken:  accessToken,
-		TokenType:    tokenType(dpopJKT),
+		TokenType:    binding.tokenTypeFor(),
 		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
 		RefreshToken: rotated,
 		IDToken:      idToken,
@@ -252,15 +264,15 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 // rotateRefreshToken mints the next-generation refresh token whose
 // ParentID points at the just-consumed id. The library always rotates;
 // returning the original token would defeat the §2.2.2 replay defence
-// the exchanger already enforces. dpopJKT is propagated onto the
-// rotated record so the binding survives across the chain (RFC 9449
-// §6.1).
+// the exchanger already enforces. The binding is propagated onto the
+// rotated record so the sender constraint (RFC 9449 §6.1 for DPoP,
+// RFC 8705 §3.1 for mTLS) survives across the chain.
 func rotateRefreshToken(
 	ctx context.Context,
 	deps Deps,
 	clientID string,
 	exchanged *refresh.Exchanged,
-	dpopJKT string,
+	binding tokenBinding,
 ) (string, error) {
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
@@ -272,11 +284,12 @@ func rotateRefreshToken(
 	}
 	parent := exchanged.ConsumedID
 	return issuer.Issue(ctx, refresh.IssueInput{
-		ClientID: clientID,
-		Subject:  exchanged.Subject,
-		GrantID:  exchanged.GrantID,
-		Scope:    append([]string(nil), exchanged.Scope...),
-		ParentID: &parent,
-		DPoPJKT:  dpopJKT,
+		ClientID:           clientID,
+		Subject:            exchanged.Subject,
+		GrantID:            exchanged.GrantID,
+		Scope:              append([]string(nil), exchanged.Scope...),
+		ParentID:           &parent,
+		DPoPJKT:            binding.DPoPJKT,
+		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})
 }

@@ -33,11 +33,59 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
+	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
+	if !ok {
+		return
+	}
 	exchanged, ok := exchangeAuthCode(ctx, w, deps, in)
 	if !ok {
 		return
 	}
-	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, dpopOut.JKT)
+	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, tokenBinding{
+		DPoPJKT:        dpopOut.JKT,
+		MTLSThumbprint: mtlsOut.Thumbprint,
+	})
+}
+
+// tokenBinding bundles the sender-constraint fields a token-endpoint
+// response inherits from the inbound request. Issuance code threads
+// the value through the access-token mint, the id_token mint, and
+// the refresh-token persist so the wire shape and the persisted
+// record stay in lock-step.
+type tokenBinding struct {
+	// DPoPJKT is the RFC 7638 thumbprint extracted from a presented
+	// DPoP proof. Empty when the request did not carry a proof.
+	DPoPJKT string
+
+	// MTLSThumbprint is the RFC 8705 §3.1 thumbprint extracted from
+	// a presented client cert. Empty when the request did not
+	// terminate mTLS at the OP (or the proxy header path).
+	MTLSThumbprint string
+}
+
+// confirmation projects the binding onto the cnf claim shape RFC
+// 7800 §3 prescribes. An empty binding returns nil so the access-
+// token mint can guard the cnf assignment with a non-nil check.
+func (b tokenBinding) confirmation() map[string]string {
+	switch {
+	case b.DPoPJKT != "":
+		return map[string]string{"jkt": b.DPoPJKT}
+	case b.MTLSThumbprint != "":
+		return map[string]string{"x5t#S256": b.MTLSThumbprint}
+	default:
+		return nil
+	}
+}
+
+// tokenTypeFor returns the "token_type" wire value: "DPoP" when a DPoP
+// proof bound the token, "Bearer" otherwise. RFC 8705 explicitly
+// keeps the bearer token_type for cert-bound tokens (§3.1) because
+// the binding is on the cnf claim, not the wire token type.
+func (b tokenBinding) tokenTypeFor() string {
+	if b.DPoPJKT != "" {
+		return "DPoP"
+	}
+	return "Bearer"
 }
 
 // authCodeInputs is the de-structured view of the form parameters the
@@ -167,10 +215,10 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 }
 
 // issueAuthCodeResponse mints the access token, optionally a refresh
-// token, and the id_token, then writes the success body. dpopJKT is
-// the RFC 7638 thumbprint extracted from a presented DPoP proof, or
-// "" when the request is bearer; non-empty values bind both the
-// access token (cnf.jkt) and the refresh token (DPoPJKT field).
+// token, and the id_token, then writes the success body. The binding
+// argument carries the sender-constraint fields (cnf.jkt for DPoP,
+// cnf.x5t#S256 for mTLS) extracted from the inbound request; an
+// empty binding produces a plain bearer response.
 func issueAuthCodeResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -178,7 +226,7 @@ func issueAuthCodeResponse(
 	client *store.Client,
 	code string,
 	exchanged *authcode.Exchanged,
-	dpopJKT string,
+	binding tokenBinding,
 ) {
 	now := deps.now().UTC()
 	accessToken, err := mintAccessToken(
@@ -188,7 +236,7 @@ func issueAuthCodeResponse(
 		exchanged.Scope,
 		now,
 		lookupAuthTime(ctx, deps, exchanged.GrantID),
-		dpopJKT,
+		binding,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -207,29 +255,19 @@ func issueAuthCodeResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	refreshToken, err := maybeIssueRefreshToken(ctx, deps, client, exchanged.Subject, exchanged.GrantID, exchanged.Scope, dpopJKT)
+	refreshToken, err := maybeIssueRefreshToken(ctx, deps, client, exchanged.Subject, exchanged.GrantID, exchanged.Scope, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	writeSuccess(w, successResponse{
 		AccessToken:  accessToken,
-		TokenType:    tokenType(dpopJKT),
+		TokenType:    binding.tokenTypeFor(),
 		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
 		RefreshToken: refreshToken,
 		IDToken:      idToken,
 		Scope:        joinScope(exchanged.Scope),
 	})
-}
-
-// tokenType returns the "token_type" wire value the response carries.
-// RFC 9449 §4 mandates "DPoP" for sender-constrained tokens; bearer
-// tokens keep the historic "Bearer" value.
-func tokenType(jkt string) string {
-	if jkt == "" {
-		return "Bearer"
-	}
-	return "DPoP"
 }
 
 // mintIDTokenInput collects the parameters [mintAuthCodeIDToken] needs.
@@ -247,35 +285,34 @@ type mintIDTokenInput struct {
 }
 
 // mintAccessToken signs the JWT-shaped access token (RFC 9068). When
-// dpopJKT is non-empty the token is sender-constrained per RFC 9449
-// §6: the "cnf.jkt" claim carries the supplied thumbprint and the
-// resource server is expected to verify a matching DPoP proof on
-// every use of the token.
+// the binding carries a DPoP JKT (RFC 9449 §6) or an mTLS thumbprint
+// (RFC 8705 §3.1) the token is sender-constrained: the "cnf" claim
+// carries the corresponding member ("jkt" or "x5t#S256") and the
+// resource server is expected to verify a matching proof on every
+// use of the token.
 func mintAccessToken(
 	deps Deps,
 	subject, clientID string,
 	scope []string,
 	now time.Time,
 	authTime int64,
-	dpopJKT string,
+	binding tokenBinding,
 ) (string, error) {
 	jti, err := newJTI()
 	if err != nil {
 		return "", err
 	}
 	claims := tokens.AccessTokenClaims{
-		Issuer:    deps.Issuer,
-		Subject:   subject,
-		Audience:  []string{deps.Issuer},
-		ClientID:  clientID,
-		IssuedAt:  now.Unix(),
-		ExpiresAt: tokens.ExpiresIn(now, deps.AccessTokenTTL),
-		JTI:       jti,
-		Scope:     append([]string(nil), scope...),
-		AuthTime:  authTime,
-	}
-	if dpopJKT != "" {
-		claims.Confirmation = map[string]string{"jkt": dpopJKT}
+		Issuer:       deps.Issuer,
+		Subject:      subject,
+		Audience:     []string{deps.Issuer},
+		ClientID:     clientID,
+		IssuedAt:     now.Unix(),
+		ExpiresAt:    tokens.ExpiresIn(now, deps.AccessTokenTTL),
+		JTI:          jti,
+		Scope:        append([]string(nil), scope...),
+		AuthTime:     authTime,
+		Confirmation: binding.confirmation(),
 	}
 	return tokens.SignAccessToken(activeSigningKey(deps), claims)
 }
@@ -303,15 +340,16 @@ func mintAuthCodeIDToken(deps Deps, in mintIDTokenInput) (string, error) {
 // client and granted scope satisfy [clientPermitsRefresh]. Returns the
 // empty string when no refresh token is issued; that is a valid
 // successful response (e.g. a non-OIDC client or a public client that
-// did not request "openid"). dpopJKT is propagated onto the persisted
-// record so refresh-time enforcement can require a matching proof.
+// did not request "openid"). The binding is propagated onto the
+// persisted record so refresh-time enforcement can require a
+// matching proof / cert.
 func maybeIssueRefreshToken(
 	ctx context.Context,
 	deps Deps,
 	client *store.Client,
 	subject, grantID string,
 	scope []string,
-	dpopJKT string,
+	binding tokenBinding,
 ) (string, error) {
 	if !clientPermitsRefresh(client, scope) {
 		return "", nil
@@ -325,11 +363,12 @@ func maybeIssueRefreshToken(
 		return "", err
 	}
 	return issuer.Issue(ctx, refresh.IssueInput{
-		ClientID: client.ID,
-		Subject:  subject,
-		GrantID:  grantID,
-		Scope:    append([]string(nil), scope...),
-		DPoPJKT:  dpopJKT,
+		ClientID:           client.ID,
+		Subject:            subject,
+		GrantID:            grantID,
+		Scope:              append([]string(nil), scope...),
+		DPoPJKT:            binding.DPoPJKT,
+		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})
 }
 

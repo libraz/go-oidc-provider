@@ -1,6 +1,7 @@
 package op
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"net/http"
@@ -13,7 +14,9 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
+	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
@@ -135,6 +138,10 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	if err != nil {
 		return nil, err
 	}
+	mtlsVerifier, err := buildMTLSVerifier(cfg)
+	if err != nil {
+		return nil, err
+	}
 	mux.Handle(cfg.endpoints.Discovery, discHandler)
 	mux.Handle(joinPath(cfg.mountPrefix, cfg.endpoints.JWKS), jwks.Handler(keySet))
 	mux.Handle(
@@ -146,6 +153,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Clock:     cfg.clock,
 			Leeway:    defaultUserInfoLeeway,
 			DPoP:      dpopVerifier,
+			MTLS:      mtlsVerifier,
 		}),
 	)
 	mux.Handle(
@@ -160,12 +168,14 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Clock:         cfg.clock,
 			Scopes:        scopes,
 			DPoP:          dpopVerifier,
+			MTLS:          mtlsVerifier,
 		}),
 	)
 	if err := mountAuthorizeHandlers(mux, cfg, scopes); err != nil {
 		return nil, err
 	}
 	mountPAREndpoint(mux, cfg, scopes)
+	mountRegistrationEndpoint(mux, cfg, scopes)
 	return mux, nil
 }
 
@@ -194,6 +204,127 @@ func buildDPoPVerifier(cfg *config) (*dpop.Verifier, error) {
 		}
 	}
 	return v, nil
+}
+
+// buildMTLSVerifier constructs the RFC 8705 verifier when the
+// [feature.MTLS] flag is enabled. The shape mirrors
+// [buildDPoPVerifier]: nil verifier means "feature off" everywhere
+// downstream, and the (*mtls.Verifier, error) signature returns
+// (nil, nil) on that path on purpose.
+//
+// v0.x ships with a zero [mtls.ProxyConfig], which restricts the
+// trust path to TLS handshakes terminated at the OP. Embedders that
+// need the reverse-proxy header path will land a configuration knob
+// on a follow-up; the wiring here keeps the field-set narrow so that
+// extension is purely additive.
+//
+//nolint:nilnil // (nil, nil) is the documented "mTLS not enabled" signal.
+func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
+	if !featureEnabled(cfg.features, feature.MTLS) {
+		return nil, nil
+	}
+	v, err := mtls.NewVerifier(mtls.VerifierConfig{})
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "mTLS verifier construction failed",
+			Cause:       err,
+		}
+	}
+	return v, nil
+}
+
+// mountRegistrationEndpoint registers the /register and
+// /register/{client_id} handlers when [WithDynamicRegistration] is
+// configured. The two paths share a single [registrationendpoint.Handler]
+// instance which discriminates on the URL shape internally; mounting
+// them separately here is required because [http.ServeMux] does not
+// admit a single pattern that matches both the bare and parameterised
+// paths.
+//
+// Without the option the routes are absent — discovery already gates
+// the advertisement on the same condition, so the OP cannot tell
+// clients the endpoint exists while quietly serving 404.
+func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) {
+	if cfg.dcr == nil {
+		return
+	}
+	// validateRegistration ran inside [config.validate]; the type
+	// assertion here cannot fail in practice. The defensive ok-check
+	// preserves the property that a misconfigured store does not panic
+	// at request time.
+	registry, ok := cfg.store.(store.ClientRegistry)
+	if !ok {
+		return
+	}
+	deps := registrationendpoint.Deps{
+		Issuer:                   cfg.issuer,
+		MountPrefix:              cfg.mountPrefix,
+		RegisterPath:             cfg.endpoints.Register,
+		Clock:                    cfg.clock,
+		Clients:                  registry,
+		InitialAccessTokens:      cfg.store.InitialAccessTokens(),
+		RegistrationAccessTokens: cfg.store.RegistrationAccessTokens(),
+		Scopes:                   scopes,
+		Open:                     cfg.dcr.Open,
+		AllowedGrantTypes:        append([]string(nil), cfg.dcr.AllowedGrantTypes...),
+		AllowedResponseTypes:     append([]string(nil), cfg.dcr.AllowedResponseTypes...),
+		PairwiseEnabled:          false, // WithPairwiseSubject not yet implemented; v1.0 placeholder.
+		ValidateMetadata:         wrapValidateMetadata(cfg.dcr.ValidateMetadata),
+		Logger:                   cfg.logger,
+	}
+	handler := registrationendpoint.Handler(deps)
+	registerPath := joinPath(cfg.mountPrefix, cfg.endpoints.Register)
+	mux.Handle(registerPath, handler)
+	mux.Handle(registerPath+"/{client_id}", handler)
+}
+
+// wrapValidateMetadata adapts a caller-supplied
+// [RegistrationOption.ValidateMetadata] hook (which sees the public
+// op.ClientMetadata) into the internal-package signature
+// (registrationendpoint.ClientMetadata). internal/* must not import
+// op/, so the conversion lives here.
+//
+// A nil input returns nil so the internal handler can short-circuit
+// the hook entirely.
+func wrapValidateMetadata(fn func(ctx context.Context, m ClientMetadata) error) func(ctx context.Context, m registrationendpoint.ClientMetadata) error {
+	if fn == nil {
+		return nil
+	}
+	return func(ctx context.Context, m registrationendpoint.ClientMetadata) error {
+		return fn(ctx, fromInternalMetadata(m))
+	}
+}
+
+// fromInternalMetadata projects the internal-shape metadata onto the
+// public [ClientMetadata]. The two structs are field-for-field
+// identical; the conversion exists solely to honour the rule that
+// internal/* must not import op/.
+func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata {
+	return ClientMetadata{
+		RedirectURIs:             m.RedirectURIs,
+		GrantTypes:               m.GrantTypes,
+		ResponseTypes:            m.ResponseTypes,
+		Scope:                    m.Scope,
+		TokenEndpointAuthMethod:  m.TokenEndpointAuthMethod,
+		ApplicationType:          m.ApplicationType,
+		SubjectType:              m.SubjectType,
+		IDTokenSignedResponseAlg: m.IDTokenSignedResponseAlg,
+		SectorIdentifierURI:      m.SectorIdentifierURI,
+		ClientName:               m.ClientName,
+		ClientURI:                m.ClientURI,
+		LogoURI:                  m.LogoURI,
+		PolicyURI:                m.PolicyURI,
+		TosURI:                   m.TosURI,
+		JWKsURI:                  m.JWKsURI,
+		JWKs:                     m.JWKs,
+		Contacts:                 m.Contacts,
+		DefaultMaxAge:            m.DefaultMaxAge,
+		RequireAuthTime:          m.RequireAuthTime,
+		DefaultACRValues:         m.DefaultACRValues,
+		InitiateLoginURI:         m.InitiateLoginURI,
+		RequestURIs:              m.RequestURIs,
+	}
 }
 
 // mountPAREndpoint registers the /par handler when the [feature.PAR] flag
@@ -365,6 +496,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 			PAR:         cfg.endpoints.PAR,
 			Interaction: cfg.endpoints.Interaction,
 			Session:     cfg.endpoints.Session,
+			Register:    cfg.endpoints.Register,
 		},
 		Features:        buildFeatures(cfg.features),
 		GrantsSupported: grantStrings,
@@ -392,6 +524,8 @@ func buildFeatures(flags []feature.Flag) discovery.Features {
 			out.Introspect = true
 		case feature.Revoke:
 			out.Revoke = true
+		case feature.DynamicRegistration:
+			out.DynamicRegistration = true
 		case feature.PKCE:
 			// PKCE is always enabled in v1.0; the flag exists so the
 			// caller can advertise it explicitly in discovery, which

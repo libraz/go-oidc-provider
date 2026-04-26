@@ -54,17 +54,19 @@ type EndpointPaths struct {
 	PAR         string
 	Interaction string
 	Session     string
+	Register    string
 }
 
 // Features carries the enable bits for optional protocol extensions.
 type Features struct {
-	PAR        bool
-	JAR        bool
-	JARM       bool
-	DPoP       bool
-	MTLS       bool
-	Introspect bool
-	Revoke     bool
+	PAR                 bool
+	JAR                 bool
+	JARM                bool
+	DPoP                bool
+	MTLS                bool
+	Introspect          bool
+	Revoke              bool
+	DynamicRegistration bool
 }
 
 // Build returns a [Document] populated from in. Absolute URLs are formed
@@ -104,6 +106,26 @@ func Build(in Input) Document {
 		// algorithms; ES256 / EdDSA is the FAPI 2.0 baseline.
 		doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA"}
 	}
+	if in.Features.MTLS {
+		// RFC 8705 §3.3: the OP signals that it issues
+		// certificate-bound access tokens. The flag covers both
+		// the §2 client-authentication path and the §3 binding
+		// path; clients use it to decide whether to present a
+		// certificate at /token in the first place.
+		doc.TLSClientCertificateBoundAccessTokens = true
+		// Append the §2 auth methods so a client can discover
+		// whether tls_client_auth / self_signed_tls_client_auth
+		// are accepted at /token without trial-and-error.
+		doc.TokenEndpointAuthMethodsSupported = appendUnique(
+			doc.TokenEndpointAuthMethodsSupported,
+			"tls_client_auth",
+			"self_signed_tls_client_auth",
+		)
+	}
+	if in.Features.DynamicRegistration {
+		doc.RegistrationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Register)
+		doc.RegistrationEndpointAuthMethodsSupported = []string{"initial_access_token"}
+	}
 	return doc
 }
 
@@ -136,5 +158,26 @@ func defaultAuthMethods(in []string) []string {
 	}
 	out := make([]string, len(in))
 	copy(out, in)
+	return out
+}
+
+// appendUnique returns base with each entry from extra appended exactly
+// once, preserving the original order. The helper exists so the mTLS
+// branch above can extend the auth-method list without duplicating
+// values an embedder may have already named in
+// [Input.AuthMethodsSupported].
+func appendUnique(base []string, extra ...string) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	for _, v := range base {
+		seen[v] = struct{}{}
+	}
+	out := append([]string(nil), base...)
+	for _, v := range extra {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
 	return out
 }

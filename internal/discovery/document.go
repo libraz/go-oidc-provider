@@ -39,6 +39,16 @@ type Document struct {
 	// RFC 9126 PAR endpoint. Only emitted when the feature is enabled.
 	PushedAuthorizationRequestEndpoint string `json:"pushed_authorization_request_endpoint,omitempty"`
 
+	// RegistrationEndpoint is the absolute URL of the RFC 7591 Dynamic
+	// Client Registration endpoint. Only emitted when the
+	// DynamicRegistration feature is enabled.
+	RegistrationEndpoint string `json:"registration_endpoint,omitempty"`
+
+	// RegistrationEndpointAuthMethodsSupported lists the authentication
+	// methods accepted at the registration endpoint. v1.0 advertises
+	// "initial_access_token" only. Empty when the feature is disabled.
+	RegistrationEndpointAuthMethodsSupported []string `json:"registration_endpoint_auth_methods_supported,omitempty"`
+
 	// ResponseTypesSupported lists the response_type values the OP
 	// accepts. v1.0 ships with "code" only (no implicit / hybrid).
 	ResponseTypesSupported []string `json:"response_types_supported"`
@@ -87,4 +97,11 @@ type Document struct {
 	// OP accepts on the "DPoP" header (RFC 9449 §5.1). Only emitted
 	// when the DPoP feature is enabled.
 	DPoPSigningAlgValuesSupported []string `json:"dpop_signing_alg_values_supported,omitempty"`
+
+	// TLSClientCertificateBoundAccessTokens reports whether the OP
+	// issues RFC 8705 certificate-bound access tokens. The field is
+	// false (and omitted from the wire) unless the MTLS feature is
+	// enabled; clients consult it to decide whether to present a
+	// client certificate at /token.
+	TLSClientCertificateBoundAccessTokens bool `json:"tls_client_certificate_bound_access_tokens,omitempty"`
 }

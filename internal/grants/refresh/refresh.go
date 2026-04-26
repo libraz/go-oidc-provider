@@ -144,6 +144,17 @@ type IssueInput struct {
 	// rotation handler later requires a matching proof on every
 	// refresh request. Empty means the refresh chain is bearer.
 	DPoPJKT string
+
+	// MTLSCertThumbprint is the RFC 8705 §3.1 thumbprint of the
+	// client certificate the associated access token is bound to.
+	// Non-empty values are persisted on the [store.RefreshToken]
+	// record; the rotation handler later requires a matching cert
+	// on every refresh request. Empty means the refresh chain is
+	// not mTLS-bound.
+	//
+	// MTLSCertThumbprint and DPoPJKT are mutually exclusive on a
+	// single record; the token endpoint never issues both at once.
+	MTLSCertThumbprint string
 }
 
 // Issue mints a new refresh token and persists it. It returns the opaque
@@ -159,15 +170,16 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 	}
 	now := i.clock().UTC()
 	rec := &store.RefreshToken{
-		ID:        id,
-		ClientID:  in.ClientID,
-		Subject:   in.Subject,
-		GrantID:   in.GrantID,
-		Scope:     slices.Clone(in.Scope),
-		ParentID:  cloneStringPtr(in.ParentID),
-		ExpiresAt: now.Add(i.ttl),
-		CreatedAt: now,
-		DPoPJKT:   in.DPoPJKT,
+		ID:                 id,
+		ClientID:           in.ClientID,
+		Subject:            in.Subject,
+		GrantID:            in.GrantID,
+		Scope:              slices.Clone(in.Scope),
+		ParentID:           cloneStringPtr(in.ParentID),
+		ExpiresAt:          now.Add(i.ttl),
+		CreatedAt:          now,
+		DPoPJKT:            in.DPoPJKT,
+		MTLSCertThumbprint: in.MTLSCertThumbprint,
 	}
 	if err := i.store.Save(ctx, rec); err != nil {
 		return "", fmt.Errorf("refresh: save: %w", err)
@@ -262,6 +274,14 @@ type Exchanged struct {
 	// require a DPoP proof whose JWK thumbprint equals this value
 	// before minting the next-generation token.
 	DPoPJKT string
+
+	// MTLSCertThumbprint is the RFC 8705 §3.1 thumbprint the chain
+	// was bound to at issuance, copied verbatim from the consumed
+	// record. Empty means the chain is not mTLS-bound; non-empty
+	// means the rotation handler MUST require a client cert whose
+	// DER bytes hash to this value before minting the next-
+	// generation token.
+	MTLSCertThumbprint string
 }
 
 // Exchange consumes the token, verifies the bindings, and returns the
@@ -291,13 +311,14 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		return nil, err
 	}
 	return &Exchanged{
-		ConsumedID: rec.ID,
-		ClientID:   rec.ClientID,
-		Subject:    rec.Subject,
-		GrantID:    rec.GrantID,
-		Scope:      resolvedScope,
-		ConsumedAt: *rec.ConsumedAt,
-		DPoPJKT:    rec.DPoPJKT,
+		ConsumedID:         rec.ID,
+		ClientID:           rec.ClientID,
+		Subject:            rec.Subject,
+		GrantID:            rec.GrantID,
+		Scope:              resolvedScope,
+		ConsumedAt:         *rec.ConsumedAt,
+		DPoPJKT:            rec.DPoPJKT,
+		MTLSCertThumbprint: rec.MTLSCertThumbprint,
 	}, nil
 }
 

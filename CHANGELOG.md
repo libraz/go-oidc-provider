@@ -21,3 +21,19 @@ in any minor release.
   the existing `store.ConsumedJTIStore`. Discovery advertises the
   accepted proof signing algorithms via
   `dpop_signing_alg_values_supported` (ES256, EdDSA).
+- RFC 8705 mTLS certificate-bound access tokens. Enabled via
+  `op.WithFeature(feature.MTLS)`. When a client presents a TLS
+  certificate at the token endpoint, the issued access token carries
+  `cnf.x5t#S256` (SHA-256 thumbprint of the leaf cert DER bytes),
+  the persisted refresh token records the same thumbprint, and the
+  userinfo endpoint enforces the binding on every call. Discovery
+  advertises `tls_client_certificate_bound_access_tokens: true` and
+  appends `tls_client_auth` / `self_signed_tls_client_auth` to the
+  supported auth-method list. The §2 client-authentication paths
+  (matching cert subject DN / SAN against client metadata, or
+  matching against a registered JWK) are exposed as
+  `internal/mtls.VerifyTLSClientAuth` /
+  `internal/mtls.VerifySelfSignedTLSClientAuth`; full wiring at the
+  token endpoint is deferred to a follow-up that lands the
+  `TLSClientAuth*` fields on `op/store.Client` alongside the
+  RFC 7591 dynamic-registration work.

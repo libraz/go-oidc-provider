@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -124,6 +125,21 @@ type Deps struct {
 	// the issued access token via cnf.jkt, and (for refresh) enforces
 	// the proof against the bound thumbprint of the presented token.
 	DPoP *dpop.Verifier
+
+	// MTLS is the RFC 8705 client-certificate verifier. A nil value
+	// disables mTLS binding entirely: the handler ignores any
+	// presented client cert, issues bearer tokens, and accepts
+	// refresh requests without checking a thumbprint. When non-nil
+	// AND a cert is presented at issuance, the issued access token
+	// carries cnf.x5t#S256 and the persisted refresh token records
+	// the same thumbprint so subsequent refreshes are gated on the
+	// same cert.
+	//
+	// DPoP and MTLS are mutually exclusive on a single token: when
+	// both are presented at /token the handler prefers DPoP (cnf.jkt)
+	// and skips the mTLS binding so the wire shape stays
+	// unambiguous.
+	MTLS *mtls.Verifier
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.

@@ -35,12 +35,15 @@
   "token_endpoint_auth_methods_supported": [
     "client_secret_basic",
     "client_secret_post",
-    "private_key_jwt"
+    "private_key_jwt",
+    "tls_client_auth",
+    "self_signed_tls_client_auth"
   ],
   "request_parameter_supported": true,
   "request_uri_parameter_supported": true,
   "dpop_signing_alg_values_supported": [
     "ES256",
     "EdDSA"
-  ]
+  ],
+  "tls_client_certificate_bound_access_tokens": true
 }

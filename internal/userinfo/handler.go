@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -64,6 +65,11 @@ type HandlerDeps struct {
 	// rejected to fail closed (silently downgrading a sender-
 	// constrained token to bearer would defeat the binding).
 	DPoP *dpop.Verifier
+
+	// MTLS is the RFC 8705 client-cert verifier. A nil value
+	// disables mTLS enforcement entirely; tokens carrying
+	// cnf.x5t#S256 are then rejected to fail closed.
+	MTLS *mtls.Verifier
 }
 
 // Handler returns the /userinfo [http.Handler]. Behaviour follows
@@ -111,13 +117,20 @@ func Handler(deps HandlerDeps) http.Handler {
 	})
 }
 
-// enforceCnfBinding verifies the DPoP proof on the request when the
-// access token carries a cnf.jkt confirmation (RFC 9449 §6.2). The
-// function emits a 401 with the appropriate WWW-Authenticate challenge
-// and returns false on any failure so the caller stops processing. A
-// missing cnf claim leaves the request on the bearer path; a present
-// cnf claim demands a proof, and the proof's thumbprint MUST equal
-// the bound value.
+// enforceCnfBinding verifies the sender-constraint proof on the
+// request whenever the access token carries a cnf claim (RFC 7800).
+// Two binding methods are recognised:
+//
+//   - "jkt": RFC 9449 DPoP. Requires a "DPoP" header carrying a proof
+//     whose JWK thumbprint equals the bound value.
+//   - "x5t#S256": RFC 8705 §3. Requires a client cert (TLS handshake
+//     or trusted reverse-proxy header) whose DER bytes hash to the
+//     bound value.
+//
+// A token may carry BOTH members; the function then enforces both
+// proofs. A token with no cnf claim leaves the request on the
+// bearer path. The function emits a 401 with the appropriate
+// WWW-Authenticate challenge and returns false on any failure.
 func enforceCnfBinding(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -125,18 +138,34 @@ func enforceCnfBinding(
 	claims *tokens.AccessTokenClaims,
 	rawAccessToken string,
 ) bool {
-	jkt := ""
-	if claims.Confirmation != nil {
-		jkt = claims.Confirmation["jkt"]
-	}
-	if jkt == "" {
+	cnf := claims.Confirmation
+	if len(cnf) == 0 {
 		// Bearer token: nothing to enforce.
 		return true
 	}
+	if jkt := cnf["jkt"]; jkt != "" {
+		if !enforceDPoPCnf(w, r, deps, jkt, rawAccessToken) {
+			return false
+		}
+	}
+	if x5t := cnf["x5t#S256"]; x5t != "" {
+		if !enforceMTLSCnf(w, r, deps, x5t) {
+			return false
+		}
+	}
+	return true
+}
+
+// enforceDPoPCnf is the DPoP-specific half of [enforceCnfBinding].
+// Split out so the two confirmation methods stay readable when both
+// are present on the same token.
+func enforceDPoPCnf(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps HandlerDeps,
+	jkt, rawAccessToken string,
+) bool {
 	if deps.DPoP == nil {
-		// Sender-constrained token presented at a verifier with DPoP
-		// disabled: fail closed. Echoing the cause via
-		// WWW-Authenticate gives the RP a clear remediation path.
 		respondDPoPInvalid(w, "DPoP verification is not enabled")
 		return false
 	}
@@ -157,6 +186,27 @@ func enforceCnfBinding(
 	return true
 }
 
+// enforceMTLSCnf is the mTLS-specific half of [enforceCnfBinding]. It
+// surfaces the appropriate WWW-Authenticate challenge for missing /
+// mismatched client certificates without leaking which sub-class of
+// failure produced the rejection.
+func enforceMTLSCnf(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps HandlerDeps,
+	bound string,
+) bool {
+	if deps.MTLS == nil {
+		respondMTLSInvalid(w, "mTLS verification is not enabled")
+		return false
+	}
+	if err := deps.MTLS.VerifyBoundRequest(r, bound); err != nil {
+		respondMTLSInvalid(w, "client certificate does not match the bound thumbprint")
+		return false
+	}
+	return true
+}
+
 // respondDPoPInvalid writes the RFC 9449 §7.1 challenge for a token
 // that requires DPoP but failed verification. The library uses the
 // "invalid_token" code (rather than the spec's "invalid_dpop_proof")
@@ -166,6 +216,17 @@ func enforceCnfBinding(
 func respondDPoPInvalid(w http.ResponseWriter, description string) {
 	w.Header().Set("WWW-Authenticate",
 		`DPoP error="invalid_token", error_description="`+description+`"`)
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+// respondMTLSInvalid writes the RFC 8705 §3.2 equivalent challenge for
+// a token that requires a client certificate but failed verification.
+// The challenge stays on the OAuth-Bearer code "invalid_token" so RP
+// libraries that key off the bearer state machine continue to
+// function; mTLS does not define a new error code for this case.
+func respondMTLSInvalid(w http.ResponseWriter, description string) {
+	w.Header().Set("WWW-Authenticate",
+		`Bearer error="invalid_token", error_description="`+description+`"`)
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
