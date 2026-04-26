@@ -1,0 +1,342 @@
+package authcode_test
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
+	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+)
+
+func challengeFor(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// fixture bundles a freshly-built Issuer + Exchanger sharing the same
+// clock and store. The shared clock is deliberately by-pointer so tests can
+// advance it after Issue and observe the new "now" at Exchange.
+type fixture struct {
+	issuer    *authcode.Issuer
+	exchanger *authcode.Exchanger
+	cur       *time.Time
+}
+
+// movingClock satisfies inmem.Clock and reads the current value of the
+// pointer it wraps so the test fixture's clock advances are observed by the
+// store's own ConsumedAt stamping.
+type movingClock struct{ cur *time.Time }
+
+func (c movingClock) Now() time.Time { return *c.cur }
+
+func newFixture(tb testing.TB, t0 time.Time) fixture {
+	tb.Helper()
+	cur := t0
+	clk := func() time.Time { return cur }
+	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).AuthorizationCodes()
+	iss, err := authcode.NewIssuer(authcode.IssuerConfig{Store: st, Clock: clk})
+	if err != nil {
+		tb.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := authcode.NewExchanger(authcode.ExchangerConfig{Store: st, Clock: clk})
+	if err != nil {
+		tb.Fatalf("NewExchanger: %v", err)
+	}
+	return fixture{issuer: iss, exchanger: exc, cur: &cur}
+}
+
+func goodInput(verifier string) authcode.IssueInput {
+	return authcode.IssueInput{
+		ClientID:            "client-1",
+		Subject:             "user-1",
+		GrantID:             "grant-1",
+		RedirectURI:         "https://rp.example.com/cb",
+		Scope:               []string{"openid", "profile"},
+		CodeChallenge:       challengeFor(verifier),
+		CodeChallengeMethod: pkce.Method,
+		Nonce:               "n-0S6_WzA2Mj",
+		State:               "state-abc",
+	}
+}
+
+func TestNewIssuer_RejectsMissingStore(t *testing.T) {
+	t.Parallel()
+
+	if _, err := authcode.NewIssuer(authcode.IssuerConfig{}); err == nil {
+		t.Error("NewIssuer accepted empty config")
+	}
+}
+
+func TestNewExchanger_RejectsMissingStore(t *testing.T) {
+	t.Parallel()
+
+	if _, err := authcode.NewExchanger(authcode.ExchangerConfig{}); err == nil {
+		t.Error("NewExchanger accepted empty config")
+	}
+}
+
+func TestIssue_AndExchange_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	f := newFixture(t, t0)
+
+	code, err := f.issuer.Issue(context.Background(), goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if code == "" {
+		t.Fatal("Issue returned empty code")
+	}
+
+	out, err := f.exchanger.Exchange(context.Background(), authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+	})
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if out.Subject != "user-1" {
+		t.Errorf("Subject=%q want user-1", out.Subject)
+	}
+	if out.GrantID != "grant-1" {
+		t.Errorf("GrantID=%q want grant-1", out.GrantID)
+	}
+	if out.Nonce != "n-0S6_WzA2Mj" {
+		t.Errorf("Nonce=%q", out.Nonce)
+	}
+	if got := out.Scope; len(got) != 2 || got[0] != "openid" || got[1] != "profile" {
+		t.Errorf("Scope=%v", got)
+	}
+	if !out.ConsumedAt.Equal(t0) {
+		t.Errorf("ConsumedAt=%v want %v", out.ConsumedAt, t0)
+	}
+}
+
+func TestIssue_RejectsMissingFields(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	verifier := strings.Repeat("a", 64)
+
+	cases := map[string]func(*authcode.IssueInput){
+		"missing_client":   func(in *authcode.IssueInput) { in.ClientID = "" },
+		"missing_subject":  func(in *authcode.IssueInput) { in.Subject = "" },
+		"missing_redirect": func(in *authcode.IssueInput) { in.RedirectURI = "" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			in := goodInput(verifier)
+			mutate(&in)
+			if _, err := f.issuer.Issue(context.Background(), in); err == nil {
+				t.Error("Issue accepted incomplete input")
+			}
+		})
+	}
+}
+
+func TestIssue_RejectsBadPKCE(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+
+	in := goodInput(strings.Repeat("a", 64))
+	in.CodeChallengeMethod = "plain"
+	_, err := f.issuer.Issue(context.Background(), in)
+	if !errors.Is(err, pkce.ErrChallengeMethodUnsupported) {
+		t.Errorf("err=%v want ErrChallengeMethodUnsupported", err)
+	}
+}
+
+func TestExchange_ReplayReturnsSentinel(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	code, err := f.issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	in := authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+	}
+	if _, err := f.exchanger.Exchange(ctx, in); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	if _, err := f.exchanger.Exchange(ctx, in); !errors.Is(err, authcode.ErrCodeReplayed) {
+		t.Errorf("second Exchange err=%v want ErrCodeReplayed", err)
+	}
+}
+
+func TestExchange_RejectsClientMismatch(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	code, err := f.issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	_, err = f.exchanger.Exchange(ctx, authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "other-client",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+	})
+	if !errors.Is(err, authcode.ErrClientMismatch) {
+		t.Errorf("err=%v want ErrClientMismatch", err)
+	}
+}
+
+func TestExchange_RejectsRedirectMismatch(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	code, err := f.issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	_, err = f.exchanger.Exchange(ctx, authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/elsewhere",
+		CodeVerifier: verifier,
+	})
+	if !errors.Is(err, authcode.ErrRedirectURIMismatch) {
+		t.Errorf("err=%v want ErrRedirectURIMismatch", err)
+	}
+}
+
+func TestExchange_RejectsBadVerifier(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	code, err := f.issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	_, err = f.exchanger.Exchange(ctx, authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: strings.Repeat("b", 64),
+	})
+	if !errors.Is(err, pkce.ErrVerifierMismatch) {
+		t.Errorf("err=%v want ErrVerifierMismatch", err)
+	}
+}
+
+func TestExchange_RejectsMissingCode(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	_, err := f.exchanger.Exchange(context.Background(), authcode.ExchangeInput{
+		Code:        "",
+		ClientID:    "client-1",
+		RedirectURI: "https://rp.example.com/cb",
+	})
+	if !errors.Is(err, authcode.ErrCodeMissing) {
+		t.Errorf("empty code: err=%v want ErrCodeMissing", err)
+	}
+	_, err = f.exchanger.Exchange(context.Background(), authcode.ExchangeInput{
+		Code:        "no-such-code",
+		ClientID:    "client-1",
+		RedirectURI: "https://rp.example.com/cb",
+	})
+	if !errors.Is(err, authcode.ErrCodeMissing) {
+		t.Errorf("unknown code: err=%v want ErrCodeMissing", err)
+	}
+}
+
+func TestExchange_DetectsExpiredCode(t *testing.T) {
+	t.Parallel()
+
+	// Use a custom store that does NOT expire on read so the exchanger's
+	// own clock-based check is exercised. The default inmem store treats
+	// expired records as ErrNotFound at Consume; we want to observe the
+	// authcode-layer's expiry sentinel instead.
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	st := &alwaysAliveCodeStore{
+		AuthorizationCodeStore: inmem.New().AuthorizationCodes(),
+	}
+	cur := t0
+	iss, err := authcode.NewIssuer(authcode.IssuerConfig{
+		Store: st,
+		Clock: func() time.Time { return cur },
+		TTL:   60 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := authcode.NewExchanger(authcode.ExchangerConfig{
+		Store: st,
+		Clock: func() time.Time { return cur },
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	code, err := iss.Issue(context.Background(), goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	cur = t0.Add(2 * time.Minute) // 2 min > 60s default TTL
+	_, err = exc.Exchange(context.Background(), authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+	})
+	if !errors.Is(err, authcode.ErrCodeExpired) {
+		t.Errorf("err=%v want ErrCodeExpired", err)
+	}
+}
+
+// alwaysAliveCodeStore wraps a real inmem store but bypasses the store's own
+// expiry-on-read so the authcode package's clock-based check is exercised.
+// Without this layer, an expired code returns store.ErrNotFound and Exchange
+// would surface ErrCodeMissing instead of ErrCodeExpired.
+type alwaysAliveCodeStore struct {
+	store.AuthorizationCodeStore
+}
+
+func (s *alwaysAliveCodeStore) Consume(ctx context.Context, id string) (*store.AuthorizationCode, error) {
+	rec, err := s.Find(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	rec.ConsumedAt = &now
+	return rec, nil
+}

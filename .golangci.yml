@@ -97,6 +97,7 @@ linters:
             - "!**/internal/cookie/**"
             - "!**/internal/sessions/**"
             - "!**/internal/tokens/**"
+            - "!**/internal/grants/**"
             - "!**/internal/authn/recovery/**"
             - "!**/*_test.go"
           deny:
