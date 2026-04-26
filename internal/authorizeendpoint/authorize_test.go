@@ -17,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -399,6 +400,125 @@ func TestAuthorize_MaxAgeViolationForcesInteraction(t *testing.T) {
 	loc := mustParseLocation(t, resp)
 	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
 		t.Errorf("Location=%s want interaction redirect", loc.String())
+	}
+}
+
+// newScopeHarness builds a handler whose Deps include a registry that
+// locks billing:write to a single client. The fixture client (client-1)
+// is granted billing:write in its registered Scopes so the
+// AllowedClients allowlist is the only barrier left for the test rows
+// to exercise.
+func newScopeHarness(t *testing.T) *testHarness {
+	t.Helper()
+	clock := &fakeClock{now: fixedNow()}
+	st := inmem.New(inmem.WithClock(clock))
+	if err := st.RegisterClient(context.Background(), &store.Client{
+		ID:                      "client-1",
+		RedirectURIs:            []string{"https://rp.example.com/cb"},
+		GrantTypes:              []string{"authorization_code"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid", "profile", "email", "billing:write"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	cookieKey := make([]byte, 32)
+	for i := range cookieKey {
+		cookieKey[i] = byte(i + 1)
+	}
+	cookieCodec, err := cookie.NewCodec(cookieKey)
+	if err != nil {
+		t.Fatalf("cookie.NewCodec: %v", err)
+	}
+	sessCodec, err := sessions.NewCodec(cookieCodec)
+	if err != nil {
+		t.Fatalf("sessions.NewCodec: %v", err)
+	}
+	mgr, err := sessions.NewManager(sessions.Config{
+		Codec: sessCodec,
+		Store: st.Sessions(),
+		Clock: clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("sessions.NewManager: %v", err)
+	}
+	csrfKey := make([]byte, 32)
+	for i := range csrfKey {
+		csrfKey[i] = byte(i + 100)
+	}
+	signer, err := csrf.NewSigner(csrfKey)
+	if err != nil {
+		t.Fatalf("csrf.NewSigner: %v", err)
+	}
+	allow, err := csrf.NewAllowlist([]string{"https://op.example.com"})
+	if err != nil {
+		t.Fatalf("csrf.NewAllowlist: %v", err)
+	}
+
+	scopes := scoperegistry.New([]scoperegistry.Entry{
+		{Name: "billing:write", Public: true, AllowedClients: []string{"svc-billing"}},
+	})
+
+	deps := authorizeendpoint.Deps{
+		Clients:         st.Clients(),
+		Codes:           st.AuthorizationCodes(),
+		Grants:          st.Grants(),
+		Interactions:    st.Interactions(),
+		Sessions:        mgr,
+		CookieCodec:     cookieCodec,
+		CSRF:            signer,
+		Origins:         allow,
+		Driver:          interaction.NoopDriver{},
+		Scopes:          scopes,
+		AuthorizePath:   "/oidc/auth",
+		InteractionPath: "/oidc/interaction",
+		Clock:           clock,
+	}
+
+	return &testHarness{
+		handler:        authorizeendpoint.Handler(deps),
+		store:          st,
+		cookieCodec:    cookieCodec,
+		sessionMgr:     mgr,
+		csrfSigner:     signer,
+		driver:         interaction.NoopDriver{},
+		clock:          clock,
+		authorizePath:  deps.AuthorizePath,
+		interactionPth: deps.InteractionPath,
+	}
+}
+
+// TestAuthorize_ScopeAllowedClients_RedirectsInvalidScope is the HTTP
+// surface counterpart of the validator-level test in
+// internal/authorize. The /authorize endpoint MUST surface the
+// AllowedClients violation as a redirect with error=invalid_scope
+// because redirect_uri has already been verified by the time the scope
+// check runs (ErrScopeClientNotAllowed is redirect-safe).
+func TestAuthorize_ScopeAllowedClients_RedirectsInvalidScope(t *testing.T) {
+	t.Parallel()
+
+	h := newScopeHarness(t)
+	v := goodAuthorizeValues()
+	v.Set("scope", "openid billing:write")
+
+	resp := doAuthorizeGET(t, h, v)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302", resp.StatusCode)
+	}
+	loc := mustParseLocation(t, resp)
+	if got := loc.Query().Get("error"); got != "invalid_scope" {
+		t.Errorf("error=%q want invalid_scope", got)
+	}
+	if got := loc.Query().Get("state"); got != "state-abc" {
+		t.Errorf("state=%q want state-abc", got)
+	}
+	// The Location host must be the registered redirect_uri host;
+	// otherwise the OP misclassified the error as pre-redirect-URI.
+	if loc.Host != "rp.example.com" {
+		t.Errorf("redirect host=%q want rp.example.com", loc.Host)
 	}
 }
 

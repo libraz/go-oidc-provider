@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -332,6 +333,86 @@ func TestValidate_PromptCombinations(t *testing.T) {
 	if err := req.Validate(goodClient(), nil); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
+}
+
+// TestValidate_ScopeAllowedClients pins the ADR-0004 contract at the
+// validator boundary. The scenarios are:
+//
+//   - allowlist contains the requesting client → no error.
+//   - allowlist excludes the requesting client → ErrScopeClientNotAllowed.
+//   - the registry itself is nil → allowlist check is skipped, so a
+//     scope the embedder modelled as "client-locked" still validates
+//     when the OP was built without a registry. The intersection check
+//     against client.Scopes still runs and is what guards the request
+//     in that mode.
+func TestValidate_ScopeAllowedClients(t *testing.T) {
+	t.Parallel()
+
+	// Use a client whose registered Scopes include both the standard
+	// and the locked-down billing:write entry; that way the table can
+	// exercise allowlist behaviour without the unrelated
+	// ErrScopeNotPermitted firing first.
+	clientWithBilling := func() *store.Client {
+		c := goodClient()
+		c.Scopes = append(c.Scopes, "billing:write")
+		return c
+	}
+
+	t.Run("listed_client_admitted", func(t *testing.T) {
+		t.Parallel()
+
+		reg := scoperegistry.New([]scoperegistry.Entry{
+			{Name: "billing:write", Public: true, AllowedClients: []string{"client-1", "svc-admin"}},
+		})
+		v := goodValues()
+		v.Set("scope", "openid billing:write")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		if err := req.Validate(clientWithBilling(), reg); err != nil {
+			t.Errorf("listed client must be admitted: %v", err)
+		}
+	})
+
+	t.Run("unlisted_client_rejected", func(t *testing.T) {
+		t.Parallel()
+
+		reg := scoperegistry.New([]scoperegistry.Entry{
+			{Name: "billing:write", Public: true, AllowedClients: []string{"svc-billing"}},
+		})
+		v := goodValues()
+		v.Set("scope", "openid billing:write")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		gotErr := req.Validate(clientWithBilling(), reg)
+		if !errors.Is(gotErr, authorize.ErrScopeClientNotAllowed) {
+			t.Fatalf("err=%v want ErrScopeClientNotAllowed", gotErr)
+		}
+		if !authorize.IsRedirectSafe(gotErr) {
+			t.Error("ErrScopeClientNotAllowed must be redirect-safe (post-redirect-URI validation)")
+		}
+	})
+
+	t.Run("nil_registry_skips_allowlist", func(t *testing.T) {
+		t.Parallel()
+
+		// With nil registry the allowlist is not enforced; the
+		// client's intersection is the only gate. Use a client that
+		// already has billing:write so intersection passes; this
+		// confirms the validator falls through to no-error.
+		v := goodValues()
+		v.Set("scope", "openid billing:write")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		if err := req.Validate(clientWithBilling(), nil); err != nil {
+			t.Errorf("nil registry must skip allowlist enforcement, got %v", err)
+		}
+	})
 }
 
 // TestIsRedirectSafe_NonPackageError confirms that callers passing in an

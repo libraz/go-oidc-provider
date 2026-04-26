@@ -1,11 +1,16 @@
 package tokenendpoint_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // refreshForm builds the canonical refresh_token form body. scope is
@@ -192,6 +197,149 @@ func TestRefresh_ScopeNarrowing(t *testing.T) {
 		t.Errorf("scope=%v want openid", got)
 	}
 }
+
+// scopedFixture builds a fresh fixture whose op.Provider has a custom
+// scope registered with an AllowedClients allowlist that excludes the
+// confidential test client. The lookup is plumbed through op.New →
+// scoperegistry.New → tokenendpoint.Deps.Scopes; this exercises the
+// full wire-up rather than the ExchangerConfig in isolation.
+func scopedFixture(tb testing.TB) *fixture {
+	tb.Helper()
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(tb,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithScope(op.Scope{
+			Name:           "billing:write",
+			Public:         true,
+			AllowedClients: []string{"svc-billing"},
+		})),
+	)
+	return &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		clock:    clock,
+	}
+}
+
+// TestRefresh_ScopeAllowedClients_Rejected verifies that the
+// /token endpoint enforces ADR-0004's AllowedClients allowlist. The
+// confidential client requests a scope locked to a different client and
+// MUST be rejected with invalid_scope before the refresh token is
+// consumed.
+func TestRefresh_ScopeAllowedClients_Rejected(t *testing.T) {
+	t.Parallel()
+
+	f := scopedFixture(t)
+	const secret = "shh-its-a-secret"
+	hasher := authn.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := f.prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-conf",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid", "profile", "email", "billing:write"},
+	})
+
+	const tokenID = "rt-allowlist"
+	f.seedGrant(t, &store.Grant{
+		ID: "grant-allowlist", Subject: "user-1", ClientID: client.ID,
+		Scope: []string{"openid", "billing:write"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  "user-1",
+		GrantID:  "grant-allowlist",
+		Scope:    []string{"openid", "billing:write"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, "openid billing:write"), client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "invalid_scope" {
+		t.Errorf("error=%v want invalid_scope", got)
+	}
+
+	// The presented refresh token MUST still be intact: the allowlist
+	// check runs before refresh.Exchanger.Exchange, so the record's
+	// ConsumedAt should remain nil and a subsequent allowlist-clean
+	// request must succeed against the same token.
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find after rejection: %v", err)
+	}
+	if rec.ConsumedAt != nil {
+		t.Fatalf("refresh token must not be consumed on allowlist rejection (ConsumedAt=%v)", rec.ConsumedAt)
+	}
+
+	// Without a scope override the request reuses the bound scope and
+	// should succeed (the allowlist check is skipped because the
+	// request did not ask for a fresh override). This double-checks
+	// that the rejection above did not corrupt the chain.
+	follow := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer follow.Body.Close()
+	if follow.StatusCode != http.StatusOK {
+		t.Fatalf("follow-up status=%d want 200; allowlist rejection must leave the token usable", follow.StatusCode)
+	}
+}
+
+// TestRefresh_ScopeAllowedClients_Permitted is the positive
+// counterpart: the same registry, but the requesting client is on the
+// allowlist. The refresh succeeds and the rotated token is returned.
+func TestRefresh_ScopeAllowedClients_Permitted(t *testing.T) {
+	t.Parallel()
+
+	f := scopedFixture(t)
+	const secret = "shh-its-a-secret"
+	hasher := authn.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := f.prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "svc-billing",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid", "billing:write"},
+	})
+
+	const tokenID = "rt-allowlist-ok" //nolint:gosec // not a credential — opaque test fixture id.
+	f.seedGrant(t, &store.Grant{
+		ID: "grant-allowlist-ok", Subject: "user-1", ClientID: client.ID,
+		Scope: []string{"openid", "billing:write"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  "user-1",
+		GrantID:  "grant-allowlist-ok",
+		Scope:    []string{"openid", "billing:write"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, "openid billing:write"), client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got, _ := body["refresh_token"].(string); got == "" {
+		t.Errorf("refresh_token must rotate on allowlist-permitted refresh: %v", body)
+	}
+}
+
+// Note: authorization_code grant does not accept a scope reduction at
+// /token (the granted scope is bound to the issued code at /authorize).
+// The AllowedClients allowlist is therefore enforced upstream by the
+// authorize endpoint; no /token-side authcode test is required for
+// ADR-0004 coverage.
 
 // TestRefresh_MissingToken yields invalid_request when the body omits
 // refresh_token.
