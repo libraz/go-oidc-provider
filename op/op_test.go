@@ -33,10 +33,41 @@ func (stubStore) RefreshTokens() store.RefreshTokenStore { return stubRefreshSto
 // Grants is invoked eagerly by buildRouter to wire /token.
 func (stubStore) Grants() store.GrantStore { return stubGrantStore{} }
 
-func (stubStore) Sessions() store.SessionStore                     { panic("not implemented") }
+// Sessions and Interactions are invoked eagerly by buildRouter to wire the
+// /authorize and /interaction handlers; returning no-op substores lets
+// construction tests exercise op.New without seeding a real backend.
+func (stubStore) Sessions() store.SessionStore                     { return stubSessionStore{} }
 func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { panic("not implemented") }
-func (stubStore) Interactions() store.InteractionStore             { panic("not implemented") }
+func (stubStore) Interactions() store.InteractionStore             { return stubInteractionStore{} }
 func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { panic("not implemented") }
+
+type stubSessionStore struct{}
+
+func (stubSessionStore) Save(context.Context, *store.Session) error { return store.ErrNotFound }
+
+func (stubSessionStore) Find(context.Context, string) (*store.Session, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubSessionStore) Touch(context.Context, string, time.Time, time.Time) error {
+	return store.ErrNotFound
+}
+
+func (stubSessionStore) Delete(context.Context, string) error { return store.ErrNotFound }
+
+func (stubSessionStore) ListByChooserGroup(context.Context, string) ([]*store.Session, error) {
+	return nil, nil
+}
+
+type stubInteractionStore struct{}
+
+func (stubInteractionStore) Save(context.Context, *store.Interaction) error { return store.ErrNotFound }
+
+func (stubInteractionStore) Find(context.Context, string) (*store.Interaction, error) {
+	return nil, store.ErrNotFound
+}
+
+func (stubInteractionStore) Delete(context.Context, string) error { return store.ErrNotFound }
 
 // Users is invoked eagerly by buildRouter to wire the /userinfo handler;
 // returning a no-op substore lets construction tests exercise op.New

@@ -1,15 +1,22 @@
 package op
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
+	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
 	"github.com/libraz/go-oidc-provider/internal/userinfo"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
 // defaultUserInfoLeeway is the symmetric tolerance the /userinfo
@@ -18,6 +25,12 @@ import (
 // slow / clock-skewed RP retries quickly without amplifying replay
 // windows for stolen tokens.
 const defaultUserInfoLeeway = 30 * time.Second
+
+// csrfDerivationLabel is the HMAC label used to derive the CSRF signing
+// key from the active cookie key. Including a domain-separation label
+// prevents a key reuse attack across cookie / CSRF surfaces if either
+// derivation function is ever changed independently.
+const csrfDerivationLabel = "oidc-csrf-v1"
 
 // Provider is the assembled OpenID Connect Provider. It implements
 // [http.Handler] and is the result of a successful [New] call.
@@ -118,7 +131,112 @@ func buildRouter(cfg *config, keySet *keys.Set) (*http.ServeMux, error) {
 			Clock:         cfg.clock,
 		}),
 	)
+	if err := mountAuthorizeHandlers(mux, cfg); err != nil {
+		return nil, err
+	}
 	return mux, nil
+}
+
+// mountAuthorizeHandlers wires the /authorize and /interaction routes when
+// the configuration includes a grant that needs them (currently only
+// AuthorizationCode). The handler shares an internal mux so a single
+// instance services both paths; see [internal/authorizeendpoint.Handler].
+func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config) error {
+	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
+		return nil
+	}
+	cookieCodec, err := cookie.NewCodec(cfg.cookieKeys[0], cfg.cookieKeys[1:]...)
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "cookie codec rejected configured keys",
+			Cause:       err,
+		}
+	}
+	sessCodec, err := sessions.NewCodec(cookieCodec)
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "sessions codec construction failed",
+			Cause:       err,
+		}
+	}
+	sessMgr, err := sessions.NewManager(sessions.Config{
+		Codec: sessCodec,
+		Store: cfg.store.Sessions(),
+		Clock: cfg.clock.Now,
+	})
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "sessions manager construction failed",
+			Cause:       err,
+		}
+	}
+	csrfSigner, err := csrf.NewSigner(deriveCSRFKey(cfg.cookieKeys[0]))
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "csrf signer construction failed",
+			Cause:       err,
+		}
+	}
+	allowOrigins := append([]string(nil), cfg.corsOrigins...)
+	if origin, oerr := csrf.CanonicalOrigin(cfg.issuer); oerr == nil {
+		allowOrigins = append(allowOrigins, origin)
+	}
+	allow, err := csrf.NewAllowlist(allowOrigins)
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "csrf allowlist construction failed",
+			Cause:       err,
+		}
+	}
+	authorizePath := joinPath(cfg.mountPrefix, cfg.endpoints.Authorize)
+	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
+	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
+		Issuer:          cfg.issuer,
+		Clients:         cfg.store.Clients(),
+		Codes:           cfg.store.AuthorizationCodes(),
+		Grants:          cfg.store.Grants(),
+		Interactions:    cfg.store.Interactions(),
+		Sessions:        sessMgr,
+		SessionCodec:    sessCodec,
+		CookieCodec:     cookieCodec,
+		CSRF:            csrfSigner,
+		Origins:         allow,
+		Driver:          cfg.interactionD,
+		AuthorizePath:   authorizePath,
+		InteractionPath: interactionPath,
+		Clock:           cfg.clock,
+	})
+	mux.Handle(authorizePath, handler)
+	mux.Handle(interactionPath+"/{uid}", handler)
+	return nil
+}
+
+// grantsRequireAuthorizeEndpoint reports whether any configured grant
+// depends on the /authorize endpoint being mounted. Currently only the
+// AuthorizationCode grant qualifies; the helper exists so future
+// grants can opt in by adding themselves to the switch.
+func grantsRequireAuthorizeEndpoint(grants []grant.Type) bool {
+	for _, g := range grants {
+		if g == grant.AuthorizationCode {
+			return true
+		}
+	}
+	return false
+}
+
+// deriveCSRFKey returns a 32-byte HMAC-SHA256 derivation of cookieKey
+// labelled with [csrfDerivationLabel]. SHA-256 emits exactly 32 bytes
+// which matches the [csrf.NewSigner] requirement, so no truncation is
+// needed.
+func deriveCSRFKey(cookieKey []byte) []byte {
+	h := hmac.New(sha256.New, cookieKey)
+	_, _ = h.Write([]byte(csrfDerivationLabel))
+	return h.Sum(nil)
 }
 
 // buildDiscoveryInput converts the public [config] to the internal
