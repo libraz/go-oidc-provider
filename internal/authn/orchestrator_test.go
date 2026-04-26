@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 // newSigner constructs a deterministic StateRef signer for tests. The
@@ -57,19 +58,19 @@ type stubAuthenticator struct {
 	aal        op.AAL
 	amr        string
 	prompts    []string
-	beginFn    func(ctx context.Context, in op.BeginInput) (op.Step, error)
-	continueFn func(ctx context.Context, in op.ContinueInput) (op.Step, error)
+	beginFn    func(ctx context.Context, in op.BeginInput) (interaction.Step, error)
+	continueFn func(ctx context.Context, in op.ContinueInput) (interaction.Step, error)
 }
 
 func (s *stubAuthenticator) Type() op.FactorType { return s.typeID }
 func (s *stubAuthenticator) AAL() op.AAL         { return s.aal }
 func (s *stubAuthenticator) AMR() string         { return s.amr }
 func (s *stubAuthenticator) Prompts() []string   { return s.prompts }
-func (s *stubAuthenticator) Begin(ctx context.Context, in op.BeginInput) (op.Step, error) {
+func (s *stubAuthenticator) Begin(ctx context.Context, in op.BeginInput) (interaction.Step, error) {
 	return s.beginFn(ctx, in)
 }
 
-func (s *stubAuthenticator) Continue(ctx context.Context, in op.ContinueInput) (op.Step, error) {
+func (s *stubAuthenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
 	return s.continueFn(ctx, in)
 }
 
@@ -77,17 +78,17 @@ func (s *stubAuthenticator) Continue(ctx context.Context, in op.ContinueInput) (
 type stubInteraction struct {
 	name       string
 	trigger    op.InteractionTrigger
-	beginFn    func(ctx context.Context, in op.BeginInput) (op.Step, error)
-	continueFn func(ctx context.Context, in op.ContinueInput) (op.Step, error)
+	beginFn    func(ctx context.Context, in op.BeginInput) (interaction.Step, error)
+	continueFn func(ctx context.Context, in op.ContinueInput) (interaction.Step, error)
 }
 
 func (i *stubInteraction) Name() string                   { return i.name }
 func (i *stubInteraction) Trigger() op.InteractionTrigger { return i.trigger }
-func (i *stubInteraction) Begin(ctx context.Context, in op.BeginInput) (op.Step, error) {
+func (i *stubInteraction) Begin(ctx context.Context, in op.BeginInput) (interaction.Step, error) {
 	return i.beginFn(ctx, in)
 }
 
-func (i *stubInteraction) Continue(ctx context.Context, in op.ContinueInput) (op.Step, error) {
+func (i *stubInteraction) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
 	return i.continueFn(ctx, in)
 }
 
@@ -132,10 +133,10 @@ func (r *recordingObserver) snapshot() []op.LoginAttempt {
 
 // passwordPrompt is a convenience constructor for the canonical
 // password Prompt shape the tests emit.
-func passwordPrompt() *op.Prompt {
-	return &op.Prompt{
+func passwordPrompt() *interaction.Prompt {
+	return &interaction.Prompt{
 		Type: "auth.password",
-		Data: op.PasswordPromptData{},
+		Data: interaction.PasswordPromptData{},
 	}
 }
 
@@ -148,11 +149,11 @@ func TestTickSinglePasswordSuccess(t *testing.T) {
 		aal:     op.AAL1,
 		amr:     "pwd",
 		prompts: []string{"auth.password"},
-		beginFn: func(_ context.Context, _ op.BeginInput) (op.Step, error) {
-			return op.Step{Prompt: passwordPrompt()}, nil
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: passwordPrompt()}, nil
 		},
-		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
-			return op.Step{Result: &op.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
 		},
 	}
 	o, err := authn.New(authn.Config{
@@ -175,7 +176,7 @@ func TestTickSinglePasswordSuccess(t *testing.T) {
 	}
 
 	st, step, err = o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "hunter2"}},
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "hunter2"}},
 		Now:        fakeNow(),
 	})
 	if err != nil {
@@ -211,21 +212,21 @@ func TestTickMultiStepEmailOTP(t *testing.T) {
 		aal:     op.AAL2,
 		amr:     "otp",
 		prompts: []string{"auth.email_otp.send", "auth.email_otp.verify"},
-		beginFn: func(_ context.Context, _ op.BeginInput) (op.Step, error) {
-			return op.Step{Prompt: &op.Prompt{
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &interaction.Prompt{
 				Type: "auth.email_otp.send",
-				Data: op.EmailOTPSendPromptData{},
+				Data: interaction.EmailOTPSendPromptData{},
 			}}, nil
 		},
-		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
 			step++
 			if step == 1 {
-				return op.Step{Prompt: &op.Prompt{
+				return interaction.Step{Prompt: &interaction.Prompt{
 					Type: "auth.email_otp.verify",
-					Data: op.EmailOTPVerifyPromptData{MaskedEmail: "a***@e***"},
+					Data: interaction.EmailOTPVerifyPromptData{MaskedEmail: "a***@e***"},
 				}}, nil
 			}
-			return op.Step{Result: &op.Result{Subject: "user-9", AuthTime: fakeNow()}}, nil
+			return interaction.Step{Result: &interaction.Result{Subject: "user-9", AuthTime: fakeNow()}}, nil
 		},
 	}
 
@@ -247,7 +248,7 @@ func TestTickMultiStepEmailOTP(t *testing.T) {
 	}
 
 	st, verifyStep, err := o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: sendStep.Prompt.StateRef, Values: map[string]string{"email": "a@e"}},
+		Submission: &interaction.FormSubmission{StateRef: sendStep.Prompt.StateRef, Values: map[string]string{"email": "a@e"}},
 		Now:        fakeNow(),
 	})
 	if err != nil || verifyStep.Prompt == nil || verifyStep.Prompt.Type != "auth.email_otp.verify" {
@@ -255,7 +256,7 @@ func TestTickMultiStepEmailOTP(t *testing.T) {
 	}
 
 	_, finalStep, err := o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: verifyStep.Prompt.StateRef, Values: map[string]string{"code": "123456"}},
+		Submission: &interaction.FormSubmission{StateRef: verifyStep.Prompt.StateRef, Values: map[string]string{"code": "123456"}},
 		Now:        fakeNow(),
 	})
 	if err != nil {
@@ -357,7 +358,7 @@ func TestTickCaptchaAfterThreeFailures(t *testing.T) {
 
 	// Solve captcha; expect to land on the password prompt.
 	_, pwStep, err := o.Tick(context.Background(), st, authn.Input{
-		Submission:   &op.FormSubmission{StateRef: captchaStep.Prompt.StateRef},
+		Submission:   &interaction.FormSubmission{StateRef: captchaStep.Prompt.StateRef},
 		CaptchaToken: "ok",
 		Now:          fakeNow(),
 	})
@@ -400,7 +401,7 @@ func TestTickCaptchaFailureReemits(t *testing.T) {
 	}
 
 	_, retryStep, err := o.Tick(context.Background(), st, authn.Input{
-		Submission:   &op.FormSubmission{StateRef: captchaStep.Prompt.StateRef},
+		Submission:   &interaction.FormSubmission{StateRef: captchaStep.Prompt.StateRef},
 		CaptchaToken: "wrong",
 		Now:          fakeNow(),
 	})
@@ -444,7 +445,7 @@ func TestTickStateRefMismatch(t *testing.T) {
 	bumped := st
 	bumped.StepCounter++
 	_, _, err = o.Tick(context.Background(), bumped, authn.Input{
-		Submission: &op.FormSubmission{StateRef: step.Prompt.StateRef},
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
 		Now:        fakeNow(),
 	})
 	if !errors.Is(err, authn.ErrInvalidStateRef) {
@@ -453,7 +454,7 @@ func TestTickStateRefMismatch(t *testing.T) {
 
 	// Expired token (advance the clock past the TTL).
 	_, _, err = o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: step.Prompt.StateRef},
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
 		Now:        fakeNow().Add(time.Hour),
 	})
 	if !errors.Is(err, authn.ErrInvalidStateRef) {
@@ -484,7 +485,7 @@ func TestTickUnregisteredAMRDropped(t *testing.T) {
 		t.Fatalf("first tick: %v", err)
 	}
 	st, _, err = o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: step.Prompt.StateRef},
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
 		Now:        fakeNow(),
 	})
 	if err != nil {
@@ -527,14 +528,14 @@ func TestTickInteractionBeforeAuthn(t *testing.T) {
 	region := &stubInteraction{
 		name:    "myorg.region.gate",
 		trigger: op.TriggerBeforeAuthn,
-		beginFn: func(_ context.Context, _ op.BeginInput) (op.Step, error) {
-			return op.Step{Prompt: &op.Prompt{
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &interaction.Prompt{
 				Type: "myorg.region.prompt",
-				Data: op.PasswordPromptData{},
+				Data: interaction.PasswordPromptData{},
 			}}, nil
 		},
-		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
-			return op.Step{Result: &op.Result{}}, nil
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{Result: &interaction.Result{}}, nil
 		},
 	}
 	o, err := authn.New(authn.Config{
@@ -563,14 +564,14 @@ func TestTickInteractionAfterAuthn(t *testing.T) {
 	consent := &stubInteraction{
 		name:    "consent",
 		trigger: op.TriggerAfterAuthn,
-		beginFn: func(_ context.Context, _ op.BeginInput) (op.Step, error) {
-			return op.Step{Prompt: &op.Prompt{
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &interaction.Prompt{
 				Type: "consent.scope",
-				Data: op.ConsentScopePromptData{},
+				Data: interaction.ConsentScopePromptData{},
 			}}, nil
 		},
-		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
-			return op.Step{Result: &op.Result{}}, nil
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{Result: &interaction.Result{}}, nil
 		},
 	}
 	o, err := authn.New(authn.Config{
@@ -587,7 +588,7 @@ func TestTickInteractionAfterAuthn(t *testing.T) {
 		t.Fatalf("first tick: %v", err)
 	}
 	st, step, err = o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: step.Prompt.StateRef},
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
 		Now:        fakeNow(),
 	})
 	if err != nil {
@@ -597,7 +598,7 @@ func TestTickInteractionAfterAuthn(t *testing.T) {
 		t.Fatalf("expected consent prompt, got %+v", step.Prompt)
 	}
 	st, step, err = o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: step.Prompt.StateRef},
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
 		Now:        fakeNow(),
 	})
 	if err != nil {
@@ -631,7 +632,7 @@ func TestTickObserverFanout(t *testing.T) {
 		t.Fatalf("first tick: %v", err)
 	}
 	_, _, err = o.Tick(context.Background(), st, authn.Input{
-		Submission: &op.FormSubmission{StateRef: step.Prompt.StateRef},
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef},
 		Now:        fakeNow(),
 	})
 	if err != nil {
@@ -663,11 +664,11 @@ func buildSuccessAuthenticator(t op.FactorType, aal op.AAL, amr string) *stubAut
 		aal:     aal,
 		amr:     amr,
 		prompts: []string{prompt.Type},
-		beginFn: func(_ context.Context, _ op.BeginInput) (op.Step, error) {
-			return op.Step{Prompt: &prompt}, nil
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &prompt}, nil
 		},
-		continueFn: func(_ context.Context, _ op.ContinueInput) (op.Step, error) {
-			return op.Step{Result: &op.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
 		},
 	}
 }
@@ -676,19 +677,19 @@ func buildSuccessAuthenticator(t op.FactorType, aal op.AAL, amr string) *stubAut
 // type. Tests that exercise custom factor types (e.g.,
 // "myorg.custom") receive a generic password-shaped prompt; the
 // orchestrator does not validate the prompt namespace.
-func promptForFactor(t op.FactorType) op.Prompt {
+func promptForFactor(t op.FactorType) interaction.Prompt {
 	switch t {
 	case op.FactorPassword:
-		return op.Prompt{Type: "auth.password", Data: op.PasswordPromptData{}}
+		return interaction.Prompt{Type: "auth.password", Data: interaction.PasswordPromptData{}}
 	case op.FactorTOTP:
-		return op.Prompt{Type: "auth.totp", Data: op.TOTPPromptData{}}
+		return interaction.Prompt{Type: "auth.totp", Data: interaction.TOTPPromptData{}}
 	case op.FactorPasskey:
-		return op.Prompt{Type: "auth.passkey", Data: op.PasskeyPromptData{Challenge: []byte("c")}}
+		return interaction.Prompt{Type: "auth.passkey", Data: interaction.PasskeyPromptData{Challenge: []byte("c")}}
 	case op.FactorRecoveryCode:
-		return op.Prompt{Type: "auth.recovery_code", Data: op.RecoveryCodePromptData{}}
+		return interaction.Prompt{Type: "auth.recovery_code", Data: interaction.RecoveryCodePromptData{}}
 	case op.FactorEmailOTP:
-		return op.Prompt{Type: "auth.email_otp.send", Data: op.EmailOTPSendPromptData{}}
+		return interaction.Prompt{Type: "auth.email_otp.send", Data: interaction.EmailOTPSendPromptData{}}
 	default:
-		return op.Prompt{Type: "auth.password", Data: op.PasswordPromptData{}}
+		return interaction.Prompt{Type: "auth.password", Data: interaction.PasswordPromptData{}}
 	}
 }

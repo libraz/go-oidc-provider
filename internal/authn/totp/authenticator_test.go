@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -95,9 +96,9 @@ func TestAuthenticator_BeginEmitsPromptWithFullAttempts(t *testing.T) {
 	if step.Prompt.Type != totp.PromptType {
 		t.Errorf("Prompt.Type = %q, want %q", step.Prompt.Type, totp.PromptType)
 	}
-	data, ok := step.Prompt.Data.(op.TOTPPromptData)
+	data, ok := step.Prompt.Data.(interaction.TOTPPromptData)
 	if !ok {
-		t.Fatalf("Prompt.Data type = %T, want op.TOTPPromptData", step.Prompt.Data)
+		t.Fatalf("Prompt.Data type = %T, want interaction.TOTPPromptData", step.Prompt.Data)
 	}
 	if data.AttemptsRemaining != 30 {
 		t.Errorf("AttemptsRemaining = %d, want 30", data.AttemptsRemaining)
@@ -161,7 +162,7 @@ func TestAuthenticator_ContinueSuccessReturnsResult(t *testing.T) {
 	step, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{totp.CodeFieldName: code}},
+		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: code}},
 	})
 	if err != nil {
 		t.Fatalf("Continue: %v", err)
@@ -192,7 +193,7 @@ func TestAuthenticator_ContinueWrongCodeReEmitsPrompt(t *testing.T) {
 	step, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{totp.CodeFieldName: "000000"}},
+		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: "000000"}},
 	})
 	if err != nil {
 		t.Fatalf("Continue returned err = %v, want nil for wrong code", err)
@@ -200,9 +201,9 @@ func TestAuthenticator_ContinueWrongCodeReEmitsPrompt(t *testing.T) {
 	if step.Prompt == nil {
 		t.Fatalf("expected re-emit Prompt, got %+v", step)
 	}
-	data, ok := step.Prompt.Data.(op.TOTPPromptData)
+	data, ok := step.Prompt.Data.(interaction.TOTPPromptData)
 	if !ok {
-		t.Fatalf("Prompt.Data type = %T, want op.TOTPPromptData", step.Prompt.Data)
+		t.Fatalf("Prompt.Data type = %T, want interaction.TOTPPromptData", step.Prompt.Data)
 	}
 	if data.AttemptsRemaining != 29 {
 		t.Errorf("AttemptsRemaining = %d, want 29 after one miss", data.AttemptsRemaining)
@@ -234,7 +235,7 @@ func TestAuthenticator_ContinueLockReturnsError(t *testing.T) {
 	_, err = f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{totp.CodeFieldName: "000000"}},
+		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: "000000"}},
 	})
 	if !errors.Is(err, totp.ErrResetRequired) {
 		t.Fatalf("err = %v, want ErrResetRequired", err)
@@ -255,7 +256,7 @@ func TestAuthenticator_ContinueRequiresCodeField(t *testing.T) {
 	_, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{}},
+		Submission: interaction.FormSubmission{Values: map[string]string{}},
 	})
 	if !errors.Is(err, totp.ErrCodeMissing) {
 		t.Fatalf("err = %v, want ErrCodeMissing", err)
@@ -268,7 +269,7 @@ func TestAuthenticator_ContinueRequiresSubject(t *testing.T) {
 	f := newAdapterFixture(t)
 	_, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{totp.CodeFieldName: "123456"}},
+		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: "123456"}},
 	})
 	if !errors.Is(err, totp.ErrSubjectRequired) {
 		t.Fatalf("err = %v, want ErrSubjectRequired", err)

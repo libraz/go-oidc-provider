@@ -1,11 +1,11 @@
 package op_test
 
 import (
-	"context"
 	"crypto"
 	"crypto/rsa"
 	"errors"
 	"io"
+	"net/http"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
@@ -174,15 +174,14 @@ func TestWithProfile_RejectsDuplicate(t *testing.T) {
 
 type recordingDriver struct{ called bool }
 
-func (d *recordingDriver) Offer(context.Context, interaction.Request) (interaction.Step, error) {
+func (d *recordingDriver) Render(http.ResponseWriter, *http.Request, interaction.Prompt) error {
 	d.called = true
-	return interaction.Step{}, nil
+	return nil
 }
 
-func (d *recordingDriver) Verify(context.Context, interaction.Request, interaction.Result) (interaction.Decision, error) {
-	return interaction.Decision{}, nil
+func (d *recordingDriver) ParseSubmission(*http.Request) (interaction.FormSubmission, error) {
+	return interaction.FormSubmission{}, nil
 }
-func (d *recordingDriver) Cancel(context.Context, interaction.Request) error { return nil }
 
 func TestWithInteraction_RejectsNil(t *testing.T) {
 	t.Parallel()

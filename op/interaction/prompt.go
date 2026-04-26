@@ -1,4 +1,4 @@
-package op
+package interaction
 
 import "time"
 
@@ -18,8 +18,8 @@ import "time"
 // unexported:
 //
 //	type ForeignPromptData struct{}
-//	func (ForeignPromptData) isPromptData() {} // cannot — method is unexported in op
-//	var _ op.PromptData = ForeignPromptData{}  // compile error
+//	func (ForeignPromptData) isPromptData() {} // cannot — method is unexported in interaction
+//	var _ interaction.PromptData = ForeignPromptData{}  // compile error
 type PromptData interface {
 	isPromptData()
 }
@@ -127,13 +127,33 @@ type CaptchaPromptData struct {
 
 func (CaptchaPromptData) isPromptData() {}
 
-// ConsentScopePromptData backs Prompt.Type "consent.scope". The shape
-// reuses [Scope] from §A.5 so the SPA renders the same metadata that
-// flows through discovery and account management.
+// ConsentScope is the slim view of an OAuth scope the consent screen
+// renders. The struct is intentionally a flat copy of the §A.5
+// scope-catalog entry: keeping it in [interaction] avoids an import
+// cycle through [op.Scope] (the catalog type) while preserving the
+// fields the SPA needs to render a consent dialogue.
+type ConsentScope struct {
+	// Name is the scope identifier (e.g. "openid", "profile").
+	Name string
+
+	// Description is the human-readable summary the SPA shows to
+	// the user. The library does not interpret the value beyond
+	// echoing it; localisation is the embedder's responsibility.
+	Description string
+
+	// Required reports whether the scope cannot be deselected by
+	// the user (typically "openid" itself or scopes the client
+	// declared as required at registration).
+	Required bool
+}
+
+// ConsentScopePromptData backs Prompt.Type "consent.scope". The
+// shape mirrors §A.5 of the product design — the SPA renders one
+// row per [ConsentScope] in display order.
 type ConsentScopePromptData struct {
 	// Scopes is the list of scopes the user is being asked to grant.
 	// Order matches the orchestrator's display order.
-	Scopes []Scope
+	Scopes []ConsentScope
 }
 
 func (ConsentScopePromptData) isPromptData() {}
@@ -196,103 +216,7 @@ type FieldSpec struct {
 	Required bool
 
 	// Pattern is an optional regex the orchestrator validates the
-	// value against before passing it to [Authenticator.Continue].
+	// value against before passing it to [op.Authenticator.Continue].
 	// Empty means "no pattern check beyond Kind validation".
 	Pattern string
-}
-
-// Prompt is the unit of UI an [Authenticator] or [Interaction]
-// returns. The SPA reads Prompt verbatim; the [PromptData] type
-// projection determines which concrete fields are safe to expose.
-//
-// Prompt.Type follows the namespace rules in §E.2.3:
-//
-//   - "auth.*"        — Authenticator-emitted prompts ("auth.password",
-//     "auth.totp", "auth.email_otp.send", "auth.email_otp.verify",
-//     "auth.passkey", "auth.recovery_code", "auth.<myorg>.<factor>.*").
-//   - "consent.*"     — consent screens ("consent.scope").
-//   - "captcha"       — bot-detection prompt (§M.6.1).
-//   - "interaction.*" — orchestrator-driven non-authn prompts
-//     (select_account etc.).
-//   - "<myorg>.*"     — user-extension prompts. The first dotted token
-//     MUST be the org identifier so library-reserved names do not
-//     collide.
-//
-// The OIDC `prompt` request parameter ("none" / "login" / "consent" /
-// "select_account") lives in a different namespace; the prefix rule
-// keeps the two from colliding when a custom factor is added.
-type Prompt struct {
-	// Type is the prompt identifier. See the namespace rules above.
-	Type string
-
-	// Data is the typed payload for this prompt. The concrete type
-	// is fixed by Prompt.Type per §E.2 schema.
-	Data PromptData
-
-	// Inputs is the form fields the SPA renders. Empty means the
-	// prompt is informational (e.g., a captcha that completes via
-	// the upstream JS SDK without an explicit form submission).
-	Inputs []FieldSpec
-
-	// StateRef is an opaque continuation token the SPA echoes back
-	// in the next [FormSubmission]. The orchestrator binds it to:
-	//
-	//   - the interaction uid (cross-uid replay rejected),
-	//   - the [Authenticator] / [Interaction] instance (cross-factor
-	//     reuse rejected),
-	//   - a short TTL (default 10 minutes; expiry restarts the
-	//     factor),
-	//   - single-use semantics (a successful Continue invalidates
-	//     it).
-	//
-	// StateRef MUST NOT carry plaintext secrets (OTP codes, TOTP
-	// shared secrets, recovery codes, email OTP codes) — the rule
-	// applies even when the value is HMAC-signed. See §E.2.1 for
-	// the security requirements.
-	StateRef string
-}
-
-// Step is the discriminated union an [Authenticator] / [Interaction]
-// returns from Begin / Continue. Exactly one of Prompt or Result is
-// populated; an empty Step is invalid and the orchestrator rejects it.
-type Step struct {
-	// Prompt, when non-nil, instructs the orchestrator to render
-	// another screen and await the SPA's submission.
-	Prompt *Prompt
-
-	// Result, when non-nil, signals the factor (or interaction) is
-	// complete.
-	Result *Result
-}
-
-// Result reports a successful factor or interaction completion. For
-// [Interaction], Subject is the empty string because the subject is
-// already bound by the time the interaction runs.
-type Result struct {
-	// Subject is the OP-internal identifier the factor authenticated.
-	// Empty for [Interaction] returns.
-	Subject string
-
-	// AuthTime is the wall-clock time at which the factor confirmed
-	// the user. Implementations read it from [BeginInput.AuthTime]
-	// or the orchestrator [Clock]; direct [time.Now] calls are
-	// forbidden by depguard.
-	AuthTime time.Time
-}
-
-// FormSubmission is the SPA's reply to a [Prompt]. The orchestrator
-// validates Values against [FieldSpec] before dispatching to
-// [Authenticator.Continue]; in particular the orchestrator caps the
-// total Values size, the per-field byte length, and the field count
-// to prevent denial-of-service through oversized submissions.
-type FormSubmission struct {
-	// StateRef is the [Prompt.StateRef] from the prompt that
-	// produced this submission. The orchestrator validates it
-	// matches the active factor's continuation token.
-	StateRef string
-
-	// Values are the SPA-supplied form values keyed by
-	// [FieldSpec.Name]. The orchestrator enforces size limits;
-	// callers MUST treat the map as read-only.
-	Values map[string]string
 }

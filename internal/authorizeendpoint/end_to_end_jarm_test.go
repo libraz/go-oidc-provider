@@ -129,15 +129,17 @@ func (h *jarmHarness) runHappyPathInteraction(t *testing.T, mode string) *http.R
 	}
 	defer stepResp.Body.Close()
 	step := decodeMap(t, stepResp)
-	csrfToken, _ := step["csrf"].(string)
-	if csrfToken == "" {
-		t.Fatal("csrf token missing from step body")
+	stateRef, _ := step["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatal("state_ref missing from step body")
+	}
+	csrfCookie := findCookie(stepResp.Cookies(), "__Host-oidc_csrf")
+	if csrfCookie == nil {
+		t.Fatal("csrf cookie missing")
 	}
 	body := map[string]any{
-		"subject_hint":   "user-1",
-		"granted_scopes": []string{"openid", "profile", "email"},
-		"auth_time":      h.clock.now.UTC().Format(time.RFC3339),
-		"amr":            []string{"pwd"},
+		"state_ref": stateRef,
+		"values":    map[string]string{"subject": "user-1"},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -150,7 +152,8 @@ func (h *jarmHarness) runHappyPathInteraction(t *testing.T, mode string) *http.R
 	}
 	postReq.Header.Set("Content-Type", "application/json")
 	postReq.Header.Set("Origin", h.tk.Issuer)
-	postReq.Header.Set("X-CSRF-Token", csrfToken)
+	postReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	postReq.AddCookie(csrfCookie)
 	postResp, err := h.httpClient.Do(postReq)
 	if err != nil {
 		t.Fatalf("POST interaction: %v", err)

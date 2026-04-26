@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 func TestFactorType_IsBuiltin(t *testing.T) {
@@ -80,12 +81,12 @@ func (s stubAuthenticator) AAL() op.AAL         { return s.aal }
 func (s stubAuthenticator) AMR() string         { return s.amr }
 func (s stubAuthenticator) Prompts() []string   { return s.prompts }
 
-func (s stubAuthenticator) Begin(_ context.Context, _ op.BeginInput) (op.Step, error) {
-	return op.Step{}, nil
+func (s stubAuthenticator) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+	return interaction.Step{}, nil
 }
 
-func (s stubAuthenticator) Continue(_ context.Context, _ op.ContinueInput) (op.Step, error) {
-	return op.Step{}, nil
+func (s stubAuthenticator) Continue(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+	return interaction.Step{}, nil
 }
 
 // stubInteraction is the minimal [op.Interaction] used by option-
@@ -98,12 +99,12 @@ type stubInteraction struct {
 func (s stubInteraction) Name() string                   { return s.name }
 func (s stubInteraction) Trigger() op.InteractionTrigger { return s.trigger }
 
-func (s stubInteraction) Begin(_ context.Context, _ op.BeginInput) (op.Step, error) {
-	return op.Step{}, nil
+func (s stubInteraction) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+	return interaction.Step{}, nil
 }
 
-func (s stubInteraction) Continue(_ context.Context, _ op.ContinueInput) (op.Step, error) {
-	return op.Step{}, nil
+func (s stubInteraction) Continue(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+	return interaction.Step{}, nil
 }
 
 // Compile-time confirmation that the stubs satisfy the public
@@ -117,5 +118,5 @@ var (
 // expected fields without breaking signatures across edits.
 var (
 	_ time.Time = op.BeginInput{}.AuthTime
-	_ time.Time = op.Result{}.AuthTime
+	_ time.Time = interaction.Result{}.AuthTime
 )

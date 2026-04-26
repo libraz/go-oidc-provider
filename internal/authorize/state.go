@@ -132,20 +132,25 @@ func (s RequestSnapshot) ToRequest() *Request {
 }
 
 // RequestState is the on-disk shape persisted in [op/store.Interaction.RawState].
-// It composes the library snapshot with an opaque Driver-owned blob so the two
-// halves can evolve independently: drivers may stash their own continuation
-// state (multi-step flows, MFA queues) without colliding with the library's
-// fields.
+// It composes the library snapshot with the orchestrator's chain state so
+// the two halves can be loaded together on every /interaction request.
+//
+// The Authn field is intentionally a raw JSON blob from this package's
+// perspective: the orchestrator owns its own [authn.State] schema and
+// the authorizeendpoint encodes / decodes it through that package.
+// Keeping the encoding hidden behind a [json.RawMessage] avoids an
+// import cycle (authorize → authn → op → authorizeendpoint → authorize)
+// while still letting the HTTP layer round-trip the structured state.
 type RequestState struct {
 	// Library is the validated authorization request the OP needs to mint
-	// the eventual code. The HTTP layer never lets the Driver mutate this
-	// field — it is the trusted view of the original request.
+	// the eventual code. The HTTP layer never mutates this field after the
+	// initial snapshot — it is the trusted view of the original request.
 	Library RequestSnapshot `json:"library"`
 
-	// Driver is a JSON blob owned by the [interaction.Driver] implementation.
-	// The library round-trips it verbatim across Save / Find calls and never
-	// inspects its contents.
-	Driver json.RawMessage `json:"driver,omitempty"`
+	// Authn is the orchestrator chain state encoded as JSON. The library
+	// round-trips it verbatim across Save / Find calls; only the
+	// authorizeendpoint package decodes it through internal/authn.
+	Authn json.RawMessage `json:"authn,omitempty"`
 }
 
 // MarshalState serialises s for storage. The function is a thin wrapper over

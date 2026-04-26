@@ -210,9 +210,9 @@ func validatePayload(p Payload) error {
 // configuration mirrors [internal/tokens.newSigner] so both endpoints
 // emit JWTs with identical "kid" / "typ" / "alg" headers; the
 // duplication is preferred over importing the unexported helper.
-//
-//nolint:ireturn // josev4.Signer is the third-party interface this thin wrapper exposes.
-func newSigner(key tokens.SigningKey) (josev4.Signer, error) {
+// josev4.Signer is the third-party interface this thin wrapper
+// exposes; the ireturn check is intentionally suppressed.
+func newSigner(key tokens.SigningKey) (josev4.Signer, error) { //nolint:ireturn // wraps third-party josev4.Signer
 	sk := josev4.SigningKey{
 		Algorithm: josev4.ES256,
 		Key: josev4.JSONWebKey{

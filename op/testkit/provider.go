@@ -132,6 +132,7 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		op.WithKeyset(op.Keyset{signKey}),
 		op.WithCookieKey(generateCookieKey(tb)),
 		op.WithInteraction(AutoConsentDriver{}),
+		op.WithAuthenticators(SubjectAuthenticator{}),
 	}
 	if cfg.clock != nil {
 		baseOpts = append(baseOpts, op.WithClock(cfg.clock))

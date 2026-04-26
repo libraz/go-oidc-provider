@@ -78,7 +78,7 @@ func TestSnapshotFrom_AbsentMaxAgeStaysAbsent(t *testing.T) {
 	}
 }
 
-func TestRequestState_RoundTripWithDriverBlob(t *testing.T) {
+func TestRequestState_RoundTripWithAuthnBlob(t *testing.T) {
 	t.Parallel()
 
 	state := authorize.RequestState{
@@ -87,7 +87,7 @@ func TestRequestState_RoundTripWithDriverBlob(t *testing.T) {
 			RedirectURI: "https://rp.example.com/cb",
 			Scope:       []string{"openid"},
 		}, fixedNow),
-		Driver: json.RawMessage(`{"step":"otp","attempts":1}`),
+		Authn: json.RawMessage(`{"phase":1,"step_counter":2}`),
 	}
 	raw, err := authorize.MarshalState(state)
 	if err != nil {
@@ -100,8 +100,8 @@ func TestRequestState_RoundTripWithDriverBlob(t *testing.T) {
 	if got.Library.ClientID != "client-1" {
 		t.Errorf("ClientID=%q", got.Library.ClientID)
 	}
-	if string(got.Driver) != `{"step":"otp","attempts":1}` {
-		t.Errorf("Driver=%s", string(got.Driver))
+	if string(got.Authn) != `{"phase":1,"step_counter":2}` {
+		t.Errorf("Authn=%s", string(got.Authn))
 	}
 }
 

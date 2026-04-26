@@ -2,15 +2,13 @@ package authn
 
 import (
 	"sort"
-
-	"github.com/libraz/go-oidc-provider/op"
 )
 
 // amrMFA is the RFC 8176 §2 token that signals the user authenticated
 // with multiple distinct factors during this login. The library appends
 // it to the aggregated amr slice when the chain saw two or more
 // **different** RFC 8176 tokens and the resulting assurance level is
-// at least [op.AAL2]; see [Aggregate] for the precise rule.
+// at least [AAL2]; see [Aggregate] for the precise rule.
 const amrMFA = "mfa"
 
 // Aggregate folds a per-step factor slice into the (acr, amr, level)
@@ -20,16 +18,16 @@ const amrMFA = "mfa"
 // Semantics:
 //
 //   - level is the maximum [Factor.AssuranceLevel] across factors. An
-//     empty slice yields [op.AAL0].
+//     empty slice yields [AAL0].
 //   - amr is the sorted, de-duplicated set of non-empty
 //     [Factor.AMRValue] results. Foreign factor types contribute the
 //     empty string and are filtered out, so they cannot dilute the
 //     claim.
-//   - acr is level.ACRURI(); empty when level is [op.AAL0] or out of
+//   - acr is level.ACRURI(); empty when level is [AAL0] or out of
 //     range.
 //
 // Multi-factor signalling: if the aggregated amr set contains at least
-// two distinct RFC 8176 tokens AND the resulting level is [op.AAL2] or
+// two distinct RFC 8176 tokens AND the resulting level is [AAL2] or
 // higher, Aggregate appends "mfa" to amr (RFC 8176 §2). The "distinct"
 // rule matters: two TOTP verifications during a step-up flow both emit
 // "otp", so the slice carries one entry, no "mfa" appears, and the user
@@ -38,9 +36,9 @@ const amrMFA = "mfa"
 //
 // Aggregate does not mutate factors. Callers MAY pass a slice they
 // continue to read after the call.
-func Aggregate(factors []Factor) (acr string, amr []string, level op.AAL) {
+func Aggregate(factors []Factor) (acr string, amr []string, level AAL) {
 	if len(factors) == 0 {
-		return "", nil, op.AAL0
+		return "", nil, AAL0
 	}
 
 	// Collect distinct, non-empty AMR values. A small map suffices;
@@ -70,7 +68,7 @@ func Aggregate(factors []Factor) (acr string, amr []string, level op.AAL) {
 	for v := range seen {
 		amr = append(amr, v)
 	}
-	if len(seen) >= 2 && level >= op.AAL2 {
+	if len(seen) >= 2 && level >= AAL2 {
 		amr = append(amr, amrMFA)
 	}
 	sort.Strings(amr)

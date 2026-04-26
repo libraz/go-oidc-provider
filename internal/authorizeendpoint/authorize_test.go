@@ -1,6 +1,7 @@
 package authorizeendpoint_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,15 +14,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // fakeClock returns a fixed wall-clock reading; injecting it makes timing
@@ -52,9 +56,31 @@ type testHarness struct {
 	sessionMgr     *sessions.Manager
 	csrfSigner     *csrf.Signer
 	driver         interaction.Driver
+	orchestrator   *authn.Orchestrator
 	clock          *fakeClock
 	authorizePath  string
 	interactionPth string
+}
+
+// buildTestOrchestrator constructs the chain runner the harness
+// installs in [authorizeendpoint.Deps]. The orchestrator is wired
+// with a single [testkit.SubjectAuthenticator] so /interaction is
+// driven by a deterministic factor that binds whatever subject the
+// test echoes through the form.
+func buildTestOrchestrator(t *testing.T) *authn.Orchestrator {
+	t.Helper()
+	signer, err := authn.NewStateRefSigner(bytes.Repeat([]byte{0xCD}, 32))
+	if err != nil {
+		t.Fatalf("authn.NewStateRefSigner: %v", err)
+	}
+	orch, err := authn.New(authn.Config{
+		Authenticators: []op.Authenticator{testkit.SubjectAuthenticator{}},
+		StateRefSigner: signer,
+	})
+	if err != nil {
+		t.Fatalf("authn.New: %v", err)
+	}
+	return orch
 }
 
 // newHarness builds a handler against fresh in-memory infrastructure.
@@ -97,6 +123,7 @@ func newHarness(t *testing.T) *testHarness {
 		t.Fatalf("csrf.NewAllowlist: %v", err)
 	}
 
+	orch := buildTestOrchestrator(t)
 	deps := authorizeendpoint.Deps{
 		Clients:         store.Clients(),
 		Codes:           store.AuthorizationCodes(),
@@ -106,7 +133,8 @@ func newHarness(t *testing.T) *testHarness {
 		CookieCodec:     cookieCodec,
 		CSRF:            signer,
 		Origins:         allow,
-		Driver:          interaction.NoopDriver{},
+		Driver:          interaction.JSONDriver{},
+		Authn:           orch,
 		AuthorizePath:   "/oidc/auth",
 		InteractionPath: "/oidc/interaction",
 		Clock:           clock,
@@ -118,7 +146,8 @@ func newHarness(t *testing.T) *testHarness {
 		cookieCodec:    cookieCodec,
 		sessionMgr:     mgr,
 		csrfSigner:     signer,
-		driver:         interaction.NoopDriver{},
+		driver:         interaction.JSONDriver{},
+		orchestrator:   orch,
 		clock:          clock,
 		authorizePath:  deps.AuthorizePath,
 		interactionPth: deps.InteractionPath,
@@ -460,6 +489,7 @@ func newScopeHarness(t *testing.T) *testHarness {
 		{Name: "billing:write", Public: true, AllowedClients: []string{"svc-billing"}},
 	})
 
+	orch := buildTestOrchestrator(t)
 	deps := authorizeendpoint.Deps{
 		Clients:         st.Clients(),
 		Codes:           st.AuthorizationCodes(),
@@ -469,7 +499,8 @@ func newScopeHarness(t *testing.T) *testHarness {
 		CookieCodec:     cookieCodec,
 		CSRF:            signer,
 		Origins:         allow,
-		Driver:          interaction.NoopDriver{},
+		Driver:          interaction.JSONDriver{},
+		Authn:           orch,
 		Scopes:          scopes,
 		AuthorizePath:   "/oidc/auth",
 		InteractionPath: "/oidc/interaction",
@@ -482,7 +513,8 @@ func newScopeHarness(t *testing.T) *testHarness {
 		cookieCodec:    cookieCodec,
 		sessionMgr:     mgr,
 		csrfSigner:     signer,
-		driver:         interaction.NoopDriver{},
+		driver:         interaction.JSONDriver{},
+		orchestrator:   orch,
 		clock:          clock,
 		authorizePath:  deps.AuthorizePath,
 		interactionPth: deps.InteractionPath,

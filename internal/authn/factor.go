@@ -1,7 +1,5 @@
 package authn
 
-import "github.com/libraz/go-oidc-provider/op"
-
 // Factor records one successful authentication step contributed by a
 // per-method verifier (password adapter, [totp.Verifier],
 // [recovery.Consumer], [passkey.Asserter], ...). The orchestrator
@@ -15,26 +13,26 @@ import "github.com/libraz/go-oidc-provider/op"
 // it MUST persist that context through its own store.
 type Factor struct {
 	// Type names the authenticator method that produced the factor.
-	// Use one of the [op.FactorType] constants exported by the public
+	// Use one of the [FactorType] constants exported by the public
 	// API (or a user-defined dotted identifier per
-	// [op.FactorType.IsUserDefined]); foreign strings are preserved
+	// [FactorType.IsUserDefined]); foreign strings are preserved
 	// across [Aggregate] but contribute no amr value.
 	//
 	// The constant strings are the same identifiers that flow through
 	// [op/interaction.Result.AMR], so a Driver that round-trips a
 	// custom authenticator name does not need a translation table.
-	Type op.FactorType
+	Type FactorType
 
-	// AssuranceLevel is the [op.AAL] this factor independently
+	// AssuranceLevel is the [AAL] this factor independently
 	// satisfies. The aggregator takes the maximum across the slice;
 	// a single AAL3 factor therefore lifts the whole session, while
 	// adding a weaker factor next to a stronger one does not weaken
 	// it.
-	AssuranceLevel op.AAL
+	AssuranceLevel AAL
 
 	// UserVerified is true when the authenticator confirmed the user
 	// (WebAuthn UV bit, biometric gesture, PIN). The aggregator only
-	// reads it for [op.FactorPasskey], where UV distinguishes the
+	// reads it for [FactorPasskey], where UV distinguishes the
 	// "swk" and "hwk" RFC 8176 tokens; other methods MAY leave it
 	// false.
 	UserVerified bool
@@ -72,11 +70,11 @@ type Factor struct {
 //     consumers already know how to render.
 func (f Factor) AMRValue() string {
 	switch f.Type {
-	case op.FactorPassword:
+	case FactorPassword:
 		return "pwd"
-	case op.FactorTOTP, op.FactorRecoveryCode, op.FactorEmailOTP:
+	case FactorTOTP, FactorRecoveryCode, FactorEmailOTP:
 		return "otp"
-	case op.FactorPasskey:
+	case FactorPasskey:
 		if f.UserVerified {
 			return "hwk"
 		}

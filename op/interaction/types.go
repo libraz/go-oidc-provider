@@ -2,123 +2,129 @@ package interaction
 
 import "time"
 
-// Prompt names recognised by the library. The set is closed: a Driver MUST
-// switch over the constants below and surface unknowns via the default arm.
+// OIDC `prompt` request parameter values (OpenID Connect Core 1.0
+// §3.1.2.1). The constants are exported so callers parsing or
+// asserting against the request value can do so without a stringly-
+// typed copy.
+//
+// Note: these names live in a different namespace from
+// [Prompt.Type] (which uses dotted prefixes like "auth.password").
+// Sharing constants between the two would have been ambiguous; the
+// orchestrator keeps them deliberately separate per
+// docs/plans/002-product-design.md §E.2.3.
 const (
-	// PromptLogin is presented when the user is not authenticated to the
-	// satisfaction of the request (no session, expired session, or
-	// max_age violation).
+	// PromptLogin is the "login" value of the OIDC prompt parameter:
+	// the RP asks the OP to re-authenticate the user.
 	PromptLogin = "login"
 
-	// PromptConsent is presented when the requested scopes contain at
-	// least one not previously granted to the client. It is suppressed
-	// for first-party clients per [Client.FirstParty].
+	// PromptConsent is the "consent" value of the OIDC prompt
+	// parameter: the RP asks the OP to re-prompt for consent.
 	PromptConsent = "consent"
 
-	// PromptSelectAccount is presented when the user has multiple active
-	// sessions in the chooser group and the request requires a choice.
+	// PromptSelectAccount is the "select_account" value of the OIDC
+	// prompt parameter: the RP asks the OP to surface an account
+	// chooser.
 	PromptSelectAccount = "select_account"
+
+	// PromptNone is the "none" value of the OIDC prompt parameter:
+	// the RP asks the OP to complete silently or fail with one of
+	// the *_required errors.
+	PromptNone = "none"
 )
 
-// Hint records why a prompt is being shown. The slice is ordered from most
-// to least specific; UIs typically render the first reason as the headline
-// and the rest as supplementary detail.
-type Hint struct {
-	// Prompt is the prompt name (one of [PromptLogin], [PromptConsent],
-	// [PromptSelectAccount]). It is set by the library; Driver
-	// implementations MUST NOT mutate it.
-	Prompt string
+// Prompt is the unit of UI an [op.Authenticator] or [op.Interaction]
+// returns. The SPA reads Prompt verbatim; the [PromptData] type
+// projection determines which concrete fields are safe to expose.
+//
+// Prompt.Type follows the namespace rules in §E.2.3:
+//
+//   - "auth.*"        — Authenticator-emitted prompts ("auth.password",
+//     "auth.totp", "auth.email_otp.send", "auth.email_otp.verify",
+//     "auth.passkey", "auth.recovery_code", "auth.<myorg>.<factor>.*").
+//   - "consent.*"     — consent screens ("consent.scope").
+//   - "captcha"       — bot-detection prompt (§M.6.1).
+//   - "interaction.*" — orchestrator-driven non-authn prompts
+//     (select_account etc.).
+//   - "<myorg>.*"     — user-extension prompts. The first dotted token
+//     MUST be the org identifier so library-reserved names do not
+//     collide.
+//
+// The OIDC `prompt` request parameter ("none" / "login" / "consent" /
+// "select_account") lives in a different namespace; the prefix rule
+// keeps the two from colliding when a custom factor is added.
+type Prompt struct {
+	// Type is the prompt identifier. See the namespace rules above.
+	Type string `json:"type"`
 
-	// Reasons enumerates the policy decisions that produced this prompt
-	// (e.g. "no_session", "max_age_exceeded", "new_grant"). Reason
-	// identifiers are stable strings the library uses in audit logs.
-	Reasons []string
+	// Data is the typed payload for this prompt. The concrete type
+	// is fixed by Prompt.Type per §E.2 schema.
+	Data PromptData `json:"data,omitempty"`
+
+	// Inputs is the form fields the SPA renders. Empty means the
+	// prompt is informational (e.g., a captcha that completes via
+	// the upstream JS SDK without an explicit form submission).
+	Inputs []FieldSpec `json:"inputs,omitempty"`
+
+	// StateRef is an opaque continuation token the SPA echoes back
+	// in the next [FormSubmission]. The orchestrator binds it to:
+	//
+	//   - the interaction uid (cross-uid replay rejected),
+	//   - the [op.Authenticator] / [op.Interaction] instance
+	//     (cross-factor reuse rejected),
+	//   - a short TTL (default 10 minutes; expiry restarts the
+	//     factor),
+	//   - single-use semantics (a successful Continue invalidates
+	//     it).
+	//
+	// StateRef MUST NOT carry plaintext secrets (OTP codes, TOTP
+	// shared secrets, recovery codes, email OTP codes) — the rule
+	// applies even when the value is HMAC-signed. See §E.2.1 for
+	// the security requirements.
+	StateRef string `json:"state_ref"`
 }
 
-// Step describes the next user-facing action the OP needs in order to
-// progress the interaction. It is the data the SPA renders when polling
-// /interaction/{uid}.
-//
-// The exact field set is intentionally minimal in v0.x; richer detail
-// (scope metadata, account chooser entries, authenticator catalogues) is
-// rendered by the L2 JSON endpoints, which read from the Provider
-// directly. Step is the shape passed across the [Driver] boundary so
-// custom drivers can short-circuit UI rendering.
+// Step is the discriminated union an [op.Authenticator] /
+// [op.Interaction] returns from Begin / Continue. Exactly one of
+// Prompt or Result is populated; an empty Step is invalid and the
+// orchestrator rejects it.
 type Step struct {
-	// Hint describes why this step is required.
-	Hint Hint
+	// Prompt, when non-nil, instructs the orchestrator to render
+	// another screen and await the SPA's submission.
+	Prompt *Prompt
 
-	// CSRF is the double-submit token the SPA must echo on the matching
-	// POST. It is opaque to the Driver.
-	CSRF string
-
-	// ExpiresAtUnix is the wall-clock expiry of the interaction record
-	// as a Unix timestamp. Zero means the interaction has no expiry,
-	// which the library only emits in tests.
-	ExpiresAtUnix int64
+	// Result, when non-nil, signals the factor (or interaction) is
+	// complete.
+	Result *Result
 }
 
-// Result is the outcome the SPA POSTs back to the OP after the user
-// completes a step. It is intentionally a tagged union encoded as a
-// struct: only fields relevant to the [Hint.Prompt] kind are read.
-//
-// AuthTime, AMR, and ACR are consumed by the library when a fresh login
-// completes: they are forwarded to the session manager so the resulting
-// [op/store.Session] carries the authentication context the OP later
-// surfaces in id_token claims. Drivers handling [PromptConsent] alone may
-// leave them zero — the library only reads them when the result triggers
-// a new session record.
+// Result reports a successful factor or interaction completion. For
+// [op.Interaction], Subject is the empty string because the subject
+// is already bound by the time the interaction runs.
 type Result struct {
-	// SubjectHint is the canonical subject the Driver authenticated.
-	// For PromptLogin it is required; for PromptConsent it is informational.
-	SubjectHint string
+	// Subject is the OP-internal identifier the factor authenticated.
+	// Empty for [op.Interaction] returns.
+	Subject string
 
-	// GrantedScopes lists the scopes the user agreed to release. It is
-	// only consulted on PromptConsent; the library intersects it with
-	// the authorization request and the client's registered scopes
-	// before issuing tokens.
-	GrantedScopes []string
-
-	// AccountID is the chooser-group account identifier picked on
-	// PromptSelectAccount. Empty for other prompts.
-	AccountID string
-
-	// Aborted is set when the user explicitly cancelled the interaction.
-	// The library translates this to access_denied at the authorization
-	// endpoint per OpenID Connect Core 1.0 §3.1.2.6.
-	Aborted bool
-
-	// AuthTime is the wall-clock time at which the Driver authenticated
-	// the user. It is the value the library copies into the session's
-	// auth_time and into the id_token's auth_time claim. The library only
-	// reads this on a fresh-login terminal result.
+	// AuthTime is the wall-clock time at which the factor confirmed
+	// the user. Implementations read it from
+	// [op.BeginInput.AuthTime] or the orchestrator [op.Clock];
+	// direct [time.Now] calls are forbidden by depguard.
 	AuthTime time.Time
-
-	// AMR lists the authenticator method references the Driver used
-	// (RFC 8176, e.g. "pwd", "otp", "hwk"). Forwarded to the session
-	// record on a fresh login.
-	AMR []string
-
-	// ACR is the authentication context class reference the Driver
-	// asserts (e.g. "urn:mace:incommon:iap:silver"). Forwarded to the
-	// session record on a fresh login.
-	ACR string
 }
 
-// Decision is the verdict the [Driver] returns to the OP after processing
-// a [Result]. It is the contract that lets the OP either complete the
-// flow or request a follow-up step (for example MFA after a password).
-type Decision struct {
-	// Continue is true when another [Step] is required. The library will
-	// poll the Driver again with the new state.
-	Continue bool
+// FormSubmission is the SPA's reply to a [Prompt]. The orchestrator
+// validates Values against [FieldSpec] before dispatching to
+// [op.Authenticator.Continue]; in particular the orchestrator caps
+// the total Values size, the per-field byte length, and the field
+// count to prevent denial-of-service through oversized submissions.
+type FormSubmission struct {
+	// StateRef is the [Prompt.StateRef] from the prompt that
+	// produced this submission. The orchestrator validates it
+	// matches the active factor's continuation token.
+	StateRef string `json:"state_ref"`
 
-	// Next is populated when Continue is true. It is the shape the SPA
-	// renders for the follow-up step.
-	Next Step
-
-	// Error is set when the Driver wants to surface a domain-level
-	// error to the SPA without aborting the interaction. The library
-	// forwards the value verbatim; it MUST NOT contain sensitive data.
-	Error string
+	// Values are the SPA-supplied form values keyed by
+	// [FieldSpec.Name]. The orchestrator enforces size limits;
+	// callers MUST treat the map as read-only.
+	Values map[string]string `json:"values,omitempty"`
 }

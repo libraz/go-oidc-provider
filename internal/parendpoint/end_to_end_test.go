@@ -131,17 +131,26 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 		t.Fatalf("/interaction GET status=%d", stepResp.StatusCode)
 	}
 	step := decodeJSON(t, stepResp)
-	csrfToken, _ := step["csrf"].(string)
-	if csrfToken == "" {
-		t.Fatal("csrf token missing")
+	stateRef, _ := step["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatal("state_ref missing from step body")
+	}
+	var csrfCookie *http.Cookie
+	for _, c := range stepResp.Cookies() {
+		if c.Name == "__Host-oidc_csrf" {
+			csrfCookie = c
+			break
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("csrf cookie missing")
 	}
 
-	// 4: POST /interaction/{uid} with subject hint + auth_time.
+	// 4: POST /interaction/{uid} with the SubjectAuthenticator
+	// submission shape.
 	body := map[string]any{
-		"subject_hint":   "user-par",
-		"granted_scopes": []string{"openid", "profile", "email"},
-		"auth_time":      clock.now.UTC().Format(time.RFC3339),
-		"amr":            []string{"pwd"},
+		"state_ref": stateRef,
+		"values":    map[string]string{"subject": "user-par"},
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -154,7 +163,8 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 	}
 	postReq.Header.Set("Content-Type", "application/json")
 	postReq.Header.Set("Origin", tk.Issuer)
-	postReq.Header.Set("X-CSRF-Token", csrfToken)
+	postReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	postReq.AddCookie(csrfCookie)
 	postResp, err := client.Do(postReq)
 	if err != nil {
 		t.Fatalf("Do POST /interaction: %v", err)

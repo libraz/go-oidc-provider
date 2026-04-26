@@ -91,16 +91,15 @@ func runAuthorizeForMTLS(t testing.TB, tk *testkit.Provider, clientID, redirectU
 	}
 	defer getResp.Body.Close()
 	step := decodeBodyMTLS(t, getResp)
-	csrfToken, _ := step["csrf"].(string)
-	if csrfToken == "" {
-		t.Fatal("csrf token missing")
+	stateRef, _ := step["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatal("state_ref missing from step body")
 	}
+	csrfValue := requireCSRFCookieValueMTLS(t, getResp.Cookies())
 
 	body, err := json.Marshal(map[string]any{
-		"subject_hint":   "user-mtls",
-		"granted_scopes": []string{"openid", "email"},
-		"auth_time":      time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC).Format(time.RFC3339),
-		"amr":            []string{"pwd"},
+		"state_ref": stateRef,
+		"values":    map[string]string{"subject": "user-mtls"},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -112,7 +111,8 @@ func runAuthorizeForMTLS(t testing.TB, tk *testkit.Provider, clientID, redirectU
 	}
 	postReq.Header.Set("Content-Type", "application/json")
 	postReq.Header.Set("Origin", tk.Issuer)
-	postReq.Header.Set("X-CSRF-Token", csrfToken)
+	postReq.Header.Set("X-CSRF-Token", csrfValue)
+	postReq.AddCookie(&http.Cookie{Name: "__Host-oidc_csrf", Value: csrfValue})
 	postResp, err := client.Do(postReq)
 	if err != nil {
 		t.Fatalf("Do /interaction POST: %v", err)
@@ -148,6 +148,22 @@ func decodeBodyMTLS(t testing.TB, resp *http.Response) map[string]any {
 		t.Fatalf("Unmarshal(%s): %v", raw, err)
 	}
 	return out
+}
+
+// requireCSRFCookieValueMTLS returns the value of the
+// __Host-oidc_csrf cookie, failing the test if absent. Returning a
+// string (rather than the cookie pointer) lets the caller skip a
+// follow-up nil check that staticcheck flags even when the previous
+// t.Fatal would have prevented it.
+func requireCSRFCookieValueMTLS(t testing.TB, cookies []*http.Cookie) string {
+	t.Helper()
+	for _, c := range cookies {
+		if c.Name == "__Host-oidc_csrf" {
+			return c.Value
+		}
+	}
+	t.Fatal("csrf cookie missing")
+	return ""
 }
 
 // servePostWithCert is the package-local helper that dispatches a

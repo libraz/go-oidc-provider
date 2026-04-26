@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/jar"
@@ -114,8 +115,15 @@ type Deps struct {
 	Origins *csrf.Allowlist
 
 	// Driver is the [interaction.Driver] the handler delegates UI
-	// rendering and verification to. Required.
+	// rendering to. A nil value falls back to [interaction.JSONDriver].
 	Driver interaction.Driver
+
+	// Authn is the orchestrator that drives the chain of
+	// [op.Authenticator] / [op.Interaction] across /interaction
+	// requests. The HTTP layer feeds it [authn.Input] on every Tick
+	// and persists the returned [authn.State] back into the
+	// interaction record. Required.
+	Authn *authn.Orchestrator
 
 	// Scopes is the read-only scope registry the handler consults
 	// when validating the requested scope list. A nil value disables
@@ -165,7 +173,7 @@ func resolveDeps(d Deps) resolved {
 		d.InteractionTTL = DefaultInteractionTTL
 	}
 	if d.Driver == nil {
-		d.Driver = interaction.NoopDriver{}
+		d.Driver = interaction.JSONDriver{}
 	}
 	return resolved{Deps: d}
 }

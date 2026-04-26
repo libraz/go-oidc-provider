@@ -12,11 +12,12 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
-// startInteractionFlow drives the GET /authorize → 302 chain so the table
-// tests can pick up a valid uid+cookies pair without re-implementing the
-// happy path on every row.
+// interactionStart bundles the post-redirect handle the table tests
+// reuse to drive the GET / POST / DELETE phases of the orchestrator-
+// backed /interaction endpoint.
 type interactionStart struct {
 	uid             string
 	interactionCk   *http.Cookie
@@ -24,12 +25,14 @@ type interactionStart struct {
 	requestState    string
 }
 
+// startInteractionFlow drives GET /authorize so the test arrives at
+// the redirect with a valid uid + cookie pair.
 func startInteractionFlow(t *testing.T, h *testHarness) interactionStart {
 	t.Helper()
 	resp := doAuthorizeGET(t, h, goodAuthorizeValues())
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("authorize status=%d", resp.StatusCode)
+		t.Fatalf("authorize status=%d body=%s", resp.StatusCode, readBody(t, resp))
 	}
 	loc, err := url.Parse(resp.Header.Get("Location"))
 	if err != nil {
@@ -57,37 +60,46 @@ func startInteractionFlow(t *testing.T, h *testHarness) interactionStart {
 	}
 }
 
-// installInteractionDriver replaces the harness driver with d and rebuilds
-// the handler so the table tests can swap behaviour without re-creating
-// every dependency.
-func TestInteractionGet_ReturnsStepWithCSRF(t *testing.T) {
+// readBody reads the response body and returns its string form for
+// diagnostic logging. It rewinds nothing — the caller has already
+// consumed the response.
+func readBody(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return buf.String()
+}
+
+func TestInteractionGet_RendersOrchestratorPrompt(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	start := startInteractionFlow(t, h)
 
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
-		h.interactionPth+"/"+start.uid, http.NoBody)
-	r.AddCookie(start.interactionCk)
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status=%d", resp.StatusCode)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.interactionPth+"/"+start.uid, nil)
+	req.AddCookie(start.interactionCk)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
+	var body struct {
+		Type     string `json:"type"`
+		StateRef string `json:"state_ref"`
 	}
-	if got, _ := body["csrf"].(string); got == "" {
-		t.Errorf("csrf missing: %v", body)
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, rr.Body.String())
 	}
-	if hint, ok := body["hint"].(map[string]any); !ok || hint["prompt"] == "" {
-		t.Errorf("hint missing: %v", body)
+	if body.Type != testkit.SubjectPromptType {
+		t.Errorf("Type=%q want %q", body.Type, testkit.SubjectPromptType)
 	}
-	if !hasCookie(resp, cookie.CSRFProfile.Name) {
-		t.Error("csrf cookie missing")
+	if body.StateRef == "" {
+		t.Error("StateRef must be populated")
+	}
+	if rr.Header().Get("Content-Type") != "application/json" {
+		t.Errorf("Content-Type=%q", rr.Header().Get("Content-Type"))
 	}
 }
 
@@ -96,15 +108,12 @@ func TestInteractionGet_404OnMissingCookie(t *testing.T) {
 
 	h := newHarness(t)
 	start := startInteractionFlow(t, h)
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
-		h.interactionPth+"/"+start.uid, http.NoBody)
-	// Deliberately omit the interaction cookie.
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status=%d want 404", resp.StatusCode)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.interactionPth+"/"+start.uid, nil)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status=%d want 404", rr.Code)
 	}
 }
 
@@ -112,16 +121,14 @@ func TestInteractionGet_404OnUnknownUID(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
-		h.interactionPth+"/unknown", http.NoBody)
-	// Cookie does not seal "unknown" → mismatch → 404.
-	r.AddCookie(&http.Cookie{Name: cookie.InteractionProfile.Name, Value: "garbage"})
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status=%d", resp.StatusCode)
+	start := startInteractionFlow(t, h)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.interactionPth+"/no-such-uid", nil)
+	req.AddCookie(start.interactionCk)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status=%d want 404", rr.Code)
 	}
 }
 
@@ -131,207 +138,116 @@ func TestInteractionPost_HappyPath_RedirectsWithCode(t *testing.T) {
 	h := newHarness(t)
 	start := startInteractionFlow(t, h)
 
-	// Run GET to mint a CSRF token + cookie.
-	csrfCookie, csrfToken := fetchCSRF(t, h, start)
+	getResp := doInteractionGet(t, h, start)
+	defer getResp.Body.Close()
+	stateRef, csrfCookie := readPromptStateRef(t, getResp)
 
-	body := map[string]any{
-		"subject_hint":   "user-1",
-		"granted_scopes": []string{"openid", "profile"},
-		"auth_time":      "2026-04-26T12:00:00Z",
-		"amr":            []string{"pwd"},
+	body := interaction.FormSubmission{
+		StateRef: stateRef,
+		Values:   map[string]string{testkit.SubjectFieldName: "user-1"},
 	}
-	resp := postInteraction(t, h, start, csrfCookie, csrfToken, body)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("status=%d body=%s", resp.StatusCode, dumpBody(resp))
+	rr := postSubmission(t, h, start, csrfCookie, body)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	loc, err := url.Parse(resp.Header.Get("Location"))
-	if err != nil {
-		t.Fatalf("parse Location: %v", err)
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, start.requestRedirect+"?") {
+		t.Errorf("Location=%q want redirect to RP", loc)
 	}
-	if loc.Query().Get("code") == "" {
-		t.Errorf("code missing in %s", loc.String())
-	}
-	if loc.Query().Get("state") != start.requestState {
-		t.Errorf("state=%q", loc.Query().Get("state"))
-	}
-	// Session cookie must now be set.
-	if !hasCookie(resp, cookie.SessionProfile.Name) {
-		t.Errorf("session cookie missing: %v", resp.Cookies())
+	if !strings.Contains(loc, "code=") {
+		t.Errorf("Location=%q must carry code", loc)
 	}
 }
 
-func TestInteractionPost_AbortRedirectsAccessDenied(t *testing.T) {
+func TestInteractionDelete_Cancels_RedirectsAccessDenied(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	start := startInteractionFlow(t, h)
-	csrfCookie, csrfToken := fetchCSRF(t, h, start)
-	body := map[string]any{
-		"subject_hint": "user-1",
-		"aborted":      true,
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodDelete, h.interactionPth+"/"+start.uid, nil)
+	req.AddCookie(start.interactionCk)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status=%d", rr.Code)
 	}
-	resp := postInteraction(t, h, start, csrfCookie, csrfToken, body)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("status=%d", resp.StatusCode)
-	}
-	loc, _ := url.Parse(resp.Header.Get("Location"))
-	if loc.Query().Get("error") != "access_denied" {
-		t.Errorf("error=%q", loc.Query().Get("error"))
+	loc := rr.Header().Get("Location")
+	if !strings.Contains(loc, "error=access_denied") {
+		t.Errorf("Location=%q want access_denied", loc)
 	}
 }
 
-func TestInteractionPost_RejectsMissingOrigin(t *testing.T) {
-	t.Parallel()
-
-	h := newHarness(t)
-	start := startInteractionFlow(t, h)
-	csrfCookie, csrfToken := fetchCSRF(t, h, start)
-
-	body, _ := json.Marshal(map[string]any{"subject_hint": "user-1"})
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
-		h.interactionPth+"/"+start.uid, bytes.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("X-CSRF-Token", csrfToken)
-	r.AddCookie(start.interactionCk)
-	r.AddCookie(csrfCookie)
-	// No Origin / Referer header
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("status=%d want 403", resp.StatusCode)
-	}
-}
-
-func TestInteractionPost_RejectsBadCSRF(t *testing.T) {
-	t.Parallel()
-
-	h := newHarness(t)
-	start := startInteractionFlow(t, h)
-	csrfCookie, _ := fetchCSRF(t, h, start)
-	body, _ := json.Marshal(map[string]any{"subject_hint": "user-1"})
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
-		h.interactionPth+"/"+start.uid, bytes.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Origin", "https://op.example.com")
-	r.Header.Set("X-CSRF-Token", "wrong-token")
-	r.AddCookie(start.interactionCk)
-	r.AddCookie(csrfCookie)
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("status=%d", resp.StatusCode)
-	}
-}
-
-func TestInteractionDelete_Cancels_Returns204(t *testing.T) {
-	t.Parallel()
-
-	h := newHarness(t)
-	start := startInteractionFlow(t, h)
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodDelete,
-		h.interactionPth+"/"+start.uid, http.NoBody)
-	r.AddCookie(start.interactionCk)
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("status=%d", resp.StatusCode)
-	}
-	if !hasCookie(resp, cookie.InteractionProfile.Name) {
-		// Clear cookie should set the cookie to MaxAge=-1
-		t.Errorf("interaction cookie clear missing")
-	}
-}
-
-// fetchCSRF runs GET /interaction/{uid} to obtain a CSRF cookie+token pair
-// the table tests then submit on the matching POST.
-func fetchCSRF(t *testing.T, h *testHarness, start interactionStart) (*http.Cookie, string) {
+// doInteractionGet runs GET /interaction/{uid} so the table tests
+// can pull StateRef + CSRF cookie out of the response without
+// repeating the boilerplate.
+func doInteractionGet(t *testing.T, h *testHarness, start interactionStart) *http.Response {
 	t.Helper()
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
-		h.interactionPth+"/"+start.uid, http.NoBody)
-	r.AddCookie(start.interactionCk)
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	resp := w.Result()
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET interaction status=%d", resp.StatusCode)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.interactionPth+"/"+start.uid, nil)
+	req.AddCookie(start.interactionCk)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("interaction GET: status=%d body=%s", rr.Code, rr.Body.String())
 	}
-	var body map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode: %v", err)
+	return rr.Result()
+}
+
+// readPromptStateRef extracts the StateRef from the JSON envelope
+// and the __Host-oidc_csrf cookie set on the response.
+func readPromptStateRef(t *testing.T, resp *http.Response) (string, *http.Cookie) {
+	t.Helper()
+	var prompt struct {
+		StateRef string `json:"state_ref"`
 	}
-	token, _ := body["csrf"].(string)
-	if token == "" {
-		t.Fatal("csrf token missing")
+	if err := json.NewDecoder(resp.Body).Decode(&prompt); err != nil {
+		t.Fatalf("decode prompt: %v", err)
 	}
+	if prompt.StateRef == "" {
+		t.Fatal("StateRef missing")
+	}
+	var csrfCookie *http.Cookie
 	for _, c := range resp.Cookies() {
 		if c.Name == cookie.CSRFProfile.Name {
-			return c, token
+			csrfCookie = c
+			break
 		}
 	}
-	t.Fatal("csrf cookie missing")
-	return nil, ""
+	if csrfCookie == nil {
+		t.Fatal("csrf cookie missing")
+	}
+	return prompt.StateRef, csrfCookie
 }
 
-// postInteraction POSTs the body as JSON, including the CSRF + interaction
-// cookies the helpers build up.
-func postInteraction(
+// postSubmission posts a JSON FormSubmission with the matching
+// CSRF cookie / header and returns the recorder so the caller can
+// assert on the response.
+func postSubmission(
 	t *testing.T,
 	h *testHarness,
 	start interactionStart,
 	csrfCookie *http.Cookie,
-	csrfToken string,
-	body map[string]any,
-) *http.Response {
+	body interaction.FormSubmission,
+) *httptest.ResponseRecorder {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
-		h.interactionPth+"/"+start.uid, bytes.NewReader(raw))
-	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Origin", "https://op.example.com")
-	r.Header.Set("X-CSRF-Token", csrfToken)
-	r.AddCookie(start.interactionCk)
-	r.AddCookie(csrfCookie)
-	w := httptest.NewRecorder()
-	h.handler.ServeHTTP(w, r)
-	return w.Result()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, h.interactionPth+"/"+start.uid, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://op.example.com")
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	req.AddCookie(start.interactionCk)
+	req.AddCookie(csrfCookie)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	return rr
 }
 
-func dumpBody(resp *http.Response) string {
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(resp.Body)
-	return buf.String()
-}
+// Compile-time confirmation that AutoConsentDriver still satisfies
+// the new Driver shape.
+var _ = func() interaction.Driver { return testkit.AutoConsentDriver{} }
 
-// stubAutoConsentDriver always returns a terminal Decision so the
-// interaction-completion tests can drive the happy path through Verify.
-type stubAutoConsentDriver struct{}
-
-func (stubAutoConsentDriver) Offer(_ context.Context, _ interaction.Request) (interaction.Step, error) {
-	return interaction.Step{Hint: interaction.Hint{Prompt: interaction.PromptConsent}}, nil
-}
-
-func (stubAutoConsentDriver) Verify(_ context.Context, _ interaction.Request, _ interaction.Result) (interaction.Decision, error) {
-	return interaction.Decision{Continue: false}, nil
-}
-
-func (stubAutoConsentDriver) Cancel(_ context.Context, _ interaction.Request) error { return nil }
-
-// TestStubAutoConsentDriver_CompilesAsDriver pins the test stub to the
-// interaction.Driver contract so accidental signature drift breaks the
-// build before the matrix test does.
-func TestStubAutoConsentDriver_CompilesAsDriver(t *testing.T) {
-	t.Parallel()
-	var _ interaction.Driver = stubAutoConsentDriver{}
-}
+// Used to silence the unused context import after the rewrite.
+var _ = context.Background

@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
@@ -355,9 +357,11 @@ func decideHintInteractive(s hintState) authorizeHint {
 	}
 }
 
-// startInteraction creates the persisted interaction record, sets the
+// startInteraction creates the persisted interaction record with a
+// freshly-initialised orchestrator [authn.State], sets the
 // __Host-oidc_interaction cookie, and redirects the browser to
-// /interaction/{uid}.
+// /interaction/{uid}. The orchestrator runs on the first GET and
+// emits the initial prompt.
 func startInteraction(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -365,15 +369,38 @@ func startInteraction(
 	req *authorize.Request,
 	client *store.Client,
 	active *sessions.Active,
-	prompt string,
+	_ string,
 ) {
+	if deps.Authn == nil {
+		emitAuthorizeError(w, r, deps, req, errServerError, "interaction is not configured")
+		return
+	}
 	uid, err := newRandomB64(uidByteLength)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate interaction id")
 		return
 	}
 	now := deps.now().UTC()
-	state := authorize.RequestState{Library: authorize.SnapshotFrom(req, now)}
+	authnState := authn.State{
+		InteractionUID:  uid,
+		ClientID:        client.ID,
+		Subject:         currentSubject(active),
+		RemoteIP:        clientIPFromRequest(r),
+		UserAgent:       truncateUserAgent(r.UserAgent()),
+		AuthTime:        now,
+		ActiveFactorIdx: -1,
+		Phase:           authn.PhaseBeforeAuthn,
+		InteractionsRun: map[string]bool{},
+	}
+	authnRaw, err := encodeAuthnState(authnState)
+	if err != nil {
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not marshal interaction state")
+		return
+	}
+	state := authorize.RequestState{
+		Library: authorize.SnapshotFrom(req, now),
+		Authn:   authnRaw,
+	}
 	raw, err := authorize.MarshalState(state)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not marshal interaction state")
@@ -382,7 +409,6 @@ func startInteraction(
 	rec := &store.Interaction{
 		ID:        uid,
 		ClientID:  client.ID,
-		Step:      prompt,
 		RawState:  raw,
 		ExpiresAt: now.Add(deps.InteractionTTL),
 		CreatedAt: now,
@@ -396,18 +422,41 @@ func startInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not set interaction cookie")
 		return
 	}
-	// Inform the Driver so it can pre-render UI state. Errors from the
-	// Driver are intentionally swallowed: the interaction record is
-	// already persisted, and the SPA will get a fresh Offer call on the
-	// matching GET.
-	_, _ = deps.Driver.Offer(r.Context(), interaction.Request{
-		UID:            uid,
-		ClientID:       client.ID,
-		CurrentSubject: currentSubject(active),
-	})
 	stampNoStore(w)
 	target := deps.InteractionPath + "/" + uid
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+// userAgentMaxLen caps the [http.Request] User-Agent string the
+// orchestrator records on the chain state. The cap mirrors the
+// length internal/sessions uses for its session record so the values
+// remain comparable across the HTTP layer.
+const userAgentMaxLen = 512
+
+// truncateUserAgent enforces the [userAgentMaxLen] cap. Empty input
+// passes through; over-long strings are sliced byte-wise.
+func truncateUserAgent(ua string) string {
+	if len(ua) <= userAgentMaxLen {
+		return ua
+	}
+	return ua[:userAgentMaxLen]
+}
+
+// clientIPFromRequest parses the request's RemoteAddr into a
+// [netip.Addr]. Trusted-proxy resolution is intentionally out of
+// scope for the orchestrator state today; embedders that need the
+// XFF-aware IP can plug it through a future option.
+func clientIPFromRequest(r *http.Request) netip.Addr {
+	host := r.RemoteAddr
+	if i := strings.LastIndex(host, ":"); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr
 }
 
 // currentSubject returns the active session's subject or empty when there

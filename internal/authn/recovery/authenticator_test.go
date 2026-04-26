@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -82,9 +83,9 @@ func TestAuthenticator_BeginEmitsPromptWithFullSlots(t *testing.T) {
 	if step.Prompt == nil {
 		t.Fatalf("expected Prompt, got %+v", step)
 	}
-	data, ok := step.Prompt.Data.(op.RecoveryCodePromptData)
+	data, ok := step.Prompt.Data.(interaction.RecoveryCodePromptData)
 	if !ok {
-		t.Fatalf("Prompt.Data type = %T, want op.RecoveryCodePromptData", step.Prompt.Data)
+		t.Fatalf("Prompt.Data type = %T, want interaction.RecoveryCodePromptData", step.Prompt.Data)
 	}
 	if data.AttemptsRemaining != 10 {
 		t.Errorf("AttemptsRemaining = %d, want 10", data.AttemptsRemaining)
@@ -121,7 +122,7 @@ func TestAuthenticator_ContinueSuccessReturnsResultAndPersists(t *testing.T) {
 	step, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{recovery.CodeFieldName: f.plaintext[2]}},
+		Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: f.plaintext[2]}},
 	})
 	if err != nil {
 		t.Fatalf("Continue: %v", err)
@@ -158,7 +159,7 @@ func TestAuthenticator_ContinueWrongCodeReEmitsPromptWithoutConsuming(t *testing
 	step, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{recovery.CodeFieldName: "WRONG-CODES"}},
+		Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: "WRONG-CODES"}},
 	})
 	if err != nil {
 		t.Fatalf("Continue err = %v, want nil for invalid code", err)
@@ -166,9 +167,9 @@ func TestAuthenticator_ContinueWrongCodeReEmitsPromptWithoutConsuming(t *testing
 	if step.Prompt == nil {
 		t.Fatalf("expected re-emit Prompt, got %+v", step)
 	}
-	data, ok := step.Prompt.Data.(op.RecoveryCodePromptData)
+	data, ok := step.Prompt.Data.(interaction.RecoveryCodePromptData)
 	if !ok {
-		t.Fatalf("Prompt.Data type = %T, want op.RecoveryCodePromptData", step.Prompt.Data)
+		t.Fatalf("Prompt.Data type = %T, want interaction.RecoveryCodePromptData", step.Prompt.Data)
 	}
 	if data.AttemptsRemaining != 10 {
 		t.Errorf("AttemptsRemaining = %d, want 10 (no slot consumed)", data.AttemptsRemaining)
@@ -193,7 +194,7 @@ func TestAuthenticator_ContinueAllConsumedReturnsError(t *testing.T) {
 		_, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 			Subject:    f.subject,
 			AuthTime:   f.authTime,
-			Submission: op.FormSubmission{Values: map[string]string{recovery.CodeFieldName: f.plaintext[i]}},
+			Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: f.plaintext[i]}},
 		})
 		if err != nil {
 			t.Fatalf("Continue %d: %v", i, err)
@@ -202,7 +203,7 @@ func TestAuthenticator_ContinueAllConsumedReturnsError(t *testing.T) {
 	_, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{recovery.CodeFieldName: f.plaintext[0]}},
+		Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: f.plaintext[0]}},
 	})
 	if !errors.Is(err, recovery.ErrAllConsumed) {
 		t.Fatalf("err = %v, want ErrAllConsumed", err)
@@ -216,7 +217,7 @@ func TestAuthenticator_ContinueRequiresCodeAndSubject(t *testing.T) {
 	_, err := f.adapter.Continue(context.Background(), op.ContinueInput{
 		Subject:    f.subject,
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{}},
+		Submission: interaction.FormSubmission{Values: map[string]string{}},
 	})
 	if !errors.Is(err, recovery.ErrCodeMissing) {
 		t.Fatalf("missing code: err = %v, want ErrCodeMissing", err)
@@ -224,7 +225,7 @@ func TestAuthenticator_ContinueRequiresCodeAndSubject(t *testing.T) {
 
 	_, err = f.adapter.Continue(context.Background(), op.ContinueInput{
 		AuthTime:   f.authTime,
-		Submission: op.FormSubmission{Values: map[string]string{recovery.CodeFieldName: "SOMETHING"}},
+		Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: "SOMETHING"}},
 	})
 	if !errors.Is(err, recovery.ErrSubjectRequired) {
 		t.Fatalf("missing subject: err = %v, want ErrSubjectRequired", err)

@@ -6,22 +6,23 @@ import (
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// PromptType is the [op.Prompt.Type] the adapter emits. The string is
+// PromptType is the [interaction.Prompt.Type] the adapter emits. The string is
 // fixed by docs/plans/002-product-design.md §E.2 and matches the
 // constant set [op.Authenticator.Prompts] returns.
 const PromptType = "auth.totp"
 
-// CodeFieldName is the [op.FieldSpec.Name] the adapter expects in
-// [op.FormSubmission.Values]. It is exported so SPA documentation can
+// CodeFieldName is the [interaction.FieldSpec.Name] the adapter expects in
+// [interaction.FormSubmission.Values]. It is exported so SPA documentation can
 // reference the canonical key without a stringly-typed copy.
 const CodeFieldName = "code"
 
 // digitCount is the RFC 6238 default code length the verifier expects
 // (the same constant lives in the verifier internals as `digits`). The
-// adapter pins MinLen / MaxLen on its [op.FieldSpec] to that length so
+// adapter pins MinLen / MaxLen on its [interaction.FieldSpec] to that length so
 // a SPA cannot submit a partial code.
 const digitCount = 6
 
@@ -33,7 +34,7 @@ const digitCount = 6
 var ErrSubjectRequired = errors.New("totp: subject is required")
 
 // ErrCodeMissing is returned by [Authenticator.Continue] when the
-// submission omits the code field. The orchestrator's [op.FieldSpec]
+// submission omits the code field. The orchestrator's [interaction.FieldSpec]
 // validation should already have caught this; the adapter re-checks
 // to keep the error path explicit at the trust boundary.
 var ErrCodeMissing = errors.New("totp: code field is missing")
@@ -91,24 +92,24 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 
 // Begin implements [op.Authenticator]. It reads the persisted record
 // for [op.BeginInput.Subject] and emits the [PromptType] prompt with
-// the current [op.TOTPPromptData.AttemptsRemaining]. A locked record
+// the current [interaction.TOTPPromptData.AttemptsRemaining]. A locked record
 // surfaces [ErrLocked] verbatim so the orchestrator can stop the
 // chain instead of pretending the factor is available.
-func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (op.Step, error) {
+func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
-		return op.Step{}, ErrSubjectRequired
+		return interaction.Step{}, ErrSubjectRequired
 	}
 	rec, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
-		return op.Step{}, fmt.Errorf("totp: load record: %w", err)
+		return interaction.Step{}, fmt.Errorf("totp: load record: %w", err)
 	}
 	if rec == nil {
-		return op.Step{}, store.ErrNotFound
+		return interaction.Step{}, store.ErrNotFound
 	}
 	if !rec.ConfirmedAt.IsZero() && !rec.LockedUntil.IsZero() && rec.LockedUntil.After(in.AuthTime) {
-		return op.Step{}, ErrLocked
+		return interaction.Step{}, ErrLocked
 	}
-	return op.Step{Prompt: a.prompt(rec)}, nil
+	return interaction.Step{Prompt: a.prompt(rec)}, nil
 }
 
 // Continue implements [op.Authenticator]. It reads the persisted
@@ -118,29 +119,29 @@ func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (op.Step, e
 //
 // Outcomes:
 //
-//   - On [OutcomeSuccess]: [op.Step.Result] is populated with the
+//   - On [OutcomeSuccess]: [interaction.Step.Result] is populated with the
 //     bound subject and the orchestrator's [op.ContinueInput.AuthTime].
-//   - On [OutcomeWrongCode] (recoverable): [op.Step.Prompt] is re-
-//     emitted with [op.TOTPPromptData.AttemptsRemaining] decremented;
+//   - On [OutcomeWrongCode] (recoverable): [interaction.Step.Prompt] is re-
+//     emitted with [interaction.TOTPPromptData.AttemptsRemaining] decremented;
 //     the orchestrator advances [State.StepCounter] so the previous
-//     [op.Prompt.StateRef] is invalidated.
+//     [interaction.Prompt.StateRef] is invalidated.
 //   - On [OutcomeLocked] / [OutcomeResetRequired]: the matching error
 //     is returned so the orchestrator stops the chain. The persisted
 //     record carries the lockout stamp.
-func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (op.Step, error) {
+func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
 	if in.Subject == "" {
-		return op.Step{}, ErrSubjectRequired
+		return interaction.Step{}, ErrSubjectRequired
 	}
 	code, ok := in.Submission.Values[CodeFieldName]
 	if !ok || code == "" {
-		return op.Step{}, ErrCodeMissing
+		return interaction.Step{}, ErrCodeMissing
 	}
 	rec, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
-		return op.Step{}, fmt.Errorf("totp: load record: %w", err)
+		return interaction.Step{}, fmt.Errorf("totp: load record: %w", err)
 	}
 	if rec == nil {
-		return op.Step{}, store.ErrNotFound
+		return interaction.Step{}, store.ErrNotFound
 	}
 
 	res, verr := a.verifier.Verify(ctx, rec, code)
@@ -150,37 +151,37 @@ func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (op.S
 		// clears counters, wrong-code bumps them, reset-required
 		// stamps the long lock).
 		if perr := a.store.Put(ctx, res.Record); perr != nil {
-			return op.Step{}, fmt.Errorf("totp: persist record: %w", perr)
+			return interaction.Step{}, fmt.Errorf("totp: persist record: %w", perr)
 		}
 	}
 
 	switch {
 	case verr == nil:
-		return op.Step{Result: &op.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case errors.Is(verr, ErrWrongCode):
-		return op.Step{Prompt: a.prompt(res.Record)}, nil
+		return interaction.Step{Prompt: a.prompt(res.Record)}, nil
 	default:
 		// ErrLocked / ErrResetRequired / store-decryption failures
 		// flow through verbatim so the orchestrator can dispatch.
-		return op.Step{}, verr
+		return interaction.Step{}, verr
 	}
 }
 
-// prompt builds the [op.Prompt] the adapter emits for both Begin and
+// prompt builds the [interaction.Prompt] the adapter emits for both Begin and
 // the wrong-code re-emit branch of Continue. Centralising the shape
 // here keeps the two call sites in sync; a SPA seeing two different
 // prompt shapes for the same factor would be a contract bug.
-func (*Authenticator) prompt(rec *store.TOTPRecord) *op.Prompt {
+func (*Authenticator) prompt(rec *store.TOTPRecord) *interaction.Prompt {
 	remaining := lockThresholdShort - rec.FailedCount
 	if remaining < 0 {
 		remaining = 0
 	}
-	return &op.Prompt{
+	return &interaction.Prompt{
 		Type: PromptType,
-		Data: op.TOTPPromptData{AttemptsRemaining: remaining},
-		Inputs: []op.FieldSpec{{
+		Data: interaction.TOTPPromptData{AttemptsRemaining: remaining},
+		Inputs: []interaction.FieldSpec{{
 			Name:     CodeFieldName,
-			Kind:     op.FieldOTPCode,
+			Kind:     interaction.FieldOTPCode,
 			Label:    "auth.totp.code",
 			Required: true,
 			MinLen:   digitCount,

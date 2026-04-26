@@ -6,15 +6,16 @@ import (
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// PromptType is the [op.Prompt.Type] the adapter emits, fixed by
+// PromptType is the [interaction.Prompt.Type] the adapter emits, fixed by
 // docs/plans/002-product-design.md §E.2.
 const PromptType = "auth.recovery_code"
 
-// CodeFieldName is the [op.FieldSpec.Name] the adapter expects in
-// [op.FormSubmission.Values]. Exported so SPA documentation can
+// CodeFieldName is the [interaction.FieldSpec.Name] the adapter expects in
+// [interaction.FormSubmission.Values]. Exported so SPA documentation can
 // reference the canonical key without a stringly-typed copy.
 const CodeFieldName = "code"
 
@@ -36,7 +37,7 @@ const (
 var ErrSubjectRequired = errors.New("recovery: subject is required")
 
 // ErrCodeMissing is returned by [Authenticator.Continue] when the
-// submission omits the code field. The orchestrator's [op.FieldSpec]
+// submission omits the code field. The orchestrator's [interaction.FieldSpec]
 // validation should already have caught this; the adapter re-checks
 // at the trust boundary.
 var ErrCodeMissing = errors.New("recovery: code field is missing")
@@ -93,90 +94,90 @@ func (*Authenticator) AMR() string { return "otp" }
 func (*Authenticator) Prompts() []string { return []string{PromptType} }
 
 // Begin implements [op.Authenticator]. It reads the persisted batch
-// to surface [op.RecoveryCodePromptData.AttemptsRemaining] (the count
+// to surface [interaction.RecoveryCodePromptData.AttemptsRemaining] (the count
 // of unconsumed slots) and emits the [PromptType] prompt. Begin
 // surfaces [store.ErrNotFound] when the user has no batch generated
 // so the orchestrator can stop the chain rather than silently rolling
 // over to the next factor.
-func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (op.Step, error) {
+func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
-		return op.Step{}, ErrSubjectRequired
+		return interaction.Step{}, ErrSubjectRequired
 	}
 	batch, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
-		return op.Step{}, fmt.Errorf("recovery: load batch: %w", err)
+		return interaction.Step{}, fmt.Errorf("recovery: load batch: %w", err)
 	}
 	if batch == nil {
-		return op.Step{}, store.ErrNotFound
+		return interaction.Step{}, store.ErrNotFound
 	}
-	return op.Step{Prompt: a.prompt(batch)}, nil
+	return interaction.Step{Prompt: a.prompt(batch)}, nil
 }
 
 // Continue implements [op.Authenticator]. It loads the batch,
 // verifies the submitted code through the [Verifier], persists the
-// mutated batch on success, and returns the matching [op.Step]:
+// mutated batch on success, and returns the matching [interaction.Step]:
 //
-//   - On [OutcomeSuccess]: [op.Step.Result] is populated with the
+//   - On [OutcomeSuccess]: [interaction.Step.Result] is populated with the
 //     bound subject and the orchestrator's
 //     [op.ContinueInput.AuthTime]. The persisted batch carries the
 //     stamped ConsumedAt on the matched slot.
-//   - On [OutcomeInvalid]: [op.Step.Prompt] is re-emitted with
-//     [op.RecoveryCodePromptData.AttemptsRemaining] unchanged (no slot
+//   - On [OutcomeInvalid]: [interaction.Step.Prompt] is re-emitted with
+//     [interaction.RecoveryCodePromptData.AttemptsRemaining] unchanged (no slot
 //     was consumed).
 //   - On [OutcomeAllConsumed] / [OutcomeNoCodes]: the matching error
 //     is returned so the orchestrator stops the chain.
-func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (op.Step, error) {
+func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
 	if in.Subject == "" {
-		return op.Step{}, ErrSubjectRequired
+		return interaction.Step{}, ErrSubjectRequired
 	}
 	code, ok := in.Submission.Values[CodeFieldName]
 	if !ok || code == "" {
-		return op.Step{}, ErrCodeMissing
+		return interaction.Step{}, ErrCodeMissing
 	}
 	batch, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
-		return op.Step{}, fmt.Errorf("recovery: load batch: %w", err)
+		return interaction.Step{}, fmt.Errorf("recovery: load batch: %w", err)
 	}
 	if batch == nil {
-		return op.Step{}, store.ErrNotFound
+		return interaction.Step{}, store.ErrNotFound
 	}
 
 	res, verr := a.verifier.Verify(ctx, batch, code)
 	if verr == nil && res != nil && res.Batch != nil {
 		if perr := a.store.Put(ctx, res.Batch); perr != nil {
-			return op.Step{}, fmt.Errorf("recovery: persist batch: %w", perr)
+			return interaction.Step{}, fmt.Errorf("recovery: persist batch: %w", perr)
 		}
 	}
 
 	switch {
 	case verr == nil:
-		return op.Step{Result: &op.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case errors.Is(verr, ErrCodeInvalid):
-		return op.Step{Prompt: a.prompt(batch)}, nil
+		return interaction.Step{Prompt: a.prompt(batch)}, nil
 	default:
 		// ErrAllConsumed / ErrNoCodes / hash-format failures flow
 		// through verbatim so the orchestrator can dispatch to the
 		// out-of-band recovery branch.
-		return op.Step{}, verr
+		return interaction.Step{}, verr
 	}
 }
 
-// prompt builds the [op.Prompt] the adapter emits on Begin and on
+// prompt builds the [interaction.Prompt] the adapter emits on Begin and on
 // the wrong-code re-emit branch of Continue. Centralising the shape
 // here keeps the two call sites in sync.
-func (*Authenticator) prompt(batch *store.RecoveryBatch) *op.Prompt {
+func (*Authenticator) prompt(batch *store.RecoveryBatch) *interaction.Prompt {
 	remaining := 0
 	for _, slot := range batch.Codes {
 		if slot.ConsumedAt.IsZero() {
 			remaining++
 		}
 	}
-	return &op.Prompt{
+	return &interaction.Prompt{
 		Type: PromptType,
-		Data: op.RecoveryCodePromptData{AttemptsRemaining: remaining},
-		Inputs: []op.FieldSpec{{
+		Data: interaction.RecoveryCodePromptData{AttemptsRemaining: remaining},
+		Inputs: []interaction.FieldSpec{{
 			Name:     CodeFieldName,
-			Kind:     op.FieldText,
+			Kind:     interaction.FieldText,
 			Label:    "auth.recovery_code.code",
 			Required: true,
 			MinLen:   codeMinLen,

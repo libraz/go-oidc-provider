@@ -1,88 +1,93 @@
 package interaction
 
-import "context"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+// maxSubmissionBytes caps the body size [JSONDriver.ParseSubmission]
+// reads. Submissions carry [FormSubmission] only; a few KiB is far
+// above any legitimate payload while bounding memory use against
+// pathological inputs (gosec G120).
+const maxSubmissionBytes = 32 * 1024
 
 // Driver is the contract a caller implements to plug a UI into the
-// [op.Provider]. Implementations own scope metadata, authenticator
-// presentation, and prompt resolution; the library owns every
-// protocol-visible decision the OP makes around them.
+// [op.Provider]. The new shape (see docs/plans/002-product-design.md
+// §E.1 / §E.2) is intentionally thin: every protocol-visible decision
+// — factor sequencing, captcha gating, risk routing, prompt
+// validation — is the orchestrator's. The Driver only renders the
+// orchestrator's chosen [Prompt] for the SPA and parses the SPA's
+// reply back into a [FormSubmission].
 //
 // Implementations MUST be safe for concurrent use; the library calls
 // every method from request-scoped goroutines.
 type Driver interface {
-	// Offer is invoked when the OP determines that the request requires
-	// user interaction. It returns the [Step] the SPA must render. The
-	// Driver MAY use ctx to carry tracing or to honour cancellation; it
-	// MUST NOT block beyond the request deadline.
-	Offer(ctx context.Context, req Request) (Step, error)
+	// Render writes the response for prompt to w. The Driver picks
+	// the content type (JSON for SPA, HTML for SSR) and sets the
+	// matching Content-Type header before any bytes are written.
+	// The orchestrator has already populated [Prompt.StateRef]
+	// with a fresh continuation token by the time Render runs;
+	// implementations MUST echo it back to the SPA so the next
+	// submission round-trips correctly.
+	Render(w http.ResponseWriter, r *http.Request, prompt Prompt) error
 
-	// Verify is invoked after the SPA POSTs an interaction result. It
-	// returns the [Decision] that tells the OP whether to complete the
-	// flow or to keep prompting.
-	Verify(ctx context.Context, req Request, result Result) (Decision, error)
-
-	// Cancel is invoked when the interaction is abandoned (timeout, user
-	// abort, downstream error). Implementations SHOULD release any
-	// SPA-side state associated with req.UID. Cancel MUST NOT return
-	// an error for unknown UIDs; it is best-effort.
-	Cancel(ctx context.Context, req Request) error
+	// ParseSubmission reads the SPA's reply from r and returns the
+	// resulting [FormSubmission]. The Driver chooses the wire
+	// format; the orchestrator validates the returned values
+	// against the active [Prompt.Inputs] before dispatching to
+	// the [op.Authenticator]. The function MUST NOT consume more
+	// than a few KiB from r.Body.
+	ParseSubmission(r *http.Request) (FormSubmission, error)
 }
 
-// Request is the call-side context handed to a [Driver] method. It bundles
-// the interaction identifier with the authorization-request fragments the
-// Driver may need for prompt selection.
+// JSONDriver is the default [Driver] implementation. It speaks JSON
+// over HTTP: [JSONDriver.Render] writes the [Prompt] as
+// application/json and [JSONDriver.ParseSubmission] decodes a
+// [FormSubmission] from the request body. Embedders that ship a SPA
+// can use it as-is; SSR or framework-specific Drivers replace it.
 //
-// The struct is small on purpose: drivers that need richer context (full
-// AuthorizationRequest, client metadata) read it via the [op.Provider]
-// helpers using [Request.UID] as the key.
-type Request struct {
-	// UID is the opaque interaction identifier. It MUST be treated as a
-	// secret; embedding it in URLs is fine because the library binds it
-	// to a CSRF token, but Drivers MUST NOT log raw UIDs.
-	UID string
+// JSONDriver is safe for concurrent use; it carries no state.
+type JSONDriver struct{}
 
-	// ClientID is the OAuth client_id of the relying party that started
-	// the authorization request. It is provided so Drivers can short-
-	// circuit lookups for prompt routing.
-	ClientID string
+// Compile-time confirmation that JSONDriver satisfies Driver.
+var _ Driver = JSONDriver{}
 
-	// CurrentSubject is the canonical subject of the active session, or
-	// empty when no user is logged in. Drivers use it to skip prompts
-	// when the authenticated user already satisfies the request.
-	CurrentSubject string
+// ErrSubmissionMalformed is returned by [JSONDriver.ParseSubmission]
+// when the body cannot be decoded into a [FormSubmission]. The error
+// is intentionally opaque: the orchestrator translates it to a 400 /
+// 403 without echoing the parse error back to the SPA, so a
+// malicious caller cannot probe the format through error messages.
+var ErrSubmissionMalformed = errors.New("interaction: submission malformed")
+
+// Render implements [Driver]. The function writes the Prompt as
+// JSON and stamps Content-Type before the first byte; callers MUST
+// NOT have written headers themselves.
+func (JSONDriver) Render(w http.ResponseWriter, _ *http.Request, prompt Prompt) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(prompt); err != nil {
+		return fmt.Errorf("interaction: render prompt: %w", err)
+	}
+	return nil
 }
 
-// NoopDriver is a [Driver] implementation that produces no UI and rejects
-// every request with PromptLogin / "no_driver_configured". It is the
-// default when the caller does not pass [op.WithInteraction]; the OP
-// remains usable for non-interactive grants (client_credentials).
-//
-// Drivers that need a permissive default for tests should consult
-// [op/testkit] instead; NoopDriver is deliberately strict so production
-// misconfigurations fail closed.
-type NoopDriver struct{}
-
-// Offer implements [Driver]. It always returns a PromptLogin step with a
-// "no_driver_configured" reason so an accidentally-deployed Provider
-// surfaces the missing UI immediately rather than 500ing.
-func (NoopDriver) Offer(_ context.Context, _ Request) (Step, error) {
-	return Step{
-		Hint: Hint{
-			Prompt:  PromptLogin,
-			Reasons: []string{"no_driver_configured"},
-		},
-	}, nil
+// ParseSubmission implements [Driver]. It reads at most
+// [maxSubmissionBytes] from r.Body, decodes the [FormSubmission]
+// envelope, and returns the result. Unknown fields produce
+// [ErrSubmissionMalformed].
+func (JSONDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {
+	r.Body = http.MaxBytesReader(nil, r.Body, maxSubmissionBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var body FormSubmission
+	if err := dec.Decode(&body); err != nil {
+		if errors.Is(err, io.EOF) {
+			return FormSubmission{}, ErrSubmissionMalformed
+		}
+		return FormSubmission{}, fmt.Errorf("%w: %w", ErrSubmissionMalformed, err)
+	}
+	return body, nil
 }
-
-// Verify implements [Driver]. It always returns Continue=false with an
-// error string so the SPA cannot complete a flow against a Provider that
-// has no configured Driver.
-func (NoopDriver) Verify(_ context.Context, _ Request, _ Result) (Decision, error) {
-	return Decision{Error: "no_driver_configured"}, nil
-}
-
-// Cancel implements [Driver] as a no-op.
-func (NoopDriver) Cancel(_ context.Context, _ Request) error { return nil }
-
-// Compile-time confirmation that NoopDriver satisfies Driver.
-var _ Driver = NoopDriver{}

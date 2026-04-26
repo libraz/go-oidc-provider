@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -16,41 +17,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
-
-// maxInteractionBodyBytes caps the JSON body size for /interaction POSTs.
-// The body carries [interaction.Result] only; a few KiB is far above any
-// legitimate payload while bounding memory use against pathological inputs
-// (gosec G120).
-const maxInteractionBodyBytes = 32 * 1024
-
-// stepResponse is the JSON shape the /interaction GET handler returns.
-// Field names are snake_case to match the convention in
-// [internal/tokenendpoint] and on the SPA contract documented in §A.9.
-type stepResponse struct {
-	Hint      hintBody `json:"hint"`
-	CSRF      string   `json:"csrf"`
-	ExpiresAt int64    `json:"expires_at"`
-}
-
-// hintBody is the JSON shape of [interaction.Hint] over the wire. It is a
-// distinct type so adding fields does not force callers to recompile.
-type hintBody struct {
-	Prompt  string   `json:"prompt"`
-	Reasons []string `json:"reasons,omitempty"`
-}
-
-// resultBody is the JSON shape of [interaction.Result] inbound from the
-// SPA. The wire form uses snake_case field names; AuthTime is RFC 3339 so
-// the SPA can emit an ISO 8601 timestamp directly.
-type resultBody struct {
-	SubjectHint   string   `json:"subject_hint"`
-	GrantedScopes []string `json:"granted_scopes,omitempty"`
-	AccountID     string   `json:"account_id,omitempty"`
-	Aborted       bool     `json:"aborted,omitempty"`
-	AuthTime      string   `json:"auth_time,omitempty"`
-	AMR           []string `json:"amr,omitempty"`
-	ACR           string   `json:"acr,omitempty"`
-}
 
 // serveInteraction is the multiplexed entry point for /interaction/{uid}.
 // It dispatches GET / POST / DELETE to the matching helper after pulling
@@ -95,51 +61,26 @@ func verifyInteractionCookie(r *http.Request, deps resolved, uid string) bool {
 	return string(raw) == uid
 }
 
-// serveInteractionGet returns the next [Step] the SPA should render. The
-// handler decodes the persisted state, asks the Driver to refine it, and
-// mints a fresh CSRF token bound to the UID.
+// serveInteractionGet drives the orchestrator one tick from the
+// persisted state without any submission. The function is the SPA's
+// entry point after the /authorize redirect: the first call advances
+// the chain into [authn.PhaseAuthn] and renders the first prompt;
+// subsequent reloads re-emit a fresh prompt with a new StateRef.
 func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
-	rec, _, ok := loadInteraction(w, r, deps, uid)
+	rec, state, ok := loadInteraction(w, r, deps, uid)
 	if !ok {
 		return
 	}
-	active, _ := resolveSession(r, deps)
-	step, err := deps.Driver.Offer(r.Context(), interaction.Request{
-		UID:            uid,
-		ClientID:       rec.ClientID,
-		CurrentSubject: currentSubject(active),
-	})
+	authnState, err := decodeAuthnState(state.Authn)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction driver failed")
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
 		return
 	}
-	now := deps.now().UTC()
-	token, err := deps.CSRF.Issue(uid, now)
-	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not issue csrf token")
-		return
-	}
-	if err := setCSRFCookie(w, token, deps.InteractionTTL); err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not set csrf cookie")
-		return
-	}
-	prompt := step.Hint.Prompt
-	if prompt == "" {
-		prompt = rec.Step
-	}
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(stepResponse{
-		Hint:      hintBody{Prompt: prompt, Reasons: slices.Clone(step.Hint.Reasons)},
-		CSRF:      token,
-		ExpiresAt: rec.ExpiresAt.UTC().Unix(),
-	})
+	dispatchTick(w, r, deps, rec, state, authnState, nil)
 }
 
-// serveInteractionPost accepts the SPA's [Result] payload, runs it through
-// the Driver, and either persists a follow-up Step or terminates the
-// interaction (success / abort).
+// serveInteractionPost runs the orchestrator against the SPA's
+// submission and dispatches the resulting [interaction.Step].
 func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
 	if err := csrf.CheckOrigin(r, deps.Origins); err != nil {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "origin not allowed")
@@ -152,52 +93,142 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 	if !ok {
 		return
 	}
-	body, ok := decodeResult(w, r)
-	if !ok {
-		return
-	}
-	result, ok := buildResult(w, body)
-	if !ok {
-		return
-	}
-	dec, err := deps.Driver.Verify(r.Context(), interaction.Request{
-		UID:            uid,
-		ClientID:       rec.ClientID,
-		CurrentSubject: currentSubjectFromCookie(r, deps),
-	}, result)
+	authnState, err := decodeAuthnState(state.Authn)
 	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction driver failed")
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
 		return
 	}
-	if dec.Continue {
-		persistFollowUp(w, r, deps, rec, state, dec)
+	submission, err := deps.Driver.ParseSubmission(r)
+	if err != nil {
+		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "invalid interaction body")
 		return
 	}
-	terminateInteraction(w, r, deps, rec, state, result)
+	dispatchTick(w, r, deps, rec, state, authnState, &submission)
 }
 
-// serveInteractionDelete cancels the interaction. The Driver is notified
-// best-effort; cancellation is idempotent so a stale UID still returns 204.
+// serveInteractionDelete cancels the interaction. The function emits
+// the access_denied redirect when a redirect target is available;
+// otherwise it returns 204 so the SPA can treat the call as a
+// best-effort cancel.
 func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolved, uid string) {
-	rec, _, ok := loadInteraction(w, r, deps, uid)
+	rec, state, ok := loadInteraction(w, r, deps, uid)
 	if !ok {
 		return
 	}
-	_ = deps.Driver.Cancel(r.Context(), interaction.Request{
-		UID:            uid,
-		ClientID:       rec.ClientID,
-		CurrentSubject: currentSubjectFromCookie(r, deps),
-	})
-	_ = deps.Interactions.Delete(r.Context(), uid)
+	_ = deps.Interactions.Delete(r.Context(), rec.ID)
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
 	stampNoStore(w)
-	w.WriteHeader(http.StatusNoContent)
+	if state.Library.RedirectURI == "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	emitAuthorizeError(w, r, deps, state.Library.ToRequest(), errAccessDenied, "user aborted the interaction")
+}
+
+// dispatchTick runs a single orchestrator tick and routes the
+// resulting Step. The function consolidates the GET / POST branches
+// so the SPA-visible behaviour stays identical regardless of whether
+// the SPA polled for the next prompt or submitted a reply.
+func dispatchTick(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+	state authorize.RequestState,
+	authnState authn.State,
+	submission *interaction.FormSubmission,
+) {
+	now := deps.now().UTC()
+	next, step, err := deps.Authn.Tick(r.Context(), authnState, authn.Input{
+		Submission: submission,
+		Now:        now,
+	})
+	if err != nil {
+		writeAuthnError(w, r, deps, state, err)
+		return
+	}
+	if step.Result != nil {
+		terminateInteraction(w, r, deps, rec, state, next, *step.Result)
+		return
+	}
+	if step.Prompt == nil {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "orchestrator returned empty step")
+		return
+	}
+	if err := persistAuthnState(r.Context(), deps, rec, state, next, step.Prompt.Type, now); err != nil {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist interaction")
+		return
+	}
+	token, err := deps.CSRF.Issue(rec.ID, now)
+	if err != nil {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not issue csrf token")
+		return
+	}
+	if err := setCSRFCookie(w, token, deps.InteractionTTL); err != nil {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not set csrf cookie")
+		return
+	}
+	stampNoStore(w)
+	if err := deps.Driver.Render(w, r, *step.Prompt); err != nil {
+		// Render's own headers may already be partially written;
+		// surfacing a JSON error after that is unsafe so we just
+		// bail. The persistent state is consistent.
+		return
+	}
+}
+
+// writeAuthnError translates an orchestrator [authn] error into the
+// matching HTTP response. Most failures are server-side (state
+// corruption, store outage) but a few — invalid StateRef, risk denial
+// — surface as 4xx.
+func writeAuthnError(w http.ResponseWriter, r *http.Request, deps resolved, state authorize.RequestState, err error) {
+	switch {
+	case errors.Is(err, authn.ErrInvalidStateRef):
+		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "stateref rejected")
+	case errors.Is(err, authn.ErrChainComplete):
+		renderJSONError(w, http.StatusGone, errInvalidRequest, "interaction already complete")
+	case errors.Is(err, authn.ErrRiskDenied):
+		emitAuthorizeError(w, r, deps, state.Library.ToRequest(), errAccessDenied, "risk policy denied the request")
+	default:
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "orchestrator failed")
+	}
+}
+
+// persistAuthnState saves the updated record + encoded chain state
+// back to the interaction store. The function centralises the
+// encoding so the callers do not have to worry about the json /
+// rec.Step / rec.UpdatedAt bookkeeping.
+func persistAuthnState(
+	ctx context.Context,
+	deps resolved,
+	rec *store.Interaction,
+	state authorize.RequestState,
+	next authn.State,
+	step string,
+	now time.Time,
+) error {
+	encoded, err := encodeAuthnState(next)
+	if err != nil {
+		return fmt.Errorf("authorizeendpoint: encode authn state: %w", err)
+	}
+	state.Authn = encoded
+	raw, err := authorize.MarshalState(state)
+	if err != nil {
+		return fmt.Errorf("authorizeendpoint: marshal interaction state: %w", err)
+	}
+	rec.RawState = raw
+	rec.Step = step
+	rec.UpdatedAt = now
+	if err := deps.Interactions.Save(ctx, rec); err != nil {
+		return fmt.Errorf("authorizeendpoint: save interaction: %w", err)
+	}
+	return nil
 }
 
 // loadInteraction fetches the persisted record and decodes its state
-// payload. On failure the handler emits the matching response and returns
-// ok=false so the caller can stop.
+// payload. On failure the handler emits the matching response and
+// returns ok=false so the caller can stop.
 func loadInteraction(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -221,8 +252,8 @@ func loadInteraction(
 	return rec, state, true
 }
 
-// verifyCSRFToken enforces the double-submit pattern. It returns true on
-// success; on failure it has already written the response.
+// verifyCSRFToken enforces the double-submit pattern. It returns true
+// on success; on failure it has already written the response.
 func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid string) bool {
 	cookieVal, err := r.Cookie(cookie.CSRFProfile.Name)
 	if err != nil || cookieVal == nil || cookieVal.Value == "" {
@@ -230,15 +261,6 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid 
 		return false
 	}
 	header := r.Header.Get("X-CSRF-Token")
-	if header == "" {
-		// Form fallback so SPA frameworks that prefer a hidden input
-		// can still drive the endpoint. Bound the body before parsing
-		// so a malicious caller cannot exhaust memory.
-		r.Body = http.MaxBytesReader(w, r.Body, maxInteractionBodyBytes)
-		if err := r.ParseForm(); err == nil {
-			header = r.PostForm.Get("csrf_token")
-		}
-	}
 	if header == "" {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token missing")
 		return false
@@ -254,161 +276,54 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid 
 	return true
 }
 
-// decodeResult reads and parses the JSON body. On failure it has already
-// written the response.
-func decodeResult(w http.ResponseWriter, r *http.Request) (resultBody, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxInteractionBodyBytes)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	var body resultBody
-	if err := dec.Decode(&body); err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "invalid interaction body")
-		return resultBody{}, false
-	}
-	return body, true
-}
-
-// buildResult converts the wire body into [interaction.Result]. The only
-// transformation is RFC 3339 → time.Time on AuthTime.
-func buildResult(w http.ResponseWriter, body resultBody) (interaction.Result, bool) {
-	var authTime time.Time
-	if body.AuthTime != "" {
-		t, err := time.Parse(time.RFC3339, body.AuthTime)
-		if err != nil {
-			renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "auth_time must be RFC 3339")
-			return interaction.Result{}, false
-		}
-		authTime = t.UTC()
-	}
-	return interaction.Result{
-		SubjectHint:   body.SubjectHint,
-		GrantedScopes: slices.Clone(body.GrantedScopes),
-		AccountID:     body.AccountID,
-		Aborted:       body.Aborted,
-		AuthTime:      authTime,
-		AMR:           slices.Clone(body.AMR),
-		ACR:           body.ACR,
-	}, true
-}
-
-// persistFollowUp saves the Driver-supplied next step and returns its JSON
-// representation so the SPA can render the next prompt.
-func persistFollowUp(
-	w http.ResponseWriter,
-	r *http.Request,
-	deps resolved,
-	rec *store.Interaction,
-	state authorize.RequestState,
-	dec interaction.Decision,
-) {
-	now := deps.now().UTC()
-	rec.Step = dec.Next.Hint.Prompt
-	rec.UpdatedAt = now
-	// Re-marshal because the snapshot may carry a CreatedUnix that is
-	// now stale; the library snapshot itself is unchanged so the
-	// round-trip is cheap.
-	raw, err := authorize.MarshalState(state)
-	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not marshal interaction state")
-		return
-	}
-	rec.RawState = raw
-	if err := deps.Interactions.Save(r.Context(), rec); err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist interaction")
-		return
-	}
-	token, err := deps.CSRF.Issue(rec.ID, now)
-	if err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not issue csrf token")
-		return
-	}
-	if err := setCSRFCookie(w, token, deps.InteractionTTL); err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not set csrf cookie")
-		return
-	}
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(stepResponse{
-		Hint:      hintBody{Prompt: dec.Next.Hint.Prompt, Reasons: slices.Clone(dec.Next.Hint.Reasons)},
-		CSRF:      token,
-		ExpiresAt: rec.ExpiresAt.UTC().Unix(),
-	})
-}
-
-// terminateInteraction is the happy-path / abort branch of the POST
-// handler. It deletes the interaction record, clears the cookies, and
-// either redirects with code+state (success) or with access_denied (abort).
+// terminateInteraction is the happy-path branch of a Tick that
+// returned [interaction.Step.Result]. It mints a session for the
+// bound subject, records / refreshes the grant for the requested
+// scope, persists an authorization code, and emits the success
+// redirect to the RP.
 func terminateInteraction(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps resolved,
 	rec *store.Interaction,
 	state authorize.RequestState,
+	authnState authn.State,
 	result interaction.Result,
 ) {
 	req := state.Library.ToRequest()
-	if result.Aborted {
-		_ = deps.Interactions.Delete(r.Context(), rec.ID)
-		clearCookie(w, cookie.InteractionProfile)
-		clearCookie(w, cookie.CSRFProfile)
-		emitAuthorizeError(w, r, deps, req, errAccessDenied, "user aborted the interaction")
-		return
-	}
-	if err := finalizeInteraction(w, r, deps, rec, req, result); err != nil {
-		// finalizeInteraction has already written a response on failure.
-		return
-	}
-}
-
-// finalizeInteraction persists the session + grant + code resulting from a
-// successful interaction and emits the redirect to the RP. The function
-// returns an error when it has already written a response so the caller
-// can stop without a second write.
-func finalizeInteraction(
-	w http.ResponseWriter,
-	r *http.Request,
-	deps resolved,
-	rec *store.Interaction,
-	req *authorize.Request,
-	result interaction.Result,
-) error {
-	if result.SubjectHint == "" {
-		// The Driver claimed the interaction is terminal but did not
-		// provide a subject. Translate to access_denied so the RP sees
-		// a determinate outcome.
+	if result.Subject == "" {
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
-		return errors.New("missing subject hint")
+		return
 	}
-	subject := result.SubjectHint
-	if err := ensureSession(w, r, deps, result); err != nil {
+	acr, amr, _ := authn.Aggregate(authnState.Factors)
+	if err := ensureSession(w, r, deps, result.Subject, result.AuthTime, amr, acr); err != nil {
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not establish session")
-		return err
+		return
 	}
-	grant, err := upsertGrant(r.Context(), deps, subject, rec.ClientID, finalScope(result, req), deps.now())
+	grant, err := upsertGrant(r.Context(), deps, result.Subject, rec.ClientID, append([]string(nil), req.Scope...), deps.now())
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not record grant")
-		return err
+		return
 	}
 	codeID, err := newRandomB64(codeByteLength)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
-		return err
+		return
 	}
 	now := deps.now().UTC()
 	authCode := &store.AuthorizationCode{
 		ID:                  codeID,
 		ClientID:            rec.ClientID,
-		Subject:             subject,
+		Subject:             result.Subject,
 		GrantID:             grant.ID,
 		RedirectURI:         req.RedirectURI,
-		Scope:               finalScope(result, req),
+		Scope:               append([]string(nil), req.Scope...),
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
 		Nonce:               req.Nonce,
@@ -418,29 +333,35 @@ func finalizeInteraction(
 	}
 	if err := deps.Codes.Save(r.Context(), authCode); err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist authorization code")
-		return err
+		return
 	}
 	_ = deps.Interactions.Delete(r.Context(), rec.ID)
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
 	emitAuthorizeSuccess(w, r, deps, req, codeID)
-	return nil
 }
 
-// ensureSession either reuses the session referenced by the cookie or
-// issues a fresh one when no session exists or the cookie is invalid.
-// The freshly-issued cookie is set on the response writer.
-func ensureSession(w http.ResponseWriter, r *http.Request, deps resolved, result interaction.Result) error {
+// ensureSession reuses the cookie-bound session when it represents
+// the same subject, or issues a fresh one. The freshly issued cookie
+// is set on the response writer.
+func ensureSession(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	subject string,
+	authTime time.Time,
+	amr []string,
+	acr string,
+) error {
 	active, err := resolveSession(r, deps)
-	if err == nil && active != nil && active.Session != nil && active.Session.Subject == result.SubjectHint {
-		// Session already represents this subject; reuse it.
+	if err == nil && active != nil && active.Session != nil && active.Session.Subject == subject {
 		return nil
 	}
 	out, err := deps.Sessions.Issue(r.Context(), sessions.Login{
-		Subject:  result.SubjectHint,
-		AuthTime: result.AuthTime,
-		AMR:      slices.Clone(result.AMR),
-		ACR:      result.ACR,
+		Subject:  subject,
+		AuthTime: authTime,
+		AMR:      slices.Clone(amr),
+		ACR:      acr,
 	})
 	if err != nil {
 		return fmt.Errorf("authorizeendpoint: issue session: %w", err)
@@ -453,8 +374,8 @@ func ensureSession(w http.ResponseWriter, r *http.Request, deps resolved, result
 	return nil
 }
 
-// upsertGrant ensures a grant exists for (subject, clientID) covering at
-// least the supplied scope. Returns the persisted grant.
+// upsertGrant ensures a grant exists for (subject, clientID) covering
+// at least the supplied scope. Returns the persisted grant.
 func upsertGrant(
 	ctx context.Context,
 	deps resolved,
@@ -464,8 +385,6 @@ func upsertGrant(
 ) (*store.Grant, error) {
 	existing, err := deps.Grants.FindBySubjectClient(ctx, subject, clientID)
 	if err == nil && existing != nil && scopeIsSubset(scope, existing.Scope) {
-		// Already covered; touch UpdatedAt so auth_time tracking
-		// follows the latest interaction.
 		existing.UpdatedAt = now.UTC()
 		if err := deps.Grants.Save(ctx, existing); err != nil {
 			return nil, fmt.Errorf("authorizeendpoint: refresh grant: %w", err)
@@ -490,33 +409,6 @@ func upsertGrant(
 	return g, nil
 }
 
-// finalScope intersects the Driver-declared GrantedScopes with the
-// snapshotted request scope. An empty GrantedScopes yields the full
-// request scope (the driver expressed no narrowing).
-func finalScope(result interaction.Result, req *authorize.Request) []string {
-	if len(result.GrantedScopes) == 0 {
-		return append([]string(nil), req.Scope...)
-	}
-	out := make([]string, 0, len(result.GrantedScopes))
-	for _, s := range result.GrantedScopes {
-		if containsString(req.Scope, s) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// currentSubjectFromCookie resolves the current subject from the request
-// cookie or returns empty when no live session is bound. It silently
-// swallows resolve errors because the value is only used for Driver hints.
-func currentSubjectFromCookie(r *http.Request, deps resolved) string {
-	active, err := resolveSession(r, deps)
-	if err != nil || active == nil || active.Session == nil {
-		return ""
-	}
-	return active.Session.Subject
-}
-
 // setCSRFCookie writes the __Host-oidc_csrf cookie carrying token.
 func setCSRFCookie(w http.ResponseWriter, token string, _ time.Duration) error {
 	c, err := cookie.Build(cookie.CSRFProfile, token)
@@ -525,4 +417,27 @@ func setCSRFCookie(w http.ResponseWriter, token string, _ time.Duration) error {
 	}
 	http.SetCookie(w, c)
 	return nil
+}
+
+// decodeAuthnState parses the chain state from the persisted blob.
+// An empty blob produces the zero [authn.State], which the
+// orchestrator treats as a freshly-initialised attempt.
+func decodeAuthnState(raw json.RawMessage) (authn.State, error) {
+	if len(raw) == 0 {
+		return authn.State{ActiveFactorIdx: -1, Phase: authn.PhaseBeforeAuthn}, nil
+	}
+	var s authn.State
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return authn.State{}, fmt.Errorf("authorizeendpoint: decode authn state: %w", err)
+	}
+	return s, nil
+}
+
+// encodeAuthnState marshals the chain state for persistence.
+func encodeAuthnState(s authn.State) (json.RawMessage, error) {
+	out, err := json.Marshal(s)
+	if err != nil {
+		return nil, fmt.Errorf("authorizeendpoint: encode authn state: %w", err)
+	}
+	return out, nil
 }

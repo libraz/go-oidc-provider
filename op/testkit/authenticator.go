@@ -5,14 +5,15 @@ import (
 	"errors"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
-// SubjectFieldName is the [op.FieldSpec.Name] [SubjectAuthenticator]
-// expects in [op.FormSubmission.Values]. Tests echo the desired
+// SubjectFieldName is the [interaction.FieldSpec.Name] [SubjectAuthenticator]
+// expects in [interaction.FormSubmission.Values]. Tests echo the desired
 // subject through this key; production deployments do not.
 const SubjectFieldName = "subject"
 
-// SubjectPromptType is the [op.Prompt.Type] [SubjectAuthenticator]
+// SubjectPromptType is the [interaction.Prompt.Type] [SubjectAuthenticator]
 // emits. The "auth.testkit.subject" namespace marks it as a test-only
 // extension so a deployment that accidentally registers
 // [SubjectAuthenticator] in production is at least loud about it in
@@ -53,14 +54,14 @@ func (SubjectAuthenticator) Prompts() []string { return []string{SubjectPromptTy
 
 // Begin implements [op.Authenticator]. It emits a single prompt
 // asking the SPA to echo a subject value. The prompt has no
-// [op.PromptData] payload because the SPA sees only the [SubjectFieldName]
+// [interaction.PromptData] payload because the SPA sees only the [SubjectFieldName]
 // input field.
-func (SubjectAuthenticator) Begin(_ context.Context, _ op.BeginInput) (op.Step, error) {
-	return op.Step{Prompt: &op.Prompt{
+func (SubjectAuthenticator) Begin(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+	return interaction.Step{Prompt: &interaction.Prompt{
 		Type: SubjectPromptType,
-		Inputs: []op.FieldSpec{{
+		Inputs: []interaction.FieldSpec{{
 			Name:     SubjectFieldName,
-			Kind:     op.FieldText,
+			Kind:     interaction.FieldText,
 			Required: true,
 			MinLen:   1,
 			MaxLen:   256,
@@ -70,13 +71,13 @@ func (SubjectAuthenticator) Begin(_ context.Context, _ op.BeginInput) (op.Step, 
 
 // Continue implements [op.Authenticator]. It reads the subject field
 // from the submission verbatim and stamps the orchestrator's
-// reference clock onto [op.Result.AuthTime].
-func (SubjectAuthenticator) Continue(_ context.Context, in op.ContinueInput) (op.Step, error) {
+// reference clock onto [interaction.Result.AuthTime].
+func (SubjectAuthenticator) Continue(_ context.Context, in op.ContinueInput) (interaction.Step, error) {
 	sub, ok := in.Submission.Values[SubjectFieldName]
 	if !ok || sub == "" {
-		return op.Step{}, ErrSubjectMissing
+		return interaction.Step{}, ErrSubjectMissing
 	}
-	return op.Step{Result: &op.Result{Subject: sub, AuthTime: in.AuthTime}}, nil
+	return interaction.Step{Result: &interaction.Result{Subject: sub, AuthTime: in.AuthTime}}, nil
 }
 
 // Compile-time confirmation that SubjectAuthenticator satisfies the

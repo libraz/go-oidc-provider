@@ -106,9 +106,25 @@ func pkcePair(_ testing.TB) (verifier, challenge string) {
 	return verifier, challenge
 }
 
+// requireCSRFCookieValue returns the value of the __Host-oidc_csrf
+// cookie, failing the test if absent. Returning a string (rather
+// than the cookie pointer) lets the caller skip a follow-up nil
+// check that staticcheck flags as a possible nil dereference even
+// when the previous t.Fatal would have prevented it.
+func requireCSRFCookieValue(t testing.TB, cookies []*http.Cookie) string {
+	t.Helper()
+	for _, c := range cookies {
+		if c.Name == "__Host-oidc_csrf" {
+			return c.Value
+		}
+	}
+	t.Fatal("csrf cookie missing")
+	return ""
+}
+
 // runAuthorize drives /authorize → /interaction (auto-consent) and
 // returns the issued authorization code.
-func runAuthorize(t testing.TB, tk *testkit.Provider, clientID, redirectURI, challenge, state, nonce string, clock fixedClock) string {
+func runAuthorize(t testing.TB, tk *testkit.Provider, clientID, redirectURI, challenge, state, nonce string, _ fixedClock) string {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -167,16 +183,15 @@ func runAuthorize(t testing.TB, tk *testkit.Provider, clientID, redirectURI, cha
 		t.Fatalf("/interaction GET status=%d", getResp.StatusCode)
 	}
 	step := decodeJSONResp(t, getResp)
-	csrfToken, _ := step["csrf"].(string)
-	if csrfToken == "" {
-		t.Fatal("csrf token missing")
+	stateRef, _ := step["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatal("state_ref missing from step body")
 	}
+	csrfValue := requireCSRFCookieValue(t, getResp.Cookies())
 
 	body, err := json.Marshal(map[string]any{
-		"subject_hint":   "user-dpop",
-		"granted_scopes": []string{"openid", "email"},
-		"auth_time":      clock.now.UTC().Format(time.RFC3339),
-		"amr":            []string{"pwd"},
+		"state_ref": stateRef,
+		"values":    map[string]string{"subject": "user-dpop"},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -188,7 +203,8 @@ func runAuthorize(t testing.TB, tk *testkit.Provider, clientID, redirectURI, cha
 	}
 	postReq.Header.Set("Content-Type", "application/json")
 	postReq.Header.Set("Origin", tk.Issuer)
-	postReq.Header.Set("X-CSRF-Token", csrfToken)
+	postReq.Header.Set("X-CSRF-Token", csrfValue)
+	postReq.AddCookie(&http.Cookie{Name: "__Host-oidc_csrf", Value: csrfValue})
 	postResp, err := client.Do(postReq)
 	if err != nil {
 		t.Fatalf("Do /interaction POST: %v", err)

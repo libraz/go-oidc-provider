@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 // stubCaptcha is the minimal [op.CaptchaVerifier] used by option-
@@ -296,9 +297,9 @@ func TestWithInteractions_RejectsEmptyName(t *testing.T) {
 }
 
 // TestPromptDataSealing pins the documented sealing pattern: the
-// concrete shipped types satisfy [op.PromptData], and tests that
-// instantiate an [op.Prompt] can do so verbatim. A foreign type
-// cannot satisfy the interface because op.PromptData declares an
+// concrete shipped types satisfy [interaction.PromptData], and tests that
+// instantiate an [interaction.Prompt] can do so verbatim. A foreign type
+// cannot satisfy the interface because interaction.PromptData declares an
 // unexported method — the absence of a compile failure for the
 // commented-out lines below would surface a sealing regression.
 func TestPromptDataSealing(t *testing.T) {
@@ -307,14 +308,14 @@ func TestPromptDataSealing(t *testing.T) {
 	// Compile-time confirmations that the shipped types satisfy the
 	// sealed interface.
 	var (
-		_ op.PromptData = op.PasswordPromptData{}
-		_ op.PromptData = op.TOTPPromptData{}
-		_ op.PromptData = op.EmailOTPSendPromptData{}
-		_ op.PromptData = op.EmailOTPVerifyPromptData{}
-		_ op.PromptData = op.PasskeyPromptData{}
-		_ op.PromptData = op.RecoveryCodePromptData{}
-		_ op.PromptData = op.CaptchaPromptData{}
-		_ op.PromptData = op.ConsentScopePromptData{}
+		_ interaction.PromptData = interaction.PasswordPromptData{}
+		_ interaction.PromptData = interaction.TOTPPromptData{}
+		_ interaction.PromptData = interaction.EmailOTPSendPromptData{}
+		_ interaction.PromptData = interaction.EmailOTPVerifyPromptData{}
+		_ interaction.PromptData = interaction.PasskeyPromptData{}
+		_ interaction.PromptData = interaction.RecoveryCodePromptData{}
+		_ interaction.PromptData = interaction.CaptchaPromptData{}
+		_ interaction.PromptData = interaction.ConsentScopePromptData{}
 	)
 
 	// The following pattern would not compile in user code because
@@ -322,7 +323,7 @@ func TestPromptDataSealing(t *testing.T) {
 	//
 	//   type ForeignPromptData struct{}
 	//   func (ForeignPromptData) isPromptData() {} // illegal — method is unexported in op
-	//   var _ op.PromptData = ForeignPromptData{}
+	//   var _ interaction.PromptData = ForeignPromptData{}
 	//
 	// We document the constraint here rather than invoke it; go vet
 	// would flag the failed assertion, and the sealing pattern is a

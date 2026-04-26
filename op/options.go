@@ -154,7 +154,7 @@ func (c *config) applyDefaults() {
 	defaults := defaultEndpoints()
 	c.endpoints = defaults.merge(c.endpoints)
 	if c.interactionD == nil {
-		c.interactionD = interaction.NoopDriver{}
+		c.interactionD = interaction.JSONDriver{}
 	}
 	if len(c.grants) == 0 {
 		c.grants = []grant.Type{grant.AuthorizationCode, grant.RefreshToken}

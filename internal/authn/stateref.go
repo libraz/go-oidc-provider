@@ -61,7 +61,7 @@ var ErrStateRefStepMismatch = errors.New("authn: stateref step counter mismatch"
 var ErrStateRefExpired = errors.New("authn: stateref expired")
 
 // StateRefPayload is the JSON envelope the orchestrator signs into a
-// [op.Prompt.StateRef]. Callers receive a populated payload from
+// [interaction.Prompt.StateRef]. Callers receive a populated payload from
 // [StateRefSigner.Verify] so they can read the routing tag without
 // re-parsing the token. Field names are short to keep the encoded
 // token compact (cookie / header space matters at the edge); the
@@ -90,7 +90,7 @@ type StateRefPayload struct {
 }
 
 // StateRefSigner produces and verifies the opaque continuation tokens
-// the orchestrator hands to the SPA on every [op.Prompt.StateRef]. The
+// the orchestrator hands to the SPA on every [interaction.Prompt.StateRef]. The
 // signer is HMAC-SHA256 over a JSON envelope; the encoded form is
 // `base64url(payload).base64url(mac)`. The token binds the
 // interaction UID, the per-attempt monotonic step counter, a routing
@@ -120,7 +120,7 @@ func NewStateRefSigner(key []byte) (*StateRefSigner, error) {
 	return &StateRefSigner{key: cp}, nil
 }
 
-// Issue signs an [op.Prompt.StateRef] for the supplied attempt
+// Issue signs an [interaction.Prompt.StateRef] for the supplied attempt
 // context. The orchestrator calls Issue exactly once per Prompt; the
 // returned token is opaque to the SPA. The nonce is generated through
 // crypto/rand so a re-emit at the same step never collides with an

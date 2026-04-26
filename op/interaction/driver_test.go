@@ -1,46 +1,79 @@
 package interaction_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
-func TestNoopDriver_OfferReturnsLoginPromptWithReason(t *testing.T) {
+func TestJSONDriver_RenderEmitsJSONEnvelope(t *testing.T) {
 	t.Parallel()
 
-	step, err := interaction.NoopDriver{}.Offer(context.Background(), interaction.Request{UID: "u-1"})
-	if err != nil {
-		t.Fatalf("Offer returned err=%v", err)
+	rec := httptest.NewRecorder()
+	prompt := interaction.Prompt{
+		Type:     "auth.password",
+		Data:     interaction.PasswordPromptData{UsernameHint: "alice"},
+		Inputs:   []interaction.FieldSpec{{Name: "password", Kind: interaction.FieldPassword, Required: true}},
+		StateRef: "ref-1",
 	}
-	if step.Hint.Prompt != interaction.PromptLogin {
-		t.Errorf("Prompt=%q want %q", step.Hint.Prompt, interaction.PromptLogin)
+	if err := (interaction.JSONDriver{}).Render(rec, httptest.NewRequestWithContext(context.Background(), "GET", "/interaction/u-1", nil), prompt); err != nil {
+		t.Fatalf("Render: %v", err)
 	}
-	if len(step.Hint.Reasons) == 0 || step.Hint.Reasons[0] != "no_driver_configured" {
-		t.Errorf("Reasons=%v want [no_driver_configured]", step.Hint.Reasons)
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	var got struct {
+		Type     string `json:"type"`
+		StateRef string `json:"state_ref"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Type != prompt.Type || got.StateRef != prompt.StateRef {
+		t.Errorf("envelope = %+v, want type=%s state_ref=%s", got, prompt.Type, prompt.StateRef)
 	}
 }
 
-func TestNoopDriver_VerifySurfacesError(t *testing.T) {
+func TestJSONDriver_ParseSubmissionDecodesEnvelope(t *testing.T) {
 	t.Parallel()
 
-	dec, err := interaction.NoopDriver{}.Verify(context.Background(), interaction.Request{}, interaction.Result{})
+	body := `{"state_ref":"ref-1","values":{"password":"hunter2"}}`
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/interaction/u-1", strings.NewReader(body))
+	sub, err := (interaction.JSONDriver{}).ParseSubmission(r)
 	if err != nil {
-		t.Fatalf("Verify returned err=%v", err)
+		t.Fatalf("ParseSubmission: %v", err)
 	}
-	if dec.Continue {
-		t.Error("NoopDriver must never request a follow-up step")
+	if sub.StateRef != "ref-1" {
+		t.Errorf("StateRef = %q, want ref-1", sub.StateRef)
 	}
-	if dec.Error == "" {
-		t.Error("NoopDriver must surface an error string")
+	if sub.Values["password"] != "hunter2" {
+		t.Errorf("Values[password] = %q, want hunter2", sub.Values["password"])
 	}
 }
 
-func TestNoopDriver_CancelIsNoop(t *testing.T) {
+func TestJSONDriver_ParseSubmissionRejectsUnknownFields(t *testing.T) {
 	t.Parallel()
 
-	if err := (interaction.NoopDriver{}).Cancel(context.Background(), interaction.Request{}); err != nil {
-		t.Errorf("Cancel returned err=%v", err)
+	body := `{"state_ref":"ref-1","values":{},"extra":"reject"}`
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/interaction/u-1", strings.NewReader(body))
+	_, err := (interaction.JSONDriver{}).ParseSubmission(r)
+	if !errors.Is(err, interaction.ErrSubmissionMalformed) {
+		t.Fatalf("err = %v, want ErrSubmissionMalformed", err)
+	}
+}
+
+func TestJSONDriver_ParseSubmissionRejectsEmptyBody(t *testing.T) {
+	t.Parallel()
+
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/interaction/u-1", bytes.NewReader(nil))
+	_, err := (interaction.JSONDriver{}).ParseSubmission(r)
+	if !errors.Is(err, interaction.ErrSubmissionMalformed) {
+		t.Fatalf("err = %v, want ErrSubmissionMalformed", err)
 	}
 }

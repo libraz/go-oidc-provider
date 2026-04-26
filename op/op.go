@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -41,6 +42,12 @@ const defaultUserInfoLeeway = 30 * time.Second
 // prevents a key reuse attack across cookie / CSRF surfaces if either
 // derivation function is ever changed independently.
 const csrfDerivationLabel = "oidc-csrf-v1"
+
+// stateRefDerivationLabel is the HMAC label used to derive the
+// orchestrator's [authn.StateRefSigner] key from the cookie key. The
+// derivation is namespaced from the CSRF key so a hypothetical key-
+// disclosure on one signer cannot forge tokens on the other.
+const stateRefDerivationLabel = "oidc-stateref-v1"
 
 // Provider is the assembled OpenID Connect Provider. It implements
 // [http.Handler] and is the result of a successful [New] call.
@@ -497,6 +504,10 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 			Cause:       err,
 		}
 	}
+	orchestrator, err := buildOrchestrator(cfg)
+	if err != nil {
+		return err
+	}
 	authorizePath := joinPath(cfg.mountPrefix, cfg.endpoints.Authorize)
 	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
@@ -512,6 +523,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		CSRF:            csrfSigner,
 		Origins:         allow,
 		Driver:          cfg.interactionD,
+		Authn:           orchestrator,
 		Scopes:          scopes,
 		AuthorizePath:   authorizePath,
 		InteractionPath: interactionPath,
@@ -520,6 +532,43 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)
 	return nil
+}
+
+// buildOrchestrator constructs the [authn.Orchestrator] the
+// /interaction handler drives. The function returns nil without an
+// error when no [Authenticator] has been registered: deployments
+// running only non-interactive grants (client_credentials, refresh
+// against an externally-issued code) do not need the chain runner,
+// and the handler treats a nil orchestrator as "interaction
+// disabled".
+func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
+	if len(cfg.authenticators) == 0 {
+		return nil, nil //nolint:nilnil // documented "no orchestrator configured" sentinel
+	}
+	signer, err := authn.NewStateRefSigner(deriveStateRefKey(cfg.cookieKeys[0]))
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "stateref signer construction failed",
+			Cause:       err,
+		}
+	}
+	orch, err := authn.New(authn.Config{
+		Authenticators: cfg.authenticators,
+		Interactions:   cfg.interactions,
+		Risk:           cfg.risk,
+		Captcha:        cfg.captcha,
+		Observers:      cfg.loginObservers,
+		StateRefSigner: signer,
+	})
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "authn orchestrator construction failed",
+			Cause:       err,
+		}
+	}
+	return orch, nil
 }
 
 // authorizePARStore returns the substore the authorize handler should use
@@ -556,6 +605,15 @@ func grantsRequireAuthorizeEndpoint(grants []grant.Type) bool {
 func deriveCSRFKey(cookieKey []byte) []byte {
 	h := hmac.New(sha256.New, cookieKey)
 	_, _ = h.Write([]byte(csrfDerivationLabel))
+	return h.Sum(nil)
+}
+
+// deriveStateRefKey returns a 32-byte HMAC-SHA256 derivation of
+// cookieKey labelled with [stateRefDerivationLabel] for use as the
+// orchestrator's [authn.StateRefSigner] key.
+func deriveStateRefKey(cookieKey []byte) []byte {
+	h := hmac.New(sha256.New, cookieKey)
+	_, _ = h.Write([]byte(stateRefDerivationLabel))
 	return h.Sum(nil)
 }
 
