@@ -235,6 +235,9 @@ func TestKind_String(t *testing.T) {
 		{composite.PushedAuthRequests, "PushedAuthRequests"},
 		{composite.Interactions, "Interactions"},
 		{composite.ConsumedJTIs, "ConsumedJTIs"},
+		{composite.Users, "Users"},
+		{composite.InitialAccessTokens, "InitialAccessTokens"},
+		{composite.RegistrationAccessTokens, "RegistrationAccessTokens"},
 		{composite.Kind(99), "Kind(99)"},
 	}
 	for _, tc := range cases {

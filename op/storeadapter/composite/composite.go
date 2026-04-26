@@ -100,6 +100,16 @@ const (
 	// Users routes [store.UserStore] calls. Outside the transactional
 	// cluster.
 	Users
+
+	// InitialAccessTokens routes [store.InitialAccessTokenStore] calls.
+	// Used by the RFC 7591 dynamic-client-registration endpoint. Outside
+	// the transactional cluster.
+	InitialAccessTokens
+
+	// RegistrationAccessTokens routes [store.RegistrationAccessTokenStore]
+	// calls. Used by the RFC 7592 management endpoints. Outside the
+	// transactional cluster.
+	RegistrationAccessTokens
 )
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -125,6 +135,10 @@ func (k Kind) String() string {
 		return "ConsumedJTIs"
 	case Users:
 		return "Users"
+	case InitialAccessTokens:
+		return "InitialAccessTokens"
+	case RegistrationAccessTokens:
+		return "RegistrationAccessTokens"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -144,6 +158,8 @@ var allKinds = []Kind{
 	Interactions,
 	ConsumedJTIs,
 	Users,
+	InitialAccessTokens,
+	RegistrationAccessTokens,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -384,6 +400,21 @@ func (s *Store) ConsumedJTIs() store.ConsumedJTIStore {
 // Users implements [store.Store].
 func (s *Store) Users() store.UserStore {
 	return s.routes[Users].Users()
+}
+
+// InitialAccessTokens implements [store.Store]. The returned substore is
+// nil-passthrough: backends that lack RFC 7591 support return nil from
+// their own [store.Store.InitialAccessTokens] accessor and the composite
+// surfaces the same nil. Callers that require dynamic registration MUST
+// treat the nil return as a configuration error.
+func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore {
+	return s.routes[InitialAccessTokens].InitialAccessTokens()
+}
+
+// RegistrationAccessTokens implements [store.Store]. Same nil-passthrough
+// semantics as [Store.InitialAccessTokens].
+func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	return s.routes[RegistrationAccessTokens].RegistrationAccessTokens()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

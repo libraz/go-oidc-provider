@@ -45,6 +45,15 @@ const (
 	// Revoke enables RFC 7009 OAuth 2.0 Token Revocation. The /revoke
 	// endpoint becomes routable for confidential clients.
 	Revoke
+
+	// DynamicRegistration enables RFC 7591 / RFC 7592 / OpenID Connect
+	// Dynamic Client Registration 1.0. The /register endpoint becomes
+	// routable, the discovery document advertises
+	// "registration_endpoint", and operators may mint Initial Access
+	// Tokens via [op.Provider.IssueInitialAccessToken]. Activated
+	// implicitly by [op.WithDynamicRegistration]; callers do not pass
+	// this flag to [op.WithFeature] directly.
+	DynamicRegistration
 )
 
 // String returns the canonical lower-case identifier used in discovery
@@ -67,6 +76,8 @@ func (f Flag) String() string {
 		return "introspect"
 	case Revoke:
 		return "revoke"
+	case DynamicRegistration:
+		return "dynamic_registration"
 	case flagUnspecified:
 		return ""
 	default:
@@ -77,7 +88,7 @@ func (f Flag) String() string {
 // IsValid reports whether f is one of the recognised exported constants.
 func (f Flag) IsValid() bool {
 	switch f {
-	case PKCE, PAR, JAR, JARM, DPoP, MTLS, Introspect, Revoke:
+	case PKCE, PAR, JAR, JARM, DPoP, MTLS, Introspect, Revoke, DynamicRegistration:
 		return true
 	case flagUnspecified:
 		return false

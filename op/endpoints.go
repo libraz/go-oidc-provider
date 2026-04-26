@@ -54,6 +54,13 @@ type Endpoints struct {
 
 	// Session overrides the SPA session prefix. Default: "/session".
 	Session string
+
+	// Register overrides the RFC 7591 Dynamic Client Registration
+	// endpoint. Default: "/register". Only mounted when the
+	// DynamicRegistration feature is enabled via
+	// [WithDynamicRegistration]; the discovery document advertises
+	// "registration_endpoint" with the same gating.
+	Register string
 }
 
 // defaultEndpoints returns the endpoint paths the [Provider] uses when the
@@ -72,6 +79,7 @@ func defaultEndpoints() Endpoints {
 		PAR:         "/par",
 		Interaction: "/interaction",
 		Session:     "/session",
+		Register:    "/register",
 	}
 }
 
@@ -111,6 +119,9 @@ func (e Endpoints) merge(override Endpoints) Endpoints {
 	}
 	if override.Session != "" {
 		out.Session = override.Session
+	}
+	if override.Register != "" {
+		out.Register = override.Register
 	}
 	return out
 }

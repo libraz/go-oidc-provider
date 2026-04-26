@@ -1,0 +1,560 @@
+package op_test
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+)
+
+// hashIATValueForTest mirrors the SHA-256 hex digest the library
+// computes from an IAT bearer secret before persisting it. The helper
+// lives here because op/registration.go's hashIATSecret is unexported;
+// the formula is part of the contract documented on
+// store.InitialAccessToken.HashedValue.
+func hashIATValueForTest(tb testing.TB, secret string) string {
+	tb.Helper()
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
+
+// noIATStore is a [store.Store] decorator that returns nil for the
+// InitialAccessTokens substore so the WithDynamicRegistration cross-cut
+// validation surfaces the missing substore as a configuration error.
+type noIATStore struct{ *inmem.Store }
+
+func (noIATStore) InitialAccessTokens() store.InitialAccessTokenStore { return nil }
+
+// noRATStore is a [store.Store] decorator that returns nil for the
+// RegistrationAccessTokens substore so the WithDynamicRegistration cross-cut
+// validation surfaces the missing substore as a configuration error.
+type noRATStore struct{ *inmem.Store }
+
+func (noRATStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore { return nil }
+
+// nonRegistryStore is a [store.Store] that does not implement
+// [store.ClientRegistry]. The struct embeds the inmem store via composition
+// over a private pointer so the type assertion in op.validateRegistration
+// fails even though every required substore is wired.
+type nonRegistryStore struct {
+	inner *inmem.Store
+}
+
+func (s nonRegistryStore) Clients() store.ClientStore { return s.inner.Clients() }
+func (s nonRegistryStore) AuthorizationCodes() store.AuthorizationCodeStore {
+	return s.inner.AuthorizationCodes()
+}
+func (s nonRegistryStore) RefreshTokens() store.RefreshTokenStore { return s.inner.RefreshTokens() }
+func (s nonRegistryStore) Grants() store.GrantStore               { return s.inner.Grants() }
+func (s nonRegistryStore) Sessions() store.SessionStore           { return s.inner.Sessions() }
+func (s nonRegistryStore) PushedAuthRequests() store.PushedAuthRequestStore {
+	return s.inner.PushedAuthRequests()
+}
+func (s nonRegistryStore) Interactions() store.InteractionStore { return s.inner.Interactions() }
+func (s nonRegistryStore) ConsumedJTIs() store.ConsumedJTIStore { return s.inner.ConsumedJTIs() }
+func (s nonRegistryStore) Users() store.UserStore               { return s.inner.Users() }
+func (s nonRegistryStore) InitialAccessTokens() store.InitialAccessTokenStore {
+	return s.inner.InitialAccessTokens()
+}
+
+func (s nonRegistryStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	return s.inner.RegistrationAccessTokens()
+}
+
+// dcrBaseOpts returns the option slice that satisfies op.New for a
+// DCR-enabled provider when paired with WithDynamicRegistration. The
+// helper centralises the deterministic clock so tests that observe
+// IAT expiry can pin "now" precisely.
+func dcrBaseOpts(tb testing.TB, s store.Store, clock op.Clock) []op.Option {
+	tb.Helper()
+	return []op.Option{
+		op.WithIssuer(validIssuer),
+		op.WithStore(s),
+		op.WithKeyset(validKeyset(tb)),
+		op.WithCookieKey(newRandomCookieKey(tb)),
+		op.WithClock(clock),
+	}
+}
+
+// dcrFixedClock is a deterministic clock anchored at the project's
+// "today" baseline so IAT issuance / expiry tests share an identical
+// view of "now" with the provider under test.
+func dcrFixedClock() fakeClock {
+	return fakeClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+}
+
+// configurationDescription extracts the Description from a configuration_error
+// [*op.Error]. Tests use it to pin the wire-stable description string the
+// library returns, which is the only way to distinguish "missing
+// substore" from "feature flag drift" since [*op.Error.Is] compares
+// Codes only and every configuration_error therefore matches every
+// other.
+func configurationDescription(tb testing.TB, err error) string {
+	tb.Helper()
+	var e *op.Error
+	if !errors.As(err, &e) {
+		tb.Fatalf("error is not *op.Error: %v", err)
+	}
+	return e.Description
+}
+
+func TestWithDynamicRegistration_RejectsMissingIATStore(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := noIATStore{Store: inmem.New(inmem.WithClock(clock))}
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for missing IAT substore, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing substore must be classified as a server-side configuration error: %v", err)
+	}
+	desc := configurationDescription(t, err)
+	if !strings.Contains(desc, "InitialAccessTokens") {
+		t.Errorf("description=%q must mention the missing InitialAccessTokens substore", desc)
+	}
+}
+
+func TestWithDynamicRegistration_RejectsMissingRATStore(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := noRATStore{Store: inmem.New(inmem.WithClock(clock))}
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for missing RAT substore, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing substore must be classified as a server-side configuration error: %v", err)
+	}
+	desc := configurationDescription(t, err)
+	if !strings.Contains(desc, "RegistrationAccessTokens") {
+		t.Errorf("description=%q must mention the missing RegistrationAccessTokens substore", desc)
+	}
+}
+
+func TestWithDynamicRegistration_RejectsStoreWithoutClientRegistry(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := nonRegistryStore{inner: inmem.New(inmem.WithClock(clock))}
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error when store does not implement ClientRegistry")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing ClientRegistry must be classified as a server-side configuration error: %v", err)
+	}
+}
+
+func TestWithDynamicRegistration_RejectsNegativeIATTTL(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{IATTTL: -time.Second}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for negative IATTTL, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("negative IATTTL must surface as server configuration error: %v", err)
+	}
+}
+
+func TestWithDynamicRegistration_RejectsNegativeIATUses(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{IATUses: -1}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for negative IATUses, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("negative IATUses must surface as server configuration error: %v", err)
+	}
+}
+
+func TestWithDynamicRegistration_RejectsUnknownGrantType(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{
+			AllowedGrantTypes: []string{"client_credentials"},
+		}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for unsupported grant_type in DCR allowlist")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("unsupported grant_type must surface as server configuration error: %v", err)
+	}
+}
+
+func TestWithDynamicRegistration_RejectsNonCodeResponseType(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{
+			AllowedResponseTypes: []string{"token"},
+		}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for non-code response_type in DCR allowlist")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("non-code response_type must surface as server configuration error: %v", err)
+	}
+}
+
+func TestWithDynamicRegistration_RejectsDuplicate(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error when WithDynamicRegistration is supplied twice")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("duplicate WithDynamicRegistration must surface as server configuration error: %v", err)
+	}
+}
+
+// TestWithDynamicRegistration_RejectsRedundantFeatureFlag confirms that an
+// embedder who passes feature.DynamicRegistration through WithFeature in
+// addition to WithDynamicRegistration receives a deterministic configuration
+// error rather than silent double-enablement.
+func TestWithDynamicRegistration_RejectsRedundantFeatureFlag(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithFeature(feature.DynamicRegistration),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error when feature flag and option are both supplied")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("redundant feature flag must surface as server configuration error: %v", err)
+	}
+}
+
+func TestWithDynamicRegistration_AcceptsZeroValue(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New rejected zero-value RegistrationOption: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+
+	// The defaults documented on RegistrationOption must be applied when
+	// the option is supplied with zero-value fields. We verify by issuing
+	// an IAT and checking the ExpiresAt is at least one default IATTTL
+	// (24h) ahead of the deterministic clock.
+	issued, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+	want := clock.now.Add(24 * time.Hour)
+	if !issued.ExpiresAt.Equal(want) {
+		t.Errorf("default IATTTL (24h) expected ExpiresAt=%s, got %s", want, issued.ExpiresAt)
+	}
+}
+
+func TestProvider_IssueInitialAccessToken_DCRDisabled(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(validBaseOpts(t)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	_, err = provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if !errors.Is(err, op.ErrDynamicRegistrationDisabled) {
+		t.Fatalf("expected ErrDynamicRegistrationDisabled, got %v", err)
+	}
+}
+
+func TestProvider_IssueInitialAccessToken_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{
+			IATTTL:  time.Hour,
+			IATUses: 3,
+		}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	issued, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+	if issued.ID == "" {
+		t.Error("issued.ID must not be empty")
+	}
+	if issued.Value == "" {
+		t.Error("issued.Value must not be empty")
+	}
+	want := clock.now.Add(time.Hour)
+	if !issued.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt=%s want %s", issued.ExpiresAt, want)
+	}
+	// Issuance must produce fresh material on every call: two back-to-back
+	// IATs MUST differ in both ID and Value.
+	other, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("second IssueInitialAccessToken: %v", err)
+	}
+	if other.ID == issued.ID {
+		t.Error("two IATs share an ID; randomness contract broken")
+	}
+	if other.Value == issued.Value {
+		t.Error("two IATs share a Value; randomness contract broken")
+	}
+}
+
+func TestProvider_IssueInitialAccessToken_AppliesDefaults(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{
+			IATTTL:  2 * time.Hour,
+			IATUses: 5,
+		}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	// Spec leaves TTL / MaxUses zero; option-level defaults must apply.
+	issued, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+	wantExpiry := clock.now.Add(2 * time.Hour)
+	if !issued.ExpiresAt.Equal(wantExpiry) {
+		t.Errorf("default TTL not applied: ExpiresAt=%s want %s", issued.ExpiresAt, wantExpiry)
+	}
+	// Lookup the underlying record to verify MaxUses defaulted to 5.
+	rec, lookErr := s.InitialAccessTokens().GetByHash(context.Background(), hashIATValueForTest(t, issued.Value))
+	if lookErr != nil {
+		t.Fatalf("GetByHash: %v", lookErr)
+	}
+	if rec.MaxUses != 5 {
+		t.Errorf("MaxUses=%d want 5 (option default)", rec.MaxUses)
+	}
+}
+
+func TestProvider_IssueInitialAccessToken_PersistsAllowedScopesAndTag(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	issued, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{
+		AllowedScopes: []string{"openid", "profile"},
+		Tag:           "tenant-acme-2026-04",
+	})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+	rec, lookErr := s.InitialAccessTokens().GetByHash(context.Background(), hashIATValueForTest(t, issued.Value))
+	if lookErr != nil {
+		t.Fatalf("GetByHash: %v", lookErr)
+	}
+	if got := strings.Join(rec.AllowedScopes, " "); got != "openid profile" {
+		t.Errorf("AllowedScopes=%q want %q", got, "openid profile")
+	}
+	if rec.Tag != "tenant-acme-2026-04" {
+		t.Errorf("Tag=%q want tenant-acme-2026-04", rec.Tag)
+	}
+}
+
+func TestProvider_IssueInitialAccessToken_RejectsNegativeTTL(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	_, err = provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{
+		TTL: -time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative TTL, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("negative TTL must surface as a server-side configuration error: %v", err)
+	}
+}
+
+func TestProvider_IssueInitialAccessToken_RejectsNegativeMaxUses(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	_, err = provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{
+		MaxUses: -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative MaxUses, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("negative MaxUses must surface as a server-side configuration error: %v", err)
+	}
+}
+
+func TestProvider_RevokeInitialAccessToken_DCRDisabled(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(validBaseOpts(t)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	if err := provider.RevokeInitialAccessToken(context.Background(), "any"); !errors.Is(err, op.ErrDynamicRegistrationDisabled) {
+		t.Fatalf("expected ErrDynamicRegistrationDisabled, got %v", err)
+	}
+}
+
+func TestProvider_RevokeInitialAccessToken_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	issued, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+	// Issue a second IAT so we can confirm revocation does not affect siblings.
+	other, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken (second): %v", err)
+	}
+	if err := provider.RevokeInitialAccessToken(context.Background(), issued.ID); err != nil {
+		t.Fatalf("RevokeInitialAccessToken: %v", err)
+	}
+	// The revoked IAT must be absent from the store.
+	if _, err := s.InitialAccessTokens().GetByHash(context.Background(), hashIATValueForTest(t, issued.Value)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("revoked IAT lookup: want ErrNotFound, got %v", err)
+	}
+	// The sibling IAT must still resolve cleanly.
+	if _, err := s.InitialAccessTokens().GetByHash(context.Background(), hashIATValueForTest(t, other.Value)); err != nil {
+		t.Errorf("unrelated IAT lookup: want nil, got %v", err)
+	}
+}
+
+func TestProvider_RevokeInitialAccessToken_NotFoundPropagates(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	err = provider.RevokeInitialAccessToken(context.Background(), "no-such-id")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected store.ErrNotFound, got %v", err)
+	}
+}
+
+func TestProvider_RevokeInitialAccessToken_RejectsEmptyID(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	provider, err := op.New(opts...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	err = provider.RevokeInitialAccessToken(context.Background(), "")
+	if err == nil {
+		t.Fatal("expected error for empty IAT id, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("empty id must surface as a server-side configuration error: %v", err)
+	}
+}

@@ -223,5 +223,45 @@ func (fakeStore) PushedAuthRequests() store.PushedAuthRequestStore { return fake
 func (fakeStore) Interactions() store.InteractionStore             { return fakeInteractionStore{} }
 func (fakeStore) ConsumedJTIs() store.ConsumedJTIStore             { return fakeJTIStore{} }
 func (fakeStore) Users() store.UserStore                           { return fakeUserStore{} }
+func (fakeStore) InitialAccessTokens() store.InitialAccessTokenStore {
+	return fakeInitialAccessTokenStore{}
+}
+
+func (fakeStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	return fakeRegistrationAccessTokenStore{}
+}
 
 var _ store.Store = (*fakeStore)(nil)
+
+type fakeInitialAccessTokenStore struct{}
+
+func (fakeInitialAccessTokenStore) Put(context.Context, *store.InitialAccessToken) error {
+	return nil
+}
+
+func (fakeInitialAccessTokenStore) GetByHash(context.Context, string) (*store.InitialAccessToken, error) {
+	return nil, store.ErrNotFound
+}
+
+func (fakeInitialAccessTokenStore) IncrementUses(context.Context, string) (int, error) {
+	return 0, store.ErrNotFound
+}
+func (fakeInitialAccessTokenStore) Delete(context.Context, string) error { return store.ErrNotFound }
+
+var _ store.InitialAccessTokenStore = (*fakeInitialAccessTokenStore)(nil)
+
+type fakeRegistrationAccessTokenStore struct{}
+
+func (fakeRegistrationAccessTokenStore) Put(context.Context, *store.RegistrationAccessToken) error {
+	return nil
+}
+
+func (fakeRegistrationAccessTokenStore) GetByClientID(context.Context, string) (*store.RegistrationAccessToken, error) {
+	return nil, store.ErrNotFound
+}
+
+func (fakeRegistrationAccessTokenStore) Delete(context.Context, string) error {
+	return store.ErrNotFound
+}
+
+var _ store.RegistrationAccessTokenStore = (*fakeRegistrationAccessTokenStore)(nil)

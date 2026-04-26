@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // startProvider boots an [op.Provider] behind an [httptest.Server]. The
@@ -190,6 +191,127 @@ func TestIntegration_PAREndpointDisabledByDefault_Returns404(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status=%d want 404 when PAR feature is disabled", resp.StatusCode)
+	}
+}
+
+// TestIntegration_Discovery_RegisteredScopesRespectVisibility wires the
+// full op.New → /.well-known/openid-configuration path and confirms the
+// ADR-0004 contract end-to-end: scopes registered with Public:true
+// appear in scopes_supported, scopes registered with Public:false do
+// not. Standard OIDC scopes always appear because the standard-scope
+// fill in op.fillStandardScopes is unconditional.
+func TestIntegration_Discovery_RegisteredScopesRespectVisibility(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t,
+		op.WithScope(op.Scope{Name: "read:projects", Public: true}),
+		op.WithScope(op.Scope{Name: "internal:metrics", Public: false}),
+		op.WithScope(op.Scope{
+			Name:           "billing:write",
+			Public:         true,
+			AllowedClients: []string{"svc-billing"},
+		}),
+	)
+
+	resp := httpGet(t, base+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	rawScopes, _ := doc["scopes_supported"].([]any)
+	advertised := make(map[string]struct{}, len(rawScopes))
+	for _, s := range rawScopes {
+		if name, ok := s.(string); ok {
+			advertised[name] = struct{}{}
+		}
+	}
+
+	// Public custom scopes and every standard scope must appear.
+	mustContain := []string{
+		"openid", "profile", "email", "address", "phone", "offline_access",
+		"read:projects", "billing:write",
+	}
+	for _, name := range mustContain {
+		if _, ok := advertised[name]; !ok {
+			t.Errorf("scopes_supported missing %q (got %v)", name, rawScopes)
+		}
+	}
+
+	// Non-public scopes MUST NOT leak into discovery; that is the
+	// entire point of the Public flag.
+	if _, leaked := advertised["internal:metrics"]; leaked {
+		t.Errorf("scopes_supported leaked private scope internal:metrics: %v", rawScopes)
+	}
+}
+
+// TestIntegration_Discovery_DCRDisabled_OmitsRegistrationEndpoint
+// confirms that the discovery document omits "registration_endpoint"
+// (and the auth methods supported list) when WithDynamicRegistration
+// is not configured. Advertising the endpoint without serving it would
+// be the worst kind of false promise.
+func TestIntegration_Discovery_DCRDisabled_OmitsRegistrationEndpoint(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t)
+	resp := httpGet(t, base+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := doc["registration_endpoint"]; ok {
+		t.Errorf("registration_endpoint must be absent when DCR is disabled, got %v", doc["registration_endpoint"])
+	}
+	if _, ok := doc["registration_endpoint_auth_methods_supported"]; ok {
+		t.Errorf("registration_endpoint_auth_methods_supported must be absent when DCR is disabled, got %v", doc["registration_endpoint_auth_methods_supported"])
+	}
+}
+
+// TestIntegration_Discovery_DCREnabled_AdvertisesRegistrationEndpoint
+// confirms that enabling [op.WithDynamicRegistration] surfaces the
+// /register URL and the {"initial_access_token"} auth methods list in
+// the discovery document. Custom store wiring is required because the
+// stub store panics when DCR substores are accessed.
+func TestIntegration_Discovery_DCREnabled_AdvertisesRegistrationEndpoint(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKey(newRandomCookieKey(t)),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	srv := httptest.NewServer(provider)
+	t.Cleanup(srv.Close)
+
+	resp := httpGet(t, srv.URL+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	regURL, _ := doc["registration_endpoint"].(string)
+	if regURL != validIssuer+"/oidc/register" {
+		t.Errorf("registration_endpoint=%v want %s/oidc/register", doc["registration_endpoint"], validIssuer)
+	}
+	methods, _ := doc["registration_endpoint_auth_methods_supported"].([]any)
+	if len(methods) != 1 || methods[0] != "initial_access_token" {
+		t.Errorf("registration_endpoint_auth_methods_supported=%v want [initial_access_token]", methods)
 	}
 }
 

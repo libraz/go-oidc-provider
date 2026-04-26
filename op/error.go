@@ -38,14 +38,13 @@ func (e *Error) Error() string {
 // Unwrap exposes the underlying cause to [errors.Is] and [errors.As].
 func (e *Error) Unwrap() error { return e.Cause }
 
-// Is reports whether target is an [*Error] with the same Code.
-func (e *Error) Is(target error) bool {
-	t, ok := target.(*Error)
-	if !ok {
-		return false
-	}
-	return t.Code == e.Code
-}
+// Note: [Error] intentionally does not implement a custom Is method.
+// Sentinel errors in this package are package-level pointer values
+// (see [ErrIssuerRequired] et al.), and [errors.Is] uses pointer
+// identity by default — the right behaviour, since two distinct
+// sentinels can share an OAuth-style Code (e.g. "configuration_error")
+// without being interchangeable. Use [IsClientError] / [IsServerError]
+// for code-class predicates.
 
 // IsClientError reports whether err is a 4xx-class [*Error] caused by client
 // input (invalid_request, invalid_grant, unauthorized_client, etc.).
@@ -144,4 +143,15 @@ var ErrKeysetRequired = &Error{
 var ErrCookieKeysRequired = &Error{
 	Code:        codeConfiguration,
 	Description: "WithCookieKey/WithCookieKeys is required when the authorization_code grant is enabled",
+}
+
+// ErrDynamicRegistrationDisabled is returned by
+// [Provider.IssueInitialAccessToken] and related operator-facing methods
+// when the [Provider] was constructed without
+// [WithDynamicRegistration]. The library does not silently no-op on the
+// missing feature flag because IAT issuance is a control-plane operation
+// that operators MUST be aware of.
+var ErrDynamicRegistrationDisabled = &Error{
+	Code:        codeConfiguration,
+	Description: "WithDynamicRegistration is not configured",
 }

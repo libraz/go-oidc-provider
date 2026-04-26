@@ -81,6 +81,15 @@ type config struct {
 	// returns; consumers MUST go through [config.scopeIndex] only on
 	// the post-validate config.
 	scopeIndex map[string]Scope
+
+	// dcr carries the [RegistrationOption] supplied through
+	// [WithDynamicRegistration]. Nil when the option is absent;
+	// non-nil when the feature is configured (defaults populated by
+	// [config.applyDefaults]). The library reads dcr to decide
+	// whether to mount /register, advertise registration_endpoint in
+	// discovery, and accept calls to
+	// [Provider.IssueInitialAccessToken].
+	dcr *RegistrationOption
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -120,6 +129,30 @@ func (c *config) applyDefaults() {
 		c.grants = []grant.Type{grant.AuthorizationCode, grant.RefreshToken}
 	}
 	c.fillStandardScopes()
+	c.applyRegistrationDefaults()
+}
+
+// applyRegistrationDefaults fills in [RegistrationOption] zero-value
+// fields with their library defaults. The fill is only performed when
+// [WithDynamicRegistration] was invoked; the function is otherwise a
+// no-op so that [config.validate] can still distinguish "feature not
+// configured" from "feature configured with explicit zero".
+func (c *config) applyRegistrationDefaults() {
+	if c.dcr == nil {
+		return
+	}
+	if c.dcr.IATTTL == 0 {
+		c.dcr.IATTTL = defaultIATTTL
+	}
+	if c.dcr.IATUses == 0 {
+		c.dcr.IATUses = defaultIATUses
+	}
+	if c.dcr.AllowedGrantTypes == nil {
+		c.dcr.AllowedGrantTypes = defaultRegistrationGrantTypes()
+	}
+	if c.dcr.AllowedResponseTypes == nil {
+		c.dcr.AllowedResponseTypes = defaultRegistrationResponseTypes()
+	}
 }
 
 // fillStandardScopes appends a built-in entry for every OIDC standard
@@ -206,6 +239,60 @@ func (c *config) validate() error {
 	}
 	if err := c.validateScopes(); err != nil {
 		return err
+	}
+	if err := c.validateRegistration(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateRegistration enforces the cross-cutting invariants between
+// [WithDynamicRegistration] and [WithFeature]. The two surfaces MUST
+// agree: a non-nil [config.dcr] requires the
+// [feature.DynamicRegistration] flag, and the configured store MUST
+// expose the IAT and RAT substores. The method also rejects
+// [WithDynamicRegistration] without a backing flag (so a caller who
+// removed the feature accidentally is told why /register is missing).
+func (c *config) validateRegistration() error {
+	flagOn := false
+	for _, f := range c.features {
+		if f == feature.DynamicRegistration {
+			flagOn = true
+			break
+		}
+	}
+	if c.dcr == nil && !flagOn {
+		return nil
+	}
+	if c.dcr == nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "feature.DynamicRegistration enabled without WithDynamicRegistration",
+		}
+	}
+	if !flagOn {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithDynamicRegistration set without feature.DynamicRegistration enabled",
+		}
+	}
+	if c.store.InitialAccessTokens() == nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "InitialAccessTokens not implemented by store backend",
+		}
+	}
+	if c.store.RegistrationAccessTokens() == nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "RegistrationAccessTokens not implemented by store backend",
+		}
+	}
+	if _, ok := c.store.(store.ClientRegistry); !ok {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "Store does not implement ClientRegistry; dynamic registration requires write access",
+		}
 	}
 	return nil
 }

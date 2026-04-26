@@ -100,9 +100,11 @@ linters:
             - "!**/internal/tokenendpoint/**"
             - "!**/internal/authorizeendpoint/**"
             - "!**/internal/parendpoint/**"
+            - "!**/internal/registrationendpoint/**"
             - "!**/internal/grants/**"
             - "!**/internal/authn/**"
             - "!**/op/testkit/**"
+            - "!**/op/registration.go"
             - "!**/*_test.go"
           deny:
             - pkg: crypto/rand

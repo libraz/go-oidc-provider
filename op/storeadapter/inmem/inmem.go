@@ -96,6 +96,8 @@ type Store struct {
 	interactions *interactionStore
 	jtis         *jtiStore
 	users        *userStore
+	iats         *iatStore
+	rats         *ratStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -117,6 +119,8 @@ func New(opts ...Option) *Store {
 	s.interactions = newInteractionStore(s.clock)
 	s.jtis = newJTIStore(s.clock)
 	s.users = newUserStore()
+	s.iats = newIATStore()
+	s.rats = newRATStore()
 	return s
 }
 
@@ -146,6 +150,12 @@ func (s *Store) ConsumedJTIs() store.ConsumedJTIStore { return s.jtis }
 
 // Users implements [store.Store].
 func (s *Store) Users() store.UserStore { return s.users }
+
+// InitialAccessTokens implements [store.Store].
+func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore { return s.iats }
+
+// RegistrationAccessTokens implements [store.Store].
+func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore { return s.rats }
 
 // PutUser seeds the in-memory user store with u so tests can drive
 // /userinfo and id_token claim assembly without standing up a real
@@ -284,6 +294,12 @@ func cloneClient(c *store.Client) *store.Client {
 	out.GrantTypes = slices.Clone(c.GrantTypes)
 	out.ResponseTypes = slices.Clone(c.ResponseTypes)
 	out.Scopes = slices.Clone(c.Scopes)
+	out.Contacts = slices.Clone(c.Contacts)
+	out.DefaultACRValues = slices.Clone(c.DefaultACRValues)
+	out.RequestURIs = slices.Clone(c.RequestURIs)
+	if len(c.JWKs) > 0 {
+		out.JWKs = append([]byte(nil), c.JWKs...)
+	}
 	return &out
 }
 
@@ -836,6 +852,134 @@ func cloneUser(u *store.User) *store.User {
 	if u.Claims != nil {
 		out.Claims = maps.Clone(u.Claims)
 	}
+	return &out
+}
+
+// --- InitialAccessTokenStore -------------------------------------------------
+
+type iatStore struct {
+	mu sync.Mutex
+	m  map[string]*store.InitialAccessToken
+}
+
+func newIATStore() *iatStore {
+	return &iatStore{m: make(map[string]*store.InitialAccessToken)}
+}
+
+func (s *iatStore) Put(_ context.Context, t *store.InitialAccessToken) error {
+	if t == nil {
+		return errors.New("inmem: nil initial access token")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.m[t.ID]; exists {
+		return store.ErrAlreadyExists
+	}
+	s.m[t.ID] = cloneIAT(t)
+	return nil
+}
+
+func (s *iatStore) GetByHash(_ context.Context, hash string) (*store.InitialAccessToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rec := range s.m {
+		if rec.HashedValue == hash {
+			return cloneIAT(rec), nil
+		}
+	}
+	return nil, store.ErrNotFound
+}
+
+// IncrementUses atomically increments the Uses counter and reports the new
+// value. The contract test relies on this being read-modify-write under a
+// single mutex; the reference implementation is single-process by design.
+// IncrementUses returns [store.ErrConflict] when the new value would exceed
+// MaxUses (with MaxUses==0 treated as a single-use ceiling of 1) so the
+// caller can treat the attempt as a replay race rather than an absent IAT.
+func (s *iatStore) IncrementUses(_ context.Context, id string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[id]
+	if !ok {
+		return 0, store.ErrNotFound
+	}
+	newUses := rec.Uses + 1
+	ceiling := rec.MaxUses
+	if ceiling == 0 {
+		ceiling = 1
+	}
+	if newUses > ceiling {
+		return rec.Uses, store.ErrConflict
+	}
+	rec.Uses = newUses
+	return newUses, nil
+}
+
+func (s *iatStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.m[id]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.m, id)
+	return nil
+}
+
+func cloneIAT(t *store.InitialAccessToken) *store.InitialAccessToken {
+	if t == nil {
+		return nil
+	}
+	out := *t
+	out.AllowedScopes = slices.Clone(t.AllowedScopes)
+	return &out
+}
+
+// --- RegistrationAccessTokenStore --------------------------------------------
+
+type ratStore struct {
+	mu sync.Mutex
+	m  map[string]*store.RegistrationAccessToken
+}
+
+func newRATStore() *ratStore {
+	return &ratStore{m: make(map[string]*store.RegistrationAccessToken)}
+}
+
+func (s *ratStore) Put(_ context.Context, t *store.RegistrationAccessToken) error {
+	if t == nil {
+		return errors.New("inmem: nil registration access token")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[t.ClientID] = cloneRAT(t)
+	return nil
+}
+
+func (s *ratStore) GetByClientID(_ context.Context, clientID string) (*store.RegistrationAccessToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[clientID]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return cloneRAT(rec), nil
+}
+
+func (s *ratStore) Delete(_ context.Context, clientID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.m[clientID]; !ok {
+		return store.ErrNotFound
+	}
+	delete(s.m, clientID)
+	return nil
+}
+
+func cloneRAT(t *store.RegistrationAccessToken) *store.RegistrationAccessToken {
+	if t == nil {
+		return nil
+	}
+	out := *t
 	return &out
 }
 

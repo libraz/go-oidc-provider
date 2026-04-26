@@ -69,6 +69,8 @@ func Run(t *testing.T, f Factory) {
 		{"PushedAuthRequestStore", parCases},
 		{"InteractionStore", interactionCases},
 		{"ConsumedJTIStore", jtiCases},
+		{"InitialAccessTokenStore", iatCases},
+		{"RegistrationAccessTokenStore", ratCases},
 		{"Transactional", transactionalCases},
 	}
 

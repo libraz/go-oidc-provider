@@ -52,4 +52,17 @@ type Store interface {
 	// Users returns the [UserStore] for this backend. Read-only from
 	// the library's perspective; outside the transactional cluster.
 	Users() UserStore
+
+	// InitialAccessTokens returns the [InitialAccessTokenStore] for
+	// this backend. Backends without RFC 7591 Dynamic Client
+	// Registration support MAY return nil; the library detects nil at
+	// construction time and fails op.WithDynamicRegistration with a
+	// clear error rather than panicking later. Outside the
+	// transactional cluster.
+	InitialAccessTokens() InitialAccessTokenStore
+
+	// RegistrationAccessTokens returns the [RegistrationAccessTokenStore]
+	// for this backend. Same nil semantics as
+	// [Store.InitialAccessTokens]. Outside the transactional cluster.
+	RegistrationAccessTokens() RegistrationAccessTokenStore
 }

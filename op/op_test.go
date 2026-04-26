@@ -40,6 +40,13 @@ func (stubStore) Sessions() store.SessionStore                     { return stub
 func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { return stubPARStore{} }
 func (stubStore) Interactions() store.InteractionStore             { return stubInteractionStore{} }
 func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { panic("not implemented") }
+func (stubStore) InitialAccessTokens() store.InitialAccessTokenStore {
+	panic("not implemented")
+}
+
+func (stubStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	panic("not implemented")
+}
 
 type stubSessionStore struct{}
 

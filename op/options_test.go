@@ -368,3 +368,107 @@ func TestWithCrossSiteFlow_Accepts(t *testing.T) {
 		t.Fatalf("WithCrossSiteFlow: %v", err)
 	}
 }
+
+// TestWithScope_RejectsStandardScopeNonPublic enforces ADR-0004's
+// construction-time guard: every OIDC standard scope MUST stay in the
+// discovery document, so registering one with Public:false is a
+// configuration bug surfaced at op.New rather than a silent runtime
+// drift in /.well-known/openid-configuration.
+func TestWithScope_RejectsStandardScopeNonPublic(t *testing.T) {
+	t.Parallel()
+
+	standard := []string{"openid", "profile", "email", "address", "phone", "offline_access"}
+	for _, name := range standard {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOpts(t),
+				op.WithScope(op.Scope{Name: name, Public: false}),
+			)...)
+			if err == nil {
+				t.Fatalf("op.New must reject Public:false for standard scope %q", name)
+			}
+			if op.IsClientError(err) {
+				t.Errorf("standard-scope misconfiguration must surface as a server error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestWithScope_AcceptsStandardScopePublic confirms that overriding a
+// standard scope with explicit Public:true (typically to attach
+// translations or a Title) is the supported way to customise the
+// built-in entry without breaking discovery.
+func TestWithScope_AcceptsStandardScopePublic(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithScope(op.Scope{
+			Name:        "profile",
+			Public:      true,
+			Title:       "Profile",
+			Description: "Read your profile information.",
+		}),
+	)...); err != nil {
+		t.Fatalf("op.New rejected standard-scope Public:true override: %v", err)
+	}
+}
+
+// TestWithScope_RejectsDuplicateName surfaces a configuration mistake
+// the moment two registrations collide on the wire identifier; without
+// this the second call would silently shadow the first.
+func TestWithScope_RejectsDuplicateName(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithScope(op.Scope{Name: "read:projects", Public: true}),
+		op.WithScope(op.Scope{Name: "read:projects", Public: true}),
+	)...)
+	if err == nil {
+		t.Fatal("op.New must reject duplicate WithScope registrations")
+	}
+}
+
+// TestWithScope_RejectsEmptyName covers the option-level guard. The
+// registry's wire identifier is the contract clients build against; a
+// blank Name would corrupt the registry and is rejected eagerly.
+func TestWithScope_RejectsEmptyName(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithScope(op.Scope{Name: "", Public: true}),
+	)...)
+	if err == nil {
+		t.Fatal("op.New must reject WithScope with empty Name")
+	}
+}
+
+// TestWithScope_AcceptsCustomNonPublic registers a private custom scope
+// (the "internal-only API" use case from ADR-0004). Public:false is
+// permitted on custom names; only standard scopes are forced public.
+func TestWithScope_AcceptsCustomNonPublic(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithScope(op.Scope{Name: "internal:metrics", Public: false}),
+	)...); err != nil {
+		t.Fatalf("op.New rejected Public:false custom scope: %v", err)
+	}
+}
+
+// TestWithScope_AcceptsCustomWithAllowedClients exercises the
+// orthogonal AllowedClients axis: a public scope locked to a specific
+// service client. The registration must succeed; runtime enforcement is
+// validated in the authorize / token endpoint tests.
+func TestWithScope_AcceptsCustomWithAllowedClients(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithScope(op.Scope{
+			Name:           "billing:write",
+			Public:         true,
+			AllowedClients: []string{"svc-billing", "svc-admin"},
+		}),
+	)...); err != nil {
+		t.Fatalf("op.New rejected AllowedClients-restricted scope: %v", err)
+	}
+}
