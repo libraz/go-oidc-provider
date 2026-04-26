@@ -15,7 +15,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -58,7 +58,7 @@ func newJARMHarness(t *testing.T, opts ...testkit.Option) *jarmHarness {
 	tk := testkit.NewProvider(t, options...)
 
 	const secret = "rp-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)
@@ -350,7 +350,7 @@ func TestEndToEnd_JARM_FeatureDisabled_ReturnsLegacyError(t *testing.T) {
 	clock := fakeClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	tk := testkit.NewProvider(t, testkit.WithClock(clock))
 	const secret = "rp-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
@@ -102,16 +102,16 @@ type Deps struct {
 	RefreshTokenTTL time.Duration
 
 	// SecretVerifier verifies confidential-client secrets. A nil value
-	// installs the library default ([authn.Argon2id]) so deployments
+	// installs the library default ([clientauth.Argon2id]) so deployments
 	// that follow the reference posture need not wire one explicitly.
-	SecretVerifier authn.SecretVerifier
+	SecretVerifier clientauth.SecretVerifier
 
 	// AssertionVerifier verifies private_key_jwt assertions. A nil value
 	// disables private_key_jwt support: requests that arrive with a
 	// "client_assertion" parameter are rejected as invalid_client. Wire
-	// an [authn.PrivateKeyJWTVerifier] (or a custom implementation) to
+	// an [clientauth.PrivateKeyJWTVerifier] (or a custom implementation) to
 	// support the asymmetric authentication path.
-	AssertionVerifier authn.AssertionVerifier
+	AssertionVerifier clientauth.AssertionVerifier
 
 	// Scopes is the read-only scope registry the handler consults
 	// when accepting a refresh-time scope override. A nil value
@@ -199,7 +199,7 @@ func resolveDeps(d Deps) Deps {
 		d.RefreshTokenTTL = defaultRefreshTokenTTL
 	}
 	if d.SecretVerifier == nil {
-		d.SecretVerifier = &authn.Argon2id{}
+		d.SecretVerifier = &clientauth.Argon2id{}
 	}
 	return d
 }
@@ -260,14 +260,14 @@ func authenticate(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps Deps,
-) (*store.Client, *authn.Credentials, bool) {
-	creds, err := authn.Parse(r)
+) (*store.Client, *clientauth.Credentials, bool) {
+	creds, err := clientauth.Parse(r)
 	usedBasic := r.Header.Get("Authorization") != ""
 	if err != nil {
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
-	if creds.Method == authn.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
+	if creds.Method == clientauth.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
 		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
 		return nil, nil, false
 	}
@@ -276,7 +276,7 @@ func authenticate(
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
-	if _, err := authn.VerifyClient(ctx, creds, client, authn.VerifyOpts{
+	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
 	}); err != nil {
@@ -287,17 +287,17 @@ func authenticate(
 }
 
 // lookupClient resolves the registered client for id, mapping
-// [store.ErrNotFound] to [authn.ErrCredentialsInvalid] so the caller
+// [store.ErrNotFound] to [clientauth.ErrCredentialsInvalid] so the caller
 // cannot tell "unknown client" apart from "wrong secret" through the
 // error surface.
 func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*store.Client, error) {
 	if id == "" {
-		return nil, authn.ErrCredentialsInvalid
+		return nil, clientauth.ErrCredentialsInvalid
 	}
 	c, err := clients.GetClient(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, authn.ErrCredentialsInvalid
+			return nil, clientauth.ErrCredentialsInvalid
 		}
 		return nil, err
 	}
@@ -309,20 +309,20 @@ func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*s
 // library's sentinel discrimination.
 func writeAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
 	switch {
-	case errors.Is(err, authn.ErrNoCredentials):
+	case errors.Is(err, clientauth.ErrNoCredentials):
 		// No credentials at all: the request reached the token endpoint
 		// without any way to authenticate a confidential client and
 		// without claiming a public-client identity. Surface 401 with a
 		// challenge so RP libraries retry intelligently.
 		writeInvalidClient(w, usedBasic, "client authentication required")
-	case errors.Is(err, authn.ErrAmbiguousCredentials),
-		errors.Is(err, authn.ErrUnsupportedMethod):
+	case errors.Is(err, clientauth.ErrAmbiguousCredentials),
+		errors.Is(err, clientauth.ErrUnsupportedMethod):
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"client authentication parameters are malformed")
-	case errors.Is(err, authn.ErrClientMismatch),
-		errors.Is(err, authn.ErrCredentialsInvalid),
-		errors.Is(err, authn.ErrAssertionMalformed),
-		errors.Is(err, authn.ErrAssertionReplayed):
+	case errors.Is(err, clientauth.ErrClientMismatch),
+		errors.Is(err, clientauth.ErrCredentialsInvalid),
+		errors.Is(err, clientauth.ErrAssertionMalformed),
+		errors.Is(err, clientauth.ErrAssertionReplayed):
 		writeInvalidClient(w, usedBasic, "client authentication failed")
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")

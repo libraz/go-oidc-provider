@@ -15,7 +15,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -59,7 +59,7 @@ func newJARFixture(tb testing.TB) *jarFixture {
 		tb.Fatalf("Marshal: %v", err)
 	}
 	const secret = "rp-par-jar-secret" //nolint:gosec // test fixture, not a real credential.
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		tb.Fatalf("Hash: %v", err)

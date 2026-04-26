@@ -1,4 +1,4 @@
-package authn_test
+package clientauth_test
 
 import (
 	"context"
@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 )
 
-// FuzzParse exercises [authn.Parse] with arbitrary Authorization header,
+// FuzzParse exercises [clientauth.Parse] with arbitrary Authorization header,
 // Content-Type, and body triples synthesised into a token-endpoint request.
 // The harness checks four structural invariants:
 //
@@ -92,15 +92,15 @@ func FuzzParse(f *testing.F) {
 			req.Header.Set("Authorization", "Basic "+basicAuth)
 		}
 
-		creds, err := authn.Parse(req)
+		creds, err := clientauth.Parse(req)
 		if err != nil {
 			// Invariant 2: the error MUST wrap a Parse-tier sentinel.
 			switch {
-			case errors.Is(err, authn.ErrNoCredentials),
-				errors.Is(err, authn.ErrAmbiguousCredentials),
-				errors.Is(err, authn.ErrUnsupportedMethod),
-				errors.Is(err, authn.ErrClientMismatch),
-				errors.Is(err, authn.ErrAssertionMalformed):
+			case errors.Is(err, clientauth.ErrNoCredentials),
+				errors.Is(err, clientauth.ErrAmbiguousCredentials),
+				errors.Is(err, clientauth.ErrUnsupportedMethod),
+				errors.Is(err, clientauth.ErrClientMismatch),
+				errors.Is(err, clientauth.ErrAssertionMalformed):
 				// allowed
 			default:
 				t.Fatalf("Parse returned unrecognised error class: %v", err)
@@ -117,7 +117,7 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("Parse returned nil credentials with nil error")
 		}
 		switch creds.Method {
-		case authn.MethodNone:
+		case clientauth.MethodNone:
 			// MethodNone with empty ClientID would have been rerouted
 			// through ErrNoCredentials, so ClientID must be non-empty
 			// here. All secret/assertion fields must be empty.
@@ -127,21 +127,21 @@ func FuzzParse(f *testing.F) {
 			if creds.SecretBasic != "" || creds.SecretPost != "" || creds.AssertionJWT != "" {
 				t.Fatalf("MethodNone leaked secret/assertion material: %+v", creds)
 			}
-		case authn.MethodSecretBasic:
+		case clientauth.MethodSecretBasic:
 			// SecretBasic and ClientID may both be empty if the Basic
 			// header carried empty user / pass; that is Verify's
 			// problem to reject, not Parse's.
 			if creds.SecretPost != "" || creds.AssertionJWT != "" {
 				t.Fatalf("MethodSecretBasic leaked into other channels: %+v", creds)
 			}
-		case authn.MethodSecretPost:
+		case clientauth.MethodSecretPost:
 			if creds.SecretPost == "" {
 				t.Fatalf("MethodSecretPost without SecretPost: %+v", creds)
 			}
 			if creds.SecretBasic != "" || creds.AssertionJWT != "" {
 				t.Fatalf("MethodSecretPost leaked into other channels: %+v", creds)
 			}
-		case authn.MethodPrivateKeyJWT:
+		case clientauth.MethodPrivateKeyJWT:
 			if creds.AssertionJWT == "" {
 				t.Fatalf("MethodPrivateKeyJWT without AssertionJWT: %+v", creds)
 			}

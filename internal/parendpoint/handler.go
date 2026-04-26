@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -80,16 +80,16 @@ type Deps struct {
 	Clock Clock
 
 	// SecretVerifier verifies confidential-client secrets. A nil value
-	// installs the library default ([authn.Argon2id]) so deployments that
+	// installs the library default ([clientauth.Argon2id]) so deployments that
 	// follow the reference posture need not wire one explicitly.
-	SecretVerifier authn.SecretVerifier
+	SecretVerifier clientauth.SecretVerifier
 
 	// AssertionVerifier verifies private_key_jwt assertions. A nil value
 	// disables private_key_jwt support: requests that arrive with a
 	// "client_assertion" parameter are rejected as invalid_client. Wire an
-	// [authn.PrivateKeyJWTVerifier] (or a custom implementation) to support
+	// [clientauth.PrivateKeyJWTVerifier] (or a custom implementation) to support
 	// the asymmetric authentication path.
-	AssertionVerifier authn.AssertionVerifier
+	AssertionVerifier clientauth.AssertionVerifier
 
 	// TTL overrides the lifetime of issued request_uri values. Zero or
 	// negative falls back to [DefaultTTL].
@@ -121,7 +121,7 @@ func resolveDeps(d Deps) Deps {
 		d.TTL = DefaultTTL
 	}
 	if d.SecretVerifier == nil {
-		d.SecretVerifier = &authn.Argon2id{}
+		d.SecretVerifier = &clientauth.Argon2id{}
 	}
 	return d
 }

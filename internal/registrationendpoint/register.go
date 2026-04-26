@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -241,7 +241,7 @@ func isConfidentialAuthMethod(m string) bool {
 // newClientSecret returns a freshly generated client_secret and its
 // argon2id hash, ready to be stored in [store.Client.SecretHash]. The
 // hash format matches the contract documented on
-// [authn.SecretVerifier]; verification is delegated to the same
+// [clientauth.SecretVerifier]; verification is delegated to the same
 // adapter the token endpoint uses, so dynamically registered clients
 // authenticate identically to statically provisioned ones.
 func newClientSecret() (raw, hash string, err error) {
@@ -249,7 +249,7 @@ func newClientSecret() (raw, hash string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	hasher := &authn.Argon2id{}
+	hasher := &clientauth.Argon2id{}
 	hash, err = hasher.Hash(raw)
 	if err != nil {
 		return "", "", err

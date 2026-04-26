@@ -103,6 +103,7 @@ linters:
             - "!**/internal/registrationendpoint/**"
             - "!**/internal/grants/**"
             - "!**/internal/authn/**"
+            - "!**/internal/clientauth/**"
             - "!**/op/testkit/**"
             - "!**/op/registration.go"
             - "!**/*_test.go"

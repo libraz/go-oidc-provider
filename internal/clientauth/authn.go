@@ -1,4 +1,4 @@
-// Package authn implements OAuth 2.0 / OpenID Connect client
+// Package clientauth implements OAuth 2.0 / OpenID Connect client
 // authentication at the token endpoint. It covers the four methods the
 // library accepts in v1.0:
 //
@@ -32,7 +32,7 @@
 //   - ErrCredentialsInvalid      → invalid_client
 //   - ErrAssertionMalformed      → invalid_client
 //   - ErrAssertionReplayed       → invalid_client
-package authn
+package clientauth
 
 import "errors"
 

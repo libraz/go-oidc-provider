@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -38,7 +38,7 @@ func TestEndToEnd_AuthorizeInteractionToken_HappyPath(t *testing.T) {
 	clock := fakeClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
 	tk := testkit.NewProvider(t, testkit.WithClock(clock))
 	const secret = "rp-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)

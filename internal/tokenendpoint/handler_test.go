@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -86,7 +86,7 @@ func pkcePair() (verifier, challenge string) {
 func (f *fixture) confidentialClientFixture(tb testing.TB) (*store.Client, string) {
 	tb.Helper()
 	const secret = "shh-its-a-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		tb.Fatalf("Argon2id.Hash: %v", err)

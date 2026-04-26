@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -290,14 +290,14 @@ func authenticate(
 	w http.ResponseWriter,
 	r *http.Request,
 	deps Deps,
-) (*store.Client, *authn.Credentials, bool) {
-	creds, err := authn.Parse(r)
+) (*store.Client, *clientauth.Credentials, bool) {
+	creds, err := clientauth.Parse(r)
 	usedBasic := r.Header.Get("Authorization") != ""
 	if err != nil {
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
-	if creds.Method == authn.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
+	if creds.Method == clientauth.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
 		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
 		return nil, nil, false
 	}
@@ -306,7 +306,7 @@ func authenticate(
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
-	if _, err := authn.VerifyClient(ctx, creds, client, authn.VerifyOpts{
+	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
 	}); err != nil {
@@ -317,17 +317,17 @@ func authenticate(
 }
 
 // lookupClient resolves the registered client for id, mapping
-// [store.ErrNotFound] to [authn.ErrCredentialsInvalid] so the caller
+// [store.ErrNotFound] to [clientauth.ErrCredentialsInvalid] so the caller
 // cannot tell "unknown client" apart from "wrong secret" through the
 // error surface.
 func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*store.Client, error) {
 	if id == "" {
-		return nil, authn.ErrCredentialsInvalid
+		return nil, clientauth.ErrCredentialsInvalid
 	}
 	c, err := clients.GetClient(ctx, id)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, authn.ErrCredentialsInvalid
+			return nil, clientauth.ErrCredentialsInvalid
 		}
 		return nil, err
 	}
@@ -339,16 +339,16 @@ func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*s
 // library's sentinel discrimination, identical to the token endpoint.
 func writeAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
 	switch {
-	case errors.Is(err, authn.ErrNoCredentials):
+	case errors.Is(err, clientauth.ErrNoCredentials):
 		writeInvalidClient(w, usedBasic, "client authentication required")
-	case errors.Is(err, authn.ErrAmbiguousCredentials),
-		errors.Is(err, authn.ErrUnsupportedMethod):
+	case errors.Is(err, clientauth.ErrAmbiguousCredentials),
+		errors.Is(err, clientauth.ErrUnsupportedMethod):
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"client authentication parameters are malformed")
-	case errors.Is(err, authn.ErrClientMismatch),
-		errors.Is(err, authn.ErrCredentialsInvalid),
-		errors.Is(err, authn.ErrAssertionMalformed),
-		errors.Is(err, authn.ErrAssertionReplayed):
+	case errors.Is(err, clientauth.ErrClientMismatch),
+		errors.Is(err, clientauth.ErrCredentialsInvalid),
+		errors.Is(err, clientauth.ErrAssertionMalformed),
+		errors.Is(err, clientauth.ErrAssertionReplayed):
 		writeInvalidClient(w, usedBasic, "client authentication failed")
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")

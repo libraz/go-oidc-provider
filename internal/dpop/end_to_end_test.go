@@ -21,7 +21,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -222,7 +222,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 		testkit.WithOptions(op.WithFeature(feature.DPoP)),
 	)
 	const secret = "rp-dpop-secret" //nolint:gosec // not a credential — opaque test fixture secret.
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)

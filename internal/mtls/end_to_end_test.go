@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -199,7 +199,7 @@ func TestE2E_MTLS_FullFlow(t *testing.T) {
 		testkit.WithOptions(op.WithFeature(feature.MTLS)),
 	)
 	const secret = "rp-mtls-secret" //nolint:gosec // not a credential — opaque test fixture secret.
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)

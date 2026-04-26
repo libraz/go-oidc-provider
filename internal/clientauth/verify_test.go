@@ -1,4 +1,4 @@
-package authn_test
+package clientauth_test
 
 import (
 	"context"
@@ -13,14 +13,14 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func newConfidentialClient(tb testing.TB, secret string) *store.Client {
 	tb.Helper()
-	v := &authn.Argon2id{Params: authn.Argon2idParams{
+	v := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
 		Memory:      16 * 1024,
 		Iterations:  1,
 		Parallelism: 1,
@@ -34,12 +34,12 @@ func newConfidentialClient(tb testing.TB, secret string) *store.Client {
 	return &store.Client{
 		ID:                      "client-1",
 		SecretHash:              hash,
-		TokenEndpointAuthMethod: string(authn.MethodSecretBasic),
+		TokenEndpointAuthMethod: string(clientauth.MethodSecretBasic),
 	}
 }
 
-func smallArgon2id() *authn.Argon2id {
-	return &authn.Argon2id{Params: authn.Argon2idParams{
+func smallArgon2id() *clientauth.Argon2id {
+	return &clientauth.Argon2id{Params: clientauth.Argon2idParams{
 		Memory:      16 * 1024,
 		Iterations:  1,
 		Parallelism: 1,
@@ -54,17 +54,17 @@ func TestVerifyClient_BasicAuth_Success(t *testing.T) {
 	client := newConfidentialClient(t, "topsecret")
 	form := url.Values{}
 	req := newPostRequest(t, form, "client-1", "topsecret")
-	creds, err := authn.Parse(req)
+	creds, err := clientauth.Parse(req)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	method, err := authn.VerifyClient(context.Background(), creds, client, authn.VerifyOpts{
+	method, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 	})
 	if err != nil {
 		t.Fatalf("VerifyClient: %v", err)
 	}
-	if method != authn.MethodSecretBasic {
+	if method != clientauth.MethodSecretBasic {
 		t.Errorf("method=%v", method)
 	}
 }
@@ -74,14 +74,14 @@ func TestVerifyClient_WrongSecretYieldsCredentialsInvalid(t *testing.T) {
 
 	client := newConfidentialClient(t, "topsecret")
 	req := newPostRequest(t, url.Values{}, "client-1", "wrong-secret")
-	creds, err := authn.Parse(req)
+	creds, err := clientauth.Parse(req)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	_, err = authn.VerifyClient(context.Background(), creds, client, authn.VerifyOpts{
+	_, err = clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 	})
-	if !errors.Is(err, authn.ErrCredentialsInvalid) {
+	if !errors.Is(err, clientauth.ErrCredentialsInvalid) {
 		t.Errorf("err=%v want ErrCredentialsInvalid", err)
 	}
 }
@@ -92,17 +92,17 @@ func TestVerifyClient_PublicClientCannotUseBasic(t *testing.T) {
 	public := &store.Client{
 		ID:                      "spa",
 		PublicClient:            true,
-		TokenEndpointAuthMethod: string(authn.MethodNone),
+		TokenEndpointAuthMethod: string(clientauth.MethodNone),
 	}
 	req := newPostRequest(t, url.Values{}, "spa", "anything")
-	creds, err := authn.Parse(req)
+	creds, err := clientauth.Parse(req)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	_, err = authn.VerifyClient(context.Background(), creds, public, authn.VerifyOpts{
+	_, err = clientauth.VerifyClient(context.Background(), creds, public, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 	})
-	if !errors.Is(err, authn.ErrCredentialsInvalid) {
+	if !errors.Is(err, clientauth.ErrCredentialsInvalid) {
 		t.Errorf("err=%v want ErrCredentialsInvalid", err)
 	}
 }
@@ -113,20 +113,20 @@ func TestVerifyClient_PublicClientNonePath(t *testing.T) {
 	public := &store.Client{
 		ID:                      "spa",
 		PublicClient:            true,
-		TokenEndpointAuthMethod: string(authn.MethodNone),
+		TokenEndpointAuthMethod: string(clientauth.MethodNone),
 	}
 	form := url.Values{}
 	form.Set("client_id", "spa")
 	req := newPostRequest(t, form, "", "")
-	creds, err := authn.Parse(req)
+	creds, err := clientauth.Parse(req)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	method, err := authn.VerifyClient(context.Background(), creds, public, authn.VerifyOpts{})
+	method, err := clientauth.VerifyClient(context.Background(), creds, public, clientauth.VerifyOpts{})
 	if err != nil {
 		t.Fatalf("VerifyClient: %v", err)
 	}
-	if method != authn.MethodNone {
+	if method != clientauth.MethodNone {
 		t.Errorf("method=%v", method)
 	}
 }
@@ -135,11 +135,11 @@ func TestVerifyClient_NilClientReturnsCredentialsInvalid(t *testing.T) {
 	t.Parallel()
 
 	req := newPostRequest(t, url.Values{}, "client-1", "x")
-	creds, _ := authn.Parse(req)
-	_, err := authn.VerifyClient(context.Background(), creds, nil, authn.VerifyOpts{
+	creds, _ := clientauth.Parse(req)
+	_, err := clientauth.VerifyClient(context.Background(), creds, nil, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 	})
-	if !errors.Is(err, authn.ErrCredentialsInvalid) {
+	if !errors.Is(err, clientauth.ErrCredentialsInvalid) {
 		t.Errorf("err=%v want ErrCredentialsInvalid", err)
 	}
 }
@@ -148,15 +148,15 @@ func TestVerifyClient_ClientIDMismatch(t *testing.T) {
 	t.Parallel()
 
 	client := newConfidentialClient(t, "x")
-	creds := &authn.Credentials{
+	creds := &clientauth.Credentials{
 		ClientID:    "other-id",
-		Method:      authn.MethodSecretBasic,
+		Method:      clientauth.MethodSecretBasic,
 		SecretBasic: "x",
 	}
-	_, err := authn.VerifyClient(context.Background(), creds, client, authn.VerifyOpts{
+	_, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
 		SecretVerifier: smallArgon2id(),
 	})
-	if !errors.Is(err, authn.ErrClientMismatch) {
+	if !errors.Is(err, clientauth.ErrClientMismatch) {
 		t.Errorf("err=%v want ErrClientMismatch", err)
 	}
 }
@@ -198,7 +198,7 @@ func TestPrivateKeyJWTVerifier_HappyPath(t *testing.T) {
 	})
 
 	jtiStore := inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs()
-	v := &authn.PrivateKeyJWTVerifier{
+	v := &clientauth.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: pubKeys},
 		JTIStore: jtiStore,
 		Audience: tokenAud,
@@ -208,7 +208,7 @@ func TestPrivateKeyJWTVerifier_HappyPath(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	// Replay must be rejected.
-	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, authn.ErrAssertionReplayed) {
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionReplayed) {
 		t.Fatalf("replay err=%v want ErrAssertionReplayed", err)
 	}
 }
@@ -231,13 +231,13 @@ func TestPrivateKeyJWTVerifier_RejectsBadAudience(t *testing.T) {
 		"iat": now.Unix(),
 		"exp": now.Add(time.Minute).Unix(),
 	})
-	v := &authn.PrivateKeyJWTVerifier{
+	v := &clientauth.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: pubKeys},
 		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
 		Audience: "https://op.test/oidc/token",
 		Clock:    fixedClock{now: now}.Now,
 	}
-	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, authn.ErrAssertionMalformed) {
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionMalformed) {
 		t.Errorf("err=%v want ErrAssertionMalformed", err)
 	}
 }
@@ -260,13 +260,13 @@ func TestPrivateKeyJWTVerifier_RejectsExpired(t *testing.T) {
 		"iat": now.Add(-10 * time.Minute).Unix(),
 		"exp": now.Add(-5 * time.Minute).Unix(),
 	})
-	v := &authn.PrivateKeyJWTVerifier{
+	v := &clientauth.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: pubKeys},
 		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
 		Audience: "https://op.test/oidc/token",
 		Clock:    fixedClock{now: now}.Now,
 	}
-	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, authn.ErrAssertionMalformed) {
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionMalformed) {
 		t.Errorf("err=%v want ErrAssertionMalformed", err)
 	}
 }
@@ -286,13 +286,13 @@ func TestPrivateKeyJWTVerifier_UnknownClient_RejectsCredentials(t *testing.T) {
 		"iat": now.Unix(),
 		"exp": now.Add(time.Minute).Unix(),
 	})
-	v := &authn.PrivateKeyJWTVerifier{
+	v := &clientauth.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: &josev4.JSONWebKeySet{}}, // empty
 		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
 		Audience: "https://op.test/oidc/token",
 		Clock:    fixedClock{now: now}.Now,
 	}
-	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, authn.ErrCredentialsInvalid) {
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
 		t.Errorf("err=%v want ErrCredentialsInvalid", err)
 	}
 }

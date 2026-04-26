@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -32,7 +32,7 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 		testkit.WithOptions(op.WithFeature(feature.PAR)),
 	)
 	const secret = "rp-par-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)
@@ -219,7 +219,7 @@ func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
 		testkit.WithOptions(op.WithFeature(feature.PAR)),
 	)
 	const secret = "rp-replay-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)

@@ -1,4 +1,4 @@
-package authn
+package clientauth
 
 import "encoding/json"
 

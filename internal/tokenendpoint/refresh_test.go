@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -231,7 +231,7 @@ func TestRefresh_ScopeAllowedClients_Rejected(t *testing.T) {
 
 	f := scopedFixture(t)
 	const secret = "shh-its-a-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)
@@ -298,7 +298,7 @@ func TestRefresh_ScopeAllowedClients_Permitted(t *testing.T) {
 
 	f := scopedFixture(t)
 	const secret = "shh-its-a-secret"
-	hasher := authn.Argon2id{}
+	hasher := clientauth.Argon2id{}
 	hash, err := hasher.Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)

@@ -1,17 +1,17 @@
-package authn_test
+package clientauth_test
 
 import (
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 )
 
 func TestArgon2id_HashRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	v := &authn.Argon2id{}
+	v := &clientauth.Argon2id{}
 	hash, err := v.Hash("secret-1")
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
@@ -22,7 +22,7 @@ func TestArgon2id_HashRoundTrip(t *testing.T) {
 	if err := v.Verify("secret-1", hash); err != nil {
 		t.Errorf("Verify(correct): %v", err)
 	}
-	if err := v.Verify("secret-2", hash); !errors.Is(err, authn.ErrCredentialsInvalid) {
+	if err := v.Verify("secret-2", hash); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
 		t.Errorf("Verify(wrong)=%v want ErrCredentialsInvalid", err)
 	}
 }
@@ -30,7 +30,7 @@ func TestArgon2id_HashRoundTrip(t *testing.T) {
 func TestArgon2id_VerifyRejectsMalformed(t *testing.T) {
 	t.Parallel()
 
-	v := &authn.Argon2id{}
+	v := &clientauth.Argon2id{}
 	cases := map[string]string{
 		"empty":         "",
 		"wrong-prefix":  "$bcrypt$v=19$m=65536,t=3,p=1$abc$def",
@@ -41,7 +41,7 @@ func TestArgon2id_VerifyRejectsMalformed(t *testing.T) {
 	for name, encoded := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if err := v.Verify("secret", encoded); !errors.Is(err, authn.ErrCredentialsInvalid) {
+			if err := v.Verify("secret", encoded); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
 				t.Errorf("err=%v want ErrCredentialsInvalid", err)
 			}
 		})
@@ -53,7 +53,7 @@ func TestArgon2id_CustomParamsRoundTrip(t *testing.T) {
 
 	// Use a small parameter set so the test is fast but still hits every
 	// branch of resolved/parameter handling.
-	v := &authn.Argon2id{Params: authn.Argon2idParams{
+	v := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
 		Memory:      16 * 1024,
 		Iterations:  1,
 		Parallelism: 1,
