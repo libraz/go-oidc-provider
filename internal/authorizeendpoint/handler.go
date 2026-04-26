@@ -54,12 +54,6 @@ type Clock interface {
 // constructs a [Deps] once at startup and passes it to [Handler]; the
 // handler is otherwise self-contained.
 type Deps struct {
-	// Issuer is the OP issuer URL. The handler never embeds it in the
-	// response payloads directly, but the discovery layer consults the
-	// same value so the field is wired here for symmetry with
-	// [internal/tokenendpoint.Deps].
-	Issuer string
-
 	// Clients is the read-only client registry. Used to confirm the
 	// request's client_id and redirect_uri before any state mutation.
 	Clients store.ClientStore
@@ -83,11 +77,6 @@ type Deps struct {
 	// whether interaction is required, and calls [sessions.Manager.Issue]
 	// after a fresh login terminates the interaction.
 	Sessions *sessions.Manager
-
-	// SessionCodec is the session-cookie codec. Held for symmetry with
-	// the manager; the handler never decodes session cookies directly,
-	// but future hooks (RP-Initiated Logout) need it. Required.
-	SessionCodec *sessions.Codec
 
 	// CookieCodec is the underlying AES-256-GCM codec used to seal the
 	// __Host-oidc_interaction cookie value (the interaction UID).

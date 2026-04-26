@@ -196,13 +196,11 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config) error {
 	authorizePath := joinPath(cfg.mountPrefix, cfg.endpoints.Authorize)
 	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
-		Issuer:          cfg.issuer,
 		Clients:         cfg.store.Clients(),
 		Codes:           cfg.store.AuthorizationCodes(),
 		Grants:          cfg.store.Grants(),
 		Interactions:    cfg.store.Interactions(),
 		Sessions:        sessMgr,
-		SessionCodec:    sessCodec,
 		CookieCodec:     cookieCodec,
 		CSRF:            csrfSigner,
 		Origins:         allow,

@@ -97,13 +97,11 @@ func newHarness(t *testing.T) *testHarness {
 	}
 
 	deps := authorizeendpoint.Deps{
-		Issuer:          "https://op.example.com",
 		Clients:         store.Clients(),
 		Codes:           store.AuthorizationCodes(),
 		Grants:          store.Grants(),
 		Interactions:    store.Interactions(),
 		Sessions:        mgr,
-		SessionCodec:    sessCodec,
 		CookieCodec:     cookieCodec,
 		CSRF:            signer,
 		Origins:         allow,
