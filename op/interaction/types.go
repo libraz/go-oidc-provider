@@ -95,6 +95,21 @@ type Step struct {
 	// Result, when non-nil, signals the factor (or interaction) is
 	// complete.
 	Result *Result
+
+	// Scratch is opaque per-attempt state the orchestrator persists
+	// alongside [Prompt] and feeds back to [op.Authenticator.Continue]
+	// via [op.ContinueInput.Scratch] on the next submission. The
+	// Driver never sees Scratch; it is round-tripped server-side
+	// through the orchestrator's state blob only.
+	//
+	// Scratch is meaningful only on Prompt steps. Stateless factors
+	// (TOTP, password, recovery code) leave it nil; factors that
+	// need to remember per-ceremony state across the
+	// Begin → Continue boundary (e.g. a WebAuthn assertion session
+	// bearing the challenge and allowed credential IDs) populate it.
+	// On a Result step Scratch is ignored and the orchestrator clears
+	// the persisted slot.
+	Scratch []byte `json:"-"`
 }
 
 // Result reports a successful factor or interaction completion. For

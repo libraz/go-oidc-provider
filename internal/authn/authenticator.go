@@ -133,6 +133,13 @@ type ContinueInput struct {
 	// against the active factor; the adapter is responsible for any
 	// per-input validation beyond the [interaction.FieldSpec] constraints.
 	Submission interaction.FormSubmission
+
+	// Scratch is the byte slice the matching [interaction.Step.Scratch]
+	// stashed on the previous Begin or Continue call. The orchestrator
+	// round-trips it through [State.FactorScratch] without inspection.
+	// It is empty when the active factor never emitted a Scratch
+	// payload; stateless adapters can ignore the field.
+	Scratch []byte
 }
 
 // Authenticator is the protocol-side state machine for a single

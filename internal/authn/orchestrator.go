@@ -142,6 +142,14 @@ type State struct {
 	// orchestrator emits a captcha challenge once it reaches
 	// [captchaFailureThreshold].
 	LastFailures int
+
+	// FactorScratch is the opaque byte slice the active factor's
+	// most recent [interaction.Step.Scratch] return populated. The
+	// orchestrator persists it across the Begin → Continue boundary
+	// and feeds it back to [Authenticator.Continue] through
+	// [ContinueInput.Scratch]. It is cleared automatically when the
+	// active factor terminates (Result or hard error).
+	FactorScratch []byte `json:"factor_scratch,omitempty"`
 }
 
 // Input is the per-tick payload the HTTP layer hands to
@@ -406,13 +414,15 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 		ClientID:   st.ClientID,
 		AuthTime:   st.AuthTime,
 		Submission: *in.Submission,
+		Scratch:    st.FactorScratch,
 	})
 	if err != nil {
 		o.observeFailure(ctx, st, in.Now, auth.Type())
+		st.FactorScratch = nil
 		return st, interaction.Step{}, err
 	}
 	if step.Prompt != nil {
-		next, emitted, ferr := o.emitFactorPrompt(st, auth, *step.Prompt, in.Now)
+		next, emitted, ferr := o.emitFactorPrompt(st, auth, step, in.Now)
 		if ferr != nil {
 			return st, interaction.Step{}, ferr
 		}
@@ -421,6 +431,7 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	if step.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
 	}
+	st.FactorScratch = nil
 	st = o.appendFactor(st, auth, *step.Result)
 	o.observeSuccess(ctx, st, in.Now, auth.Type())
 	denied, derr := o.runRiskPostFactor(ctx, st, in.Now, auth.Type())
@@ -596,7 +607,7 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 	}
 	if step.Prompt != nil {
 		st.ActiveFactorIdx = idx
-		next, emitted, perr := o.emitFactorPrompt(st, auth, *step.Prompt, now)
+		next, emitted, perr := o.emitFactorPrompt(st, auth, step, now)
 		if perr != nil {
 			return st, interaction.Step{}, perr
 		}
@@ -606,6 +617,7 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 		return st, interaction.Step{}, ErrInvalidStep
 	}
 	st.ActiveFactorIdx = idx
+	st.FactorScratch = nil
 	st = o.appendFactor(st, auth, *step.Result)
 	o.observeSuccess(ctx, st, now, auth.Type())
 	denied2, derr := o.runRiskPostFactor(ctx, st, now, auth.Type())
@@ -679,13 +691,17 @@ func (o *Orchestrator) emitCaptchaPrompt(st State, now time.Time) (State, intera
 
 // emitFactorPrompt re-issues the prompt the authenticator returned
 // with a freshly minted StateRef bound to the active factor's type.
-func (o *Orchestrator) emitFactorPrompt(st State, auth Authenticator, prompt interaction.Prompt, now time.Time) (State, interaction.Step, error) {
+// The factor's Scratch is mirrored into [State.FactorScratch] so the
+// next [Authenticator.Continue] sees it via [ContinueInput.Scratch].
+func (o *Orchestrator) emitFactorPrompt(st State, auth Authenticator, step interaction.Step, now time.Time) (State, interaction.Step, error) {
 	st.StepCounter++
 	ref, err := o.cfg.StateRefSigner.Issue(st.InteractionUID, tagAuthPrefix+string(auth.Type()), st.StepCounter, now.Add(stateRefTTL))
 	if err != nil {
 		return st, interaction.Step{}, err
 	}
+	prompt := *step.Prompt
 	prompt.StateRef = ref
+	st.FactorScratch = step.Scratch
 	return st, interaction.Step{Prompt: &prompt}, nil
 }
 

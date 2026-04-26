@@ -653,6 +653,72 @@ func TestTickObserverFanout(t *testing.T) {
 	}
 }
 
+// TestTickFactorScratchRoundtrip verifies that a per-factor Scratch
+// payload returned from Authenticator.Begin survives the orchestrator's
+// state encoding and is delivered back to Authenticator.Continue
+// through ContinueInput.Scratch on the matching submission. The
+// fixture also asserts that a successful Result clears State.FactorScratch
+// so a subsequent factor cannot accidentally inherit the stale slot.
+func TestTickFactorScratchRoundtrip(t *testing.T) {
+	t.Parallel()
+
+	wantScratch := []byte("session-blob-v1")
+	var seenContinueScratch []byte
+	pk := &stubAuthenticator{
+		typeID:  op.FactorPasskey,
+		aal:     op.AAL2,
+		amr:     "hwk",
+		prompts: []string{"auth.passkey"},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{
+				Prompt:  &interaction.Prompt{Type: "auth.passkey", Data: interaction.PasskeyPromptData{Challenge: []byte("c")}},
+				Scratch: wantScratch,
+			}, nil
+		},
+		continueFn: func(_ context.Context, in op.ContinueInput) (interaction.Step, error) {
+			seenContinueScratch = append([]byte(nil), in.Scratch...)
+			return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+		},
+	}
+	o, err := authn.New(authn.Config{
+		Authenticators: []op.Authenticator{pk},
+		StateRefSigner: newSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	st0 := initialState()
+	st0.Subject = "user-1"
+
+	st, step, err := o.Tick(context.Background(), st0, authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first Tick: %v", err)
+	}
+	if step.Prompt == nil {
+		t.Fatalf("expected Prompt, got %+v", step)
+	}
+	if !bytes.Equal(st.FactorScratch, wantScratch) {
+		t.Errorf("State.FactorScratch = %q, want %q", st.FactorScratch, wantScratch)
+	}
+
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"response": "x"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("second Tick: %v", err)
+	}
+	if step.Result == nil {
+		t.Fatalf("expected Result, got %+v", step)
+	}
+	if !bytes.Equal(seenContinueScratch, wantScratch) {
+		t.Errorf("ContinueInput.Scratch = %q, want %q", seenContinueScratch, wantScratch)
+	}
+	if len(st.FactorScratch) != 0 {
+		t.Errorf("State.FactorScratch = %q, want empty after factor success", st.FactorScratch)
+	}
+}
+
 // buildSuccessAuthenticator constructs a stubAuthenticator that emits
 // a generic prompt on Begin and returns a Result with subject "user-1"
 // on Continue. Tests that need different subjects override the
