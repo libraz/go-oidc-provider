@@ -197,7 +197,7 @@ func TestPrivateKeyJWTVerifier_HappyPath(t *testing.T) {
 		"exp": now.Add(2 * time.Minute).Unix(),
 	})
 
-	jtiStore := inmem.New().ConsumedJTIs()
+	jtiStore := inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs()
 	v := &authn.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: pubKeys},
 		JTIStore: jtiStore,
@@ -233,7 +233,7 @@ func TestPrivateKeyJWTVerifier_RejectsBadAudience(t *testing.T) {
 	})
 	v := &authn.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: pubKeys},
-		JTIStore: inmem.New().ConsumedJTIs(),
+		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
 		Audience: "https://op.test/oidc/token",
 		Clock:    fixedClock{now: now}.Now,
 	}
@@ -262,7 +262,7 @@ func TestPrivateKeyJWTVerifier_RejectsExpired(t *testing.T) {
 	})
 	v := &authn.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: pubKeys},
-		JTIStore: inmem.New().ConsumedJTIs(),
+		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
 		Audience: "https://op.test/oidc/token",
 		Clock:    fixedClock{now: now}.Now,
 	}
@@ -288,7 +288,7 @@ func TestPrivateKeyJWTVerifier_UnknownClient_RejectsCredentials(t *testing.T) {
 	})
 	v := &authn.PrivateKeyJWTVerifier{
 		Resolver: staticResolver{keys: &josev4.JSONWebKeySet{}}, // empty
-		JTIStore: inmem.New().ConsumedJTIs(),
+		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
 		Audience: "https://op.test/oidc/token",
 		Clock:    fixedClock{now: now}.Now,
 	}

@@ -120,7 +120,11 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 	}
 
 	signKey := generateSigningKey(tb, cfg.kid)
-	store := inmem.New()
+	var storeOpts []inmem.Option
+	if cfg.clock != nil {
+		storeOpts = append(storeOpts, inmem.WithClock(cfg.clock))
+	}
+	store := inmem.New(storeOpts...)
 
 	baseOpts := []op.Option{
 		op.WithIssuer(cfg.issuer),

@@ -46,12 +46,13 @@ import (
 //   - body with bare "client_assertion=...": triggers the
 //     private_key_jwt unsupported path; 401 invalid_client.
 func FuzzPARFormBody(f *testing.F) {
-	store := inmem.New()
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	store := inmem.New(inmem.WithClock(clock))
 	deps := parendpoint.Deps{
 		Issuer:  "https://op.example",
 		Clients: store.Clients(),
 		PARs:    store.PushedAuthRequests(),
-		Clock:   fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)},
+		Clock:   clock,
 	}
 	handler := parendpoint.Handler(deps)
 
