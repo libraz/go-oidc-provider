@@ -95,6 +95,7 @@ type Store struct {
 	pars         *parStore
 	interactions *interactionStore
 	jtis         *jtiStore
+	users        *userStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -115,6 +116,7 @@ func New(opts ...Option) *Store {
 	s.pars = newPARStore(s.clock)
 	s.interactions = newInteractionStore(s.clock)
 	s.jtis = newJTIStore(s.clock)
+	s.users = newUserStore()
 	return s
 }
 
@@ -141,6 +143,18 @@ func (s *Store) Interactions() store.InteractionStore { return s.interactions }
 
 // ConsumedJTIs implements [store.Store].
 func (s *Store) ConsumedJTIs() store.ConsumedJTIStore { return s.jtis }
+
+// Users implements [store.Store].
+func (s *Store) Users() store.UserStore { return s.users }
+
+// PutUser seeds the in-memory user store with u so tests can drive
+// /userinfo and id_token claim assembly without standing up a real
+// backend. Calling PutUser with a Subject that already exists overwrites
+// the prior record; the helper is intentionally lenient because the
+// reference implementation targets tests, not production.
+func (s *Store) PutUser(_ context.Context, u *store.User) {
+	s.users.put(u)
+}
 
 // RegisterClient implements [store.ClientRegistry].
 func (s *Store) RegisterClient(ctx context.Context, c *store.Client) error {
@@ -782,6 +796,47 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// --- UserStore ---------------------------------------------------------------
+
+type userStore struct {
+	mu sync.RWMutex
+	m  map[string]*store.User
+}
+
+func newUserStore() *userStore {
+	return &userStore{m: make(map[string]*store.User)}
+}
+
+func (s *userStore) FindBySubject(_ context.Context, sub string) (*store.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	u, ok := s.m[sub]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return cloneUser(u), nil
+}
+
+func (s *userStore) put(u *store.User) {
+	if u == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[u.Subject] = cloneUser(u)
+}
+
+func cloneUser(u *store.User) *store.User {
+	if u == nil {
+		return nil
+	}
+	out := *u
+	if u.Claims != nil {
+		out.Claims = maps.Clone(u.Claims)
+	}
+	return &out
 }
 
 // --- helpers -----------------------------------------------------------------

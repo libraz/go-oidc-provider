@@ -24,6 +24,7 @@ func (stubStore) Sessions() store.SessionStore                     { panic("not 
 func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { panic("not implemented") }
 func (stubStore) Interactions() store.InteractionStore             { panic("not implemented") }
 func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { panic("not implemented") }
+func (stubStore) Users() store.UserStore                           { panic("not implemented") }
 
 const validIssuer = "https://idp.example.com"
 

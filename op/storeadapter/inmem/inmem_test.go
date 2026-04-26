@@ -321,3 +321,47 @@ func TestTx_RollbackDiscardsRefreshChain(t *testing.T) {
 		t.Fatalf("Find child after rollback: want ErrNotFound, got %v", err)
 	}
 }
+
+func TestUserStore_FindBySubject_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	ctx := context.Background()
+	s.PutUser(ctx, &store.User{
+		Subject:   "user-1",
+		Claims:    map[string]any{"name": "Alice", "email": "alice@example.com"},
+		UpdatedAt: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
+	})
+
+	got, err := s.Users().FindBySubject(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("FindBySubject: %v", err)
+	}
+	if got.Subject != "user-1" {
+		t.Errorf("Subject=%q", got.Subject)
+	}
+	if got.Claims["name"] != "Alice" {
+		t.Errorf("name claim=%v", got.Claims["name"])
+	}
+
+	// Defensive copy: mutating the returned map must not affect the
+	// next read. The store SHOULD clone its internal map per call.
+	got.Claims["name"] = "Bob"
+	again, err := s.Users().FindBySubject(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("FindBySubject (second): %v", err)
+	}
+	if again.Claims["name"] != "Alice" {
+		t.Errorf("defensive copy violated: %v", again.Claims["name"])
+	}
+}
+
+func TestUserStore_FindBySubject_Missing(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	_, err := s.Users().FindBySubject(context.Background(), "absent")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("FindBySubject: want ErrNotFound, got %v", err)
+	}
+}

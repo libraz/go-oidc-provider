@@ -177,6 +177,16 @@ func (fakeJTIStore) Has(_ context.Context, _ string) (bool, error) {
 
 var _ store.ConsumedJTIStore = (*fakeJTIStore)(nil)
 
+// --- UserStore ---------------------------------------------------------------------
+
+type fakeUserStore struct{}
+
+func (fakeUserStore) FindBySubject(_ context.Context, _ string) (*store.User, error) {
+	return nil, store.ErrNotFound
+}
+
+var _ store.UserStore = (*fakeUserStore)(nil)
+
 // --- Transactional / Tx ------------------------------------------------------------
 
 type fakeTx struct{}
@@ -212,5 +222,6 @@ func (fakeStore) Sessions() store.SessionStore                     { return fake
 func (fakeStore) PushedAuthRequests() store.PushedAuthRequestStore { return fakePARStore{} }
 func (fakeStore) Interactions() store.InteractionStore             { return fakeInteractionStore{} }
 func (fakeStore) ConsumedJTIs() store.ConsumedJTIStore             { return fakeJTIStore{} }
+func (fakeStore) Users() store.UserStore                           { return fakeUserStore{} }
 
 var _ store.Store = (*fakeStore)(nil)

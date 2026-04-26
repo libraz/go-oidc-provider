@@ -96,6 +96,10 @@ const (
 	// ConsumedJTIs routes [store.ConsumedJTIStore] calls. Outside the
 	// transactional cluster.
 	ConsumedJTIs
+
+	// Users routes [store.UserStore] calls. Outside the transactional
+	// cluster.
+	Users
 )
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -119,6 +123,8 @@ func (k Kind) String() string {
 		return "Interactions"
 	case ConsumedJTIs:
 		return "ConsumedJTIs"
+	case Users:
+		return "Users"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -137,6 +143,7 @@ var allKinds = []Kind{
 	PushedAuthRequests,
 	Interactions,
 	ConsumedJTIs,
+	Users,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -372,6 +379,11 @@ func (s *Store) Interactions() store.InteractionStore {
 // ConsumedJTIs implements [store.Store].
 func (s *Store) ConsumedJTIs() store.ConsumedJTIStore {
 	return s.routes[ConsumedJTIs].ConsumedJTIs()
+}
+
+// Users implements [store.Store].
+func (s *Store) Users() store.UserStore {
+	return s.routes[Users].Users()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

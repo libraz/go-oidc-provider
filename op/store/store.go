@@ -48,4 +48,8 @@ type Store interface {
 	// ConsumedJTIs returns the [ConsumedJTIStore] for this backend.
 	// Outside the transactional cluster.
 	ConsumedJTIs() ConsumedJTIStore
+
+	// Users returns the [UserStore] for this backend. Read-only from
+	// the library's perspective; outside the transactional cluster.
+	Users() UserStore
 }
