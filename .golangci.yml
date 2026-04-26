@@ -98,7 +98,7 @@ linters:
             - "!**/internal/sessions/**"
             - "!**/internal/tokens/**"
             - "!**/internal/grants/**"
-            - "!**/internal/authn/recovery/**"
+            - "!**/internal/authn/**"
             - "!**/*_test.go"
           deny:
             - pkg: crypto/rand
