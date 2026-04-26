@@ -3,6 +3,7 @@ package refresh_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -291,9 +292,7 @@ func TestExchange_DetectsExpiredToken(t *testing.T) {
 	// Use a custom store that does NOT expire on read so the exchanger's
 	// own clock-based check is exercised. Mirrors the authcode test.
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-	st := &alwaysAliveRefreshStore{
-		RefreshTokenStore: inmem.New().RefreshTokens(),
-	}
+	st := newAlwaysAliveRefreshStore()
 	cur := t0
 	iss, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: st,
@@ -324,13 +323,40 @@ func TestExchange_DetectsExpiredToken(t *testing.T) {
 	}
 }
 
-// alwaysAliveRefreshStore wraps a real inmem store but bypasses the
-// store's own expiry-on-read so the refresh package's clock-based check
-// is exercised. Without this layer, an expired token returns
-// store.ErrNotFound and Exchange would surface ErrTokenMissing instead
-// of ErrTokenExpired.
+// alwaysAliveRefreshStore is a test-local RefreshTokenStore that does no
+// expiry filtering at any layer. It exists so the refresh package's own
+// clock-based ErrTokenExpired check is exercised end-to-end; a real
+// backing store would surface ErrNotFound for an expired record before
+// the exchanger ran its own check.
 type alwaysAliveRefreshStore struct {
-	store.RefreshTokenStore
+	mu sync.Mutex
+	m  map[string]*store.RefreshToken
+}
+
+func newAlwaysAliveRefreshStore() *alwaysAliveRefreshStore {
+	return &alwaysAliveRefreshStore{m: make(map[string]*store.RefreshToken)}
+}
+
+func (s *alwaysAliveRefreshStore) Save(_ context.Context, tok *store.RefreshToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.m[tok.ID]; exists {
+		return store.ErrAlreadyExists
+	}
+	clone := *tok
+	s.m[tok.ID] = &clone
+	return nil
+}
+
+func (s *alwaysAliveRefreshStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	clone := *rec
+	return &clone, nil
 }
 
 func (s *alwaysAliveRefreshStore) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
@@ -341,4 +367,19 @@ func (s *alwaysAliveRefreshStore) Consume(ctx context.Context, id string) (*stor
 	now := time.Now().UTC()
 	rec.ConsumedAt = &now
 	return rec, nil
+}
+
+func (s *alwaysAliveRefreshStore) RevokeChain(_ context.Context, rootID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if rec, ok := s.m[rootID]; ok {
+		rec.ConsumedAt = &now
+	}
+	for _, rec := range s.m {
+		if rec.ParentID != nil && *rec.ParentID == rootID {
+			rec.ConsumedAt = &now
+		}
+	}
+	return nil
 }

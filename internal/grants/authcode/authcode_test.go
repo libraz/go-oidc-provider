@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -288,9 +289,7 @@ func TestExchange_DetectsExpiredCode(t *testing.T) {
 	// authcode-layer's expiry sentinel instead.
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	verifier := strings.Repeat("a", 64)
-	st := &alwaysAliveCodeStore{
-		AuthorizationCodeStore: inmem.New().AuthorizationCodes(),
-	}
+	st := newAlwaysAliveCodeStore()
 	cur := t0
 	iss, err := authcode.NewIssuer(authcode.IssuerConfig{
 		Store: st,
@@ -323,12 +322,40 @@ func TestExchange_DetectsExpiredCode(t *testing.T) {
 	}
 }
 
-// alwaysAliveCodeStore wraps a real inmem store but bypasses the store's own
-// expiry-on-read so the authcode package's clock-based check is exercised.
-// Without this layer, an expired code returns store.ErrNotFound and Exchange
-// would surface ErrCodeMissing instead of ErrCodeExpired.
+// alwaysAliveCodeStore is a test-local AuthorizationCodeStore that does no
+// expiry filtering at any layer. It exists so the authcode package's own
+// clock-based ErrCodeExpired check is exercised end-to-end; a real backing
+// store would surface ErrNotFound for an expired record before the
+// exchanger ran its own check.
 type alwaysAliveCodeStore struct {
-	store.AuthorizationCodeStore
+	mu sync.Mutex
+	m  map[string]*store.AuthorizationCode
+}
+
+func newAlwaysAliveCodeStore() *alwaysAliveCodeStore {
+	return &alwaysAliveCodeStore{m: make(map[string]*store.AuthorizationCode)}
+}
+
+func (s *alwaysAliveCodeStore) Save(_ context.Context, code *store.AuthorizationCode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.m[code.ID]; exists {
+		return store.ErrAlreadyExists
+	}
+	clone := *code
+	s.m[code.ID] = &clone
+	return nil
+}
+
+func (s *alwaysAliveCodeStore) Find(_ context.Context, id string) (*store.AuthorizationCode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	clone := *rec
+	return &clone, nil
 }
 
 func (s *alwaysAliveCodeStore) Consume(ctx context.Context, id string) (*store.AuthorizationCode, error) {
