@@ -92,4 +92,15 @@ type SessionStore interface {
 	// or mark the row deleted as long as subsequent Find calls return
 	// [ErrNotFound].
 	Delete(ctx context.Context, id string) error
+
+	// ListByChooserGroup returns every non-expired session whose
+	// ChooserGroupID matches groupID. It is the lookup the multi-account
+	// flow needs to enumerate the accounts in a browser's chooser
+	// (002-product-design §A.9). Order is unspecified; callers that need
+	// stable ordering MUST sort the result themselves.
+	//
+	// Returning an empty slice (with a nil error) is the correct response
+	// when no sessions exist for groupID. Backends MUST NOT include
+	// records whose ExpiresAt has passed, mirroring [SessionStore.Find].
+	ListByChooserGroup(ctx context.Context, groupID string) ([]*Session, error)
 }

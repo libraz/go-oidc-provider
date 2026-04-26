@@ -598,6 +598,22 @@ func (s *sessionStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *sessionStore) ListByChooserGroup(_ context.Context, groupID string) ([]*store.Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*store.Session, 0)
+	for _, rec := range s.m {
+		if rec.ChooserGroupID != groupID {
+			continue
+		}
+		if isExpired(rec.ExpiresAt, s.clock) {
+			continue
+		}
+		out = append(out, cloneSession(rec))
+	}
+	return out, nil
+}
+
 func cloneSession(s *store.Session) *store.Session {
 	if s == nil {
 		return nil

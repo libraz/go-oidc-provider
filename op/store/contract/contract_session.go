@@ -23,6 +23,8 @@ var sessionCases = []subtest{
 	{"TouchMissing", sessionTouchMissing},
 	{"Delete", sessionDelete},
 	{"Expired", sessionExpired},
+	{"ListByChooserGroup", sessionListByChooserGroup},
+	{"ListByChooserGroupSkipsExpired", sessionListByChooserGroupSkipsExpired},
 }
 
 func sessionSaveFind(t *testing.T, f Factory) {
@@ -99,6 +101,58 @@ func sessionExpired(t *testing.T, f Factory) {
 	}
 	if _, err := b.Store.Sessions().Find(ctx, "s-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Find expired: want ErrNotFound, got %v", err)
+	}
+}
+
+func sessionListByChooserGroup(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	a := newSession(b.Now, "s-a")
+	a.ChooserGroupID = "cg-list"
+	a.Subject = "user-a"
+	bb := newSession(b.Now, "s-b")
+	bb.ChooserGroupID = "cg-list"
+	bb.Subject = "user-b"
+	other := newSession(b.Now, "s-other")
+	other.ChooserGroupID = "cg-other"
+	for _, s := range []*store.Session{a, bb, other} {
+		if err := b.Store.Sessions().Save(ctx, s); err != nil {
+			t.Fatalf("Save %s: %v", s.ID, err)
+		}
+	}
+	got, err := b.Store.Sessions().ListByChooserGroup(ctx, "cg-list")
+	if err != nil {
+		t.Fatalf("ListByChooserGroup: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2; got %+v", len(got), got)
+	}
+	for _, s := range got {
+		if s.ChooserGroupID != "cg-list" {
+			t.Errorf("returned session with ChooserGroupID=%q", s.ChooserGroupID)
+		}
+	}
+}
+
+func sessionListByChooserGroupSkipsExpired(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	live := newSession(b.Now, "s-live")
+	live.ChooserGroupID = "cg-mixed"
+	dead := newSession(b.Now, "s-dead")
+	dead.ChooserGroupID = "cg-mixed"
+	dead.ExpiresAt = b.Now.Add(-time.Hour)
+	for _, s := range []*store.Session{live, dead} {
+		if err := b.Store.Sessions().Save(ctx, s); err != nil {
+			t.Fatalf("Save %s: %v", s.ID, err)
+		}
+	}
+	got, err := b.Store.Sessions().ListByChooserGroup(ctx, "cg-mixed")
+	if err != nil {
+		t.Fatalf("ListByChooserGroup: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "s-live" {
+		t.Fatalf("got %+v want exactly s-live", got)
 	}
 }
 

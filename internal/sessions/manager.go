@@ -215,8 +215,7 @@ func (m *Manager) Touch(ctx context.Context, sessionID string) error {
 }
 
 // Logout deletes the supplied session. It does not clear other accounts in
-// the same chooser group; that is the caller's job (see future
-// [Manager.LogoutAll], not yet implemented).
+// the same chooser group; that is [Manager.LogoutAll]'s job.
 //
 // The function is idempotent: deleting an already-removed session returns
 // nil so a double-click on "log out" does not produce a 5xx.
@@ -226,6 +225,228 @@ func (m *Manager) Logout(ctx context.Context, sessionID string) error {
 		return nil
 	}
 	return fmt.Errorf("sessions: delete: %w", err)
+}
+
+// AddAccount adds a new authenticated account to an existing chooser group
+// and switches the cookie to point at it. It is the operation invoked when
+// the user clicks "sign in to another account" on the chooser screen
+// (002-product-design §A.9).
+//
+// chooserGroupID identifies the existing group to add to; the caller MUST
+// have previously confirmed the cookie's group via [Manager.Resolve] so
+// that an attacker cannot graft a session into someone else's group.
+func (m *Manager) AddAccount(ctx context.Context, chooserGroupID string, login Login) (Outcome, error) {
+	if chooserGroupID == "" {
+		return Outcome{}, errors.New("sessions: AddAccount requires ChooserGroupID")
+	}
+	if login.Subject == "" {
+		return Outcome{}, errors.New("sessions: AddAccount requires Subject")
+	}
+	now := m.clock().UTC()
+	sid, err := newID()
+	if err != nil {
+		return Outcome{}, err
+	}
+	sess := &store.Session{
+		ID:             sid,
+		Subject:        login.Subject,
+		AuthTime:       login.AuthTime,
+		AMR:            append([]string(nil), login.AMR...),
+		ACR:            login.ACR,
+		ChooserGroupID: chooserGroupID,
+		ExpiresAt:      now.Add(m.idleTTL),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := m.store.Save(ctx, sess); err != nil {
+		return Outcome{}, fmt.Errorf("sessions: save: %w", err)
+	}
+	value, err := m.codec.Encode(Payload{
+		ChooserGroupID:   chooserGroupID,
+		CurrentSessionID: sid,
+		IssuedAt:         now.Unix(),
+	})
+	if err != nil {
+		return Outcome{}, err
+	}
+	return Outcome{Cookie: value, ChooserGroupID: chooserGroupID, SessionID: sid}, nil
+}
+
+// Switch rebinds the cookie's "current session" to a different account
+// already present in the chooser group. It returns an updated cookie value
+// without touching the underlying session record (no Touch — Switch is a
+// pure UX selection, not authentication activity).
+//
+// The function fails with [ErrCurrentSessionExpired] when targetSessionID
+// either does not exist or has been garbage-collected; the caller should
+// clear the cookie or re-render the chooser. It fails with
+// [ErrCookieInvalid] when targetSessionID belongs to a different chooser
+// group than chooserGroupID — the caller MUST treat this as tampering.
+func (m *Manager) Switch(ctx context.Context, chooserGroupID, targetSessionID string) (Outcome, error) {
+	if chooserGroupID == "" || targetSessionID == "" {
+		return Outcome{}, errors.New("sessions: Switch requires ChooserGroupID and SessionID")
+	}
+	sess, err := m.store.Find(ctx, targetSessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return Outcome{}, ErrCurrentSessionExpired
+		}
+		return Outcome{}, fmt.Errorf("sessions: find: %w", err)
+	}
+	if sess.ChooserGroupID != chooserGroupID {
+		return Outcome{}, ErrCookieInvalid
+	}
+	now := m.clock().UTC()
+	value, err := m.codec.Encode(Payload{
+		ChooserGroupID:   chooserGroupID,
+		CurrentSessionID: targetSessionID,
+		IssuedAt:         now.Unix(),
+	})
+	if err != nil {
+		return Outcome{}, err
+	}
+	return Outcome{Cookie: value, ChooserGroupID: chooserGroupID, SessionID: targetSessionID}, nil
+}
+
+// Account is a projection of [store.Session] suitable for rendering the
+// account chooser. It deliberately omits internal-only fields like
+// ChooserGroupID and ExpiresAt so the UI never accidentally leaks them.
+type Account struct {
+	// SessionID is the value the chooser passes back to [Manager.Switch]
+	// or [Manager.Remove].
+	SessionID string
+
+	// Subject is the OP-internal stable identifier of the user; the UI
+	// resolves this to a display name via the caller's user lookup.
+	Subject string
+
+	// AuthTime is the wall-clock time at which this session authenticated.
+	AuthTime time.Time
+
+	// UpdatedAt is the wall-clock time of the most recent activity. The
+	// chooser uses this to sort accounts "most recent first".
+	UpdatedAt time.Time
+}
+
+// Accounts returns every live account in the chooser group, in unspecified
+// order. Callers that render the chooser sort by UpdatedAt descending so
+// the most recently active account appears first.
+func (m *Manager) Accounts(ctx context.Context, chooserGroupID string) ([]Account, error) {
+	if chooserGroupID == "" {
+		return nil, errors.New("sessions: Accounts requires ChooserGroupID")
+	}
+	sessions, err := m.store.ListByChooserGroup(ctx, chooserGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("sessions: list: %w", err)
+	}
+	out := make([]Account, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, Account{
+			SessionID: s.ID,
+			Subject:   s.Subject,
+			AuthTime:  s.AuthTime,
+			UpdatedAt: s.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
+// Removal describes the post-Remove cookie state. When Remaining is empty
+// the chooser group has been fully torn down and the caller MUST clear the
+// session cookie. When Cookie is non-empty the cookie's "current session"
+// has been rebound to a different account — the caller MUST set the
+// returned value as the new cookie payload.
+type Removal struct {
+	// Cookie is the new cookie value when the removed session was the
+	// current account; empty when no rebind was needed.
+	Cookie string
+
+	// CurrentSessionID is the new "current" account; empty when the
+	// chooser group has been fully torn down.
+	CurrentSessionID string
+
+	// Remaining is the set of session IDs still in the chooser group
+	// after the removal.
+	Remaining []string
+}
+
+// Remove deletes a single account from the chooser group. When the removed
+// session was the cookie's "current" account, Remove rebinds current to the
+// most recently active remaining account (sorted by UpdatedAt descending);
+// when the group becomes empty the caller MUST clear the cookie.
+//
+// removeID need not be live — Remove is idempotent for already-deleted
+// sessions, mirroring [Manager.Logout].
+func (m *Manager) Remove(ctx context.Context, chooserGroupID, currentSessionID, removeID string) (Removal, error) {
+	if chooserGroupID == "" || removeID == "" {
+		return Removal{}, errors.New("sessions: Remove requires ChooserGroupID and removeID")
+	}
+	if err := m.store.Delete(ctx, removeID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return Removal{}, fmt.Errorf("sessions: delete: %w", err)
+	}
+	remaining, err := m.store.ListByChooserGroup(ctx, chooserGroupID)
+	if err != nil {
+		return Removal{}, fmt.Errorf("sessions: list: %w", err)
+	}
+	out := Removal{Remaining: remainingIDs(remaining)}
+	if removeID != currentSessionID || len(remaining) == 0 {
+		// Either the removed account was not current (no cookie rebind
+		// needed) or the chooser is empty (caller clears cookie).
+		return out, nil
+	}
+	next := mostRecent(remaining)
+	now := m.clock().UTC()
+	value, err := m.codec.Encode(Payload{
+		ChooserGroupID:   chooserGroupID,
+		CurrentSessionID: next.ID,
+		IssuedAt:         now.Unix(),
+	})
+	if err != nil {
+		return Removal{}, err
+	}
+	out.Cookie = value
+	out.CurrentSessionID = next.ID
+	return out, nil
+}
+
+// LogoutAll deletes every session in the chooser group. The caller MUST
+// clear the session cookie after a successful return. The function is
+// idempotent: an empty chooser group succeeds silently so a double-click on
+// "log out everywhere" does not produce a 5xx.
+func (m *Manager) LogoutAll(ctx context.Context, chooserGroupID string) error {
+	if chooserGroupID == "" {
+		return errors.New("sessions: LogoutAll requires ChooserGroupID")
+	}
+	sessions, err := m.store.ListByChooserGroup(ctx, chooserGroupID)
+	if err != nil {
+		return fmt.Errorf("sessions: list: %w", err)
+	}
+	for _, s := range sessions {
+		if err := m.store.Delete(ctx, s.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("sessions: delete %s: %w", s.ID, err)
+		}
+	}
+	return nil
+}
+
+func remainingIDs(sessions []*store.Session) []string {
+	out := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, s.ID)
+	}
+	return out
+}
+
+// mostRecent returns the session with the latest UpdatedAt. The caller has
+// already filtered out empty slices.
+func mostRecent(sessions []*store.Session) *store.Session {
+	best := sessions[0]
+	for _, s := range sessions[1:] {
+		if s.UpdatedAt.After(best.UpdatedAt) {
+			best = s
+		}
+	}
+	return best
 }
 
 // newID generates a base64url-encoded random identifier of [IDLength]

@@ -624,6 +624,63 @@ func (s *txSessions) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (s *txSessions) ListByChooserGroup(ctx context.Context, groupID string) ([]*store.Session, error) {
+	if s.tx.closed.Load() {
+		return nil, errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	st := s.tx.ssStaging
+	out, seen := stagedSessionsByGroup(st, groupID, s.tx.clock)
+	st.parent.mu.RLock()
+	defer st.parent.mu.RUnlock()
+	for id, rec := range st.parent.m {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		if _, deleted := st.deleted[id]; deleted {
+			continue
+		}
+		if rec.ChooserGroupID != groupID {
+			continue
+		}
+		clone := cloneSession(rec)
+		if t, ok := st.touched[id]; ok {
+			clone.ExpiresAt = t.expiresAt
+			clone.UpdatedAt = t.updatedAt
+		}
+		if isExpired(clone.ExpiresAt, s.tx.clock) {
+			continue
+		}
+		out = append(out, clone)
+	}
+	return out, nil
+}
+
+// stagedSessionsByGroup collects sessions added in this transaction that
+// match the chooser group, returning them alongside the set of IDs already
+// observed so the parent walk can skip duplicates.
+func stagedSessionsByGroup(
+	st *sessionStaging,
+	groupID string,
+	clock Clock,
+) ([]*store.Session, map[string]struct{}) {
+	out := make([]*store.Session, 0)
+	seen := make(map[string]struct{})
+	for id, rec := range st.added {
+		if rec.ChooserGroupID != groupID {
+			continue
+		}
+		if isExpired(rec.ExpiresAt, clock) {
+			continue
+		}
+		out = append(out, cloneSession(rec))
+		seen[id] = struct{}{}
+	}
+	return out, seen
+}
+
 func (s *sessionStaging) lookup(id string) *store.Session {
 	if _, deleted := s.deleted[id]; deleted {
 		return nil

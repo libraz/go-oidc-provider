@@ -121,6 +121,10 @@ func (fakeSessionStore) Delete(_ context.Context, _ string) error {
 	return store.ErrNotFound
 }
 
+func (fakeSessionStore) ListByChooserGroup(_ context.Context, _ string) ([]*store.Session, error) {
+	return nil, nil
+}
+
 var _ store.SessionStore = (*fakeSessionStore)(nil)
 
 // --- PushedAuthRequestStore --------------------------------------------------------
