@@ -92,6 +92,56 @@ func TestNewSet_RejectsBadShape(t *testing.T) {
 	}
 }
 
+func TestSet_FindReturnsEntryByKeyID(t *testing.T) {
+	t.Parallel()
+
+	priv1 := mustECDSAKey(t)
+	priv2 := mustECDSAKey(t)
+	set, err := keys.NewSet([]keys.Entry{
+		{KeyID: "active", Signer: priv1},
+		{KeyID: "retiring", Signer: priv2},
+	})
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+
+	got, ok := set.Find("retiring")
+	if !ok {
+		t.Fatal("Find(retiring) ok=false, want true")
+	}
+	if got.KeyID != "retiring" {
+		t.Errorf("Find(retiring).KeyID=%q want retiring", got.KeyID)
+	}
+	if got.Signer != priv2 {
+		t.Error("Find(retiring) returned the wrong Signer")
+	}
+
+	if got, ok := set.Find("active"); !ok || got.KeyID != "active" {
+		t.Errorf("Find(active)=(%+v,%v) want active key", got, ok)
+	}
+}
+
+func TestSet_FindReturnsFalseForUnknownKeyID(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	set, err := keys.NewSet([]keys.Entry{{KeyID: "active", Signer: priv}})
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	got, ok := set.Find("missing")
+	if ok {
+		t.Errorf("Find(missing) ok=true want false (got=%+v)", got)
+	}
+	if got.KeyID != "" || got.Signer != nil {
+		t.Errorf("Find(missing) returned non-zero Entry=%+v", got)
+	}
+
+	if _, ok := set.Find(""); ok {
+		t.Error("Find(\"\") ok=true want false for empty kid lookup")
+	}
+}
+
 func TestSet_JWKSIsDefensiveCopy(t *testing.T) {
 	t.Parallel()
 

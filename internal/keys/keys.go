@@ -79,6 +79,20 @@ func NewSet(entries []Entry) (*Set, error) {
 // Callers MUST treat the returned [Entry] as read-only.
 func (s *Set) Active() Entry { return s.entries[0] }
 
+// Find returns the [Entry] whose KeyID matches keyID. The boolean is
+// false when no entry matches. Verification paths use this to look up
+// the public key for a JWS "kid" header; callers MUST treat a false
+// return as an unknown-kid signal and MUST NOT fall back to the active
+// key — doing so would defeat key rotation auditing.
+func (s *Set) Find(keyID string) (Entry, bool) {
+	for _, e := range s.entries {
+		if e.KeyID == keyID {
+			return e, true
+		}
+	}
+	return Entry{}, false
+}
+
 // JWKS returns the public JWKS view of the [Set]. The returned value is a
 // shallow copy: the slice header is fresh, but the entries are shared.
 // Callers MUST NOT mutate the returned [josev4.JSONWebKey] values.
