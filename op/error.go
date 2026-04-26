@@ -127,3 +127,11 @@ var ErrIssuerInvalid = &Error{
 	Code:        codeConfiguration,
 	Description: "issuer must be an absolute https URL with no query or fragment",
 }
+
+// ErrKeysetRequired is returned by [New] when [WithKeyset] is not supplied or
+// receives an empty slice. The library cannot mint signed tokens without at
+// least one signing key.
+var ErrKeysetRequired = &Error{
+	Code:        codeConfiguration,
+	Description: "WithKeyset is required",
+}

@@ -27,10 +27,12 @@ func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { panic("not 
 
 const validIssuer = "https://idp.example.com"
 
-func validBaseOpts() []op.Option {
+func validBaseOpts(tb testing.TB) []op.Option {
+	tb.Helper()
 	return []op.Option{
 		op.WithIssuer(validIssuer),
 		op.WithStore(stubStore{}),
+		op.WithKeyset(validKeyset(tb)),
 	}
 }
 
@@ -67,7 +69,7 @@ func TestNew_RequiresStore(t *testing.T) {
 func TestNew_AcceptsValidConfiguration(t *testing.T) {
 	t.Parallel()
 
-	provider, err := op.New(validBaseOpts()...)
+	provider, err := op.New(validBaseOpts(t)...)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,7 +121,7 @@ func TestWithClock_AcceptedAndUsable(t *testing.T) {
 	t.Parallel()
 
 	want := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
-	provider, err := op.New(append(validBaseOpts(), op.WithClock(fakeClock{now: want}))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithClock(fakeClock{now: want}))...)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +134,7 @@ func TestWithLogger_AcceptedAndUsable(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(testingDiscard{}, nil))
-	provider, err := op.New(append(validBaseOpts(), op.WithLogger(logger))...)
+	provider, err := op.New(append(validBaseOpts(t), op.WithLogger(logger))...)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

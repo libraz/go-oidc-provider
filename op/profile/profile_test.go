@@ -1,0 +1,55 @@
+package profile_test
+
+import (
+	"testing"
+
+	"github.com/libraz/go-oidc-provider/op/profile"
+)
+
+func TestProfile_String(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want string
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, "fapi2-baseline"},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, "fapi2-message-signing"},
+		{"fapi-ciba", profile.FAPICIBA, "fapi-ciba"},
+		{"igov-high", profile.IGovHigh, "igov-high"},
+		{"zero", profile.Profile(0), ""},
+		{"unknown", profile.Profile(99), ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.in.String(); got != tc.want {
+				t.Errorf("String()=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProfile_IsValid(t *testing.T) {
+	t.Parallel()
+
+	all := []profile.Profile{
+		profile.FAPI2Baseline,
+		profile.FAPI2MessageSigning,
+		profile.FAPICIBA,
+		profile.IGovHigh,
+	}
+	for _, p := range all {
+		if !p.IsValid() {
+			t.Errorf("%s must be valid", p)
+		}
+	}
+	if profile.Profile(0).IsValid() {
+		t.Error("zero must be invalid")
+	}
+	if profile.Profile(200).IsValid() {
+		t.Error("out-of-range must be invalid")
+	}
+}
