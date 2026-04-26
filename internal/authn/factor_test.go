@@ -17,27 +17,32 @@ func TestFactorAMRValueKnownTypes(t *testing.T) {
 	}{
 		{
 			name: "password",
-			in:   authn.Factor{Type: authn.FactorTypePassword, AssuranceLevel: op.AAL1},
+			in:   authn.Factor{Type: op.FactorPassword, AssuranceLevel: op.AAL1},
 			want: "pwd",
 		},
 		{
 			name: "totp",
-			in:   authn.Factor{Type: authn.FactorTypeTOTP, AssuranceLevel: op.AAL2},
+			in:   authn.Factor{Type: op.FactorTOTP, AssuranceLevel: op.AAL2},
 			want: "otp",
 		},
 		{
 			name: "recovery_code",
-			in:   authn.Factor{Type: authn.FactorTypeRecoveryCode, AssuranceLevel: op.AAL2},
+			in:   authn.Factor{Type: op.FactorRecoveryCode, AssuranceLevel: op.AAL2},
+			want: "otp",
+		},
+		{
+			name: "email_otp",
+			in:   authn.Factor{Type: op.FactorEmailOTP, AssuranceLevel: op.AAL2},
 			want: "otp",
 		},
 		{
 			name: "passkey_no_uv",
-			in:   authn.Factor{Type: authn.FactorTypePasskey, AssuranceLevel: op.AAL2, UserVerified: false},
+			in:   authn.Factor{Type: op.FactorPasskey, AssuranceLevel: op.AAL2, UserVerified: false},
 			want: "swk",
 		},
 		{
 			name: "passkey_uv",
-			in:   authn.Factor{Type: authn.FactorTypePasskey, AssuranceLevel: op.AAL2, UserVerified: true},
+			in:   authn.Factor{Type: op.FactorPasskey, AssuranceLevel: op.AAL2, UserVerified: true},
 			want: "hwk",
 		},
 	}
@@ -60,8 +65,8 @@ func TestFactorAMRValueKnownTypes(t *testing.T) {
 func TestFactorAMRValuePasskeyUVSwitch(t *testing.T) {
 	t.Parallel()
 
-	noUV := authn.Factor{Type: authn.FactorTypePasskey, UserVerified: false}
-	withUV := authn.Factor{Type: authn.FactorTypePasskey, UserVerified: true}
+	noUV := authn.Factor{Type: op.FactorPasskey, UserVerified: false}
+	withUV := authn.Factor{Type: op.FactorPasskey, UserVerified: true}
 
 	if got := noUV.AMRValue(); got != "swk" {
 		t.Errorf("non-UV passkey AMRValue() = %q, want %q", got, "swk")
@@ -77,7 +82,7 @@ func TestFactorAMRValuePasskeyUVSwitch(t *testing.T) {
 func TestFactorAMRValueUnknownType(t *testing.T) {
 	t.Parallel()
 
-	cases := []string{"", "custom", "webauthn", "PASSWORD" /* case-sensitive */}
+	cases := []op.FactorType{"", "custom", "webauthn", "PASSWORD" /* case-sensitive */}
 	for _, typ := range cases {
 		f := authn.Factor{Type: typ, AssuranceLevel: op.AAL1}
 		if got := f.AMRValue(); got != "" {

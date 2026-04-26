@@ -48,28 +48,28 @@ func TestAggregateSingleFactor(t *testing.T) {
 	}{
 		{
 			name:      "password",
-			factor:    authn.Factor{Type: authn.FactorTypePassword, AssuranceLevel: op.AAL1},
+			factor:    authn.Factor{Type: op.FactorPassword, AssuranceLevel: op.AAL1},
 			wantACR:   "urn:mace:incommon:iap:bronze",
 			wantAMR:   []string{"pwd"},
 			wantLevel: op.AAL1,
 		},
 		{
 			name:      "totp",
-			factor:    authn.Factor{Type: authn.FactorTypeTOTP, AssuranceLevel: op.AAL2},
+			factor:    authn.Factor{Type: op.FactorTOTP, AssuranceLevel: op.AAL2},
 			wantACR:   "urn:mace:incommon:iap:silver",
 			wantAMR:   []string{"otp"},
 			wantLevel: op.AAL2,
 		},
 		{
 			name:      "passkey_uv",
-			factor:    authn.Factor{Type: authn.FactorTypePasskey, AssuranceLevel: op.AAL2, UserVerified: true},
+			factor:    authn.Factor{Type: op.FactorPasskey, AssuranceLevel: op.AAL2, UserVerified: true},
 			wantACR:   "urn:mace:incommon:iap:silver",
 			wantAMR:   []string{"hwk"},
 			wantLevel: op.AAL2,
 		},
 		{
 			name:      "passkey_hardware",
-			factor:    authn.Factor{Type: authn.FactorTypePasskey, AssuranceLevel: op.AAL3, UserVerified: true},
+			factor:    authn.Factor{Type: op.FactorPasskey, AssuranceLevel: op.AAL3, UserVerified: true},
 			wantACR:   "http://idmanagement.gov/ns/assurance/loa/4",
 			wantAMR:   []string{"hwk"},
 			wantLevel: op.AAL3,
@@ -98,8 +98,8 @@ func TestAggregatePasswordPlusTOTP(t *testing.T) {
 	t.Parallel()
 
 	factors := []authn.Factor{
-		{Type: authn.FactorTypePassword, AssuranceLevel: op.AAL1},
-		{Type: authn.FactorTypeTOTP, AssuranceLevel: op.AAL2},
+		{Type: op.FactorPassword, AssuranceLevel: op.AAL1},
+		{Type: op.FactorTOTP, AssuranceLevel: op.AAL2},
 	}
 	acr, amr, level := authn.Aggregate(factors)
 
@@ -135,8 +135,8 @@ func TestAggregatePasswordPlusRecoveryCode(t *testing.T) {
 	t.Parallel()
 
 	factors := []authn.Factor{
-		{Type: authn.FactorTypePassword, AssuranceLevel: op.AAL1},
-		{Type: authn.FactorTypeRecoveryCode, AssuranceLevel: op.AAL2},
+		{Type: op.FactorPassword, AssuranceLevel: op.AAL1},
+		{Type: op.FactorRecoveryCode, AssuranceLevel: op.AAL2},
 	}
 	acr, amr, level := authn.Aggregate(factors)
 
@@ -161,8 +161,8 @@ func TestAggregateTOTPTwiceNoMFA(t *testing.T) {
 	t.Parallel()
 
 	factors := []authn.Factor{
-		{Type: authn.FactorTypeTOTP, AssuranceLevel: op.AAL2},
-		{Type: authn.FactorTypeTOTP, AssuranceLevel: op.AAL2},
+		{Type: op.FactorTOTP, AssuranceLevel: op.AAL2},
+		{Type: op.FactorTOTP, AssuranceLevel: op.AAL2},
 	}
 	acr, amr, level := authn.Aggregate(factors)
 
@@ -185,8 +185,8 @@ func TestAggregatePasskeyUVPlusTOTP(t *testing.T) {
 	t.Parallel()
 
 	factors := []authn.Factor{
-		{Type: authn.FactorTypePasskey, AssuranceLevel: op.AAL2, UserVerified: true},
-		{Type: authn.FactorTypeTOTP, AssuranceLevel: op.AAL2},
+		{Type: op.FactorPasskey, AssuranceLevel: op.AAL2, UserVerified: true},
+		{Type: op.FactorTOTP, AssuranceLevel: op.AAL2},
 	}
 	acr, amr, level := authn.Aggregate(factors)
 
@@ -261,7 +261,7 @@ func TestAggregatePasswordAtAAL0(t *testing.T) {
 	t.Parallel()
 
 	factors := []authn.Factor{
-		{Type: authn.FactorTypePassword, AssuranceLevel: op.AAL0},
+		{Type: op.FactorPassword, AssuranceLevel: op.AAL0},
 	}
 	acr, amr, level := authn.Aggregate(factors)
 
@@ -284,7 +284,7 @@ func TestAggregateMFAGuardBelowAAL2(t *testing.T) {
 	t.Parallel()
 
 	factors := []authn.Factor{
-		{Type: authn.FactorTypePassword, AssuranceLevel: op.AAL1},
+		{Type: op.FactorPassword, AssuranceLevel: op.AAL1},
 		// A second knowledge-equivalent factor at AAL1.
 		{Type: "custom", AssuranceLevel: op.AAL1},
 	}
@@ -311,8 +311,8 @@ func TestAggregateDoesNotMutateInput(t *testing.T) {
 	t.Parallel()
 
 	in := []authn.Factor{
-		{Type: authn.FactorTypeTOTP, AssuranceLevel: op.AAL2},
-		{Type: authn.FactorTypePassword, AssuranceLevel: op.AAL1},
+		{Type: op.FactorTOTP, AssuranceLevel: op.AAL2},
+		{Type: op.FactorPassword, AssuranceLevel: op.AAL1},
 	}
 	snapshot := make([]authn.Factor, len(in))
 	copy(snapshot, in)

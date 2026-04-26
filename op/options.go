@@ -90,6 +90,37 @@ type config struct {
 	// discovery, and accept calls to
 	// [Provider.IssueInitialAccessToken].
 	dcr *RegistrationOption
+
+	// authenticators carries the [Authenticator] values registered
+	// through [WithAuthenticators]. The orchestrator (forthcoming)
+	// presents factors in this order when [RiskAssessor] does not
+	// override the choice. Order is preserved; duplicates by
+	// [Authenticator.Type] are rejected at construction time.
+	authenticators []Authenticator
+
+	// captcha is the optional [CaptchaVerifier] the orchestrator
+	// consults to validate captcha tokens server-side. Nil means
+	// "no captcha configured"; at most one verifier may be
+	// registered (§M.6.1).
+	captcha CaptchaVerifier
+
+	// risk is the optional [RiskAssessor] the orchestrator consults
+	// at each [RiskStage]. Nil means "always allow"; at most one
+	// assessor may be registered (§M.6.2).
+	risk RiskAssessor
+
+	// loginObservers carries the [LoginAttemptObserver] values
+	// registered through [WithLoginAttemptObserver]. Multiple
+	// observers stack: the orchestrator fans out every
+	// [LoginAttempt] to each in registration order (§M.6.3).
+	loginObservers []LoginAttemptObserver
+
+	// interactions carries the non-factor [Interaction] values
+	// registered through [WithInteractions]. The orchestrator inserts
+	// them per [InteractionTrigger]; intra-trigger ordering follows
+	// registration order, cross-trigger ordering is orchestrator-
+	// defined (§E.9).
+	interactions []Interaction
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -242,6 +273,67 @@ func (c *config) validate() error {
 	}
 	if err := c.validateRegistration(); err != nil {
 		return err
+	}
+	if err := c.validateAuthenticators(); err != nil {
+		return err
+	}
+	if err := c.validateInteractions(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateAuthenticators enforces uniqueness of [Authenticator.Type]
+// across the registered set. The orchestrator (task B) layers further
+// rules on top — minimum cardinality, capability checks against the
+// risk engine — but the bare uniqueness invariant is owned here so
+// duplicate registrations surface at [New] rather than the first
+// chain run.
+func (c *config) validateAuthenticators() error {
+	if len(c.authenticators) == 0 {
+		// Zero authenticators is permitted at this layer; the
+		// orchestrator is responsible for surfacing the missing-
+		// authenticator construction error once it lands.
+		return nil
+	}
+	seen := make(map[FactorType]struct{}, len(c.authenticators))
+	for _, a := range c.authenticators {
+		t := a.Type()
+		if _, dup := seen[t]; dup {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAuthenticators: duplicate FactorType " + string(t),
+			}
+		}
+		seen[t] = struct{}{}
+	}
+	return nil
+}
+
+// validateInteractions enforces uniqueness of [Interaction.Name]
+// across the registered set. The same rationale as
+// [config.validateAuthenticators] applies: surface registration
+// mistakes at [New] rather than the first chain run.
+func (c *config) validateInteractions() error {
+	if len(c.interactions) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(c.interactions))
+	for _, ix := range c.interactions {
+		name := ix.Name()
+		if name == "" {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithInteractions: Interaction.Name must not be empty",
+			}
+		}
+		if _, dup := seen[name]; dup {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithInteractions: duplicate Interaction.Name " + name,
+			}
+		}
+		seen[name] = struct{}{}
 	}
 	return nil
 }
@@ -791,6 +883,157 @@ func WithScope(s Scope) Option {
 func WithCrossSiteFlow() Option {
 	return optionFunc(func(c *config) error {
 		c.crossSiteFlow = true
+		return nil
+	})
+}
+
+// WithAuthenticators registers one or more [Authenticator] values.
+// Order is preserved: the orchestrator presents factors in
+// registration order when no [RiskAssessor] overrides the choice.
+// Calling WithAuthenticators multiple times appends to the configured
+// set; duplicates by [Authenticator.Type] are rejected at [New]
+// construction time.
+//
+// At least one authenticator is required for an interactive [Provider]
+// to mount /authorize. The construction error for the empty-set case
+// is surfaced by the orchestrator once it lands; this option only
+// stores the registered values.
+//
+// Experimental: the orchestrator that consumes this slice is being
+// designed; the option name and contract are stable but the exact
+// per-authenticator semantics may evolve.
+func WithAuthenticators(a ...Authenticator) Option {
+	return optionFunc(func(c *config) error {
+		if len(a) == 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAuthenticators requires at least one Authenticator",
+			}
+		}
+		for i, item := range a {
+			if item == nil {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithAuthenticators received nil Authenticator at position " + strconv.Itoa(i),
+				}
+			}
+		}
+		c.authenticators = append(c.authenticators, a...)
+		return nil
+	})
+}
+
+// WithCaptchaVerifier wires the [CaptchaVerifier] used to validate
+// captcha tokens server-side. At most one verifier is permitted; a
+// second [WithCaptchaVerifier] call fails [New] with a structured
+// configuration error so duplicate registrations surface as
+// misconfigurations rather than silently overwriting the earlier
+// value.
+//
+// See docs/plans/002-product-design.md §M.6.1.
+//
+// Experimental: the orchestrator that drives this verifier is being
+// designed.
+func WithCaptchaVerifier(v CaptchaVerifier) Option {
+	return optionFunc(func(c *config) error {
+		if v == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithCaptchaVerifier received nil CaptchaVerifier",
+			}
+		}
+		if c.captcha != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithCaptchaVerifier may be called at most once",
+			}
+		}
+		c.captcha = v
+		return nil
+	})
+}
+
+// WithRiskAssessor wires the [RiskAssessor] consulted at each
+// [RiskStage]. At most one assessor is permitted; a second
+// [WithRiskAssessor] call fails [New] with a structured configuration
+// error.
+//
+// See docs/plans/002-product-design.md §M.6.2.
+//
+// Experimental: the orchestrator that drives this assessor is being
+// designed.
+func WithRiskAssessor(a RiskAssessor) Option {
+	return optionFunc(func(c *config) error {
+		if a == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithRiskAssessor received nil RiskAssessor",
+			}
+		}
+		if c.risk != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithRiskAssessor may be called at most once",
+			}
+		}
+		c.risk = a
+		return nil
+	})
+}
+
+// WithLoginAttemptObserver registers a [LoginAttemptObserver]. Multiple
+// observers stack; the orchestrator fans out every [LoginAttempt] to
+// each registered observer in registration order. This is the brute-
+// force / risk-counter feed; general audit events are emitted by the
+// library to slog (§N.2) and observers MUST NOT duplicate them here.
+//
+// See docs/plans/002-product-design.md §M.6.3.
+//
+// Experimental: the orchestrator that emits these events is being
+// designed.
+func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
+	return optionFunc(func(c *config) error {
+		if o == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithLoginAttemptObserver received nil LoginAttemptObserver",
+			}
+		}
+		c.loginObservers = append(c.loginObservers, o)
+		return nil
+	})
+}
+
+// WithInteractions registers non-factor [Interaction] values (T&C,
+// KYC, device-trust prompts, ...). Order is preserved within an
+// [InteractionTrigger] bucket; cross-trigger ordering is orchestrator-
+// defined per §E.9. Calling WithInteractions multiple times appends;
+// duplicates by [Interaction.Name] are rejected at [New] construction
+// time.
+//
+// The library-built-in consent screen is registered automatically by
+// the orchestrator (task B); user extensions ship with a unique
+// dotted [Interaction.Name] (e.g., "myorg.tos.accept").
+//
+// Experimental: the orchestrator that drives these interactions is
+// being designed.
+func WithInteractions(i ...Interaction) Option {
+	return optionFunc(func(c *config) error {
+		if len(i) == 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithInteractions requires at least one Interaction",
+			}
+		}
+		for idx, item := range i {
+			if item == nil {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithInteractions received nil Interaction at position " + strconv.Itoa(idx),
+				}
+			}
+		}
+		c.interactions = append(c.interactions, i...)
 		return nil
 	})
 }

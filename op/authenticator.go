@@ -1,0 +1,214 @@
+package op
+
+import (
+	"context"
+	"strings"
+	"time"
+)
+
+// FactorType is the typed identifier for an [Authenticator] method. The
+// string values double as identifiers in audit logs, [op/interaction]
+// JSON, and the RFC 8176 amr derivation, so they MUST stay stable: the
+// constants are the wire form and not just symbolic names. New built-in
+// values ship with the library; embedders extend the namespace through
+// dotted user identifiers (see [FactorType.IsUserDefined]).
+//
+// See docs/plans/002-product-design.md §E.2 for the full schema.
+type FactorType string
+
+// Built-in [FactorType] values. The string content is the canonical
+// identifier; renaming any of these breaks audit log continuity and
+// orchestrator routing tables and is therefore a v1.0 freeze surface.
+//
+// User extensions: any FactorType whose string value contains a "." is
+// treated as user-defined (e.g., "myorg.sms_otp"). Reserved bare names
+// are exhausted by the constants below; pick a prefix.
+const (
+	// FactorPassword is a knowledge factor (RFC 8176 amr "pwd").
+	FactorPassword FactorType = "password"
+
+	// FactorTOTP is RFC 6238 time-based one-time password (amr "otp").
+	FactorTOTP FactorType = "totp"
+
+	// FactorPasskey is a WebAuthn assertion. RFC 8176 amr value
+	// depends on the user-verification bit: "hwk" with UV, "swk"
+	// without (see [internal/authn.Factor.AMRValue]).
+	FactorPasskey FactorType = "passkey"
+
+	// FactorRecoveryCode is a single-use pre-issued numeric code
+	// stored at enrolment (amr "otp").
+	FactorRecoveryCode FactorType = "recovery_code"
+
+	// FactorEmailOTP is a code delivered through email. The factor
+	// emits two prompts (send / verify) and is amr "otp".
+	FactorEmailOTP FactorType = "email_otp"
+)
+
+// IsBuiltin reports whether t is one of the [FactorType] constants
+// declared by the library. Built-in identifiers are reserved: a user
+// extension MUST NOT match any of them, and the orchestrator rejects
+// duplicates at construction time.
+func (t FactorType) IsBuiltin() bool {
+	switch t {
+	case FactorPassword, FactorTOTP, FactorPasskey, FactorRecoveryCode, FactorEmailOTP:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsUserDefined reports whether t is a non-empty user extension. The
+// rule is intentionally simple — a dotted prefix segregates user
+// extensions from the bare built-in identifiers — so that Authenticator
+// authors do not need to consult a separate registry to verify their
+// chosen name is safe.
+func (t FactorType) IsUserDefined() bool {
+	if t == "" || t.IsBuiltin() {
+		return false
+	}
+	return strings.Contains(string(t), ".")
+}
+
+// String returns the underlying identifier. Provided for symmetry with
+// the other typed-string identifiers in this package.
+func (t FactorType) String() string { return string(t) }
+
+// BeginInput carries the per-attempt context an [Authenticator] needs
+// to start a ceremony. Subject is empty when the user has not yet been
+// identified (the first factor in the chain); subsequent factors
+// receive the subject the previous factor's [Result] returned.
+//
+// AuthTime is the orchestrator's reference clock for this attempt
+// (typically the wall-clock time the interaction was created). Authn
+// implementations MUST NOT call [time.Now] directly; reading AuthTime
+// keeps the chain run consistent with the [Clock] the [Provider] was
+// configured with.
+type BeginInput struct {
+	// Subject is the canonical OP-internal subject identifier the
+	// previous factor produced, or "" for the first factor in a
+	// chain.
+	Subject string
+
+	// ClientID is the OAuth client_id of the relying party that
+	// started the authorization request.
+	ClientID string
+
+	// AuthTime is the reference time for this attempt (typically the
+	// interaction creation time).
+	AuthTime time.Time
+}
+
+// Authenticator is the protocol-side state machine for a single
+// authentication factor. Implementations are stateless across calls;
+// per-attempt state is carried by [Prompt.StateRef].
+//
+// Multi-screen factors (e.g., email OTP: enter address -> enter code)
+// are expressed by returning a [Step] that contains a [Prompt] from
+// [Authenticator.Begin] and further Prompts from
+// [Authenticator.Continue] until [Step.Result] is populated and the
+// factor is complete.
+//
+// Implementation responsibilities (docs/plans/002-product-design.md
+// §E.2.2):
+//
+//   - User-existence leak defence is the implementation's
+//     responsibility: response shape and timing MUST be identical for
+//     registered vs unknown identifiers.
+//   - [Authenticator.AMR] MUST return one of the RFC 8176 §2 registered
+//     values ("pwd", "otp", "hwk", "swk", "face", "fpt", "iris", "geo",
+//     "kba", ...) or an empty string. Foreign values are dropped by
+//     the orchestrator (warning audit log) and never reach amr_history.
+//   - [Authenticator.Prompts] MUST declare every [Prompt.Type] the
+//     authenticator may emit so a Driver can validate its routing
+//     table at startup.
+//
+// Implementations MUST be safe for concurrent use by multiple
+// goroutines; the orchestrator dispatches across goroutines without
+// per-instance locking.
+type Authenticator interface {
+	// Type returns the [FactorType] this authenticator implements.
+	// Two registered authenticators MUST NOT share a Type.
+	Type() FactorType
+
+	// AAL returns the assurance level a successful Continue raises
+	// the session to. The orchestrator takes the maximum across all
+	// completed factors when deriving the session AAL.
+	AAL() AAL
+
+	// AMR returns the RFC 8176 §2 registered value contributed to
+	// the amr claim, or "" to suppress this factor's contribution.
+	AMR() string
+
+	// Prompts returns every [Prompt.Type] this authenticator may
+	// emit. The slice is treated as read-only by the orchestrator.
+	Prompts() []string
+
+	// Begin starts the ceremony. The returned [Step] either carries
+	// a [Prompt] (multi-step factor) or a populated [Result]
+	// (single-step factor that completes immediately, rare).
+	Begin(ctx context.Context, in BeginInput) (Step, error)
+
+	// Continue advances the ceremony with the SPA's submission. A
+	// nil-Prompt nil-Result Step is invalid and rejected by the
+	// orchestrator.
+	Continue(ctx context.Context, sub FormSubmission) (Step, error)
+}
+
+// Interaction is a non-authentication screen unit (T&C acceptance,
+// KYC gate, device-trust prompt, ...). Unlike [Authenticator], an
+// Interaction does not bind a subject — the subject is already known.
+// Interactions do not contribute to amr / acr; they only inject
+// [Prompt] sequences at the chosen [InteractionTrigger] point.
+//
+// Built-in: the consent screen (§A.5) is registered automatically.
+// User extensions ship with a unique [Interaction.Name] prefixed by
+// the org identifier (e.g., "myorg.tos.accept"). See §E.9.
+//
+// Implementations MUST be safe for concurrent use by multiple
+// goroutines.
+type Interaction interface {
+	// Name returns the unique identifier for this interaction. User
+	// extensions MUST use a dotted prefix the org owns; built-ins
+	// reserve the bare names ("consent", ...).
+	Name() string
+
+	// Trigger reports when the orchestrator inserts the interaction
+	// into the chain. See [InteractionTrigger].
+	Trigger() InteractionTrigger
+
+	// Begin starts the interaction. The returned [Step] follows the
+	// same shape rules as [Authenticator.Begin] except that any
+	// returned [Result] MUST leave [Result.Subject] empty (subject is
+	// already bound elsewhere).
+	Begin(ctx context.Context, in BeginInput) (Step, error)
+
+	// Continue advances the interaction with the SPA's submission.
+	Continue(ctx context.Context, sub FormSubmission) (Step, error)
+}
+
+// InteractionTrigger declares when the orchestrator inserts an
+// [Interaction] into the chain. The values are intentionally a small
+// closed set — the orchestrator handles cross-trigger ordering — so
+// adding a new trigger is a v1.x extension rather than a per-call
+// option.
+type InteractionTrigger int
+
+// InteractionTrigger values. See §E.9 for the orchestrator's
+// per-trigger ordering rules.
+const (
+	// TriggerBeforeAuthn fires before any factor's Begin.
+	// Suitable for region gates that do not need an identified user.
+	TriggerBeforeAuthn InteractionTrigger = iota
+
+	// TriggerAfterAuthn fires after the last factor's Continue
+	// completes and the subject is bound. Suitable for T&C / KYC.
+	TriggerAfterAuthn
+
+	// TriggerBeforeToken fires after consent and before the token
+	// endpoint can mint tokens. Suitable for device trust prompts.
+	TriggerBeforeToken
+
+	// TriggerAlways fires at every chain stage. Reserved for cross-
+	// cutting interactions; orchestrator may de-duplicate.
+	TriggerAlways
+)
