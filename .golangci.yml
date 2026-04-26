@@ -1,0 +1,169 @@
+version: "2"
+
+run:
+  timeout: 5m
+  go: "1.23"
+  modules-download-mode: readonly
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - gosec
+    - errorlint
+    - revive
+    - gocritic
+    - depguard
+    - bodyclose
+    - noctx
+    - nilerr
+    - nilnil
+    - nolintlint
+    - exhaustive
+    - ireturn
+    - gocognit
+    - cyclop
+    - prealloc
+    - predeclared
+    - tagalign
+    - perfsprint
+    - copyloopvar
+    - intrange
+    - testpackage
+    - tparallel
+    - paralleltest
+    - nakedret
+    - forbidigo
+    - gochecknoinits
+    - gochecknoglobals
+
+  settings:
+    cyclop:
+      max-complexity: 15
+    gocognit:
+      min-complexity: 15
+    revive:
+      severity: error
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: var-naming
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: receiver-naming
+        - name: indent-error-flow
+        - name: unused-parameter
+        - name: time-equal
+        - name: defer
+        - name: empty-block
+    forbidigo:
+      forbid:
+        - pattern: ^time\.Now$
+          msg: "use a Clock obtained from internal/timex instead — see ADR 0002"
+        - pattern: ^math/rand\.
+          msg: "math/rand is forbidden; use crypto/rand via internal/keys"
+        - pattern: ^panic$
+          msg: "panic is forbidden in library code; return an error"
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          deny:
+            - pkg: math/rand
+              desc: "use crypto/rand via internal/keys"
+            - pkg: io/ioutil
+              desc: "deprecated; use io / os"
+            - pkg: github.com/sirupsen/logrus
+              desc: "use log/slog"
+            - pkg: go.uber.org/zap
+              desc: "use log/slog"
+        # crypto/rand may only be imported from a small allow-list of
+        # packages. Files NOT matching the listed globs cannot import it.
+        # The leading "!" inverts the glob: "this rule applies to files
+        # that do NOT match" — i.e. the deny only fires outside the allow-
+        # list. Test files are exempt so test fixtures can build keys.
+        crypto-rand-restrict:
+          list-mode: lax
+          files:
+            - "!**/internal/keys/**"
+            - "!**/internal/jose/**"
+            - "!**/internal/dpop/**"
+            - "!**/internal/csrf/**"
+            - "!**/internal/cookie/**"
+            - "!**/internal/tokens/**"
+            - "!**/internal/authn/recovery/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: crypto/rand
+              desc: "crypto/rand is allow-listed; route randomness through internal/keys"
+        # Go's /internal/ path rule already blocks external imports of
+        # internal/. This rule additionally blocks intra-module callers
+        # outside op/ and internal/ (i.e. examples/, cmd/) from reaching
+        # in. The op/ public namespace is allowed: it is the bridge
+        # layer that wires user-supplied configuration into private
+        # implementation packages.
+        internal-isolation:
+          list-mode: lax
+          files:
+            - "!**/*_test.go"
+            - "!**/internal/**"
+            - "!**/op/**"
+          deny:
+            - pkg: github.com/libraz/go-oidc-provider/internal
+              desc: "internal/* may only be reached via the op/ namespace"
+    exhaustive:
+      default-signifies-exhaustive: true
+    gosec:
+      excludes:
+        - G104
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - github.com/libraz/go-oidc-provider/op\.Option
+        - github.com/libraz/go-oidc-provider/op/store\..*
+        - github.com/libraz/go-oidc-provider/op/interaction\..*
+        - github.com/libraz/go-oidc-provider/op/grant\..*
+        - github.com/libraz/go-oidc-provider/op/feature\..*
+        - github.com/libraz/go-oidc-provider/op/profile\..*
+        - github.com/libraz/go-oidc-provider/internal/log\.Logger
+    nakedret:
+      max-func-lines: 30
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gochecknoglobals
+          - gochecknoinits
+          - cyclop
+          - gocognit
+          - errcheck
+          - forbidigo
+      - path: examples/
+        linters:
+          - depguard
+          - gochecknoglobals
+          - gosec
+      - path: cmd/op-demo/
+        linters:
+          - gochecknoinits
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/libraz/go-oidc-provider

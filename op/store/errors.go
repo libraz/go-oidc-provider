@@ -1,0 +1,38 @@
+package store
+
+import "errors"
+
+// ErrNotFound is returned by Find-style methods when the requested record does
+// not exist. Backends MUST return ErrNotFound (directly or wrapped with
+// [errors.Is]-compatible chaining) rather than a backend-specific "no rows"
+// error, so that handler code can use [errors.Is] uniformly across backends.
+var ErrNotFound = errors.New("store: record not found")
+
+// ErrAlreadyExists is returned by Save-style methods when a record with the
+// same primary key (or a unique secondary key) already exists. Backends MUST
+// return ErrAlreadyExists in preference to backend-specific duplicate-key
+// errors so that grant handlers can distinguish "first write wins" cases from
+// transport faults.
+var ErrAlreadyExists = errors.New("store: record already exists")
+
+// ErrAlreadyConsumed is returned by Consume-style methods when the targeted
+// one-time record has already been marked consumed by an earlier call. It is
+// the signal that grant handlers use to detect replay of single-use tokens
+// such as authorization codes (RFC 6749 §4.1.2) and pushed authorization
+// requests (RFC 9126 §2.2). Backends MUST distinguish ErrAlreadyConsumed
+// from [ErrNotFound]: the former proves the record existed and was used,
+// while the latter is silent on prior usage.
+var ErrAlreadyConsumed = errors.New("store: record already consumed")
+
+// ErrConflict is returned when an optimistic-locking or compare-and-swap
+// update fails because another writer modified the record concurrently.
+// Callers MAY retry the operation after re-reading the record. Backends that
+// have no concept of versioned updates need never return ErrConflict.
+var ErrConflict = errors.New("store: concurrent modification")
+
+// ErrTxRequired is returned when an operation that requires a transaction is
+// invoked on a substore handle that was obtained outside one. It is used by
+// backends that refuse to run transactional-cluster mutations on the
+// non-transactional handle path; backends without that distinction need
+// never return it.
+var ErrTxRequired = errors.New("store: operation requires a transaction")

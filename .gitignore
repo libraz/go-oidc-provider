@@ -1,0 +1,65 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+build/
+dist/
+
+# Test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+profile.out
+testdata/.cache/
+
+# Fuzz
+testdata/fuzz/
+**/testdata/fuzz/*/
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# Environment / secrets — never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Tool caches
+.golangci-cache/
+.cache/
+
+# Generated docs
+docs/godoc/
+
+# Local override
+local/
+tmp/
+
+# Internal-only artefacts (kept locally, never committed). The OSS-facing
+# documentation lives in README.md, CHANGELOG.md, SECURITY.md, NOTICE,
+# and CONTRIBUTING.md. The entire docs/ tree is internal working
+# material and not part of the published repository.
+CLAUDE.md
+.claude/
+docs/
