@@ -155,3 +155,16 @@ in any minor release.
   uses the OP's active signing key and stamps `typ: token-introspection+jwt`.
   Discovery advertises `introspection_signing_alg_values_supported: ["ES256"]`
   whenever the Introspect feature is enabled.
+- RFC 7009 OAuth 2.0 Token Revocation. Enabled via
+  `op.WithFeature(feature.Revoke)`. The `/revoke` endpoint authenticates
+  the calling client through `internal/clientauth`, dispatches on token
+  shape (JWT-shaped → access-token verifier; opaque → refresh-token
+  store), enforces same-client-only authorization, and walks the
+  refresh-token rotation chain to its root before calling
+  `RefreshTokens.RevokeChain`. Per RFC 7009 §2.2 the response is always
+  HTTP 200 with an empty body — the server intentionally hides whether
+  the token was found, valid, or already revoked. JWT access-token
+  revocation is a no-op (the OP does not maintain a denylist in v1.0;
+  the token expires naturally). Discovery advertises
+  `revocation_endpoint` and
+  `revocation_endpoint_auth_methods_supported`.

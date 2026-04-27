@@ -22,6 +22,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
+	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
@@ -191,6 +192,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 		return nil, err
 	}
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet)
+	mountRevocationEndpoint(mux, cfg, keySet)
 	mountRegistrationEndpoint(mux, cfg, scopes)
 	return mux, nil
 }
@@ -456,6 +458,33 @@ func mountIntrospectionEndpoint(mux *http.ServeMux, cfg *config, scopes *scopere
 			Scopes:        scopes,
 			Clock:         cfg.clock,
 			SigningKey:    tokens.FromInternalEntry(keySet.Active()),
+		}),
+	)
+}
+
+// mountRevocationEndpoint registers the /revoke handler when the
+// [feature.Revoke] flag is enabled. Without the flag the route is
+// absent — discovery already gates the advertisement on the same
+// flag, so the OP cannot tell clients the endpoint exists while
+// quietly serving 404. The handler reuses the OP keyset (so the JWT
+// branch can verify access-token signatures during the
+// acknowledgement check) and the refresh-token substore (so the
+// opaque branch can walk the rotation chain to its root before
+// calling RevokeChain). Refresh-token revocation is a no-op when the
+// backend returns a nil RefreshTokenStore, which the revokeendpoint
+// package documents as "opaque path always silently 200".
+func mountRevocationEndpoint(mux *http.ServeMux, cfg *config, keySet *keys.Set) {
+	if !featureEnabled(cfg.features, feature.Revoke) {
+		return
+	}
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.Revoke),
+		revokeendpoint.Handler(revokeendpoint.Deps{
+			Issuer:        cfg.issuer,
+			Clients:       cfg.store.Clients(),
+			RefreshTokens: cfg.store.RefreshTokens(),
+			Keys:          keySet,
+			Clock:         cfg.clock,
 		}),
 	)
 }

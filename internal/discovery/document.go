@@ -44,6 +44,15 @@ type Document struct {
 	// revocation endpoint. Only emitted when the feature is enabled.
 	RevocationEndpoint string `json:"revocation_endpoint,omitempty"`
 
+	// RevocationEndpointAuthMethodsSupported lists the client
+	// authentication methods accepted at the revocation endpoint.
+	// RFC 8414 §2 advertises the field separately from the token
+	// endpoint's so deployments may, in principle, accept different
+	// methods at each. v1.0 mirrors the token endpoint's list (the
+	// revocation handler reuses the same authentication machinery)
+	// and only emits the field when the Revoke feature is enabled.
+	RevocationEndpointAuthMethodsSupported []string `json:"revocation_endpoint_auth_methods_supported,omitempty"`
+
 	// PushedAuthorizationRequestEndpoint is the absolute URL of the
 	// RFC 9126 PAR endpoint. Only emitted when the feature is enabled.
 	PushedAuthorizationRequestEndpoint string `json:"pushed_authorization_request_endpoint,omitempty"`

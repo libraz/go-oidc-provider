@@ -166,6 +166,16 @@ func Build(in Input) Document {
 		// signing key is shared.
 		doc.IntrospectionSigningAlgValuesSupported = []string{"ES256"}
 	}
+	// RFC 8414 §2: the revocation endpoint advertises its client
+	// authentication methods separately from the token endpoint. v1.0
+	// reuses the same client-auth machinery at both, so the list
+	// mirrors token_endpoint_auth_methods_supported. The copy happens
+	// AFTER every feature-driven extension so the two fields stay in
+	// lock-step on a single toggle of either feature.
+	if in.Features.Revoke {
+		doc.RevocationEndpointAuthMethodsSupported = append([]string(nil),
+			doc.TokenEndpointAuthMethodsSupported...)
+	}
 	return doc
 }
 
