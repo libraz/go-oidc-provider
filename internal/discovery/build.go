@@ -150,6 +150,17 @@ func Build(in Input) Document {
 		// embedders that grow the algorithm list see a stable shape.
 		doc.AuthorizationSigningAlgValuesSupported = []string{"ES256"}
 	}
+	// RFC 8414 §2: the introspection endpoint advertises its client
+	// authentication methods separately from the token endpoint. v1.0
+	// reuses the same client-auth machinery at both, so the list
+	// mirrors token_endpoint_auth_methods_supported. The copy happens
+	// AFTER every feature-driven extension (mTLS appends
+	// tls_client_auth / self_signed_tls_client_auth above) so the two
+	// fields stay in lock-step on a single toggle of either feature.
+	if in.Features.Introspect {
+		doc.IntrospectionEndpointAuthMethodsSupported = append([]string(nil),
+			doc.TokenEndpointAuthMethodsSupported...)
+	}
 	return doc
 }
 

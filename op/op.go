@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
@@ -189,6 +190,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	if err := mountPAREndpoint(mux, cfg, scopes); err != nil {
 		return nil, err
 	}
+	mountIntrospectionEndpoint(mux, cfg, scopes, keySet)
 	mountRegistrationEndpoint(mux, cfg, scopes)
 	return mux, nil
 }
@@ -428,6 +430,33 @@ func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Reg
 		}),
 	)
 	return nil
+}
+
+// mountIntrospectionEndpoint registers the /introspect handler when the
+// [feature.Introspect] flag is enabled. Without the flag the route is
+// absent — discovery already gates the advertisement on the same flag,
+// so the OP cannot tell clients the endpoint exists while quietly
+// serving 404. The handler reuses the OP keyset (for JWT
+// access-token verification) and the refresh-token substore (for
+// opaque introspection); refresh-token introspection is a no-op when
+// the backend returns a nil RefreshTokenStore, which the
+// introspectendpoint package documents as "opaque path always returns
+// inactive".
+func mountIntrospectionEndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, keySet *keys.Set) {
+	if !featureEnabled(cfg.features, feature.Introspect) {
+		return
+	}
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.Introspect),
+		introspectendpoint.Handler(introspectendpoint.Deps{
+			Issuer:        cfg.issuer,
+			Clients:       cfg.store.Clients(),
+			RefreshTokens: cfg.store.RefreshTokens(),
+			Keys:          keySet,
+			Scopes:        scopes,
+			Clock:         cfg.clock,
+		}),
+	)
 }
 
 // featureEnabled reports whether flag is in the configured feature list.

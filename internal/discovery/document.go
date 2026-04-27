@@ -31,6 +31,15 @@ type Document struct {
 	// introspection endpoint. Only emitted when the feature is enabled.
 	IntrospectionEndpoint string `json:"introspection_endpoint,omitempty"`
 
+	// IntrospectionEndpointAuthMethodsSupported lists the client
+	// authentication methods accepted at the introspection endpoint.
+	// RFC 8414 §2 advertises the field separately from the token
+	// endpoint's so deployments may, in principle, accept different
+	// methods at each. v1.0 mirrors the token endpoint's list (the
+	// introspection handler reuses the same authentication machinery)
+	// and only emits the field when the Introspect feature is enabled.
+	IntrospectionEndpointAuthMethodsSupported []string `json:"introspection_endpoint_auth_methods_supported,omitempty"`
+
 	// RevocationEndpoint is the absolute URL of the RFC 7009 token
 	// revocation endpoint. Only emitted when the feature is enabled.
 	RevocationEndpoint string `json:"revocation_endpoint,omitempty"`

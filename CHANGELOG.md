@@ -133,3 +133,16 @@ in any minor release.
   client_secret_jwt / mTLS) extracted from the token endpoint so PAR,
   introspection, revocation, and DCR all share one verifier with one
   set of error semantics.
+- RFC 7662 OAuth 2.0 Token Introspection. Enabled via
+  `op.WithFeature(feature.Introspect)`. The `/introspect` endpoint
+  authenticates the calling client through `internal/clientauth`,
+  detects whether the supplied `token` is a JWT-shaped access token
+  (RFC 9068) or an opaque refresh token, and projects the verified
+  record onto the canonical RFC 7662 §2.2 JSON shape. Same-client-only
+  authorization (a token belonging to a different client surfaces as
+  `{"active": false}`); RFC 7662 §2.3 / §4 caching and content-type
+  rules are enforced. `token_type_hint` is honoured but the handler
+  always falls through on miss per §2.1. Discovery advertises
+  `introspection_endpoint` and
+  `introspection_endpoint_auth_methods_supported`. JWT introspection
+  for FAPI Message Signing is a follow-up.
