@@ -101,6 +101,7 @@ type Store struct {
 	totps        *totpStore
 	recoveries   *recoveryStore
 	passkeys     *passkeyStore
+	emailotps    *emailOTPStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -127,6 +128,7 @@ func New(opts ...Option) *Store {
 	s.totps = newTOTPStore()
 	s.recoveries = newRecoveryStore()
 	s.passkeys = newPasskeyStore()
+	s.emailotps = newEmailOTPStore(s.clock)
 	return s
 }
 
@@ -184,6 +186,14 @@ func (s *Store) RecoveryCodes() store.RecoveryStore { return s.recoveries }
 // exposed here so the authn package and its tests can reach the
 // reference implementation without forking the in-memory backend.
 func (s *Store) Passkeys() store.PasskeyStore { return s.passkeys }
+
+// EmailOTPs returns the [store.EmailOTPStore] backed by this Store.
+// Like [Store.TOTPs] / [Store.Passkeys] the substore is not part of
+// the aggregate [store.Store] interface — the email-OTP wiring lives
+// behind [op.NewEmailOTPAuthenticator] — but the accessor is exposed
+// here so the authn package and its tests can reach the reference
+// implementation without forking the in-memory backend.
+func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailotps }
 
 // PutUser seeds the in-memory user store with u so tests can drive
 // /userinfo and id_token claim assembly without standing up a real

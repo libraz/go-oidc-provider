@@ -11,6 +11,23 @@ in any minor release.
 
 ### Added
 
+- Email-OTP authenticator (`op.NewEmailOTPAuthenticator`) implementing
+  the two-screen send / verify factor per design 002 §E.2 / §E.3. The
+  factor maps to `FactorEmailOTP`, contributes AAL2, and reports RFC
+  8176 amr `"otp"`. Construction takes a `Mailer` SPI hook (the
+  embedder's transport — SMTP, SES, or a queue producer), the new
+  `store.EmailOTPStore` substore that persists pending challenges as
+  SHA-256(salt || subject || code) hashes, and a `store.UserStore` so
+  the authenticator can resolve the subject's bound `email` claim.
+  Codes are 6 decimal digits drawn from `crypto/rand`, single-use, and
+  expire after `DefaultEmailOTPCodeTTL` (5 minutes). The verify step
+  shares the brute-force counter shape with TOTP (30 wrong codes →
+  1-hour lock; 90 wrong codes → 24-hour lock + reset-required). The
+  prompt shape is constant whether or not the user-typed address
+  matches the bound claim — on mismatch the authenticator persists a
+  no-`SentAt` sentinel record so verify deterministically fails
+  without leaking enumeration information through prompt or timing.
+  In-memory reference store: `inmem.Store.EmailOTPs()`.
 - OpenID Connect Back-Channel Logout 1.0. The OP signs a Logout Token
   (`typ=logout+jwt`, ES256, with `iss`/`aud`/`iat`/`exp`/`jti`/`sub`/`sid`/`events`)
   and POSTs it to every relying party that registered a
