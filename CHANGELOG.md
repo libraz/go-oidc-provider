@@ -11,6 +11,21 @@ in any minor release.
 
 ### Added
 
+- FAPI 2.0 Message Signing §5 forced JWT introspection at
+  `/introspect`. When `profile.FAPI2MessageSigning` is the active
+  profile, every successful introspection response is delivered as
+  the RFC 9701 `application/token-introspection+jwt` envelope
+  regardless of client metadata or the `Accept` header — an Accept
+  hint asking for JSON cannot override a profile that mandates
+  signed responses. Without the profile (or under FAPI 2.0
+  Baseline, which leaves format negotiation to RFC 9701 §5) the
+  endpoint continues to apply the existing precedence: client
+  preregistered `introspection_signed_response_alg` wins, otherwise
+  the `Accept` header decides. `introspectendpoint.Deps` gains a
+  `RequireSignedIntrospection bool` field so embedders that build
+  the handler directly can opt into the same force without
+  selecting the full Message Signing profile.
+
 - FAPI 2.0 Message Signing §5.5 forced JARM response mode at the
   authorize endpoint. When `profile.FAPI2MessageSigning` is the
   active profile, `/authorize` rejects any request that did not

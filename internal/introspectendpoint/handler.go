@@ -121,6 +121,16 @@ type Deps struct {
 	// emits JSON. The op layer wires this from the active keyset entry,
 	// so production deployments always have a non-zero value.
 	SigningKey tokens.SigningKey
+
+	// RequireSignedIntrospection forces every successful introspection
+	// response onto the RFC 9701 JWT envelope, regardless of client
+	// metadata or Accept negotiation. FAPI 2.0 Message Signing §5
+	// mandates this posture: an Accept header asking for JSON does not
+	// override a profile that requires signed responses. The op layer
+	// wires this from the active profile set; the build-time profile
+	// validator already requires a working keyset, so true here means
+	// SigningKey.Signer is guaranteed to be non-nil.
+	RequireSignedIntrospection bool
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection

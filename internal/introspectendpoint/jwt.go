@@ -28,11 +28,24 @@ const jsonMediaType = "application/json"
 const jwtTyp = "token-introspection+jwt"
 
 // shouldEmitJWT applies the RFC 9701 §5 negotiation rule. The signer
-// must be configured AND either the client has preregistered a signed
-// response alg, or the Accept header prefers the JWT media type.
+// must be configured AND any one of:
+//
+//   - [Deps.RequireSignedIntrospection] is true (FAPI 2.0 Message
+//     Signing §5: profile forces JWT regardless of client metadata or
+//     Accept).
+//   - The client has preregistered an introspection_signed_response_alg.
+//   - The Accept header prefers the JWT media type.
+//
+// The profile-force check sits ahead of the per-client metadata check
+// so a client that did not preregister an alg cannot use a JSON-asking
+// Accept header to slip past a profile that forbids unsigned
+// introspection.
 func shouldEmitJWT(deps Deps, client *store.Client, accept string) bool {
 	if deps.SigningKey.Signer == nil {
 		return false
+	}
+	if deps.RequireSignedIntrospection {
+		return true
 	}
 	if client.IntrospectionSignedResponseAlg != "" {
 		return true

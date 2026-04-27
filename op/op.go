@@ -623,15 +623,16 @@ func mountIntrospectionEndpoint(
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Introspect),
 		introspectendpoint.Handler(introspectendpoint.Deps{
-			Issuer:                   cfg.issuer,
-			Clients:                  cfg.store.Clients(),
-			RefreshTokens:            cfg.store.RefreshTokens(),
-			Keys:                     keySet,
-			Scopes:                   scopes,
-			Clock:                    cfg.clock,
-			SigningKey:               tokens.FromInternalEntry(keySet.Active()),
-			AssertionVerifier:        assertionVerifier,
-			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			Issuer:                     cfg.issuer,
+			Clients:                    cfg.store.Clients(),
+			RefreshTokens:              cfg.store.RefreshTokens(),
+			Keys:                       keySet,
+			Scopes:                     scopes,
+			Clock:                      cfg.clock,
+			SigningKey:                 tokens.FromInternalEntry(keySet.Active()),
+			AssertionVerifier:          assertionVerifier,
+			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
+			RequireSignedIntrospection: cfg.requireSignedIntrospection(),
 		}),
 	)
 }
@@ -732,6 +733,29 @@ func (c *config) requireJARMResponseMode() bool {
 			// Baseline does not require response signing; the two
 			// future profiles ship without their constraint tables
 			// and will land here when they graduate from placeholder.
+		}
+	}
+	return false
+}
+
+// requireSignedIntrospection reports whether the active
+// [profile.Profile] set forces every successful /introspect response
+// onto the RFC 9701 JWT envelope. FAPI 2.0 Message Signing §5 is the
+// only profile today that imposes this; FAPI 2.0 Baseline leaves
+// introspection format negotiation to RFC 9701 §5 (client metadata
+// plus Accept). The signing key the handler uses is the OP active key,
+// which op.New requires unconditionally — so true here means a
+// non-nil signer is guaranteed at request time.
+func (c *config) requireSignedIntrospection() bool {
+	for _, p := range c.profiles {
+		switch p {
+		case profile.FAPI2MessageSigning:
+			return true
+		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+			// Baseline does not require introspection signing; the
+			// two future profiles ship without their constraint
+			// tables and will land here when they graduate from
+			// placeholder.
 		}
 	}
 	return false
