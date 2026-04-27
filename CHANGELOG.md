@@ -11,6 +11,27 @@ in any minor release.
 
 ### Added
 
+- `use_dpop_nonce` challenge response wired at `/token` and
+  `/userinfo`. When the dpop verifier returns one of the new nonce
+  sentinels (added in the previous commit), the endpoints now emit
+  the RFC 9449 challenge with a fresh `DPoP-Nonce` header so the
+  client can retry. `/token` follows §8.2 (HTTP 400 + JSON
+  `error="use_dpop_nonce"`), `/userinfo` follows §9
+  (HTTP 401 + `WWW-Authenticate: DPoP error="use_dpop_nonce"`).
+  Both endpoints' `Deps` gain a `DPoPNonces dpop.NonceIssuer` field
+  for the issuance side; the typical embedder satisfies both that
+  and `dpop.NonceVerifier` with one struct so issuance and
+  validation share a rotation pipeline. A nil issuer omits the
+  `DPoP-Nonce` header but still emits the challenge code so a
+  debugger can see the gate fired. The `internal/dpop` package
+  gains an `IsNonceError(err)` helper so each endpoint dispatches
+  on the two sentinels uniformly. White-box tests cover the wire
+  shape — status, header, body — for both the AS-style and
+  RS-style challenge, plus the misconfiguration paths
+  (no issuer, issuer returns empty). The public
+  `op.WithDPoPNonceSource` option that drives this end-to-end
+  lands in the next commit.
+
 - DPoP nonce-verifier machinery in `internal/dpop` (RFC 9449 §8 / §9
   server-supplied nonce flow, package-level foundation only).
   `dpop.NonceVerifier` is the new interface; the verifier consults it

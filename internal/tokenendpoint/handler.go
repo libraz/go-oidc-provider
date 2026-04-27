@@ -136,6 +136,16 @@ type Deps struct {
 	// the proof against the bound thumbprint of the presented token.
 	DPoP *dpop.Verifier
 
+	// DPoPNonces is the RFC 9449 §8 nonce issuer consulted on the
+	// `use_dpop_nonce` challenge response. A nil value omits the
+	// "DPoP-Nonce" response header on the challenge but the JSON
+	// envelope still carries error="use_dpop_nonce" so a debugger can
+	// see the gate triggered. The expected wiring is one struct that
+	// satisfies both [dpop.NonceVerifier] (consumed by [Deps.DPoP])
+	// and [dpop.NonceIssuer] (this field) so issuance and validation
+	// share a rotation pipeline.
+	DPoPNonces dpop.NonceIssuer
+
 	// MTLS is the RFC 8705 client-certificate verifier. A nil value
 	// disables mTLS binding entirely: the handler ignores any
 	// presented client cert, issues bearer tokens, and accepts

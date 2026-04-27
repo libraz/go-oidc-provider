@@ -66,6 +66,16 @@ type HandlerDeps struct {
 	// constrained token to bearer would defeat the binding).
 	DPoP *dpop.Verifier
 
+	// DPoPNonces is the RFC 9449 §9 nonce issuer consulted on the
+	// `use_dpop_nonce` challenge response. A nil value omits the
+	// "DPoP-Nonce" response header on the challenge but the
+	// WWW-Authenticate value still carries error="use_dpop_nonce" so
+	// a debugger can see the gate triggered. The expected wiring is
+	// one struct that satisfies both [dpop.NonceVerifier] (consumed by
+	// [HandlerDeps.DPoP]) and [dpop.NonceIssuer] (this field) so
+	// issuance and validation share a rotation pipeline.
+	DPoPNonces dpop.NonceIssuer
+
 	// MTLS is the RFC 8705 client-cert verifier. A nil value
 	// disables mTLS enforcement entirely; tokens carrying
 	// cnf.x5t#S256 are then rejected to fail closed.
@@ -176,6 +186,10 @@ func enforceDPoPCnf(
 	}
 	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, rawAccessToken)
 	if err != nil {
+		if dpop.IsNonceError(err) {
+			respondUseDPoPNonce(w, deps)
+			return false
+		}
 		respondDPoPInvalid(w, "DPoP proof rejected")
 		return false
 	}
@@ -216,6 +230,26 @@ func enforceMTLSCnf(
 func respondDPoPInvalid(w http.ResponseWriter, description string) {
 	w.Header().Set("WWW-Authenticate",
 		`DPoP error="invalid_token", error_description="`+description+`"`)
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+// respondUseDPoPNonce writes the RFC 9449 §9 nonce challenge: a 401
+// with WWW-Authenticate: DPoP error="use_dpop_nonce" and a
+// "DPoP-Nonce" response header carrying a fresh value the client
+// should embed in the next proof's "nonce" claim. A nil
+// [HandlerDeps.DPoPNonces] omits the "DPoP-Nonce" header (the issuer
+// is offline) but still carries the error code so a debugger can see
+// the gate fired; the client then has no nonce to retry with, which
+// is the most truthful signal the server can give in that
+// misconfiguration.
+func respondUseDPoPNonce(w http.ResponseWriter, deps HandlerDeps) {
+	if deps.DPoPNonces != nil {
+		if nonce := deps.DPoPNonces.IssueNonce(); nonce != "" {
+			w.Header().Set("DPoP-Nonce", nonce)
+		}
+	}
+	w.Header().Set("WWW-Authenticate",
+		`DPoP error="use_dpop_nonce", error_description="DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header"`)
 	w.WriteHeader(http.StatusUnauthorized)
 }
 

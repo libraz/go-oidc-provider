@@ -49,6 +49,33 @@ type NonceVerifier interface {
 	Validate(nonce string) bool
 }
 
+// NonceIssuer is the contract HTTP handlers consult when they need
+// to stamp a fresh "DPoP-Nonce" response header — both on the
+// `use_dpop_nonce` challenge that follows [ErrProofNonceMissing] /
+// [ErrProofNonceInvalid] and on success-path rotation. It is
+// deliberately split from [NonceVerifier] so a resource-server-style
+// embedder that only validates existing nonces can satisfy
+// [NonceVerifier] without owning an issuance pipeline; the typical
+// embedder satisfies both with a single struct.
+//
+// Implementations MUST be safe for concurrent use; the handler
+// invokes [IssueNonce] from every request goroutine. An empty return
+// value is treated by callers as "issuer offline": the challenge is
+// emitted without a DPoP-Nonce header. Implementations SHOULD never
+// return empty in normal operation.
+type NonceIssuer interface {
+	IssueNonce() string
+}
+
+// IsNonceError reports whether err is one of the RFC 9449 §8 / §9
+// nonce sentinels — [ErrProofNonceMissing] or [ErrProofNonceInvalid].
+// Endpoint code uses this to dispatch onto the `use_dpop_nonce`
+// challenge response without re-implementing the [errors.Is]
+// disjunction in every package.
+func IsNonceError(err error) bool {
+	return errors.Is(err, ErrProofNonceMissing) || errors.Is(err, ErrProofNonceInvalid)
+}
+
 // Verifier is the request-scoped entry point. Construct it once at
 // startup with [NewVerifier]; the value is immutable and safe for
 // concurrent use.

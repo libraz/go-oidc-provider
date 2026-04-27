@@ -40,7 +40,7 @@ func verifyTokenDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (*dpopOu
 	}
 	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
 	if err != nil {
-		writeDPoPError(w, err)
+		writeDPoPError(w, deps, err)
 		return nil, false
 	}
 	return &dpopOutcome{JKT: res.JKT, Presented: true}, true
@@ -77,7 +77,7 @@ func requireDPoPMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundJK
 	}
 	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
 	if err != nil {
-		writeDPoPError(w, err)
+		writeDPoPError(w, deps, err)
 		return nil, false
 	}
 	if boundJKT != "" && res.JKT != boundJKT {
@@ -95,7 +95,16 @@ func requireDPoPMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundJK
 // codes do not need to learn a new code class. The description echoes
 // the closest RFC 9449 wording; the wrapped sentinel cause is dropped
 // to avoid leaking timing-side-channel signal.
-func writeDPoPError(w http.ResponseWriter, err error) {
+//
+// The nonce sentinels ([dpop.ErrProofNonceMissing] /
+// [dpop.ErrProofNonceInvalid]) take a separate code: §8 defines
+// "use_dpop_nonce" specifically so the client knows to retry with the
+// fresh value carried in the companion "DPoP-Nonce" response header.
+func writeDPoPError(w http.ResponseWriter, deps Deps, err error) {
+	if dpop.IsNonceError(err) {
+		writeUseDPoPNonce(w, deps)
+		return
+	}
 	switch {
 	case errors.Is(err, dpop.ErrProofMalformed),
 		errors.Is(err, dpop.ErrProofMissingJTI):
@@ -114,4 +123,22 @@ func writeDPoPError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 	}
+}
+
+// writeUseDPoPNonce emits the RFC 9449 §8 nonce challenge: a 400
+// JSON envelope with error="use_dpop_nonce" plus a "DPoP-Nonce"
+// response header carrying a fresh value the client should embed in
+// the next proof's "nonce" claim. A nil [Deps.DPoPNonces] omits the
+// header (the issuer is offline) but still emits the JSON body so a
+// debugger can see the gate fired; the client then has no nonce to
+// retry with, which is the most truthful signal the server can give
+// in that misconfiguration.
+func writeUseDPoPNonce(w http.ResponseWriter, deps Deps) {
+	if deps.DPoPNonces != nil {
+		if nonce := deps.DPoPNonces.IssueNonce(); nonce != "" {
+			w.Header().Set("DPoP-Nonce", nonce)
+		}
+	}
+	writeError(w, http.StatusBadRequest, errUseDPoPNonce,
+		"DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header")
 }

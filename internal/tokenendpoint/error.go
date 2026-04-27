@@ -15,6 +15,13 @@ const (
 	errUnsupportedGrantType = "unsupported_grant_type"
 	errInvalidScope         = "invalid_scope"
 	errServerError          = "server_error"
+
+	// errUseDPoPNonce is the RFC 9449 §8 wire code the token endpoint
+	// emits when the request must be retried with a fresh
+	// server-supplied DPoP nonce. The companion "DPoP-Nonce" response
+	// header carries the value the client should embed in the next
+	// proof's "nonce" claim.
+	errUseDPoPNonce = "use_dpop_nonce"
 )
 
 // errorResponse is the JSON envelope the token endpoint returns for every
