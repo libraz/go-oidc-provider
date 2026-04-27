@@ -11,6 +11,13 @@ in any minor release.
 
 ### Added
 
+- `CODE_OF_CONDUCT.md` adopting the Contributor Covenant 2.1 by
+  reference. The file uses the short-form pattern (link to the
+  canonical upstream text rather than duplicating it) so it cannot
+  drift if the Contributor Covenant publishes a new version, and
+  documents the project-specific reporting channel and scope. The
+  document is linked from `CONTRIBUTING.md` so contributors
+  discover it through the existing entry point.
 - `LICENSES/THIRD_PARTY.md` index of every Go module dependency,
   generated from `go-licenses report ./...` so the table never
   drifts from `go.mod`. The file matches the path `NOTICE` already

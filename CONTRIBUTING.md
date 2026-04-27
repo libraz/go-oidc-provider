@@ -34,6 +34,12 @@ project-specific scopes:
 When code asserts a specification requirement, cite it in the form
 `RFC 6749 §10.5`. Avoid bare RFC numbers without a section.
 
+## Code of Conduct
+
+Participation in this project is governed by the project's
+[Code of Conduct](CODE_OF_CONDUCT.md), which adopts the Contributor
+Covenant 2.1.
+
 ## License
 
 By submitting a pull request, you agree that your contribution will be
