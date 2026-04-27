@@ -38,18 +38,20 @@ func (f optionFunc) apply(c *config) error { return f(c) }
 // that callers can only build it through [Option] values, which lets us
 // preserve invariants (no zero-value Provider, type-driven enums, etc.).
 type config struct {
-	issuer       string
-	store        store.Store
-	clock        Clock
-	logger       *slog.Logger
-	auditLogger  *slog.Logger
-	keyset       Keyset
-	mountPrefix  string
-	endpoints    Endpoints
-	grants       []grant.Type
-	features     []feature.Flag
-	profiles     []profile.Profile
-	interactionD interaction.Driver
+	issuer        string
+	store         store.Store
+	clock         Clock
+	logger        *slog.Logger
+	auditLogger   *slog.Logger
+	keyset        Keyset
+	defaultLocale Locale
+	localeBundles []LocaleBundle
+	mountPrefix   string
+	endpoints     Endpoints
+	grants        []grant.Type
+	features      []feature.Flag
+	profiles      []profile.Profile
+	interactionD  interaction.Driver
 
 	// cookieKeys carries the AES-256-GCM keys used by the Cookie codec.
 	// The first entry is the active encryption key; the remainder are
@@ -169,6 +171,9 @@ func (c *config) applyDefaults() {
 	}
 	c.fillStandardScopes()
 	c.applyRegistrationDefaults()
+	if c.defaultLocale == "" {
+		c.defaultLocale = LocaleEnglish
+	}
 }
 
 // applyRegistrationDefaults fills in [RegistrationOption] zero-value
@@ -288,7 +293,33 @@ func (c *config) validate() error {
 	if err := c.validateInteractions(); err != nil {
 		return err
 	}
+	if err := c.validateLocales(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateLocales rejects a [WithDefaultLocale] value that is not
+// served by any registered bundle. The seed en / ja bundles are
+// always available, so a default of "en" / "ja" never trips the
+// check; embedders that override the default to a custom locale
+// MUST register the matching bundle through [WithLocale].
+func (c *config) validateLocales() error {
+	if c.defaultLocale == "" {
+		return nil
+	}
+	for _, b := range c.localeBundles {
+		if b.Locale() == c.defaultLocale {
+			return nil
+		}
+	}
+	if c.defaultLocale == LocaleEnglish || c.defaultLocale == LocaleJapanese {
+		return nil
+	}
+	return &Error{
+		Code:        codeConfiguration,
+		Description: "WithDefaultLocale references a locale that is not registered through WithLocale or shipped as a seed bundle",
+	}
 }
 
 // validateAuthenticators enforces uniqueness of [Authenticator.Type]

@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endsession"
+	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
@@ -62,10 +63,11 @@ const stateRefDerivationLabel = "oidc-stateref-v1"
 // constructed. It must not be mutated after construction; configuration is
 // fixed via [Option] values passed to [New].
 type Provider struct {
-	cfg    *config
-	keys   *keys.Set
-	scopes *scoperegistry.Registry
-	mux    *http.ServeMux
+	cfg     *config
+	keys    *keys.Set
+	scopes  *scoperegistry.Registry
+	locales *i18n.Resolver
+	mux     *http.ServeMux
 }
 
 // ServeHTTP routes incoming requests to the OIDC endpoints registered by the
@@ -99,11 +101,50 @@ func New(opts ...Option) (*Provider, error) {
 		}
 	}
 	scopes := scoperegistry.New(toScopeEntries(cfg.scopes))
+	locales, err := buildLocaleResolver(cfg)
+	if err != nil {
+		return nil, err
+	}
 	mux, err := buildRouter(cfg, keySet, scopes)
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{cfg: cfg, keys: keySet, scopes: scopes, mux: mux}, nil
+	return &Provider{cfg: cfg, keys: keySet, scopes: scopes, locales: locales, mux: mux}, nil
+}
+
+// buildLocaleResolver assembles the [i18n.Resolver] from the seed
+// bundles plus any embedder overrides registered through [WithLocale].
+// Override entries replace seeds with the same tag so an embedder
+// can ship branded copy without forking the library catalogue.
+func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
+	seeds, err := i18n.DefaultBundles()
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "embedded locale bundles failed to load",
+			Cause:       err,
+		}
+	}
+	bundles := make(map[i18n.Tag]*i18n.Bundle, len(seeds)+len(cfg.localeBundles))
+	order := make([]i18n.Tag, 0, len(seeds)+len(cfg.localeBundles))
+	for _, b := range seeds {
+		bundles[b.Tag()] = b
+		order = append(order, b.Tag())
+	}
+	for _, b := range cfg.localeBundles {
+		if b.internal == nil {
+			continue
+		}
+		if _, exists := bundles[b.internal.Tag()]; !exists {
+			order = append(order, b.internal.Tag())
+		}
+		bundles[b.internal.Tag()] = b.internal
+	}
+	merged := make([]*i18n.Bundle, 0, len(order))
+	for _, t := range order {
+		merged = append(merged, bundles[t])
+	}
+	return i18n.NewResolver(i18n.Tag(cfg.defaultLocale), merged...)
 }
 
 // toScopeEntries projects the public [Scope] values onto the internal

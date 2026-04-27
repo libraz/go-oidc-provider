@@ -1,0 +1,21 @@
+{
+  "consent.title": "{client_name} を承認",
+  "consent.subtitle": "{client_name} が次の情報へのアクセスを求めています:",
+  "consent.button.allow": "許可する",
+  "consent.button.deny": "キャンセル",
+
+  "login.title": "サインイン",
+  "login.identifier.label": "メールアドレス または ユーザー名",
+  "login.password.label": "パスワード",
+  "login.button.submit": "サインイン",
+
+  "logout.title": "サインアウトしました",
+  "logout.body": "このウィンドウを閉じてください。",
+
+  "error.invalid_request.title": "リクエストが不正です",
+  "error.invalid_request.body": "必須のパラメータが欠落しているか、形式が正しくありません。",
+  "error.access_denied.title": "アクセスが拒否されました",
+  "error.access_denied.body": "このクライアントへの承認を拒否しました。",
+  "error.server_error.title": "問題が発生しました",
+  "error.server_error.body": "リクエストを処理できませんでした。再度お試しください。"
+}

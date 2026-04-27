@@ -194,6 +194,24 @@ in any minor release.
   clearing the cookie so a malformed request cannot terminate a
   session by accident. Discovery already advertised
   `end_session_endpoint`; this release wires the handler.
+- Locale resolver (`internal/i18n`) and the public
+  `op.WithDefaultLocale` / `op.WithLocale` options. The resolver
+  walks the priority chain from design 002 §L.2:
+  `UserStore.PreferredLocale(sub)` → `ui_locales` authorize
+  parameter → `__Host-oidc_locale` cookie → `Accept-Language` HTTP
+  header → `WithDefaultLocale` (defaults to `LocaleEnglish`). An
+  exact tag match wins; failing that, the language subtag is tried
+  so `ja-JP` hits the `ja` bundle. The library ships seed
+  catalogues for `en` / `ja` covering the consent screen, login
+  screen, logout screen, and the canonical
+  `invalid_request` / `access_denied` / `server_error` error pages;
+  embedders override individual entries through `op.WithLocale`
+  and add new locales the same way. The catalogue format is a flat
+  dotted-key JSON object with `{var}` placeholders for runtime
+  substitution; ICU MessageFormat support is deferred. The
+  `WithDefaultLocale` value is validated at construction so a
+  default that is not registered fails closed instead of silently
+  falling back.
 - Audit-event sink (`internal/audit`) and the public
   `op.WithAuditLogger(*slog.Logger)` option. Audit records carry the
   slog attribute `audit="true"` so log shippers can route them to

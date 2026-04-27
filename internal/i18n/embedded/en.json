@@ -1,0 +1,21 @@
+{
+  "consent.title": "Authorize {client_name}",
+  "consent.subtitle": "{client_name} would like to access:",
+  "consent.button.allow": "Allow",
+  "consent.button.deny": "Cancel",
+
+  "login.title": "Sign in",
+  "login.identifier.label": "Email or username",
+  "login.password.label": "Password",
+  "login.button.submit": "Sign in",
+
+  "logout.title": "You're signed out",
+  "logout.body": "You can close this window.",
+
+  "error.invalid_request.title": "Invalid request",
+  "error.invalid_request.body": "The request is missing a required parameter or is otherwise malformed.",
+  "error.access_denied.title": "Access denied",
+  "error.access_denied.body": "You declined to authorize this client.",
+  "error.server_error.title": "Something went wrong",
+  "error.server_error.body": "We couldn't complete your request. Please try again."
+}
