@@ -180,3 +180,17 @@ in any minor release.
   `tokenBinding` plumbing so a client_credentials access token
   inherits sender constraints exactly like an authorization_code
   one.
+- OpenID Connect RP-Initiated Logout 1.0. The `/end_session`
+  endpoint accepts GET or POST, validates the optional
+  `id_token_hint` (signature only — expired tokens are accepted so a
+  user can log out from a stale tab), resolves the requesting client
+  via the token's `aud` claim or the `client_id` parameter, and
+  validates `post_logout_redirect_uri` against
+  `op/store.Client.PostLogoutRedirectURIs` (exact byte match). On a
+  valid request the handler clears the `__Host-oidc_session` cookie,
+  deletes the underlying session record, and either redirects 302
+  to the post-logout URI (with `state` echoed) or renders a minimal
+  static HTML confirmation page. The error path returns 400 without
+  clearing the cookie so a malformed request cannot terminate a
+  session by accident. Discovery already advertised
+  `end_session_endpoint`; this release wires the handler.

@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/endsession"
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
@@ -185,7 +186,8 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			MTLS:          mtlsVerifier,
 		}),
 	)
-	if err := mountAuthorizeHandlers(mux, cfg, scopes, keySet); err != nil {
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet)
+	if err != nil {
 		return nil, err
 	}
 	if err := mountPAREndpoint(mux, cfg, scopes); err != nil {
@@ -194,6 +196,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet)
 	mountRevocationEndpoint(mux, cfg, keySet)
 	mountRegistrationEndpoint(mux, cfg, scopes)
+	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr)
 	return mux, nil
 }
 
@@ -505,49 +508,31 @@ func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
 // the configuration includes a grant that needs them (currently only
 // AuthorizationCode). The handler shares an internal mux so a single
 // instance services both paths; see [internal/authorizeendpoint.Handler].
-func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, keySet *keys.Set) error {
+//
+// The returned [*sessions.Manager] is the same instance the authorize
+// handler installed; [mountEndSessionEndpoint] reuses it so the two
+// surfaces operate on the same chooser-group state. A nil manager is
+// returned when no grant requires the authorize endpoint — the
+// /end_session helper short-circuits in that case.
+func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, keySet *keys.Set) (*sessions.Manager, error) {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
-		return nil
+		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
 	}
 	jarmSigner, err := buildJARMSigner(cfg, keySet)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	jarVerifier, err := buildJARVerifier(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	cookieCodec, err := cookie.NewCodec(cfg.cookieKeys[0], cfg.cookieKeys[1:]...)
+	cookieCodec, sessMgr, err := buildSessionMachinery(cfg)
 	if err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "cookie codec rejected configured keys",
-			Cause:       err,
-		}
-	}
-	sessCodec, err := sessions.NewCodec(cookieCodec)
-	if err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "sessions codec construction failed",
-			Cause:       err,
-		}
-	}
-	sessMgr, err := sessions.NewManager(sessions.Config{
-		Codec: sessCodec,
-		Store: cfg.store.Sessions(),
-		Clock: cfg.clock.Now,
-	})
-	if err != nil {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "sessions manager construction failed",
-			Cause:       err,
-		}
+		return nil, err
 	}
 	csrfSigner, err := csrf.NewSigner(deriveCSRFKey(cfg.cookieKeys[0]))
 	if err != nil {
-		return &Error{
+		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "csrf signer construction failed",
 			Cause:       err,
@@ -559,7 +544,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 	}
 	allow, err := csrf.NewAllowlist(allowOrigins)
 	if err != nil {
-		return &Error{
+		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "csrf allowlist construction failed",
 			Cause:       err,
@@ -567,7 +552,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 	}
 	orchestrator, err := buildOrchestrator(cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	authorizePath := joinPath(cfg.mountPrefix, cfg.endpoints.Authorize)
 	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
@@ -592,7 +577,73 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 	})
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)
-	return nil
+	return sessMgr, nil
+}
+
+// buildSessionMachinery constructs the cookie codec and chooser-group
+// session manager shared by /authorize and /end_session. Splitting the
+// helper out keeps the two mount sites in lock-step: a future change
+// to the cookie key derivation, the codec configuration, or the idle
+// TTL applies uniformly to every endpoint that touches the session
+// cookie.
+func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error) {
+	cookieCodec, err := cookie.NewCodec(cfg.cookieKeys[0], cfg.cookieKeys[1:]...)
+	if err != nil {
+		return nil, nil, &Error{
+			Code:        codeConfiguration,
+			Description: "cookie codec rejected configured keys",
+			Cause:       err,
+		}
+	}
+	sessCodec, err := sessions.NewCodec(cookieCodec)
+	if err != nil {
+		return nil, nil, &Error{
+			Code:        codeConfiguration,
+			Description: "sessions codec construction failed",
+			Cause:       err,
+		}
+	}
+	sessMgr, err := sessions.NewManager(sessions.Config{
+		Codec: sessCodec,
+		Store: cfg.store.Sessions(),
+		Clock: cfg.clock.Now,
+	})
+	if err != nil {
+		return nil, nil, &Error{
+			Code:        codeConfiguration,
+			Description: "sessions manager construction failed",
+			Cause:       err,
+		}
+	}
+	return cookieCodec, sessMgr, nil
+}
+
+// mountEndSessionEndpoint registers the /end_session handler. The
+// endpoint is always advertised through the discovery document
+// (RP-Initiated Logout 1.0 has no feature flag in this library); the
+// handler is mounted only when [grantsRequireAuthorizeEndpoint]
+// reports true so a deployment running solely non-interactive grants
+// (client_credentials) does not pay for a session manager it never
+// uses. Discovery still advertises the URL — that's the documented
+// trade-off.
+//
+// The handler shares the [*sessions.Manager] with /authorize so the
+// two surfaces operate on the same chooser-group state and a logout
+// performed at /end_session is visible to a subsequent /authorize.
+func mountEndSessionEndpoint(mux *http.ServeMux, cfg *config, keySet *keys.Set, sessMgr *sessions.Manager) {
+	if sessMgr == nil {
+		return
+	}
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.EndSession),
+		endsession.Handler(endsession.Deps{
+			Issuer:   cfg.issuer,
+			Clients:  cfg.store.Clients(),
+			Sessions: sessMgr,
+			Keys:     keySet,
+			Clock:    cfg.clock,
+		}),
+	)
 }
 
 // buildOrchestrator constructs the [authn.Orchestrator] the

@@ -319,6 +319,7 @@ func cloneClient(c *store.Client) *store.Client {
 	}
 	out := *c
 	out.RedirectURIs = slices.Clone(c.RedirectURIs)
+	out.PostLogoutRedirectURIs = slices.Clone(c.PostLogoutRedirectURIs)
 	out.GrantTypes = slices.Clone(c.GrantTypes)
 	out.ResponseTypes = slices.Clone(c.ResponseTypes)
 	out.Scopes = slices.Clone(c.Scopes)

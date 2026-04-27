@@ -24,6 +24,7 @@ import (
 type ClientFixture struct {
 	ID                      string
 	RedirectURIs            []string
+	PostLogoutRedirectURIs  []string
 	GrantTypes              []string
 	ResponseTypes           []string
 	Scopes                  []string
@@ -52,6 +53,7 @@ func buildClient(fix ClientFixture) *store.Client {
 	out := &store.Client{
 		ID:                      coalesce(fix.ID, "client-test"),
 		RedirectURIs:            slices.Clone(fix.RedirectURIs),
+		PostLogoutRedirectURIs:  slices.Clone(fix.PostLogoutRedirectURIs),
 		GrantTypes:              slices.Clone(fix.GrantTypes),
 		ResponseTypes:           slices.Clone(fix.ResponseTypes),
 		Scopes:                  slices.Clone(fix.Scopes),
@@ -95,6 +97,7 @@ func coalesce(first, fallback string) string {
 func cloneClient(c *store.Client) *store.Client {
 	cp := *c
 	cp.RedirectURIs = slices.Clone(c.RedirectURIs)
+	cp.PostLogoutRedirectURIs = slices.Clone(c.PostLogoutRedirectURIs)
 	cp.GrantTypes = slices.Clone(c.GrantTypes)
 	cp.ResponseTypes = slices.Clone(c.ResponseTypes)
 	cp.Scopes = slices.Clone(c.Scopes)

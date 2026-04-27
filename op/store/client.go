@@ -57,6 +57,15 @@ type Client struct {
 	// are forbidden: the validator compares strings byte-for-byte.
 	RedirectURIs []string
 
+	// PostLogoutRedirectURIs lists the exact-match URIs the OP will
+	// redirect to from /end_session after a successful RP-Initiated
+	// Logout (OIDC RP-Initiated Logout 1.0 §2). Entries are byte-for-byte
+	// compared against the request's post_logout_redirect_uri parameter;
+	// no wildcards or path-prefix matches. A nil or empty slice means
+	// the client cannot use post_logout_redirect_uri at all and the
+	// /end_session endpoint will reject any request that supplies one.
+	PostLogoutRedirectURIs []string
+
 	// GrantTypes lists the grant_type values the client is permitted to use
 	// at the token endpoint (for example "authorization_code",
 	// "refresh_token", "client_credentials"). Empty means the client may
