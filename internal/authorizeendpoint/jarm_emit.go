@@ -32,6 +32,17 @@ func jarmFeatureRequested(req *authorize.Request) bool {
 	return jarm.IsJARM(req.ResponseMode)
 }
 
+// jarmModeMissing reports whether the active configuration requires
+// every authorize response to be JARM-wrapped (Deps.RequireJARMResponseMode
+// is true) and this request did not opt into a JARM response_mode.
+// True means /authorize must reject the request with
+// unsupported_response_mode; false means continue. Symmetric to
+// [jarmFeatureRequested]: the two cover the four cells of the
+// (RequireJARMResponseMode × IsJARM) matrix.
+func jarmModeMissing(deps resolved, req *authorize.Request) bool {
+	return deps.RequireJARMResponseMode && !jarmFeatureRequested(req)
+}
+
 // jarmEmitSuccess writes the success response as a JARM JWT in the
 // resolved mode. The function returns an error when JWT signing or
 // dispatch fails; callers translate the error into the legacy redirect

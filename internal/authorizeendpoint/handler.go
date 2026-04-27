@@ -154,6 +154,20 @@ type Deps struct {
 	// and CSRF tokens. Zero or negative falls back to
 	// [DefaultInteractionTTL].
 	InteractionTTL time.Duration
+
+	// RequireJARMResponseMode, when true, makes /authorize reject any
+	// request that did not opt into one of the four JARM response_mode
+	// values ("jwt", "query.jwt", "fragment.jwt", "form_post.jwt").
+	// The flag implements the FAPI 2.0 Message Signing §5.5 mandate
+	// that every authorize response be JARM-wrapped: a request that
+	// omits the JARM response_mode is misconfigured against the active
+	// profile, and the OP signals that with the OAuth wire code
+	// "unsupported_response_mode" via the legacy redirect (JARM cannot
+	// be used to convey "JARM is not in use yet"). The check runs only
+	// after request validation has succeeded so a malformed request
+	// surfaces its own error first; it has no effect when the request
+	// already opted into JARM.
+	RequireJARMResponseMode bool
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

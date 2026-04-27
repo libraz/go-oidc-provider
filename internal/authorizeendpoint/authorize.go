@@ -76,6 +76,18 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 			"response_mode is not supported by this OP")
 		return
 	}
+	if jarmModeMissing(deps, req) {
+		// The active profile (FAPI 2.0 Message Signing §5.5) requires
+		// every authorize response to be JARM-wrapped, but this request
+		// did not opt into a JARM response_mode. Surface
+		// "unsupported_response_mode" via the legacy redirect — the
+		// non-JARM mode the request asked for is the one the profile
+		// forbids, and JARM cannot be used to convey "JARM is not in
+		// use yet".
+		emitAuthorizeError(w, r, deps, req, errUnsupportedResponseMode,
+			`response_mode is required by the active profile (use "jwt", "query.jwt", "fragment.jwt", or "form_post.jwt")`)
+		return
+	}
 	dispatchAuthorize(w, r, deps, req, client)
 }
 

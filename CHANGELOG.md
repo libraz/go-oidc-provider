@@ -9,6 +9,24 @@ in any minor release.
 
 ## [Unreleased]
 
+### Added
+
+- FAPI 2.0 Message Signing §5.5 forced JARM response mode at the
+  authorize endpoint. When `profile.FAPI2MessageSigning` is the
+  active profile, `/authorize` rejects any request that did not
+  opt into one of the four JARM response_mode values
+  (`jwt` / `query.jwt` / `fragment.jwt` / `form_post.jwt`) with
+  `unsupported_response_mode` via the legacy redirect (JARM cannot
+  be used to convey "JARM is not in use yet"). The check runs only
+  after request validation succeeds so a malformed request still
+  surfaces its own error first; it is symmetric to the existing
+  "feature off but JARM requested" gate. Without the profile (or
+  under FAPI 2.0 Baseline, which does not require response signing)
+  the endpoint continues to honour non-JARM modes.
+  `authorizeendpoint.Deps` gains a `RequireJARMResponseMode bool`
+  field so embedders that build the handler directly can opt into
+  the same gate without selecting the full Message Signing profile.
+
 ### Changed
 
 - `README.md` Quickstart now shows the four options `op.New`

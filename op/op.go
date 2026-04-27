@@ -714,6 +714,29 @@ func (c *config) requireSenderConstrainedTokens() bool {
 	return false
 }
 
+// requireJARMResponseMode reports whether the active
+// [profile.Profile] set mandates that every /authorize response be
+// JARM-wrapped. FAPI 2.0 Message Signing §5.5 is the only profile
+// today that imposes this; FAPI 2.0 Baseline leaves response_mode
+// to the client (Baseline does not require response signing). The
+// build-time profile validator already requires [feature.JARM] to
+// be enabled when [profile.FAPI2MessageSigning] is active, so the
+// runtime path returning true here means "the JARM signer is
+// guaranteed to be wired".
+func (c *config) requireJARMResponseMode() bool {
+	for _, p := range c.profiles {
+		switch p {
+		case profile.FAPI2MessageSigning:
+			return true
+		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+			// Baseline does not require response signing; the two
+			// future profiles ship without their constraint tables
+			// and will land here when they graduate from placeholder.
+		}
+	}
+	return false
+}
+
 func (c *config) allowedClientAuthMethods() []clientauth.Method {
 	allowedNames := c.profileAllowedAuthMethodNames()
 	if allowedNames == nil {
@@ -783,23 +806,24 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 	authorizePath := joinPath(cfg.mountPrefix, cfg.endpoints.Authorize)
 	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
-		Clients:         cfg.store.Clients(),
-		Codes:           cfg.store.AuthorizationCodes(),
-		Grants:          cfg.store.Grants(),
-		Interactions:    cfg.store.Interactions(),
-		PARs:            authorizePARStore(cfg),
-		JARM:            jarmSigner,
-		JAR:             jarVerifier,
-		Sessions:        sessMgr,
-		CookieCodec:     cookieCodec,
-		CSRF:            csrfSigner,
-		Origins:         allow,
-		Driver:          cfg.interactionD,
-		Authn:           orchestrator,
-		Scopes:          scopes,
-		AuthorizePath:   authorizePath,
-		InteractionPath: interactionPath,
-		Clock:           cfg.clock,
+		Clients:                 cfg.store.Clients(),
+		Codes:                   cfg.store.AuthorizationCodes(),
+		Grants:                  cfg.store.Grants(),
+		Interactions:            cfg.store.Interactions(),
+		PARs:                    authorizePARStore(cfg),
+		JARM:                    jarmSigner,
+		JAR:                     jarVerifier,
+		Sessions:                sessMgr,
+		CookieCodec:             cookieCodec,
+		CSRF:                    csrfSigner,
+		Origins:                 allow,
+		Driver:                  cfg.interactionD,
+		Authn:                   orchestrator,
+		Scopes:                  scopes,
+		AuthorizePath:           authorizePath,
+		InteractionPath:         interactionPath,
+		Clock:                   cfg.clock,
+		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
 	})
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)
