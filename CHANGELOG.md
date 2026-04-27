@@ -82,3 +82,54 @@ in any minor release.
   `request_parameter_supported`, `request_uri_parameter_supported`,
   `require_request_uri_registration: true`, and
   `request_object_signing_alg_values_supported`.
+- Authenticator chain. Public `op.Authenticator` interface with
+  `op.WithAuthenticators(...)` plus a chain-runner orchestrator
+  (`internal/authn`) that drives factors through `BeforeAuthn` →
+  `Authn` → `AfterAuthn` → `Done` phases, ferries per-step UI state
+  through an orchestrator-private `Step.Scratch` byte slice, and
+  persists progress as a JSON `authn.State` blob in
+  `store.InteractionStore`. `acr` / `amr` / AAL aggregation across
+  factors is centralised in `internal/authn/aggregate` so the issued
+  ID token reflects every factor that ran in order.
+- RFC 6238 TOTP authenticator (`internal/authn/totp`). Secrets are
+  generated via `crypto/rand`, stored AES-256-GCM-sealed at rest
+  (`store.TOTPStore`), and verified with the canonical 30-second step
+  plus a configurable `±N`-step skew window. The
+  `op.NewTOTPAuthenticator` adapter exposes the factor as
+  `Type=FactorTOTP`, `AAL=AAL2`, `AMR="otp"`.
+- Recovery codes authenticator (`internal/authn/recovery`). Codes are
+  minted in batches of 10, displayed once, hashed at rest with
+  Argon2id, and consumed single-use via `store.RecoveryCodeStore`. The
+  `op.NewRecoveryAuthenticator` adapter exposes the factor as
+  `Type=FactorRecovery`, `AAL=AAL1`, `AMR="rc"`.
+- WebAuthn passkey authenticator (`internal/authn/passkey`). Wraps
+  `go-webauthn/webauthn` for both registration (attestation) and
+  assertion (authentication) ceremonies. The
+  `op.NewPasskeyAuthenticator` adapter drives the assertion ceremony
+  with the orchestrator-private scratch channel carrying the
+  per-ceremony `webauthn.SessionData`; factor metadata is
+  `Type=FactorPasskey`, `AAL=AAL2`, `AMR="hwk"` (RFC 8176, conservative
+  reading of NIST SP 800-63B §5.1.7).
+- Built-in consent screen (`internal/authn/consent`). Auto-registered
+  by `op.New`, runs after authentication, and projects
+  `op.WithScope(...)` registry entries through
+  `interaction.ConsentScopePromptData` so the SPA / driver receives
+  human-readable scope metadata. Approvals submitted via the
+  `approved_scopes` form field are validated against the requested
+  scope set, required scopes are enforced, and the resulting subset
+  flows back through the orchestrator into the persisted
+  `store.Grant`. When the existing grant already covers the requested
+  scope set, the consent step is skipped automatically.
+- Orchestrator-driven `/interaction` HTTP layer
+  (`internal/authn/orchestrator` + `internal/authorizeendpoint`).
+  Replaces the prior thin `interaction.Driver` shape: every prompt /
+  submission round-trip is mediated by the orchestrator, the encrypted
+  state-ref envelope is HMAC-bound, and the driver only renders the
+  `interaction.Step` payload. `op/testkit` ships
+  `IsConsentPrompt` / `PostConsentApproval` helpers so embedders can
+  drive the consent screen from end-to-end tests.
+- `internal/clientauth` package. Centralised client authentication
+  (client_secret_basic / client_secret_post / private_key_jwt /
+  client_secret_jwt / mTLS) extracted from the token endpoint so PAR,
+  introspection, revocation, and DCR all share one verifier with one
+  set of error semantics.
