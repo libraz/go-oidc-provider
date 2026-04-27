@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -43,9 +44,9 @@ func verifyIAT(
 		// degraded posture in their logs. The caller may emit a
 		// stronger WARN once the registration succeeds; the audit
 		// event here records the configuration choice.
-		deps.audit().Audit(ctx, auditEvent{
+		deps.audit().Emit(ctx, audit.Event{
 			Name:    auditDCROpenRegistrationUsed,
-			Level:   auditLevelWarn,
+			Level:   audit.LevelWarn,
 			Message: "open registration accepted without IAT",
 		})
 		return iatVerification{Open: true}, true
@@ -59,9 +60,9 @@ func verifyIAT(
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			deps.logger().Warn("dcr.iat.invalid", "reason", "not_found")
-			deps.audit().Audit(ctx, auditEvent{
+			deps.audit().Emit(ctx, audit.Event{
 				Name:    auditDCRIATInvalid,
-				Level:   auditLevelInfo,
+				Level:   audit.LevelInfo,
 				Message: "Initial Access Token not found",
 			})
 			writeInvalidToken(w, deps.Issuer, "Initial Access Token is invalid")
@@ -72,9 +73,9 @@ func verifyIAT(
 		return iatVerification{}, false
 	}
 	if expired := rec.ExpiresAt.Before(deps.now()); expired {
-		deps.audit().Audit(ctx, auditEvent{
+		deps.audit().Emit(ctx, audit.Event{
 			Name:    auditDCRIATExpired,
-			Level:   auditLevelInfo,
+			Level:   audit.LevelInfo,
 			Message: "Initial Access Token expired",
 			Tag:     rec.Tag,
 		})
@@ -91,9 +92,9 @@ func verifyIAT(
 		// the read-modify-write race. We surface the WARN here so the
 		// audit trail flags repeated reuse attempts.
 		deps.logger().Warn("dcr.iat.consumed", "tag", rec.Tag)
-		deps.audit().Audit(ctx, auditEvent{
+		deps.audit().Emit(ctx, audit.Event{
 			Name:    auditDCRIATConsumed,
-			Level:   auditLevelWarn,
+			Level:   audit.LevelWarn,
 			Message: "Initial Access Token already consumed",
 			Tag:     rec.Tag,
 		})
@@ -122,9 +123,9 @@ func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVe
 		switch {
 		case errors.Is(err, store.ErrConflict):
 			deps.logger().Warn("dcr.iat.consumed", "tag", ver.Token.Tag, "reason", "race")
-			deps.audit().Audit(ctx, auditEvent{
+			deps.audit().Emit(ctx, audit.Event{
 				Name:    auditDCRIATConsumed,
-				Level:   auditLevelInfo,
+				Level:   audit.LevelInfo,
 				Message: "Initial Access Token race lost",
 				Tag:     ver.Token.Tag,
 			})

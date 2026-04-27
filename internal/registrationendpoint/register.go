@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -176,9 +177,9 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return
 	}
-	deps.audit().Audit(ctx, auditEvent{
+	deps.audit().Emit(ctx, audit.Event{
 		Name:     auditDCRClientRegistered,
-		Level:    auditLevelInfo,
+		Level:    audit.LevelInfo,
 		Message:  "client registered via RFC 7591",
 		ClientID: clientID,
 	})
@@ -308,9 +309,9 @@ func writeMetadataValidationError(
 	err error,
 	auditEventClientID string,
 ) {
-	deps.audit().Audit(ctx, auditEvent{
+	deps.audit().Emit(ctx, audit.Event{
 		Name:     auditDCRMetadataValidation,
-		Level:    auditLevelInfo,
+		Level:    audit.LevelInfo,
 		Message:  "metadata validation failed",
 		ClientID: auditEventClientID,
 	})

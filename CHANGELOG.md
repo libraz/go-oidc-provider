@@ -194,6 +194,24 @@ in any minor release.
   clearing the cookie so a malformed request cannot terminate a
   session by accident. Discovery already advertised
   `end_session_endpoint`; this release wires the handler.
+- Audit-event sink (`internal/audit`) and the public
+  `op.WithAuditLogger(*slog.Logger)` option. Audit records carry the
+  slog attribute `audit="true"` so log shippers can route them to
+  long-retention storage without parsing the event name; the
+  remaining canonical fields (`event` / `actor_id` / `client_id` /
+  `session_id` / `request_id` / `ip` / `user_agent` / `tag`) ride
+  as top-level attributes and event-specific data lives under the
+  `extras` group. The supplied logger's handler is wrapped through
+  `internal/redact` so a regression that drops a token into an
+  `Event.Extras` map cannot escape the wire posture. The closed
+  catalogue of event names ships as `op.AuditEvent` constants
+  (login / mfa / consent / code / token / session / logout / dcr /
+  defensive). When `WithAuditLogger` is absent the emitter falls
+  back to the operational logger from `WithLogger`; when neither is
+  set audit records are dropped silently. The
+  `internal/registrationendpoint` handler is migrated onto the
+  lifted package; previous private `auditLogger` / `auditEvent`
+  shapes are removed.
 - Logging redaction (`internal/redact`). The package wraps any
   `slog.Handler` so attributes named after the canonical OAuth/OIDC
   secrets — `access_token`, `refresh_token`, `id_token`, `code`,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -41,9 +42,9 @@ func verifyRAT(
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			deps.logger().Warn("dcr.rat.invalid", "reason", "client_not_found", "client_id", clientID)
-			deps.audit().Audit(ctx, auditEvent{
+			deps.audit().Emit(ctx, audit.Event{
 				Name:     auditDCRRATInvalid,
-				Level:    auditLevelWarn,
+				Level:    audit.LevelWarn,
 				Message:  "client not found",
 				ClientID: clientID,
 			})
@@ -56,9 +57,9 @@ func verifyRAT(
 	}
 	if !sourceIsDynamic(client.Source) {
 		deps.logger().Warn("dcr.rat.invalid", "reason", "non_dynamic_client", "client_id", clientID)
-		deps.audit().Audit(ctx, auditEvent{
+		deps.audit().Emit(ctx, audit.Event{
 			Name:     auditDCRRATInvalid,
-			Level:    auditLevelWarn,
+			Level:    audit.LevelWarn,
 			Message:  "client is not dynamically registered",
 			ClientID: clientID,
 		})
@@ -69,9 +70,9 @@ func verifyRAT(
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			deps.logger().Warn("dcr.rat.invalid", "reason", "rat_missing", "client_id", clientID)
-			deps.audit().Audit(ctx, auditEvent{
+			deps.audit().Emit(ctx, audit.Event{
 				Name:     auditDCRRATInvalid,
-				Level:    auditLevelWarn,
+				Level:    audit.LevelWarn,
 				Message:  "registration access token not on file",
 				ClientID: clientID,
 			})
@@ -84,9 +85,9 @@ func verifyRAT(
 	}
 	if !constantTimeEqualString(hashSecret(bearer), stored.HashedValue) {
 		deps.logger().Warn("dcr.rat.invalid", "reason", "hash_mismatch", "client_id", clientID)
-		deps.audit().Audit(ctx, auditEvent{
+		deps.audit().Emit(ctx, audit.Event{
 			Name:     auditDCRRATInvalid,
-			Level:    auditLevelWarn,
+			Level:    audit.LevelWarn,
 			Message:  "registration access token hash mismatch",
 			ClientID: clientID,
 		})

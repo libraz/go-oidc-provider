@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
@@ -355,6 +356,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		PairwiseEnabled:          false, // WithPairwiseSubject not yet implemented; v1.0 placeholder.
 		ValidateMetadata:         wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                   cfg.logger,
+		Audit:                    audit.Slog(cfg.effectiveAuditLogger()),
 	}
 	handler := registrationendpoint.Handler(deps)
 	registerPath := joinPath(cfg.mountPrefix, cfg.endpoints.Register)

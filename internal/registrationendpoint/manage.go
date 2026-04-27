@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -22,9 +23,9 @@ func handleRead(w http.ResponseWriter, r *http.Request, deps Deps, clientID stri
 	if !ok {
 		return
 	}
-	deps.audit().Audit(ctx, auditEvent{
+	deps.audit().Emit(ctx, audit.Event{
 		Name:     auditDCRClientMetadataRead,
-		Level:    auditLevelInfo,
+		Level:    audit.LevelInfo,
 		Message:  "client metadata read via RFC 7592",
 		ClientID: clientID,
 	})
@@ -85,9 +86,9 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	if !ok {
 		return
 	}
-	deps.audit().Audit(ctx, auditEvent{
+	deps.audit().Emit(ctx, audit.Event{
 		Name:     auditDCRClientMetadataUpdated,
-		Level:    auditLevelInfo,
+		Level:    audit.LevelInfo,
 		Message:  "client metadata updated via RFC 7592",
 		ClientID: clientID,
 	})
@@ -221,9 +222,9 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	// docs/plans/002-product-design.md §A.6.2.2. The cross-cutting
 	// revocation orchestration requires the back-channel logout
 	// subsystem to be wired first.
-	deps.audit().Audit(ctx, auditEvent{
+	deps.audit().Emit(ctx, audit.Event{
 		Name:     auditDCRClientDeleted,
-		Level:    auditLevelInfo,
+		Level:    audit.LevelInfo,
 		Message:  "client deleted via RFC 7592",
 		ClientID: clientID,
 	})

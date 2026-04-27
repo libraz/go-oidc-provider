@@ -42,6 +42,7 @@ type config struct {
 	store        store.Store
 	clock        Clock
 	logger       *slog.Logger
+	auditLogger  *slog.Logger
 	keyset       Keyset
 	mountPrefix  string
 	endpoints    Endpoints
@@ -149,6 +150,12 @@ func (c *config) applyDefaults() {
 	if c.logger == nil {
 		c.logger = slog.New(discardHandler{})
 	}
+	// auditLogger has no fall-back default: when neither
+	// [WithAuditLogger] nor [WithLogger] is set, [effectiveAuditLogger]
+	// returns nil and the audit emitter collapses to a no-op. Setting
+	// a default here would silently route audit lines into the
+	// operational stream — which is the design rationale for keeping
+	// the two loggers structurally separate (see 002 §N.1).
 	if c.mountPrefix == "" {
 		c.mountPrefix = "/oidc"
 	}
@@ -589,6 +596,47 @@ func WithLogger(logger *slog.Logger) Option {
 			logger = slog.New(redact.WrapHandler(logger.Handler()))
 		}
 		c.logger = logger
+		return nil
+	})
+}
+
+// effectiveAuditLogger returns the [*slog.Logger] audit events
+// should ride on. The dedicated audit logger from [WithAuditLogger]
+// wins; otherwise the operational logger from [WithLogger] is used so
+// audit records are not silently dropped just because the embedder
+// did not split the streams. A nil return collapses the emitter to
+// [audit.Discard] — that path is reachable only when neither option
+// was supplied.
+func (c *config) effectiveAuditLogger() *slog.Logger {
+	if c.auditLogger != nil {
+		return c.auditLogger
+	}
+	return c.logger
+}
+
+// WithAuditLogger injects the [*slog.Logger] the library routes
+// audit events on. Audit records carry the slog attribute
+// "audit"="true" so log shippers can split them onto a dedicated
+// retention bucket without parsing the [AuditEvent] name; the
+// design rationale is in design 002 §N.1.
+//
+// If unset, the [Provider] uses the operational logger from
+// [WithLogger]; if neither is configured, audit records are dropped.
+// Embedders SHOULD pass a logger pointed at long-retention storage
+// (S3-backed handler, BigQuery sink, ELK index, …) so audit lines
+// outlive the operational stream.
+//
+// The supplied logger's handler is wrapped with the same redaction
+// hook as [WithLogger] so a regression that puts a token into an
+// [AuditEvent] extras map cannot escape the wire posture.
+//
+// Stable since v0.1.
+func WithAuditLogger(logger *slog.Logger) Option {
+	return optionFunc(func(c *config) error {
+		if logger != nil {
+			logger = slog.New(redact.WrapHandler(logger.Handler()))
+		}
+		c.auditLogger = logger
 		return nil
 	})
 }

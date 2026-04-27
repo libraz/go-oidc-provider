@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -20,40 +21,10 @@ type Clock interface {
 	Now() time.Time
 }
 
-// auditLogger is the structural audit-event sink. It is unexported so
-// the public [Deps] surface does not expose the internal-only
-// [auditEvent] shape. The op layer cannot wire a custom audit sink in
-// v1.0; once an audit interface lands on the public op/ surface this
-// can be promoted.
-type auditLogger interface {
-	Audit(ctx context.Context, ev auditEvent)
-}
-
-// auditEvent is the structural shape every DCR audit record carries.
-// The names mirror docs/plans/002-product-design.md §A.6.2; new event
-// names are added to the catalog in this file.
-type auditEvent struct {
-	// Name is the canonical event identifier, e.g.
-	// "dcr.client.registered". Sinks routes records by this field.
-	Name string
-
-	// Level is the severity classification (info / warn / error).
-	// Sinks may filter on this.
-	Level string
-
-	// Message is a short human-readable description for operators.
-	Message string
-
-	// ClientID is the client_id involved in the event, when known.
-	// Empty for events that fire before a client is identified.
-	ClientID string
-
-	// Tag is the IAT tag (operator-supplied identifier) when the
-	// event is bound to an IAT.
-	Tag string
-}
-
-// Audit event names mirror docs/plans/002-product-design.md §A.6.2.
+// Audit event names mirror docs/plans/002-product-design.md §N.2.
+// The strings here MUST agree with the public op.AuditEvent constants
+// in op/audit.go; the registrationendpoint_test package contains a
+// guard that compares both lists.
 const (
 	auditDCRIATConsumed           = "dcr.iat.consumed"
 	auditDCRIATExpired            = "dcr.iat.expired"
@@ -65,9 +36,6 @@ const (
 	auditDCRClientDeleted         = "dcr.client.deleted"
 	auditDCRRATInvalid            = "dcr.rat.invalid"
 	auditDCRMetadataValidation    = "dcr.metadata.validation_failed"
-
-	auditLevelInfo = "info"
-	auditLevelWarn = "warn"
 )
 
 // Deps bundles the runtime dependencies the registration endpoint
@@ -146,6 +114,11 @@ type Deps struct {
 	// Logger is the slog handler the endpoint emits diagnostic
 	// records on. A nil Logger installs [slog.Default].
 	Logger *slog.Logger
+
+	// Audit is the structured audit-event sink. A nil Emitter
+	// collapses to [audit.Discard] so handler code can call
+	// deps.audit().Emit unconditionally without a nil-check.
+	Audit audit.Emitter
 }
 
 // Handler returns the HTTP handler the OP mounts at /register and
@@ -200,25 +173,15 @@ func (d *Deps) logger() *slog.Logger {
 	return d.Logger
 }
 
-// audit returns the audit sink the handler uses. v1.0 ships a no-op
-// sink; once the public op/ surface grows an audit interface, [Deps]
-// will gain a field that this helper consults instead.
-//
-// The receiver is anonymous because v1.0 does not yet read any [Deps]
-// field; call sites use the d.audit() shape so the migration path
-// stays a one-line edit.
-func (*Deps) audit() auditLogger { //nolint:ireturn // auditLogger is the package-internal interface call sites depend on; the concrete sink will swap once op/ exposes an audit hook.
-	return noopAudit{}
+// audit returns the audit sink the handler uses. A nil [Deps.Audit]
+// collapses to [audit.Discard] so handler code can call
+// deps.audit().Emit unconditionally without a nil-check.
+func (d *Deps) audit() audit.Emitter { //nolint:ireturn // audit.Emitter is the package's audit-sink contract; returning the interface is required so the discard fallback can flow through one helper.
+	if d.Audit == nil {
+		return audit.Discard()
+	}
+	return d.Audit
 }
-
-// noopAudit is the zero-cost auditLogger used in v1.0 because the
-// public op/ surface does not yet expose an audit hook. It exists so
-// handler code can call deps.audit().Audit unconditionally without a
-// nil-check.
-type noopAudit struct{}
-
-// Audit implements [auditLogger] as a no-op.
-func (noopAudit) Audit(_ context.Context, _ auditEvent) {}
 
 // serve routes the request to the matching method+path handler. The
 // op layer mounts the handler at both <RegisterPath> and
