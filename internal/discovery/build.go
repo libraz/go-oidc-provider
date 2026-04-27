@@ -222,11 +222,18 @@ func join(issuer, mountPrefix, endpoint string) string {
 }
 
 // defaultAuthMethods returns the auth-method advertisement, falling back to
-// the v1.0 baseline (client_secret_basic + client_secret_post) when the
-// caller does not supply an override.
+// the v1.0 baseline when the caller does not supply an override. The
+// baseline lists the symmetric secret methods plus private_key_jwt
+// (OIDC Core §9 / RFC 7523 §3) — the OP wiring layer always installs
+// the [internal/clientauth.PrivateKeyJWTVerifier] so a client whose
+// metadata names "private_key_jwt" can authenticate out of the box.
+// tls_client_auth / self_signed_tls_client_auth are appended only
+// when the [feature.MTLS] flag is on; they live behind a feature
+// gate because they require a [internal/mtls] verifier and a
+// terminating-mTLS deployment shape.
 func defaultAuthMethods(in []string) []string {
 	if len(in) == 0 {
-		return []string{"client_secret_basic", "client_secret_post"}
+		return []string{"client_secret_basic", "client_secret_post", "private_key_jwt"}
 	}
 	out := make([]string, len(in))
 	copy(out, in)

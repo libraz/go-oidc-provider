@@ -11,17 +11,30 @@ in any minor release.
 
 ### Added
 
+- `private_key_jwt` is now wired in `op.New`. The OP installs a
+  `clientauth.PrivateKeyJWTVerifier` against every endpoint that
+  authenticates clients (/token, /par, /introspect, /revoke), with
+  the audience pinned to the absolute token endpoint URL per OIDC
+  Core §9 / RFC 7523 §3. Inline JWKs (`store.Client.JWKs`) are
+  resolved through the new `clientauth.StoreJWKSResolver`; clients
+  that only publish their keys via `JWKsURI` are rejected with
+  `clientauth.ErrJWKSURIUnsupported` until a follow-up Wave
+  promotes the JWKS fetcher to a shared package. Discovery now
+  advertises `private_key_jwt` in
+  `token_endpoint_auth_methods_supported` by default, so an RP
+  whose registration carries `"private_key_jwt"` can authenticate
+  out of the box without an embedder-side option toggle.
 - `examples/fapi2` example. Demonstrates the FAPI 2.0 Baseline
   wiring shape end-to-end: `op.WithProfile(profile.FAPI2Baseline)`,
-  the four required features (PAR / JAR / DPoP / MTLS), and a
+  the three required features (PAR / JAR / DPoP), and a
   pre-registered confidential client whose
-  `TokenEndpointAuthMethod` is `self_signed_tls_client_auth`.
+  `TokenEndpointAuthMethod` is `private_key_jwt` with inline JWKs.
   Running the example and curling the discovery document is the
   fastest way to confirm the OP advertises the FAPI 2.0 surface
-  (auth-method allow-list intersected per §3.1.3, mTLS-bound
-  access tokens, DPoP advertised, JAR / PAR endpoints present).
-  Built behind the `example` build tag so the binary is excluded
-  from `go test` / production go.sum.
+  (auth-method allow-list intersected per §3.1.3 down to
+  `["private_key_jwt"]`, DPoP advertised, JAR / PAR endpoints
+  present). Built behind the `example` build tag so the binary
+  is excluded from `go test` / production go.sum.
 - FAPI 2.0 §3.1.4 sender-constrained access-token enforcement at
   the token endpoint. When a FAPI 2.0 profile is active, the
   `/token` handler refuses to mint an access token unless the

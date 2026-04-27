@@ -237,6 +237,10 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	if err != nil {
 		return nil, err
 	}
+	assertionVerifier, err := buildAssertionVerifier(cfg)
+	if err != nil {
+		return nil, err
+	}
 	mux.Handle(cfg.endpoints.Discovery, discHandler)
 	mux.Handle(joinPath(cfg.mountPrefix, cfg.endpoints.JWKS), jwks.Handler(keySet))
 	mux.Handle(
@@ -264,6 +268,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Scopes:                         scopes,
 			DPoP:                           dpopVerifier,
 			MTLS:                           mtlsVerifier,
+			AssertionVerifier:              assertionVerifier,
 			AccessTokenTTL:                 cfg.accessTokenTTL,
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
@@ -273,11 +278,11 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes); err != nil {
+	if err := mountPAREndpoint(mux, cfg, scopes, assertionVerifier); err != nil {
 		return nil, err
 	}
-	mountIntrospectionEndpoint(mux, cfg, scopes, keySet)
-	mountRevocationEndpoint(mux, cfg, keySet)
+	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, assertionVerifier)
+	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifier)
 	mountRegistrationEndpoint(mux, cfg, scopes)
 	bcc, err := buildBackchannelCoordinator(cfg, keySet)
 	if err != nil {
@@ -371,6 +376,69 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 		}
 	}
 	return v, nil
+}
+
+// buildAssertionVerifier constructs the [clientauth.PrivateKeyJWTVerifier]
+// the OP installs at every endpoint that authenticates clients
+// (/token, /par, /introspect, /revoke). The verifier is unconditional
+// — discovery advertises private_key_jwt as a supported auth method
+// and the FAPI 2.0 §3.1.3 allow-list lists it as preferred — so the
+// OP wiring layer does not gate it on a feature flag. Embedders that
+// register a client with a different [TokenEndpointAuthMethod] are
+// unaffected: the verifier is consulted only when the inbound
+// request actually claims private_key_jwt.
+//
+// The verifier reads inline JWKs from [store.Client.JWKs] via
+// [clientauth.StoreJWKSResolver]. JWKsURI fetching is documented at
+// the resolver as a follow-up; until that lands an embedder whose
+// clients publish their keys via URL must pre-fetch them and write
+// the inline form into the client record.
+//
+// Audience is the absolute token endpoint URL, per OIDC Core §9 / RFC
+// 7523 §3 — every assertion at /token, /par, /introspect, and /revoke
+// MUST set "aud" to that URL. The library reuses the same value across
+// the four endpoints so an RP that signs once can authenticate
+// anywhere; spec-strict embedders who want endpoint-scoped audiences
+// can swap the verifier through the public store.
+func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, error) {
+	resolver, err := clientauth.NewStoreJWKSResolver(cfg.store.Clients())
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "private_key_jwt JWKS resolver construction failed",
+			Cause:       err,
+		}
+	}
+	return &clientauth.PrivateKeyJWTVerifier{
+		Resolver: resolver,
+		JTIStore: cfg.store.ConsumedJTIs(),
+		Audience: absoluteEndpointURL(cfg, cfg.endpoints.Token),
+		Clock:    cfg.clock.Now,
+	}, nil
+}
+
+// absoluteEndpointURL composes the OP's issuer with the mount prefix
+// and the named endpoint, producing the canonical absolute URL the
+// JOSE assertion verifier expects in the "aud" claim. The helper
+// mirrors the discovery builder's joining logic so the audience the
+// verifier accepts is byte-for-byte identical to the value
+// /.well-known/openid-configuration advertises.
+func absoluteEndpointURL(cfg *config, endpoint string) string {
+	issuer := cfg.issuer
+	for len(issuer) > 0 && issuer[len(issuer)-1] == '/' {
+		issuer = issuer[:len(issuer)-1]
+	}
+	prefix := cfg.mountPrefix
+	if prefix == "/" {
+		prefix = ""
+	}
+	for len(prefix) > 0 && prefix[len(prefix)-1] == '/' {
+		prefix = prefix[:len(prefix)-1]
+	}
+	if len(endpoint) > 0 && endpoint[0] != '/' {
+		endpoint = "/" + endpoint
+	}
+	return issuer + prefix + endpoint
 }
 
 // buildJARMSigner constructs the JARM signer when the [feature.JARM]
@@ -503,7 +571,12 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 // is enabled. Without the flag the route is absent — discovery already
 // gates the advertisement on the same flag, so the OP cannot tell clients
 // the endpoint exists while quietly serving 404.
-func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) error {
+func mountPAREndpoint(
+	mux *http.ServeMux,
+	cfg *config,
+	scopes *scoperegistry.Registry,
+	assertionVerifier clientauth.AssertionVerifier,
+) error {
 	if !featureEnabled(cfg.features, feature.PAR) {
 		return nil
 	}
@@ -520,6 +593,7 @@ func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Reg
 			Scopes:                   scopes,
 			Clock:                    cfg.clock,
 			JAR:                      jarVerifier,
+			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)
@@ -536,7 +610,13 @@ func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Reg
 // the backend returns a nil RefreshTokenStore, which the
 // introspectendpoint package documents as "opaque path always returns
 // inactive".
-func mountIntrospectionEndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, keySet *keys.Set) {
+func mountIntrospectionEndpoint(
+	mux *http.ServeMux,
+	cfg *config,
+	scopes *scoperegistry.Registry,
+	keySet *keys.Set,
+	assertionVerifier clientauth.AssertionVerifier,
+) {
 	if !featureEnabled(cfg.features, feature.Introspect) {
 		return
 	}
@@ -550,6 +630,7 @@ func mountIntrospectionEndpoint(mux *http.ServeMux, cfg *config, scopes *scopere
 			Scopes:                   scopes,
 			Clock:                    cfg.clock,
 			SigningKey:               tokens.FromInternalEntry(keySet.Active()),
+			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)
@@ -566,7 +647,12 @@ func mountIntrospectionEndpoint(mux *http.ServeMux, cfg *config, scopes *scopere
 // calling RevokeChain). Refresh-token revocation is a no-op when the
 // backend returns a nil RefreshTokenStore, which the revokeendpoint
 // package documents as "opaque path always silently 200".
-func mountRevocationEndpoint(mux *http.ServeMux, cfg *config, keySet *keys.Set) {
+func mountRevocationEndpoint(
+	mux *http.ServeMux,
+	cfg *config,
+	keySet *keys.Set,
+	assertionVerifier clientauth.AssertionVerifier,
+) {
 	if !featureEnabled(cfg.features, feature.Revoke) {
 		return
 	}
@@ -578,6 +664,7 @@ func mountRevocationEndpoint(mux *http.ServeMux, cfg *config, keySet *keys.Set) 
 			RefreshTokens:            cfg.store.RefreshTokens(),
 			Keys:                     keySet,
 			Clock:                    cfg.clock,
+			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)

@@ -39,7 +39,7 @@ func (stubStore) Grants() store.GrantStore { return stubGrantStore{} }
 func (stubStore) Sessions() store.SessionStore                     { return stubSessionStore{} }
 func (stubStore) PushedAuthRequests() store.PushedAuthRequestStore { return stubPARStore{} }
 func (stubStore) Interactions() store.InteractionStore             { return stubInteractionStore{} }
-func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { panic("not implemented") }
+func (stubStore) ConsumedJTIs() store.ConsumedJTIStore             { return stubJTIStore{} }
 func (stubStore) InitialAccessTokens() store.InitialAccessTokenStore {
 	panic("not implemented")
 }
@@ -110,6 +110,18 @@ type stubClientStore struct{}
 func (stubClientStore) GetClient(context.Context, string) (*store.Client, error) {
 	return nil, store.ErrNotFound
 }
+
+// stubJTIStore is the no-op [store.ConsumedJTIStore] used by construction
+// tests so [op.New] can wire the private_key_jwt verifier without seeding
+// a real JTI substore. Mark always succeeds (records nothing); Has always
+// reports "absent" — a test that actually drives a private_key_jwt
+// authentication observes a fresh-replay window each time, which is fine
+// for construction smoke tests.
+type stubJTIStore struct{}
+
+func (stubJTIStore) Mark(context.Context, string, time.Time) error { return nil }
+
+func (stubJTIStore) Has(context.Context, string) (bool, error) { return false, nil }
 
 type stubAuthCodeStore struct{}
 
