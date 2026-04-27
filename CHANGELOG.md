@@ -11,13 +11,23 @@ in any minor release.
 
 ### Added
 
+- `cmd/op-demo` `-redirect-uri` flag now accepts a comma-separated
+  list. A multi-plan OFCS run targets one alias per plan
+  (`/test/a/<alias>/callback`), so seeding every alias in a single
+  invocation lets one op-demo serve every plan without restart
+  between runs. Whitespace and stray trailing commas are trimmed.
 - `cmd/op-demo` runnable demo OP binary suitable for manual flows and
   the OpenID Foundation Conformance Suite. Generates ephemeral ES256
   signing and cookie keys, seeds an inmem store with a single demo
   client, and shuts down cleanly on SIGINT / SIGTERM via
   `signal.NotifyContext`. CLI flags expose `-listen`, `-issuer`,
-  `-mount`, `-client-id`, and `-redirect-uri`. Not for production —
-  the binary is dev-only and persists every record in process memory.
+  `-mount`, `-client-id`, `-redirect-uri`, plus `-tls-cert` /
+  `-tls-key` for HTTPS — the OFCS requires `https://` issuers, so the
+  TLS branch is the harness path. The two TLS flags are validated as
+  a pair (one without the other is a config error so a half-set
+  invocation cannot silently degrade to plain HTTP). Not for
+  production — the binary is dev-only and persists every record in
+  process memory.
 - `examples/minimal` shows the smallest embedder boilerplate that
   constructs a Provider and mounts it on an `http.ServeMux`. Gated by
   the `//go:build example` tag so the example does not enter the main

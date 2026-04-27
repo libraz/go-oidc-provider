@@ -7,13 +7,22 @@
 // terminates the OP cleanly on SIGINT / SIGTERM. It is not intended
 // for production deployments.
 //
-// Quick start:
+// Quick start (HTTP):
 //
 //	go run ./cmd/op-demo \
 //	    -listen :9090 \
 //	    -issuer https://localhost:9090 \
 //	    -client-id demo-client \
 //	    -redirect-uri https://localhost.emobix.co.uk:8443/test/a/op-demo/callback
+//
+// Quick start (HTTPS, required by the OpenID Foundation Conformance
+// Suite because issuer URLs MUST be https://):
+//
+//	go run ./cmd/op-demo \
+//	    -listen :9443 \
+//	    -issuer https://localhost:9443 \
+//	    -tls-cert ./localhost.pem \
+//	    -tls-key  ./localhost-key.pem
 //
 // In production embedders read keys from a vault / KMS and persist
 // records in a real backend; this binary deliberately wires neither
@@ -32,6 +41,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +55,18 @@ import (
 // op-demo is a development binary, not a production OP, so a long
 // grace period would only mask hung handlers during conformance runs.
 const shutdownGrace = 5 * time.Second
+
+// runConfig groups the demo's startup knobs so run() does not grow a
+// long positional signature as flags accumulate.
+type runConfig struct {
+	listen       string
+	issuer       string
+	mount        string
+	clientID     string
+	redirectURIs []string
+	tlsCert      string
+	tlsKey       string
+}
 
 func main() {
 	if err := mainErr(); err != nil {
@@ -62,7 +84,9 @@ func mainErr() error {
 		issuer      = flag.String("issuer", "https://localhost:9090", "issuer URL — MUST be https://, no query, no fragment")
 		mount       = flag.String("mount", "/oidc", "URL prefix the OP handler is mounted under")
 		clientID    = flag.String("client-id", "demo-client", "client_id of the seed client")
-		redirectURI = flag.String("redirect-uri", "https://localhost.emobix.co.uk:8443/test/a/op-demo/callback", "redirect_uri seeded for the demo client (matches OFCS default)")
+		redirectURI = flag.String("redirect-uri", "https://localhost.emobix.co.uk:8443/test/a/op-demo/callback", "comma-separated list of redirect_uri values seeded for the demo client. The OFCS routes each test plan's callback at /test/a/<alias>/callback, so a multi-plan conformance run needs every plan's URI seeded up front.")
+		tlsCert     = flag.String("tls-cert", "", "path to PEM-encoded TLS certificate; empty to serve plain HTTP. Must be paired with -tls-key.")
+		tlsKey      = flag.String("tls-key", "", "path to PEM-encoded TLS private key; empty to serve plain HTTP. Must be paired with -tls-cert.")
 	)
 	flag.Parse()
 
@@ -71,14 +95,31 @@ func mainErr() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, *listen, *issuer, *mount, *clientID, *redirectURI, logger); err != nil {
+	cfg := runConfig{
+		listen:       *listen,
+		issuer:       *issuer,
+		mount:        *mount,
+		clientID:     *clientID,
+		redirectURIs: parseRedirectURIs(*redirectURI),
+		tlsCert:      *tlsCert,
+		tlsKey:       *tlsKey,
+	}
+	if err := run(ctx, cfg, logger); err != nil {
 		logger.Error("op-demo: fatal", "err", err)
 		return err
 	}
 	return nil
 }
 
-func run(ctx context.Context, listen, issuer, mount, clientID, redirectURI string, logger *slog.Logger) error {
+func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
+	// One-of TLS configuration is almost always a typo: a half-set
+	// pair would silently fall back to plain HTTP and surprise the
+	// operator at the first OFCS run. Reject it before we touch
+	// anything else.
+	if (cfg.tlsCert == "") != (cfg.tlsKey == "") {
+		return errors.New("op-demo: -tls-cert and -tls-key must be provided together")
+	}
+
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return fmt.Errorf("generate signing key: %w", err)
@@ -88,17 +129,21 @@ func run(ctx context.Context, listen, issuer, mount, clientID, redirectURI strin
 		return fmt.Errorf("generate cookie key: %w", err)
 	}
 
+	if len(cfg.redirectURIs) == 0 {
+		return errors.New("op-demo: -redirect-uri must list at least one URI")
+	}
+
 	st := inmem.New()
-	if err := seedClient(st, clientID, redirectURI); err != nil {
+	if err := seedClient(st, cfg.clientID, cfg.redirectURIs); err != nil {
 		return fmt.Errorf("seed demo client: %w", err)
 	}
 
 	provider, err := op.New(
-		op.WithIssuer(issuer),
+		op.WithIssuer(cfg.issuer),
 		op.WithStore(st),
 		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
 		op.WithCookieKey(cookieKey),
-		op.WithMountPrefix(mount),
+		op.WithMountPrefix(cfg.mount),
 		op.WithLogger(logger),
 	)
 	if err != nil {
@@ -106,7 +151,7 @@ func run(ctx context.Context, listen, issuer, mount, clientID, redirectURI strin
 	}
 
 	srv := &http.Server{
-		Addr:              listen,
+		Addr:              cfg.listen,
 		Handler:           provider,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -128,14 +173,23 @@ func run(ctx context.Context, listen, issuer, mount, clientID, redirectURI strin
 		close(idleClosed)
 	}()
 
+	tlsEnabled := cfg.tlsCert != ""
 	logger.Info("op-demo: listening",
-		"addr", listen,
-		"issuer", issuer,
-		"mount", mount,
-		"client_id", clientID,
+		"addr", cfg.listen,
+		"issuer", cfg.issuer,
+		"mount", cfg.mount,
+		"client_id", cfg.clientID,
+		"tls", tlsEnabled,
 	)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("listen: %w", err)
+
+	var listenErr error
+	if tlsEnabled {
+		listenErr = srv.ListenAndServeTLS(cfg.tlsCert, cfg.tlsKey)
+	} else {
+		listenErr = srv.ListenAndServe()
+	}
+	if listenErr != nil && !errors.Is(listenErr, http.ErrServerClosed) {
+		return fmt.Errorf("listen: %w", listenErr)
 	}
 	<-idleClosed
 	return nil
@@ -145,10 +199,10 @@ func run(ctx context.Context, listen, issuer, mount, clientID, redirectURI strin
 // and the OFCS test plans. The library has no implicit clients, so
 // without this seed the /authorize endpoint would reject every
 // request as unknown_client.
-func seedClient(st *inmem.Store, clientID, redirectURI string) error {
+func seedClient(st *inmem.Store, clientID string, redirectURIs []string) error {
 	return st.RegisterClient(context.Background(), &store.Client{
 		ID:                      clientID,
-		RedirectURIs:            []string{redirectURI},
+		RedirectURIs:            redirectURIs,
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
 		Scopes:                  []string{"openid", "profile", "email"},
@@ -156,4 +210,19 @@ func seedClient(st *inmem.Store, clientID, redirectURI string) error {
 		PublicClient:            true,
 		Source:                  store.ClientSourceStatic,
 	})
+}
+
+// parseRedirectURIs splits the -redirect-uri flag on commas and trims
+// whitespace so a multi-plan conformance run can seed every plan's
+// callback path in one invocation. Empty entries (from a stray
+// trailing comma) are dropped.
+func parseRedirectURIs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
