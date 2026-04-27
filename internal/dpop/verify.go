@@ -29,6 +29,26 @@ type Clock interface {
 	Now() time.Time
 }
 
+// NonceVerifier is the contract the [Verifier] consults when the
+// deployment opts into the RFC 9449 §8 / §9 server-supplied nonce
+// flow. A nil [VerifierConfig.Nonces] disables the check entirely:
+// proofs without a "nonce" claim are accepted, and proofs that carry
+// one are not validated against any list.
+//
+// Implementations MUST be safe for concurrent use; the verifier
+// invokes [Validate] from every request goroutine. The embedder is
+// responsible for the rotation policy (single value, sliding window,
+// HMAC-keyed, etc.); the dpop package does not assume one.
+type NonceVerifier interface {
+	// Validate reports whether nonce is currently acceptable. The
+	// implementation MAY treat empty input as "not acceptable"
+	// directly; the verifier already short-circuits on empty before
+	// reaching this method, but the interface is permissive so a
+	// caller embedding the implementation outside the verifier need
+	// not duplicate that guard.
+	Validate(nonce string) bool
+}
+
 // Verifier is the request-scoped entry point. Construct it once at
 // startup with [NewVerifier]; the value is immutable and safe for
 // concurrent use.
@@ -37,6 +57,7 @@ type Verifier struct {
 	jtis       store.ConsumedJTIStore
 	iatWindow  time.Duration
 	replayLeew time.Duration
+	nonces     NonceVerifier
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier].
@@ -52,6 +73,15 @@ type VerifierConfig struct {
 	// IatWindow overrides [DefaultIatWindow]. Zero or negative falls
 	// back to the default.
 	IatWindow time.Duration
+
+	// Nonces opts the verifier into the RFC 9449 §8 / §9
+	// server-supplied nonce flow. When non-nil, every proof MUST
+	// carry a "nonce" claim accepted by [NonceVerifier.Validate];
+	// otherwise the verifier returns [ErrProofNonceMissing] or
+	// [ErrProofNonceInvalid] and the HTTP layer issues the
+	// "use_dpop_nonce" challenge. A nil value (the default) leaves
+	// the proof's nonce claim unread, matching the v0.x posture.
+	Nonces NonceVerifier
 }
 
 // NewVerifier builds a [*Verifier] from cfg. The function returns an
@@ -74,6 +104,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		jtis:       cfg.JTIs,
 		iatWindow:  window,
 		replayLeew: window,
+		nonces:     cfg.Nonces,
 	}, nil
 }
 
@@ -159,6 +190,10 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 		}
 	}
 
+	if err := v.checkNonce(parsed.claims.Nonce); err != nil {
+		return nil, err
+	}
+
 	jkt, err := Thumbprint(parsed.jwk)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrProofMalformed, err)
@@ -177,6 +212,28 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 	}
 
 	return &VerifyResult{JKT: jkt, JTI: parsed.claims.JTI}, nil
+}
+
+// checkNonce runs the optional RFC 9449 §8 / §9 nonce gate. The
+// check sits ahead of the replay mark in [Verifier.Verify] so a
+// stale-nonce proof does not consume a jti slot the legitimate retry
+// would need: the client is expected to retry with a fresh proof
+// (new jti, new nonce), and burning the failed jti would force the
+// retry to surface as a spurious replay.
+//
+// A nil [Verifier.nonces] disables the gate; this matches the v0.x
+// posture where proofs without a nonce claim were always accepted.
+func (v *Verifier) checkNonce(nonce string) error {
+	if v.nonces == nil {
+		return nil
+	}
+	if nonce == "" {
+		return ErrProofNonceMissing
+	}
+	if !v.nonces.Validate(nonce) {
+		return ErrProofNonceInvalid
+	}
+	return nil
 }
 
 // VerifyHTTPRequest is the convenience wrapper that pulls inputs off

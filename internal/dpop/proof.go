@@ -34,9 +34,10 @@ var allowedProofAlgs = map[jose.Algorithm]struct{}{
 // proofClaims is the decoded claim bundle of a DPoP proof JWT. RFC 9449
 // §4.2 marks "jti" / "htm" / "htu" / "iat" as required; "ath" is
 // required when the proof is presented alongside an access token; and
-// "nonce" is parsed but ignored (server-supplied nonces are out of
-// scope for v0.x — the field is here so the wire form round-trips
-// without surprise when the upstream feature ships).
+// "nonce" is required when the verifier has been configured with a
+// [NonceVerifier] (RFC 9449 §8 / §9 server-supplied nonce flow).
+// Without that config the field is parsed but unread, matching the
+// v0.x posture so a proof minted with a nonce claim still round-trips.
 type proofClaims struct {
 	JTI      string `json:"jti"`
 	HTM      string `json:"htm"`

@@ -57,4 +57,22 @@ var (
 	// claim is mandatory under RFC 9449 §4.2; without it the replay
 	// store has nothing to mark.
 	ErrProofMissingJTI = errors.New("dpop: proof missing jti")
+
+	// ErrProofNonceMissing signals that the verifier has been
+	// configured with a [NonceVerifier] but the proof does not carry a
+	// "nonce" claim. RFC 9449 §8 / §9 prescribes a 401 / 400 response
+	// with "WWW-Authenticate: DPoP error=\"use_dpop_nonce\"" and a
+	// fresh "DPoP-Nonce" header so the client can retry. The HTTP
+	// layer translates this sentinel onto that wire form; the
+	// verifier itself only signals the condition.
+	ErrProofNonceMissing = errors.New("dpop: proof missing nonce")
+
+	// ErrProofNonceInvalid signals that the proof carries a "nonce"
+	// claim but it is not currently acceptable to the configured
+	// [NonceVerifier]. The wire response is identical to the
+	// missing-nonce case (RFC 9449 §8 collapses the two onto the same
+	// challenge) so callers may inspect either sentinel through a
+	// single [errors.Is] check, but the two are kept distinct here so
+	// audit logs can tell "stale" apart from "absent".
+	ErrProofNonceInvalid = errors.New("dpop: proof nonce not acceptable")
 )

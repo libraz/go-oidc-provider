@@ -11,6 +11,20 @@ in any minor release.
 
 ### Added
 
+- DPoP nonce-verifier machinery in `internal/dpop` (RFC 9449 §8 / §9
+  server-supplied nonce flow, package-level foundation only).
+  `dpop.NonceVerifier` is the new interface; the verifier consults it
+  via `dpop.VerifierConfig.Nonces`. Two new sentinels —
+  `ErrProofNonceMissing` and `ErrProofNonceInvalid` — distinguish
+  "absent" from "stale" so audit logs can tell the two apart even
+  though the wire challenge is the same. The nonce check sits ahead
+  of the replay mark in `Verify`, so a stale-nonce proof does not
+  burn a jti slot the legitimate retry would need. A nil `Nonces`
+  preserves the v0.x posture: proofs without a nonce claim are
+  accepted unchanged. Endpoint wiring (the `use_dpop_nonce`
+  challenge response) and the `op.WithDPoPNonceSource` option will
+  follow in subsequent commits.
+
 - FAPI 2.0 Message Signing §5 forced JWT introspection at
   `/introspect`. When `profile.FAPI2MessageSigning` is the active
   profile, every successful introspection response is delivered as
