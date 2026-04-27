@@ -9,6 +9,18 @@ in any minor release.
 
 ## [Unreleased]
 
+### Changed
+
+- `README.md` Quickstart now shows the four options `op.New`
+  actually requires (Issuer, Store, Keyset, CookieKey) instead of
+  the misleading `WithIssuer`-only sketch that referenced a
+  non-existent `WithClientStore`. New Examples section indexes
+  `examples/minimal`, `examples/fapi2`, and
+  `examples/custom-interaction`; new Community section links
+  `SECURITY.md`, `CONTRIBUTING.md`, and `CODE_OF_CONDUCT.md`; the
+  License section now points to `LICENSES/THIRD_PARTY.md` for
+  dependency attribution.
+
 ### Added
 
 - `CODE_OF_CONDUCT.md` adopting the Contributor Covenant 2.1 by
