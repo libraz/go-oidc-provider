@@ -194,3 +194,18 @@ in any minor release.
   clearing the cookie so a malformed request cannot terminate a
   session by accident. Discovery already advertised
   `end_session_endpoint`; this release wires the handler.
+- Logging redaction (`internal/redact`). The package wraps any
+  `slog.Handler` so attributes named after the canonical OAuth/OIDC
+  secrets — `access_token`, `refresh_token`, `id_token`, `code`,
+  `code_verifier`, `client_secret`, `password`, `state`, `nonce`,
+  `dpop` / `dpop_proof`, `authorization`, `cookie`, `set-cookie`,
+  `registration_access_token`, `initial_access_token`, `request`,
+  `assertion`, `client_assertion` — are replaced with the sentinel
+  `[REDACTED]` before they reach the underlying handler. Matching is
+  case-insensitive and treats hyphens / underscores as equivalent so
+  `Set-Cookie`, `set_cookie`, and `set-cookie` all resolve to the
+  same entry. `op.WithLogger` now wraps the supplied logger's
+  handler automatically; the wrap is idempotent. A free-form
+  `redact.Mask(string)` helper rewrites `key=value` pairs (URL
+  queries, Cookie headers) for the rare callsite that logs an
+  unparsed string.

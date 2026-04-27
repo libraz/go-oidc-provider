@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -573,9 +574,20 @@ func WithClock(clock Clock) Option {
 // SHOULD pass a logger backed by their service's slog handler so OP events
 // appear in the same stream as the rest of the application.
 //
+// The supplied logger's handler is wrapped with the library's redaction
+// hook (see internal/redact) so attributes named after the canonical
+// OAuth/OIDC secrets — access_token, refresh_token, id_token, code,
+// code_verifier, client_secret, password, state, nonce, dpop,
+// authorization, cookie, set-cookie — are masked before they reach
+// the underlying handler. The wrapping is idempotent: passing a
+// logger whose handler is already redact-wrapped is a no-op.
+//
 // Stable since v0.1.
 func WithLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
+		if logger != nil {
+			logger = slog.New(redact.WrapHandler(logger.Handler()))
+		}
 		c.logger = logger
 		return nil
 	})
