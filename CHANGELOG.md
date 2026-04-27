@@ -11,6 +11,31 @@ in any minor release.
 
 ### Added
 
+- `interaction.Prompt.CSRFToken` field plus a `csrf_token` form-field
+  fallback at `/interaction/{uid}` POST, so a server-rendered HTML
+  driver can satisfy the double-submit CSRF check without
+  JavaScript. The header path (`X-CSRF-Token`) that SPA drivers use
+  is unchanged — the verifier reads the header first and falls back
+  to the form field only when the body is `application/x-www-form-
+  urlencoded`. The cookie stays HttpOnly. The orchestrator stamps
+  the active token onto `Prompt.CSRFToken` before `Driver.Render` so
+  SSR drivers can embed it as a hidden input; SPA drivers may ignore
+  the field. Two new tests in `internal/authorizeendpoint`
+  (`TestInteractionPost_AcceptsCSRFTokenViaFormBody` and
+  `TestInteractionPost_RejectsMissingCSRF`) cover the fallback and
+  its negative companion.
+
+- `cmd/op-demo` now ships an end-to-end interactive flow. The
+  binary wires a stub `op.Authenticator` (any non-empty
+  username + password authenticates as `demo-user`) and an HTML
+  `interaction.Driver` that renders both the `auth.password` and
+  `consent.scope` prompts as plain server-rendered forms. A demo
+  user record is seeded into the in-memory store so `/userinfo`
+  and the id_token claim assembly resolve a subject. With this
+  wiring the demo OP can complete the OFCS happy-path
+  authorization-code flow against the seeded client without any
+  embedder-supplied UI.
+
 - `op.WithDPoPNonceSource(source)` public option, completing the
   RFC 9449 §8 / §9 server-supplied nonce flow. The new
   `op.DPoPNonceSource` interface bundles both halves of the

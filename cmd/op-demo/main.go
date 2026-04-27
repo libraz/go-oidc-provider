@@ -137,6 +137,7 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 	if err := seedClient(st, cfg.clientID, cfg.redirectURIs); err != nil {
 		return fmt.Errorf("seed demo client: %w", err)
 	}
+	seedDemoUser(st)
 
 	provider, err := op.New(
 		op.WithIssuer(cfg.issuer),
@@ -145,6 +146,8 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		op.WithCookieKey(cookieKey),
 		op.WithMountPrefix(cfg.mount),
 		op.WithLogger(logger),
+		op.WithInteraction(htmlDriver{}),
+		op.WithAuthenticators(stubAuthenticator{}),
 	)
 	if err != nil {
 		return fmt.Errorf("op.New: %w", err)
@@ -209,6 +212,31 @@ func seedClient(st *inmem.Store, clientID string, redirectURIs []string) error {
 		TokenEndpointAuthMethod: "none",
 		PublicClient:            true,
 		Source:                  store.ClientSourceStatic,
+	})
+}
+
+// seedDemoUser populates the user record [stubAuthenticator] binds
+// every successful login to. /userinfo and id_token claim assembly
+// look up the subject through [store.UserStore.FindBySubject]; without
+// this seed the openid scope would yield a token whose subject does
+// not resolve and the conformance run would surface "unknown subject".
+//
+// The claim values are deliberately conventional ("name", "email",
+// "email_verified") so OFCS profile_response checks pass with no
+// further wiring. UpdatedAt uses a fixed date rather than [time.Now]
+// because internal/timex is the canonical clock source for production
+// code and a dev-only seed has no need to participate in that
+// machinery — the value just feeds the "updated_at" claim, which OFCS
+// only checks for shape, not freshness.
+func seedDemoUser(st *inmem.Store) {
+	st.PutUser(context.Background(), &store.User{
+		Subject: demoSubject,
+		Claims: map[string]any{
+			"name":           "Demo User",
+			"email":          "demo-user@example.com",
+			"email_verified": true,
+		},
+		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 }
 
