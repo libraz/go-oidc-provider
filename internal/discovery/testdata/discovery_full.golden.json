@@ -70,5 +70,8 @@
   ],
   "authorization_signing_alg_values_supported": [
     "ES256"
+  ],
+  "introspection_signing_alg_values_supported": [
+    "ES256"
   ]
 }

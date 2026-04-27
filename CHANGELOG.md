@@ -144,5 +144,14 @@ in any minor release.
   rules are enforced. `token_type_hint` is honoured but the handler
   always falls through on miss per §2.1. Discovery advertises
   `introspection_endpoint` and
-  `introspection_endpoint_auth_methods_supported`. JWT introspection
-  for FAPI Message Signing is a follow-up.
+  `introspection_endpoint_auth_methods_supported`.
+- RFC 9701 JWT Response for OAuth 2.0 Token Introspection. The
+  `/introspect` endpoint now negotiates the response format: if the
+  request's `Accept` header prefers `application/token-introspection+jwt`,
+  or the introspecting client preregistered `introspection_signed_response_alg`
+  via `op/store.Client.IntrospectionSignedResponseAlg`, the response is
+  a compact-serialised JWS carrying `iss` / `aud` (= client_id) / `iat`
+  with the RFC 7662 body nested under `token_introspection`. The JWS
+  uses the OP's active signing key and stamps `typ: token-introspection+jwt`.
+  Discovery advertises `introspection_signing_alg_values_supported: ["ES256"]`
+  whenever the Introspect feature is enabled.

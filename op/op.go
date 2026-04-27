@@ -455,6 +455,7 @@ func mountIntrospectionEndpoint(mux *http.ServeMux, cfg *config, scopes *scopere
 			Keys:          keySet,
 			Scopes:        scopes,
 			Clock:         cfg.clock,
+			SigningKey:    tokens.FromInternalEntry(keySet.Active()),
 		}),
 	)
 }

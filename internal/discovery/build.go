@@ -160,6 +160,11 @@ func Build(in Input) Document {
 	if in.Features.Introspect {
 		doc.IntrospectionEndpointAuthMethodsSupported = append([]string(nil),
 			doc.TokenEndpointAuthMethodsSupported...)
+		// RFC 9701 §6: advertise the alg values the OP signs JWT-
+		// formatted introspection responses with. The list mirrors
+		// the ID-token / JARM posture (ES256 only) because the
+		// signing key is shared.
+		doc.IntrospectionSigningAlgValuesSupported = []string{"ES256"}
 	}
 	return doc
 }

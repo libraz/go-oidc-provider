@@ -75,11 +75,16 @@
 // tokens always project onto inactive. JWT introspection still functions
 // because it does not consult the refresh-token store.
 //
-// TODO(introspect-jwt): JWT-formatted introspection responses (FAPI 2.0
-// Message Signing) are deferred to Task #31. The current package emits
-// JSON only; the metadata fields
-// "introspection_signing_alg_values_supported",
-// "introspection_encryption_alg_values_supported", and
-// "introspection_encryption_enc_values_supported" are not yet advertised
-// in discovery.
+// # JWT-formatted responses (RFC 9701)
+//
+// When the introspecting client has preregistered
+// [op/store.Client.IntrospectionSignedResponseAlg], or the request's
+// Accept header prefers application/token-introspection+jwt over
+// application/json, the response is emitted as a compact-serialised
+// JWS instead of JSON. The JWT carries the OP's iss, the requesting
+// client_id as aud, the wall-clock iat, and the RFC 7662 §2.2 body
+// nested under the "token_introspection" claim. The JWS header sets
+// "typ": "token-introspection+jwt". v1.0 signs with ES256 only;
+// discovery advertises the alg list at
+// "introspection_signing_alg_values_supported".
 package introspectendpoint

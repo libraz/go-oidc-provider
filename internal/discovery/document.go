@@ -138,4 +138,11 @@ type Document struct {
 	// OP uses when signing JARM responses. v1.0 is "ES256" only.
 	// Emitted only when the JARM feature is enabled.
 	AuthorizationSigningAlgValuesSupported []string `json:"authorization_signing_alg_values_supported,omitempty"`
+
+	// IntrospectionSigningAlgValuesSupported lists the JWS alg values
+	// the OP signs JWT-formatted introspection responses with
+	// (RFC 9701 §6). v1.0 is "ES256" only. Emitted only when the
+	// Introspect feature is enabled because the field is meaningless
+	// without a /introspect endpoint.
+	IntrospectionSigningAlgValuesSupported []string `json:"introspection_signing_alg_values_supported,omitempty"`
 }

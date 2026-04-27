@@ -108,6 +108,13 @@ type Deps struct {
 	// applies to "exp" / "iat" comparisons. Zero or negative falls
 	// back to [defaultLeeway].
 	Leeway time.Duration
+
+	// SigningKey is the OP active key used to sign JWT-formatted
+	// introspection responses (RFC 9701). A zero value disables JWT
+	// introspection: the handler ignores Accept negotiation and always
+	// emits JSON. The op layer wires this from the active keyset entry,
+	// so production deployments always have a non-zero value.
+	SigningKey tokens.SigningKey
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection
@@ -190,6 +197,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 	}
 	hint := r.PostForm.Get("token_type_hint")
 	resp := resolveToken(r.Context(), deps, verifier, client.ID, token, hint)
+	if shouldEmitJWT(deps, client, r.Header.Get("Accept")) {
+		writeJWTResponse(w, deps, client.ID, resp)
+		return
+	}
 	writeResponse(w, resp)
 }
 

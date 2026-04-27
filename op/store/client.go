@@ -115,6 +115,16 @@ type Client struct {
 	// the field is informational; later versions may relax the policy.
 	IDTokenSignedResponseAlg string
 
+	// IntrospectionSignedResponseAlg records the JWS alg the client expects
+	// when receiving JWT-formatted introspection responses (RFC 9701 §7).
+	// When non-empty the OP MUST emit a JWT response regardless of the
+	// request's Accept header. v1.0 only supports "ES256"; non-empty
+	// values that do not equal "ES256" are stored verbatim but the
+	// introspection handler treats them as "always JWT" — algorithm
+	// enforcement lands when the project supports more than one signing
+	// alg.
+	IntrospectionSignedResponseAlg string
+
 	// SectorIdentifierURI is the optional pairwise sector identifier
 	// from OIDC Core §5. The library does not fetch it eagerly; it is
 	// stored verbatim so the eventual pairwise computation can resolve
