@@ -11,6 +11,18 @@ in any minor release.
 
 ### Added
 
+- `examples/custom-interaction` example. Demonstrates how to plug a
+  non-default `interaction.Driver` into `op.New` via
+  `op.WithInteraction(...)`. The example ships a tiny `htmlDriver`
+  that renders prompts as inline HTML (instead of the bundled
+  `interaction.JSONDriver`'s JSON envelope) and parses
+  `application/x-www-form-urlencoded` submissions back into
+  `interaction.FormSubmission`. The driver is intentionally
+  template-free so the wiring shape stays auditable: a real
+  embedder substitutes its own template engine, CSP headers,
+  i18n catalogue, and styling. Built behind the `example` build
+  tag so the binary is excluded from `go test` / production
+  go.sum.
 - `private_key_jwt` is now wired in `op.New`. The OP installs a
   `clientauth.PrivateKeyJWTVerifier` against every endpoint that
   authenticates clients (/token, /par, /introspect, /revoke), with
