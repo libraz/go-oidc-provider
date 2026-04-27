@@ -11,6 +11,21 @@ in any minor release.
 
 ### Added
 
+- FAPI 2.0 §3.1.4 sender-constrained access-token enforcement at
+  the token endpoint. When a FAPI 2.0 profile is active, the
+  `/token` handler refuses to mint an access token unless the
+  inbound request presented a verifiable DPoP proof or a
+  verifiable client certificate. The check runs after the
+  existing DPoP / mTLS verification so a malformed proof still
+  surfaces its own error code, and applies uniformly to the
+  three grant types `/token` accepts (authorization_code,
+  refresh_token, client_credentials). The wire response is
+  `400 invalid_request` with a description that names both
+  remedies (DPoP proof / client certificate) so RP libraries
+  can fix the request without grovelling through the spec.
+  Without a profile (or when the profile does not require
+  sender constraint) the endpoint continues to issue bearer
+  tokens for unbound requests.
 - FAPI 2.0 §6 `x-fapi-interaction-id` echo middleware. When a FAPI
   2.0 profile is active, every response from the OP carries an
   `x-fapi-interaction-id` header: the client-supplied value is

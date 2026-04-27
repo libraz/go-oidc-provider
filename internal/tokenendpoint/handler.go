@@ -150,6 +150,19 @@ type Deps struct {
 	// and skips the mTLS binding so the wire shape stays
 	// unambiguous.
 	MTLS *mtls.Verifier
+
+	// RequireSenderConstrainedTokens, when true, makes the endpoint
+	// refuse to issue an access token unless the inbound request
+	// carried either a verifiable DPoP proof or a verifiable client
+	// certificate (so the issued cnf claim is non-empty). Empty
+	// bindings collapse onto an "invalid_request" wire response so
+	// FAPI 2.0 §3.1.4 / product-design §J.7.2 are uniformly enforced
+	// across all three grant types. The flag is plumbed by the OP
+	// wiring layer when any FAPI2 [profile.Profile] is active; the
+	// build-time profile validator already gates DPoP|MTLS feature
+	// enable, so a runtime "no proof presented" is the only way to
+	// trip this branch.
+	RequireSenderConstrainedTokens bool
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.

@@ -39,10 +39,14 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
-	issueClientCredsResponse(w, deps, client, authorized.Scope, tokenBinding{
+	binding := tokenBinding{
 		DPoPJKT:        dpopOut.JKT,
 		MTLSThumbprint: mtlsOut.Thumbprint,
-	})
+	}
+	if !enforceSenderConstraint(w, deps, binding) {
+		return
+	}
+	issueClientCredsResponse(w, deps, client, authorized.Scope, binding)
 }
 
 // parseClientCredsRequest extracts the optional "scope" form parameter.

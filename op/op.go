@@ -254,18 +254,19 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Token),
 		tokenendpoint.Handler(tokenendpoint.Deps{
-			Issuer:                   cfg.issuer,
-			Clients:                  cfg.store.Clients(),
-			Codes:                    cfg.store.AuthorizationCodes(),
-			RefreshTokens:            cfg.store.RefreshTokens(),
-			Grants:                   cfg.store.Grants(),
-			Keys:                     keySet,
-			Clock:                    cfg.clock,
-			Scopes:                   scopes,
-			DPoP:                     dpopVerifier,
-			MTLS:                     mtlsVerifier,
-			AccessTokenTTL:           cfg.accessTokenTTL,
-			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			Issuer:                         cfg.issuer,
+			Clients:                        cfg.store.Clients(),
+			Codes:                          cfg.store.AuthorizationCodes(),
+			RefreshTokens:                  cfg.store.RefreshTokens(),
+			Grants:                         cfg.store.Grants(),
+			Keys:                           keySet,
+			Clock:                          cfg.clock,
+			Scopes:                         scopes,
+			DPoP:                           dpopVerifier,
+			MTLS:                           mtlsVerifier,
+			AccessTokenTTL:                 cfg.accessTokenTTL,
+			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
+			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 		}),
 	)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet)
@@ -604,6 +605,28 @@ func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
 // do not appear in the returned slice because they are handled
 // outside the package; the FAPI 2.0 §3.1.3 enforcement ladder for
 // those methods lives in internal/mtls.
+// requireSenderConstrainedTokens reports whether the active
+// [profile.Profile] set forbids the issuance of bearer access
+// tokens. The library's product design (§J.7.2) ties this to the
+// FAPI 2.0 family; the build-time profile validator already requires
+// either DPoP or mTLS feature to be enabled when a FAPI2 profile is
+// active, so the runtime path returning true here means "an /token
+// request must present a proof or a cert".
+func (c *config) requireSenderConstrainedTokens() bool {
+	for _, p := range c.profiles {
+		switch p {
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+			return true
+		case profile.FAPICIBA, profile.IGovHigh:
+			// Future profiles. v1.0 ships without their constraint
+			// tables; FAPI-CIBA requires sender-constrained tokens
+			// the same way and will land here when the profile
+			// graduates from placeholder.
+		}
+	}
+	return false
+}
+
 func (c *config) allowedClientAuthMethods() []clientauth.Method {
 	allowedNames := c.profileAllowedAuthMethodNames()
 	if allowedNames == nil {

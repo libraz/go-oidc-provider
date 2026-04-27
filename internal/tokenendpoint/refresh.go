@@ -55,6 +55,9 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 		DPoPJKT:        dpopOut.JKT,
 		MTLSThumbprint: exchanged.MTLSCertThumbprint,
 	}
+	if !enforceSenderConstraint(w, deps, binding) {
+		return
+	}
 	issueRefreshResponse(ctx, w, deps, client, exchanged, binding)
 }
 

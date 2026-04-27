@@ -37,14 +37,18 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
+	binding := tokenBinding{
+		DPoPJKT:        dpopOut.JKT,
+		MTLSThumbprint: mtlsOut.Thumbprint,
+	}
+	if !enforceSenderConstraint(w, deps, binding) {
+		return
+	}
 	exchanged, ok := exchangeAuthCode(ctx, w, deps, in)
 	if !ok {
 		return
 	}
-	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, tokenBinding{
-		DPoPJKT:        dpopOut.JKT,
-		MTLSThumbprint: mtlsOut.Thumbprint,
-	})
+	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, binding)
 }
 
 // tokenBinding bundles the sender-constraint fields a token-endpoint
@@ -86,6 +90,32 @@ func (b tokenBinding) tokenTypeFor() string {
 		return "DPoP"
 	}
 	return "Bearer"
+}
+
+// constrained reports whether the binding carries either a DPoP
+// thumbprint or an mTLS thumbprint. It is the single source of truth
+// for the FAPI 2.0 §3.1.4 "sender-constrained tokens MUST be issued"
+// check that [enforceSenderConstraint] consults.
+func (b tokenBinding) constrained() bool {
+	return b.DPoPJKT != "" || b.MTLSThumbprint != ""
+}
+
+// enforceSenderConstraint refuses an issuance when the deployment
+// requires sender-constrained tokens but the inbound request did not
+// present one. It writes the wire error and returns false on the
+// reject path; the success path is a no-op true so callers can chain
+// it like the other guard helpers in the handler. The error code is
+// "invalid_request" because the missing proof is a property of the
+// HTTP request shape, not of the credential or the grant: an RP that
+// learns of the FAPI policy can fix the problem by re-trying with a
+// proof header or a client certificate.
+func enforceSenderConstraint(w http.ResponseWriter, deps Deps, b tokenBinding) bool {
+	if !deps.RequireSenderConstrainedTokens || b.constrained() {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errInvalidRequest,
+		"sender-constrained access token required: present a DPoP proof or a client certificate")
+	return false
 }
 
 // authCodeInputs is the de-structured view of the form parameters the
