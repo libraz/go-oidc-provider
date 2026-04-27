@@ -86,6 +86,8 @@ func Build(in Input) Document {
 		ScopesSupported:                   append([]string(nil), in.ScopesSupported...),
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: defaultAuthMethods(in.AuthMethodsSupported),
+		BackchannelLogoutSupported:        true,
+		BackchannelLogoutSessionSupported: true,
 	}
 	if in.Features.PAR {
 		doc.PushedAuthorizationRequestEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.PAR)

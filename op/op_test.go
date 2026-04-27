@@ -157,6 +157,10 @@ func (stubGrantStore) FindBySubjectClient(context.Context, string, string) (*sto
 	return nil, store.ErrNotFound
 }
 
+func (stubGrantStore) ListBySubject(context.Context, string) ([]*store.Grant, error) {
+	return nil, nil
+}
+
 func (stubGrantStore) Delete(context.Context, string) error {
 	return store.ErrNotFound
 }

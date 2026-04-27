@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
@@ -60,6 +61,13 @@ type Deps struct {
 	// godoc for why the field exists despite the v1.0 verifier not
 	// consulting it.
 	Clock Clock
+
+	// Backchannel is the [backchannel.Coordinator] the handler hands
+	// off to after the session is terminated. A nil value disables
+	// back-channel fan-out — the embedder either runs without RPs
+	// that registered backchannel_logout_uri, or wires the
+	// coordinator manually outside the standard mount point.
+	Backchannel *backchannel.Coordinator
 }
 
 // Handler returns the HTTP handler the OP mounts at its /end_session
@@ -238,35 +246,47 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 }
 
 // terminateSession is the success-path side effect: read the session
-// cookie, delete the underlying session record, and clear the cookie
-// in the response. Failures during the store call are best-effort —
-// the user's intent is to log out, and a transient store fault should
-// not surface as a 5xx — but the cookie is always cleared so the
-// browser stops authenticating future requests with stale state.
+// cookie, delete the underlying session record, dispatch a
+// back-channel logout fan-out to the affected RPs, and clear the
+// cookie in the response. Failures during the store call are best-
+// effort — the user's intent is to log out, and a transient store
+// fault should not surface as a 5xx — but the cookie is always
+// cleared so the browser stops authenticating future requests with
+// stale state.
 func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
-	sid := readSessionID(r, deps)
+	sid, subject := readSessionFingerprint(r, deps)
 	if sid != "" {
 		// Logout is documented as idempotent; ignoring the error here
 		// is consistent with the manager's ErrNotFound contract and
 		// matches how /authorize treats expired sessions.
 		_ = deps.Sessions.Logout(r.Context(), sid)
 	}
+	if subject != "" && deps.Backchannel != nil {
+		// Back-channel fan-out is best-effort: per-RP failures are
+		// recorded as audit events inside the coordinator so a
+		// broken downstream cannot stall the user-visible logout.
+		_, _ = deps.Backchannel.Notify(r.Context(), backchannel.Notice{
+			Subject:   subject,
+			SessionID: sid,
+		})
+	}
 	clearSessionCookie(w)
 }
 
-// readSessionID pulls the session_id out of the __Host-oidc_session
-// cookie. A missing cookie / decode failure returns the empty string;
-// the caller treats that as "nothing to delete".
-func readSessionID(r *http.Request, deps Deps) string {
+// readSessionFingerprint pulls the session id and the authenticated
+// subject out of the __Host-oidc_session cookie. A missing cookie /
+// decode failure returns the empty pair; the caller treats that as
+// "nothing to terminate".
+func readSessionFingerprint(r *http.Request, deps Deps) (sid, subject string) {
 	c, err := r.Cookie(cookie.SessionProfile.Name)
 	if err != nil || c == nil || c.Value == "" {
-		return ""
+		return "", ""
 	}
 	active, err := deps.Sessions.Resolve(r.Context(), c.Value)
 	if err != nil || active == nil || active.Session == nil {
-		return ""
+		return "", ""
 	}
-	return active.Session.ID
+	return active.Session.ID, active.Session.Subject
 }
 
 // clearSessionCookie writes a Set-Cookie header that retires the

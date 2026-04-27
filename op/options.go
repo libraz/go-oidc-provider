@@ -4,9 +4,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
@@ -125,6 +127,17 @@ type config struct {
 	// registration order, cross-trigger ordering is orchestrator-
 	// defined (§E.9).
 	interactions []Interaction
+
+	// backchannelLogoutHTTPClient is the HTTP client the back-channel
+	// logout coordinator uses to POST Logout Tokens to RPs. Nil means
+	// "use the package default" (a fresh [*http.Client] with the
+	// timeout below and a redirect-refusing CheckRedirect, matching
+	// the spec posture).
+	backchannelLogoutHTTPClient *http.Client
+
+	// backchannelLogoutTimeout is the per-RP request budget. Zero
+	// substitutes [backchannel.DefaultTimeout].
+	backchannelLogoutTimeout time.Duration
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -1124,6 +1137,46 @@ func WithInteractions(i ...Interaction) Option {
 			}
 		}
 		c.interactions = append(c.interactions, i...)
+		return nil
+	})
+}
+
+// WithBackchannelLogoutHTTPClient injects the [*http.Client] the
+// back-channel logout coordinator uses when POSTing Logout Tokens to
+// relying parties. Most embedders do not need this — the package
+// default (a fresh client with [WithBackchannelLogoutTimeout] applied
+// and a CheckRedirect that refuses 3xx hops) is correct for the spec
+// posture.
+//
+// Pass a custom client when the deployment already maintains a shared
+// outbound transport (instrumentation, proxy resolution, custom
+// dialer, …). Embedders that override the client SHOULD preserve a
+// CheckRedirect that returns [http.ErrUseLastResponse] so the OP
+// continues to refuse redirects on a sensitive POST; the design notes
+// in 002 §H.2 explain why.
+//
+// Stable since v0.1.
+func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
+	return optionFunc(func(c *config) error {
+		c.backchannelLogoutHTTPClient = client
+		return nil
+	})
+}
+
+// WithBackchannelLogoutTimeout caps the time the OP spends waiting
+// for a single relying party to acknowledge a Logout Token POST. The
+// budget applies per RP; the coordinator dispatches in parallel, so a
+// slow RP does not delay deliveries to its peers.
+//
+// A zero or negative duration substitutes the package default
+// (5 seconds). Embedders SHOULD keep the value low — back-channel
+// logout is best-effort, and a long timeout merely keeps the OP
+// holding state on a likely-broken RP.
+//
+// Stable since v0.1.
+func WithBackchannelLogoutTimeout(d time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		c.backchannelLogoutTimeout = d
 		return nil
 	})
 }

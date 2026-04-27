@@ -95,6 +95,10 @@ func (fakeGrantStore) FindBySubjectClient(_ context.Context, _, _ string) (*stor
 	return nil, store.ErrNotFound
 }
 
+func (fakeGrantStore) ListBySubject(_ context.Context, _ string) ([]*store.Grant, error) {
+	return nil, nil
+}
+
 func (fakeGrantStore) Delete(_ context.Context, _ string) error {
 	return store.ErrNotFound
 }

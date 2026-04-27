@@ -66,6 +66,24 @@ type Client struct {
 	// /end_session endpoint will reject any request that supplies one.
 	PostLogoutRedirectURIs []string
 
+	// BackchannelLogoutURI is the absolute https:// URL the OP POSTs a
+	// Logout Token to when this client's session terminates (OpenID
+	// Connect Back-Channel Logout 1.0 §2.5). An empty value disables
+	// back-channel logout for this client; the library does not invent
+	// a target. The URL MUST be HTTPS in production deployments — the
+	// validator at registration time enforces that — but the storage
+	// layer keeps it opaque so test fixtures can exercise http:// hosts
+	// served by httptest.
+	BackchannelLogoutURI string
+
+	// BackchannelLogoutSessionRequired reports whether the OP MUST
+	// include the "sid" claim in the Logout Token sent to this client
+	// (OpenID Connect Back-Channel Logout 1.0 §2.4). When false the OP
+	// is free to omit "sid" and identify the session by "sub" alone;
+	// when true the OP MUST emit "sid" (and the coordinator skips the
+	// client when no SID is available).
+	BackchannelLogoutSessionRequired bool
+
 	// GrantTypes lists the grant_type values the client is permitted to use
 	// at the token endpoint (for example "authorization_code",
 	// "refresh_token", "client_credentials"). Empty means the client may

@@ -5,6 +5,8 @@
   "userinfo_endpoint": "https://idp.example.com/oidc/userinfo",
   "jwks_uri": "https://idp.example.com/oidc/jwks",
   "end_session_endpoint": "https://idp.example.com/oidc/end_session",
+  "backchannel_logout_supported": true,
+  "backchannel_logout_session_supported": true,
   "introspection_endpoint": "https://idp.example.com/oidc/introspect",
   "introspection_endpoint_auth_methods_supported": [
     "client_secret_basic",

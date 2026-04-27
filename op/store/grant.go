@@ -68,6 +68,18 @@ type GrantStore interface {
 	// one; revoked grants MUST NOT be returned.
 	FindBySubjectClient(ctx context.Context, subject, clientID string) (*Grant, error)
 
+	// ListBySubject returns every active grant the subject currently
+	// holds. The library calls it during back-channel logout fan-out
+	// (OpenID Connect Back-Channel Logout 1.0 §2.5) to enumerate the
+	// clients that have to be notified when a session terminates.
+	//
+	// Returning an empty slice (with a nil error) is the correct
+	// response when the subject holds no grants. Backends that store
+	// historical grants MUST return only active records, mirroring the
+	// [GrantStore.FindBySubjectClient] contract; revoked grants MUST
+	// NOT appear in the result. Order is unspecified.
+	ListBySubject(ctx context.Context, subject string) ([]*Grant, error)
+
 	// Delete revokes the grant identified by id. It MUST return
 	// [ErrNotFound] if no such grant exists. Backends MAY soft-delete or
 	// hard-delete; the library only requires that subsequent Find and

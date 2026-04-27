@@ -414,6 +414,8 @@ var grantCases = []subtest{
 	{"FindMissing", grantFindMissing},
 	{"FindBySubjectClient", grantFindBySubjectClient},
 	{"FindBySubjectClientMissing", grantFindBySubjectClientMissing},
+	{"ListBySubject", grantListBySubject},
+	{"ListBySubjectEmpty", grantListBySubjectEmpty},
 	{"Delete", grantDelete},
 }
 
@@ -467,6 +469,52 @@ func grantFindBySubjectClientMissing(t *testing.T, f Factory) {
 	_, err := b.Store.Grants().FindBySubjectClient(context.Background(), "absent", "absent")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("FindBySubjectClient missing: want ErrNotFound, got %v", err)
+	}
+}
+
+func grantListBySubject(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	rows := []*store.Grant{
+		newGrant(b.Now, "g-a", "sub", "client-a"),
+		newGrant(b.Now, "g-b", "sub", "client-b"),
+		newGrant(b.Now, "g-other", "other-sub", "client-a"),
+	}
+	for _, g := range rows {
+		if err := b.Store.Grants().Save(ctx, g); err != nil {
+			t.Fatalf("Save %s: %v", g.ID, err)
+		}
+	}
+	got, err := b.Store.Grants().ListBySubject(ctx, "sub")
+	if err != nil {
+		t.Fatalf("ListBySubject: %v", err)
+	}
+	clients := make(map[string]struct{}, len(got))
+	for _, g := range got {
+		if g.Subject != "sub" {
+			t.Fatalf("ListBySubject returned wrong subject: %+v", g)
+		}
+		clients[g.ClientID] = struct{}{}
+	}
+	if len(clients) != 2 {
+		t.Fatalf("ListBySubject got %d distinct clients, want 2: %+v", len(clients), got)
+	}
+	if _, ok := clients["client-a"]; !ok {
+		t.Fatalf("ListBySubject missing client-a")
+	}
+	if _, ok := clients["client-b"]; !ok {
+		t.Fatalf("ListBySubject missing client-b")
+	}
+}
+
+func grantListBySubjectEmpty(t *testing.T, f Factory) {
+	b := f(t)
+	got, err := b.Store.Grants().ListBySubject(context.Background(), "absent")
+	if err != nil {
+		t.Fatalf("ListBySubject empty: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListBySubject empty: want 0 entries, got %d", len(got))
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
@@ -238,7 +239,11 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet)
 	mountRevocationEndpoint(mux, cfg, keySet)
 	mountRegistrationEndpoint(mux, cfg, scopes)
-	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr)
+	bcc, err := buildBackchannelCoordinator(cfg, keySet)
+	if err != nil {
+		return nil, err
+	}
+	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc)
 	return mux, nil
 }
 
@@ -673,20 +678,69 @@ func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error
 // The handler shares the [*sessions.Manager] with /authorize so the
 // two surfaces operate on the same chooser-group state and a logout
 // performed at /end_session is visible to a subsequent /authorize.
-func mountEndSessionEndpoint(mux *http.ServeMux, cfg *config, keySet *keys.Set, sessMgr *sessions.Manager) {
+//
+// The handler also runs back-channel logout fan-out (OpenID Connect
+// Back-Channel Logout 1.0 §2.5) when a [backchannel.Coordinator] is
+// supplied; [buildBackchannelCoordinator] returns a non-nil value
+// once at least one RP is registered with a backchannel_logout_uri.
+func mountEndSessionEndpoint(
+	mux *http.ServeMux,
+	cfg *config,
+	keySet *keys.Set,
+	sessMgr *sessions.Manager,
+	bcc *backchannel.Coordinator,
+) {
 	if sessMgr == nil {
 		return
 	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.EndSession),
 		endsession.Handler(endsession.Deps{
-			Issuer:   cfg.issuer,
-			Clients:  cfg.store.Clients(),
-			Sessions: sessMgr,
-			Keys:     keySet,
-			Clock:    cfg.clock,
+			Issuer:      cfg.issuer,
+			Clients:     cfg.store.Clients(),
+			Sessions:    sessMgr,
+			Keys:        keySet,
+			Clock:       cfg.clock,
+			Backchannel: bcc,
 		}),
 	)
+}
+
+// buildBackchannelCoordinator constructs the [backchannel.Coordinator]
+// the /end_session handler dispatches to after the session is
+// terminated. The coordinator is always wired: its store traversal
+// short-circuits when no RP has registered a backchannel_logout_uri,
+// so the cost on a deployment that does not use back-channel logout
+// is one map walk per logout.
+//
+// The OP signs Logout Tokens with the active OP signing key, sharing
+// the rotation lifecycle with id_tokens. The HTTP transport defaults
+// to an internal client with [backchannel.DefaultTimeout] applied;
+// embedders that need shared instrumentation override it through
+// [WithBackchannelLogoutHTTPClient].
+func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Coordinator, error) {
+	active := keySet.Active()
+	deliverer := backchannel.NewHTTPDeliverer(cfg.backchannelLogoutTimeout)
+	if cfg.backchannelLogoutHTTPClient != nil {
+		deliverer.Client = cfg.backchannelLogoutHTTPClient
+	}
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:    cfg.issuer,
+		Signing:   backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
+		Clients:   cfg.store.Clients(),
+		Grants:    cfg.store.Grants(),
+		Deliverer: deliverer,
+		Emitter:   audit.Slog(cfg.effectiveAuditLogger()),
+		Clock:     cfg.clock,
+	})
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "back-channel logout coordinator construction failed",
+			Cause:       err,
+		}
+	}
+	return coord, nil
 }
 
 // buildOrchestrator constructs the [authn.Orchestrator] the

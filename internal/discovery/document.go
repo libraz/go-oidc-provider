@@ -27,6 +27,21 @@ type Document struct {
 	// endpoint per OpenID Connect RP-Initiated Logout 1.0 §2.
 	EndSessionEndpoint string `json:"end_session_endpoint,omitempty"`
 
+	// BackchannelLogoutSupported reports whether the OP implements
+	// OpenID Connect Back-Channel Logout 1.0 §2 — i.e. POSTs a Logout
+	// Token to clients that registered a backchannel_logout_uri when
+	// their session terminates. v1.0 always reports true; the field is
+	// omitted from the wire only if the value is false (which the
+	// library never sets) so RPs can rely on its presence.
+	BackchannelLogoutSupported bool `json:"backchannel_logout_supported,omitempty"`
+
+	// BackchannelLogoutSessionSupported reports whether the Logout
+	// Tokens the OP issues carry the "sid" claim (OpenID Connect
+	// Back-Channel Logout 1.0 §2.4). v1.0 emits "sid" whenever the
+	// terminating session has a stable identifier, which is always the
+	// case in this library, so the field is true.
+	BackchannelLogoutSessionSupported bool `json:"backchannel_logout_session_supported,omitempty"`
+
 	// IntrospectionEndpoint is the absolute URL of the RFC 7662 token
 	// introspection endpoint. Only emitted when the feature is enabled.
 	IntrospectionEndpoint string `json:"introspection_endpoint,omitempty"`

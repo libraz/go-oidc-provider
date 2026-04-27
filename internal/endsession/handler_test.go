@@ -8,12 +8,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endsession"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -498,6 +500,102 @@ func TestHandler_POSTAccepted(t *testing.T) {
 	}
 	if got := loc.Query().Get("state"); got != "post-state" {
 		t.Errorf("state=%q want post-state", got)
+	}
+}
+
+// TestHandler_BackchannelFanOut wires a [backchannel.Coordinator]
+// into the handler and verifies that a successful logout dispatches
+// a Logout Token to every grantee that registered a
+// backchannel_logout_uri.
+func TestHandler_BackchannelFanOut(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, sessionID := h.issueSession(t)
+
+	const rpClient = "rp-back"
+	if err := h.store.RegisterClient(context.Background(), &store.Client{
+		ID:                   rpClient,
+		BackchannelLogoutURI: "https://rp-back.example/logout",
+	}); err != nil {
+		t.Fatalf("RegisterClient(rp-back): %v", err)
+	}
+	now := h.clock.now
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "g-back",
+		Subject:   "user-1",
+		ClientID:  rpClient,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Grants().Save: %v", err)
+	}
+
+	keyEntry, err := keys.GenerateES256("bcc-1")
+	if err != nil {
+		t.Fatalf("keys.GenerateES256: %v", err)
+	}
+	var calls atomic.Int32
+	var capturedAud string
+	var capturedSID string
+	deliver := backchannel.DelivererFunc(func(_ context.Context, target backchannel.Target, token string) error {
+		calls.Add(1)
+		capturedAud = target.ClientID
+		parsed, err := jwt.ParseSigned(token, []josev4.SignatureAlgorithm{josev4.ES256})
+		if err != nil {
+			t.Errorf("parse logout token: %v", err)
+			return err
+		}
+		claims := map[string]any{}
+		if err := parsed.UnsafeClaimsWithoutVerification(&claims); err != nil {
+			t.Errorf("decode claims: %v", err)
+			return err
+		}
+		if sid, _ := claims["sid"].(string); sid != "" {
+			capturedSID = sid
+		}
+		return nil
+	})
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:    "https://op.example.com",
+		Signing:   backchannel.SigningKey{KeyID: keyEntry.KeyID, Signer: keyEntry.Signer},
+		Clients:   h.store.Clients(),
+		Grants:    h.store.Grants(),
+		Deliverer: deliver,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	deps := endsession.Deps{
+		Issuer:      "https://op.example.com",
+		Clients:     h.store.Clients(),
+		Sessions:    h.sessionMgr,
+		Keys:        nil,
+		Clock:       h.clock,
+		Backchannel: coord,
+	}
+	mux := http.NewServeMux()
+	mux.Handle(h.endSessionPath, endsession.Handler(deps))
+
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.endSessionPath, http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("deliverer called %d times, want 1", got)
+	}
+	if capturedAud != rpClient {
+		t.Errorf("logout-token aud=%q want %q", capturedAud, rpClient)
+	}
+	if capturedSID != sessionID {
+		t.Errorf("logout-token sid=%q want %q", capturedSID, sessionID)
 	}
 }
 

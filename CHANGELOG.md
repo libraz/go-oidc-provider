@@ -11,6 +11,23 @@ in any minor release.
 
 ### Added
 
+- OpenID Connect Back-Channel Logout 1.0. The OP signs a Logout Token
+  (`typ=logout+jwt`, ES256, with `iss`/`aud`/`iat`/`exp`/`jti`/`sub`/`sid`/`events`)
+  and POSTs it to every relying party that registered a
+  `backchannel_logout_uri` when `/end_session` succeeds. Audience is
+  resolved via the new `store.GrantStore.ListBySubject` method; storage
+  backends MUST implement it (the in-memory adapter is updated). The
+  fan-out is best-effort: per-RP failures surface as
+  `logout.back_channel.failed` audit events rather than rolling back
+  the user-visible logout. Two new options tune the transport:
+  `op.WithBackchannelLogoutHTTPClient` injects a shared `*http.Client`
+  (the package default refuses 3xx redirects per the spec posture) and
+  `op.WithBackchannelLogoutTimeout` overrides the per-RP request budget
+  (default 5 seconds). Discovery now advertises
+  `backchannel_logout_supported` and `backchannel_logout_session_supported`.
+  `op/store.Client` gains `BackchannelLogoutURI` and
+  `BackchannelLogoutSessionRequired`; the latter forces the OP to emit
+  `sid` and skips the RP when no session id is available.
 - Initial repository scaffold (Apache-2.0 license, contribution guide, security
   policy, baseline `op` package skeleton).
 - Per-client scope registry (`op.Scope`, `op.WithScope`). Scopes carry
