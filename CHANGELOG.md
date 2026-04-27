@@ -11,6 +11,18 @@ in any minor release.
 
 ### Added
 
+- `LICENSES/THIRD_PARTY.md` index of every Go module dependency,
+  generated from `go-licenses report ./...` so the table never
+  drifts from `go.mod`. The file matches the path `NOTICE` already
+  references; rows are sorted lexicographically and the project's
+  own module is filtered out (the repo's `LICENSE` carries the
+  project's own terms). `scripts/licenses.sh` now regenerates the
+  file alongside the existing allowlist check, so `make licenses`
+  is the single command that both audits and refreshes the index.
+  All current dependencies are MIT / Apache-2.0 / BSD-2-Clause /
+  BSD-3-Clause; the disallowed-license screen (AGPL / GPL / SSPL /
+  BUSL / Elastic / Commons-Clause) continues to fail `make
+  licenses` if a future bump pulls one in.
 - `examples/custom-interaction` example. Demonstrates how to plug a
   non-default `interaction.Driver` into `op.New` via
   `op.WithInteraction(...)`. The example ships a tiny `htmlDriver`
