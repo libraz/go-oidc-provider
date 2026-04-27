@@ -107,6 +107,8 @@ linters:
             - "!**/internal/clientauth/**"
             - "!**/op/testkit/**"
             - "!**/op/registration.go"
+            - "!**/cmd/op-demo/**"
+            - "!**/examples/**"
             - "!**/*_test.go"
           deny:
             - pkg: crypto/rand

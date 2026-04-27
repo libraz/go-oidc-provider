@@ -11,6 +11,17 @@ in any minor release.
 
 ### Added
 
+- `cmd/op-demo` runnable demo OP binary suitable for manual flows and
+  the OpenID Foundation Conformance Suite. Generates ephemeral ES256
+  signing and cookie keys, seeds an inmem store with a single demo
+  client, and shuts down cleanly on SIGINT / SIGTERM via
+  `signal.NotifyContext`. CLI flags expose `-listen`, `-issuer`,
+  `-mount`, `-client-id`, and `-redirect-uri`. Not for production —
+  the binary is dev-only and persists every record in process memory.
+- `examples/minimal` shows the smallest embedder boilerplate that
+  constructs a Provider and mounts it on an `http.ServeMux`. Gated by
+  the `//go:build example` tag so the example does not enter the main
+  module build (`go run -tags example ./examples/minimal`).
 - `op.WithProfile` now enforces the profile's MUST clauses against the
   rest of the configuration: `profile.FAPI2Baseline` rejects `op.New`
   unless `feature.PAR`, `feature.JAR`, and at least one of
