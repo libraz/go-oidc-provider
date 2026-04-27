@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -281,6 +283,104 @@ func TestWithProfile_FAPI2MessageSigning_AcceptsFullStack(t *testing.T) {
 	)...)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithAccessTokenTTL_RejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithAccessTokenTTL(-1*time.Second))...)
+	if err == nil {
+		t.Fatal("expected error for negative TTL, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-negative") {
+		t.Errorf("err = %v, want it to mention non-negative", err)
+	}
+}
+
+func TestWithAccessTokenTTL_AcceptsZero(t *testing.T) {
+	t.Parallel()
+
+	// Zero opts into [DefaultAccessTokenTTL]. The construction must
+	// succeed; the actual default substitution is observable through
+	// downstream behavior, not directly readable here.
+	_, err := op.New(append(validBaseOpts(t), op.WithAccessTokenTTL(0))...)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithAccessTokenTTL_AcceptsCustomValue(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithAccessTokenTTL(2*time.Minute))...)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithAccessTokenTTL_FAPI2BaselineRejectsTooLong(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenTTL(15*time.Minute),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for TTL above FAPI2 cap, got nil")
+	}
+	if !strings.Contains(err.Error(), "fapi2-baseline") || !strings.Contains(err.Error(), "10m") {
+		t.Errorf("err = %v, want it to mention fapi2-baseline and the 10m cap", err)
+	}
+}
+
+func TestWithAccessTokenTTL_FAPI2BaselineAcceptsAtCap(t *testing.T) {
+	t.Parallel()
+
+	// Stricter-than-profile is OK; exactly at the cap is also OK.
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenTTL(10*time.Minute),
+	)...)
+	if err != nil {
+		t.Fatalf("unexpected error at the cap: %v", err)
+	}
+}
+
+func TestWithAccessTokenTTL_FAPI2BaselineAcceptsStricter(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenTTL(2*time.Minute),
+	)...)
+	if err != nil {
+		t.Fatalf("unexpected error for stricter-than-profile TTL: %v", err)
+	}
+}
+
+func TestWithAccessTokenTTL_FAPI2MessageSigningRejectsTooLong(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2MessageSigning),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.JARM),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenTTL(11*time.Minute),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for TTL above FAPI2 Message Signing cap, got nil")
 	}
 }
 

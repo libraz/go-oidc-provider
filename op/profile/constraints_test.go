@@ -3,6 +3,7 @@ package profile_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -82,4 +83,30 @@ func TestRequiredAnyOf(t *testing.T) {
 			t.Error("RequiredAnyOf returned aliased inner slice; mutation leaked across calls")
 		}
 	})
+}
+
+func TestMaxAccessTokenTTL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want time.Duration
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, 10 * time.Minute},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, 10 * time.Minute},
+		{"fapi-ciba", profile.FAPICIBA, 0},
+		{"igov-high", profile.IGovHigh, 0},
+		{"zero", profile.Profile(0), 0},
+		{"unknown", profile.Profile(99), 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := profile.MaxAccessTokenTTL(tc.in)
+			if got != tc.want {
+				t.Errorf("MaxAccessTokenTTL(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
 }

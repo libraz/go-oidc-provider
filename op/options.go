@@ -138,6 +138,13 @@ type config struct {
 	// backchannelLogoutTimeout is the per-RP request budget. Zero
 	// substitutes [backchannel.DefaultTimeout].
 	backchannelLogoutTimeout time.Duration
+
+	// accessTokenTTL is the lifetime of issued access tokens. Zero
+	// before [config.applyDefaults] runs; the defaults pass populates
+	// it with [DefaultAccessTokenTTL] so [config.validate] can compare
+	// against the active profile bound without re-deriving the
+	// fallback. Negative values are rejected at the option site.
+	accessTokenTTL time.Duration
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -156,6 +163,14 @@ func newConfig(opts []Option) (*config, error) {
 	c.applyDefaults()
 	return c, nil
 }
+
+// DefaultAccessTokenTTL is the lifetime applied to issued access
+// tokens when the embedder does not call [WithAccessTokenTTL]. Five
+// minutes sits comfortably under the 10-minute upper bound that
+// FAPI 2.0 §3.1.9 imposes on profile-enabled deployments, so a
+// caller who layers [WithProfile] on top of the defaults stays
+// inside spec without further tuning.
+const DefaultAccessTokenTTL = 5 * time.Minute
 
 // applyDefaults fills in optional fields with their library defaults.
 func (c *config) applyDefaults() {
@@ -186,6 +201,9 @@ func (c *config) applyDefaults() {
 	c.applyRegistrationDefaults()
 	if c.defaultLocale == "" {
 		c.defaultLocale = LocaleEnglish
+	}
+	if c.accessTokenTTL == 0 {
+		c.accessTokenTTL = DefaultAccessTokenTTL
 	}
 }
 
@@ -358,26 +376,46 @@ func (c *config) validateProfiles() error {
 		enabled[f] = struct{}{}
 	}
 	for _, p := range c.profiles {
-		for _, req := range profile.RequiredFeatures(p) {
-			if _, ok := enabled[req]; ok {
-				continue
-			}
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithProfile " + p.String() +
-					" requires WithFeature(" + req.String() + ")",
-			}
+		if err := c.validateProfile(p, enabled); err != nil {
+			return err
 		}
-		for _, anyOf := range profile.RequiredAnyOf(p) {
-			if anyEnabled(enabled, anyOf) {
-				continue
-			}
-			return &Error{
-				Code: codeConfiguration,
-				Description: "WithProfile " + p.String() +
-					" requires at least one of WithFeature(" +
-					strings.Join(featureFlagNames(anyOf), ") or WithFeature(") + ")",
-			}
+	}
+	return nil
+}
+
+// validateProfile checks one [profile.Profile] against the enabled
+// feature set and the rest of the config. The per-profile loop is
+// extracted from [config.validateProfiles] so the outer iteration
+// stays under the gocognit budget as additional MUST clauses land
+// (Access Token TTL, refresh grace, client auth method, …).
+func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]struct{}) error {
+	for _, req := range profile.RequiredFeatures(p) {
+		if _, ok := enabled[req]; ok {
+			continue
+		}
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" requires WithFeature(" + req.String() + ")",
+		}
+	}
+	for _, anyOf := range profile.RequiredAnyOf(p) {
+		if anyEnabled(enabled, anyOf) {
+			continue
+		}
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" requires at least one of WithFeature(" +
+				strings.Join(featureFlagNames(anyOf), ") or WithFeature(") + ")",
+		}
+	}
+	if maxTTL := profile.MaxAccessTokenTTL(p); maxTTL > 0 && c.accessTokenTTL > maxTTL {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" caps WithAccessTokenTTL at " + maxTTL.String() +
+				"; got " + c.accessTokenTTL.String(),
 		}
 	}
 	return nil
@@ -862,6 +900,30 @@ func WithFeature(f feature.Flag) Option {
 			}
 		}
 		c.features = append(c.features, f)
+		return nil
+	})
+}
+
+// WithAccessTokenTTL overrides the lifetime applied to issued access
+// tokens. Zero means "use [DefaultAccessTokenTTL]"; a negative value
+// is rejected at the option site so the misconfiguration surfaces at
+// startup rather than silently expiring tokens at the wrong cadence.
+//
+// When [WithProfile] is also configured, the embedder's TTL MUST stay
+// at or below the profile's bound (see [profile.MaxAccessTokenTTL] —
+// FAPI 2.0 §3.1.9 caps at 10 minutes). Stricter-than-profile values
+// are accepted; a value above the bound fails [New].
+//
+// Stable since v0.1.
+func WithAccessTokenTTL(ttl time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if ttl < 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAccessTokenTTL requires a non-negative duration",
+			}
+		}
+		c.accessTokenTTL = ttl
 		return nil
 	})
 }

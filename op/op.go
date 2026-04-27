@@ -217,16 +217,17 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Token),
 		tokenendpoint.Handler(tokenendpoint.Deps{
-			Issuer:        cfg.issuer,
-			Clients:       cfg.store.Clients(),
-			Codes:         cfg.store.AuthorizationCodes(),
-			RefreshTokens: cfg.store.RefreshTokens(),
-			Grants:        cfg.store.Grants(),
-			Keys:          keySet,
-			Clock:         cfg.clock,
-			Scopes:        scopes,
-			DPoP:          dpopVerifier,
-			MTLS:          mtlsVerifier,
+			Issuer:         cfg.issuer,
+			Clients:        cfg.store.Clients(),
+			Codes:          cfg.store.AuthorizationCodes(),
+			RefreshTokens:  cfg.store.RefreshTokens(),
+			Grants:         cfg.store.Grants(),
+			Keys:           keySet,
+			Clock:          cfg.clock,
+			Scopes:         scopes,
+			DPoP:           dpopVerifier,
+			MTLS:           mtlsVerifier,
+			AccessTokenTTL: cfg.accessTokenTTL,
 		}),
 	)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet)

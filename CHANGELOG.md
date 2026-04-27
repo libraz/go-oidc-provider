@@ -11,6 +11,18 @@ in any minor release.
 
 ### Added
 
+- `op.WithAccessTokenTTL(time.Duration)` option overrides the
+  lifetime of issued access tokens. Zero opts into the new public
+  default `op.DefaultAccessTokenTTL` (5 minutes); negative values
+  are rejected at the option site so the misconfiguration surfaces
+  at startup. When a FAPI 2.0 profile is also active, the
+  embedder's TTL must stay at or below the profile's bound: FAPI
+  2.0 §3.1.9 caps access tokens at 10 minutes, encoded as
+  `profile.MaxAccessTokenTTL`. Stricter-than-profile values
+  remain accepted; a value above the bound fails `op.New`. The
+  bound flows through to `tokenendpoint.Deps.AccessTokenTTL` so
+  authorization_code, refresh_token, and client_credentials grants
+  all honour it.
 - Conformance harness scaffolding under `conformance/` plus the
   driver script `scripts/conformance.sh` and Makefile targets
   `conformance-certs`, `conformance-op-up`, `conformance-op-down`,

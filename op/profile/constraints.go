@@ -1,6 +1,10 @@
 package profile
 
-import "github.com/libraz/go-oidc-provider/op/feature"
+import (
+	"time"
+
+	"github.com/libraz/go-oidc-provider/op/feature"
+)
 
 // RequiredFeatures returns the conjunctive set of [feature.Flag]
 // values an [op.Provider] MUST have enabled for p to be a valid
@@ -51,5 +55,24 @@ func RequiredAnyOf(p Profile) [][]feature.Flag {
 		return nil
 	default:
 		return nil
+	}
+}
+
+// MaxAccessTokenTTL returns the upper bound the profile imposes on
+// access token lifetime, or 0 when p does not constrain it. The
+// rule is one-directional: an embedder MAY configure a stricter
+// (smaller) TTL but MUST NOT configure a value above this bound.
+//
+// Both FAPI 2.0 Baseline and Message Signing cap access tokens at
+// 10 minutes (FAPI 2.0 §3.1.9). [FAPICIBA] and [IGovHigh] return 0
+// because their option surfaces are scheduled for v1.x / v2+.
+func MaxAccessTokenTTL(p Profile) time.Duration {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return 10 * time.Minute
+	case FAPICIBA, IGovHigh, profileUnspecified:
+		return 0
+	default:
+		return 0
 	}
 }
