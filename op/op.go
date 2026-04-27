@@ -18,6 +18,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endsession"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
 	"github.com/libraz/go-oidc-provider/internal/jar"
@@ -71,13 +72,14 @@ type Provider struct {
 	scopes  *scoperegistry.Registry
 	locales *i18n.Resolver
 	mux     *http.ServeMux
+	handler http.Handler
 }
 
 // ServeHTTP routes incoming requests to the OIDC endpoints registered by the
 // enabled grants and features. The mount path is determined by where the
 // caller installs the handler in its own router.
 func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	p.mux.ServeHTTP(w, r)
+	p.handler.ServeHTTP(w, r)
 }
 
 // New constructs a [Provider] from the supplied options. It validates that
@@ -112,7 +114,40 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{cfg: cfg, keys: keySet, scopes: scopes, locales: locales, mux: mux}, nil
+	handler := wrapWithProfileMiddleware(mux, cfg)
+	return &Provider{
+		cfg:     cfg,
+		keys:    keySet,
+		scopes:  scopes,
+		locales: locales,
+		mux:     mux,
+		handler: handler,
+	}, nil
+}
+
+// wrapWithProfileMiddleware decorates the [Provider]'s router with
+// the cross-cutting middlewares whose enable bit comes from the
+// active [profile.Profile] set. The function is composition-only;
+// every middleware factory continues to live with the feature it
+// implements (the FAPI x-fapi-interaction-id echo lives in
+// internal/httpx, not here).
+func wrapWithProfileMiddleware(mux http.Handler, cfg *config) http.Handler {
+	handler := mux
+	for _, p := range cfg.profiles {
+		switch p {
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+			handler = httpx.InteractionIDMiddleware(handler)
+			// Once any FAPI2 profile has activated the echo we are
+			// done — repeating it would stamp the header twice and
+			// hide the upstream client value behind a regenerated
+			// UUID. Other profiles will add their own middlewares
+			// here as the constraint set grows.
+			return handler
+		case profile.FAPICIBA, profile.IGovHigh:
+			// v1.x / v2+; no middleware contribution today.
+		}
+	}
+	return handler
 }
 
 // buildLocaleResolver assembles the [i18n.Resolver] from the seed

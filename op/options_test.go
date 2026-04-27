@@ -1,11 +1,13 @@
 package op_test
 
 import (
+	"context"
 	"crypto"
 	"crypto/rsa"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -381,6 +383,67 @@ func TestWithAccessTokenTTL_FAPI2MessageSigningRejectsTooLong(t *testing.T) {
 	)...)
 	if err == nil {
 		t.Fatal("expected error for TTL above FAPI2 Message Signing cap, got nil")
+	}
+}
+
+func TestWithProfile_FAPI2_StampsInteractionIDHeader(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/openid-configuration", http.NoBody)
+	rec := httptest.NewRecorder()
+	provider.ServeHTTP(rec, req)
+	got := rec.Header().Get("x-fapi-interaction-id")
+	if got == "" {
+		t.Errorf("response x-fapi-interaction-id missing under FAPI2Baseline profile")
+	}
+}
+
+func TestWithProfile_FAPI2_EchoesClientInteractionID(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	want := "0123abcd-4567-89ef-0123-456789abcdef"
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/openid-configuration", http.NoBody)
+	req.Header.Set("x-fapi-interaction-id", want)
+	rec := httptest.NewRecorder()
+	provider.ServeHTTP(rec, req)
+	if got := rec.Header().Get("x-fapi-interaction-id"); got != want {
+		t.Errorf("response x-fapi-interaction-id = %q, want %q (must echo client value)", got, want)
+	}
+}
+
+func TestNoProfile_DoesNotStampInteractionIDHeader(t *testing.T) {
+	t.Parallel()
+
+	// Without any profile, the FAPI middleware MUST be off — otherwise
+	// every OP would advertise FAPI 2.0 §6 compliance the embedder
+	// did not opt into.
+	provider, err := op.New(validBaseOpts(t)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/openid-configuration", http.NoBody)
+	rec := httptest.NewRecorder()
+	provider.ServeHTTP(rec, req)
+	if got := rec.Header().Get("x-fapi-interaction-id"); got != "" {
+		t.Errorf("non-profile OP stamped x-fapi-interaction-id = %q, want absent", got)
 	}
 }
 

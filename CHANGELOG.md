@@ -11,6 +11,16 @@ in any minor release.
 
 ### Added
 
+- FAPI 2.0 §6 `x-fapi-interaction-id` echo middleware. When a FAPI
+  2.0 profile is active, every response from the OP carries an
+  `x-fapi-interaction-id` header: the client-supplied value is
+  forwarded verbatim, or a fresh UUIDv4 is generated when the
+  request did not include one. The middleware is wired around the
+  whole router so discovery, JWKS, /authorize, /token, /userinfo,
+  /par, /introspect, /revoke, and /end_session all carry the same
+  trace identifier without per-handler plumbing. Without a profile
+  the middleware stays off so OPs that did not opt into FAPI do
+  not advertise compliance they did not configure.
 - Profile-driven client authentication policy. When a FAPI 2.0
   profile is active, the OP rejects requests that authenticate at
   `/token`, `/par`, `/introspect`, or `/revoke` with

@@ -105,6 +105,7 @@ linters:
             - "!**/internal/authn/**"
             - "!**/internal/backchannel/**"
             - "!**/internal/clientauth/**"
+            - "!**/internal/httpx/**"
             - "!**/op/testkit/**"
             - "!**/op/registration.go"
             - "!**/cmd/op-demo/**"
