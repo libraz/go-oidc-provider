@@ -11,6 +11,17 @@ in any minor release.
 
 ### Added
 
+- `examples/fapi2` example. Demonstrates the FAPI 2.0 Baseline
+  wiring shape end-to-end: `op.WithProfile(profile.FAPI2Baseline)`,
+  the four required features (PAR / JAR / DPoP / MTLS), and a
+  pre-registered confidential client whose
+  `TokenEndpointAuthMethod` is `self_signed_tls_client_auth`.
+  Running the example and curling the discovery document is the
+  fastest way to confirm the OP advertises the FAPI 2.0 surface
+  (auth-method allow-list intersected per §3.1.3, mTLS-bound
+  access tokens, DPoP advertised, JAR / PAR endpoints present).
+  Built behind the `example` build tag so the binary is excluded
+  from `go test` / production go.sum.
 - FAPI 2.0 §3.1.4 sender-constrained access-token enforcement at
   the token endpoint. When a FAPI 2.0 profile is active, the
   `/token` handler refuses to mint an access token unless the
