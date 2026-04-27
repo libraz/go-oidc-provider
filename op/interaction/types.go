@@ -81,6 +81,21 @@ type Prompt struct {
 	// applies even when the value is HMAC-signed. See §E.2.1 for
 	// the security requirements.
 	StateRef string `json:"state_ref"`
+
+	// CSRFToken is the per-render value of the __Host-oidc_csrf
+	// cookie. The orchestrator stamps it before invoking
+	// [Driver.Render] so a server-rendered HTML driver can echo it
+	// into a hidden form field; on submission the endpoint accepts
+	// the value through either an X-CSRF-Token header (the SPA
+	// pattern) or a "csrf_token" form field (the SSR pattern).
+	//
+	// The field is empty for non-prompt-stage flows that the
+	// orchestrator does not protect with the double-submit pattern.
+	// JSON-mode SPAs may ignore it; they read the cookie via
+	// document.cookie (when the embedder strips the HttpOnly flag)
+	// or, more commonly, take the cookie's value from the prompt
+	// envelope and echo it back in the X-CSRF-Token header.
+	CSRFToken string `json:"csrf_token,omitempty"`
 }
 
 // Step is the discriminated union an [op.Authenticator] /

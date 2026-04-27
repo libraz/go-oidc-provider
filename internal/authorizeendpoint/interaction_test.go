@@ -159,6 +159,82 @@ func TestInteractionPost_HappyPath_RedirectsWithCode(t *testing.T) {
 	}
 }
 
+// TestInteractionPost_AcceptsCSRFTokenViaFormBody covers the SSR
+// fallback path in verifyCSRFToken: a request that posts a
+// url-encoded body with the csrf_token field (and no X-CSRF-Token
+// header) MUST clear the double-submit check. JSONDriver still
+// rejects the body as malformed — that is expected — but the test
+// asserts the failure happens in ParseSubmission (400
+// invalid_request, "invalid interaction body"), not in the CSRF
+// gate.
+func TestInteractionPost_AcceptsCSRFTokenViaFormBody(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	start := startInteractionFlow(t, h)
+
+	getResp := doInteractionGet(t, h, start)
+	defer getResp.Body.Close()
+	stateRef, csrfCookie := readPromptStateRef(t, getResp)
+
+	form := url.Values{
+		"state_ref":  {stateRef},
+		"csrf_token": {csrfCookie.Value},
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, h.interactionPth+"/"+start.uid, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://op.example.com")
+	req.AddCookie(start.interactionCk)
+	req.AddCookie(csrfCookie)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+
+	if rr.Code == http.StatusForbidden {
+		t.Fatalf("CSRF body fallback did not clear: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(strings.ToLower(rr.Body.String()), "csrf") {
+		t.Errorf("response cites csrf despite valid form-body token: body=%s", rr.Body.String())
+	}
+	// JSONDriver cannot parse a form-encoded body, so the request
+	// terminates at ParseSubmission with 400 invalid_request — the
+	// signal that the CSRF gate has been cleared.
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status=%d want 400 (CSRF cleared, ParseSubmission rejects form body)", rr.Code)
+	}
+}
+
+// TestInteractionPost_RejectsMissingCSRF confirms a request that
+// neither sends X-CSRF-Token nor a csrf_token form field is rejected
+// at the CSRF gate. The negative companion to
+// [TestInteractionPost_AcceptsCSRFTokenViaFormBody] guards against a
+// regression where the body fallback accidentally swallowed the
+// missing-token branch.
+func TestInteractionPost_RejectsMissingCSRF(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	start := startInteractionFlow(t, h)
+
+	getResp := doInteractionGet(t, h, start)
+	defer getResp.Body.Close()
+	_, csrfCookie := readPromptStateRef(t, getResp)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, h.interactionPth+"/"+start.uid, strings.NewReader(""))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://op.example.com")
+	req.AddCookie(start.interactionCk)
+	req.AddCookie(csrfCookie)
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want 403 (no CSRF token supplied)", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "csrf token missing") {
+		t.Errorf("body=%s want csrf token missing", rr.Body.String())
+	}
+}
+
 func TestInteractionDelete_Cancels_RedirectsAccessDenied(t *testing.T) {
 	t.Parallel()
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -17,6 +18,13 @@ import (
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// csrfFormMaxBytes is the body-size cap [csrfFromForm] applies before
+// calling [http.Request.ParseForm]. The cap matches the size a typical
+// HTML driver allocates for [interaction.FormSubmission] bodies and is
+// well above any legitimate CSRF token; the bound exists so a hostile
+// client cannot stream an unbounded body through the verifier.
+const csrfFormMaxBytes = 32 * 1024
 
 // serveInteraction is the multiplexed entry point for /interaction/{uid}.
 // It dispatches GET / POST / DELETE to the matching helper after pulling
@@ -170,7 +178,14 @@ func dispatchTick(
 		return
 	}
 	stampNoStore(w)
-	if err := deps.Driver.Render(w, r, *step.Prompt); err != nil {
+	prompt := *step.Prompt
+	// Stamp the CSRF token onto the prompt envelope so a server-
+	// rendered Driver can embed it as a hidden form field. SPA
+	// drivers that prefer the X-CSRF-Token header may ignore the
+	// field; the POST handler accepts both routes, so the choice is
+	// the driver's.
+	prompt.CSRFToken = token
+	if err := deps.Driver.Render(w, r, prompt); err != nil {
 		// Render's own headers may already be partially written;
 		// surfacing a JSON error after that is unsafe so we just
 		// bail. The persistent state is consistent.
@@ -254,26 +269,63 @@ func loadInteraction(
 
 // verifyCSRFToken enforces the double-submit pattern. It returns true
 // on success; on failure it has already written the response.
+//
+// The submitted token is taken from the X-CSRF-Token header (the SPA
+// pattern, where a JS client reads the prompt envelope and stamps the
+// header) and falls back to the "csrf_token" form field when the
+// request body is form-encoded (the SSR pattern, where a static HTML
+// form posts the value as a hidden field). Either path satisfies the
+// double-submit check; embedders pick whichever matches their UI
+// architecture.
 func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid string) bool {
 	cookieVal, err := r.Cookie(cookie.CSRFProfile.Name)
 	if err != nil || cookieVal == nil || cookieVal.Value == "" {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf cookie missing")
 		return false
 	}
-	header := r.Header.Get("X-CSRF-Token")
-	if header == "" {
+	submitted := r.Header.Get("X-CSRF-Token")
+	if submitted == "" {
+		submitted = csrfFromForm(r)
+	}
+	if submitted == "" {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token missing")
 		return false
 	}
-	if !csrf.ConstantTimeEqual(cookieVal.Value, header) {
+	if !csrf.ConstantTimeEqual(cookieVal.Value, submitted) {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token mismatch")
 		return false
 	}
-	if err := deps.CSRF.Verify(header, uid, deps.now(), deps.InteractionTTL); err != nil {
+	if err := deps.CSRF.Verify(submitted, uid, deps.now(), deps.InteractionTTL); err != nil {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token rejected")
 		return false
 	}
 	return true
+}
+
+// csrfFromForm reads the "csrf_token" field from a url-encoded body.
+// It returns "" when the body is not form-encoded so the caller falls
+// through to the missing-token branch and JSON-mode SPAs keep their
+// header-only contract.
+//
+// The function caps the body through [http.MaxBytesReader] before
+// calling [http.Request.ParseForm] so a hostile client cannot stream
+// an unbounded body. A subsequent call to [http.Request.ParseForm]
+// from the driver is a no-op (the standard library caches the parsed
+// form on the request) so this read does not interfere with the
+// driver's own ParseSubmission.
+func csrfFromForm(r *http.Request) string {
+	ct := r.Header.Get("Content-Type")
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	if strings.TrimSpace(ct) != "application/x-www-form-urlencoded" {
+		return ""
+	}
+	r.Body = http.MaxBytesReader(nil, r.Body, csrfFormMaxBytes)
+	if err := r.ParseForm(); err != nil {
+		return ""
+	}
+	return r.PostForm.Get("csrf_token")
 }
 
 // terminateInteraction is the happy-path branch of a Tick that
