@@ -11,6 +11,24 @@ in any minor release.
 
 ### Added
 
+- `op.WithDPoPNonceSource(source)` public option, completing the
+  RFC 9449 §8 / §9 server-supplied nonce flow. The new
+  `op.DPoPNonceSource` interface bundles both halves of the
+  contract — `IssueNonce()` for stamping fresh values into the
+  `DPoP-Nonce` response header, and `Validate(nonce) bool` for
+  checking presented values — because the typical embedder owns
+  one rotation pipeline that does both. The provider threads the
+  source through `dpop.Verifier` (consumed as `NonceVerifier`) and
+  through the /token + /userinfo handler `Deps` (consumed as
+  `NonceIssuer`), so a single call enables every piece. Without
+  the option the v0.x posture is unchanged: proofs without a
+  nonce claim are accepted and the `use_dpop_nonce` challenge is
+  never emitted. At most one source may be registered. End-to-end
+  tests cover the round trip — first request with no nonce gets
+  the challenge, retry embedding the issued value succeeds and
+  binds `cnf.jkt` — plus the stale-nonce variant that collapses
+  onto the same challenge.
+
 - `use_dpop_nonce` challenge response wired at `/token` and
   `/userinfo`. When the dpop verifier returns one of the new nonce
   sentinels (added in the previous commit), the endpoints now emit

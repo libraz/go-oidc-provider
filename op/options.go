@@ -145,6 +145,13 @@ type config struct {
 	// against the active profile bound without re-deriving the
 	// fallback. Negative values are rejected at the option site.
 	accessTokenTTL time.Duration
+
+	// dpopNonces is the [DPoPNonceSource] supplied through
+	// [WithDPoPNonceSource]. Nil means the RFC 9449 §8 / §9 nonce
+	// flow is disabled; the verifier accepts proofs without a nonce
+	// claim and the endpoints never emit the use_dpop_nonce
+	// challenge. At most one source may be registered.
+	dpopNonces DPoPNonceSource
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -1312,6 +1319,44 @@ func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 func WithBackchannelLogoutTimeout(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		c.backchannelLogoutTimeout = d
+		return nil
+	})
+}
+
+// WithDPoPNonceSource opts the provider into the RFC 9449 §8 / §9
+// server-supplied nonce flow for DPoP proofs. With a non-nil source
+// wired, the /token and /userinfo handlers reject any DPoP proof
+// whose "nonce" claim is absent or not accepted by
+// [DPoPNonceSource.Validate], emitting the spec-mandated
+// `use_dpop_nonce` challenge along with a fresh value from
+// [DPoPNonceSource.IssueNonce] in the response's `DPoP-Nonce`
+// header.
+//
+// Without this option the provider preserves the v0.x posture:
+// proofs without a nonce claim are accepted and the challenge is
+// never emitted. The option is independent of [WithFeature]
+// (feature.DPoP); the nonce flow only fires when DPoP is also
+// enabled because the verifier itself is wired only on that flag.
+//
+// At most one source may be registered; a second [WithDPoPNonceSource]
+// call fails [New] so a typo cannot silently win.
+//
+// Stable since v0.1.
+func WithDPoPNonceSource(source DPoPNonceSource) Option {
+	return optionFunc(func(c *config) error {
+		if source == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDPoPNonceSource received nil DPoPNonceSource",
+			}
+		}
+		if c.dpopNonces != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDPoPNonceSource may be called at most once",
+			}
+		}
+		c.dpopNonces = source
 		return nil
 	})
 }

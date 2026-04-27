@@ -246,13 +246,14 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.UserInfo),
 		userinfo.Handler(userinfo.HandlerDeps{
-			Keys:      keySet,
-			Issuer:    cfg.issuer,
-			UserStore: cfg.store.Users(),
-			Clock:     cfg.clock,
-			Leeway:    defaultUserInfoLeeway,
-			DPoP:      dpopVerifier,
-			MTLS:      mtlsVerifier,
+			Keys:       keySet,
+			Issuer:     cfg.issuer,
+			UserStore:  cfg.store.Users(),
+			Clock:      cfg.clock,
+			Leeway:     defaultUserInfoLeeway,
+			DPoP:       dpopVerifier,
+			DPoPNonces: cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			MTLS:       mtlsVerifier,
 		}),
 	)
 	mux.Handle(
@@ -267,6 +268,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Clock:                          cfg.clock,
 			Scopes:                         scopes,
 			DPoP:                           dpopVerifier,
+			DPoPNonces:                     cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
 			MTLS:                           mtlsVerifier,
 			AssertionVerifier:              assertionVerifier,
 			AccessTokenTTL:                 cfg.accessTokenTTL,
@@ -306,8 +308,9 @@ func buildDPoPVerifier(cfg *config) (*dpop.Verifier, error) {
 		return nil, nil
 	}
 	v, err := dpop.NewVerifier(dpop.VerifierConfig{
-		JTIs:  cfg.store.ConsumedJTIs(),
-		Clock: cfg.clock,
+		JTIs:   cfg.store.ConsumedJTIs(),
+		Clock:  cfg.clock,
+		Nonces: cfg.dpopNonces, // nil leaves the §8 / §9 gate disabled.
 	})
 	if err != nil {
 		return nil, &Error{
