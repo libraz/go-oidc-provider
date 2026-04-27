@@ -11,6 +11,17 @@ in any minor release.
 
 ### Added
 
+- `op.WithProfile` now enforces the profile's MUST clauses against the
+  rest of the configuration: `profile.FAPI2Baseline` rejects `op.New`
+  unless `feature.PAR`, `feature.JAR`, and at least one of
+  `feature.DPoP` / `feature.MTLS` are also enabled (FAPI 2.0 §3.1.1 /
+  §3.1.4 / §3.1.11); `profile.FAPI2MessageSigning` additionally
+  requires `feature.JARM` (Message Signing §5). Stricter-than-profile
+  configurations remain accepted; the rule is one-directional, so a
+  profile cannot be relaxed by a later option. The constraint table
+  itself lives in `op/profile.RequiredFeatures` /
+  `op/profile.RequiredAnyOf` so embedders can introspect or mirror the
+  same checks in their own boot harness.
 - Email-OTP authenticator (`op.NewEmailOTPAuthenticator`) implementing
   the two-screen send / verify factor per design 002 §E.2 / §E.3. The
   factor maps to `FactorEmailOTP`, contributes AAL2, and reports RFC

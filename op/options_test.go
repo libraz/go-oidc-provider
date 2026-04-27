@@ -13,7 +13,23 @@ import (
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/profile"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
+
+// validBaseOptsWithInmem returns the same option shape as
+// [validBaseOpts] but swaps [stubStore] for the inmem reference
+// implementation, so tests that exercise paths reaching the DPoP /
+// MTLS verifier wiring (which calls into substores [stubStore]
+// deliberately leaves panicking) construct without panic.
+func validBaseOptsWithInmem(tb testing.TB) []op.Option {
+	tb.Helper()
+	return []op.Option{
+		op.WithIssuer(validIssuer),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(validKeyset(tb)),
+		op.WithCookieKey(newRandomCookieKey(tb)),
+	}
+}
 
 func TestWithKeyset_RejectsEmpty(t *testing.T) {
 	t.Parallel()
@@ -169,6 +185,102 @@ func TestWithProfile_RejectsDuplicate(t *testing.T) {
 	)...)
 	if err == nil {
 		t.Fatal("expected error for duplicate profile, got nil")
+	}
+}
+
+func TestWithProfile_FAPI2Baseline_RequiresPAR(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when PAR is missing, got nil")
+	}
+}
+
+func TestWithProfile_FAPI2Baseline_RequiresJAR(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when JAR is missing, got nil")
+	}
+}
+
+func TestWithProfile_FAPI2Baseline_RequiresSenderConstrainedToken(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when neither DPoP nor MTLS is enabled, got nil")
+	}
+}
+
+func TestWithProfile_FAPI2Baseline_AcceptsDPoP(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithProfile_FAPI2Baseline_AcceptsMTLS(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.MTLS),
+	)...)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithProfile_FAPI2MessageSigning_RequiresJARM(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithProfile(profile.FAPI2MessageSigning),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when JARM is missing, got nil")
+	}
+}
+
+func TestWithProfile_FAPI2MessageSigning_AcceptsFullStack(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2MessageSigning),
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+		op.WithFeature(feature.JARM),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

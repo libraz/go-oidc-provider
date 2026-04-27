@@ -297,6 +297,9 @@ func (c *config) validate() error {
 	if err := c.validateScopes(); err != nil {
 		return err
 	}
+	if err := c.validateProfiles(); err != nil {
+		return err
+	}
 	if err := c.validateRegistration(); err != nil {
 		return err
 	}
@@ -333,6 +336,76 @@ func (c *config) validateLocales() error {
 		Code:        codeConfiguration,
 		Description: "WithDefaultLocale references a locale that is not registered through WithLocale or shipped as a seed bundle",
 	}
+}
+
+// validateProfiles enforces the MUST clauses each enabled
+// [profile.Profile] inherits from its source spec. The check runs
+// after [config.applyDefaults] so default-on features are visible to
+// the lookup, and after [config.validateScopes] so scope-shape errors
+// surface first.
+//
+// The rule is one-directional: a profile MUST NOT be relaxed by a
+// later option, but stricter-than-profile configurations are
+// permitted (an embedder may layer additional [WithFeature] calls on
+// top). The library therefore only fails [New] when a required flag
+// is missing — never when an extra flag is present.
+func (c *config) validateProfiles() error {
+	if len(c.profiles) == 0 {
+		return nil
+	}
+	enabled := make(map[feature.Flag]struct{}, len(c.features))
+	for _, f := range c.features {
+		enabled[f] = struct{}{}
+	}
+	for _, p := range c.profiles {
+		for _, req := range profile.RequiredFeatures(p) {
+			if _, ok := enabled[req]; ok {
+				continue
+			}
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithProfile " + p.String() +
+					" requires WithFeature(" + req.String() + ")",
+			}
+		}
+		for _, anyOf := range profile.RequiredAnyOf(p) {
+			if anyEnabled(enabled, anyOf) {
+				continue
+			}
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithProfile " + p.String() +
+					" requires at least one of WithFeature(" +
+					strings.Join(featureFlagNames(anyOf), ") or WithFeature(") + ")",
+			}
+		}
+	}
+	return nil
+}
+
+// anyEnabled reports whether any flag in want is present in have. The
+// helper exists so [config.validateProfiles] reads as the disjunctive
+// rule from the spec rather than an inlined map lookup loop.
+func anyEnabled(have map[feature.Flag]struct{}, want []feature.Flag) bool {
+	for _, f := range want {
+		if _, ok := have[f]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// featureFlagNames returns the canonical string identifier of every
+// flag in fs in the same order, suitable for joining into a
+// human-readable error message. Centralising the conversion keeps
+// the formatting consistent across [config.validateProfiles] and any
+// future profile-aware diagnostics.
+func featureFlagNames(fs []feature.Flag) []string {
+	names := make([]string, len(fs))
+	for i, f := range fs {
+		names[i] = f.String()
+	}
+	return names
 }
 
 // validateAuthenticators enforces uniqueness of [Authenticator.Type]
