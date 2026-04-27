@@ -286,13 +286,15 @@ func TestHandler_WrongContentType(t *testing.T) {
 }
 
 // TestHandler_UnknownGrantType yields unsupported_grant_type per
-// RFC 6749 §5.2.
+// RFC 6749 §5.2. The chosen grant_type is a deliberately bogus value
+// that no RFC defines, so the test stays green even as future
+// dispatch arms (device_code, token_exchange, etc.) land.
 func TestHandler_UnknownGrantType(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 	form := url.Values{}
-	form.Set("grant_type", "client_credentials")
+	form.Set("grant_type", "urn:example:not-a-real-grant-type")
 	resp := f.post(t, form, "", "")
 	defer resp.Body.Close()
 

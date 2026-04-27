@@ -168,3 +168,15 @@ in any minor release.
   the token expires naturally). Discovery advertises
   `revocation_endpoint` and
   `revocation_endpoint_auth_methods_supported`.
+- RFC 6749 §4.4 client_credentials grant. Enabled by adding
+  `grant.ClientCredentials` to `op.WithGrants(...)`. The
+  `/token` endpoint authenticates the client through
+  `internal/clientauth`, validates that the client is confidential
+  and registered for the grant, intersects the requested scope
+  against `Client.Scopes`, rejects the OIDC `openid` scope (no
+  end-user), and mints a JWT access token whose `sub` claim equals
+  the `client_id`. Refresh tokens and id_tokens are never issued
+  on this grant. DPoP and mTLS bindings flow through the existing
+  `tokenBinding` plumbing so a client_credentials access token
+  inherits sender constraints exactly like an authorization_code
+  one.

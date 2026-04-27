@@ -180,6 +180,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		handleAuthorizationCode(w, r, deps)
 	case "refresh_token":
 		handleRefreshToken(w, r, deps)
+	case "client_credentials":
+		handleClientCredentials(w, r, deps)
 	default:
 		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
 			"grant_type is not supported")
