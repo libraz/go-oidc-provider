@@ -11,6 +11,26 @@ in any minor release.
 
 ### Added
 
+- Profile-driven client authentication policy. When a FAPI 2.0
+  profile is active, the OP rejects requests that authenticate at
+  `/token`, `/par`, `/introspect`, or `/revoke` with
+  `client_secret_basic`, `client_secret_post`, or `none` — even
+  when the registered client carries one of those methods. FAPI
+  2.0 §3.1.3 mandates `private_key_jwt`, `tls_client_auth`, or
+  `self_signed_tls_client_auth`; the constraint table lives in
+  `op/profile.AllowedClientAuthMethods` so embedders can mirror
+  the same gate in their own boot harness. Discovery filters
+  `token_endpoint_auth_methods_supported` (and the mirrored
+  introspection / revocation lists) to the same allow-list, so
+  RPs see the actually-accepted set without trial-and-error.
+  When multiple profiles are active the result is the
+  intersection of every profile's allow-list — the most
+  restrictive policy wins, matching the existing
+  "stricter MAY override looser" posture used elsewhere in the
+  configuration. `clientauth.VerifyOpts` gains an
+  `AllowedMethods` field (empty means "no policy override"),
+  exposed so embedders driving `clientauth.VerifyClient` directly
+  can plug in the same gate.
 - `op.WithAccessTokenTTL(time.Duration)` option overrides the
   lifetime of issued access tokens. Zero opts into the new public
   default `op.DefaultAccessTokenTTL` (5 minutes); negative values

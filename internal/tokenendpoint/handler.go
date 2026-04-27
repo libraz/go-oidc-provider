@@ -113,6 +113,16 @@ type Deps struct {
 	// support the asymmetric authentication path.
 	AssertionVerifier clientauth.AssertionVerifier
 
+	// AllowedClientAuthMethods optionally restricts which client
+	// authentication methods the endpoint accepts, regardless of the
+	// registered client's stored TokenEndpointAuthMethod. Empty means
+	// "no restriction"; non-empty means the chosen method must appear
+	// in the list or the request fails with invalid_client. The OP
+	// wires the slice from the active [profile.Profile] set so
+	// FAPI 2.0 §3.1.3 is enforced uniformly across /token, /par,
+	// /introspect, and /revoke.
+	AllowedClientAuthMethods []clientauth.Method
+
 	// Scopes is the read-only scope registry the handler consults
 	// when accepting a refresh-time scope override. A nil value
 	// disables only the per-scope AllowedClients allowlist check.
@@ -281,6 +291,7 @@ func authenticate(
 	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
+		AllowedMethods:    deps.AllowedClientAuthMethods,
 	}); err != nil {
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false

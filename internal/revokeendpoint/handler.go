@@ -103,6 +103,12 @@ type Deps struct {
 	// invalid_client.
 	AssertionVerifier clientauth.AssertionVerifier
 
+	// AllowedClientAuthMethods optionally restricts which client
+	// authentication methods the endpoint accepts. See
+	// tokenendpoint.Deps.AllowedClientAuthMethods for the rationale;
+	// the rule is applied identically at /revoke.
+	AllowedClientAuthMethods []clientauth.Method
+
 	// Leeway overrides the symmetric tolerance the JWT verifier
 	// applies to "exp" / "iat" comparisons. Zero or negative falls
 	// back to [defaultLeeway].
@@ -223,6 +229,7 @@ func authenticate(
 	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
+		AllowedMethods:    deps.AllowedClientAuthMethods,
 	}); err != nil {
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false

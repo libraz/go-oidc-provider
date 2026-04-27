@@ -76,3 +76,30 @@ func MaxAccessTokenTTL(p Profile) time.Duration {
 		return 0
 	}
 }
+
+// AllowedClientAuthMethods returns the closed set of client
+// authentication methods p accepts at the token endpoint, or nil
+// when p imposes no restriction. Returned values are the canonical
+// `token_endpoint_auth_methods_supported` strings used in
+// discovery and dynamic client registration (RFC 8414 / RFC 7591).
+//
+// FAPI 2.0 §3.1.3 mandates one of [private_key_jwt],
+// [tls_client_auth] (RFC 8705), or [self_signed_tls_client_auth]
+// (RFC 8705 §2.2). Public clients ("none") and shared-secret
+// methods ("client_secret_basic", "client_secret_post",
+// "client_secret_jwt") are forbidden. Both Baseline and Message
+// Signing inherit the same set; Message Signing's additional
+// constraints concern response signing rather than client auth.
+//
+// The slice is freshly allocated on each call; callers may mutate
+// it freely.
+func AllowedClientAuthMethods(p Profile) []string {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
+	case FAPICIBA, IGovHigh, profileUnspecified:
+		return nil
+	default:
+		return nil
+	}
+}

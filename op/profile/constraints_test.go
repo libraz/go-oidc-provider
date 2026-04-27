@@ -110,3 +110,41 @@ func TestMaxAccessTokenTTL(t *testing.T) {
 		})
 	}
 }
+
+func TestAllowedClientAuthMethods(t *testing.T) {
+	t.Parallel()
+
+	fapi2Allowed := []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want []string
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, fapi2Allowed},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, fapi2Allowed},
+		{"fapi-ciba", profile.FAPICIBA, nil},
+		{"igov-high", profile.IGovHigh, nil},
+		{"zero", profile.Profile(0), nil},
+		{"unknown", profile.Profile(99), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := profile.AllowedClientAuthMethods(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("AllowedClientAuthMethods(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("returns-fresh-slice", func(t *testing.T) {
+		t.Parallel()
+		first := profile.AllowedClientAuthMethods(profile.FAPI2Baseline)
+		second := profile.AllowedClientAuthMethods(profile.FAPI2Baseline)
+		first[0] = "TAINTED"
+		if second[0] == "TAINTED" {
+			t.Error("AllowedClientAuthMethods returned aliased slice; mutation leaked across calls")
+		}
+	})
+}

@@ -131,6 +131,75 @@ func TestVerifyClient_PublicClientNonePath(t *testing.T) {
 	}
 }
 
+func TestVerifyClient_AllowedMethodsRejectsOutOfPolicy(t *testing.T) {
+	t.Parallel()
+
+	client := newConfidentialClient(t, "topsecret")
+	req := newPostRequest(t, url.Values{}, "client-1", "topsecret")
+	creds, err := clientauth.Parse(req)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
+		SecretVerifier: smallArgon2id(),
+		// FAPI 2.0 §3.1.3: only private_key_jwt / tls_client_auth /
+		// self_signed_tls_client_auth are accepted. The presented
+		// client_secret_basic credential MUST be rejected even though
+		// the client is registered for it.
+		AllowedMethods: []clientauth.Method{clientauth.MethodPrivateKeyJWT},
+	})
+	if !errors.Is(err, clientauth.ErrCredentialsInvalid) {
+		t.Errorf("err=%v want ErrCredentialsInvalid", err)
+	}
+}
+
+func TestVerifyClient_AllowedMethodsAcceptsListed(t *testing.T) {
+	t.Parallel()
+
+	client := newConfidentialClient(t, "topsecret")
+	req := newPostRequest(t, url.Values{}, "client-1", "topsecret")
+	creds, err := clientauth.Parse(req)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	method, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
+		SecretVerifier: smallArgon2id(),
+		AllowedMethods: []clientauth.Method{
+			clientauth.MethodSecretBasic,
+			clientauth.MethodPrivateKeyJWT,
+		},
+	})
+	if err != nil {
+		t.Fatalf("VerifyClient: %v", err)
+	}
+	if method != clientauth.MethodSecretBasic {
+		t.Errorf("method=%v", method)
+	}
+}
+
+func TestVerifyClient_AllowedMethodsEmptyMeansNoOverride(t *testing.T) {
+	t.Parallel()
+
+	// Empty AllowedMethods is the default no-policy state and MUST
+	// behave identically to the pre-Wave-G2 path: the registered
+	// client's TokenEndpointAuthMethod is the only gate.
+	client := newConfidentialClient(t, "topsecret")
+	req := newPostRequest(t, url.Values{}, "client-1", "topsecret")
+	creds, err := clientauth.Parse(req)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	method, err := clientauth.VerifyClient(context.Background(), creds, client, clientauth.VerifyOpts{
+		SecretVerifier: smallArgon2id(),
+	})
+	if err != nil {
+		t.Fatalf("VerifyClient: %v", err)
+	}
+	if method != clientauth.MethodSecretBasic {
+		t.Errorf("method=%v", method)
+	}
+}
+
 func TestVerifyClient_NilClientReturnsCredentialsInvalid(t *testing.T) {
 	t.Parallel()
 

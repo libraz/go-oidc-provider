@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
@@ -35,6 +36,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -217,17 +219,18 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Token),
 		tokenendpoint.Handler(tokenendpoint.Deps{
-			Issuer:         cfg.issuer,
-			Clients:        cfg.store.Clients(),
-			Codes:          cfg.store.AuthorizationCodes(),
-			RefreshTokens:  cfg.store.RefreshTokens(),
-			Grants:         cfg.store.Grants(),
-			Keys:           keySet,
-			Clock:          cfg.clock,
-			Scopes:         scopes,
-			DPoP:           dpopVerifier,
-			MTLS:           mtlsVerifier,
-			AccessTokenTTL: cfg.accessTokenTTL,
+			Issuer:                   cfg.issuer,
+			Clients:                  cfg.store.Clients(),
+			Codes:                    cfg.store.AuthorizationCodes(),
+			RefreshTokens:            cfg.store.RefreshTokens(),
+			Grants:                   cfg.store.Grants(),
+			Keys:                     keySet,
+			Clock:                    cfg.clock,
+			Scopes:                   scopes,
+			DPoP:                     dpopVerifier,
+			MTLS:                     mtlsVerifier,
+			AccessTokenTTL:           cfg.accessTokenTTL,
+			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet)
@@ -475,12 +478,13 @@ func mountPAREndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Reg
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
 		parendpoint.Handler(parendpoint.Deps{
-			Issuer:  cfg.issuer,
-			Clients: cfg.store.Clients(),
-			PARs:    cfg.store.PushedAuthRequests(),
-			Scopes:  scopes,
-			Clock:   cfg.clock,
-			JAR:     jarVerifier,
+			Issuer:                   cfg.issuer,
+			Clients:                  cfg.store.Clients(),
+			PARs:                     cfg.store.PushedAuthRequests(),
+			Scopes:                   scopes,
+			Clock:                    cfg.clock,
+			JAR:                      jarVerifier,
+			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)
 	return nil
@@ -503,13 +507,14 @@ func mountIntrospectionEndpoint(mux *http.ServeMux, cfg *config, scopes *scopere
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Introspect),
 		introspectendpoint.Handler(introspectendpoint.Deps{
-			Issuer:        cfg.issuer,
-			Clients:       cfg.store.Clients(),
-			RefreshTokens: cfg.store.RefreshTokens(),
-			Keys:          keySet,
-			Scopes:        scopes,
-			Clock:         cfg.clock,
-			SigningKey:    tokens.FromInternalEntry(keySet.Active()),
+			Issuer:                   cfg.issuer,
+			Clients:                  cfg.store.Clients(),
+			RefreshTokens:            cfg.store.RefreshTokens(),
+			Keys:                     keySet,
+			Scopes:                   scopes,
+			Clock:                    cfg.clock,
+			SigningKey:               tokens.FromInternalEntry(keySet.Active()),
+			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)
 }
@@ -532,11 +537,12 @@ func mountRevocationEndpoint(mux *http.ServeMux, cfg *config, keySet *keys.Set) 
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Revoke),
 		revokeendpoint.Handler(revokeendpoint.Deps{
-			Issuer:        cfg.issuer,
-			Clients:       cfg.store.Clients(),
-			RefreshTokens: cfg.store.RefreshTokens(),
-			Keys:          keySet,
-			Clock:         cfg.clock,
+			Issuer:                   cfg.issuer,
+			Clients:                  cfg.store.Clients(),
+			RefreshTokens:            cfg.store.RefreshTokens(),
+			Keys:                     keySet,
+			Clock:                    cfg.clock,
+			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)
 }
@@ -551,6 +557,32 @@ func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
 		}
 	}
 	return false
+}
+
+// allowedClientAuthMethods returns the [clientauth.Method] subset
+// imposed on /token, /par, /introspect, /revoke by the active
+// [profile.Profile] set, or nil when no profile constrains client
+// authentication.
+//
+// Profile values that name authentication methods outside the
+// [clientauth] enum (tls_client_auth, self_signed_tls_client_auth)
+// do not appear in the returned slice because they are handled
+// outside the package; the FAPI 2.0 §3.1.3 enforcement ladder for
+// those methods lives in internal/mtls.
+func (c *config) allowedClientAuthMethods() []clientauth.Method {
+	allowedNames := c.profileAllowedAuthMethodNames()
+	if allowedNames == nil {
+		return nil
+	}
+	out := make([]clientauth.Method, 0, len(allowedNames))
+	for _, name := range allowedNames {
+		switch clientauth.Method(name) {
+		case clientauth.MethodNone, clientauth.MethodSecretBasic,
+			clientauth.MethodSecretPost, clientauth.MethodPrivateKeyJWT:
+			out = append(out, clientauth.Method(name))
+		}
+	}
+	return out
 }
 
 // mountAuthorizeHandlers wires the /authorize and /interaction routes when
@@ -888,10 +920,64 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 			Session:     cfg.endpoints.Session,
 			Register:    cfg.endpoints.Register,
 		},
-		Features:        buildFeatures(cfg.features),
-		GrantsSupported: grantStrings,
-		ScopesSupported: scopes.PublicNames(),
+		Features:                  buildFeatures(cfg.features),
+		GrantsSupported:           grantStrings,
+		ScopesSupported:           scopes.PublicNames(),
+		ProfileAllowedAuthMethods: cfg.profileAllowedAuthMethodNames(),
 	}
+}
+
+// profileAllowedAuthMethodNames returns the intersection of every
+// active [profile.Profile]'s [profile.AllowedClientAuthMethods] as
+// raw method names, suitable for [discovery.Input]. Returns nil
+// when no profile constrains client authentication.
+//
+// When multiple profiles are active the result is the intersection
+// of every profile's allowed list — the most restrictive policy
+// wins, matching the "stricter MAY override looser" posture used
+// elsewhere in the configuration. The wire list keeps mTLS methods
+// (tls_client_auth / self_signed_tls_client_auth) because they are
+// advertised in discovery even though the [clientauth] package
+// does not enforce them directly.
+func (c *config) profileAllowedAuthMethodNames() []string {
+	if len(c.profiles) == 0 {
+		return nil
+	}
+	var allowed []string
+	first := true
+	for _, p := range c.profiles {
+		methods := profile.AllowedClientAuthMethods(p)
+		if methods == nil {
+			continue
+		}
+		if first {
+			allowed = methods
+			first = false
+			continue
+		}
+		allowed = intersectStrings(allowed, methods)
+	}
+	if first {
+		return nil
+	}
+	return allowed
+}
+
+// intersectStrings returns the elements of a that also appear in b,
+// preserving a's order. It exists as a free function so
+// [config.profileAllowedAuthMethodNames] stays under the gocognit
+// budget while remaining readable.
+func intersectStrings(a, b []string) []string {
+	out := make([]string, 0, len(a))
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				out = append(out, x)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // buildFeatures translates the configured feature flags into the

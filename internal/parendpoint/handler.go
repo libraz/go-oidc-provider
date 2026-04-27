@@ -91,6 +91,14 @@ type Deps struct {
 	// the asymmetric authentication path.
 	AssertionVerifier clientauth.AssertionVerifier
 
+	// AllowedClientAuthMethods optionally restricts which client
+	// authentication methods the endpoint accepts. See
+	// tokenendpoint.Deps.AllowedClientAuthMethods for the full
+	// rationale; the rule is applied identically at /par so a request
+	// authenticating with client_secret_basic under FAPI 2.0 is
+	// rejected at the same wire layer as it would be at /token.
+	AllowedClientAuthMethods []clientauth.Method
+
 	// TTL overrides the lifetime of issued request_uri values. Zero or
 	// negative falls back to [DefaultTTL].
 	TTL time.Duration

@@ -309,6 +309,7 @@ func authenticate(
 	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
+		AllowedMethods:    deps.AllowedClientAuthMethods,
 	}); err != nil {
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false

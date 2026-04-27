@@ -20,6 +20,22 @@ type VerifyOpts struct {
 	// AssertionVerifier verifies private_key_jwt assertions. Required
 	// when the request uses MethodPrivateKeyJWT.
 	AssertionVerifier AssertionVerifier
+
+	// AllowedMethods optionally restricts the [Method] values
+	// VerifyClient will accept. Empty means "no policy override; the
+	// registered client's method governs"; non-empty means a method
+	// outside the list is rejected with [ErrCredentialsInvalid] before
+	// any cryptographic check runs (after the dummy-verify timing
+	// shim, so the latency channel still tells the caller nothing).
+	//
+	// The list is the OP-level intersection of every active
+	// [profile.Profile]'s allowed-methods set, translated into the
+	// [Method] enum: profile-only values such as "tls_client_auth" do
+	// not appear because they are handled outside this package.
+	// Encoding the policy here lets every endpoint that calls
+	// [VerifyClient] enforce FAPI 2.0 §3.1.3 without duplicating the
+	// switch.
+	AllowedMethods []Method
 }
 
 // VerifyClient cross-checks the parsed credentials against the
@@ -43,6 +59,10 @@ func VerifyClient(ctx context.Context, creds *Credentials, client *store.Client,
 		return "", ErrClientMismatch
 	}
 	if !methodAllowedForClient(creds.Method, client) {
+		runDummyVerify(creds, opts)
+		return "", ErrCredentialsInvalid
+	}
+	if !methodAllowedByPolicy(creds.Method, opts.AllowedMethods) {
 		runDummyVerify(creds, opts)
 		return "", ErrCredentialsInvalid
 	}
@@ -95,6 +115,21 @@ func methodAllowedForClient(m Method, c *store.Client) bool {
 		return false
 	}
 	return string(m) == c.TokenEndpointAuthMethod
+}
+
+// methodAllowedByPolicy reports whether the OP-level allow-list (set
+// by [VerifyOpts.AllowedMethods]) admits m. An empty list means "no
+// policy override"; the registered client's method governs.
+func methodAllowedByPolicy(m Method, allowed []Method) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, a := range allowed {
+		if a == m {
+			return true
+		}
+	}
+	return false
 }
 
 // verifySecret runs the configured SecretVerifier. The function returns

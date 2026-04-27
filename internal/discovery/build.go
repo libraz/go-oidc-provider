@@ -34,6 +34,15 @@ type Input struct {
 	// set (client_secret_basic, client_secret_post).
 	AuthMethodsSupported []string
 
+	// ProfileAllowedAuthMethods, when non-empty, filters the advertised
+	// token_endpoint_auth_methods_supported (and the mirrored
+	// introspection / revocation lists) down to the intersection of the
+	// computed list and this allow-list. The op layer populates it
+	// from the active [profile.Profile] set so an OP that runs FAPI 2.0
+	// advertises only the methods FAPI 2.0 §3.1.3 actually permits,
+	// regardless of which features are otherwise enabled.
+	ProfileAllowedAuthMethods []string
+
 	// ScopesSupported lists the scope identifiers the OP advertises
 	// in the discovery document. The op layer pre-filters this list
 	// (built-in standard scopes plus every registered scope whose
@@ -136,6 +145,17 @@ func Build(in Input) Document {
 			"self_signed_tls_client_auth",
 		)
 	}
+	// FAPI 2.0 §3.1.3 narrowing: when an active profile constrains the
+	// token-endpoint auth methods, intersect the advertised list with
+	// the profile's allow-list before downstream fields (introspect /
+	// revoke) take their copy. Filtering here keeps the three lists in
+	// lock-step under a single toggle.
+	if len(in.ProfileAllowedAuthMethods) > 0 {
+		doc.TokenEndpointAuthMethodsSupported = intersect(
+			doc.TokenEndpointAuthMethodsSupported,
+			in.ProfileAllowedAuthMethods,
+		)
+	}
 	if in.Features.DynamicRegistration {
 		doc.RegistrationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Register)
 		doc.RegistrationEndpointAuthMethodsSupported = []string{"initial_access_token"}
@@ -230,6 +250,27 @@ func appendUnique(base []string, extra ...string) []string {
 		}
 		seen[v] = struct{}{}
 		out = append(out, v)
+	}
+	return out
+}
+
+// intersect returns the elements of base that also appear in keep,
+// preserving base's order. It is used by [Build] to apply the active
+// [profile.Profile]'s auth-method allow-list without reshuffling the
+// list the rest of the builder produced.
+func intersect(base, keep []string) []string {
+	if len(base) == 0 || len(keep) == 0 {
+		return nil
+	}
+	allow := make(map[string]struct{}, len(keep))
+	for _, v := range keep {
+		allow[v] = struct{}{}
+	}
+	out := make([]string, 0, len(base))
+	for _, v := range base {
+		if _, ok := allow[v]; ok {
+			out = append(out, v)
+		}
 	}
 	return out
 }

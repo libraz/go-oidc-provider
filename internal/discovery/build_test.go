@@ -137,3 +137,78 @@ func TestBuild_StaticPolicyValues(t *testing.T) {
 		t.Errorf("code_challenge_methods=%v want [S256]", doc.CodeChallengeMethodsSupported)
 	}
 }
+
+func TestBuild_ProfileFiltersTokenAuthMethods(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints: discovery.EndpointPaths{
+			JWKS: "/jwks", Authorize: "/auth", Token: "/token",
+			Introspect: "/introspect", Revoke: "/revoke",
+		},
+		Features: discovery.Features{MTLS: true, Introspect: true, Revoke: true},
+		// FAPI 2.0 §3.1.3 narrowing: secret_basic and secret_post must
+		// not appear even though MTLS is enabled (which would otherwise
+		// add tls_client_auth on top of the default secret list).
+		ProfileAllowedAuthMethods: []string{
+			"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth",
+		},
+	})
+	for _, banned := range []string{"client_secret_basic", "client_secret_post", "none"} {
+		for _, got := range doc.TokenEndpointAuthMethodsSupported {
+			if got == banned {
+				t.Errorf("token_endpoint_auth_methods_supported still contains %q", banned)
+			}
+		}
+	}
+	for _, want := range []string{"tls_client_auth", "self_signed_tls_client_auth"} {
+		found := false
+		for _, got := range doc.TokenEndpointAuthMethodsSupported {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("token_endpoint_auth_methods_supported missing %q (got %v)",
+				want, doc.TokenEndpointAuthMethodsSupported)
+		}
+	}
+	// Introspection / revocation lists mirror the filtered token list,
+	// so the same bans must apply there too.
+	for _, got := range doc.IntrospectionEndpointAuthMethodsSupported {
+		if got == "client_secret_basic" {
+			t.Errorf("introspection_endpoint_auth_methods_supported still contains client_secret_basic")
+		}
+	}
+	for _, got := range doc.RevocationEndpointAuthMethodsSupported {
+		if got == "client_secret_basic" {
+			t.Errorf("revocation_endpoint_auth_methods_supported still contains client_secret_basic")
+		}
+	}
+}
+
+func TestBuild_NoProfileLeavesAuthMethodsAlone(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints:   discovery.EndpointPaths{JWKS: "/jwks", Authorize: "/auth", Token: "/token"},
+	})
+	// Default list is the secret pair when nothing else is configured;
+	// passing a nil ProfileAllowedAuthMethods MUST NOT strip them.
+	hasBasic := false
+	for _, m := range doc.TokenEndpointAuthMethodsSupported {
+		if m == "client_secret_basic" {
+			hasBasic = true
+			break
+		}
+	}
+	if !hasBasic {
+		t.Errorf("token_endpoint_auth_methods_supported = %v, want it to retain client_secret_basic when no profile is set",
+			doc.TokenEndpointAuthMethodsSupported)
+	}
+}
