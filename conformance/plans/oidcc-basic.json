@@ -1,0 +1,15 @@
+{
+  "alias": "go-oidc-oidcc-basic",
+  "publish": "summary",
+  "description": "go-oidc-provider — oidcc-basic conformance run (Authorization Code + PKCE)",
+  "consent": false,
+  "server": {
+    "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "demo-client",
+    "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-basic/callback",
+    "scope": "openid profile email"
+  },
+  "browser": []
+}

@@ -56,6 +56,13 @@ docs/godoc/
 local/
 tmp/
 
+# Conformance harness runtime artifacts. *.pem above already covers the
+# generated cert material; these add the op-demo runtime files.
+conformance/op-demo.pid
+conformance/op-demo.log
+conformance/op-demo.bin
+conformance/certs/openssl.cnf
+
 # Internal-only artefacts (kept locally, never committed). The OSS-facing
 # documentation lives in README.md, CHANGELOG.md, SECURITY.md, NOTICE,
 # and CONTRIBUTING.md. The entire docs/ tree is internal working

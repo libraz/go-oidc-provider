@@ -11,6 +11,23 @@ in any minor release.
 
 ### Added
 
+- Conformance harness scaffolding under `conformance/` plus the
+  driver script `scripts/conformance.sh` and Makefile targets
+  `conformance-certs`, `conformance-op-up`, `conformance-op-down`,
+  `conformance-op-status`. The `certs` target generates a 30-day
+  ECDSA P-256 self-signed cert covering `localhost`,
+  `host.docker.internal`, `127.0.0.1`, and `::1` so the OFCS
+  container can reach op-demo across the Docker network boundary.
+  The `op-up` target builds the op-demo binary once (avoiding the
+  `go run` parent-child PID layering that leaks listeners) and
+  starts it on `https://127.0.0.1:9443`, seeded with the three
+  per-plan callback URIs. Three OFCS plan templates ship under
+  `conformance/plans/`: `oidcc-basic.json`, `fapi2-baseline.json`,
+  `fapi2-message-signing.json`. OFCS itself is not bundled — the
+  README documents the canonical clone-and-build of
+  `openid/conformance-suite`. Headless plan submission via OFCS
+  REST API is deferred to the green-out wave because the API
+  surface is not version-stable across releases.
 - `cmd/op-demo` `-redirect-uri` flag now accepts a comma-separated
   list. A multi-plan OFCS run targets one alias per plan
   (`/test/a/<alias>/callback`), so seeding every alias in a single

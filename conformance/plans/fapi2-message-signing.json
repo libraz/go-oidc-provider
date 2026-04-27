@@ -1,0 +1,28 @@
+{
+  "alias": "go-oidc-fapi2-msg-signing",
+  "publish": "summary",
+  "description": "go-oidc-provider — fapi2-message-signing conformance run (baseline + JARM + signed introspection)",
+  "consent": false,
+  "server": {
+    "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "demo-client",
+    "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-fapi2-msg-signing/callback",
+    "scope": "openid profile",
+    "client_authentication_type": "private_key_jwt"
+  },
+  "client2": {
+    "client_id": "demo-client-2",
+    "scope": "openid profile",
+    "client_authentication_type": "private_key_jwt"
+  },
+  "variant": {
+    "client_auth_type": "private_key_jwt",
+    "sender_constrain": "dpop",
+    "fapi_profile": "plain_fapi",
+    "openid": "plain_oauth",
+    "fapi_response_mode": "jarm"
+  },
+  "browser": []
+}
