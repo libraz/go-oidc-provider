@@ -1111,7 +1111,7 @@ func TestWithConsentUI_RejectsReactUICombination(t *testing.T) {
 func TestWithStaticClients_AcceptsPublicSeed(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t),
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://app.example.com/cb"},
@@ -1125,7 +1125,7 @@ func TestWithStaticClients_AcceptsPublicSeed(t *testing.T) {
 func TestWithStaticClients_AcceptsMixedSeeds(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t),
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "demo-spa",
@@ -1186,10 +1186,81 @@ func TestWithStaticClients_RejectsNilSeed(t *testing.T) {
 	}
 }
 
+// TestWithStaticClients_PersistsToStore verifies the H1-D seeding
+// step: every ClientSeed projected through op.WithStaticClients lands
+// in the configured store as a real [store.Client] record so the
+// token / authorize / introspect endpoints can authenticate against
+// it. Without this step the option silently degraded to a no-op.
+func TestWithStaticClients_PersistsToStore(t *testing.T) {
+	t.Parallel()
+
+	st := inmem.New()
+	if _, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(st),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKey(newRandomCookieKey(t)),
+		op.WithStaticClients(
+			op.PublicClient{
+				ID:           "demo-spa",
+				RedirectURIs: []string{"https://app.example.com/cb"},
+				Scopes:       []string{"openid"},
+			},
+			op.ConfidentialClient{
+				ID:           "demo-confidential",
+				Secret:       "demo-secret",
+				RedirectURIs: []string{"https://app.example.com/cb"},
+				Scopes:       []string{"openid"},
+			},
+		),
+	); err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+
+	pub, err := st.Clients().GetClient(context.Background(), "demo-spa")
+	if err != nil {
+		t.Fatalf("PublicClient not persisted: %v", err)
+	}
+	if !pub.PublicClient {
+		t.Errorf("demo-spa.PublicClient = false, want true")
+	}
+
+	conf, err := st.Clients().GetClient(context.Background(), "demo-confidential")
+	if err != nil {
+		t.Fatalf("ConfidentialClient not persisted: %v", err)
+	}
+	if conf.SecretHash == "" {
+		t.Errorf("demo-confidential.SecretHash is empty; ConfidentialClient.seed() must hash the secret")
+	}
+}
+
+// TestWithStaticClients_RejectsReadOnlyStore confirms op.New fails
+// fast when the embedder configures static clients but supplies a
+// store that does not satisfy [store.ClientRegistry] — the
+// configuration cannot succeed because the seeds have nowhere to
+// land.
+func TestWithStaticClients_RejectsReadOnlyStore(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithStaticClients(op.PublicClient{
+			ID:           "demo-spa",
+			RedirectURIs: []string{"https://app.example.com/cb"},
+			Scopes:       []string{"openid"},
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for read-only store, got nil")
+	}
+	if !strings.Contains(err.Error(), "ClientRegistry") {
+		t.Errorf("err = %v, want it to mention ClientRegistry", err)
+	}
+}
+
 func TestWithStaticClients_AppendsAcrossCalls(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t),
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa-a",
 			RedirectURIs: []string{"https://a.example.com/cb"},
@@ -1216,7 +1287,7 @@ func TestWithStaticClients_AppendsAcrossCalls(t *testing.T) {
 func TestWithStaticClients_ConfidentialEmptySecret(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.New(append(validBaseOpts(t),
+	_, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:           "demo-empty-secret",
 			Secret:       "",
@@ -1258,7 +1329,7 @@ func TestWithFirstPartyClients_RejectsUnknownID(t *testing.T) {
 func TestWithFirstPartyClients_AcceptsKnownID(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t),
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "first-party-spa",
 			RedirectURIs: []string{"https://app.example.com/cb"},

@@ -99,6 +99,9 @@ func New(opts ...Option) (*Provider, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	if err := seedStaticClients(cfg); err != nil {
+		return nil, err
+	}
 	keySet, err := keys.NewSet(toKeyEntries(cfg.keyset))
 	if err != nil {
 		return nil, &Error{
@@ -715,6 +718,44 @@ func mountRevocationEndpoint(
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 		}),
 	)
+}
+
+// seedStaticClients persists the [WithStaticClients] entries in
+// [config.staticClients] through [store.ClientRegistry.RegisterClient].
+// The function is a no-op when no static clients were configured. It
+// fails [New] when:
+//
+//   - the configured store does not satisfy [store.ClientRegistry] (the
+//     embedder asked for static seeding but supplied a read-only store);
+//   - any [store.ClientRegistry.RegisterClient] call fails (e.g. the
+//     same id is registered twice).
+//
+// Calling this once at construction matches the OAuth 2.0 §2 expectation
+// that the OP knows about every static client before serving requests.
+func seedStaticClients(cfg *config) error {
+	if len(cfg.staticClients) == 0 {
+		return nil
+	}
+	registry, ok := cfg.store.(store.ClientRegistry)
+	if !ok {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithStaticClients requires a Store that implements " +
+				"store.ClientRegistry; got a read-only store",
+		}
+	}
+	ctx := context.Background()
+	for i := range cfg.staticClients {
+		c := cfg.staticClients[i]
+		if err := registry.RegisterClient(ctx, &c); err != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithStaticClients: registering client " + c.ID,
+				Cause:       err,
+			}
+		}
+	}
+	return nil
 }
 
 // featureEnabled reports whether flag is in the configured feature list.
