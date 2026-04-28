@@ -52,6 +52,7 @@ numbering convention groups examples by topic — 0x = bootstrap,
 | [`examples/02-bundle`](examples/02-bundle/main.go) | Comprehensive wiring: LoginFlow + clients + scopes + first-party. |
 | [`examples/03-fapi2`](examples/03-fapi2/main.go) | FAPI 2.0 Baseline profile: PAR / JAR / DPoP, `private_key_jwt` client. |
 | [`examples/04-custom-interaction`](examples/04-custom-interaction/main.go) | Swap to `interaction.JSONDriver` instead of the default HTML driver. |
+| [`examples/05-client-credentials`](examples/05-client-credentials/main.go) | Machine-to-machine `grant_type=client_credentials` (RFC 6749 §4.4). |
 | [`examples/10-react-login`](examples/10-react-login/main.go) | Delegate login / consent / logout screens to a SPA via `op.WithReactUI`. |
 | [`examples/11-custom-consent-ui`](examples/11-custom-consent-ui/main.go) | Custom consent template via `op.WithConsentUI`. |
 | [`examples/12-scopes-public-private`](examples/12-scopes-public-private/main.go) | `op.PublicScope` / `op.InternalScope` — discovery vs admin-only scopes. |
