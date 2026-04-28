@@ -512,6 +512,25 @@ cmd_drive() {
     --resolve "host.docker.internal:9443:127.0.0.1"
     --cookie-jar "$cookies" --cookie "$cookies")
 
+  # Tests that need ≥2 visits to the same authorize URL before
+  # authentication completes (RFC 9126 §2.2 reuse-before-completion)
+  # tell us via OFCS_DRIVE_DOUBLE_VISIT. We cannot fire two real GETs
+  # because each would create a new interaction state behind the
+  # scenes; OFCS only checks getVisited()'s frequency for the URL, so
+  # we register both visits through the runner browser API. The OP is
+  # responsible for accepting the second resolution of the same
+  # request_uri (Find, not Consume, until code emission); the unit
+  # test [TestEndToEnd_PAR_AuthorizeRejectsReplay] anchors that
+  # contract.
+  if [[ "${OFCS_DRIVE_DOUBLE_VISIT:-0}" == "1" && -n "${OFCS_RUNNER_ID:-}" ]]; then
+    echo "[drive pre] register two browser visits for reuse-before-auth"
+    for visit_n in 1 2; do
+      curl -sk -X POST "${OFCS_API}/api/runner/browser/${OFCS_RUNNER_ID}/visit" \
+        --data-urlencode "url=${auth_url}" \
+        -o /dev/null -w "[drive pre] visit#${visit_n}=%{http_code}\n"
+    done
+  fi
+
   echo "[drive 1/3] GET ${auth_url}"
   local prompt interaction_url body state_ref csrf
   prompt="$("${curl_base[@]}" -L "$auth_url" -i \
@@ -692,6 +711,12 @@ json_field() {
 drive_all_urls() {
   local id="$1" max_iters="${2:-40}"
   local driven=" " urls url s found i
+  # Forward the runner id so cmd_drive can call back into the OFCS
+  # browser visit endpoint when a test (currently only the
+  # PAR reused-request-uri-prior-to-auth-completion check) needs an
+  # extra visit registered.
+  OFCS_RUNNER_ID="$id"
+  export OFCS_RUNNER_ID
   for ((i=0; i<max_iters; i++)); do
     urls="$(curl -sk "${OFCS_API}/api/runner/$id" | python3 -c '
 import json, sys
@@ -751,6 +776,18 @@ cmd_batch() {
       *)                             OFCS_DRIVE_REJECT=0 ;;
     esac
     export OFCS_DRIVE_REJECT
+    # The "ensure-reused-request-uri-prior-to-auth-completion-succeeds"
+    # test asserts that the authorize URL with the same request_uri is
+    # visited at least twice before authentication completes (the OP
+    # must accept the second visit; RFC 9126 §2.2 reads "one-time" as
+    # "consumed at code emission", not at /authorize entry). Our drive
+    # only navigates once, so we mark a redundant visit via the OFCS
+    # browser API when this test is running.
+    case "$m" in
+      *reused-request-uri-prior-to-auth-completion*) OFCS_DRIVE_DOUBLE_VISIT=1 ;;
+      *)                                             OFCS_DRIVE_DOUBLE_VISIT=0 ;;
+    esac
+    export OFCS_DRIVE_DOUBLE_VISIT
     if [[ -n "${BATCH_VARIANT:-}" ]]; then
       v="$BATCH_VARIANT"
     elif [[ "$m" == fapi2-security-profile-id2-* || "$m" == fapi2-message-signing-id1-* ]]; then
