@@ -366,13 +366,14 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 	if !featureEnabled(cfg.features, feature.JAR) {
 		return nil, nil
 	}
-	// FAPI 2.0 Message Signing §5.6 mandates "nbf" and a 60-second
-	// claim window. Baseline (with JAR not normally exercised) is
-	// admitted under the same posture: the strict cap is harmless
-	// when the request object is absent and protects deployments
-	// that opt in to JAR without flipping a Message-Signing-only
-	// switch. Other JAR-enabling profiles inherit the relaxed
-	// (back-compat) behaviour.
+	// FAPI 2.0 Message Signing §5.6 mandates "nbf" and a request-object
+	// lifetime no longer than 60 minutes after nbf. The library
+	// implements that bound symmetrically: exp must not be more than
+	// 60 minutes in the future, and nbf must not be more than 60
+	// minutes in the past. Baseline (where JAR is rarely exercised)
+	// inherits the same posture so a deployment that opts in to JAR
+	// without a Message-Signing-only switch still gets the bound. Other
+	// JAR-enabling profiles inherit the relaxed (back-compat) behaviour.
 	var (
 		requireNbf  bool
 		maxLifetime time.Duration
@@ -380,7 +381,7 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning {
 			requireNbf = true
-			maxLifetime = 60 * time.Second
+			maxLifetime = 60 * time.Minute
 			break
 		}
 	}
