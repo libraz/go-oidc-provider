@@ -90,6 +90,16 @@ type PrivateKeyJWTVerifier struct {
 	// OIDC Core §9 it MUST be the OP's token endpoint URL.
 	Audience string
 
+	// AuxAudiences is the set of additional "aud" values the verifier
+	// accepts when [Audience] does not match. It exists because
+	// FAPI 2.0 §5.2.2 mandates aud == issuer (not aud == token
+	// endpoint), and RFC 7523 §3 itself says "a value identifying
+	// the authorization server" without pinning which identifier.
+	// A wider verifier accepts both shapes so an OP that runs OIDC
+	// Core and FAPI 2.0 simultaneously authenticates clients in
+	// either dialect. Empty disables the extra acceptance.
+	AuxAudiences []string
+
 	// Clock returns the current wall-clock time. Required so tests can
 	// pin the verification window.
 	Clock func() time.Time
@@ -125,7 +135,8 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrAssertionMalformed, err)
 	}
-	if err := validateAssertionClaims(claims, clientID, v.Audience, v.Clock(), leeway); err != nil {
+	accepted := append([]string{v.Audience}, v.AuxAudiences...)
+	if err := validateAssertionClaims(claims, clientID, accepted, v.Clock(), leeway); err != nil {
 		return err
 	}
 	if err := v.JTIStore.Mark(ctx, claims.JTI, time.Unix(claims.ExpiresAt, 0).UTC()); err != nil {
@@ -176,14 +187,15 @@ func decodeAssertionClaims(payload []byte) (AssertionClaims, error) {
 }
 
 // validateAssertionClaims enforces the standard claim invariants
-// required by OIDC Core §9: iss == sub == clientID, aud contains the
-// expected token endpoint, jti is non-empty, exp is in the future, iat
-// is not in the future (within leeway), nbf if present is past.
-func validateAssertionClaims(claims AssertionClaims, clientID, expectedAud string, now time.Time, leeway time.Duration) error {
+// required by OIDC Core §9: iss == sub == clientID, aud contains one
+// of the accepted audience values, jti is non-empty, exp is in the
+// future, iat is not in the future (within leeway), nbf if present
+// is past.
+func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAud []string, now time.Time, leeway time.Duration) error {
 	if claims.Issuer != clientID || claims.Subject != clientID {
 		return ErrAssertionMalformed
 	}
-	if !audienceMatches(claims.Audience, expectedAud) {
+	if !audienceMatchesAny(claims.Audience, acceptedAud) {
 		return ErrAssertionMalformed
 	}
 	if claims.JTI == "" {
@@ -209,6 +221,21 @@ func validateAssertionClaims(claims AssertionClaims, clientID, expectedAud strin
 		}
 	}
 	return nil
+}
+
+// audienceMatchesAny reports whether any of expected appears in aud.
+// Empty entries in expected are skipped so a partially populated
+// accept-list does not silently accept everything.
+func audienceMatchesAny(aud, expected []string) bool {
+	for _, e := range expected {
+		if e == "" {
+			continue
+		}
+		if audienceMatches(aud, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // audienceMatches reports whether expected appears in aud.

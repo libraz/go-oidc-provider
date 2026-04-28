@@ -1,9 +1,11 @@
 package clientauth
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // Credentials is the parsed view of a token-endpoint request's
@@ -66,10 +68,53 @@ func Parse(r *http.Request) (*Credentials, error) {
 	}
 
 	creds := buildCredentials(clientID, hasBasic, basicSecret, parsed)
+	if creds.Method == MethodPrivateKeyJWT && creds.ClientID == "" {
+		// RFC 7521 §4.2 / RFC 7523 §3: the JWT bearer assertion's
+		// "iss" / "sub" claims identify the client. When the request
+		// omits client_id (FAPI 2.0 / OAuth 2.1 deployments often
+		// drop the redundant parameter), the parser derives the
+		// claim from the assertion header / payload so the verifier
+		// can resolve the client. The value here is unverified and
+		// is re-checked against the signed claim by the assertion
+		// verifier — extraction is for lookup, not authorization.
+		if id, err := unverifiedAssertionClientID(parsed.assertion); err == nil {
+			creds.ClientID = id
+		}
+	}
 	if creds.Method == MethodNone && creds.ClientID == "" {
 		return nil, ErrNoCredentials
 	}
 	return creds, nil
+}
+
+// unverifiedAssertionClientID returns the assertion's "iss" claim
+// without verifying the signature. Callers MUST treat the value as a
+// lookup key only; the assertion verifier re-checks iss / sub against
+// the resolved clientID before authenticating.
+func unverifiedAssertionClientID(assertion string) (string, error) {
+	parts := strings.Split(assertion, ".")
+	if len(parts) < 2 {
+		return "", ErrAssertionMalformed
+	}
+	body, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", ErrAssertionMalformed
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+		Sub string `json:"sub"`
+	}
+	if err := jsonUnmarshal(body, &claims); err != nil {
+		return "", ErrAssertionMalformed
+	}
+	switch {
+	case claims.Iss != "":
+		return claims.Iss, nil
+	case claims.Sub != "":
+		return claims.Sub, nil
+	default:
+		return "", ErrAssertionMalformed
+	}
 }
 
 // formCredentials is the de-structured view of the credential-bearing
