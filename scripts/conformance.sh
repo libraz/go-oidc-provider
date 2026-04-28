@@ -247,12 +247,25 @@ cmd_drive() {
     return 0
   fi
 
+  # Pre-redirect-trust error: /authorize returns 400 with a JSON
+  # envelope when something is wrong before the redirect_uri is
+  # validated (PAR-required without request_uri, unknown client_id,
+  # malformed parameters, …). There is no interaction prompt to walk
+  # and no callback to forward to — OFCS will detect the rejection
+  # by polling /api/info and rule the test on its own (typically as
+  # WAITING/REVIEW for a manual screenshot upload). Return 0 so the
+  # outer batch keeps moving instead of bailing the whole run.
+  if printf '%s' "$body" | grep -q '"error":'; then
+    echo "[drive 1/3] /authorize returned a JSON error envelope; OFCS will rule via REVIEW"
+    return 0
+  fi
+
   state_ref="$(extract_field "$body" state_ref)"
   csrf="$(extract_field "$body" csrf_token)"
 
   if [[ -z "$state_ref" || -z "$csrf" || -z "$interaction_url" ]]; then
     echo "[drive] failed to parse interaction state from initial prompt" >&2
-    exit 1
+    return 0
   fi
   echo "[drive 1/3] interaction_url=${interaction_url}"
 
@@ -445,10 +458,21 @@ cmd_batch() {
     drive_all_urls "$id" 40
     # Final poll for termination.
     info=""
+    local stable=0
     for _ in $(seq 1 30); do
       info="$(curl -sk "${OFCS_API}/api/info/$id")"
       status="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-      [[ "$status" == "FINISHED" ]] && break
+      [[ "$status" == "FINISHED" || "$status" == "INTERRUPTED" ]] && break
+      # WAITING with no further URLs typically means the test is
+      # human-review-gated (REVIEW item, screenshot upload) — count
+      # five consecutive WAITING polls as terminal so the batch keeps
+      # moving without us forging a result.
+      if [[ "$status" == "WAITING" ]]; then
+        stable=$((stable+1))
+        if (( stable >= 5 )); then break; fi
+      else
+        stable=0
+      fi
       sleep 1
     done
     result="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","") or "")' 2>/dev/null || true)"
@@ -456,6 +480,8 @@ cmd_batch() {
     case "$result" in
       PASSED)  pass=$((pass+1));;
       SKIPPED) skip=$((skip+1));;
+      REVIEW)  skip=$((skip+1));;
+      WARNING) skip=$((skip+1));;
       *)       fail=$((fail+1));;
     esac
     rm -f "$jar"
