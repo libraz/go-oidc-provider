@@ -207,6 +207,7 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
+	idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
 	idToken, err := maybeMintRefreshIDToken(deps, refreshIDTokenInput{
 		Subject:  exchanged.Subject,
 		ClientID: client.ID,
@@ -215,6 +216,7 @@ func issueRefreshResponse(
 		AuthTime: authCtx.AuthTime,
 		ACR:      authCtx.ACR,
 		AMR:      authCtx.AMR,
+		Extra:    idTokenExtra,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -250,6 +252,12 @@ type refreshIDTokenInput struct {
 	AuthTime int64
 	ACR      string
 	AMR      []string
+
+	// Extra carries the OIDC Core 1.0 §5.5 "claims"-projected
+	// id_token claims resolved from the originating grant. nil when
+	// the grant carried no §5.5 payload or the projector returned
+	// no values.
+	Extra map[string]any
 }
 
 // maybeMintRefreshIDToken signs an id_token only when the rotated grant
@@ -272,6 +280,7 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 		AuthTime:  in.AuthTime,
 		ACR:       in.ACR,
 		AMR:       append([]string(nil), in.AMR...),
+		Extra:     in.Extra,
 	}
 	return tokens.SignIDToken(activeSigningKey(deps), claims)
 }

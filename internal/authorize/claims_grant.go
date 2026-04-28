@@ -21,9 +21,6 @@ func EncodeClaimsToGrant(c *ClaimsRequest) map[string]any {
 		return nil
 	}
 	body := map[string]any{}
-	if len(c.IDToken) == 0 && len(c.UserInfo) == 0 {
-		return nil
-	}
 	if encoded := encodeClaimsLocation(c.IDToken); encoded != nil {
 		body["id_token"] = encoded
 	}

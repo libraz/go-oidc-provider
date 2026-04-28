@@ -418,6 +418,60 @@ func TestRefresh_ScopeAllowedClients_Permitted(t *testing.T) {
 // authorize endpoint; no /token-side authcode test is required for
 // ADR-0004 coverage.
 
+// TestRefresh_HonoursClaimsRequest_IDToken verifies that an OIDC Core
+// 1.0 §5.5 "claims" request payload persisted on the originating grant
+// is honoured by the refresh-derived id_token. The grant carries an
+// id_token request for "email"; the user store has the matching value;
+// the refreshed id_token MUST surface the claim. Without the projector
+// wired through the refresh path the claim was silently dropped.
+func TestRefresh_HonoursClaimsRequest_IDToken(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-claims"
+	const subject = "user-claims"
+	const grantID = "grant-claims"
+
+	f.prov.Store.PutUser(context.Background(), &store.User{
+		Subject: subject,
+		Claims:  map[string]any{"email": "user@example.com"},
+	})
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+		Claims: map[string]any{
+			"request": map[string]any{
+				"id_token": map[string]any{
+					"email": map[string]any{"essential": true},
+				},
+			},
+		},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	idt, _ := body["id_token"].(string)
+	if idt == "" {
+		t.Fatal("id_token missing")
+	}
+	idClaims := decodeIDTokenClaims(t, idt)
+	if got := idClaims["email"]; got != "user@example.com" {
+		t.Errorf("id_token.email=%v want user@example.com (claims request not honoured on refresh path)", got)
+	}
+}
+
 // TestRefresh_MissingToken yields invalid_request when the body omits
 // refresh_token.
 func TestRefresh_MissingToken(t *testing.T) {
