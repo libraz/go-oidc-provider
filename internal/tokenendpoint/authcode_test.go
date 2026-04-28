@@ -100,6 +100,91 @@ func TestAuthCode_HappyPath(t *testing.T) {
 	}
 }
 
+// TestAuthCode_NoPKCE_HappyPath drives the profile-conditional non-
+// PKCE path: a code that was issued without a code_challenge MUST be
+// redeemable without a code_verifier. The test pins the new contract
+// so a regression that re-instates the always-required gate at
+// /token surfaces here.
+func TestAuthCode_NoPKCE_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const codeID = "code-no-pkce"
+	const grantID = "grant-no-pkce"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:          codeID,
+		ClientID:    client.ID,
+		Subject:     subject,
+		GrantID:     grantID,
+		RedirectURI: redirect,
+		Scope:       []string{"openid"},
+		Nonce:       "nonce-no-pkce",
+		// CodeChallenge / CodeChallengeMethod intentionally empty.
+	})
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", codeID)
+	form.Set("redirect_uri", redirect)
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if _, ok := body["access_token"].(string); !ok {
+		t.Errorf("access_token missing: %v", body)
+	}
+}
+
+// TestAuthCode_NoPKCE_RejectsSmuggledVerifier covers the downgrade
+// guard: a code issued without PKCE MUST refuse a code_verifier on
+// exchange. The error surface is invalid_grant ("PKCE verification
+// failed") because [authcode.Exchanger.Exchange] returns
+// pkce.ErrVerifierMismatch for the smuggled case.
+func TestAuthCode_NoPKCE_RejectsSmuggledVerifier(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const codeID = "code-no-pkce-smuggle"
+	const grantID = "grant-no-pkce-smuggle"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:          codeID,
+		ClientID:    client.ID,
+		Subject:     subject,
+		GrantID:     grantID,
+		RedirectURI: redirect,
+		Scope:       []string{"openid"},
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, "smuggled-verifier-smuggled-verifier-smuggled-1234"), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_grant" {
+		t.Errorf("error=%v want invalid_grant", body["error"])
+	}
+}
+
 // TestAuthCode_PublicClient_PKCE_OK confirms the public-client path:
 // no Basic auth, client_id in the body, PKCE replaces the secret as
 // the proof of possession.

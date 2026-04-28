@@ -142,14 +142,16 @@ func parseAuthCodeRequest(w http.ResponseWriter, r *http.Request) (authCodeInput
 	case in.RedirectURI == "":
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "redirect_uri is required")
 		return authCodeInputs{}, false
-	case in.CodeVerifier == "":
-		// PKCE is mandatory in this library (§A.12.3); a missing
-		// verifier is an invalid_grant rather than invalid_request
-		// because the code was issued under a binding the client now
-		// fails to present.
-		writeError(w, http.StatusBadRequest, errInvalidGrant, "code_verifier is required")
-		return authCodeInputs{}, false
 	}
+	// PKCE enforcement is profile-conditional: when the issued code
+	// carries a code_challenge, [authcode.Exchanger.Exchange] verifies
+	// the presented code_verifier and surfaces ErrVerifierMismatch /
+	// ErrVerifierFormat. When it does not, Exchange refuses any
+	// supplied verifier (downgrade guard). Letting an empty verifier
+	// fall through here lets a non-PKCE code redeem against the
+	// authorize policy that issued it; the gate cannot be lifted at
+	// /token because the token endpoint does not know the active
+	// profile.
 	return in, true
 }
 
