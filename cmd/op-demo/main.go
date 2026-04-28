@@ -46,6 +46,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -159,6 +160,12 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		op.WithLogger(logger),
 		op.WithInteraction(htmlDriver{}),
 		op.WithAuthenticators(stubAuthenticator{}),
+		// JAR (RFC 9101) is opt-in. Enabling it makes discovery
+		// advertise request_object_signing_alg_values_supported
+		// (without "none"), which lets the OFCS unsigned-request-
+		// object module skip cleanly while keeping the signed
+		// path live for the redirect-uri-in-request-object module.
+		op.WithFeature(feature.JAR),
 	)
 	if err != nil {
 		return fmt.Errorf("op.New: %w", err)

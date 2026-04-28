@@ -377,7 +377,7 @@ cmd_batch() {
   local default_variant client_secret_post_variant
   default_variant='%7B%22client_auth_type%22%3A%22client_secret_basic%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
   client_secret_post_variant='%7B%22client_auth_type%22%3A%22client_secret_post%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
-  local pass=0 fail=0 err=0 m v resp id info status result jar
+  local pass=0 fail=0 skip=0 err=0 m v resp id info status result jar
   for m in "$@"; do
     echo
     echo "==== $m ===="
@@ -411,14 +411,15 @@ cmd_batch() {
     result="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","") or "")' 2>/dev/null || true)"
     echo "result=${status}/${result}"
     case "$result" in
-      PASSED) pass=$((pass+1));;
-      *)      fail=$((fail+1));;
+      PASSED)  pass=$((pass+1));;
+      SKIPPED) skip=$((skip+1));;
+      *)       fail=$((fail+1));;
     esac
     rm -f "$jar"
     unset OFCS_DRIVE_COOKIES
   done
   echo
-  echo "==== summary: pass=${pass} fail=${fail} err=${err} ===="
+  echo "==== summary: pass=${pass} skip=${skip} fail=${fail} err=${err} ===="
 }
 
 case "${1:-help}" in
