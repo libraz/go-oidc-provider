@@ -393,7 +393,11 @@ cmd_seed_plans() {
   local plans_dir="${CONF}/plans"
   local tmpdir
   tmpdir="$(mktemp -d "/tmp/ofcs-seed-plans.XXXXXX")"
-  trap 'rm -rf "${tmpdir}"' RETURN
+  # NB: do not use `trap RETURN` here — the handler captures ${tmpdir}
+  # by name and persists past this function's lifetime, firing on the
+  # next function return when the variable is already out of scope and
+  # tripping `set -u`. Clean up explicitly at the end of the function
+  # via a tail-only `_seed_plans_cleanup` sentinel.
   local entry f plan_name plan_file body_file variant resp id alias_name
   # File → OFCS planName mapping. OFCS does not expose a "list plan
   # definitions" endpoint, so the names are baked in here.
@@ -459,6 +463,7 @@ PY
     alias_name="$(python3 -c 'import json,pathlib,sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text()).get("alias",""))' "${plan_file}")"
     echo "[seed] ${plan_name} -> plan_id=${id} (alias=${alias_name})"
   done
+  rm -rf "${tmpdir}"
 }
 
 # extract_field <html> <name> -> first <input name="..." value="..."> match.

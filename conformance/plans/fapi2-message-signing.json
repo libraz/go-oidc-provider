@@ -1,27 +1,58 @@
 {
   "alias": "go-oidc-fapi2-msg-signing",
   "publish": "summary",
-  "description": "go-oidc-provider — fapi2-message-signing conformance run (baseline + JARM + signed introspection)",
+  "description": "go-oidc-provider — fapi2-message-signing conformance run (Baseline + JAR + JARM)",
   "consent": false,
   "server": {
     "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
   },
+  "resource": {
+    "resourceUrl": "https://host.docker.internal:9443/oidc/userinfo"
+  },
   "client": {
-    "client_id": "demo-client",
+    "client_id": "demo-fapi",
     "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-fapi2-msg-signing/callback",
     "scope": "openid profile",
-    "client_authentication_type": "private_key_jwt"
+    "client_authentication_type": "private_key_jwt",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "use": "sig",
+          "alg": "ES256",
+          "kid": "fapi-client-1",
+          "x": "tn47XpuJUkfY7CDSmu5fayO7EnPvG9u9uqVb-Ifmthc",
+          "y": "k5a3GEPNL35HRcw-Ajt5rfJ5llU7HomRBQfWWroFva8",
+          "d": "jJIxf76uD4dK01r2oxsG5fv1XjOZFdJpdWWUuSh5Dxs"
+        }
+      ]
+    }
   },
   "client2": {
-    "client_id": "demo-client-2",
+    "client_id": "demo-fapi-2",
     "scope": "openid profile",
-    "client_authentication_type": "private_key_jwt"
+    "client_authentication_type": "private_key_jwt",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "use": "sig",
+          "alg": "ES256",
+          "kid": "fapi-client-2-1",
+          "x": "bqbDRmZUV9q_VMPl9OHQZaFbjy5hGVhdg-0O_6aCpGs",
+          "y": "qlJ7HWQ9sYY9iScO4VKPM_gfOj64IrmYTVaElf9IgwI",
+          "d": "hElLJgOd0o7wkNioOE5xV1nFgTQBn67ZCoUdyw-9zwY"
+        }
+      ]
+    }
   },
   "variant": {
     "client_auth_type": "private_key_jwt",
     "sender_constrain": "dpop",
     "fapi_profile": "plain_fapi",
-    "openid": "plain_oauth",
+    "openid": "openid_connect",
     "fapi_request_method": "signed_non_repudiation",
     "fapi_response_mode": "jarm"
   },
