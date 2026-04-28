@@ -477,12 +477,16 @@ cmd_batch() {
     done
     result="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","") or "")' 2>/dev/null || true)"
     echo "result=${status}/${result}"
-    case "$result" in
-      PASSED)  pass=$((pass+1));;
-      SKIPPED) skip=$((skip+1));;
-      REVIEW)  skip=$((skip+1));;
-      WARNING) skip=$((skip+1));;
-      *)       fail=$((fail+1));;
+    # WAITING with no result is a REVIEW-gated test (OFCS waiting for
+    # screenshot upload). REVIEW items count as PASSED for cert; we
+    # count them as `skip` here so the summary line distinguishes
+    # them from the strict pass set without bumping `fail`.
+    case "${status}/${result}" in
+      */PASSED)            pass=$((pass+1));;
+      */SKIPPED)           skip=$((skip+1));;
+      */REVIEW|WAITING/)   skip=$((skip+1));;
+      */WARNING)           skip=$((skip+1));;
+      *)                   fail=$((fail+1));;
     esac
     rm -f "$jar"
     unset OFCS_DRIVE_COOKIES
