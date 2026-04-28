@@ -119,7 +119,12 @@ cmd_op_up() {
   echo "[op-up] building ${BINFILE}"
   ( cd "${ROOT}" && go build -o "${BINFILE}" ./cmd/op-demo )
 
-  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER})"
+  # OP_PROFILE selects the security profile op-demo runs under. The
+  # default ("") = vanilla OIDC Core. Override with
+  #   OP_PROFILE=fapi2-baseline scripts/conformance.sh op-up
+  # to drive the FAPI 2.0 Baseline plan; the binary then activates
+  # WithProfile + the features the profile demands (PAR / DPoP).
+  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic})"
   "${BINFILE}" \
     -listen "${LISTEN}" \
     -issuer "${ISSUER}" \
@@ -128,6 +133,9 @@ cmd_op_up() {
     -redirect-uri "${REDIRECT_URIS}" \
     -tls-cert "${CERT_FILE}" \
     -tls-key  "${KEY_FILE}" \
+    -profile "${OP_PROFILE:-}" \
+    -fapi-client-jwks "${ROOT}/conformance/keys/fapi-client.jwks.json" \
+    -fapi-client-2-jwks "${ROOT}/conformance/keys/fapi-client-2.jwks.json" \
     > "${LOGFILE}" 2>&1 &
   echo $! > "${PIDFILE}"
   sleep 1
@@ -316,7 +324,19 @@ forward_implicit_bridge() {
     return 0
   fi
   alias_base="$(printf '%s' "$redirect" | sed -E 's|/callback\?.*$||')"
-  query="$(printf '%s' "$redirect" | sed -E 's|^[^?]*\?|?|')"
+  # When the redirect target carries the response in the query string
+  # (code flow / response_mode=query), the implicit-bridge body MUST
+  # be empty: OFCS interprets a non-empty body as "the response was
+  # ALSO in the URL fragment", which makes FAPI 2.0's
+  # RejectAuthCodeInUrlFragment fire. POSTing an empty body still
+  # advances the runner state machine (OFCS records the
+  # implicit-submit happened) without lying about fragment content.
+  if [[ "$redirect" == *"?code="* || "$redirect" == *"&code="* \
+        || "$redirect" == *"?error="* || "$redirect" == *"&error="* ]]; then
+    query=""
+  else
+    query="$(printf '%s' "$redirect" | sed -E 's|^[^?]*\?|?|')"
+  fi
   echo "[drive forward] POST ${alias_base}/${impl}"
   curl -sk -X POST "${alias_base}/${impl}" \
     -H 'Content-Type: text/plain' \
