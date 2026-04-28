@@ -17,7 +17,7 @@
     "client_secret": "demo-confidential-secret"
   },
   "client2": {
-    "client_id": "demo-confidential",
+    "client_id": "demo-confidential-2",
     "client_secret": "demo-confidential-secret"
   },
   "browser": []

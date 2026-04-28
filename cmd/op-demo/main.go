@@ -279,13 +279,29 @@ func seedConfidentialClient(st *inmem.Store, clientID, clientSecret string, redi
 	}); err != nil {
 		return err
 	}
-	return st.RegisterClient(context.Background(), &store.Client{
+	if err := st.RegisterClient(context.Background(), &store.Client{
 		ID:                      clientID + "-post",
 		RedirectURIs:            redirectURIs,
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
 		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
 		TokenEndpointAuthMethod: "client_secret_post",
+		SecretHash:              hash,
+		Source:                  store.ClientSourceStatic,
+	}); err != nil {
+		return err
+	}
+	// A third basic-auth client distinct from clientID so OFCS modules
+	// that exercise "second client must NOT be able to refresh first
+	// client's token" (oidcc-refresh-token) can pin client2 to a
+	// genuinely different client_id without changing auth method.
+	return st.RegisterClient(context.Background(), &store.Client{
+		ID:                      clientID + "-2",
+		RedirectURIs:            redirectURIs,
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
 		SecretHash:              hash,
 		Source:                  store.ClientSourceStatic,
 	})
