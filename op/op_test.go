@@ -48,6 +48,24 @@ func (stubStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 	panic("not implemented")
 }
 
+func (stubStore) AccessTokens() store.AccessTokenRegistry { return stubAccessTokenRegistry{} }
+
+type stubAccessTokenRegistry struct{}
+
+func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }
+
+func (stubAccessTokenRegistry) Find(context.Context, string) (*store.AccessTokenRecord, error) {
+	return nil, nil //nolint:nilnil // contract permits (nil, nil) for absent records.
+}
+
+func (stubAccessTokenRegistry) RevokeByJTI(context.Context, string) error { return nil }
+
+func (stubAccessTokenRegistry) RevokeByGrant(context.Context, string) (int, error) {
+	return 0, nil
+}
+
+func (stubAccessTokenRegistry) GC(context.Context, time.Time) (int, error) { return 0, nil }
+
 type stubSessionStore struct{}
 
 func (stubSessionStore) Save(context.Context, *store.Session) error { return store.ErrNotFound }

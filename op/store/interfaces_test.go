@@ -239,7 +239,25 @@ func (fakeStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 	return fakeRegistrationAccessTokenStore{}
 }
 
+func (fakeStore) AccessTokens() store.AccessTokenRegistry { return fakeAccessTokenRegistry{} }
+
 var _ store.Store = (*fakeStore)(nil)
+
+type fakeAccessTokenRegistry struct{}
+
+func (fakeAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }
+
+func (fakeAccessTokenRegistry) Find(context.Context, string) (*store.AccessTokenRecord, error) {
+	return nil, nil //nolint:nilnil // contract permits (nil, nil) for absent records.
+}
+
+func (fakeAccessTokenRegistry) RevokeByJTI(context.Context, string) error { return nil }
+
+func (fakeAccessTokenRegistry) RevokeByGrant(context.Context, string) (int, error) { return 0, nil }
+
+func (fakeAccessTokenRegistry) GC(context.Context, time.Time) (int, error) { return 0, nil }
+
+var _ store.AccessTokenRegistry = (*fakeAccessTokenRegistry)(nil)
 
 type fakeInitialAccessTokenStore struct{}
 

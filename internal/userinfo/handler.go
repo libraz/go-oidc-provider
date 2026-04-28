@@ -89,6 +89,17 @@ type HandlerDeps struct {
 	// disables mTLS enforcement entirely; tokens carrying
 	// cnf.x5t#S256 are then rejected to fail closed.
 	MTLS *mtls.Verifier
+
+	// AccessTokens is the [store.AccessTokenRegistry] consulted after
+	// signature / cnf checks pass to reject tokens that have been
+	// revoked since issuance (RFC 6749 §4.1.2 cascade, RFC 7662 §2.2
+	// implicit "active" semantics, ADR 0013). The lookup runs late on
+	// purpose: an obviously-malformed or expired token is rejected
+	// without paying for the registry round-trip. A nil value disables
+	// the check entirely; the handler then returns the pre-ADR-0013
+	// behaviour (bearer tokens stay valid until exp regardless of any
+	// revocation that landed between issuance and the call).
+	AccessTokens store.AccessTokenRegistry
 }
 
 // Handler returns the /userinfo [http.Handler]. Behaviour follows
@@ -126,6 +137,9 @@ func Handler(deps HandlerDeps) http.Handler {
 			return
 		}
 		if !enforceCnfBinding(w, r, deps, claims, raw) {
+			return
+		}
+		if !enforceRevocationStatus(r.Context(), w, deps, claims) {
 			return
 		}
 		out, ok := assembleClaims(r.Context(), w, deps, claims)
@@ -387,6 +401,43 @@ func respondBearerExtractError(w http.ResponseWriter, err error) {
 	w.Header().Set("WWW-Authenticate",
 		`Bearer error="invalid_request", error_description="The request is missing a required parameter or is malformed"`)
 	http.Error(w, "", http.StatusBadRequest)
+}
+
+// enforceRevocationStatus consults the [store.AccessTokenRegistry] (when
+// configured) and rejects the request when the access token's JTI has
+// been flipped to revoked. A missing row is allowed to pass: tokens
+// minted by [mintAccessToken] are always Registered (the helper returns
+// an error if Register fails, so the wire never sees an unregistered
+// token from a configured deployment), while tokens constructed
+// directly by tests or by an external issuer with their own registry
+// have no row here and should not be silently rejected. The cascade
+// effect ADR 0013 codifies comes from RevokeByGrant / RevokeByJTI
+// flipping rows we did register; allowing nil keeps the legacy wire
+// shape for everything else. A nil deps.AccessTokens disables the
+// check entirely.
+func enforceRevocationStatus(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps HandlerDeps,
+	claims *tokens.AccessTokenClaims,
+) bool {
+	if deps.AccessTokens == nil {
+		return true
+	}
+	rec, err := deps.AccessTokens.Find(ctx, claims.JTI)
+	if err != nil {
+		// Treat lookup errors as fatal: silently allowing the request
+		// would re-introduce the cascade gap ADR 0013 closes.
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return false
+	}
+	if rec != nil && rec.Revoked {
+		w.Header().Set("WWW-Authenticate",
+			`Bearer error="invalid_token", error_description="The access token has been revoked"`)
+		w.WriteHeader(http.StatusUnauthorized)
+		return false
+	}
+	return true
 }
 
 // respondInvalidToken writes a 401 response with the error="invalid_token"

@@ -293,15 +293,16 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.UserInfo),
 		userinfo.Handler(userinfo.HandlerDeps{
-			Keys:       keySet,
-			Issuer:     cfg.issuer,
-			UserStore:  cfg.store.Users(),
-			Grants:     cfg.store.Grants(),
-			Clock:      cfg.clock,
-			Leeway:     defaultUserInfoLeeway,
-			DPoP:       dpopVerifier,
-			DPoPNonces: cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
-			MTLS:       mtlsVerifier,
+			Keys:         keySet,
+			Issuer:       cfg.issuer,
+			UserStore:    cfg.store.Users(),
+			Grants:       cfg.store.Grants(),
+			Clock:        cfg.clock,
+			Leeway:       defaultUserInfoLeeway,
+			DPoP:         dpopVerifier,
+			DPoPNonces:   cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			MTLS:         mtlsVerifier,
+			AccessTokens: cfg.store.AccessTokens(),
 		}),
 	)
 	mux.Handle(
@@ -325,6 +326,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			RefreshTokenGraceTTL:           cfg.effectiveRefreshGrace(),
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
+			AccessTokens:                   cfg.store.AccessTokens(),
 		}),
 	)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet)
@@ -733,6 +735,7 @@ func mountIntrospectionEndpoint(
 			AssertionVerifier:          assertionVerifier,
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
 			RequireSignedIntrospection: cfg.requireSignedIntrospection(),
+			AccessTokens:               cfg.store.AccessTokens(),
 		}),
 	)
 }
@@ -767,6 +770,7 @@ func mountRevocationEndpoint(
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			AccessTokens:             cfg.store.AccessTokens(),
 		}),
 	)
 }
@@ -1083,6 +1087,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		Issuer:                  cfg.issuer,
 		AllowPrivateNetworkJAR:  cfg.allowPrivateNetworkJAR,
 		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
+		ACRResolver:             newACRResolver(cfg),
 	})
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)
@@ -1512,6 +1517,48 @@ func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) 
 		}
 	default:
 		return authn.LoginFlowPass{}
+	}
+}
+
+// newACRResolver builds the [authorizeendpoint.ACRResolver] closure the
+// authorize endpoint consults before stamping acr / amr onto the
+// persisted grant. The closure adapts the public [ACRPolicy] surface
+// to the wire-layer input bundle: the input's CompletedKinds (raw
+// strings carried by [authn.State]) project onto the public
+// [StepKind] slice that [ACRPolicy.Resolve] / [ACRPolicy.Satisfies]
+// consume, and the input's request-scoped fields fold into a fresh
+// [LoginContext]. The function never returns nil so the wire layer
+// always sees a configured resolver: a nil [config.acrPolicy] triggers
+// the [DefaultACRPolicy] fallback.
+func newACRResolver(cfg *config) authorizeendpoint.ACRResolver {
+	policy := cfg.effectiveACRPolicy()
+	return func(ctx context.Context, in authorizeendpoint.ACRResolveInput) authorizeendpoint.ACRResolveOutput {
+		scopes := make(ScopeSet, len(in.RequestedScopes))
+		for _, s := range in.RequestedScopes {
+			scopes[ScopeName(s)] = struct{}{}
+		}
+		completed := make([]StepKind, len(in.CompletedKinds))
+		for i, k := range in.CompletedKinds {
+			completed[i] = StepKind(k)
+		}
+		lc := LoginContext{
+			Identity:        Identity{Subject: Subject(in.Subject)},
+			ClientID:        in.ClientID,
+			RequestedScopes: scopes,
+			CompletedSteps:  completed,
+			ACRValues:       append([]string(nil), in.RequestedACRValues...),
+			Remote: ClientHints{
+				RemoteIP:       in.RemoteIP,
+				UserAgent:      in.UserAgent,
+				AcceptLanguage: in.AcceptLanguage,
+			},
+		}
+		acr, amr, ok := policy.Resolve(ctx, lc, in.InternalAAL)
+		return authorizeendpoint.ACRResolveOutput{
+			ACR: acr,
+			AMR: append([]string(nil), amr...),
+			OK:  ok,
+		}
 	}
 }
 

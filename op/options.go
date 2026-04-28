@@ -248,6 +248,14 @@ type config struct {
 	// The boolean is the negative of the option argument so the zero
 	// value keeps the library default of "supported".
 	claimsParameterSupportedOff bool
+
+	// acrPolicy carries the [ACRPolicy] supplied through
+	// [WithACRPolicy]. A nil value means "library default": the
+	// authorize endpoint installs [DefaultACRPolicy] which echoes the
+	// first satisfiable acr_values entry while preserving the
+	// pre-ADR-0012 wire shape when the request omits acr_values. See
+	// docs/adr/0012-acr-policy-seam.md for the full rationale.
+	acrPolicy ACRPolicy
 }
 
 // claimsParameterSupported returns the effective discovery
@@ -261,6 +269,18 @@ func (c *config) claimsParameterSupported() bool {
 		return true
 	}
 	return !c.claimsParameterSupportedOff
+}
+
+// effectiveACRPolicy returns the [ACRPolicy] the wire layer consults.
+// The function is the single source of "did the embedder supply a
+// policy or are we using the default", so the authorize wiring and
+// any future seam (id_token re-resolution at refresh time, custom
+// /authorize tests) read the same value.
+func (c *config) effectiveACRPolicy() ACRPolicy { //nolint:ireturn // sealed-sum interface return is the contract.
+	if c.acrPolicy == nil {
+		return DefaultACRPolicy{}
+	}
+	return c.acrPolicy
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -1329,6 +1349,28 @@ func WithClaimsParameterSupported(enabled bool) Option {
 	return optionFunc(func(c *config) error {
 		c.claimsParameterSupportedSet = true
 		c.claimsParameterSupportedOff = !enabled
+		return nil
+	})
+}
+
+// WithACRPolicy installs a custom [ACRPolicy] that decides what acr /
+// amr claims the OP writes onto issued id_tokens and which acr_values
+// requests the OP treats as satisfied. The library default is
+// [DefaultACRPolicy] (lax: any AAL>=AAL1 satisfies any requested
+// acr); embedders that need a stricter mapping (e.g. NIST SP 800-63
+// binding, a configured per-acr table à la Keycloak) supply their
+// own implementation. Passing nil restores the library default.
+//
+// The option is the single seam ADR 0012 introduces. The default
+// installation is intentional: a deployment that omits the option
+// gets the OFCS-passing wire shape automatically. See
+// docs/adr/0012-acr-policy-seam.md for the rationale and the spec
+// ambiguity this resolves.
+//
+// Stable since v0.x (ADR 0012 implementation).
+func WithACRPolicy(p ACRPolicy) Option {
+	return optionFunc(func(c *config) error {
+		c.acrPolicy = p
 		return nil
 	})
 }

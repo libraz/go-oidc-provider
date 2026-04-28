@@ -1,6 +1,7 @@
 package tokenendpoint
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -46,7 +47,7 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
-	issueClientCredsResponse(w, deps, client, authorized.Scope, binding)
+	issueClientCredsResponse(ctx, w, deps, client, authorized.Scope, binding)
 }
 
 // parseClientCredsRequest extracts the optional "scope" form parameter.
@@ -128,6 +129,7 @@ func writeClientCredsAuthError(w http.ResponseWriter, err error) {
 // token inherits the same protections an authorization_code token
 // would.
 func issueClientCredsResponse(
+	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	client *store.Client,
@@ -138,7 +140,12 @@ func issueClientCredsResponse(
 	// AuthTime is zero: client_credentials has no end-user to time-stamp.
 	// The mint helper omits the claim from the encoded JWT when the
 	// value is zero, so this is the right shape for RFC 9068 §2.2.
-	accessToken, err := mintAccessToken(deps, client.ID, client.ID, scope, now, 0, binding)
+	// GrantID is empty: client_credentials has no authorize-side grant.
+	// The registry stores the empty value verbatim and RevokeByGrant("")
+	// is a no-op, which is the correct shape — there is no chain to
+	// cascade because the wire token is already the only artefact tied
+	// to this issuance.
+	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, "", scope, now, 0, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return

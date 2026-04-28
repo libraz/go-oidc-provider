@@ -110,6 +110,13 @@ const (
 	// calls. Used by the RFC 7592 management endpoints. Outside the
 	// transactional cluster.
 	RegistrationAccessTokens
+
+	// AccessTokens routes [store.AccessTokenRegistry] calls. Used by
+	// the userinfo, introspection, revocation endpoints, and by the
+	// code-replay cascade. Part of the transactional cluster: the
+	// register-on-issue path commits alongside the matching grant
+	// write.
+	AccessTokens
 )
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -139,6 +146,8 @@ func (k Kind) String() string {
 		return "InitialAccessTokens"
 	case RegistrationAccessTokens:
 		return "RegistrationAccessTokens"
+	case AccessTokens:
+		return "AccessTokens"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -160,6 +169,7 @@ var allKinds = []Kind{
 	Users,
 	InitialAccessTokens,
 	RegistrationAccessTokens,
+	AccessTokens,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -174,6 +184,7 @@ var TxClusterKinds = []Kind{
 	Grants,
 	Sessions,
 	PushedAuthRequests,
+	AccessTokens,
 }
 
 // Sentinel errors. Each one is wrapped with [fmt.Errorf] %w by the helpers in
@@ -415,6 +426,17 @@ func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore {
 // semantics as [Store.InitialAccessTokens].
 func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 	return s.routes[RegistrationAccessTokens].RegistrationAccessTokens()
+}
+
+// AccessTokens implements [store.Store] by routing the call through the
+// transactional-cluster anchor. Splitting the AT registry away from the
+// other transactional substores would re-introduce the very race
+// ADR 0013 closes (a code-replay cascade that revokes refresh tokens
+// in one backend and access tokens in another), so the composite
+// rejects such configurations at construction time via
+// [TxClusterKinds].
+func (s *Store) AccessTokens() store.AccessTokenRegistry {
+	return s.routes[AccessTokens].AccessTokens()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

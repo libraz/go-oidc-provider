@@ -202,7 +202,7 @@ func issueRefreshResponse(
 ) {
 	now := deps.now().UTC()
 	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
-	accessToken, err := mintAccessToken(deps, exchanged.Subject, client.ID, exchanged.Scope, now, authCtx.AuthTime, binding)
+	accessToken, err := mintAccessToken(ctx, deps, exchanged.Subject, client.ID, exchanged.GrantID, exchanged.Scope, now, authCtx.AuthTime, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return

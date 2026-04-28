@@ -288,6 +288,16 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	if err != nil || rec == nil {
 		return
 	}
+	// Revoke access tokens first so the userinfo / introspection paths
+	// reject any AT a sibling refresh might mint racing the cascade.
+	// The order is documented in ADR 0013 §"Code-replay cascade": "AT
+	// first, RT second" — a refresh-grant racing the revocation can
+	// still mint an AT, but that AT also passes through Register which
+	// is a fresh row, leaving the next refresh attempt blocked once
+	// the RT half of the cascade lands.
+	if deps.AccessTokens != nil {
+		_, _ = deps.AccessTokens.RevokeByGrant(ctx, rec.GrantID)
+	}
 	// RevokeByGrant walks the refresh-token store by GrantID and stamps
 	// every matching record. Implementations are expected to be silent
 	// when no record matches (a freshly-replayed code may not have
@@ -312,9 +322,11 @@ func issueAuthCodeResponse(
 	now := deps.now().UTC()
 	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
 	accessToken, err := mintAccessToken(
+		ctx,
 		deps,
 		exchanged.Subject,
 		client.ID,
+		exchanged.GrantID,
 		exchanged.Scope,
 		now,
 		authCtx.AuthTime,
@@ -378,15 +390,24 @@ type mintIDTokenInput struct {
 	Extra map[string]any
 }
 
-// mintAccessToken signs the JWT-shaped access token (RFC 9068). When
-// the binding carries a DPoP JKT (RFC 9449 §6) or an mTLS thumbprint
-// (RFC 8705 §3.1) the token is sender-constrained: the "cnf" claim
-// carries the corresponding member ("jkt" or "x5t#S256") and the
-// resource server is expected to verify a matching proof on every
-// use of the token.
+// mintAccessToken signs the JWT-shaped access token (RFC 9068) and,
+// when the configured registry is non-nil, registers a matching shadow
+// row so the userinfo / introspection / revocation paths can reject
+// the token after a future revocation (RFC 6749 §4.1.2 / ADR 0013).
+// When the binding carries a DPoP JKT (RFC 9449 §6) or an mTLS
+// thumbprint (RFC 8705 §3.1) the token is sender-constrained: the
+// "cnf" claim carries the corresponding member ("jkt" or "x5t#S256")
+// and the resource server is expected to verify a matching proof on
+// every use of the token.
+//
+// grantID is empty for grants without an authorize-side record
+// (client_credentials synthesises one upstream so the cascade still
+// works); the registry stores the empty string verbatim and
+// RevokeByGrant treats the empty grant as a no-op.
 func mintAccessToken(
+	ctx context.Context,
 	deps Deps,
-	subject, clientID string,
+	subject, clientID, grantID string,
 	scope []string,
 	now time.Time,
 	authTime int64,
@@ -396,19 +417,37 @@ func mintAccessToken(
 	if err != nil {
 		return "", err
 	}
+	expiresAt := tokens.ExpiresIn(now, deps.AccessTokenTTL)
 	claims := tokens.AccessTokenClaims{
 		Issuer:       deps.Issuer,
 		Subject:      subject,
 		Audience:     []string{deps.Issuer},
 		ClientID:     clientID,
 		IssuedAt:     now.Unix(),
-		ExpiresAt:    tokens.ExpiresIn(now, deps.AccessTokenTTL),
+		ExpiresAt:    expiresAt,
 		JTI:          jti,
 		Scope:        append([]string(nil), scope...),
 		AuthTime:     authTime,
 		Confirmation: binding.confirmation(),
 	}
-	return tokens.SignAccessToken(activeSigningKey(deps), claims)
+	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
+	if err != nil {
+		return "", err
+	}
+	if deps.AccessTokens != nil {
+		if err := deps.AccessTokens.Register(ctx, store.AccessTokenRecord{
+			JTI:       jti,
+			GrantID:   grantID,
+			Subject:   subject,
+			ClientID:  clientID,
+			Scopes:    append([]string(nil), scope...),
+			IssuedAt:  now,
+			ExpiresAt: time.Unix(expiresAt, 0).UTC(),
+		}); err != nil {
+			return "", err
+		}
+	}
+	return signed, nil
 }
 
 // mintAuthCodeIDToken signs the OIDC id_token issued in response to an

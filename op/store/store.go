@@ -65,4 +65,14 @@ type Store interface {
 	// for this backend. Same nil semantics as
 	// [Store.InitialAccessTokens]. Outside the transactional cluster.
 	RegistrationAccessTokens() RegistrationAccessTokenStore
+
+	// AccessTokens returns the [AccessTokenRegistry] for this backend.
+	// The registry is consulted by the userinfo, introspection, and
+	// revocation endpoints, and written by every grant issuance path.
+	// See ADR 0013 for the rationale (RFC 6749 §4.1.2 code-replay
+	// revocation, RFC 6819 §5.2.1.1 detection invariant). Part of the
+	// transactional cluster: a Register call accompanies a grant write
+	// so a partially-committed token issuance cannot leave a wire
+	// token unaccounted for.
+	AccessTokens() AccessTokenRegistry
 }

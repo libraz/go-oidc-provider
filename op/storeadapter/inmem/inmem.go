@@ -102,6 +102,7 @@ type Store struct {
 	recoveries   *recoveryStore
 	passkeys     *passkeyStore
 	emailotps    *emailOTPStore
+	accessTokens *accessTokenStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -129,6 +130,7 @@ func New(opts ...Option) *Store {
 	s.recoveries = newRecoveryStore()
 	s.passkeys = newPasskeyStore()
 	s.emailotps = newEmailOTPStore(s.clock)
+	s.accessTokens = newAccessTokenStore()
 	return s
 }
 
@@ -164,6 +166,12 @@ func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore { return s.i
 
 // RegistrationAccessTokens implements [store.Store].
 func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore { return s.rats }
+
+// AccessTokens implements [store.Store]. The reference implementation
+// keeps one row per issued JWT access token and marks rows revoked
+// rather than deleting them so the token endpoint can distinguish
+// "expired and dropped" from "revoked but still inside its TTL".
+func (s *Store) AccessTokens() store.AccessTokenRegistry { return s.accessTokens }
 
 // TOTPs returns the [store.TOTPStore] backed by this Store. The
 // substore is not part of the aggregate [store.Store] interface (the

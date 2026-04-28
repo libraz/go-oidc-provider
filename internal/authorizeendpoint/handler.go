@@ -1,6 +1,7 @@
 package authorizeendpoint
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -15,6 +16,42 @@ import (
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// ACRResolveInput is the bundle the wire layer hands to [Deps.ACRResolver]
+// when terminating an interaction. It carries the authorize request's
+// requested acr_values, the LoginFlow's completed-step kinds, the
+// internal AAL the ceremony reached, and the (subject, client) pair so
+// a custom [op.ACRPolicy] can build a public LoginContext at the
+// adapter layer.
+type ACRResolveInput struct {
+	RequestedACRValues []string
+	CompletedKinds     []string
+	InternalAAL        authn.AAL
+	Subject            string
+	ClientID           string
+	RequestedScopes    []string
+	RemoteIP           string
+	UserAgent          string
+	AcceptLanguage     string
+}
+
+// ACRResolveOutput is the policy verdict the wire layer applies before
+// stamping acr / amr onto the persisted grant. ok=false signals the
+// policy could not satisfy any requested acr, so the issuer omits the
+// claim entirely. ok=true with a nil AMR keeps the per-factor RFC
+// 8176 aggregation in place; a non-nil AMR replaces it verbatim.
+type ACRResolveOutput struct {
+	ACR string
+	AMR []string
+	OK  bool
+}
+
+// ACRResolver bridges the public [op.ACRPolicy] seam to the wire layer.
+// The library wires a non-nil resolver from the configured policy at
+// op.New time; tests that exercise the authorize endpoint directly may
+// leave the field nil to preserve the pre-ADR-0012 behaviour (the
+// per-factor aggregator's acr / amr flow through unchanged).
+type ACRResolver func(ctx context.Context, in ACRResolveInput) ACRResolveOutput
 
 // Default timing budgets the handler uses when [Deps] does not override
 // them. The values match 02-product-design.md §F.1 (interaction
@@ -228,6 +265,15 @@ type Deps struct {
 	// flag only governs whether the (validated) payload survives
 	// onto the grant for downstream projection.
 	ClaimsParameterEnabled bool
+
+	// ACRResolver, when non-nil, is consulted before stamping acr /
+	// amr onto the persisted grant. The library wires a non-nil
+	// resolver from the [op.ACRPolicy] supplied via [op.WithACRPolicy]
+	// (defaulting to [op.DefaultACRPolicy]); tests that exercise the
+	// authorize endpoint directly may leave the field nil to preserve
+	// the pre-ADR-0012 wire shape (the aggregator's acr / amr flow
+	// through unchanged). See ADR 0012 for the rationale.
+	ACRResolver ACRResolver
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

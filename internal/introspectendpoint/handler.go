@@ -131,6 +131,16 @@ type Deps struct {
 	// validator already requires a working keyset, so true here means
 	// SigningKey.Signer is guaranteed to be non-nil.
 	RequireSignedIntrospection bool
+
+	// AccessTokens is the [store.AccessTokenRegistry] the JWT branch
+	// consults after signature / issuer validation passes. A revoked
+	// or absent record collapses the response onto {"active": false}
+	// per RFC 7662 §2.2 — no error_description, no leakage of
+	// issuance metadata. A nil value disables the check entirely; the
+	// handler then reports {"active": true} for any token that
+	// verifies and is still inside its exp window, mirroring the
+	// pre-ADR-0013 behaviour.
+	AccessTokens store.AccessTokenRegistry
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection

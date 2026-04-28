@@ -60,9 +60,7 @@ func branchOrder(hint string, jwtShaped bool) []branchFn {
 		if !jwtShaped {
 			return nil
 		}
-		return func(_ context.Context, _ Deps, v *tokens.AccessTokenVerifier, c, t string) bool {
-			return revokeJWT(v, c, t)
-		}
+		return revokeJWT
 	}
 	opq := func() branchFn {
 		return func(ctx context.Context, deps Deps, _ *tokens.AccessTokenVerifier, c, t string) bool {
@@ -101,7 +99,7 @@ func appendNonNil(branches ...branchFn) []branchFn {
 // acknowledgement so [revokeToken] can stop searching; false means
 // the verifier rejected the token (or same-client-only failed) and
 // the caller MUST fall through.
-func revokeJWT(verifier *tokens.AccessTokenVerifier, authenticatedClientID, token string) bool {
+func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerifier, authenticatedClientID, token string) bool {
 	claims, _, err := verifier.Verify(token)
 	if err != nil {
 		return false
@@ -116,9 +114,15 @@ func revokeJWT(verifier *tokens.AccessTokenVerifier, authenticatedClientID, toke
 		// dispatcher uniform).
 		return false
 	}
-	// JWT access tokens are self-contained; no denylist to write.
-	// Returning true short-circuits the dispatcher so the opaque
-	// branch does not waste a store roundtrip.
+	// ADR 0013: flip the registry row so a subsequent userinfo /
+	// introspection call against the same JTI returns invalid_token
+	// / {"active": false}. RevokeByJTI is idempotent — a missing row
+	// returns nil — so the endpoint stays on the RFC 7009 §2.2
+	// "always 200" path even when the registry was wired but the
+	// token was issued before Register was active.
+	if deps.AccessTokens != nil {
+		_ = deps.AccessTokens.RevokeByJTI(ctx, claims.JTI)
+	}
 	return true
 }
 

@@ -94,9 +94,7 @@ func branchOrder(hint string, jwtShaped bool) []branchFn {
 		if !jwtShaped {
 			return nil
 		}
-		return func(_ context.Context, _ Deps, v *tokens.AccessTokenVerifier, c, t string) (response, bool) {
-			return resolveJWT(v, c, t)
-		}
+		return resolveJWT
 	}
 	opq := func() branchFn {
 		return func(ctx context.Context, deps Deps, _ *tokens.AccessTokenVerifier, c, t string) (response, bool) {
@@ -131,7 +129,7 @@ func appendNonNil(branches ...branchFn) []branchFn {
 // projects its claims onto the introspection response. The bool return
 // reports success: false means the verifier rejected the token (or
 // same-client-only failed) and the caller MUST fall through.
-func resolveJWT(verifier *tokens.AccessTokenVerifier, authenticatedClientID, token string) (response, bool) {
+func resolveJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerifier, authenticatedClientID, token string) (response, bool) {
 	claims, _, err := verifier.Verify(token)
 	if err != nil {
 		return response{}, false
@@ -143,6 +141,20 @@ func resolveJWT(verifier *tokens.AccessTokenVerifier, authenticatedClientID, tok
 		// library's v1.0 posture is the most conservative — return
 		// inactive without leaking why.
 		return response{}, false
+	}
+	if deps.AccessTokens != nil {
+		// ADR 0013: a token whose JTI has been flipped to revoked in
+		// the registry collapses onto {"active": false} per RFC 7662
+		// §2.2. The check is silent — no introspection metadata leaks
+		// for revoked tokens — so a curious resource server cannot
+		// probe revocation patterns. A missing row (rec == nil) is
+		// allowed through so a directly-constructed test token does
+		// not flip the contract; tokens minted via [mintAccessToken]
+		// are always Registered, so a nil row at runtime never
+		// represents one of our own issuances.
+		if rec, err := deps.AccessTokens.Find(ctx, claims.JTI); err != nil || (rec != nil && rec.Revoked) {
+			return response{}, false
+		}
 	}
 	return projectAccessTokenClaims(claims), true
 }

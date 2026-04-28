@@ -187,6 +187,20 @@ type Deps struct {
 	// enable, so a runtime "no proof presented" is the only way to
 	// trip this branch.
 	RequireSenderConstrainedTokens bool
+
+	// AccessTokens is the [store.AccessTokenRegistry] consulted on
+	// every issued access token (RFC 6749 §4.1.2 / RFC 6819 §5.2.1.1
+	// code-replay revocation, ADR 0013). The handler calls Register
+	// from each grant path and RevokeByGrant from the code-replay
+	// cascade. A nil value disables the registry entirely: the
+	// endpoint reverts to the pre-ADR-0013 behaviour where issued
+	// access tokens carry no shadow row, code replay revokes only
+	// refresh tokens, and userinfo / introspection / revocation
+	// cannot reject a token that has not yet expired. The library
+	// wires a non-nil registry from the configured [op.Store]; tests
+	// that exercise the token endpoint directly may leave it nil to
+	// preserve the legacy shape.
+	AccessTokens store.AccessTokenRegistry
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.

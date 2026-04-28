@@ -350,7 +350,25 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
 		return
 	}
-	acr, amr, _ := authn.Aggregate(authnState.Factors)
+	acr, amr, level := authn.Aggregate(authnState.Factors)
+	if deps.ACRResolver != nil {
+		out := deps.ACRResolver(r.Context(), ACRResolveInput{
+			RequestedACRValues: append([]string(nil), req.ACRValues...),
+			CompletedKinds:     append([]string(nil), authnState.CompletedStepKinds...),
+			InternalAAL:        level,
+			Subject:            result.Subject,
+			ClientID:           rec.ClientID,
+			RequestedScopes:    append([]string(nil), req.Scope...),
+		})
+		if !out.OK {
+			acr = ""
+		} else {
+			acr = out.ACR
+			if out.AMR != nil {
+				amr = append([]string(nil), out.AMR...)
+			}
+		}
+	}
 	if err := ensureSession(w, r, deps, result.Subject, result.AuthTime, amr, acr); err != nil {
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
