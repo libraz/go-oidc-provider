@@ -182,18 +182,55 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 // splitStatements splits raw SQL into individual statements on
-// semicolon boundaries that are not inside string literals. The
-// embedded DDL uses no string literals containing ";" so the simple
-// split is sufficient; we keep the helper purpose-built rather than
-// pulling in a SQL parser.
+// semicolon boundaries that are not inside string literals or line
+// comments. The bundled DDL contains line comments that use ";"
+// (e.g. "-- VARCHAR(255) is used for opaque identifiers; fits in...")
+// and empty string literals, but no block comments. The walker tracks
+// the two states it needs and keeps the helper purpose-built rather
+// than pulling in a SQL parser.
 func splitStatements(src string) []string {
-	parts := strings.Split(src, ";")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if s := strings.TrimSpace(part); s != "" {
+	var (
+		out     []string
+		cur     strings.Builder
+		i, n    = 0, len(src)
+		inStr   bool
+		comment bool
+	)
+	cur.Grow(256)
+	flush := func() {
+		if s := strings.TrimSpace(cur.String()); s != "" {
 			out = append(out, s)
 		}
+		cur.Reset()
 	}
+	for i < n {
+		c := src[i]
+		switch {
+		case comment:
+			// Strip the line comment until newline; preserve the
+			// newline so subsequent line numbers in error messages
+			// stay aligned.
+			if c == '\n' {
+				comment = false
+				cur.WriteByte(c)
+			}
+			i++
+		case !inStr && c == '-' && i+1 < n && src[i+1] == '-':
+			comment = true
+			i += 2
+		case c == '\'':
+			inStr = !inStr
+			cur.WriteByte(c)
+			i++
+		case !inStr && c == ';':
+			flush()
+			i++
+		default:
+			cur.WriteByte(c)
+			i++
+		}
+	}
+	flush()
 	return out
 }
 

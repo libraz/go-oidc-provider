@@ -17,11 +17,14 @@
 //	store, err := oidcsql.New(db, oidcsql.SQLite())
 //
 // The adapter does not import any specific driver itself; the embedder
-// chooses which driver registers with database/sql. The integration
-// tests under //go:build integration import the canonical drivers
-// (modernc.org/sqlite, github.com/go-sql-driver/mysql,
-// github.com/jackc/pgx/v5/stdlib) but production embedders may
-// substitute alternatives provided they speak the same wire dialect.
+// chooses which driver registers with database/sql. The default test
+// suite uses modernc.org/sqlite (CGO-free); the testcontainers-gated
+// suite (run with `go test -tags=testcontainers ./...`) boots
+// MySQL 8.0 and PostgreSQL 16 containers via Docker and runs the
+// same contract harness against them, exercising the canonical
+// drivers github.com/go-sql-driver/mysql and
+// github.com/jackc/pgx/v5/stdlib. Production embedders may substitute
+// alternative drivers provided they speak the same wire dialect.
 //
 // # Schema
 //
@@ -39,12 +42,11 @@
 // rewrites so embedders that already own a "clients" table can graft
 // the OP onto a different name without forking the schema. Identifiers
 // are validated against the SQL standard regular identifier grammar
-// (matched in [identifierPattern]) before any query is built; values
-// that fail validation cause [New] to return an error. The validator
-// is the single defence against identifier injection in the adapter:
-// every query is composed by interpolating validated identifiers and
-// dialect-specific placeholders only, so the construction-time check
-// is structural rather than advisory.
+// by [validateIdentifier] (a byte-walking ASCII validator — no regex)
+// before any query is built; values that fail validation cause [New]
+// to return an error. The validator is one of six defence layers
+// against identifier injection: see queries.go and the package's
+// ast_audit_test.go / queries_test.go for the rest.
 //
 // # Transactions
 //
