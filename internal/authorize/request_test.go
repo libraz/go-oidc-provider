@@ -221,6 +221,162 @@ func TestValidate_SentinelTable(t *testing.T) {
 	}
 }
 
+// TestRequest_Validate_RejectsImplicitAndHybridResponseTypes pins the
+// "code-only" stance documented in [Request.validateResponseType]:
+// every implicit / hybrid response_type combination MUST be rejected.
+//
+// Tracks: CVE-2024-10318 (NGINX OIDC reference module, late 2024) —
+// ID-token nonce was not validated, allowing session-fixation /
+// ID-token-replay against any RP that accepted an attacker-supplied
+// fresh-looking token. The structural defence here is one layer
+// further out: an OP that never issues an ID token outside the
+// /token endpoint (i.e. only response_type=code) eliminates the
+// front-channel nonce-binding surface entirely. This test pins that
+// surface to "closed".
+//
+// Also tracks: OIDC Core 1.0 §15.5.2 / OAuth 2.0 Security BCP
+// (RFC 9700) §2.1.2 which DEPRECATE the implicit and hybrid flows
+// for new deployments.
+func TestRequest_Validate_RejectsImplicitAndHybridResponseTypes(t *testing.T) {
+	t.Parallel()
+
+	forbidden := []string{
+		"token",               // OAuth implicit (legacy).
+		"id_token",            // OIDC implicit.
+		"id_token token",      // OIDC implicit + access token.
+		"code id_token",       // OIDC hybrid.
+		"code token",          // OIDC hybrid (access token via fragment).
+		"code id_token token", // OIDC hybrid (everything via fragment).
+		"none",                // OIDC §3.1.2.1 "none" — used by some session checks; the OP does not advertise.
+		"",                    // Empty: parser SHOULD reject.
+		"CODE",                // Case-variant: response_type is case-sensitive per RFC 6749 §3.1.1.
+		"Code",                // Case-variant.
+		"id_token  token",     // Doubled-space typo.
+		"code\nid_token",      // Embedded newline (header-injection class).
+	}
+	for _, rt := range forbidden {
+		t.Run("rt="+rt, func(t *testing.T) {
+			t.Parallel()
+			values := goodValues()
+			values.Set("response_type", rt)
+			req, parseErr := authorize.ParseValues(values)
+			var gotErr error
+			if parseErr != nil {
+				gotErr = parseErr
+			} else {
+				gotErr = req.Validate(goodClient(), nil, authorize.Policy{
+					PKCERequired:         true,
+					NonceRequired:        true,
+					StateOrNonceRequired: true,
+				})
+			}
+			if gotErr == nil {
+				t.Fatalf("response_type=%q: Validate accepted", rt)
+			}
+			if !errors.Is(gotErr, authorize.ErrResponseTypeUnsupported) {
+				t.Fatalf("response_type=%q: err=%v want ErrResponseTypeUnsupported", rt, gotErr)
+			}
+		})
+	}
+}
+
+// TestRequest_Validate_RedirectURIAttackVariants enumerates the
+// attacker-supplied redirect_uri shapes that exact-byte matching MUST
+// reject. The library's posture is the strictest one in the OAuth
+// ecosystem — equality on the registered string, no scheme/host
+// case-folding, no path normalisation, no port-default collapsing.
+// Every variant below has a documented bypass in another OP family;
+// the test pins the rejection so a future "ergonomic" relaxation
+// surfaces immediately.
+//
+// Tracks:
+//   - CVE-2024-8883 (Keycloak; wildcard / suffix bypass of an earlier
+//     redirect-URI patch via crafted variants).
+//   - CVE-2020-15234 (ory/fosite; case-variant redirect_uri matched a
+//     case-different registration).
+//   - ory/fosite GHSA-rfq3-w54c-f9q5 (loopback redirect rule allowed
+//     host/query override; the fix narrows runtime variation to the
+//     port only — exact-string match here is even stricter).
+//   - RFC 6749 §3.1.2.3 / RFC 9700 §4.1 which mandate "complete client
+//     redirection URI matching" for non-loopback URIs.
+//
+// The library does NOT special-case the loopback "any port" rule of
+// RFC 8252 §7.3 at this layer; embedders that want loopback flexibility
+// register every port they accept as a separate URI. That is a deliberate
+// posture pin — registering "http://127.0.0.1:0/cb" and getting "any port"
+// behaviour at runtime would be a regression.
+func TestRequest_Validate_RedirectURIAttackVariants(t *testing.T) {
+	t.Parallel()
+
+	// Registered: "https://rp.example.com/cb" (see goodClient).
+	cases := []struct {
+		name string
+		uri  string
+	}{
+		{"scheme_uppercase", "HTTPS://rp.example.com/cb"},
+		{"scheme_mixed", "Https://rp.example.com/cb"},
+		{"scheme_downgrade", "http://rp.example.com/cb"},
+		{"host_uppercase", "https://RP.EXAMPLE.COM/cb"},
+		{"host_mixed", "https://Rp.Example.com/cb"},
+		{"host_suffix_attack", "https://rp.example.com.attacker.example/cb"},
+		{"host_prefix_attack", "https://attacker.rp.example.com/cb"},
+		{"trailing_slash", "https://rp.example.com/cb/"},
+		{"fragment_appended", "https://rp.example.com/cb#frag"},
+		{"query_appended", "https://rp.example.com/cb?evil=1"},
+		{"path_case_variant", "https://rp.example.com/CB"},
+		{"path_case_variant_mixed", "https://rp.example.com/Cb"},
+		{"path_double_slash", "https://rp.example.com//cb"},
+		{"path_dot_segment", "https://rp.example.com/./cb"},
+		{"path_parent_dot_segment", "https://rp.example.com/x/../cb"},
+		{"path_pct_encoded", "https://rp.example.com/c%62"}, // %62 = 'b'
+		{"path_trailing_pct_space", "https://rp.example.com/cb%20"},
+		{"explicit_default_port", "https://rp.example.com:443/cb"},
+		{"alternate_port", "https://rp.example.com:8443/cb"},
+		{"userinfo_smuggling", "https://attacker.example@rp.example.com/cb"},
+		{"userinfo_with_pass", "https://u:p@rp.example.com/cb"},
+		{"empty_string", ""},
+		{"javascript_scheme", "javascript:alert(1)"},
+		{"data_scheme", "data:text/html,evil"},
+		{"file_scheme", "file:///etc/passwd"},
+		{"newline_injection", "https://rp.example.com/cb\nLocation:%20https://attacker.example"},
+		{"null_byte", "https://rp.example.com/cb\x00"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			values := goodValues()
+			values.Set("redirect_uri", tc.uri)
+			req, parseErr := authorize.ParseValues(values)
+			var gotErr error
+			if parseErr != nil {
+				gotErr = parseErr
+			} else {
+				gotErr = req.Validate(goodClient(), nil, authorize.Policy{
+					PKCERequired:         true,
+					StateOrNonceRequired: true,
+				})
+			}
+			if gotErr == nil {
+				t.Fatalf("redirect_uri=%q: Validate accepted; exact-match contract violated", tc.uri)
+			}
+			// All variants here either fail at parse (empty / malformed)
+			// or at the redirect-target gate. The redirect-target error
+			// MUST be ErrRedirectURIInvalid (or ErrRedirectURIRequired
+			// for the empty case); a parser-level rejection is also
+			// acceptable as long as the request never reaches a state
+			// where it could redirect to the attacker URI.
+			if !errors.Is(gotErr, authorize.ErrRedirectURIInvalid) &&
+				!errors.Is(gotErr, authorize.ErrRedirectURIRequired) &&
+				parseErr == nil {
+				t.Fatalf("redirect_uri=%q: err=%v want Err{RedirectURIInvalid|Required}", tc.uri, gotErr)
+			}
+			if authorize.IsRedirectSafe(gotErr) {
+				t.Fatalf("redirect_uri=%q: IsRedirectSafe true; attacker URI MUST NOT be honoured", tc.uri)
+			}
+		})
+	}
+}
+
 // TestRequest_Validate_PKCEPolicyConditional covers the profile-
 // conditional gate: with Policy{PKCERequired:false} a request that
 // omits code_challenge MUST be accepted (the OIDC vanilla path that

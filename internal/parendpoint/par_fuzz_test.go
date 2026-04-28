@@ -67,6 +67,17 @@ func FuzzPARFormBody(f *testing.F) {
 	f.Add(big)
 	f.Add("request_uri=urn:ietf:params:oauth:request_uri:abc")
 	f.Add("client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer&client_assertion=eyJhbGciOiJFUzI1NiJ9.e30.sig")
+	// DoS hardening seeds. CVE-2024-29371 (CVSS 7.5; jose4j JWE
+	// decompression bomb) and RFC 8725 §3.11 motivate stress-testing
+	// the body-size ceiling. MaxBytesReader should reject oversize
+	// bodies as 413 before any CPU-bound parsing kicks in; a
+	// regression bypassing the cap surfaces via the closed-status
+	// assertion below.
+	f.Add(strings.Repeat("a=b&", 1<<14))                       // ~64 KiB exact.
+	f.Add(strings.Repeat("a=b&", 1<<15))                       // ~128 KiB: must 413.
+	f.Add(strings.Repeat("scope=openid+profile+email&", 5000)) // repeated valid-looking pairs.
+	f.Add("client_id=" + strings.Repeat("A", 1<<14))           // single huge value.
+	f.Add("scope=" + strings.Repeat("openid+", 8000))          // huge space-separated list.
 
 	f.Fuzz(func(t *testing.T, body string) {
 		req := httptest.NewRequestWithContext(

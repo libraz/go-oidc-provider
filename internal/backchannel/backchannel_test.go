@@ -37,6 +37,32 @@ func fixedClock(t time.Time) timex.Clock {
 	return timex.ClockFunc(func() time.Time { return t })
 }
 
+// TestSignLogoutToken_EmitsRequiredClaims pins the OpenID Connect
+// Back-Channel Logout 1.0 §2.4 logout-token shape end-to-end. Every
+// invariant the spec enumerates is asserted here so a regression that
+// (a) drops one of the mandatory claims, (b) introduces a forbidden
+// claim, or (c) silently swaps the JWT typ header surfaces locally
+// rather than at certification time.
+//
+// Tracks (RFC + CVE class):
+//   - OpenID Connect Back-Channel Logout 1.0 §2.4 — logout_token MUST
+//     carry iss/aud/iat/exp/jti/events; sub OR sid (or both); typ
+//     header MUST be "logout+jwt"; "nonce" MUST NOT be present.
+//   - The "missing events claim" failure mode appeared in several
+//     OPs that retrofitted back-channel logout — RPs that strictly
+//     follow §2.4 (rightly) reject any token that lacks the events
+//     map keyed by [backchannel.EventID]. There is no single CVE
+//     because the failure is silent (RP just refuses to log the
+//     user out) rather than a security bypass.
+//   - The "nonce on logout_token" failure mode is the dangerous one:
+//     a logout_token carrying a nonce can be misclassified as an
+//     id_token by a permissive RP (RFC 8725 §3.11 "use a typ header
+//     to discriminate JWT shapes"); pinning nonce-absence here is
+//     part of the structural defence.
+//   - The "typ=logout+jwt" header lets RPs key off the JWT type
+//     before signature verification; conflating it with id_token
+//     would make CVE-2024-10318-style nonce-binding bypasses
+//     reachable from the back channel as well.
 func TestSignLogoutToken_EmitsRequiredClaims(t *testing.T) {
 	t.Parallel()
 	priv, sk := mustKey(t)

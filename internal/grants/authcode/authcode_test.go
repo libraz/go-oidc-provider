@@ -158,10 +158,31 @@ func TestIssue_AndExchange_NoPKCE_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestExchange_NoPKCE_RejectsSmuggledVerifier covers the downgrade
-// guard: a record issued without PKCE MUST refuse a code_verifier on
-// exchange. Without this branch a client could fabricate a verifier
-// for a code that was never bound to one.
+// TestExchange_NoPKCE_RejectsSmuggledVerifier covers the PKCE
+// downgrade guard: a record issued WITHOUT a code_challenge MUST
+// refuse a code_verifier on exchange. Without this branch a client
+// (or attacker who captured a verifier-less code via a leakage
+// channel) could fabricate a verifier for a code that was never
+// bound to PKCE, bypassing every defence the PKCE flow is meant to
+// provide.
+//
+// Tracks:
+//   - CVE-2024-23647 (authentik ≤2023.10.6, CVSS 6.1) — token
+//     endpoint accepted code_verifier on codes issued without a
+//     challenge, enabling code-injection attacks.
+//   - CVE-2025-4144 (Cloudflare workers-oauth-provider <0.0.5,
+//     CVSS 8.1) — same downgrade variant, different ecosystem.
+//   - RFC 9700 §4.8 (OAuth 2.0 Security BCP) which mandates this
+//     posture: "the authorization server MUST [...] reject [a
+//     verifier] if no code_challenge was registered with the code".
+//   - RFC 7636 §4.6 PKCE definition.
+//
+// The defence lives at internal/grants/authcode/authcode.go:309-316:
+// when the issued record's CodeChallenge is empty, any non-empty
+// CodeVerifier on the exchange MUST yield [pkce.ErrVerifierMismatch].
+// This test pins the contract; a regression that changed the empty-
+// challenge branch to "ignore verifier" (which would seem ergonomic
+// but is exactly the bypass) would surface here.
 func TestExchange_NoPKCE_RejectsSmuggledVerifier(t *testing.T) {
 	t.Parallel()
 

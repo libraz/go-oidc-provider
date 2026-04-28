@@ -340,6 +340,166 @@ func TestPrivateKeyJWTVerifier_RejectsExpired(t *testing.T) {
 	}
 }
 
+// TestPrivateKeyJWTVerifier_AudIssuer_AcceptedViaAuxAudiences pins the
+// FAPI 2.0 §5.2.2 dialect of private_key_jwt: aud == AS issuer (not
+// token endpoint URL). The verifier accepts it via AuxAudiences.
+//
+// Tracks: OIDF/IETF coordinated disclosure CVE-2025-27370 (OIDC) and
+// CVE-2025-27371 (OAuth 2.0 / RFC 7523bis) — "private_key_jwt aud
+// confusion": clients reusing one keypair across multiple ASs could be
+// impersonated by a malicious AS that advertised the honest AS's token
+// endpoint as its own. Spec fix promotes "aud SHOULD be issuer" to MUST,
+// so OPs MUST accept aud == issuer. Stored under FAPI 2.0 lineage.
+func TestPrivateKeyJWTVerifier_AudIssuer_AcceptedViaAuxAudiences(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const issuer = "https://op.test/oidc"
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": issuer, // FAPI 2.0 form.
+		"jti": "j-aud-iss",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver:     staticResolver{keys: pubKeys},
+		JTIStore:     inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
+		Audience:     tokenAud,
+		AuxAudiences: []string{issuer},
+		Clock:        fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
+		t.Fatalf("Verify aud=issuer: %v", err)
+	}
+}
+
+// TestPrivateKeyJWTVerifier_AudOtherAS_Rejected confirms a client_assertion
+// whose aud names a *different* authorization server is rejected, even
+// when the keypair is otherwise valid. This is the negative half of the
+// CVE-2025-27370 / CVE-2025-27371 fix: a malicious AS_att cannot relay
+// an assertion forged "aud=AS_hon/token" to AS_hon, because AS_hon's
+// expected aud set must not contain AS_att's identifier.
+func TestPrivateKeyJWTVerifier_AudOtherAS_Rejected(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": "https://attacker.example/as", // unrelated AS.
+		"jti": "j-aud-foreign",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver:     staticResolver{keys: pubKeys},
+		JTIStore:     inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
+		Audience:     "https://op.test/oidc/token",
+		AuxAudiences: []string{"https://op.test/oidc"},
+		Clock:        fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionMalformed) {
+		t.Fatalf("foreign-aud err=%v want ErrAssertionMalformed", err)
+	}
+}
+
+// TestPrivateKeyJWTVerifier_AudArrayWithExtraneous_StillAccepted confirms
+// that an "aud" array containing the expected value plus extras is
+// accepted (RFC 7519 §4.1.3 allows an array). This guards against
+// over-aggressive aud handling that would break legitimate clients
+// while fixing CVE-2025-27370/27371.
+func TestPrivateKeyJWTVerifier_AudArrayWithExtraneous_StillAccepted(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": []string{"https://other.example/as", tokenAud},
+		"jti": "j-aud-array",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: staticResolver{keys: pubKeys},
+		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
+		Audience: tokenAud,
+		Clock:    fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
+		t.Fatalf("aud array: %v", err)
+	}
+}
+
+// TestPrivateKeyJWTVerifier_JTIReplay_Rejected pins the RFC 7523 §3
+// requirement that a private_key_jwt assertion's jti MUST NOT be
+// replayed within its lifetime.
+//
+// Tracks: CVE-2020-15222 (ory/fosite < 0.31.0, GHSA-mh3m-8c74-74xh) —
+// jti uniqueness was not enforced for private_key_jwt, so an
+// intercepted assertion could be replayed to authenticate the client
+// repeatedly. Equivalent to CWE-345 "Insufficient Verification of Data
+// Authenticity". This test exercises both halves: first call succeeds,
+// second call with the same assertion fails with ErrAssertionReplayed.
+func TestPrivateKeyJWTVerifier_JTIReplay_Rejected(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": tokenAud,
+		"jti": "j-replay",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: staticResolver{keys: pubKeys},
+		JTIStore: inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs(),
+		Audience: tokenAud,
+		Clock:    fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
+		t.Fatalf("first verify: %v", err)
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionReplayed) {
+		t.Fatalf("replay err=%v want ErrAssertionReplayed", err)
+	}
+}
+
 func TestPrivateKeyJWTVerifier_UnknownClient_RejectsCredentials(t *testing.T) {
 	t.Parallel()
 

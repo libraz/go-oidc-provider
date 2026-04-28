@@ -21,14 +21,33 @@ import (
 // malformed-signature value. Real signed tokens are exercised in unit
 // tests where the keyset is in scope.
 func FuzzJOSEParse(f *testing.F) {
-	// Seed: alg=none compact JWS — historically devastating to JWT libs.
+	// Seed: alg=none compact JWS — historically devastating to JWT
+	// libs. Tracks CVE-2015-2951 (jose4j) and the broader 2015
+	// "alg=none" disclosure (Auth0 advisory).
 	f.Add(`eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhbGljZSJ9.`)
-	// Seed: alg=HS256 — symmetric algorithm must be rejected.
+	// Seed: alg=HS256 — symmetric algorithm must be rejected. Tracks
+	// CVE-2015-9235 (jsonwebtoken) and CVE-2016-10555 (jwt-simple).
 	f.Add(`eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhbGljZSJ9.invalid`)
 	// Seed: bogus base64 in header.
 	f.Add(`!!!.???.***`)
 	// Seed: well-formed compact JWS with ES256 header but bogus signature.
 	f.Add(`eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.signature_placeholder`)
+	// Seed: case-variant alg=NONE. Tracks CVE-2026-22817 cluster
+	// (Hono JWT middleware, 2026) — case-insensitive deny-list bypass.
+	f.Add(`eyJhbGciOiJOT05FIn0.eyJzdWIiOiJhbGljZSJ9.`)
+	f.Add(`eyJhbGciOiJOb25lIn0.eyJzdWIiOiJhbGljZSJ9.`)
+	f.Add(`eyJhbGciOiJub05FIn0.eyJzdWIiOiJhbGljZSJ9.`)
+	// Seed: JSON-serialised JWS form (RFC 7515 §7.2). The library's
+	// contract is compact-only; this seed pins the rejection.
+	f.Add(`{"payload":"eyJzdWIiOiJhbGljZSJ9","signatures":[{"protected":"eyJhbGciOiJFUzI1NiJ9","signature":"AA"}]}`)
+	// Seed: header carrying jku — RFC 8725 §3.1 / CVE-2018-0114 class.
+	// The verifier MUST NOT fetch the URL or trust the value.
+	f.Add(`eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vYXR0YWNrZXIuZXhhbXBsZS9qd2tzLmpzb24ifQ.eyJzdWIiOiJhbGljZSJ9.x`)
+	// Seed: oversize compact JWS (1 MiB). Pins that ParseSigned does
+	// not allocate or recurse unboundedly. RFC 8725 §3.11 / CVE-2024-29371
+	// (jose4j DoS) is the threat model. Truncated to a manageable seed
+	// size; the fuzzer will explore the neighbourhood.
+	f.Add(strings.Repeat("a", 1<<16))
 
 	f.Fuzz(func(t *testing.T, raw string) {
 		jws, alg, err := jose.ParseSigned(raw)

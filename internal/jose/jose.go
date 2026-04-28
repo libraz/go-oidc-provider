@@ -23,6 +23,13 @@ var ErrMalformed = errors.New("jose: malformed token")
 // returns the parsed object on success or an error wrapping
 // [ErrAlgorithmNotAllowed] / [ErrMalformed] on failure.
 //
+// Only compact serialisation (header.payload.signature) is accepted.
+// JSON-serialised and multi-signature JWS forms are rejected as
+// malformed. RFC 8725 §3.6 recommends the compact form for token
+// contexts, and accepting the multi-signature form would let an
+// attacker attach an additional signature over the same payload using
+// a key under their control, hoping the verifier picks the wrong one.
+//
 // ParseSigned does not verify the signature; that is the caller's
 // responsibility once it has selected an appropriate verifier and key.
 // Pre-parse validation here is what closes the "alg=none" and "alg
@@ -31,11 +38,11 @@ var ErrMalformed = errors.New("jose: malformed token")
 func ParseSigned(raw string) (*josev4.JSONWebSignature, Algorithm, error) {
 	allowed := allowedV4Algorithms()
 
-	jws, err := josev4.ParseSigned(raw, allowed)
+	jws, err := josev4.ParseSignedCompact(raw, allowed)
 	if err != nil {
 		return nil, AlgUnspecified, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
-	if len(jws.Signatures) == 0 {
+	if len(jws.Signatures) != 1 {
 		return nil, AlgUnspecified, ErrMalformed
 	}
 

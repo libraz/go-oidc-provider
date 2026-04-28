@@ -221,7 +221,17 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 }
 
 // TestEndToEnd_PAR_AuthorizeRejectsReplay confirms that a request_uri
-// consumed once at /authorize cannot be redeemed a second time.
+// consumed once at /authorize cannot be redeemed a second time. Pins
+// the RFC 9126 §2.2 / FAPI 2.0 §5.3.2 one-time-use contract.
+//
+// Tracks: RFC 9126 §2.2 ("the AS MUST treat the request_uri as a
+// one-time-use value"), and the security rationale documented in the
+// 2024 formal analysis of FAPI 2.0 (eprint.iacr.org/2024/1540) — a
+// re-redeemable request_uri lets an attacker who intercepts the URI
+// log in as the victim by repeating /authorize after the legitimate
+// flow finishes. The threat shape mirrors the authorization-code
+// replay class for which RFC 6749 §4.1.2 already prescribes
+// invalid_grant.
 func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
 	t.Parallel()
 

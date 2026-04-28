@@ -1,6 +1,7 @@
 package tokens_test
 
 import (
+	"crypto/ecdsa"
 	"encoding/base64"
 	"errors"
 	"strings"
@@ -305,6 +306,68 @@ func TestVerify_RejectsHS256AsMalformed(t *testing.T) {
 	}
 	if errors.Is(gotErr, tokens.ErrAccessTokenSignature) {
 		t.Fatalf("HS256 must not surface as ErrAccessTokenSignature; alg policy is enforced pre-verify")
+	}
+}
+
+// TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret reproduces the
+// canonical algorithm-confusion attack: the attacker reads the OP's
+// published JWKS, takes the public-key material of an asymmetric key,
+// and uses those bytes as the secret for an HS256 token. A naive
+// verifier that derives the algorithm from the token's "alg" header
+// without pinning it to the configured key would accept the token.
+//
+// Tracks: CVE-2015-9235 (jsonwebtoken; root case),
+// CVE-2016-10555 (jwt-simple Node library), CVE-2024-54150 (cjwt),
+// CVE-2026-22817 / CVE-2026-27804 / CVE-2026-23552 (Hono cluster, 2026),
+// CVE-2026-33322 (MinIO OIDC). All share the same root cause: the
+// verifier consults the token's alg header instead of pinning the
+// algorithm to the resolved key. RFC 8725 §2.1 prescribes the fix.
+//
+// The library closes this structurally: jose.ParseSigned rejects HS*
+// before any key is touched, so the verifier never reaches the
+// signature stage. Failure surfaces as ErrAccessTokenMalformed (NOT
+// ErrAccessTokenSignature), which is the post-condition we pin.
+func TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-1")
+	pub, ok := entry.Signer.Public().(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey, got %T", entry.Signer.Public())
+	}
+
+	// Serialise the EC public key as a stable byte stream — exactly what
+	// an attacker would obtain by fetching the published JWKS and
+	// concatenating x||y, or by pulling the SubjectPublicKeyInfo bytes.
+	// Treat the resulting bytes as a raw HMAC secret.
+	hmacSecret := append(pub.X.Bytes(), pub.Y.Bytes()...)
+
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.HS256, Key: hmacSecret},
+		(&josev4.SignerOptions{}).WithType("JWT").WithHeader("kid", "kid-1"),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, err := jwt.Signed(signer).Claims(map[string]any{
+		"iss": "https://op.example.com",
+		"sub": "user-1",
+		"aud": "client-1",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(),
+	}).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+
+	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
+	_, _, gotErr := v.Verify(raw)
+	if !errors.Is(gotErr, tokens.ErrAccessTokenMalformed) {
+		t.Fatalf("alg-confusion err=%v want ErrAccessTokenMalformed", gotErr)
+	}
+	if errors.Is(gotErr, tokens.ErrAccessTokenSignature) {
+		t.Fatalf("alg-confusion must NOT surface as ErrAccessTokenSignature; alg policy must reject pre-verify")
 	}
 }
 

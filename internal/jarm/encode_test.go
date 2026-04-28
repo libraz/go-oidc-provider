@@ -4,7 +4,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -218,6 +221,93 @@ func TestSigner_SignAbsoluteExpiry(t *testing.T) {
 	claims := encodedClaims(t, out)
 	if got, _ := claims["exp"].(float64); int64(got) != exp.Unix() {
 		t.Errorf("exp=%d want %d", int64(got), exp.Unix())
+	}
+}
+
+// TestSigner_AlgIsES256_Structural pins the JARM signing algorithm
+// to ES256 at the protected-header byte level. JARM responses MUST NOT
+// be signed with a symmetric algorithm (HS*) — a JARM that an RP
+// receives carrying alg=HS256 is a textbook algorithm-confusion
+// vector if the RP is poorly written. JARM MUST NOT be signed with
+// "none" either; the spec is clear that response objects are always
+// asymmetrically signed.
+//
+// Tracks:
+//   - CVE-2023-6927 (Keycloak; the response_mode=form_post.jwt
+//     bypass of CVE-2023-6134 — when JARM was added without the
+//     same alg restrictions as the bearer flow, a downgrade was
+//     possible).
+//   - FAPI 2.0 Message Signing §5.4 which mandates that the OP signs
+//     JARM responses with one of the asymmetric algorithms in its
+//     allow-list (PS256/ES256/EdDSA).
+//   - RFC 7515 §4.1.1 (alg) and the broader RFC 8725 §3.1 guidance
+//     on rejecting unexpected algorithms.
+//
+// Defence: the [jarm.newSigner] helper hardcodes alg=ES256 at
+// construction time (encode.go:217). The signer never inspects an
+// inbound algorithm preference — it cannot be downgraded at runtime.
+// This test decodes the JWS protected header and asserts the byte
+// content of "alg" so a regression that introduced configurability
+// (or a different default) lights up here, not at certification time.
+func TestSigner_AlgIsES256_Structural(t *testing.T) {
+	t.Parallel()
+
+	signer := mustNewSigner(t)
+	out, err := signer.Sign(jarm.Payload{
+		Issuer:    "https://op.example.com",
+		Audience:  "client-1",
+		ExpiresAt: time.Date(2026, 4, 26, 12, 5, 0, 0, time.UTC),
+		Code:      "code-abc",
+	})
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+
+	// Compact JWS form: header.payload.signature. Decode the protected
+	// header without verification; we want the wire bytes, not the
+	// post-verify view.
+	parts := strings.Split(out, ".")
+	if len(parts) != 3 {
+		t.Fatalf("compact form parts=%d want 3 (got %q)", len(parts), out)
+	}
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatalf("decode header: %v", err)
+	}
+	var header struct {
+		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+		Kid string `json:"kid"`
+	}
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		t.Fatalf("unmarshal header: %v", err)
+	}
+	if header.Alg != "ES256" {
+		t.Fatalf("alg=%q want ES256 (JARM MUST NOT be signed with %q)", header.Alg, header.Alg)
+	}
+	if header.Typ != "JWT" {
+		t.Errorf("typ=%q want JWT", header.Typ)
+	}
+	if header.Kid == "" {
+		t.Error("kid empty; JARM MUST stamp the signing kid for RP-side verification")
+	}
+
+	// Belt-and-braces: try parsing with each forbidden alg and confirm
+	// josev4 rejects every one. ParseSigned takes a closed allow-list,
+	// so a JWS signed with ES256 will not parse under HS256/RS256/etc.
+	// — but the assertion guards against a regression that produced a
+	// JWS whose header CLAIMS one alg while the signature was minted
+	// under another (the historic "alg confusion" rabbit hole).
+	for _, bad := range []josev4.SignatureAlgorithm{
+		josev4.HS256, josev4.HS384, josev4.HS512,
+		josev4.RS256, josev4.RS384, josev4.RS512,
+		josev4.PS256, josev4.PS384, josev4.PS512,
+		josev4.ES384, josev4.ES512,
+		josev4.EdDSA,
+	} {
+		if _, err := jwt.ParseSigned(out, []josev4.SignatureAlgorithm{bad}); err == nil {
+			t.Errorf("ParseSigned with allow-list=%q accepted ES256 JWS; alg-confusion gate broken", bad)
+		}
 	}
 }
 

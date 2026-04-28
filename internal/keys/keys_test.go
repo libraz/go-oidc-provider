@@ -142,6 +142,80 @@ func TestSet_FindReturnsFalseForUnknownKeyID(t *testing.T) {
 	}
 }
 
+// TestSet_FindIsPureStringEquality_NoPathTraversal pins the
+// structural property that [Set.Find] is byte-equal-on-the-key-id and
+// does NOT interpret the input as a path, URL, or any other indirect
+// reference. Tracks the JWT "kid" header injection class popularised
+// by PortSwigger's "JWT authentication bypass via kid header path
+// traversal" lab (no single CVE; the attack pattern appears in
+// libraries that map "kid" onto a filesystem read or a database query
+// without sanitisation, then trust the byte content of whatever
+// resource was returned as a verification key).
+//
+// Defence in this codebase: [Set.Find] iterates the entries slice
+// and compares "kid" with `==` on the string. There is no string
+// trimming, no canonicalisation, no Unicode folding, no path or URL
+// resolution — and entries are populated only at construction time
+// from a Go-typed [Entry] struct, never from attacker bytes. The
+// test uses a representative set of attacker shapes and asserts
+// every one returns ok=false. A regression that introduced lookup
+// transformation (or, worst case, a filesystem read) would surface
+// as one of these probes succeeding.
+//
+// Tracks: RFC 7517 §4.5 ("kid" is OPAQUE — implementations MUST NOT
+// interpret it), RFC 8725 §2.7 (algorithm and key selection MUST
+// trust only the verifier's local store).
+func TestSet_FindIsPureStringEquality_NoPathTraversal(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	set, err := keys.NewSet([]keys.Entry{{KeyID: "rotating-key-1", Signer: priv}})
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+
+	probes := []string{
+		"../rotating-key-1",
+		"../../etc/passwd",
+		"rotating-key-1/../",
+		"rotating-key-1/../../rotating-key-1",
+		"./rotating-key-1",
+		"/rotating-key-1",
+		"\\rotating-key-1",
+		"rotating-key-1\\..",
+		"rotating-key-1\x00",
+		"rotating-key-1\x00.tampered",
+		"\x00rotating-key-1",
+		"rotating-key-1\n",
+		"rotating-key-1\r\n",
+		"rotating-key-1\t",
+		"rotating-key-1 ", // trailing space
+		" rotating-key-1", // leading space
+		"ROTATING-KEY-1",  // case-variant: kid is case-sensitive
+		"Rotating-Key-1",
+		"rotating-key-1#frag",
+		"rotating-key-1?query",
+		"file://rotating-key-1",
+		"https://attacker.example/rotating-key-1",
+		"rotating-key-1\x7f",   // DEL
+		"rotating-key-1\u200b", // zero-width space
+		"rotating-key-1\uFEFF", // BOM (U+FEFF)
+		"rotating‐key‐-1",      // Unicode hyphen homoglyph (U+2010)
+	}
+	for _, kid := range probes {
+		t.Run("kid="+kid, func(t *testing.T) {
+			t.Parallel()
+			got, ok := set.Find(kid)
+			if ok {
+				t.Fatalf("Find(%q) ok=true; lookup MUST be byte-equal on kid (got Entry=%+v)", kid, got)
+			}
+			if got.KeyID != "" || got.Signer != nil {
+				t.Fatalf("Find(%q) returned non-zero Entry=%+v on miss", kid, got)
+			}
+		})
+	}
+}
+
 func TestSet_JWKSIsDefensiveCopy(t *testing.T) {
 	t.Parallel()
 
