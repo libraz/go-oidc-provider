@@ -61,6 +61,13 @@ var errPARRequired = &authorize.Error{
 // Per RFC 9126 §2.3, when request_uri is present the OP MUST ignore every
 // other authorization-request parameter except client_id; this function
 // implements that rule by returning the snapshot's parameters verbatim.
+//
+// Find (not Consume) is used here so a /authorize visit that parks the
+// user at the login screen does not invalidate the request_uri: a second
+// visit before authentication completes (e.g. the user opening the link
+// twice, or a multi-step interaction redirect) MUST still resolve. The
+// one-time-use guarantee RFC 9126 §2.2 mandates is enforced when the
+// authorization code is issued — see consumePARIfNeeded.
 func resolvePARIfNeeded(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -83,13 +90,19 @@ func resolvePARIfNeeded(
 		renderAuthorizeError(w, errPARDisabled)
 		return nil, true
 	}
-	rec, err := deps.PARs.Consume(ctx, uri)
+	rec, err := deps.PARs.Find(ctx, uri)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrAlreadyConsumed) {
+		if errors.Is(err, store.ErrNotFound) {
 			renderAuthorizeError(w, authorize.ErrInvalidRequestURI)
 			return nil, true
 		}
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "PAR backend unavailable")
+		return nil, true
+	}
+	if rec.ConsumedAt != nil {
+		// A request_uri that has already issued an authorization code
+		// is single-use per RFC 9126 §2.2; reject the replay.
+		renderAuthorizeError(w, authorize.ErrInvalidRequestURI)
 		return nil, true
 	}
 	if queryClientID != "" && rec.ClientID != queryClientID {
@@ -101,7 +114,26 @@ func resolvePARIfNeeded(
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "PAR record could not be decoded")
 		return nil, true
 	}
-	return snap.ToRequest(), false
+	out := snap.ToRequest()
+	out.PARRequestURI = uri
+	return out, false
+}
+
+// consumePARIfNeeded marks the PAR record bound to req as one-time-used.
+// The function is a no-op when the request did not originate from /par
+// (req.PARRequestURI == "") or when the PAR substore is not wired.
+//
+// Returns nil on success, [store.ErrAlreadyConsumed] if a parallel code
+// emission already redeemed the URI, and any other error verbatim from
+// the store. Callers MUST invoke this immediately before persisting the
+// authorization code so the consume happens atomically with the code's
+// existence.
+func consumePARIfNeeded(ctx context.Context, deps resolved, req *authorize.Request) error {
+	if req == nil || req.PARRequestURI == "" || deps.PARs == nil {
+		return nil
+	}
+	_, err := deps.PARs.Consume(ctx, req.PARRequestURI)
+	return err
 }
 
 // renderAuthorizeError writes the JSON envelope shape the authorize

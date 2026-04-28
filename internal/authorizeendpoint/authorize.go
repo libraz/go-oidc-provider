@@ -528,6 +528,10 @@ func mintAndRedirect(
 		emitAuthorizeError(w, r, deps, req, errServerError, "missing session or grant for silent mint")
 		return
 	}
+	if err := consumePARIfNeeded(r.Context(), deps, req); err != nil {
+		emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
+		return
+	}
 	codeID, err := newRandomB64(codeByteLength)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")

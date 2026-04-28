@@ -369,6 +369,15 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
 		return
 	}
+	if err := consumePARIfNeeded(r.Context(), deps, req); err != nil {
+		// A parallel code emission already redeemed the request_uri,
+		// or the PAR record vanished; either way RFC 9126 §2.2 forbids
+		// issuing a second code. Surface the failure on the redirect
+		// channel so the client sees access_denied rather than a
+		// silent success.
+		emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
+		return
+	}
 	now := deps.now().UTC()
 	authCode := &store.AuthorizationCode{
 		ID:                  codeID,

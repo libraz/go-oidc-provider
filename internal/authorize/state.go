@@ -69,6 +69,12 @@ type RequestSnapshot struct {
 	// authorization endpoint.
 	DPoPJKT string `json:"dpop_jkt,omitempty"`
 
+	// PARRequestURI mirrors [Request.PARRequestURI]. The snapshot
+	// carries it across the interaction redirect so the eventual code
+	// emission can mark the PAR record one-time-used (RFC 9126 §2.2).
+	// Empty when the request did not arrive via /par.
+	PARRequestURI string `json:"par_request_uri,omitempty"`
+
 	// CreatedUnix is the unix-seconds timestamp at which the snapshot was
 	// taken. The HTTP layer uses it for diagnostic logging; the field is
 	// not consumed by [RequestSnapshot.ToRequest].
@@ -107,6 +113,7 @@ func SnapshotFrom(req *Request, now time.Time) RequestSnapshot {
 		LoginHint:           req.LoginHint,
 		ResponseMode:        req.ResponseMode,
 		DPoPJKT:             req.DPoPJKT,
+		PARRequestURI:       req.PARRequestURI,
 		CreatedUnix:         now.UTC().Unix(),
 	}
 }
@@ -136,6 +143,7 @@ func (s RequestSnapshot) ToRequest() *Request {
 		LoginHint:           s.LoginHint,
 		ResponseMode:        s.ResponseMode,
 		DPoPJKT:             s.DPoPJKT,
+		PARRequestURI:       s.PARRequestURI,
 	}
 }
 

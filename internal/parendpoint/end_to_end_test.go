@@ -221,8 +221,16 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 }
 
 // TestEndToEnd_PAR_AuthorizeRejectsReplay confirms that a request_uri
-// consumed once at /authorize cannot be redeemed a second time. Pins
-// the RFC 9126 §2.2 / FAPI 2.0 §5.3.2 one-time-use contract.
+// becomes single-use once an authorization code has been issued against
+// it. Pins the RFC 9126 §2.2 / FAPI 2.0 §5.3.2 one-time-use contract.
+//
+// The library deliberately permits multiple /authorize visits before
+// authentication completes (see [FAPI2SPID2PAREnsureServerAcceptsReused
+// RequestUriBeforeAuthenticationCompletion] in the conformance suite —
+// a multi-step interaction or the user opening the URL twice MUST keep
+// resolving). The single-use guarantee is enforced when the code is
+// emitted, simulated here by directly stamping ConsumedAt on the
+// substore record.
 //
 // Tracks: RFC 9126 §2.2 ("the AS MUST treat the request_uri as a
 // one-time-use value"), and the security rationale documented in the
@@ -280,16 +288,30 @@ func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
 	}
 	requestURI, _ := decodeJSON(t, parResp)["request_uri"].(string)
 
-	// First /authorize redeems the URI cleanly (browser would follow the
-	// 302 to /interaction).
+	// First /authorize parks the user at interaction; the URI remains
+	// resolvable so a second visit before auth completes can reuse it.
 	first := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
 	if first.StatusCode != http.StatusFound {
 		t.Fatalf("first /authorize status=%d want 302", first.StatusCode)
 	}
 	first.Body.Close()
 
-	// Second /authorize with the same URI must be rejected as
-	// invalid_request_uri.
+	// Second /authorize before auth completion: still acceptable, the
+	// URI is single-use only once a code has been issued.
+	preAuth := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
+	if preAuth.StatusCode != http.StatusFound {
+		t.Fatalf("pre-auth replay status=%d want 302", preAuth.StatusCode)
+	}
+	preAuth.Body.Close()
+
+	// Simulate code emission: redeem the PAR record via the store
+	// (the same call interaction.go performs immediately before the
+	// authorization code is persisted).
+	if _, err := tk.Store.PushedAuthRequests().Consume(context.Background(), requestURI); err != nil {
+		t.Fatalf("PARs.Consume: %v", err)
+	}
+
+	// Post-emission /authorize must be rejected as invalid_request_uri.
 	second := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusBadRequest {

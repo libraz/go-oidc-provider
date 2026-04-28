@@ -104,6 +104,14 @@ type Request struct {
 	// /token endpoint can refuse a proof signed with a different
 	// key.
 	DPoPJKT string
+
+	// PARRequestURI is the urn:ietf:params:oauth:request_uri:* identifier
+	// the request was loaded from when /authorize resolved a PAR record.
+	// Empty for non-PAR requests. The field is set by the PAR consumption
+	// path in the authorize endpoint and threaded through the snapshot
+	// so the eventual code emission can mark the record one-time-used
+	// (RFC 9126 §2.2). It is never parsed from the wire form.
+	PARRequestURI string
 }
 
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
