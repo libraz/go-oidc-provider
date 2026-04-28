@@ -198,7 +198,41 @@ func Build(in Input) Document {
 		doc.RevocationEndpointAuthMethodsSupported = append([]string(nil),
 			doc.TokenEndpointAuthMethodsSupported...)
 	}
+	// FAPI 2.0 §5.4 / OIDC Core 1.0 §9: when the OP advertises an
+	// assertion-bearing client authentication method (private_key_jwt
+	// or client_secret_jwt) at /token, it MUST advertise the JWS alg
+	// values it accepts on the assertion. v1.0 enforces the same
+	// allow-list as the JAR / private_key_jwt verifier
+	// ([internal/jose] + [internal/clientauth]), so the field's
+	// content mirrors the request-object alg list that already gates
+	// JAR. Emit the field whenever an assertion-bearing method made
+	// it through the post-profile filter above.
+	if containsAssertionBearingMethod(doc.TokenEndpointAuthMethodsSupported) {
+		doc.TokenEndpointAuthSigningAlgValuesSupported = []string{
+			"RS256", "PS256", "ES256", "EdDSA",
+		}
+	}
+	// RFC 9207: every authorization response (success and error)
+	// carries an "iss" parameter set to the OP's issuer. The library
+	// emits it unconditionally — it is defense-in-depth against
+	// mix-up attacks and is mandated by FAPI 2.0 §5.3.2.2.
+	doc.AuthorizationResponseIssParameterSupported = true
 	return doc
+}
+
+// containsAssertionBearingMethod reports whether methods includes a
+// client authentication method whose proof is a JWT (private_key_jwt
+// per RFC 7523 §3 or client_secret_jwt per RFC 7523 §3.1). The two
+// methods are the only ones in the registry that consume the
+// "client_assertion_type" parameter, so the alg advertisement applies
+// to them and only them.
+func containsAssertionBearingMethod(methods []string) bool {
+	for _, m := range methods {
+		if m == "private_key_jwt" || m == "client_secret_jwt" {
+			return true
+		}
+	}
+	return false
 }
 
 // join concatenates issuer + mountPrefix + endpoint into an absolute URL,

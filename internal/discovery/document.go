@@ -169,4 +169,20 @@ type Document struct {
 	// Introspect feature is enabled because the field is meaningless
 	// without a /introspect endpoint.
 	IntrospectionSigningAlgValuesSupported []string `json:"introspection_signing_alg_values_supported,omitempty"`
+
+	// TokenEndpointAuthSigningAlgValuesSupported lists the JWS alg
+	// values the OP accepts on a "client_assertion" JWT
+	// (RFC 7521 + RFC 7523 + OIDC Core 1.0 §9). The field is meaningful
+	// only when the OP advertises an assertion-bearing auth method
+	// (private_key_jwt or client_secret_jwt); it is omitted otherwise.
+	// FAPI 2.0 §5.4 requires the field to be present and its values to
+	// reflect the alg allowlist actually enforced at /token.
+	TokenEndpointAuthSigningAlgValuesSupported []string `json:"token_endpoint_auth_signing_alg_values_supported,omitempty"`
+
+	// AuthorizationResponseIssParameterSupported reports whether the
+	// OP returns the RFC 9207 "iss" parameter on authorization
+	// responses. Defensive against mix-up attacks; FAPI 2.0 §5.3.2.2
+	// mandates it. The library always emits "iss" so the field is
+	// always true when emitted (omitempty drops the false default).
+	AuthorizationResponseIssParameterSupported bool `json:"authorization_response_iss_parameter_supported,omitempty"`
 }
