@@ -185,7 +185,8 @@ cmd_drive() {
   local pass="${OFCS_DEMO_PASS:-demo}"
   local cookies
   cookies="$(mktemp /tmp/ofcs-cookies.XXXXXX)"
-  trap 'rm -f "$cookies"' EXIT
+  # Expand $cookies at trap-set time: by EXIT it is out of scope (local).
+  trap "rm -f '$cookies'" EXIT
 
   # --resolve forces host.docker.internal to localhost from the host so
   # the same DNS name works inside and outside docker. -k is required
@@ -202,6 +203,16 @@ cmd_drive() {
     | awk -F= '/^__EFFECTIVE_URL__=/{print $2}')"
   prompt="$(printf '%s' "$prompt" | grep -v '^__EFFECTIVE_URL__=')"
   body="$(split_body "$prompt")"
+
+  # Error-path tests (e.g. response-type-missing) trigger a direct
+  # redirect from /authorize back to the OFCS callback host; there is
+  # no SSR prompt to walk. Detect that and jump to the forward step.
+  if [[ "$interaction_url" == https://localhost.emobix.co.uk:8443/* ]]; then
+    echo "[drive 1/3] /authorize landed on OFCS callback (error-path)"
+    forward_implicit_bridge "$interaction_url" "$body"
+    return 0
+  fi
+
   state_ref="$(extract_field "$body" state_ref)"
   csrf="$(extract_field "$body" csrf_token)"
 
@@ -253,9 +264,19 @@ cmd_drive() {
     exit 1
   fi
 
-  echo "[drive forward] GET ${redirect}"
-  local cb_html impl alias_base query
-  cb_html="$(curl -sk "$redirect")"
+  forward_implicit_bridge "$redirect" ""
+}
+
+# forward_implicit_bridge <ofcs-callback-url> [callback-html]
+# Posts the OFCS implicit-bridge body that submits the callback query
+# string back to the test runner. If <callback-html> is empty the
+# function fetches the callback page itself.
+forward_implicit_bridge() {
+  local redirect="$1" cb_html="$2" impl alias_base query
+  if [[ -z "$cb_html" ]]; then
+    echo "[drive forward] GET ${redirect}"
+    cb_html="$(curl -sk "$redirect")"
+  fi
   # OFCS HTML-escapes the slash in the implicit-bridge URL.
   impl="$(printf '%s' "$cb_html" \
     | grep -oE 'implicit\\?/[A-Za-z0-9]+' | head -1 | tr -d '\\')"
