@@ -269,6 +269,32 @@ cmd_drive() {
   fi
   echo "[drive 1/3] interaction_url=${interaction_url}"
 
+  # OFCS_DRIVE_REJECT=1 simulates the user pressing "cancel" on the
+  # consent screen. The library's interaction handler responds to a
+  # DELETE on the interaction URL by emitting an access_denied
+  # redirect — exactly what the OFCS user-rejects-authentication
+  # module asserts on. Forward the resulting OFCS callback URL.
+  if [[ "${OFCS_DRIVE_REJECT:-0}" == "1" ]]; then
+    echo "[drive reject] DELETE ${interaction_url}"
+    local reject_resp reject_redirect
+    set +e
+    reject_resp="$(curl -sk \
+      --resolve "host.docker.internal:9443:127.0.0.1" \
+      --cookie-jar "$cookies" --cookie "$cookies" \
+      -X DELETE "$interaction_url" \
+      -o /dev/null -w '%{http_code} %{redirect_url}\n')"
+    set -e
+    echo "[drive reject] response=${reject_resp}"
+    reject_redirect="$(printf '%s' "$reject_resp" | awk '{print $2}')"
+    if [[ -z "$reject_redirect" \
+      || "$reject_redirect" != https://localhost.emobix.co.uk:8443/* ]]; then
+      echo "[drive reject] no OFCS callback redirect; aborting" >&2
+      return 0
+    fi
+    forward_implicit_bridge "$reject_redirect" ""
+    return 0
+  fi
+
   echo "[drive 2/3] POST credentials (user=${user})"
   local pwd_resp body2 state_ref2 csrf2 approved pwd_redirect
   pwd_resp="$("${curl_base[@]}" -X POST "$interaction_url" \
@@ -435,6 +461,13 @@ cmd_batch() {
     jar="$(mktemp /tmp/ofcs-batch-cookies.XXXXXX)"
     OFCS_DRIVE_COOKIES="$jar"
     export OFCS_DRIVE_COOKIES
+    # Tests whose name encodes "user-rejects" want the consent screen
+    # cancelled, not approved. Forward the signal to cmd_drive via env.
+    case "$m" in
+      *user-rejects-authentication*) OFCS_DRIVE_REJECT=1 ;;
+      *)                             OFCS_DRIVE_REJECT=0 ;;
+    esac
+    export OFCS_DRIVE_REJECT
     if [[ -n "${BATCH_VARIANT:-}" ]]; then
       v="$BATCH_VARIANT"
     elif [[ "$m" == fapi2-security-profile-id2-* || "$m" == fapi2-message-signing-id1-* ]]; then
@@ -490,6 +523,7 @@ cmd_batch() {
     esac
     rm -f "$jar"
     unset OFCS_DRIVE_COOKIES
+    unset OFCS_DRIVE_REJECT
   done
   echo
   echo "==== summary: pass=${pass} skip=${skip} fail=${fail} err=${err} ===="

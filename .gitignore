@@ -63,6 +63,11 @@ conformance/op-demo.log
 conformance/op-demo.bin
 conformance/certs/openssl.cnf
 
+# Stray op-demo binary if `go build ./cmd/op-demo` is run from the repo
+# root. The supported flow goes through scripts/conformance.sh, which
+# writes to conformance/op-demo.bin (already ignored above).
+/op-demo
+
 # Internal-only artefacts (kept locally, never committed). The OSS-facing
 # documentation lives in README.md, CHANGELOG.md, SECURITY.md, NOTICE,
 # and CONTRIBUTING.md. The entire docs/ tree is internal working
