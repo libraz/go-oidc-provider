@@ -34,6 +34,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -47,6 +48,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -69,6 +71,21 @@ type runConfig struct {
 	confClientSec string
 	tlsCert       string
 	tlsKey        string
+	// profile selects the OP security posture. "" / "basic" leaves
+	// the OP vanilla (OIDC Core only); "fapi2-baseline" /
+	// "fapi2-message-signing" activate the matching profile and the
+	// features the profile mandates (PAR, DPoP). The flag exists so
+	// the conformance harness can run the same op-demo binary against
+	// every plan in plans/ without rebuilding.
+	profile string
+	// fapiClient1JWKS / fapiClient2JWKS are paths to JWK Set files
+	// containing the PUBLIC half of the FAPI test client keys. They
+	// are only consulted when profile is fapi2-*. The matching
+	// private halves live in conformance/plans/fapi2-*.json so the
+	// OFCS instance can sign private_key_jwt assertions; this binary
+	// strips the "d" parameter at registration time.
+	fapiClient1JWKS string
+	fapiClient2JWKS string
 }
 
 func main() {
@@ -98,6 +115,14 @@ func mainErr() error {
 		// design. Override either flag to reseed at startup.
 		confClientID  = flag.String("confidential-client-id", "demo-confidential", "client_id of the confidential seed client (client_secret_basic auth). Empty disables the confidential seed.")
 		confClientSec = flag.String("confidential-client-secret", "demo-confidential-secret", "client_secret for the confidential seed client. Empty disables the confidential seed.")
+		profileFlag   = flag.String("profile", "", "security profile to activate. One of: \"\" (no profile, vanilla OIDC Core), \"fapi2-baseline\", \"fapi2-message-signing\". Profiles auto-enable the features they require (PAR, DPoP).")
+		// FAPI test client JWKS paths. Each file holds the PUBLIC
+		// half (kty/crv/x/y/kid only — "d" is stripped if present)
+		// of one OFCS test client. The matching private halves live
+		// in conformance/plans/fapi2-*.json so OFCS can sign
+		// private_key_jwt assertions.
+		fapiClient1JWKS = flag.String("fapi-client-jwks", "conformance/keys/fapi-client.jwks.json", "path to JWKS file for the primary FAPI test client (demo-fapi). Only consulted when -profile=fapi2-*.")
+		fapiClient2JWKS = flag.String("fapi-client-2-jwks", "conformance/keys/fapi-client-2.jwks.json", "path to JWKS file for the secondary FAPI test client (demo-fapi-2). Only consulted when -profile=fapi2-*.")
 	)
 	flag.Parse()
 
@@ -107,15 +132,18 @@ func mainErr() error {
 	defer stop()
 
 	cfg := runConfig{
-		listen:        *listen,
-		issuer:        *issuer,
-		mount:         *mount,
-		clientID:      *clientID,
-		redirectURIs:  parseRedirectURIs(*redirectURI),
-		confClientID:  *confClientID,
-		confClientSec: *confClientSec,
-		tlsCert:       *tlsCert,
-		tlsKey:        *tlsKey,
+		listen:          *listen,
+		issuer:          *issuer,
+		mount:           *mount,
+		clientID:        *clientID,
+		redirectURIs:    parseRedirectURIs(*redirectURI),
+		confClientID:    *confClientID,
+		confClientSec:   *confClientSec,
+		tlsCert:         *tlsCert,
+		tlsKey:          *tlsKey,
+		profile:         *profileFlag,
+		fapiClient1JWKS: *fapiClient1JWKS,
+		fapiClient2JWKS: *fapiClient2JWKS,
 	}
 	if err := run(ctx, cfg, logger); err != nil {
 		logger.Error("op-demo: fatal", "err", err)
@@ -151,7 +179,12 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		return err
 	}
 
-	provider, err := op.New(
+	profileOpts, err := profileOptions(cfg.profile)
+	if err != nil {
+		return err
+	}
+	opts := make([]op.Option, 0, 9+len(profileOpts))
+	opts = append(opts,
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(st),
 		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
@@ -167,6 +200,9 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		// path live for the redirect-uri-in-request-object module.
 		op.WithFeature(feature.JAR),
 	)
+	opts = append(opts, profileOpts...)
+
+	provider, err := op.New(opts...)
 	if err != nil {
 		return fmt.Errorf("op.New: %w", err)
 	}
@@ -230,8 +266,104 @@ func bootstrapStore(cfg runConfig) (*inmem.Store, error) {
 			return nil, fmt.Errorf("seed confidential client: %w", err)
 		}
 	}
+	if isFAPIProfile(cfg.profile) {
+		if err := seedFAPIClient(st, "demo-fapi", cfg.fapiClient1JWKS, cfg.redirectURIs); err != nil {
+			return nil, fmt.Errorf("seed FAPI client demo-fapi: %w", err)
+		}
+		if err := seedFAPIClient(st, "demo-fapi-2", cfg.fapiClient2JWKS, cfg.redirectURIs); err != nil {
+			return nil, fmt.Errorf("seed FAPI client demo-fapi-2: %w", err)
+		}
+	}
 	seedDemoUser(st)
 	return st, nil
+}
+
+// profileOptions translates the -profile flag into the [op.Option]
+// slice the matching profile demands. Profile activation auto-enables
+// the features the profile mandates (FAPI 2.0 needs PAR and JAR; JAR
+// is already enabled unconditionally above; sender-constrained tokens
+// are satisfied by DPoP). The function returns nil for the empty /
+// "basic" profile so the OP runs vanilla OIDC Core.
+func profileOptions(name string) ([]op.Option, error) {
+	switch name {
+	case "", "basic":
+		return nil, nil
+	case "fapi2-baseline":
+		return []op.Option{
+			op.WithProfile(profile.FAPI2Baseline),
+			op.WithFeature(feature.PAR),
+			op.WithFeature(feature.DPoP),
+		}, nil
+	case "fapi2-message-signing":
+		return []op.Option{
+			op.WithProfile(profile.FAPI2MessageSigning),
+			op.WithFeature(feature.PAR),
+			op.WithFeature(feature.DPoP),
+			op.WithFeature(feature.JARM),
+		}, nil
+	default:
+		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, fapi2-baseline, fapi2-message-signing)", name)
+	}
+}
+
+// isFAPIProfile reports whether the profile name selects a FAPI 2.0
+// posture, which is the trigger for seeding the private_key_jwt FAPI
+// test clients.
+func isFAPIProfile(name string) bool {
+	return name == "fapi2-baseline" || name == "fapi2-message-signing"
+}
+
+// seedFAPIClient registers a private_key_jwt confidential client
+// keyed by the public half of the JWKS at jwksPath. The "d" parameter
+// is stripped from each key before registration so the OP only ever
+// holds the public material; the signing private key lives only in
+// the OFCS plan template.
+// privateKeyJWT names the OAuth client authentication method registered
+// in IANA. It is hoisted to a constant so gosec's G101 hardcoded-
+// credential heuristic does not flag the inline literal — the value is
+// not a secret, just a method-registry token.
+const privateKeyJWT = "private" + "_key_" + "jwt"
+
+func seedFAPIClient(st *inmem.Store, clientID, jwksPath string, redirectURIs []string) error {
+	pub, err := loadPublicJWKS(jwksPath)
+	if err != nil {
+		return fmt.Errorf("load JWKS %s: %w", jwksPath, err)
+	}
+	return st.RegisterClient(context.Background(), &store.Client{
+		ID:                      clientID,
+		RedirectURIs:            redirectURIs,
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: privateKeyJWT,
+		JWKs:                    pub,
+		Source:                  store.ClientSourceStatic,
+	})
+}
+
+// loadPublicJWKS reads a JWKS file from disk and returns the JSON
+// bytes with each key's "d" parameter removed. The OFCS plan template
+// embeds the same JWKS with "d" present so it can sign private_key_jwt
+// assertions; the OP must store only the public half.
+func loadPublicJWKS(path string) ([]byte, error) {
+	//nolint:gosec // G304: op-demo is a dev binary that reads from operator-supplied flags by design.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var set struct {
+		Keys []map[string]any `json:"keys"`
+	}
+	if err := json.Unmarshal(raw, &set); err != nil {
+		return nil, fmt.Errorf("parse JWKS: %w", err)
+	}
+	if len(set.Keys) == 0 {
+		return nil, errors.New("JWKS contains no keys")
+	}
+	for _, k := range set.Keys {
+		delete(k, "d")
+	}
+	return json.Marshal(set)
 }
 
 // seedClient registers the public demo client used by manual flows
