@@ -314,17 +314,20 @@ func extractBearer(r *http.Request) (string, error) {
 }
 
 // bearerFromHeader extracts the token from the Authorization header,
-// case-insensitively matching "Bearer" per RFC 6750 §2.1. Returns "" when
-// the header is empty or does not carry a Bearer credential.
+// case-insensitively matching either the "Bearer" scheme (RFC 6750
+// §2.1) or the "DPoP" scheme (RFC 9449 §7.1). The "DPoP" prefix is
+// what a client signals when presenting a DPoP-bound access token at
+// a protected resource: the value is the same access token, but the
+// scheme name tells the resource server that a "DPoP" proof header
+// is also present. Returns "" when the header is empty or does not
+// carry a recognised credential.
 func bearerFromHeader(value string) string {
-	const prefix = "Bearer "
-	if len(value) <= len(prefix) {
-		return ""
+	for _, prefix := range []string{"Bearer ", "DPoP "} {
+		if len(value) > len(prefix) && strings.EqualFold(value[:len(prefix)], prefix) {
+			return strings.TrimSpace(value[len(prefix):])
+		}
 	}
-	if !strings.EqualFold(value[:len(prefix)], prefix) {
-		return ""
-	}
-	return strings.TrimSpace(value[len(prefix):])
+	return ""
 }
 
 // bearerFromBody extracts the token from a POST application/x-www-form-
