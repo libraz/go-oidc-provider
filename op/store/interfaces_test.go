@@ -77,6 +77,10 @@ func (fakeRefreshStore) RevokeChain(_ context.Context, _ string) error {
 	return store.ErrNotFound
 }
 
+func (fakeRefreshStore) RevokeByGrant(_ context.Context, _ string) error {
+	return nil
+}
+
 var _ store.RefreshTokenStore = (*fakeRefreshStore)(nil)
 
 // --- GrantStore --------------------------------------------------------------------

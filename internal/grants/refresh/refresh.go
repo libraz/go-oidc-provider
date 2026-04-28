@@ -49,6 +49,20 @@ const IDLength = 32
 // explicitly via [IssuerConfig].
 const TTLDefault = 30 * 24 * time.Hour
 
+// GraceTTLDefault is the default RFC 9700 §2.2.2 grace window during
+// which a just-rotated refresh token is still accepted ("the previous
+// refresh token MAY be invalidated but MUST remain valid until the new
+// refresh token is delivered to the client successfully"). The OFCS
+// conformance suite probes the window with WaitFor30Seconds plus a
+// trailing WaitForOneSecond inside the request sequence and a few
+// hundred milliseconds of HTTP / DPoP setup latency, so the elapsed
+// time between rotation and the retry is closer to 32 seconds. A
+// 60-second default leaves comfortable headroom while keeping the
+// window short enough that replays cannot easily exploit a stolen
+// previous token. Pass a negative [ExchangerConfig.GraceTTL] to
+// disable the window and revert to strict single-use semantics.
+const GraceTTLDefault = 60 * time.Second
+
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //
 //   - ErrTokenMissing → invalid_grant.
@@ -202,14 +216,32 @@ func validateIssue(in IssueInput) error {
 // Exchanger consumes refresh tokens and validates the rotation contract.
 // It is immutable after construction and safe for concurrent use.
 type Exchanger struct {
-	store store.RefreshTokenStore
-	clock func() time.Time
+	store    store.RefreshTokenStore
+	clock    func() time.Time
+	graceTTL time.Duration
 }
 
 // ExchangerConfig is the parameter bundle for [NewExchanger].
 type ExchangerConfig struct {
 	Store store.RefreshTokenStore
 	Clock func() time.Time
+
+	// GraceTTL bounds the RFC 9700 §2.2.2 window during which a
+	// just-rotated refresh token is still accepted. Three sentinels:
+	//
+	//   - Zero falls back to [GraceTTLDefault] (the typical case);
+	//   - Positive values are used verbatim;
+	//   - Negative values disable the window entirely so the
+	//     exchanger returns [ErrTokenReplayed] on any re-presentation
+	//     of a consumed token.
+	//
+	// When the window is in force and the presented token's
+	// [store.RefreshToken.ConsumedAt] is at most GraceTTL in the past,
+	// [Exchanger.Exchange] returns an [Exchanged] with
+	// [Exchanged.InGrace] set to true so the caller skips the
+	// rotation step (the canonical successor was already minted on
+	// the first exchange).
+	GraceTTL time.Duration
 }
 
 // NewExchanger constructs an [Exchanger] from cfg.
@@ -221,7 +253,14 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 	if clock == nil {
 		clock = timex.SystemClock.Now
 	}
-	return &Exchanger{store: cfg.Store, clock: clock}, nil
+	graceTTL := cfg.GraceTTL
+	switch {
+	case graceTTL == 0:
+		graceTTL = GraceTTLDefault
+	case graceTTL < 0:
+		graceTTL = 0 // explicit disable
+	}
+	return &Exchanger{store: cfg.Store, clock: clock, graceTTL: graceTTL}, nil
 }
 
 // ExchangeInput is the bundle of fields the token endpoint extracts from
@@ -282,19 +321,36 @@ type Exchanged struct {
 	// DER bytes hash to this value before minting the next-
 	// generation token.
 	MTLSCertThumbprint string
+
+	// InGrace reports that this exchange resolved through the RFC
+	// 9700 §2.2.2 grace window: the presented token had already
+	// been consumed within [ExchangerConfig.GraceTTL]. Callers MUST
+	// NOT mint a new refresh token on the grace path — the original
+	// rotation succeeded and its successor remains the canonical
+	// next-generation token. The token endpoint signals this by
+	// omitting "refresh_token" from the response body.
+	InGrace bool
 }
 
 // Exchange consumes the token, verifies the bindings, and returns the
 // projection the token endpoint needs to mint the next-generation
 // refresh token. The package handles replay defence: when the underlying
-// store reports [store.ErrAlreadyConsumed], Exchange walks the chain
-// root and revokes every descendant before returning [ErrTokenReplayed].
+// store reports [store.ErrAlreadyConsumed], Exchange consults the
+// configured grace window — within it the presented token is treated
+// as still valid (RFC 9700 §2.2.2) and an [Exchanged] with InGrace=true
+// is returned; outside it the chain root is revoked and
+// [ErrTokenReplayed] is surfaced.
 func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
 	if in.Token == "" {
 		return nil, ErrTokenMissing
 	}
 	rec, err := e.store.Consume(ctx, in.Token)
 	if err != nil {
+		if errors.Is(err, store.ErrAlreadyConsumed) {
+			if existing, ok := e.tryGrace(ctx, in); ok {
+				return existing, nil
+			}
+		}
 		return nil, e.mapConsumeError(ctx, in.Token, err)
 	}
 	if rec.ConsumedAt == nil {
@@ -324,7 +380,10 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 
 // mapConsumeError translates raw store errors into refresh sentinels and,
 // in the replay case, performs the chain revocation before returning
-// [ErrTokenReplayed].
+// [ErrTokenReplayed]. Callers reach this only when the presented token
+// is genuinely outside the [ExchangerConfig.GraceTTL] window — the
+// grace branch in [Exchanger.Exchange] short-circuits before this
+// function runs.
 func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err error) error {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -335,6 +394,83 @@ func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err
 	default:
 		return fmt.Errorf("refresh: consume: %w", err)
 	}
+}
+
+// tryGrace looks up the (already-consumed) record and, when its
+// ConsumedAt timestamp falls inside the configured grace window AND
+// the presented credentials match the consumed record, returns the
+// [Exchanged] projection callers should use without rotating the
+// chain. ok=false means the caller MUST fall through to the regular
+// replay path (which revokes the chain). tryGrace never revokes —
+// that is the caller's job once tryGrace returns false.
+func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged, bool) {
+	if e.graceTTL <= 0 {
+		return nil, false
+	}
+	rec, err := e.store.Find(ctx, in.Token)
+	if err != nil || rec == nil {
+		return nil, false
+	}
+	if !e.withinGraceWindow(rec) {
+		return nil, false
+	}
+	exchanged, gerr := e.graceExchange(rec, in)
+	if gerr != nil {
+		// Validation failure inside the grace window (client mismatch
+		// or scope widening). Surface as replay so the chain is
+		// revoked: a consumed token presented by a different client,
+		// or with a widened scope, is the same threat shape RFC 9700
+		// §2.2.2 calls out.
+		return nil, false
+	}
+	return exchanged, true
+}
+
+// graceExchange resolves a presented token whose ConsumedAt is at most
+// [Exchanger.graceTTL] in the past. The function re-validates the
+// client and scope bindings against the consumed record and returns an
+// [Exchanged] with InGrace=true so the token endpoint mints a fresh
+// access token without rotating the refresh chain.
+//
+// The returned ConsumedID is the presented token's id rather than its
+// canonical successor's: callers use ConsumedID only as the parent for
+// the next rotation, and the grace path forbids rotation entirely.
+// Surfacing the presented id keeps the audit trail aligned with the
+// request.
+func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*Exchanged, error) {
+	if rec.ClientID != in.ClientID {
+		return nil, ErrClientMismatch
+	}
+	resolvedScope, err := resolveScope(rec.Scope, in.RequestedScope)
+	if err != nil {
+		return nil, err
+	}
+	return &Exchanged{
+		ConsumedID:         rec.ID,
+		ClientID:           rec.ClientID,
+		Subject:            rec.Subject,
+		GrantID:            rec.GrantID,
+		Scope:              resolvedScope,
+		ConsumedAt:         *rec.ConsumedAt,
+		DPoPJKT:            rec.DPoPJKT,
+		MTLSCertThumbprint: rec.MTLSCertThumbprint,
+		InGrace:            true,
+	}, nil
+}
+
+// withinGraceWindow reports whether rec is eligible for the RFC 9700
+// §2.2.2 grace re-emission: ConsumedAt is non-nil, the record was NOT
+// revoked through [store.RefreshTokenStore.RevokeChain], and the
+// timestamp is at most [Exchanger.graceTTL] in the past. A zero
+// graceTTL is impossible after [NewExchanger] (it normalises
+// non-positive inputs to the default), so the receiver-state guard
+// is purely defensive.
+func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
+	if e.graceTTL <= 0 || rec == nil || rec.ConsumedAt == nil || rec.Revoked {
+		return false
+	}
+	elapsed := e.clock().UTC().Sub(rec.ConsumedAt.UTC())
+	return elapsed >= 0 && elapsed <= e.graceTTL
 }
 
 // revokeChainBestEffort walks parent pointers from presentedID up to the

@@ -253,6 +253,90 @@ func TestAuthCode_Replay(t *testing.T) {
 	}
 }
 
+// TestAuthCode_Replay_RevokesIssuedRefreshToken pins the §A.12.4 /
+// RFC 6749 §4.1.2 escalation contract: a replayed authorization code
+// is treated as evidence that the chain is compromised. The token
+// endpoint MUST (a) reject the replay with invalid_grant AND (b)
+// revoke every refresh token descended from the same grant. Without
+// (b) an attacker who captured the legitimate refresh token would
+// retain working credentials even after the OP has detected the
+// theft.
+//
+// Tracks: RFC 6749 §4.1.2 ("if an authorization code is used more
+// than once, the authorization server MUST deny the request and
+// SHOULD revoke ... all tokens previously issued based on that
+// authorization code"), RFC 9700 §2.1.1 (Security BCP recommends
+// rotation + reuse-detection revocation as the strict-stance default),
+// and the matching threat shape that drives ory/fosite's
+// "TestRefreshTokenChainRevocation" — the same revocation contract
+// flipped on the code half of the flow. CWE-294 (Authentication
+// Bypass by Capture-Replay) is the canonical CWE.
+func TestAuthCode_Replay_RevokesIssuedRefreshToken(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-replay-revoke"
+	const grantID = "grant-replay-revoke"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "email"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "email"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	// 1. First exchange succeeds and yields a refresh token.
+	first := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first exchange status=%d want 200", first.StatusCode)
+	}
+	body := decodeJSON(t, first)
+	first.Body.Close()
+	rt, _ := body["refresh_token"].(string)
+	if rt == "" {
+		t.Fatalf("refresh_token missing on first exchange")
+	}
+
+	// 2. Replaying the code MUST fail with invalid_grant.
+	second := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	if second.StatusCode != http.StatusBadRequest {
+		t.Fatalf("replay status=%d want 400", second.StatusCode)
+	}
+	body2 := decodeJSON(t, second)
+	second.Body.Close()
+	if body2["error"] != "invalid_grant" {
+		t.Errorf("replay error=%v want invalid_grant", body2["error"])
+	}
+
+	// 3. The refresh token issued in step 1 MUST now be revoked.
+	// Presenting it on /token with grant_type=refresh_token SHOULD
+	// produce invalid_grant.
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", rt)
+	third := f.post(t, form, client.ID, secret)
+	defer third.Body.Close()
+	if third.StatusCode != http.StatusBadRequest {
+		t.Fatalf("post-revoke refresh status=%d want 400 (refresh token must be revoked after code replay)", third.StatusCode)
+	}
+	body3 := decodeJSON(t, third)
+	if body3["error"] != "invalid_grant" {
+		t.Errorf("post-revoke refresh error=%v want invalid_grant", body3["error"])
+	}
+}
+
 // TestAuthCode_WrongClient: a code issued to client A cannot be
 // redeemed by client B even when both authenticate successfully.
 func TestAuthCode_WrongClient(t *testing.T) {

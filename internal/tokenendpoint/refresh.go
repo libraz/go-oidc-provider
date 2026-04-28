@@ -140,8 +140,9 @@ func exchangeRefresh(
 	in refreshInputs,
 ) (*refresh.Exchanged, bool) {
 	exchanger, err := refresh.NewExchanger(refresh.ExchangerConfig{
-		Store: deps.RefreshTokens,
-		Clock: deps.clockFunc(),
+		Store:    deps.RefreshTokens,
+		Clock:    deps.clockFunc(),
+		GraceTTL: deps.RefreshTokenGraceTTL,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -217,10 +218,13 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	rotated, err := rotateRefreshToken(ctx, deps, client, exchanged, binding)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+	var rotated string
+	if !exchanged.InGrace {
+		rotated, err = rotateRefreshToken(ctx, deps, client, exchanged, binding)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
 	}
 	writeSuccess(w, successResponse{
 		AccessToken:  accessToken,

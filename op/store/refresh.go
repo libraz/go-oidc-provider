@@ -78,6 +78,17 @@ type RefreshToken struct {
 	// release that admits dual binding does not need a contract
 	// change.
 	MTLSCertThumbprint string
+
+	// Revoked is true when the record was retired via
+	// [RefreshTokenStore.RevokeChain] (typically after a replay was
+	// detected on a sibling). The library distinguishes "consumed by
+	// rotation" (grace-window eligible per RFC 9700 §2.2.2) from
+	// "revoked due to chain compromise" (no grace) using this flag.
+	// Backends that delete revoked rows instead of marking them are
+	// equally compliant; the field exists so backends that retain
+	// rows for audit can still be queried without surfacing revoked
+	// records as grace-eligible.
+	Revoked bool
 }
 
 // RefreshTokenStore is the substore for refresh_token records. It belongs to
@@ -118,4 +129,14 @@ type RefreshTokenStore interface {
 	// approach satisfies the contract as long as subsequent Find calls
 	// return [ErrNotFound] or records whose ConsumedAt is non-nil.
 	RevokeChain(ctx context.Context, rootID string) error
+
+	// RevokeByGrant revokes every refresh token whose [RefreshToken.GrantID]
+	// equals grantID, regardless of which chain root it descends from. It
+	// is invoked when a sibling artefact tied to the same grant — e.g.
+	// the authorization code that produced the chain — is observed to be
+	// replayed (RFC 6749 §4.1.2). The contract is identical to
+	// [RefreshTokenStore.RevokeChain]: implementations MAY delete or mark
+	// the rows, and a missing grant is not an error (returning nil is
+	// appropriate when no rows match).
+	RevokeByGrant(ctx context.Context, grantID string) error
 }

@@ -155,6 +155,10 @@ func (stubRefreshStore) RevokeChain(context.Context, string) error {
 	return store.ErrNotFound
 }
 
+func (stubRefreshStore) RevokeByGrant(context.Context, string) error {
+	return nil
+}
+
 type stubGrantStore struct{}
 
 func (stubGrantStore) Save(context.Context, *store.Grant) error {

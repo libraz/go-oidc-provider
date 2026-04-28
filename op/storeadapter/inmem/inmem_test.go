@@ -91,6 +91,62 @@ func TestConsumeAuthCode_Race(t *testing.T) {
 	}
 }
 
+// TestConsumePAR_Race pins the one-time-use contract for the PAR
+// store under concurrent redemption: exactly one Consume call wins,
+// every other observer sees ErrAlreadyConsumed. The shape mirrors
+// [TestConsumeAuthCode_Race] because RFC 9126 §2.2 borrows the
+// authorization-code one-time semantic verbatim.
+//
+// Tracks: RFC 9126 §2.2 (PAR request_uri MUST be a one-time-use
+// value). The same race surface is what the FAPI 2.0 formal analysis
+// (eprint.iacr.org/2024/1540) calls "PAR request injection" — an
+// attacker who races the legitimate /authorize completion can
+// otherwise hijack the session if the AS allows two Consumes to
+// succeed.
+func TestConsumePAR_Race(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+	const n = 64
+	const uri = "urn:ietf:params:oauth:request_uri:race-1"
+	if err := s.PushedAuthRequests().Save(ctx, &store.PushedAuthRequest{
+		URI:       uri,
+		ClientID:  "c",
+		RawParams: []byte(`{}`),
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var wins, replays atomic.Int32
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.PushedAuthRequests().Consume(ctx, uri)
+			switch {
+			case err == nil:
+				wins.Add(1)
+			case errors.Is(err, store.ErrAlreadyConsumed):
+				replays.Add(1)
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if wins.Load() != 1 {
+		t.Fatalf("expected exactly one PAR Consume to win, got %d", wins.Load())
+	}
+	if replays.Load() != n-1 {
+		t.Fatalf("expected %d replays, got %d", n-1, replays.Load())
+	}
+}
+
 func TestBeginTx_SerialisesConcurrentTransactions(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference

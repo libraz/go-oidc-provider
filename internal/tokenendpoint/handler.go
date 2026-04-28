@@ -101,6 +101,13 @@ type Deps struct {
 	// negative falls back to [defaultRefreshTokenTTL].
 	RefreshTokenTTL time.Duration
 
+	// RefreshTokenGraceTTL bounds the RFC 9700 §2.2.2 grace window
+	// during which a just-rotated refresh token is still accepted.
+	// Zero or negative falls back to [refresh.GraceTTLDefault]
+	// (currently 30s). The token endpoint forwards this verbatim to
+	// [refresh.ExchangerConfig.GraceTTL].
+	RefreshTokenGraceTTL time.Duration
+
 	// SecretVerifier verifies confidential-client secrets. A nil value
 	// installs the library default ([clientauth.Argon2id]) so deployments
 	// that follow the reference posture need not wire one explicitly.

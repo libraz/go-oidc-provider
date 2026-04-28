@@ -310,6 +310,33 @@ func (r *txRefreshes) RevokeChain(ctx context.Context, rootID string) error {
 	return nil
 }
 
+func (r *txRefreshes) RevokeByGrant(ctx context.Context, grantID string) error {
+	if r.tx.closed.Load() {
+		return errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if grantID == "" {
+		return nil
+	}
+	st := r.tx.rtStaging
+	now := r.tx.clock.Now()
+	st.iter(func(id string, rec *store.RefreshToken) {
+		if rec.GrantID != grantID {
+			return
+		}
+		updated := cloneRefresh(rec)
+		if updated.ConsumedAt == nil {
+			t := now
+			updated.ConsumedAt = &t
+		}
+		updated.Revoked = true
+		st.updated[id] = updated
+	})
+	return nil
+}
+
 // markChainStaged walks the in-memory view (parent + staging) and stamps
 // every descendant with ConsumedAt. It is called at RevokeChain time so that
 // reads inside the same tx see the revocations.

@@ -95,13 +95,28 @@ func TestRefresh_HappyPath_NonOIDC(t *testing.T) {
 	}
 }
 
-// TestRefresh_Replay verifies that re-using an already-consumed
-// refresh token surfaces invalid_grant AND that the freshly-rotated
-// refresh token is also revoked (chain-wide replay defence).
+// movableClock advances by mutating a shared time.Time so the OP and
+// the test see the same wall-clock readings even after the test has
+// stepped forward.
+type movableClock struct{ cur *time.Time }
+
+func (c movableClock) Now() time.Time { return *c.cur }
+
+// TestRefresh_Replay verifies that, once the RFC 9700 §2.2.2 grace
+// window has elapsed, re-using an already-consumed refresh token
+// surfaces invalid_grant AND chain-wide replay defence revokes every
+// descendant. The grace path itself is covered by
+// TestRefresh_GraceWindow below.
 func TestRefresh_Replay(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	cur := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	prov := testkit.NewProvider(t, testkit.WithClock(movableClock{cur: &cur}))
+	f := &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		clock:    fixedClock{now: cur},
+	}
 	client, secret := f.confidentialClientFixture(t)
 	const tokenID = "rt-replay"
 	f.seedRefreshToken(t, &store.RefreshToken{
@@ -124,6 +139,10 @@ func TestRefresh_Replay(t *testing.T) {
 		t.Fatal("first exchange did not return a rotated refresh token")
 	}
 
+	// Step well past the default 30-second grace window so the second
+	// presentation falls onto the strict replay path.
+	cur = cur.Add(2 * time.Minute)
+
 	// Replay of the original token must fail and revoke the chain.
 	second := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
 	defer second.Body.Close()
@@ -143,6 +162,64 @@ func TestRefresh_Replay(t *testing.T) {
 	}
 	if got := decodeJSON(t, third); got["error"] != "invalid_grant" {
 		t.Errorf("post-revoke error=%v want invalid_grant", got["error"])
+	}
+}
+
+// TestRefresh_GraceWindow exercises the RFC 9700 §2.2.2 grace path
+// end-to-end at the HTTP layer: a refresh token presented again
+// within the configured window returns 200 OK, a fresh access_token,
+// and (importantly) NO new refresh_token field — the canonical
+// successor was already issued on the first exchange.
+func TestRefresh_GraceWindow(t *testing.T) {
+	t.Parallel()
+
+	cur := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	prov := testkit.NewProvider(t, testkit.WithClock(movableClock{cur: &cur}))
+	f := &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		clock:    fixedClock{now: cur},
+	}
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-grace"
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  "user-1",
+		GrantID:  "grant-grace",
+		Scope:    []string{"openid"},
+	})
+
+	first := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first status=%d want 200", first.StatusCode)
+	}
+	firstBody := decodeJSON(t, first)
+	first.Body.Close()
+	firstAccess, _ := firstBody["access_token"].(string)
+	if firstAccess == "" {
+		t.Fatal("first response missing access_token")
+	}
+	if rt, _ := firstBody["refresh_token"].(string); rt == "" {
+		t.Fatal("first response must rotate a refresh token")
+	}
+
+	// Step inside the grace window (default 30s).
+	cur = cur.Add(5 * time.Second)
+
+	second := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("grace status=%d want 200", second.StatusCode)
+	}
+	secondBody := decodeJSON(t, second)
+	if rt, ok := secondBody["refresh_token"]; ok {
+		t.Errorf("grace response must omit refresh_token; got %v", rt)
+	}
+	if got, _ := secondBody["access_token"].(string); got == "" {
+		t.Error("grace response must include a fresh access_token")
+	} else if got == firstAccess {
+		t.Error("grace response must mint a NEW access_token (RFC 9700 §2.2.2)")
 	}
 }
 

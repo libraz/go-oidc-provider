@@ -241,18 +241,15 @@ func writeAuthCodeExchangeError(
 	}
 }
 
-// revokeChainForCode walks every refresh token whose grant_id matches
-// the replayed code's grant and asks the store to revoke each chain.
-// The walk is best-effort: if the consumed authorization-code record is
-// no longer findable (e.g. the store garbage-collected it) the function
-// returns silently. The caller still emits invalid_grant.
+// revokeChainForCode revokes every refresh token whose GrantID matches
+// the replayed code's grant. RFC 6749 §4.1.2 says that when an
+// authorization code is used more than once the AS MUST revoke "all
+// tokens previously issued based on that authorization code"; this is
+// the implementation of that MUST.
 //
-// Refresh-token stores expose [store.RefreshTokenStore.RevokeChain] but
-// not "list by grant", so the helper threads through the existing
-// [store.RefreshTokenStore.Find] / Consume contract: it consumes the
-// record only if the store can locate one whose ParentID is nil and
-// whose grant matches. A more thorough sweep would require a richer
-// store contract, which the library does not yet mandate.
+// The walk is best-effort: if the consumed authorization-code record
+// is no longer findable (e.g. the store garbage-collected it) the
+// function returns silently. The caller still emits invalid_grant.
 func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	// We cannot reach the grant id from the consumed code (Consume has
 	// already returned ErrAlreadyConsumed). Look the record up via
@@ -261,11 +258,11 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	if err != nil || rec == nil {
 		return
 	}
-	// Best-effort: if the store does not garbage-collect consumed rows
-	// the GrantID is recoverable. The substore contract permits Find
-	// to return ErrNotFound for consumed rows; in that case the helper
-	// silently bails.
-	_ = deps.RefreshTokens.RevokeChain(ctx, rec.GrantID)
+	// RevokeByGrant walks the refresh-token store by GrantID and stamps
+	// every matching record. Implementations are expected to be silent
+	// when no record matches (a freshly-replayed code may not have
+	// produced a refresh token at all).
+	_ = deps.RefreshTokens.RevokeByGrant(ctx, rec.GrantID)
 }
 
 // issueAuthCodeResponse mints the access token, optionally a refresh

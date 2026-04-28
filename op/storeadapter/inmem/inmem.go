@@ -478,12 +478,27 @@ func (s *refreshStore) RevokeChain(_ context.Context, rootID string) error {
 	return nil
 }
 
+func (s *refreshStore) RevokeByGrant(_ context.Context, grantID string) error {
+	if grantID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.clock.Now()
+	for _, rec := range s.m {
+		if rec.GrantID == grantID {
+			markRevoked(rec, now)
+		}
+	}
+	return nil
+}
+
 // revokeChainLocked walks the parent pointers in m starting at rootID and
 // stamps ConsumedAt on rootID and every descendant. The traversal repeatedly
 // scans m until a full pass adds no new revocations; this keeps the helper
 // O(n^2) but tolerates parents that appear after their children in the map.
 func revokeChainLocked(m map[string]*store.RefreshToken, rootID string, now time.Time) {
-	stampConsumed(m[rootID], now)
+	markRevoked(m[rootID], now)
 	revoked := map[string]struct{}{rootID: {}}
 	for revokeOneGeneration(m, revoked, now) {
 	}
@@ -504,21 +519,27 @@ func revokeOneGeneration(m map[string]*store.RefreshToken, revoked map[string]st
 		if _, parentRevoked := revoked[*rec.ParentID]; !parentRevoked {
 			continue
 		}
-		stampConsumed(rec, now)
+		markRevoked(rec, now)
 		revoked[id] = struct{}{}
 		grew = true
 	}
 	return grew
 }
 
-// stampConsumed sets rec.ConsumedAt to now when the field is currently nil.
-// rec may be nil; in that case the call is a no-op.
-func stampConsumed(rec *store.RefreshToken, now time.Time) {
-	if rec == nil || rec.ConsumedAt != nil {
+// markRevoked stamps rec as both consumed and revoked. The Revoked
+// flag distinguishes "consumed via legitimate rotation" (eligible for
+// the RFC 9700 §2.2.2 grace window) from "retired by chain
+// revocation" (never grace-eligible). rec may be nil; in that case
+// the call is a no-op.
+func markRevoked(rec *store.RefreshToken, now time.Time) {
+	if rec == nil {
 		return
 	}
-	t := now
-	rec.ConsumedAt = &t
+	if rec.ConsumedAt == nil {
+		t := now
+		rec.ConsumedAt = &t
+	}
+	rec.Revoked = true
 }
 
 func cloneRefresh(t *store.RefreshToken) *store.RefreshToken {

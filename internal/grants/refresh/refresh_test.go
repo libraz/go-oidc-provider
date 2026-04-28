@@ -227,6 +227,12 @@ func TestExchange_ReplayRevokesEntireChain(t *testing.T) {
 		t.Fatalf("Issue#2: %v", err)
 	}
 
+	// Step past the RFC 9700 §2.2.2 grace window so the second
+	// presentation is treated as a true replay rather than an
+	// idempotent retry. One second beyond [refresh.GraceTTLDefault]
+	// is enough to observe the strict path.
+	*f.cur = f.cur.Add(refresh.GraceTTLDefault + time.Second)
+
 	// Replay the root: the exchanger must walk to the chain root and
 	// revoke every descendant — including the live child token.
 	_, err = f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
@@ -286,6 +292,89 @@ func TestExchange_RejectsScopeWidening(t *testing.T) {
 	}
 }
 
+// TestExchange_ScopeUpgradeAttacks_AllRejected hardens the
+// scope-widening defence with the attack patterns that have surfaced
+// in real-world OAuth implementations. Per RFC 6749 §6 the requested
+// scope MUST NOT include any value that was not originally granted.
+//
+// Tracks: RFC 6749 §6 (scope reduction is the only legal narrowing
+// operation), and the broad class of "scope upgrade" defects exemplified
+// by GHSA advisories filed against ory/fosite around 2020 (scope upgrade
+// / scope grant misinterpretation, fixed in v0.31.x — pre-CVE era for
+// fosite, but the same threat shape recurs across implementations).
+// The attack pattern is: an attacker who has captured a refresh token
+// asks /token to issue a wider access-token scope than the original
+// grant.
+func TestExchange_ScopeUpgradeAttacks_AllRejected(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+
+	cases := []struct {
+		name      string
+		requested []string
+		why       string
+	}{
+		{"add_unknown_scope", []string{"openid", "profile", "email", "phone"}, "phone never granted"},
+		{"add_admin", []string{"openid", "profile", "email", "admin"}, "privilege-escalation flavor"},
+		{"add_wildcard", []string{"openid", "profile", "email", "*"}, "literal wildcard must not be honoured"},
+		{"replace_scope", []string{"phone"}, "narrowing-with-substitution must reject"},
+		{"add_scope_only", []string{"openid", "profile", "email", "offline_access"}, "offline_access never granted"},
+		{"case_variant_uppercase", []string{"OPENID", "profile", "email"}, "scope is case-sensitive per RFC 6749 §3.3"},
+		{"case_variant_mixed", []string{"OpenID", "profile", "email"}, "case-sensitivity again"},
+		{"unicode_lookalike", []string{"оpenid", "profile", "email"}, "Cyrillic 'о' instead of Latin 'o'"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, t0)
+			tok, err := f.issuer.Issue(ctx, goodIssue())
+			if err != nil {
+				t.Fatalf("Issue: %v", err)
+			}
+			_, err = f.exchanger.Exchange(ctx, refresh.ExchangeInput{
+				Token:          tok,
+				ClientID:       "client-1",
+				RequestedScope: tc.requested,
+			})
+			if !errors.Is(err, refresh.ErrScopeWidening) {
+				t.Fatalf("requested=%v err=%v want ErrScopeWidening (%s)", tc.requested, err, tc.why)
+			}
+		})
+	}
+}
+
+// TestExchange_ScopeReorderAccepted pins the legitimate companion
+// behaviour: a request that contains the same scope set in a
+// different order is accepted (RFC 6749 §3.3 says scope is a
+// space-separated list with order-irrelevant semantics). Without
+// this pin a future implementer could "fix" the upgrade-attack tests
+// by accidentally enforcing order equality, breaking conformance.
+func TestExchange_ScopeReorderAccepted(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	tok, err := f.issuer.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	out, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{
+		Token:          tok,
+		ClientID:       "client-1",
+		RequestedScope: []string{"email", "openid", "profile"}, // reordered subset.
+	})
+	if err != nil {
+		t.Fatalf("Exchange reordered subset: %v", err)
+	}
+	if len(out.Scope) != 3 {
+		t.Fatalf("Scope=%v want 3 entries", out.Scope)
+	}
+}
+
 func TestExchange_DetectsExpiredToken(t *testing.T) {
 	t.Parallel()
 
@@ -320,6 +409,102 @@ func TestExchange_DetectsExpiredToken(t *testing.T) {
 	})
 	if !errors.Is(err, refresh.ErrTokenExpired) {
 		t.Errorf("err=%v want ErrTokenExpired", err)
+	}
+}
+
+// TestExchange_GraceWindow_ReturnsInGrace covers the RFC 9700 §2.2.2
+// grace path: a refresh token presented again within the configured
+// window after a successful rotation must be accepted, the response
+// must NOT issue a new refresh token, and the InGrace flag must be set.
+func TestExchange_GraceWindow_ReturnsInGrace(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	root, err := f.issuer.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	first, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
+	if err != nil {
+		t.Fatalf("Exchange#1: %v", err)
+	}
+	if first.InGrace {
+		t.Fatalf("first exchange must not be marked InGrace")
+	}
+	parent := first.ConsumedID
+	if _, err := f.issuer.Issue(ctx, refresh.IssueInput{
+		ClientID: first.ClientID,
+		Subject:  first.Subject,
+		GrantID:  first.GrantID,
+		Scope:    first.Scope,
+		ParentID: &parent,
+	}); err != nil {
+		t.Fatalf("Issue child: %v", err)
+	}
+
+	// Re-present the original token well inside the grace window.
+	*f.cur = f.cur.Add(refresh.GraceTTLDefault / 2)
+	again, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
+	if err != nil {
+		t.Fatalf("grace Exchange: %v", err)
+	}
+	if !again.InGrace {
+		t.Errorf("grace Exchange InGrace=false want true")
+	}
+	if again.ConsumedID != root {
+		t.Errorf("grace ConsumedID=%q want %q", again.ConsumedID, root)
+	}
+	if got, want := again.Subject, first.Subject; got != want {
+		t.Errorf("grace Subject=%q want %q", got, want)
+	}
+}
+
+// TestExchange_GraceWindow_ExpiredFallsBackToReplay confirms that
+// re-presenting a consumed token after the grace TTL has elapsed
+// surfaces the strict replay error and revokes the chain.
+func TestExchange_GraceWindow_ExpiredFallsBackToReplay(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	root, err := f.issuer.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("Exchange#1: %v", err)
+	}
+	*f.cur = f.cur.Add(refresh.GraceTTLDefault + time.Second)
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Errorf("post-grace err=%v want ErrTokenReplayed", err)
+	}
+}
+
+// TestExchange_GraceWindow_ClientMismatchRevokes ensures a different
+// client presenting the consumed token within the grace window is
+// rejected as replay (no idempotent re-emission across clients).
+func TestExchange_GraceWindow_ClientMismatchRevokes(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	root, err := f.issuer.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("Exchange#1: %v", err)
+	}
+	*f.cur = f.cur.Add(refresh.GraceTTLDefault / 4)
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-2"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Errorf("cross-client err=%v want ErrTokenReplayed", err)
 	}
 }
 
@@ -378,6 +563,18 @@ func (s *alwaysAliveRefreshStore) RevokeChain(_ context.Context, rootID string) 
 	}
 	for _, rec := range s.m {
 		if rec.ParentID != nil && *rec.ParentID == rootID {
+			rec.ConsumedAt = &now
+		}
+	}
+	return nil
+}
+
+func (s *alwaysAliveRefreshStore) RevokeByGrant(_ context.Context, grantID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	for _, rec := range s.m {
+		if rec.GrantID == grantID && rec.ConsumedAt == nil {
 			rec.ConsumedAt = &now
 		}
 	}
