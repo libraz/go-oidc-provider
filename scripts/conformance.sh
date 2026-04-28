@@ -44,6 +44,24 @@
 #               The variant defaults to client_secret_basic + code +
 #               default response_mode; oidcc-server-client-secret-post
 #               is auto-promoted to client_secret_post.
+#   baseline [label]
+#               Run every module in every seeded plan and write a
+#               deterministic JSON snapshot to
+#               conformance/baselines/<UTC-date>-<label>.json. The
+#               module list per plan is queried from OFCS at runtime
+#               (so catalog drift is captured automatically). Plan
+#               IDs come from conformance/.plan-ids.json which
+#               seed-plans writes on every successful seed.
+#               LABEL defaults to "snapshot"; pass any short slug
+#               that names the moment in time (e.g. "pre-loginflow").
+#               Set BASELINE_FILTER to a regex to limit modules
+#               (matched against module name).
+#   baseline-diff <old-baseline.json> <new-baseline.json>
+#               Compare two snapshots produced by `baseline`. Prints
+#               regressions (modules that lost PASSED) and fixes
+#               (modules that gained PASSED), and exits non-zero on
+#               any regression. Pure JSON comparison — does NOT
+#               require OFCS to be running.
 #   help        Show this help text.
 #
 # OFCS runs from conformance/docker-compose.yml against pinned image
@@ -399,6 +417,14 @@ cmd_seed_plans() {
   # tripping `set -u`. Clean up explicitly at the end of the function
   # via a tail-only `_seed_plans_cleanup` sentinel.
   local entry f plan_name plan_file body_file variant resp id alias_name
+  # plan_ids_json accumulates {plan_name: {id, alias, planFile}} so the
+  # baseline sub-command can find every seeded plan without re-asking the
+  # operator. The mapping is rewritten on every successful seed run so a
+  # stale entry from a prior OFCS instance never leaks.
+  local plan_ids_file="${CONF}/.plan-ids.json"
+  local plan_ids_tmp
+  plan_ids_tmp="$(mktemp "/tmp/ofcs-plan-ids.XXXXXX")"
+  printf '{}' > "${plan_ids_tmp}"
   # File → OFCS planName mapping. OFCS does not expose a "list plan
   # definitions" endpoint, so the names are baked in here.
   for entry in \
@@ -462,7 +488,22 @@ PY
     fi
     alias_name="$(python3 -c 'import json,pathlib,sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text()).get("alias",""))' "${plan_file}")"
     echo "[seed] ${plan_name} -> plan_id=${id} (alias=${alias_name})"
+    PLAN_IDS_FILE="${plan_ids_tmp}" PLAN_NAME="${plan_name}" PLAN_ID="${id}" \
+    ALIAS_NAME="${alias_name}" PLAN_KEY_FILE="${f}" \
+      python3 - <<'PY'
+import json, os, pathlib
+p = pathlib.Path(os.environ["PLAN_IDS_FILE"])
+data = json.loads(p.read_text() or "{}")
+data[os.environ["PLAN_NAME"]] = {
+    "id":       os.environ["PLAN_ID"],
+    "alias":    os.environ["ALIAS_NAME"],
+    "planFile": os.environ["PLAN_KEY_FILE"],
+}
+p.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PY
   done
+  mv "${plan_ids_tmp}" "${plan_ids_file}"
+  echo "[seed] plan IDs written to ${plan_ids_file}"
   rm -rf "${tmpdir}"
 }
 
@@ -746,6 +787,90 @@ for u in (d.get("browser") or {}).get("urls") or []:
   done
 }
 
+# _select_variant <module> echoes the urlencoded JSON variant string to
+# launch the module under. Centralised here so both cmd_batch and
+# cmd_baseline pick consistent variants. BATCH_VARIANT overrides the
+# auto-selected value (kept for ad-hoc cmd_batch invocations).
+_select_variant() {
+  local m="$1"
+  local default_variant client_secret_post_variant fapi2_baseline_variant
+  default_variant='%7B%22client_auth_type%22%3A%22client_secret_basic%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
+  client_secret_post_variant='%7B%22client_auth_type%22%3A%22client_secret_post%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
+  fapi2_baseline_variant='%7B%22client_auth_type%22%3A%22private_key_jwt%22%2C%22sender_constrain%22%3A%22dpop%22%2C%22fapi_profile%22%3A%22plain_fapi%22%2C%22openid%22%3A%22openid_connect%22%2C%22fapi_request_method%22%3A%22unsigned%22%2C%22fapi_response_mode%22%3A%22plain_response%22%7D'
+  if [[ -n "${BATCH_VARIANT:-}" ]]; then
+    printf '%s' "${BATCH_VARIANT}"
+  elif [[ "$m" == fapi2-security-profile-id2-* || "$m" == fapi2-message-signing-id1-* ]]; then
+    printf '%s' "${fapi2_baseline_variant}"
+  elif [[ "$m" == "oidcc-server-client-secret-post" ]]; then
+    printf '%s' "${client_secret_post_variant}"
+  else
+    printf '%s' "${default_variant}"
+  fi
+}
+
+# _run_one_module <plan-id> <module> drives one OFCS module to a terminal
+# state and writes the outcome to the output globals MODULE_STATUS,
+# MODULE_RESULT, MODULE_RUNNER_ID, MODULE_ELAPSED_MS. Returns 0 on a
+# successful end-to-end run regardless of pass/fail; returns 1 only when
+# OFCS rejected the module-create call (the runner ID never came back).
+# The function reuses cmd_drive's per-module flags (OFCS_DRIVE_REJECT /
+# OFCS_DRIVE_DOUBLE_VISIT) by inspecting the module name.
+_run_one_module() {
+  local plan="$1" m="$2"
+  MODULE_STATUS=""; MODULE_RESULT=""; MODULE_RUNNER_ID=""; MODULE_ELAPSED_MS="0"
+  local v jar resp id info status result start_ms end_ms
+  jar="$(mktemp /tmp/ofcs-batch-cookies.XXXXXX)"
+  OFCS_DRIVE_COOKIES="$jar"
+  export OFCS_DRIVE_COOKIES
+  case "$m" in
+    *user-rejects-authentication*) OFCS_DRIVE_REJECT=1 ;;
+    *)                             OFCS_DRIVE_REJECT=0 ;;
+  esac
+  export OFCS_DRIVE_REJECT
+  case "$m" in
+    *reused-request-uri-prior-to-auth-completion*) OFCS_DRIVE_DOUBLE_VISIT=1 ;;
+    *)                                             OFCS_DRIVE_DOUBLE_VISIT=0 ;;
+  esac
+  export OFCS_DRIVE_DOUBLE_VISIT
+  v="$(_select_variant "$m")"
+  start_ms="$(python3 -c 'import time; print(int(time.time()*1000))')"
+  resp="$(curl -sk -X POST "${OFCS_API}/api/runner?test=${m}&plan=${plan}&variant=${v}" \
+    -H 'Content-Type: application/json')"
+  id="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
+  if [[ -z "$id" ]]; then
+    rm -f "$jar"
+    unset OFCS_DRIVE_COOKIES OFCS_DRIVE_REJECT OFCS_DRIVE_DOUBLE_VISIT
+    MODULE_STATUS="ERROR"
+    MODULE_RESULT="${resp:0:200}"
+    return 1
+  fi
+  MODULE_RUNNER_ID="$id"
+  sleep 1
+  drive_all_urls "$id" 40
+  info=""
+  local stable=0
+  for _ in $(seq 1 30); do
+    info="$(curl -sk "${OFCS_API}/api/info/$id")"
+    status="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+    [[ "$status" == "FINISHED" || "$status" == "INTERRUPTED" ]] && break
+    if [[ "$status" == "WAITING" ]]; then
+      stable=$((stable+1))
+      if (( stable >= 5 )); then break; fi
+    else
+      stable=0
+    fi
+    sleep 1
+  done
+  result="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","") or "")' 2>/dev/null || true)"
+  end_ms="$(python3 -c 'import time; print(int(time.time()*1000))')"
+  MODULE_STATUS="$status"
+  MODULE_RESULT="$result"
+  MODULE_ELAPSED_MS="$((end_ms - start_ms))"
+  rm -f "$jar"
+  unset OFCS_DRIVE_COOKIES OFCS_DRIVE_REJECT OFCS_DRIVE_DOUBLE_VISIT
+  return 0
+}
+
 cmd_batch() {
   local plan="${1:-}"
   if [[ -z "$plan" || $# -lt 2 ]]; then
@@ -753,100 +878,212 @@ cmd_batch() {
     exit 1
   fi
   shift
-  # The default variant is OIDC Core (client_secret_basic + code +
-  # default response_mode). FAPI 2.0 module launches need a different
-  # variant — set BATCH_VARIANT to a urlencoded JSON object to override.
-  # The fapi2_baseline_variant constant below is the prebuilt one for
-  # the standard plain_fapi run.
-  local default_variant client_secret_post_variant fapi2_baseline_variant
-  default_variant='%7B%22client_auth_type%22%3A%22client_secret_basic%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
-  client_secret_post_variant='%7B%22client_auth_type%22%3A%22client_secret_post%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
-  fapi2_baseline_variant='%7B%22client_auth_type%22%3A%22private_key_jwt%22%2C%22sender_constrain%22%3A%22dpop%22%2C%22fapi_profile%22%3A%22plain_fapi%22%2C%22openid%22%3A%22openid_connect%22%2C%22fapi_request_method%22%3A%22unsigned%22%2C%22fapi_response_mode%22%3A%22plain_response%22%7D'
-  local pass=0 fail=0 skip=0 err=0 m v resp id info status result jar
+  local pass=0 fail=0 skip=0 err=0 m
   for m in "$@"; do
     echo
     echo "==== $m ===="
-    jar="$(mktemp /tmp/ofcs-batch-cookies.XXXXXX)"
-    OFCS_DRIVE_COOKIES="$jar"
-    export OFCS_DRIVE_COOKIES
-    # Tests whose name encodes "user-rejects" want the consent screen
-    # cancelled, not approved. Forward the signal to cmd_drive via env.
-    case "$m" in
-      *user-rejects-authentication*) OFCS_DRIVE_REJECT=1 ;;
-      *)                             OFCS_DRIVE_REJECT=0 ;;
-    esac
-    export OFCS_DRIVE_REJECT
-    # The "ensure-reused-request-uri-prior-to-auth-completion-succeeds"
-    # test asserts that the authorize URL with the same request_uri is
-    # visited at least twice before authentication completes (the OP
-    # must accept the second visit; RFC 9126 §2.2 reads "one-time" as
-    # "consumed at code emission", not at /authorize entry). Our drive
-    # only navigates once, so we mark a redundant visit via the OFCS
-    # browser API when this test is running.
-    case "$m" in
-      *reused-request-uri-prior-to-auth-completion*) OFCS_DRIVE_DOUBLE_VISIT=1 ;;
-      *)                                             OFCS_DRIVE_DOUBLE_VISIT=0 ;;
-    esac
-    export OFCS_DRIVE_DOUBLE_VISIT
-    if [[ -n "${BATCH_VARIANT:-}" ]]; then
-      v="$BATCH_VARIANT"
-    elif [[ "$m" == fapi2-security-profile-id2-* || "$m" == fapi2-message-signing-id1-* ]]; then
-      v="$fapi2_baseline_variant"
-    elif [[ "$m" == "oidcc-server-client-secret-post" ]]; then
-      v="$client_secret_post_variant"
-    else
-      v="$default_variant"
-    fi
-    resp="$(curl -sk -X POST "${OFCS_API}/api/runner?test=${m}&plan=${plan}&variant=${v}" \
-      -H 'Content-Type: application/json')"
-    id="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
-    if [[ -z "$id" ]]; then
-      echo "[batch] could not start ${m}: ${resp}"
+    if ! _run_one_module "$plan" "$m"; then
+      echo "[batch] could not start ${m}: ${MODULE_RESULT}"
       err=$((err+1))
-      rm -f "$jar"
       continue
     fi
-    echo "id=$id"
-    sleep 1
-    drive_all_urls "$id" 40
-    # Final poll for termination.
-    info=""
-    local stable=0
-    for _ in $(seq 1 30); do
-      info="$(curl -sk "${OFCS_API}/api/info/$id")"
-      status="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
-      [[ "$status" == "FINISHED" || "$status" == "INTERRUPTED" ]] && break
-      # WAITING with no further URLs typically means the test is
-      # human-review-gated (REVIEW item, screenshot upload) — count
-      # five consecutive WAITING polls as terminal so the batch keeps
-      # moving without us forging a result.
-      if [[ "$status" == "WAITING" ]]; then
-        stable=$((stable+1))
-        if (( stable >= 5 )); then break; fi
-      else
-        stable=0
-      fi
-      sleep 1
-    done
-    result="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","") or "")' 2>/dev/null || true)"
-    echo "result=${status}/${result}"
-    # WAITING with no result is a REVIEW-gated test (OFCS waiting for
-    # screenshot upload). REVIEW items count as PASSED for cert; we
-    # count them as `skip` here so the summary line distinguishes
-    # them from the strict pass set without bumping `fail`.
-    case "${status}/${result}" in
+    echo "id=${MODULE_RUNNER_ID}"
+    echo "result=${MODULE_STATUS}/${MODULE_RESULT}"
+    case "${MODULE_STATUS}/${MODULE_RESULT}" in
       */PASSED)            pass=$((pass+1));;
       */SKIPPED)           skip=$((skip+1));;
       */REVIEW|WAITING/)   skip=$((skip+1));;
       */WARNING)           skip=$((skip+1));;
       *)                   fail=$((fail+1));;
     esac
-    rm -f "$jar"
-    unset OFCS_DRIVE_COOKIES
-    unset OFCS_DRIVE_REJECT
   done
   echo
   echo "==== summary: pass=${pass} skip=${skip} fail=${fail} err=${err} ===="
+}
+
+# cmd_baseline runs every module in every seeded plan and writes a
+# deterministic JSON snapshot. The plan-id mapping comes from
+# conformance/.plan-ids.json (written by cmd_seed_plans). The module
+# list per plan is queried from OFCS at runtime so catalog drift
+# between OFCS releases is captured automatically. Output lands in
+# conformance/baselines/<UTC-date>-<label>.json with sorted keys so a
+# git diff between two snapshots is meaningful.
+cmd_baseline() {
+  local label="${1:-snapshot}"
+  local plan_ids_file="${CONF}/.plan-ids.json"
+  if [[ ! -f "${plan_ids_file}" ]]; then
+    echo "[baseline] ${plan_ids_file} not found — run \`scripts/conformance.sh seed-plans\` first" >&2
+    exit 1
+  fi
+  local out_dir="${CONF}/baselines"
+  mkdir -p "${out_dir}"
+  local stamp out_file
+  stamp="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+  out_file="${out_dir}/${stamp}-${label}.json"
+  local sha branch
+  sha="$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo unknown)"
+  branch="$(git -C "${ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  local tmp
+  tmp="$(mktemp /tmp/ofcs-baseline.XXXXXX.json)"
+  BASELINE_LABEL="${label}" BASELINE_STAMP="${stamp}" BASELINE_SHA="${sha}" \
+  BASELINE_BRANCH="${branch}" BASELINE_OUT="${tmp}" \
+    python3 - <<'PY'
+import json, os, pathlib
+p = pathlib.Path(os.environ["BASELINE_OUT"])
+p.write_text(json.dumps({
+    "schema":     "go-oidc-provider/baseline/v1",
+    "label":      os.environ["BASELINE_LABEL"],
+    "captured_at": os.environ["BASELINE_STAMP"],
+    "git": {
+        "sha":    os.environ["BASELINE_SHA"],
+        "branch": os.environ["BASELINE_BRANCH"],
+    },
+    "plans": {},
+}, indent=2, sort_keys=True) + "\n")
+PY
+  local plan_name plan_id modules m
+  while IFS= read -r plan_name; do
+    plan_id="$(PLAN_IDS_FILE="${plan_ids_file}" PLAN_NAME="${plan_name}" \
+      python3 -c 'import json,os,pathlib; print(json.loads(pathlib.Path(os.environ["PLAN_IDS_FILE"]).read_text())[os.environ["PLAN_NAME"]]["id"])')"
+    echo
+    echo "==== plan ${plan_name} (id=${plan_id}) ===="
+    local plan_info
+    plan_info="$(curl -sk "${OFCS_API}/api/info/plan/${plan_id}")"
+    modules="$(printf '%s' "${plan_info}" | python3 -c '
+import json, os, re, sys
+data = json.load(sys.stdin)
+mods = []
+for entry in data.get("modules", []):
+    name = entry.get("testModule") or entry.get("name") or ""
+    if not name:
+        continue
+    if not re.search(os.environ.get("BASELINE_FILTER", ""), name):
+        continue
+    mods.append(name)
+print("\n".join(mods))
+')"
+    [[ -z "${modules}" ]] && {
+      echo "[baseline] no modules returned for plan ${plan_name}; skipping"
+      continue
+    }
+    while IFS= read -r m; do
+      [[ -z "$m" ]] && continue
+      echo "---- ${m} ----"
+      _run_one_module "${plan_id}" "${m}" || true
+      echo "result=${MODULE_STATUS}/${MODULE_RESULT} (${MODULE_ELAPSED_MS}ms)"
+      BASELINE_OUT="${tmp}" PLAN_NAME="${plan_name}" PLAN_ID="${plan_id}" \
+      MODULE_NAME="${m}" MODULE_STATUS="${MODULE_STATUS}" MODULE_RESULT="${MODULE_RESULT}" \
+      MODULE_RUNNER_ID="${MODULE_RUNNER_ID}" MODULE_ELAPSED_MS="${MODULE_ELAPSED_MS}" \
+        python3 - <<'PY'
+import json, os, pathlib
+p = pathlib.Path(os.environ["BASELINE_OUT"])
+data = json.loads(p.read_text())
+plan = data["plans"].setdefault(os.environ["PLAN_NAME"], {
+    "plan_id": os.environ["PLAN_ID"],
+    "modules": {},
+})
+plan["modules"][os.environ["MODULE_NAME"]] = {
+    "status":     os.environ.get("MODULE_STATUS", ""),
+    "result":     os.environ.get("MODULE_RESULT", ""),
+    "runner_id":  os.environ.get("MODULE_RUNNER_ID", ""),
+    "elapsed_ms": int(os.environ.get("MODULE_ELAPSED_MS") or 0),
+}
+p.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PY
+    done <<< "${modules}"
+  done < <(python3 -c 'import json,pathlib,sys; print("\n".join(sorted(json.loads(pathlib.Path(sys.argv[1]).read_text()).keys())))' "${plan_ids_file}")
+  mv "${tmp}" "${out_file}"
+  echo
+  echo "[baseline] snapshot written to ${out_file}"
+  BASELINE_OUT="${out_file}" python3 - <<'PY'
+import json, os, pathlib
+p = pathlib.Path(os.environ["BASELINE_OUT"])
+data = json.loads(p.read_text())
+totals = {"PASSED": 0, "OTHER": 0, "FAILED": 0}
+for plan in data["plans"].values():
+    for mod in plan["modules"].values():
+        r = mod.get("result") or ""
+        if r == "PASSED":
+            totals["PASSED"] += 1
+        elif r in ("FAILED", "WARNING") and mod.get("status") == "FINISHED":
+            totals["FAILED"] += 1
+        else:
+            totals["OTHER"] += 1
+print(f"[baseline] totals: pass={totals['PASSED']} fail={totals['FAILED']} other={totals['OTHER']}")
+PY
+}
+
+# cmd_baseline_diff compares two baseline JSON snapshots and prints
+# regressions (modules that lost PASSED) and fixes (modules that
+# gained PASSED). Pure JSON comparison — does NOT touch OFCS, so it
+# can run in any environment that has python3.
+cmd_baseline_diff() {
+  local old_file="${1:-}" new_file="${2:-}"
+  if [[ -z "${old_file}" || -z "${new_file}" ]]; then
+    echo "[baseline-diff] usage: $0 baseline-diff <old.json> <new.json>" >&2
+    exit 1
+  fi
+  if [[ ! -f "${old_file}" || ! -f "${new_file}" ]]; then
+    echo "[baseline-diff] file not found (old=${old_file} new=${new_file})" >&2
+    exit 1
+  fi
+  OLD_FILE="${old_file}" NEW_FILE="${new_file}" python3 - <<'PY'
+import json, os, pathlib, sys
+old = json.loads(pathlib.Path(os.environ["OLD_FILE"]).read_text())
+new = json.loads(pathlib.Path(os.environ["NEW_FILE"]).read_text())
+
+def index(snap):
+    out = {}
+    for plan, body in snap.get("plans", {}).items():
+        for m, info in body.get("modules", {}).items():
+            out[(plan, m)] = info.get("result") or ""
+    return out
+
+old_idx = index(old)
+new_idx = index(new)
+keys = sorted(set(old_idx) | set(new_idx))
+regressions = []
+fixes = []
+new_only_passes = []
+dropped_passes = []
+churn = []
+for k in keys:
+    o = old_idx.get(k)
+    n = new_idx.get(k)
+    if o == n:
+        continue
+    if o == "PASSED" and n != "PASSED":
+        regressions.append((k, o, n))
+    elif o != "PASSED" and n == "PASSED":
+        fixes.append((k, o, n))
+    elif o is None:
+        new_only_passes.append((k, n))
+    elif n is None:
+        dropped_passes.append((k, o))
+    else:
+        churn.append((k, o, n))
+
+def fmt(k, *vals):
+    plan, m = k
+    return f"  [{plan}] {m}: " + " -> ".join(v or "(absent)" for v in vals)
+
+print(f"old: {os.environ['OLD_FILE']}  ({old.get('captured_at','?')})")
+print(f"new: {os.environ['NEW_FILE']}  ({new.get('captured_at','?')})")
+print()
+print(f"regressions: {len(regressions)}")
+for k, o, n in regressions:
+    print(fmt(k, o, n))
+print(f"fixes: {len(fixes)}")
+for k, o, n in fixes:
+    print(fmt(k, o, n))
+if churn:
+    print(f"non-pass churn: {len(churn)}")
+    for k, o, n in churn:
+        print(fmt(k, o, n))
+if new_only_passes or dropped_passes:
+    print(f"catalog drift: added={len(new_only_passes)} removed={len(dropped_passes)}")
+sys.exit(1 if regressions else 0)
+PY
 }
 
 case "${1:-help}" in
@@ -862,6 +1099,8 @@ case "${1:-help}" in
   op-status)    cmd_op_status ;;
   drive)        shift; cmd_drive "$@" ;;
   batch)        shift; cmd_batch "$@" ;;
+  baseline)     shift; cmd_baseline "$@" ;;
+  baseline-diff) shift; cmd_baseline_diff "$@" ;;
   help|-h|--help) usage ;;
   *)
     echo "unknown sub-command: $1" >&2

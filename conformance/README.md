@@ -76,6 +76,51 @@ The OFCS web UI is at <https://localhost:8443>; pre-built plan
 templates can also be imported there manually if you prefer the UI to
 the REST seed-plans path.
 
+## Capturing a baseline
+
+Run every module in every seeded plan and record the pass/fail
+outcome to a deterministic JSON snapshot. The intended use is
+"freeze the current conformance state, then verify a refactor does
+not regress against it":
+
+```sh
+# 1) Stack up + plans seeded
+make conformance-up
+
+# 2) Capture a labelled snapshot
+make conformance-baseline LABEL=pre-loginflow
+# → conformance/baselines/<UTC-date>-pre-loginflow.json
+
+# 3) Make changes, capture again
+make conformance-baseline LABEL=post-loginflow
+
+# 4) Diff. Exits non-zero on any module that lost PASSED.
+make conformance-baseline-diff \
+    BASELINE_OLD=conformance/baselines/2026-04-29T01-00-00Z-pre-loginflow.json \
+    BASELINE_NEW=conformance/baselines/2026-04-29T05-00-00Z-post-loginflow.json
+```
+
+The module list is queried from OFCS at runtime (so a catalog drift
+between OFCS releases is captured automatically). Set
+`BASELINE_FILTER` to a regex when you only want to baseline a
+subset:
+
+```sh
+BASELINE_FILTER='^oidcc-' make conformance-baseline LABEL=oidcc-only
+```
+
+Snapshot files are gitignored — they record an environment-specific
+moment in time and would churn between machines / OFCS bumps. If you
+want to commit a single canonical "released" snapshot, copy the
+desired file out from under `baselines/` to a path of your choice.
+
+The diff output classifies modules as:
+
+- **regressions** — were `PASSED`, now anything else (exit non-zero)
+- **fixes** — were not `PASSED`, now `PASSED`
+- **non-pass churn** — both states are non-`PASSED` but differ
+- **catalog drift** — module appears in only one snapshot
+
 ## Lifecycle commands
 
 | Command                   | What it does                                           |
@@ -86,6 +131,8 @@ the REST seed-plans path.
 | `make conformance-ofcs-up`/`-down`/`-status` | OFCS containers only                |
 | `make conformance-op-up`/`-down`/`-status`   | `cmd/op-demo` only                  |
 | `make conformance-seed-plans`               | Re-create the OFCS plans            |
+| `make conformance-baseline LABEL=...`        | Snapshot every module's pass/fail   |
+| `make conformance-baseline-diff BASELINE_OLD=... BASELINE_NEW=...` | Compare two snapshots |
 
 ## File map
 
@@ -97,6 +144,8 @@ conformance/
 ├── keys/                 ← FAPI client JWKS used by op-demo (committed)
 ├── op-demo.log           ← op-demo runtime log (gitignored)
 ├── op-demo.pid           ← op-demo PID file (gitignored)
+├── .plan-ids.json        ← seed-plans output: {plan_name → plan_id} (gitignored)
+├── baselines/            ← `baseline` snapshots (gitignored)
 └── plans/                ← OFCS plan templates (committed)
     ├── oidcc-basic.json
     ├── fapi2-baseline.json
