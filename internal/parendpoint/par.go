@@ -51,6 +51,17 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	values := stripAuthFields(r.PostForm)
+	// RFC 9126 §3 forbids "request_uri" inside a /par body — the
+	// endpoint is the *issuer* of those URIs. The check runs before
+	// JAR consumption because [jar.Merge] silently strips the form
+	// "request_uri" key, which would otherwise let a request that
+	// pairs a signed "request" with a forbidden "request_uri" survive
+	// to the parser unscathed.
+	if values.Get("request_uri") != "" {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"request_uri is not permitted in a /par request")
+		return
+	}
 	values, ok = consumeJARRequestObject(r.Context(), w, deps, client, values)
 	if !ok {
 		return

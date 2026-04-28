@@ -190,6 +190,31 @@ func TestPAR_JAR_RejectsRequestURIInPARBody(t *testing.T) {
 	}
 }
 
+// TestPAR_JAR_RejectsRequestPlusRequestURI asserts that pairing a
+// signed `request` with a `request_uri` form parameter is rejected
+// per RFC 9126 §3. The check must fire before jar.Merge runs,
+// because the merge silently strips the wire-form request_uri and
+// would otherwise leave the violation undetected.
+func TestPAR_JAR_RejectsRequestPlusRequestURI(t *testing.T) {
+	t.Parallel()
+	f := newJARFixture(t)
+	signed := f.jarSign(t, f.happyClaims())
+	form := url.Values{
+		"client_id":   {f.rp.ID},
+		"request":     {signed},
+		"request_uri": {"https://rp.testkit.invalid/req"},
+	}
+	resp := postPARForm(t, f.endpoint, form, f.rp.ID, f.secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+}
+
 func TestPAR_JAR_FeatureDisabledRejectsRequest(t *testing.T) {
 	t.Parallel()
 	// Spin up a PAR-only fixture: feature.JAR is absent.
