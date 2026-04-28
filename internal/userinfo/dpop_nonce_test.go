@@ -10,8 +10,10 @@
 package userinfo
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -61,6 +63,76 @@ func TestRespondUseDPoPNonce_NoIssuer_OmitsHeader(t *testing.T) {
 	}
 	if got := rec.Header().Get("WWW-Authenticate"); !strings.Contains(got, `error="use_dpop_nonce"`) {
 		t.Errorf("WWW-Authenticate = %q, expected use_dpop_nonce error code", got)
+	}
+}
+
+// rotatingIssuer returns a different nonce on each [IssueNonce] call,
+// modelling the production posture where the OP rotates its accepted
+// nonce window over time. Tests use it to assert that the challenge
+// path emits a FRESH value rather than echoing whatever the client
+// just presented.
+type rotatingIssuer struct {
+	mu       sync.Mutex
+	counter  int
+	template string
+}
+
+func (r *rotatingIssuer) IssueNonce() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.counter++
+	return fmt.Sprintf("%s-%d", r.template, r.counter)
+}
+
+// TestRespondUseDPoPNonce_DoesNotEchoStaleNonce pins the freshness
+// invariant on the use_dpop_nonce challenge path: when the OP rejects
+// a proof because its nonce is stale, the DPoP-Nonce header in the
+// 401 response MUST carry a NEWLY issued value rather than echoing
+// the one the client just presented. Echoing the stale nonce would
+// be useless (the next retry would fail the same way) and would also
+// hand a confused client a perpetual loop.
+//
+// Tracks:
+//   - RFC 9449 §9 "Nonce Mechanism" — the server-generated nonce is
+//     a one-time-use freshness token; rotation is the whole point.
+//   - panva node-oidc-provider commit 1b073c0 ("issue dpop-nonce on
+//     proof iat skew failure") and 4d635e2 ("avoid emitting stale
+//     dpop-nonce on freshness failure") which fixed exactly the
+//     "echo the value the client showed" failure mode in another
+//     ecosystem.
+//
+// Defence in this codebase: [respondUseDPoPNonce] calls
+// [HandlerDeps.DPoPNonces.IssueNonce] every time it fires; the value
+// the client presented is never plumbed into this helper, so an
+// echo regression would require a refactor that broke the boundary.
+// The test confirms the boundary is still honoured: every challenge
+// receives a fresh value from the issuer, distinct from any other.
+func TestRespondUseDPoPNonce_DoesNotEchoStaleNonce(t *testing.T) {
+	t.Parallel()
+
+	iss := &rotatingIssuer{template: "server-nonce"}
+	deps := HandlerDeps{DPoPNonces: iss}
+
+	// Drive the challenge twice; assert each emission is distinct
+	// from every prior emission — the rotation contract.
+	seen := make(map[string]struct{})
+	for i := range 4 {
+		rec := httptest.NewRecorder()
+		respondUseDPoPNonce(rec, deps)
+		got := rec.Header().Get("DPoP-Nonce")
+		if got == "" {
+			t.Fatalf("call %d: DPoP-Nonce header empty", i)
+		}
+		if _, dup := seen[got]; dup {
+			t.Fatalf("call %d: DPoP-Nonce=%q already emitted on a prior challenge; rotation contract broken", i, got)
+		}
+		seen[got] = struct{}{}
+		if rec.Code != 401 {
+			t.Errorf("call %d: status=%d want 401", i, rec.Code)
+		}
+		if !strings.Contains(rec.Header().Get("WWW-Authenticate"), `error="use_dpop_nonce"`) {
+			t.Errorf("call %d: WWW-Authenticate missing use_dpop_nonce code", i)
+		}
 	}
 }
 

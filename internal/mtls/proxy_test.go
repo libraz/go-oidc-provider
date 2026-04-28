@@ -176,6 +176,105 @@ func TestCertificateFromRequest_PrefersHandshake(t *testing.T) {
 	}
 }
 
+// TestCertificateFromRequest_OnlyConfiguredHeaderHonoured pins the
+// "exact-name match" property on the proxy header path: when the
+// embedder configures [ProxyConfig.HeaderName], NO other header is
+// ever consulted, even widely-deployed alternatives like
+// "X-Forwarded-Client-Cert" (Envoy XFCC), "Ssl-Client-Cert" (nginx
+// stream), or "X-SSL-Client-Cert" (haproxy). The package's contract
+// is that ONE header name is trusted at a time, configured per
+// deployment; admitting "well-known" alternatives "for convenience"
+// is exactly the misconfiguration class that turns a reverse proxy
+// into a cert-spoofing surface.
+//
+// Threat model (no single CVE; documented as a class in RFC 8705 §3
+// and recurring in deployment guides for Envoy, nginx, haproxy,
+// AWS ELB, Cloudflare):
+//
+//   - The OP runs behind a reverse proxy that strips and replaces
+//     "X-Client-Cert" before passing the request to the OP. The
+//     attacker cannot set "X-Client-Cert" because the proxy clobbers
+//     it. But if the OP ALSO consulted "X-Forwarded-Client-Cert"
+//     (which the proxy did NOT strip because it is not the chosen
+//     name), an attacker could set XFCC on the inbound request and
+//     spoof a client cert.
+//   - Symmetric variant: an OP that adds case-insensitive matching
+//     would let an attacker bypass a strict proxy strip rule by
+//     setting "x-client-cert" (lowercase) — though Go's net/http
+//     canonicalises header names so this is structurally closed,
+//     the test pins the byte-equal expectation regardless.
+//
+// Defence: [CertificateFromRequest] consults exactly the header
+// named in [ProxyConfig.HeaderName] via [http.Header.Get], which is
+// canonicalised but does NOT alias to other names. Any deviation
+// from "exact name, single header" surfaces here.
+func TestCertificateFromRequest_OnlyConfiguredHeaderHonoured(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	pemBody := pemEncode(t, cert)
+
+	// Deployment configures "X-Client-Cert". Every probe sets a
+	// DIFFERENT header name to a valid PEM payload; the package MUST
+	// return ErrNoClientCert on every one because none of them are
+	// the configured name.
+	probes := []string{
+		"X-Forwarded-Client-Cert", // Envoy XFCC
+		"Ssl-Client-Cert",         // nginx stream
+		"X-SSL-Client-Cert",       // haproxy
+		"X-ARR-ClientCert",        // IIS / Azure App Service
+		"X-Client-Certificate",    // pluralised typo
+		"Client-Cert",             // unprefixed
+		"X-Forwarded-Cert",        // truncated
+		"X-Client-Cert-Chain",     // chain variant
+	}
+	for _, headerName := range probes {
+		t.Run(headerName, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+			req.Header.Set(headerName, pemBody)
+			_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+			if !errors.Is(err, mtls.ErrNoClientCert) {
+				t.Errorf("header %q: err=%v want ErrNoClientCert (only configured name MUST be honoured)",
+					headerName, err)
+			}
+		})
+	}
+}
+
+// TestCertificateFromRequest_NoTLSNoHeader_StillFailsClosed pins the
+// belt-and-braces property: a request with neither TLS handshake nor
+// the configured header MUST yield ErrNoClientCert, regardless of how
+// many DECOY headers the attacker piles on. The test is structurally
+// redundant with [TestCertificateFromRequest_OnlyConfiguredHeaderHonoured]
+// but exists separately so a failure here pinpoints "no source at all"
+// vs "wrong source consulted".
+func TestCertificateFromRequest_NoTLSNoHeader_StillFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	pemBody := pemEncode(t, cert)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	// Pile on every plausible attacker header.
+	for _, name := range []string{
+		"X-Forwarded-Client-Cert",
+		"Ssl-Client-Cert",
+		"X-SSL-Client-Cert",
+		"X-ARR-ClientCert",
+		"X-Client-Cert", // even the canonical name — but config is empty.
+	} {
+		req.Header.Set(name, pemBody)
+	}
+
+	// Empty ProxyConfig: no header is trusted. TLS source is also
+	// absent. MUST fail closed.
+	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{})
+	if !errors.Is(err, mtls.ErrNoClientCert) {
+		t.Errorf("err=%v want ErrNoClientCert; an unconfigured deployment must NOT trust any header", err)
+	}
+}
+
 // TestCertificateFromRequest_NilRequest fails closed.
 func TestCertificateFromRequest_NilRequest(t *testing.T) {
 	t.Parallel()
