@@ -138,7 +138,7 @@ func emitAuthorizeSuccess(
 		// Fall through to legacy emit on signer / dispatch failure.
 	}
 	stampNoStore(w)
-	http.Redirect(w, r, buildSuccessRedirect(req.RedirectURI, code, req.State), http.StatusFound)
+	http.Redirect(w, r, buildSuccessRedirect(req.RedirectURI, code, req.State, deps.Issuer), http.StatusFound)
 }
 
 // emitAuthorizeError sends the error-path response. The legacy path is
@@ -162,7 +162,7 @@ func emitAuthorizeError(
 		// "unsupported_response_mode" via the legacy redirect — JARM
 		// can't be used to convey "JARM is not supported".
 		redirectError(w, r, req.RedirectURI, errUnsupportedResponseMode,
-			"response_mode is not supported by this OP", req.State)
+			"response_mode is not supported by this OP", req.State, deps.Issuer)
 		return
 	}
 	if mode := jarmModeForRequest(req); mode != "" && deps.JARM != nil {
@@ -171,5 +171,5 @@ func emitAuthorizeError(
 		}
 		// Fall through to legacy redirect on signer / dispatch failure.
 	}
-	redirectError(w, r, req.RedirectURI, code, description, req.State)
+	redirectError(w, r, req.RedirectURI, code, description, req.State, deps.Issuer)
 }

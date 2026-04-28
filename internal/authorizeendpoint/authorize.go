@@ -547,7 +547,7 @@ func mintAndRedirect(
 
 // buildSuccessRedirect composes the success redirect target. It is split
 // out so it can be tested without invoking the HTTP machinery.
-func buildSuccessRedirect(redirectURI, code, state string) string {
+func buildSuccessRedirect(redirectURI, code, state, issuer string) string {
 	u, err := url.Parse(redirectURI)
 	if err != nil {
 		// The validator already accepted the redirect_uri, so a parse
@@ -560,6 +560,12 @@ func buildSuccessRedirect(redirectURI, code, state string) string {
 	q.Set("code", code)
 	if state != "" {
 		q.Set("state", state)
+	}
+	if issuer != "" {
+		// RFC 9207 §2.3: every authorization response carries "iss"
+		// equal to the OP's discovery issuer. Defense-in-depth against
+		// the mix-up attack class; FAPI 2.0 §5.3.2.2 mandates it.
+		q.Set("iss", issuer)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()

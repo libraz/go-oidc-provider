@@ -185,6 +185,14 @@ type Deps struct {
 	// upgrades it to MUST. The flag is forwarded verbatim to
 	// [authorize.Policy.NonceRequired].
 	RequireNonce bool
+
+	// Issuer is the OP's canonical issuer URL. The handler stamps it
+	// onto every /authorize response (success and error) as the
+	// RFC 9207 "iss" parameter — defense-in-depth against mix-up
+	// attacks and a FAPI 2.0 §5.3.2.2 MUST. An empty value disables
+	// the emission so vanilla OIDC Core deployments that have not
+	// adopted RFC 9207 keep the legacy wire shape.
+	Issuer string
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

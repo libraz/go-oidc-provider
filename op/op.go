@@ -416,7 +416,13 @@ func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, err
 		Resolver: resolver,
 		JTIStore: cfg.store.ConsumedJTIs(),
 		Audience: absoluteEndpointURL(cfg, cfg.endpoints.Token),
-		Clock:    cfg.clock.Now,
+		// FAPI 2.0 §5.2.2 mandates aud == issuer; OIDC Core §9
+		// mandates aud == token endpoint URL. RFC 7523 §3 leaves the
+		// choice to the AS. Accepting both lets the same OP serve
+		// OIDC Core and FAPI 2.0 clients without forcing a per-
+		// profile verifier swap.
+		AuxAudiences: []string{cfg.issuer},
+		Clock:        cfg.clock.Now,
 	}, nil
 }
 
@@ -892,6 +898,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
 		RequirePKCE:             cfg.requirePKCE(),
 		RequireNonce:            cfg.requireNonce(),
+		Issuer:                  cfg.issuer,
 	})
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)

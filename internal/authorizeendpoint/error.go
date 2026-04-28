@@ -48,8 +48,8 @@ func renderJSONError(w http.ResponseWriter, status int, code, description string
 // The function never inspects the existing query string of redirectURI: the
 // authorize parser has already verified that the URI parses cleanly, and we
 // preserve any existing query the client registered.
-func redirectError(w http.ResponseWriter, r *http.Request, redirectURI, code, description, state string) {
-	target, err := buildRedirectError(redirectURI, code, description, state)
+func redirectError(w http.ResponseWriter, r *http.Request, redirectURI, code, description, state, issuer string) {
+	target, err := buildRedirectError(redirectURI, code, description, state, issuer)
 	if err != nil {
 		// The redirect target is unparseable; fall back to the JSON
 		// envelope so the operator gets a useful diagnostic instead of
@@ -63,7 +63,7 @@ func redirectError(w http.ResponseWriter, r *http.Request, redirectURI, code, de
 
 // buildRedirectError composes the redirect target. It is split out so the
 // query-merge logic can be unit-tested without invoking the HTTP machinery.
-func buildRedirectError(redirectURI, code, description, state string) (string, error) {
+func buildRedirectError(redirectURI, code, description, state, issuer string) (string, error) {
 	u, err := url.Parse(redirectURI)
 	if err != nil {
 		return "", err
@@ -75,6 +75,12 @@ func buildRedirectError(redirectURI, code, description, state string) (string, e
 	}
 	if state != "" {
 		q.Set("state", state)
+	}
+	if issuer != "" {
+		// RFC 9207 §2.4: error responses also carry "iss". Skipping
+		// it on the error path would defeat the mix-up protection the
+		// success path already has.
+		q.Set("iss", issuer)
 	}
 	u.RawQuery = q.Encode()
 	return u.String(), nil
