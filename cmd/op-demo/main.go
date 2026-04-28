@@ -34,6 +34,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -212,6 +213,9 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		Handler:           provider,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	if isFAPIProfile(cfg.profile) {
+		srv.TLSConfig = fapiTLSConfig()
+	}
 
 	idleClosed := make(chan struct{})
 	// Shutdown deliberately uses a fresh background context: by the
@@ -237,6 +241,7 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		"mount", cfg.mount,
 		"client_id", cfg.clientID,
 		"tls", tlsEnabled,
+		"fapi_tls", srv.TLSConfig != nil,
 	)
 
 	var listenErr error
@@ -313,6 +318,38 @@ func isFAPIProfile(name string) bool {
 	return name == "fapi2-baseline" || name == "fapi2-message-signing"
 }
 
+// fapiTLSConfig returns the TLS configuration FAPI 2.0 §6.1.2 mandates
+// for an authorization server endpoint: TLS 1.2 with the FAPI 1.0
+// Advanced §8.5 ECDHE_RSA AEAD allowlist.
+//
+// We cap at TLS 1.2 (MinVersion == MaxVersion == VersionTLS12) because
+// the OFCS DisallowInsecureCipher condition follows the strict
+// FAPI 1.0 RW allowlist (RSA-keyed AEAD only) — and Go's TLS 1.3
+// cipher list is not configurable, so the only way to keep
+// CHACHA20_POLY1305 (which is not on the FAPI allowlist) off the wire
+// is to negotiate TLS 1.2 only.
+//
+// The cipher list is RSA-only because OFCS's allowlist (in
+// release-v5.1.9 source: condition/common/DisallowInsecureCipher)
+// excludes ECDSA variants even though FAPI 1.0 Final §8.5 lists them.
+// The matching deployment must therefore use an RSA server cert; the
+// conformance harness regenerates an RSA-2048 cert in scripts/
+// conformance.sh cmd_certs.
+//
+// DHE_RSA is omitted because Go's stdlib has not shipped DHE since
+// 1.14; modern FAPI test rigs verify ECDHE-only deployments.
+func fapiTLSConfig() *tls.Config {
+	//nolint:gosec // G402: deliberate TLS-1.2 cap so OFCS's FAPI 1.0 RW cipher tests pass.
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		MaxVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+		},
+	}
+}
+
 // seedFAPIClient registers a private_key_jwt confidential client
 // keyed by the public half of the JWKS at jwksPath. The "d" parameter
 // is stripped from each key before registration so the OP only ever
@@ -331,7 +368,7 @@ func seedFAPIClient(st *inmem.Store, clientID, jwksPath string, redirectURIs []s
 	}
 	return st.RegisterClient(context.Background(), &store.Client{
 		ID:                      clientID,
-		RedirectURIs:            redirectURIs,
+		RedirectURIs:            withFAPIDummyRedirectURIs(redirectURIs),
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
 		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
@@ -339,6 +376,24 @@ func seedFAPIClient(st *inmem.Store, clientID, jwksPath string, redirectURIs []s
 		JWKs:                    pub,
 		Source:                  store.ClientSourceStatic,
 	})
+}
+
+// withFAPIDummyRedirectURIs returns base extended with the dummy-query
+// variants the OFCS happy-flow appends via AddDummyValuesToRedirectUri.
+// FAPI 2.0 / OAuth 2.1 require exact-string redirect_uri match, but the
+// OFCS happy-flow exercises a "second client with extra query params"
+// path that the AS is expected to accept. Pre-registering the variants
+// lets exact-match succeed without weakening the matcher.
+func withFAPIDummyRedirectURIs(base []string) []string {
+	const (
+		twoDummies   = "?dummy1=lorem&dummy2=ipsum"
+		threeDummies = "?dummy1=lorem&dummy2=ipsum&dummy3=dolor"
+	)
+	out := make([]string, 0, len(base)*3)
+	for _, u := range base {
+		out = append(out, u, u+twoDummies, u+threeDummies)
+	}
+	return out
 }
 
 // loadPublicJWKS reads a JWKS file from disk and returns the JSON
