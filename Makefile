@@ -3,7 +3,10 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := verify
 
 .PHONY: tools fmt lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify clean \
-        conformance-certs conformance-op-up conformance-op-down conformance-op-status
+        conformance-certs conformance-up conformance-down \
+        conformance-ofcs-up conformance-ofcs-down conformance-ofcs-status \
+        conformance-op-up conformance-op-down conformance-op-status \
+        conformance-seed-plans
 
 tools:
 	@scripts/install-tools.sh
@@ -45,12 +48,30 @@ clean:
 	go clean -testcache
 	rm -rf cover.out cover.html bin/ build/ dist/ testdata/fuzz
 
-# Conformance harness (OpenID Foundation Conformance Suite). The OFCS
-# itself is not started by these targets — see conformance/README.md
-# for the (one-time) clone+build of openid/conformance-suite. These
-# targets manage the cert and the cmd/op-demo side of the loop.
+# Conformance harness (OpenID Foundation Conformance Suite). OFCS
+# itself runs from conformance/docker-compose.yml at a pinned image
+# tag, so `make conformance-up` is sufficient to bring the whole
+# stack up from a clean clone — no separate OFCS checkout needed.
+conformance-up:
+	@scripts/conformance.sh up
+
+conformance-down:
+	@scripts/conformance.sh down
+
 conformance-certs:
 	@scripts/conformance.sh certs
+
+conformance-seed-plans:
+	@scripts/conformance.sh seed-plans
+
+conformance-ofcs-up:
+	@scripts/conformance.sh ofcs-up
+
+conformance-ofcs-down:
+	@scripts/conformance.sh ofcs-down
+
+conformance-ofcs-status:
+	@scripts/conformance.sh ofcs-status
 
 conformance-op-up:
 	@scripts/conformance.sh op-up

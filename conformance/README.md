@@ -12,117 +12,89 @@ are scaffolded:
 
 ## Prerequisites
 
-- Docker / Docker Compose
+- Docker (Compose v2 — invoked as `docker compose`)
 - `openssl` (for cert generation)
-- A local clone of [openid/conformance-suite][ofcs] built with
-  `mvn -B clean install` per the OFCS README. The official guidance is
-  to run OFCS from that clone; this repository does not bundle a
-  vendored copy.
+- `curl` and `python3` (for the drive/seed-plans scripts)
 
-## One-time setup
+OFCS itself is pulled as a pre-built image from
+`registry.gitlab.com/openid/conformance-suite` at the tag pinned in
+[`docker-compose.yml`](docker-compose.yml). No separate OFCS checkout
+or `mvn install` step is required.
 
-1. Generate a self-signed cert covering `localhost` and
-   `host.docker.internal`:
+## One command from a clean clone
 
-   ```sh
-   make conformance-certs
-   ```
+```sh
+make conformance-up
+```
 
-   Material lands in `conformance/certs/`. The cert is a 30-day ECDSA
-   P-256 self-signed leaf — it is not committed (`*.pem` is gitignored).
+That target runs, in order:
 
-2. Bring up OFCS from your local `conformance-suite/` clone:
+1. `scripts/conformance.sh certs` — self-signed RSA-2048 cert for the
+   OP listener (covers `localhost` + `host.docker.internal`), a pair
+   of RSA-2048 PKCS#8 client cert/key files for the FAPI 2.0 mtls /
+   mtls2 plan slots, and a JKS truststore that bundles the system
+   cacerts plus the OP cert. Material lands in `conformance/certs/`
+   and is gitignored.
+2. `scripts/conformance.sh ofcs-up` — `docker compose up -d` against
+   `conformance/docker-compose.yml`. The compose file mounts the JKS
+   from step 1 into the OFCS server container and points the JVM at
+   it via `JAVA_EXTRA_ARGS`, so the suite trusts the OP without any
+   manual trust-store ceremony. Waits for `https://localhost:8443`
+   to answer.
+3. `scripts/conformance.sh op-up` — builds and launches `cmd/op-demo`
+   on `https://127.0.0.1:9443`, seeded with redirect URIs for all
+   three plan aliases. PID lands in `conformance/op-demo.pid`, logs
+   in `conformance/op-demo.log`.
+4. `scripts/conformance.sh seed-plans` — POSTs each plan template
+   from `plans/` to OFCS via its REST API, injecting mtls/mtls2 PEM
+   material into the FAPI 2.0 plans. Prints the resulting plan IDs.
 
-   ```sh
-   cd /path/to/conformance-suite
-   docker compose -f docker-compose-dev.yml up -d
-   ```
+Tear everything down (including the mongo volume that holds OFCS
+state) with:
 
-   The OFCS web UI lands at <https://localhost:8443>.
+```sh
+make conformance-down
+```
 
-3. Add the cert from step 1 to OFCS's trust store so the suite can
-   reach `https://host.docker.internal:9443`. The simplest path is
-   to mount `conformance/certs/localhost.pem` into the OFCS container
-   and re-run with the suite's `JAVA_TRUST_STORE_PASSWORD` /
-   custom-trust env vars; the OFCS README documents the exact knobs.
-   This step is empirical and is captured by the **E2-green** wave.
+## Running modules
 
-## Running a plan
+```sh
+# Multiple modules at once. Pass a plan-id printed by seed-plans.
+scripts/conformance.sh batch <plan-id> oidcc-server oidcc-userinfo-get ...
 
-1. Start `cmd/op-demo` with TLS:
+# Single browser-driven flow (e.g. when iterating on a particular module
+# from the OFCS UI; copy the "Browser" URL it prints):
+scripts/conformance.sh drive 'https://host.docker.internal:9443/oidc/authorize?...'
+```
 
-   ```sh
-   make conformance-op-up
-   ```
+`OFCS_DEMO_USER` / `OFCS_DEMO_PASS` override the default `demo` / `demo`
+credentials. `OFCS_DRIVE_REJECT=1` simulates the user cancelling the
+consent screen (used by `*user-rejects-authentication*` modules; the
+batch sub-command sets it automatically based on the test name).
 
-   This launches op-demo on `https://127.0.0.1:9443`, seeded with
-   redirect URIs for all three plan aliases so you do not have to
-   restart between plans. PID lands in `conformance/op-demo.pid`,
-   logs in `conformance/op-demo.log`.
+The OFCS web UI is at <https://localhost:8443>; pre-built plan
+templates can also be imported there manually if you prefer the UI to
+the REST seed-plans path.
 
-2. Open the OFCS web UI, sign in (default localhost has no auth), and
-   import one of the JSON files under `plans/`. The aliases are:
+## Lifecycle commands
 
-   - `go-oidc-oidcc-basic`
-   - `go-oidc-fapi2-baseline`
-   - `go-oidc-fapi2-msg-signing`
-
-3. Run the imported plan from the OFCS UI. Each module reports
-   PASS / WARNING / FAILURE; export the JSON summary when complete.
-
-   For modules that block on the browser-redirect step, copy the
-   `Authorize` URL OFCS prints in its log and feed it to the harness:
-
-   ```sh
-   scripts/conformance.sh drive 'https://host.docker.internal:9443/oidc/authorize?...'
-   ```
-
-   The `drive` sub-command walks op-demo's SSR interaction (login →
-   consent), captures the OFCS callback redirect, and posts the
-   implicit-bridge body OFCS expects. Override credentials with
-   `OFCS_DEMO_USER` / `OFCS_DEMO_PASS` if you have re-seeded the
-   demo authenticator.
-
-   To run a list of modules end-to-end (creates each instance, drives
-   every browser URL OFCS exposes including multi-step tests, polls
-   until terminal, prints pass/fail):
-
-   ```sh
-   scripts/conformance.sh batch <plan-id> oidcc-server oidcc-userinfo-get ...
-   ```
-
-4. Stop op-demo when done:
-
-   ```sh
-   make conformance-op-down
-   ```
-
-5. Bring OFCS down from your `conformance-suite/` clone when finished.
-
-## What this scaffolding does **not** do (yet)
-
-- **Headless plan execution via OFCS REST API.** OFCS does expose a
-  plan-creation API but the surface and auth knobs change between
-  releases. Empirical work — pinning a release tag, encoding the API
-  calls, polling for completion, scraping JSON reports — lives in the
-  E2-green wave, after we know which release we are targeting and
-  which calls actually work.
-
-- **Bundled OFCS image.** The OFCS publishes images intermittently and
-  does not version-tag them aggressively; the canonical run is `mvn
-  install` + `docker compose` from a local clone. We mirror that.
-
-- **CA trust automation.** Mounting our self-signed cert into OFCS's
-  Java trust store is a manual one-time step today. The E2-green wave
-  will fold that into `make conformance-up` once we have a known
-  working incantation.
+| Command                   | What it does                                           |
+| ------------------------- | ------------------------------------------------------ |
+| `make conformance-up`     | One-shot: certs + OFCS + OP + seed-plans               |
+| `make conformance-down`   | One-shot: tear down OP + OFCS, wipe mongo volume       |
+| `make conformance-certs`  | Re-generate OP cert / FAPI client material / JKS       |
+| `make conformance-ofcs-up`/`-down`/`-status` | OFCS containers only                |
+| `make conformance-op-up`/`-down`/`-status`   | `cmd/op-demo` only                  |
+| `make conformance-seed-plans`               | Re-create the OFCS plans            |
 
 ## File map
 
 ```
 conformance/
 ├── README.md             ← this file
+├── docker-compose.yml    ← pinned OFCS stack (mongo + nginx + server)
 ├── certs/                ← generated TLS material (gitignored, .gitkeep is committed)
+├── keys/                 ← FAPI client JWKS used by op-demo (committed)
 ├── op-demo.log           ← op-demo runtime log (gitignored)
 ├── op-demo.pid           ← op-demo PID file (gitignored)
 └── plans/                ← OFCS plan templates (committed)
@@ -130,5 +102,22 @@ conformance/
     ├── fapi2-baseline.json
     └── fapi2-message-signing.json
 ```
+
+## Bumping the pinned OFCS release
+
+`docker-compose.yml`'s `IMAGE_TAG` default is the canonical pin. To
+move forward:
+
+```sh
+# Override per-invocation:
+IMAGE_TAG=release-vX.Y.Z make conformance-up
+
+# Or edit conformance/docker-compose.yml and commit the new default.
+```
+
+OFCS test logic does drift between releases (module renames, condition
+strictness changes, new variants); rerun the batch spot-check after
+any bump and update `scripts/conformance.sh` if a module needs a
+different driver hint.
 
 [ofcs]: https://gitlab.com/openid/conformance-suite

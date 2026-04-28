@@ -2,8 +2,28 @@
 # conformance.sh — driver for OpenID Foundation Conformance Suite (OFCS) runs.
 #
 # Sub-commands:
-#   certs       Generate a self-signed ECDSA P-256 cert covering localhost
-#               and host.docker.internal. Writes conformance/certs/{cert,key}.pem.
+#   certs       Generate a self-signed RSA-2048 cert covering localhost and
+#               host.docker.internal for the OP listener, plus a pair of
+#               RSA-2048 PKCS#8 client certs (fapi-client.{cert,key}.pem
+#               and fapi-client-2.{cert,key}.pem) used by the FAPI 2.0
+#               second-client mTLS slot, plus a JKS truststore the
+#               bundled OFCS server mounts so it trusts the OP's
+#               self-signed cert. All material lands in
+#               conformance/certs/.
+#   ofcs-up     Bring up the OFCS containers (mongo + nginx + server)
+#               from conformance/docker-compose.yml at a pinned release
+#               tag. Waits for https://localhost:8443 to answer.
+#   ofcs-down   Tear down the OFCS containers and wipe the mongo volume.
+#   ofcs-status Print "running" / "stopped" for the OFCS stack.
+#   up          One-shot: certs + ofcs-up + op-up + seed-plans. The
+#               canonical "from a clean clone, get conformance running"
+#               command. Pulls images on first run.
+#   down        One-shot: op-down + ofcs-down.
+#   seed-plans  Re-create the OFCS plans from conformance/plans/*.json,
+#               injecting mtls/mtls2 PEM material from conformance/certs/
+#               into the FAPI 2.0 plans. Prints the new plan IDs. The
+#               OFCS REST endpoint requires the variant via URL parameter
+#               (the JSON body is the configuration only).
 #   op-up       Start cmd/op-demo with TLS, listening on 127.0.0.1:9443.
 #               Seeds the demo client with redirect URIs for all three plans.
 #               Logs go to conformance/op-demo.log; PID lands in
@@ -26,13 +46,11 @@
 #               is auto-promoted to client_secret_post.
 #   help        Show this help text.
 #
-# OFCS itself is NOT started by this script — see conformance/README.md
-# for the recommended setup (clone openid/conformance-suite, run its own
-# docker-compose). Once OFCS is up at https://localhost:8443, run
-# `op-up`, import a plan from conformance/plans/, and execute it through
-# the OFCS web UI. Headless plan submission via OFCS REST API is
-# deferred to the E2-green wave because the API surface is not version-
-# stable across releases.
+# OFCS runs from conformance/docker-compose.yml against pinned image
+# tags published to registry.gitlab.com/openid/conformance-suite. The
+# `up` sub-command brings up the whole stack (OFCS + OP) end-to-end;
+# the legacy "clone the OFCS repo and run mvn install" path is no
+# longer required.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -45,6 +63,15 @@ BINFILE="${CONF}/op-demo.bin"
 CERT_FILE="${CERTS}/localhost.pem"
 KEY_FILE="${CERTS}/localhost-key.pem"
 CFG_FILE="${CERTS}/openssl.cnf"
+TRUSTSTORE_FILE="${CERTS}/truststore.jks"
+
+# Compose stack — pinned. The image tag lives in
+# conformance/docker-compose.yml's IMAGE_TAG default. We re-export it
+# here so a `COMPOSE_IMAGE_TAG=release-vX.Y.Z` override on the command
+# line propagates to docker compose without editing the YAML.
+COMPOSE_FILE="${CONF}/docker-compose.yml"
+COMPOSE_PROJECT="go-oidc-ofcs"
+TRUSTSTORE_BUILDER_IMAGE="${TRUSTSTORE_BUILDER_IMAGE:-eclipse-temurin:17}"
 
 # host.docker.internal lets the OFCS container reach op-demo running on
 # the host. macOS / Windows Docker Desktop wires this DNS name out of
@@ -69,9 +96,16 @@ usage() {
 cmd_certs() {
   mkdir -p "${CERTS}"
   if [[ -f "${CERT_FILE}" && -f "${KEY_FILE}" ]]; then
-    echo "[certs] already present at ${CERTS} (delete the directory to regenerate)"
-    return 0
+    echo "[certs] OP cert already present at ${CERTS} (delete the file to regenerate)"
+  else
+    cmd_certs_op
   fi
+  cmd_certs_fapi_clients
+  cmd_certs_truststore
+}
+
+# cmd_certs_op writes the listener's RSA-2048 self-signed cert and key.
+cmd_certs_op() {
   cat > "${CFG_FILE}" <<'EOF'
 [req]
 distinguished_name = req_dn
@@ -104,6 +138,77 @@ EOF
     -extensions v3
   chmod 0600 "${KEY_FILE}"
   echo "[certs] wrote ${CERT_FILE} and ${KEY_FILE}"
+}
+
+# cmd_certs_fapi_clients writes per-client RSA-2048 PKCS#8 cert/key
+# pairs used by OFCS's mtls / mtls2 plan slots. OFCS's
+# ExtractMTLSCertificates2FromConfiguration is wired into every FAPI
+# 2.0 plan regardless of client_authentication_type, and the mTLS
+# keystore builder feeds the key bytes into Java's RSAPrivateCrtKeyImpl
+# — i.e. ECDSA keys throw at load. The OP itself does not validate
+# these certs (sender_constrain=dpop), so any well-formed pair
+# satisfies the plan.
+cmd_certs_fapi_clients() {
+  local client base cert_file key_file tmp_pkcs1
+  for client in "fapi-client" "fapi-client-2"; do
+    base="${CERTS}/${client}"
+    cert_file="${base}.cert.pem"
+    key_file="${base}.key.pem"
+    if [[ -f "${cert_file}" && -f "${key_file}" ]]; then
+      echo "[certs] ${client} mTLS pair already present"
+      continue
+    fi
+    tmp_pkcs1="${base}.key.pkcs1.pem"
+    openssl req -x509 -newkey rsa:2048 -days 3650 -nodes \
+      -keyout "${tmp_pkcs1}" -out "${cert_file}" \
+      -subj "/CN=${client}"
+    openssl pkcs8 -topk8 -nocrypt -in "${tmp_pkcs1}" -out "${key_file}"
+    rm -f "${tmp_pkcs1}"
+    chmod 0600 "${key_file}"
+    echo "[certs] wrote ${cert_file} and ${key_file}"
+  done
+}
+
+# cmd_certs_truststore builds a JKS at ${TRUSTSTORE_FILE} that bundles
+# the system cacerts (from the eclipse-temurin:17 base used by the
+# OFCS server image) plus the OP's self-signed cert. The OFCS server
+# container mounts this file read-only and points the JVM at it via
+# JAVA_EXTRA_ARGS so https://host.docker.internal:9443 resolves
+# without trust errors. Regenerated whenever ${CERT_FILE} is newer
+# than the truststore so cert rotations propagate.
+cmd_certs_truststore() {
+  if [[ ! -f "${CERT_FILE}" ]]; then
+    echo "[certs-truststore] missing ${CERT_FILE}; run \`$0 certs\` first" >&2
+    exit 1
+  fi
+  if [[ -f "${TRUSTSTORE_FILE}" && "${TRUSTSTORE_FILE}" -nt "${CERT_FILE}" ]]; then
+    echo "[certs-truststore] ${TRUSTSTORE_FILE} already up to date"
+    return 0
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[certs-truststore] docker not on PATH; cannot build JKS" >&2
+    exit 1
+  fi
+  echo "[certs-truststore] building ${TRUSTSTORE_FILE} via ${TRUSTSTORE_BUILDER_IMAGE}"
+  # Run keytool in a one-shot temurin container so we do not require
+  # a JDK on the host. Copy the system cacerts as the seed (so OFCS
+  # still trusts the public web), then import the OP cert under a
+  # known alias. -noprompt suppresses the "trust this cert?" question.
+  docker run --rm \
+    -v "${CERTS}:/work" \
+    --entrypoint bash \
+    "${TRUSTSTORE_BUILDER_IMAGE}" \
+    -c '
+set -euo pipefail
+cp "$JAVA_HOME/lib/security/cacerts" /work/truststore.jks
+chmod 0644 /work/truststore.jks
+keytool -delete -alias go-oidc-op \
+  -keystore /work/truststore.jks -storepass changeit >/dev/null 2>&1 || true
+keytool -importcert -trustcacerts -noprompt \
+  -keystore /work/truststore.jks -storepass changeit \
+  -alias go-oidc-op -file /work/localhost.pem
+'
+  echo "[certs-truststore] wrote ${TRUSTSTORE_FILE}"
 }
 
 cmd_op_up() {
@@ -181,6 +286,179 @@ cmd_op_status() {
   else
     echo "stopped"
   fi
+}
+
+# compose_cmd echoes the docker compose invocation with the project
+# name + compose file pinned, so callers can run `$(compose_cmd) up -d`
+# without repeating the flags.
+compose_cmd() {
+  printf 'docker compose -p %q -f %q' "${COMPOSE_PROJECT}" "${COMPOSE_FILE}"
+}
+
+cmd_ofcs_up() {
+  if [[ ! -f "${TRUSTSTORE_FILE}" ]]; then
+    echo "[ofcs-up] missing ${TRUSTSTORE_FILE}; run \`$0 certs\` first" >&2
+    exit 1
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[ofcs-up] docker not on PATH" >&2
+    exit 1
+  fi
+  echo "[ofcs-up] starting OFCS stack from ${COMPOSE_FILE}"
+  eval "$(compose_cmd) up -d"
+  echo "[ofcs-up] waiting for https://localhost:8443 to answer (this can take ~60s on a cold start)"
+  local i
+  for i in $(seq 1 90); do
+    if curl -sk --max-time 2 -o /dev/null -w '%{http_code}' \
+         "${OFCS_API}/" 2>/dev/null | grep -qE '^(200|302|401|403|404)$'; then
+      echo "[ofcs-up] OFCS UI reachable after ${i}s"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[ofcs-up] timed out waiting for OFCS; tail of server logs:" >&2
+  eval "$(compose_cmd) logs --tail=40 server" >&2 || true
+  exit 1
+}
+
+cmd_ofcs_down() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[ofcs-down] docker not on PATH" >&2
+    exit 1
+  fi
+  echo "[ofcs-down] stopping OFCS stack and clearing mongo volume"
+  # `down -v` wipes the named mongo volume so the next `up` starts
+  # from a clean OFCS state (no leftover plans / test instances).
+  eval "$(compose_cmd) down -v"
+}
+
+cmd_ofcs_status() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "stopped (docker not on PATH)"
+    return 0
+  fi
+  local running
+  running="$(eval "$(compose_cmd) ps --status=running --services" 2>/dev/null || true)"
+  if [[ -z "${running}" ]]; then
+    echo "stopped"
+  else
+    echo "running (services: $(echo "${running}" | paste -sd, -))"
+  fi
+}
+
+# wait_op_healthy polls the OP discovery doc until it answers, so the
+# subsequent seed-plans step does not race the listener boot. OIDC
+# Discovery 1.0 puts /.well-known/openid-configuration at the issuer
+# root regardless of the mount path.
+wait_op_healthy() {
+  local i
+  for i in $(seq 1 30); do
+    if curl -sk --max-time 2 -o /dev/null -w '%{http_code}' \
+         "https://127.0.0.1:9443/.well-known/openid-configuration" 2>/dev/null \
+         | grep -qE '^200$'; then
+      echo "[op-up] discovery reachable after ${i}s"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[op-up] timed out waiting for OP discovery" >&2
+  return 1
+}
+
+cmd_up() {
+  cmd_certs
+  cmd_ofcs_up
+  cmd_op_up
+  wait_op_healthy
+  cmd_seed_plans
+  echo
+  echo "[up] OFCS at ${OFCS_API} (UI: open https://localhost:8443)"
+  echo "[up] OP at ${ISSUER} (discovery: ${ISSUER}${MOUNT}/.well-known/openid-configuration)"
+  echo "[up] next: scripts/conformance.sh batch <plan-id> <module>..."
+}
+
+cmd_down() {
+  cmd_op_down || true
+  cmd_ofcs_down || true
+}
+
+# cmd_seed_plans posts each conformance/plans/*.json to OFCS as a fresh
+# plan, embedding RSA mTLS material (generated by `certs`) into the
+# mtls / mtls2 slots for FAPI 2.0 plans. OFCS only reads the variant
+# from the URL parameter, so we strip it from the JSON body and pass
+# it separately. Prints one "[seed] <plan-name> -> plan_id=<id>" line
+# per plan; existing OFCS plans are left untouched (OFCS does not
+# expose a delete endpoint via REST).
+cmd_seed_plans() {
+  local plans_dir="${CONF}/plans"
+  local tmpdir
+  tmpdir="$(mktemp -d "/tmp/ofcs-seed-plans.XXXXXX")"
+  trap 'rm -rf "${tmpdir}"' RETURN
+  local entry f plan_name plan_file body_file variant resp id alias_name
+  # File → OFCS planName mapping. OFCS does not expose a "list plan
+  # definitions" endpoint, so the names are baked in here.
+  for entry in \
+      "oidcc-basic.json|oidcc-basic-certification-test-plan" \
+      "fapi2-baseline.json|fapi2-security-profile-id2-test-plan" \
+      "fapi2-message-signing.json|fapi2-message-signing-id1-test-plan"; do
+    f="${entry%|*}"
+    plan_name="${entry#*|}"
+    plan_file="${plans_dir}/${f}"
+    if [[ ! -f "${plan_file}" ]]; then
+      echo "[seed] missing ${plan_file}; skipping"
+      continue
+    fi
+    PLAN_FILE="${plan_file}" \
+    CERTS_DIR="${CERTS}" \
+    OUT_DIR="${tmpdir}" \
+    PLAN_KEY="${f}" \
+      python3 - <<'PY'
+import json, os, pathlib, urllib.parse
+plan_file = pathlib.Path(os.environ["PLAN_FILE"])
+out_dir   = pathlib.Path(os.environ["OUT_DIR"])
+certs_dir = pathlib.Path(os.environ["CERTS_DIR"])
+key       = os.environ["PLAN_KEY"]
+cfg = json.loads(plan_file.read_text())
+variant = cfg.pop("variant", None) or {}
+if key.startswith("fapi2-"):
+    for slot, base in [("mtls", "fapi-client"), ("mtls2", "fapi-client-2")]:
+        cert_p = certs_dir / f"{base}.cert.pem"
+        key_p  = certs_dir / f"{base}.key.pem"
+        if cert_p.exists() and key_p.exists():
+            cfg[slot] = {"cert": cert_p.read_text(), "key": key_p.read_text()}
+    # The Baseline plan hardcodes fapi_request_method=unsigned and
+    # fapi_response_mode=plain_response — passing them at plan creation
+    # is rejected with "Variant '...' has been set by user, but test
+    # plan already has them set". The Message Signing plan instead
+    # requires both at plan-level (signed_non_repudiation + jarm) so
+    # the modules apply the right shape. Filter for Baseline only.
+    if key == "fapi2-baseline.json":
+        for drop in ("fapi_request_method", "fapi_response_mode"):
+            variant.pop(drop, None)
+elif key == "oidcc-basic.json" and not variant:
+    # The oidcc-basic plan refuses creation without a server_metadata /
+    # client_registration variant. The seed JSON omits them because the
+    # OFCS UI fills them in interactively; supply the defaults here.
+    variant = {"server_metadata": "discovery", "client_registration": "static_client"}
+(out_dir / "body.json").write_text(json.dumps(cfg))
+(out_dir / "variant.txt").write_text(urllib.parse.quote(json.dumps(variant)))
+PY
+    body_file="${tmpdir}/body.json"
+    variant="$(cat "${tmpdir}/variant.txt")"
+    resp="$(curl -sk -X POST \
+      "${OFCS_API}/api/plan?planName=${plan_name}&variant=${variant}" \
+      -H 'Content-Type: application/json' \
+      --data-binary "@${body_file}")"
+    id="$(printf '%s' "$resp" \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' \
+      2>/dev/null || true)"
+    if [[ -z "${id}" ]]; then
+      echo "[seed] failed for ${f}: ${resp:0:200}" >&2
+      continue
+    fi
+    alias_name="$(python3 -c 'import json,pathlib,sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text()).get("alias",""))' "${plan_file}")"
+    echo "[seed] ${plan_name} -> plan_id=${id} (alias=${alias_name})"
+  done
 }
 
 # extract_field <html> <name> -> first <input name="..." value="..."> match.
@@ -530,12 +808,18 @@ cmd_batch() {
 }
 
 case "${1:-help}" in
-  certs)     cmd_certs ;;
-  op-up)     cmd_op_up ;;
-  op-down)   cmd_op_down ;;
-  op-status) cmd_op_status ;;
-  drive)     shift; cmd_drive "$@" ;;
-  batch)     shift; cmd_batch "$@" ;;
+  certs)        cmd_certs ;;
+  seed-plans)   cmd_seed_plans ;;
+  ofcs-up)      cmd_ofcs_up ;;
+  ofcs-down)    cmd_ofcs_down ;;
+  ofcs-status)  cmd_ofcs_status ;;
+  up)           cmd_up ;;
+  down)         cmd_down ;;
+  op-up)        cmd_op_up ;;
+  op-down)      cmd_op_down ;;
+  op-status)    cmd_op_status ;;
+  drive)        shift; cmd_drive "$@" ;;
+  batch)        shift; cmd_batch "$@" ;;
   help|-h|--help) usage ;;
   *)
     echo "unknown sub-command: $1" >&2

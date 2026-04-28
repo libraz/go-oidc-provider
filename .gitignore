@@ -62,6 +62,7 @@ conformance/op-demo.pid
 conformance/op-demo.log
 conformance/op-demo.bin
 conformance/certs/openssl.cnf
+conformance/certs/truststore.jks
 
 # Stray op-demo binary if `go build ./cmd/op-demo` is run from the repo
 # root. The supported flow goes through scripts/conformance.sh, which

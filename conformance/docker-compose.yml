@@ -1,0 +1,72 @@
+# OpenID Foundation Conformance Suite — pre-built images.
+#
+# Mirrors openid/conformance-suite/docker-compose-prebuilt.yml at a
+# pinned release tag, plus the trust-store and host-routing tweaks
+# this repo's harness needs:
+#
+#   * The server reaches the OP at https://host.docker.internal:9443.
+#     On Linux, "host-gateway" maps that DNS name to the host's docker
+#     gateway IP; macOS Docker Desktop wires the same name natively
+#     and the line is a harmless no-op there.
+#   * The OP cert (conformance/certs/localhost.pem) is self-signed.
+#     scripts/conformance.sh certs builds a JKS at
+#     conformance/certs/truststore.jks that contains the system
+#     cacerts plus our cert; we mount it read-only and point the
+#     JVM's -Djavax.net.ssl.trustStore at it via JAVA_EXTRA_ARGS.
+#   * MongoDB runs on a named volume so OFCS state does not pollute
+#     the working tree and `down -v` clears it for a fresh run.
+#
+# The IMAGE_TAG variable below pins a known-good release. Bumping it
+# is a deliberate operation: rerun OFCS spot-checks after every bump
+# because OFCS test logic does drift between releases.
+services:
+  mongodb:
+    image: ${MONGODB_IMAGE:-mongo:6.0.13}
+    volumes:
+      - ofcs-mongo:/data/db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "500k"
+        max-file: "5"
+
+  nginx:
+    image: registry.gitlab.com/openid/conformance-suite/nginx:${IMAGE_TAG:-release-v5.1.42}
+    ports:
+      - "8443:8443"
+    depends_on:
+      - server
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "500k"
+        max-file: "5"
+
+  server:
+    image: registry.gitlab.com/openid/conformance-suite:${IMAGE_TAG:-release-v5.1.42}
+    environment:
+      BASE_URL: ${BASE_URL:-https://localhost.emobix.co.uk:8443}
+      MONGODB_HOST: mongodb
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      OIDC_GOOGLE_CLIENTID: ${OIDC_GOOGLE_CLIENTID:-google-client}
+      OIDC_GOOGLE_SECRET: ${OIDC_GOOGLE_SECRET:-google-secret}
+      OIDC_GITLAB_CLIENTID: ${OIDC_GITLAB_CLIENTID:-gitlab-client}
+      OIDC_GITLAB_SECRET: ${OIDC_GITLAB_SECRET:-gitlab-secret}
+      JAVA_EXTRA_ARGS: >-
+        -Djavax.net.ssl.trustStore=/extra/truststore.jks
+        -Djavax.net.ssl.trustStorePassword=changeit
+        -Djavax.net.ssl.trustStoreType=JKS
+    volumes:
+      - ./certs/truststore.jks:/extra/truststore.jks:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mongodb
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "500k"
+        max-file: "5"
+
+volumes:
+  ofcs-mongo:
