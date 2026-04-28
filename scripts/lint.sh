@@ -10,5 +10,12 @@ cd "$REPO_ROOT"
 LINT="$(tool golangci-lint)"
 
 log "$($LINT version 2>/dev/null || true)"
-log "golangci-lint run ./..."
-"$LINT" run ./...
+while IFS=$'\t' read -r mod tags; do
+  if [ -n "$tags" ]; then
+    log "golangci-lint run --build-tags=$tags ./... ($mod)"
+    (cd "$mod" && "$LINT" run "--build-tags=$tags" ./...)
+  else
+    log "golangci-lint run ./... ($mod)"
+    (cd "$mod" && "$LINT" run ./...)
+  fi
+done < <(public_modules)

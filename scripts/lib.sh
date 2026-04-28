@@ -32,3 +32,31 @@ tool() {
   fi
   die "tool not installed: $name (run 'make tools')"
 }
+
+# List every Go module that ships from this repository, excluding the
+# tools/ helper module (which is intentionally separate so its
+# linter/build-tool dependencies do not bleed into runtime go.sum).
+#
+# Each line of output is "<path>\t<tags>" where <tags> is a
+# comma-separated build-tag list to apply when running go commands
+# inside that module (empty for the host module and storage adapters,
+# "example" for example sub-modules whose main.go is gated).
+public_modules() {
+  printf '%s\t\n' "$REPO_ROOT"
+  if [ -f "$REPO_ROOT/op/storeadapter/sql/go.mod" ]; then
+    printf '%s\t\n' "$REPO_ROOT/op/storeadapter/sql"
+  fi
+  if compgen -G "$REPO_ROOT/examples/*/go.mod" >/dev/null; then
+    for f in "$REPO_ROOT"/examples/*/go.mod; do
+      printf '%s\t%s\n' "$(dirname "$f")" "example"
+    done
+  fi
+}
+
+# go_args_for echoes "-tags=<csv>" when the second argument is
+# non-empty, suitable for unquoted expansion in `go` commands.
+go_args_for() {
+  local tags="$1"
+  [ -z "$tags" ] && return 0
+  printf '%s' "-tags=$tags"
+}

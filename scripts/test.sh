@@ -20,8 +20,16 @@ for arg in "$@"; do
   esac
 done
 
-log "go test ${flags[*]} ${cover_args[*]} ./..."
-go test "${flags[@]}" "${cover_args[@]}" ./...
+while IFS=$'\t' read -r mod tags; do
+  args="$(go_args_for "$tags")"
+  if [ -n "$args" ]; then
+    log "go test ${flags[*]} ${cover_args[*]} $args ./... ($mod)"
+    (cd "$mod" && go test "${flags[@]}" "${cover_args[@]}" "$args" ./...)
+  else
+    log "go test ${flags[*]} ${cover_args[*]} ./... ($mod)"
+    (cd "$mod" && go test "${flags[@]}" "${cover_args[@]}" ./...)
+  fi
+done < <(public_modules)
 
 if [ "${#cover_args[@]}" -gt 0 ]; then
   log "Coverage written to cover.out (HTML: 'go tool cover -html=cover.out')"

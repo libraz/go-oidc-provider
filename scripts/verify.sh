@@ -25,13 +25,27 @@ if [ -n "$imports_diff" ]; then
   die "goimports would reformat the files above; run 'make fmt'"
 fi
 
-log "go vet ./..."
-go vet ./...
+while IFS=$'\t' read -r mod tags; do
+  args="$(go_args_for "$tags")"
+  log "go vet $args ./... ($mod)"
+  if [ -n "$args" ]; then
+    (cd "$mod" && go vet "$args" ./...)
+  else
+    (cd "$mod" && go vet ./...)
+  fi
+done < <(public_modules)
 
 "$SCRIPT_DIR/lint.sh"
 
-log "go build ./..."
-go build ./...
+while IFS=$'\t' read -r mod tags; do
+  args="$(go_args_for "$tags")"
+  log "go build $args ./... ($mod)"
+  if [ -n "$args" ]; then
+    (cd "$mod" && go build "$args" ./...)
+  else
+    (cd "$mod" && go build ./...)
+  fi
+done < <(public_modules)
 
 "$SCRIPT_DIR/test.sh" --race
 

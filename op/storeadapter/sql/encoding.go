@@ -1,0 +1,128 @@
+package oidcsql
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// encodeStrings serialises a []string column. The adapter stores
+// slices as JSON text (for SQLite) or JSON/JSONB (for MySQL/Postgres);
+// either path accepts the same JSON bytes verbatim.
+func encodeStrings(s []string) []byte {
+	if s == nil {
+		return []byte("[]")
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		// json.Marshal of a []string never fails; the panic surfaces
+		// only an implementation error.
+		panic(fmt.Sprintf("oidcsql: marshal []string: %v", err)) //nolint:forbidigo // infallible: encoding/json never errors on []string.
+	}
+	return b
+}
+
+// decodeStrings deserialises bytes written by encodeStrings. Empty or
+// JSON-null inputs decode to a nil slice so contract tests that
+// observe equality on (nil) keep their semantics.
+func decodeStrings(b []byte) ([]string, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var s []string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return nil, fmt.Errorf("oidcsql: unmarshal []string: %w", err)
+	}
+	return s, nil
+}
+
+// encodeMap serialises a map[string]any column. nil maps encode as
+// the JSON null literal so the round-trip preserves "no claims".
+func encodeMap(m map[string]any) []byte {
+	if m == nil {
+		return []byte("null")
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		panic(fmt.Sprintf("oidcsql: marshal map[string]any: %v", err)) //nolint:forbidigo // infallible: encoding/json never errors on map[string]any with primitive values.
+	}
+	return b
+}
+
+// decodeMap deserialises a column written by encodeMap. The literal
+// JSON null decodes to a nil map, mirroring the inmem reference.
+func decodeMap(b []byte) (map[string]any, error) {
+	if len(b) == 0 || string(b) == "null" {
+		return nil, nil //nolint:nilnil // empty/null column legitimately maps to (nil, nil); mirrors the inmem reference.
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("oidcsql: unmarshal map[string]any: %w", err)
+	}
+	return m, nil
+}
+
+// timeToInt64 converts a time.Time to the unix-nanosecond integer
+// representation used by the schema. The zero time encodes as 0 so
+// callers that observe (time.Time{}).IsZero() before writing get the
+// same shape on the way back out.
+func timeToInt64(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
+}
+
+// int64ToTime is the inverse of timeToInt64.
+func int64ToTime(n int64) time.Time {
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n).UTC()
+}
+
+// timePtrToInt64Ptr maps a *time.Time to a nullable *int64 column.
+func timePtrToInt64Ptr(t *time.Time) *int64 {
+	if t == nil {
+		return nil
+	}
+	v := timeToInt64(*t)
+	return &v
+}
+
+// int64PtrToTimePtr is the inverse of timePtrToInt64Ptr.
+func int64PtrToTimePtr(n *int64) *time.Time {
+	if n == nil {
+		return nil
+	}
+	t := int64ToTime(*n)
+	return &t
+}
+
+// isExpired reports whether t is strictly before clock.Now(). The
+// zero time is treated as "no expiry" so records may opt out of
+// expiry by leaving the field unset. The semantic mirrors the inmem
+// reference adapter byte-for-byte so the contract harness stays
+// behavioural-equivalent.
+func isExpired(t time.Time, clock Clock) bool {
+	if t.IsZero() {
+		return false
+	}
+	return t.Before(clock.Now())
+}
+
+// boolToInt64 maps a Go bool to the integer 0/1 the schema stores.
+// MySQL TINYINT(1), SQLite INTEGER, and PostgreSQL BOOLEAN all accept
+// integer-typed bind parameters via database/sql.
+func boolToInt64(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// int64ToBool is the inverse of boolToInt64. database/sql may surface
+// the value as int64 (sqlite, mysql) or as bool (postgres); the
+// scanning helpers always use int64 so the adapter normalises the
+// shape itself.
+func int64ToBool(n int64) bool { return n != 0 }
