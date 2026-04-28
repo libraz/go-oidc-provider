@@ -118,6 +118,13 @@ type Deps struct {
 	// regardless of whether the client pushes the request first or
 	// posts the parameters straight to /authorize.
 	RequirePKCE bool
+
+	// RequireNonce, when true, makes /par reject any request that
+	// omits the nonce parameter. The flag mirrors
+	// [authorizeendpoint.Deps.RequireNonce]; both endpoints share a
+	// validator so a profile that mandates nonce blocks the same way
+	// at /par and /authorize.
+	RequireNonce bool
 }
 
 // Handler returns the HTTP handler the OP mounts at its PAR endpoint. The

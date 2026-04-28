@@ -178,6 +178,13 @@ type Deps struct {
 	// false to permit the OIDC vanilla path. The flag is forwarded
 	// verbatim to [authorize.Policy.PKCERequired].
 	RequirePKCE bool
+
+	// RequireNonce, when true, makes /authorize reject any request
+	// that omits the nonce parameter. OIDC Core 1.0 makes nonce
+	// OPTIONAL for code-flow; FAPI 2.0 (Baseline / Message Signing)
+	// upgrades it to MUST. The flag is forwarded verbatim to
+	// [authorize.Policy.NonceRequired].
+	RequireNonce bool
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

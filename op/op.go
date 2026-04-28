@@ -599,6 +599,7 @@ func mountPAREndpoint(
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			RequirePKCE:              cfg.requirePKCE(),
+			RequireNonce:             cfg.requireNonce(),
 		}),
 	)
 	return nil
@@ -742,6 +743,20 @@ func (c *config) requirePKCE() bool {
 	return false
 }
 
+// requireNonce reports whether the active [profile.Profile] set
+// mandates that every authorization request carry a nonce. OIDC
+// Core 1.0 makes nonce OPTIONAL for code-flow; FAPI 2.0 (Baseline
+// and Message Signing) upgrades it to a MUST. The disjunctive
+// resolution mirrors [config.requirePKCE].
+func (c *config) requireNonce() bool {
+	for _, p := range c.profiles {
+		if profile.RequiresNonce(p) {
+			return true
+		}
+	}
+	return false
+}
+
 // requireJARMResponseMode reports whether the active
 // [profile.Profile] set mandates that every /authorize response be
 // JARM-wrapped. FAPI 2.0 Message Signing §5.5 is the only profile
@@ -876,6 +891,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		Clock:                   cfg.clock,
 		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
 		RequirePKCE:             cfg.requirePKCE(),
+		RequireNonce:            cfg.requireNonce(),
 	})
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)

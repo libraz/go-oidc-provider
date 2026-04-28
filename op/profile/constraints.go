@@ -103,6 +103,34 @@ func RequiresPKCE(p Profile) bool {
 	}
 }
 
+// RequiresNonce reports whether p mandates that every authorization
+// request carries a non-empty nonce parameter. The library's overall
+// posture follows OIDC Core 1.0: nonce is OPTIONAL for code-flow and
+// REQUIRED for response_types that emit an id_token from the
+// authorization endpoint. The OIDC Basic certification suite drives
+// the OP without nonce in code-flow per the OIDC Core errata draft
+// (see https://openid.net/specs/openid-connect-core-1_0-27.html#NonceNotes),
+// so default deployments and the Basic run accept the omission.
+//
+// FAPI 2.0 Baseline §5.3.2.1.1 and Message Signing both require
+// every authorization request to contain a nonce — the profile
+// upgrades the OIDC OPTIONAL to a MUST regardless of response_type.
+//
+// [FAPICIBA] and [IGovHigh] return false because their option
+// surfaces are scheduled for v1.x / v2+; the helper is intentionally
+// conservative — a future profile that needs nonce will be added
+// here rather than relied on as the default.
+func RequiresNonce(p Profile) bool {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return true
+	case FAPICIBA, IGovHigh, profileUnspecified:
+		return false
+	default:
+		return false
+	}
+}
+
 // AllowedClientAuthMethods returns the closed set of client
 // authentication methods p accepts at the token endpoint, or nil
 // when p imposes no restriction. Returned values are the canonical

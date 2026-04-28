@@ -11,6 +11,22 @@ in any minor release.
 
 ### Changed
 
+- **Breaking**: nonce enforcement is now profile-conditional. The
+  authorization endpoint previously rejected every request that
+  omitted `nonce`; it now does so only when the active
+  [profile.Profile] mandates nonce (FAPI 2.0 Baseline / Message
+  Signing per FAPI 2.0 §5.3.2.1.1). Vanilla OIDC deployments — and
+  the OpenID Connect Basic certification suite, which drives the OP
+  without nonce per the OIDC Core 1.0 errata draft — accept the
+  spec-compliant absence; id_token issuance keys on the stored value
+  so an absent nonce transparently omits the claim. New helper
+  `profile.RequiresNonce(p)` and a new `Policy.NonceRequired` bit
+  carry the resolved rule through the pipeline; both `/authorize` and
+  `/par` consult the same flag so a profile that mandates nonce
+  blocks consistently regardless of which entry point the client
+  uses. Tests in `op/profile` and `internal/authorize` cover both
+  branches.
+
 - **Breaking**: PKCE enforcement is now profile-conditional. The
   authorization endpoint previously rejected every request that
   omitted `code_challenge`; it now does so only when the active

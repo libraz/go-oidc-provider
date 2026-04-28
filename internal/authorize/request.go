@@ -231,6 +231,13 @@ type Policy struct {
 	// [op.WithProfile] surface; the validator does not consult the
 	// profile itself, only the resolved bit.
 	PKCERequired bool
+
+	// NonceRequired forces every authorization request to carry a
+	// nonce parameter. OIDC Core 1.0 makes nonce OPTIONAL for code-
+	// flow; FAPI 2.0 (Baseline and Message Signing) upgrades it to a
+	// MUST. As with PKCERequired the validator only consults the
+	// resolved bit, not the profile set itself.
+	NonceRequired bool
 }
 
 // Validate cross-checks the parsed [Request] against the registered client
@@ -267,7 +274,7 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 	if err := req.validateScope(client, scopes); err != nil {
 		return err
 	}
-	if err := req.validateNonce(); err != nil {
+	if err := req.validateNonce(policy.NonceRequired); err != nil {
 		return err
 	}
 	if err := req.validatePKCE(policy.PKCERequired); err != nil {
@@ -349,9 +356,14 @@ func (req *Request) validateScope(client *store.Client, scopes *scoperegistry.Re
 	return nil
 }
 
-// validateNonce enforces the library's "always emit OIDC id_tokens" policy.
-func (req *Request) validateNonce() error {
-	if req.Nonce == "" {
+// validateNonce enforces the policy-conditional nonce rule. When
+// required is true (FAPI 2.0 / explicit profile MUST) every request
+// MUST carry a nonce; otherwise the empty value is accepted, matching
+// the OIDC Core 1.0 errata that nonce is OPTIONAL for code-flow.
+// id_token issuance keys on the stored value, so an absent nonce
+// transparently omits the claim.
+func (req *Request) validateNonce(required bool) error {
+	if req.Nonce == "" && required {
 		return ErrNonceRequired
 	}
 	return nil

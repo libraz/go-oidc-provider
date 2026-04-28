@@ -205,7 +205,7 @@ func TestValidate_SentinelTable(t *testing.T) {
 			case parseErr != nil:
 				gotErr = parseErr
 			default:
-				gotErr = req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true})
+				gotErr = req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true, NonceRequired: true})
 			}
 			if !errors.Is(gotErr, tc.want) {
 				t.Fatalf("err=%v want %v", gotErr, tc.want)
@@ -270,6 +270,44 @@ func TestRequest_Validate_PKCEPolicyConditional(t *testing.T) {
 		}
 		if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: false}); !errors.Is(err, authorize.ErrPKCEMethodUnsupported) {
 			t.Errorf("err=%v want ErrPKCEMethodUnsupported", err)
+		}
+	})
+}
+
+// TestRequest_Validate_NoncePolicyConditional covers the policy-
+// conditional gate for nonce: with Policy{NonceRequired:false} a
+// request that omits nonce MUST be accepted (the OIDC Core 1.0 errata
+// path the OIDC Basic certification suite drives), while with
+// Policy{NonceRequired:true} the same request MUST be rejected with
+// ErrNonceRequired (the FAPI 2.0 posture).
+func TestRequest_Validate_NoncePolicyConditional(t *testing.T) {
+	t.Parallel()
+
+	build := func(t *testing.T) *authorize.Request {
+		t.Helper()
+		v := goodValues()
+		v.Del("nonce")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		return req
+	}
+
+	t.Run("absent_nonce_accepted_when_not_required", func(t *testing.T) {
+		t.Parallel()
+		req := build(t)
+		if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true, NonceRequired: false}); err != nil {
+			t.Fatalf("Validate: %v want nil", err)
+		}
+	})
+
+	t.Run("absent_nonce_rejected_when_required", func(t *testing.T) {
+		t.Parallel()
+		req := build(t)
+		err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true, NonceRequired: true})
+		if !errors.Is(err, authorize.ErrNonceRequired) {
+			t.Fatalf("err=%v want ErrNonceRequired", err)
 		}
 	})
 }

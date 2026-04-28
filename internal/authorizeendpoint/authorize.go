@@ -62,7 +62,10 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "client_id is not registered")
 		return
 	}
-	if err := req.Validate(client, deps.Scopes, authorize.Policy{PKCERequired: deps.RequirePKCE}); err != nil {
+	if err := req.Validate(client, deps.Scopes, authorize.Policy{
+		PKCERequired:  deps.RequirePKCE,
+		NonceRequired: deps.RequireNonce,
+	}); err != nil {
 		writeAuthorizeValidationError(w, r, req, deps, err)
 		return
 	}
