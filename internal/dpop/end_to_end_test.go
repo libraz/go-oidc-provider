@@ -415,10 +415,13 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 		t.Errorf("refresh token_type=%v want DPoP", got)
 	}
 
-	// Refresh with a mismatching proof — must fail. We need a fresh
-	// rotated refresh token because the previous request consumed it,
-	// but we'll use the freshly issued one paired with a different
-	// signing key.
+	// Refresh with a mismatching DPoP key — for a CONFIDENTIAL client
+	// (this RP authenticates with client_secret_basic), the refresh
+	// token is NOT DPoP-bound per RFC 9449 §5, so the AS rotates the
+	// chain and issues a NEW access token bound to whatever key the
+	// client presented. The thumbprint-mismatch failure path stays
+	// covered by tokenendpoint.TestRefresh_DPoP_ThumbprintMismatch
+	// against a pre-bound refresh-token record.
 	rotated, _ := refBody["refresh_token"].(string)
 	if rotated == "" {
 		t.Fatal("refresh did not return a rotated token")
@@ -440,7 +443,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 		t.Fatalf("Do mismatch refresh: %v", err)
 	}
 	defer misResp.Body.Close()
-	if misResp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("mismatch refresh status=%d want 400", misResp.StatusCode)
+	if misResp.StatusCode != http.StatusOK {
+		t.Fatalf("confidential-client refresh with rotated DPoP key status=%d want 200", misResp.StatusCode)
 	}
 }

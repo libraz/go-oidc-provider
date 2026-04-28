@@ -67,6 +67,28 @@ type tokenBinding struct {
 	MTLSThumbprint string
 }
 
+// refreshDPoPJKT returns the JKT to persist on a refresh-token record
+// for the given client. Public clients (TokenEndpointAuthMethod="none")
+// MUST have refresh tokens DPoP-bound per RFC 9449 §5.4. Confidential
+// clients ([private_key_jwt], [client_secret_*], [tls_client_auth])
+// MAY bind or not (RFC 9449 §5.0); the library leaves them unbound so
+// the client can rotate its DPoP key across refresh requests, which
+// is the OFCS conformance suite's expectation for FAPI 2.0 plans.
+//
+// The chain remains DPoP-protected at the access-token level: every
+// refresh continues to issue a new access token bound to whatever
+// DPoP key the client presents on the refresh request, so any holder
+// of the access token still needs the matching private key to use it.
+func refreshDPoPJKT(client *store.Client, dpopJKT string) string {
+	if dpopJKT == "" {
+		return ""
+	}
+	if client != nil && client.TokenEndpointAuthMethod != "none" {
+		return ""
+	}
+	return dpopJKT
+}
+
 // confirmation projects the binding onto the cnf claim shape RFC
 // 7800 §3 prescribes. An empty binding returns nil so the access-
 // token mint can guard the cnf assignment with a non-nil check.
@@ -399,7 +421,7 @@ func maybeIssueRefreshToken(
 		Subject:            subject,
 		GrantID:            grantID,
 		Scope:              append([]string(nil), scope...),
-		DPoPJKT:            binding.DPoPJKT,
+		DPoPJKT:            refreshDPoPJKT(client, binding.DPoPJKT),
 		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})
 }

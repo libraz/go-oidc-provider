@@ -11,8 +11,10 @@ import (
 
 // TestAuthCode_DPoP_BindsCnfJkt drives an authorization_code exchange
 // with a DPoP proof on the token request and asserts that the issued
-// access token carries cnf.jkt and that the issued refresh token is
-// persisted with the matching DPoPJKT.
+// access token carries cnf.jkt. Per RFC 9449 §5, refresh-token DPoP
+// binding is OPTIONAL for confidential clients (and the library
+// chooses NOT to bind so OFCS' FAPI 2.0 modules pass) — the
+// access-token cnf.jkt is the only DPoP-binding the chain carries.
 func TestAuthCode_DPoP_BindsCnfJkt(t *testing.T) {
 	t.Parallel()
 
@@ -72,13 +74,15 @@ func TestAuthCode_DPoP_BindsCnfJkt(t *testing.T) {
 		t.Errorf("cnf.jkt=%q want %q", parsed.Confirmation["jkt"], key.jkt)
 	}
 
-	// Verify the persisted refresh-token record carries the same jkt.
+	// Confidential clients leave the refresh-token record's DPoPJKT
+	// empty per RFC 9449 §5 so the client may rotate its DPoP key
+	// across refreshes; only the access-token-level cnf.jkt is bound.
 	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), rt)
 	if err != nil {
 		t.Fatalf("RefreshTokens.Find: %v", err)
 	}
-	if rec.DPoPJKT != key.jkt {
-		t.Errorf("refresh DPoPJKT=%q want %q", rec.DPoPJKT, key.jkt)
+	if rec.DPoPJKT != "" {
+		t.Errorf("refresh DPoPJKT=%q want empty (confidential client, RFC 9449 §5)", rec.DPoPJKT)
 	}
 }
 

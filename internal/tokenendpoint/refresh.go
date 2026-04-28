@@ -217,7 +217,7 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	rotated, err := rotateRefreshToken(ctx, deps, client.ID, exchanged, binding)
+	rotated, err := rotateRefreshToken(ctx, deps, client, exchanged, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -270,10 +270,18 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 // the exchanger already enforces. The binding is propagated onto the
 // rotated record so the sender constraint (RFC 9449 §6.1 for DPoP,
 // RFC 8705 §3.1 for mTLS) survives across the chain.
+//
+// DPoP rules per RFC 9449 §5.4: once the AS has bound a refresh token
+// to a DPoP key the binding MUST persist across rotations. The
+// "no-bind for confidential clients" policy therefore applies only
+// when the consumed chain was NOT already bound: an opportunistic
+// upgrade on the first refresh would lock subsequent refreshes to a
+// single key, which contradicts the RFC 9449 §5 guidance for
+// confidential clients.
 func rotateRefreshToken(
 	ctx context.Context,
 	deps Deps,
-	clientID string,
+	client *store.Client,
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
 ) (string, error) {
@@ -286,13 +294,22 @@ func rotateRefreshToken(
 		return "", err
 	}
 	parent := exchanged.ConsumedID
+	rotatedJKT := binding.DPoPJKT
+	if exchanged.DPoPJKT == "" {
+		// Chain was not previously bound: apply the issuance-time
+		// policy (public clients bind, confidential clients leave
+		// empty). When the chain is already bound, exchanged.DPoPJKT
+		// equals binding.DPoPJKT (requireDPoPMatch enforced match)
+		// and we keep that value so the chain stays bound.
+		rotatedJKT = refreshDPoPJKT(client, binding.DPoPJKT)
+	}
 	return issuer.Issue(ctx, refresh.IssueInput{
-		ClientID:           clientID,
+		ClientID:           client.ID,
 		Subject:            exchanged.Subject,
 		GrantID:            exchanged.GrantID,
 		Scope:              append([]string(nil), exchanged.Scope...),
 		ParentID:           &parent,
-		DPoPJKT:            binding.DPoPJKT,
+		DPoPJKT:            rotatedJKT,
 		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})
 }

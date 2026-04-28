@@ -260,11 +260,17 @@ func TestRefresh_DPoP_BearerChainStillWorks(t *testing.T) {
 	}
 }
 
-// TestRefresh_DPoP_BearerChainBindOnRefresh: a bearer chain whose
-// refresh request DOES present a valid proof gets sender-constrained
-// from this rotation onward (RFC 9449 §5.2 allows opportunistic
-// upgrade because the chain identifier is unchanged).
-func TestRefresh_DPoP_BearerChainBindOnRefresh(t *testing.T) {
+// TestRefresh_DPoP_BearerChainNoBindOnRefreshConfidential: a bearer
+// refresh-token chain held by a CONFIDENTIAL client whose refresh
+// request DOES present a valid proof still gets a DPoP-bound access
+// token (so the resource server enforces sender-constraint), but the
+// rotated refresh-token record stays bearer. Confidential clients
+// authenticate the chain through their own credentials per RFC 9449
+// §5; opportunistically binding the chain to a single DPoP key would
+// then lock all subsequent refreshes to that key — contradicting the
+// "MAY rotate" guidance for confidential clients and breaking the
+// OFCS FAPI 2.0 refresh-token module.
+func TestRefresh_DPoP_BearerChainNoBindOnRefreshConfidential(t *testing.T) {
 	t.Parallel()
 
 	f := dpopFixture(t)
@@ -299,7 +305,7 @@ func TestRefresh_DPoP_BearerChainBindOnRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Find rotated: %v", err)
 	}
-	if rec.DPoPJKT != key.jkt {
-		t.Errorf("rotated DPoPJKT=%q want %q (opportunistic upgrade)", rec.DPoPJKT, key.jkt)
+	if rec.DPoPJKT != "" {
+		t.Errorf("rotated DPoPJKT=%q want empty (confidential client, RFC 9449 §5)", rec.DPoPJKT)
 	}
 }
