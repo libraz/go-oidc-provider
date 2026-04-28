@@ -91,6 +91,18 @@ func consumeJARRequestObject(
 ) (url.Values, bool) {
 	raw := values.Get("request")
 	if raw == "" {
+		if deps.RequireSignedRequestObject {
+			// No JWT was supplied at all, so RFC 9101 §6.1's
+			// invalid_request_object code does not apply (there is
+			// no request object to fault). FAPI 2.0 Message Signing
+			// §5.6 leaves the code unspecified, and the OFCS PAR-2.3
+			// expectation is the generic invalid_request — a
+			// missing required parameter is the canonical
+			// invalid_request shape per RFC 6749 §5.2.
+			writeError(w, http.StatusBadRequest, errInvalidRequest,
+				"request object is required by the active profile")
+			return nil, false
+		}
 		return values, true
 	}
 	if deps.JAR == nil {

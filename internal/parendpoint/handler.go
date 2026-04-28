@@ -111,6 +111,16 @@ type Deps struct {
 	// is always rejected per RFC 9126 §3.
 	JAR *jar.Verifier
 
+	// RequireSignedRequestObject, when true, makes /par reject any
+	// request that omits the "request" parameter. FAPI 2.0 Message
+	// Signing §5.6 mandates "signed_non_repudiation": every
+	// authorization request the OP accepts must carry a signed
+	// request object. The flag is profile-conditional; Baseline /
+	// non-FAPI deployments leave it false so a plain form POST is
+	// still acceptable. When set, [Deps.JAR] MUST be non-nil — the
+	// constructor in [op] enforces that pairing at startup.
+	RequireSignedRequestObject bool
+
 	// RequirePKCE, when true, makes /par reject any request that omits
 	// a code_challenge. The flag mirrors
 	// [authorizeendpoint.Deps.RequirePKCE]; both endpoints share a

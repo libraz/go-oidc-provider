@@ -623,17 +623,18 @@ func mountPAREndpoint(
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
 		parendpoint.Handler(parendpoint.Deps{
-			Issuer:                   cfg.issuer,
-			Clients:                  cfg.store.Clients(),
-			PARs:                     cfg.store.PushedAuthRequests(),
-			Scopes:                   scopes,
-			Clock:                    cfg.clock,
-			JAR:                      jarVerifier,
-			AssertionVerifier:        assertionVerifier,
-			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
-			RequirePKCE:              cfg.requirePKCE(),
-			RequireNonce:             cfg.requireNonce(),
-			RequireStateOrNonce:      cfg.requireStateOrNonce(),
+			Issuer:                     cfg.issuer,
+			Clients:                    cfg.store.Clients(),
+			PARs:                       cfg.store.PushedAuthRequests(),
+			Scopes:                     scopes,
+			Clock:                      cfg.clock,
+			JAR:                        jarVerifier,
+			AssertionVerifier:          assertionVerifier,
+			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
+			RequirePKCE:                cfg.requirePKCE(),
+			RequireNonce:               cfg.requireNonce(),
+			RequireStateOrNonce:        cfg.requireStateOrNonce(),
+			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
 		}),
 	)
 	return nil
@@ -814,6 +815,31 @@ func (c *config) requirePAR() bool {
 	for _, p := range c.profiles {
 		if profile.RequiresPAR(p) {
 			return true
+		}
+	}
+	return false
+}
+
+// requireSignedRequestObject reports whether the active
+// [profile.Profile] set mandates that every /authorize and /par
+// request carry a signed JAR request object. FAPI 2.0 Message
+// Signing §5.6 (the "signed_non_repudiation" request method) is
+// the only profile today that imposes this; FAPI 2.0 Baseline
+// permits plain form requests. The build-time profile validator
+// requires [feature.JAR] to be enabled when
+// [profile.FAPI2MessageSigning] is active, so the runtime path
+// returning true here means "a JAR verifier is guaranteed to be
+// wired".
+func (c *config) requireSignedRequestObject() bool {
+	for _, p := range c.profiles {
+		switch p {
+		case profile.FAPI2MessageSigning:
+			return true
+		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+			// Baseline does not mandate signed_non_repudiation; the
+			// two future profiles ship without their constraint
+			// tables and will land here when they graduate from
+			// placeholder.
 		}
 	}
 	return false
