@@ -157,7 +157,9 @@ func SignLogoutToken(key SigningKey, claims LogoutClaims) (string, error) {
 // correct verification path. The kid is set to key.KeyID so a key
 // rotation that retires old material does not break in-flight RP
 // verification.
-func newSigner(key SigningKey) (josev4.Signer, error) { //nolint:ireturn // wraps third-party josev4.Signer
+//
+//nolint:ireturn // wraps third-party josev4.Signer; the interface is the package's contract.
+func newSigner(key SigningKey) (josev4.Signer, error) {
 	sk := josev4.SigningKey{
 		Algorithm: josev4.ES256,
 		Key: josev4.JSONWebKey{
