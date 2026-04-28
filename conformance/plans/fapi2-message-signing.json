@@ -22,6 +22,7 @@
     "sender_constrain": "dpop",
     "fapi_profile": "plain_fapi",
     "openid": "plain_oauth",
+    "fapi_request_method": "signed_non_repudiation",
     "fapi_response_mode": "jarm"
   },
   "browser": []
