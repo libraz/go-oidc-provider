@@ -34,8 +34,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -175,33 +173,14 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		return errors.New("op-demo: -redirect-uri must list at least one URI")
 	}
 
-	st, err := bootstrapStore(cfg)
+	st := inmem.New()
+	if err := seedDemoUser(st); err != nil {
+		return fmt.Errorf("seed demo user: %w", err)
+	}
+	opts, err := buildOptions(cfg, st, priv, cookieKey, logger)
 	if err != nil {
 		return err
 	}
-
-	profileOpts, err := profileOptions(cfg.profile)
-	if err != nil {
-		return err
-	}
-	opts := make([]op.Option, 0, 9+len(profileOpts))
-	opts = append(opts,
-		op.WithIssuer(cfg.issuer),
-		op.WithStore(st),
-		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
-		op.WithMountPrefix(cfg.mount),
-		op.WithLogger(logger),
-		op.WithInteraction(htmlDriver{}),
-		op.WithAuthenticators(stubAuthenticator{}),
-		// JAR (RFC 9101) is opt-in. Enabling it makes discovery
-		// advertise request_object_signing_alg_values_supported
-		// (without "none"), which lets the OFCS unsigned-request-
-		// object module skip cleanly while keeping the signed
-		// path live for the redirect-uri-in-request-object module.
-		op.WithFeature(feature.JAR),
-	)
-	opts = append(opts, profileOpts...)
 
 	provider, err := op.New(opts...)
 	if err != nil {
@@ -214,7 +193,7 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if isFAPIProfile(cfg.profile) {
-		srv.TLSConfig = fapiTLSConfig()
+		srv.TLSConfig = op.FAPITLSConfig()
 	}
 
 	idleClosed := make(chan struct{})
@@ -257,125 +236,163 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 	return nil
 }
 
-// bootstrapStore returns the in-memory store seeded with the public
-// client, the optional confidential client, and the demo user. The
-// helper exists so [run] stays under the gocognit budget; the seed
-// branches are intentionally split out rather than inlined.
-func bootstrapStore(cfg runConfig) (*inmem.Store, error) {
-	st := inmem.New()
-	if err := seedClient(st, cfg.clientID, cfg.redirectURIs); err != nil {
-		return nil, fmt.Errorf("seed demo client: %w", err)
+// buildOptions assembles the [op.Option] slice [run] hands to op.New.
+// The helper exists so [run] stays under the gocognit budget; the
+// branch points (profile selection, FAPI-only DPoP enable, optional
+// confidential client seeding) live here, not inline.
+func buildOptions(cfg runConfig, st *inmem.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger) ([]op.Option, error) {
+	seeds, err := buildClientSeeds(cfg)
+	if err != nil {
+		return nil, err
 	}
-	if cfg.confClientID != "" && cfg.confClientSec != "" {
-		if err := seedConfidentialClient(st, cfg.confClientID, cfg.confClientSec, cfg.redirectURIs); err != nil {
-			return nil, fmt.Errorf("seed confidential client: %w", err)
-		}
+	prof, err := profileFor(cfg.profile)
+	if err != nil {
+		return nil, err
+	}
+	opts := []op.Option{
+		op.WithIssuer(cfg.issuer),
+		op.WithStore(st),
+		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
+		op.WithCookieKey(cookieKey),
+		op.WithMountPrefix(cfg.mount),
+		op.WithLogger(logger),
+		op.WithStaticClients(seeds...),
+		// LoginFlow with the built-in PrimaryPassword Step. The
+		// orchestrator's default HTMLDriver renders the password
+		// prompt; demo seeds username "demo" / password "demo" so the
+		// OFCS scripts (which default to OFCS_DEMO_USER=demo /
+		// OFCS_DEMO_PASS=demo) complete the chain end-to-end.
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}}),
+		// JAR (RFC 9101) is opt-in for non-FAPI profiles. Enabling
+		// it makes discovery advertise
+		// request_object_signing_alg_values_supported (without
+		// "none"), which lets the OFCS unsigned-request-object
+		// module skip cleanly while keeping the signed path live
+		// for the redirect-uri-in-request-object module. WithProfile
+		// auto-enables JAR for FAPI 2.0; calling WithFeature here is
+		// idempotent under the auto-enable contract.
+		op.WithFeature(feature.JAR),
+	}
+	if prof != 0 {
+		opts = append(opts, op.WithProfile(prof))
 	}
 	if isFAPIProfile(cfg.profile) {
-		if err := seedFAPIClient(st, "demo-fapi", cfg.fapiClient1JWKS, cfg.redirectURIs); err != nil {
-			return nil, fmt.Errorf("seed FAPI client demo-fapi: %w", err)
-		}
-		if err := seedFAPIClient(st, "demo-fapi-2", cfg.fapiClient2JWKS, cfg.redirectURIs); err != nil {
-			return nil, fmt.Errorf("seed FAPI client demo-fapi-2: %w", err)
-		}
+		// FAPI 2.0 mandates sender-constrained access tokens (DPoP
+		// or mTLS); op-demo selects DPoP. WithProfile does not
+		// auto-enable DPoP because mTLS satisfies the same
+		// requirement and which one to choose is a deployment call.
+		opts = append(opts, op.WithFeature(feature.DPoP))
 	}
-	seedDemoUser(st)
-	return st, nil
+	return opts, nil
 }
 
-// profileOptions translates the -profile flag into the [op.Option]
-// slice the matching profile demands. Profile activation auto-enables
-// the features the profile mandates (FAPI 2.0 needs PAR and JAR; JAR
-// is already enabled unconditionally above; sender-constrained tokens
-// are satisfied by DPoP). The function returns nil for the empty /
-// "basic" profile so the OP runs vanilla OIDC Core.
-func profileOptions(name string) ([]op.Option, error) {
+// profileFor translates the -profile flag into a [profile.Profile] the
+// op.WithProfile option accepts. Returns 0 (the "no profile" sentinel)
+// for the empty/"basic" case so the OP runs vanilla OIDC Core.
+func profileFor(name string) (profile.Profile, error) {
 	switch name {
 	case "", "basic":
-		return nil, nil
+		return 0, nil
 	case "fapi2-baseline":
-		return []op.Option{
-			op.WithProfile(profile.FAPI2Baseline),
-			op.WithFeature(feature.PAR),
-			op.WithFeature(feature.DPoP),
-		}, nil
+		return profile.FAPI2Baseline, nil
 	case "fapi2-message-signing":
-		return []op.Option{
-			op.WithProfile(profile.FAPI2MessageSigning),
-			op.WithFeature(feature.PAR),
-			op.WithFeature(feature.DPoP),
-			op.WithFeature(feature.JARM),
-		}, nil
+		return profile.FAPI2MessageSigning, nil
 	default:
-		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, fapi2-baseline, fapi2-message-signing)", name)
+		return 0, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, fapi2-baseline, fapi2-message-signing)", name)
 	}
 }
 
 // isFAPIProfile reports whether the profile name selects a FAPI 2.0
 // posture, which is the trigger for seeding the private_key_jwt FAPI
-// test clients.
+// test clients and the FAPI TLS allowlist.
 func isFAPIProfile(name string) bool {
 	return name == "fapi2-baseline" || name == "fapi2-message-signing"
 }
 
-// fapiTLSConfig returns the TLS configuration FAPI 2.0 §6.1.2 mandates
-// for an authorization server endpoint: TLS 1.2 with the FAPI 1.0
-// Advanced §8.5 ECDHE_RSA AEAD allowlist.
+// scopeCatalog is the OIDC Core scope set every demo client is
+// registered to request. The list is shared rather than duplicated so
+// a future scope addition lands across all seeds in one place.
 //
-// We cap at TLS 1.2 (MinVersion == MaxVersion == VersionTLS12) because
-// the OFCS DisallowInsecureCipher condition follows the strict
-// FAPI 1.0 RW allowlist (RSA-keyed AEAD only) — and Go's TLS 1.3
-// cipher list is not configurable, so the only way to keep
-// CHACHA20_POLY1305 (which is not on the FAPI allowlist) off the wire
-// is to negotiate TLS 1.2 only.
+//nolint:gochecknoglobals // immutable demo seed; no per-instance tuning.
+var scopeCatalog = []string{"openid", "profile", "email", "address", "phone", "offline_access"}
+
+// fapiScopeCatalog drops the address/phone scopes from [scopeCatalog]:
+// the FAPI 2.0 conformance plans never request them, and trimming
+// keeps the registered scope set consistent with the plan templates.
 //
-// The cipher list is RSA-only because OFCS's allowlist (in
-// release-v5.1.9 source: condition/common/DisallowInsecureCipher)
-// excludes ECDSA variants even though FAPI 1.0 Final §8.5 lists them.
-// The matching deployment must therefore use an RSA server cert; the
-// conformance harness regenerates an RSA-2048 cert in scripts/
-// conformance.sh cmd_certs.
-//
-// DHE_RSA is omitted because Go's stdlib has not shipped DHE since
-// 1.14; modern FAPI test rigs verify ECDHE-only deployments.
-func fapiTLSConfig() *tls.Config {
-	//nolint:gosec // G402: deliberate TLS-1.2 cap so OFCS's FAPI 1.0 RW cipher tests pass.
-	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		MaxVersion: tls.VersionTLS12,
-		CipherSuites: []uint16{
-			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+//nolint:gochecknoglobals // immutable demo seed; no per-instance tuning.
+var fapiScopeCatalog = []string{"openid", "profile", "email", "offline_access"}
+
+// buildClientSeeds projects the runConfig onto the typed
+// [op.ClientSeed] slice [op.WithStaticClients] consumes. The function
+// is the H2 replacement for the per-client seedXxx helpers: the typed
+// builders enforce the per-shape invariants (auth method, secret
+// hashing, JWKS handling) so this layer only assembles the data.
+func buildClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
+	seeds := []op.ClientSeed{
+		// Public demo client used by manual flows (curl smoke
+		// tests, the OP-managed login UI). The library has no
+		// implicit clients, so without this seed /authorize would
+		// reject every request as unknown_client.
+		op.PublicClient{
+			ID:           cfg.clientID,
+			RedirectURIs: cfg.redirectURIs,
+			Scopes:       scopeCatalog,
 		},
 	}
-}
-
-// seedFAPIClient registers a private_key_jwt confidential client
-// keyed by the public half of the JWKS at jwksPath. The "d" parameter
-// is stripped from each key before registration so the OP only ever
-// holds the public material; the signing private key lives only in
-// the OFCS plan template.
-// privateKeyJWT names the OAuth client authentication method registered
-// in IANA. It is hoisted to a constant so gosec's G101 hardcoded-
-// credential heuristic does not flag the inline literal — the value is
-// not a secret, just a method-registry token.
-const privateKeyJWT = "private" + "_key_" + "jwt"
-
-func seedFAPIClient(st *inmem.Store, clientID, jwksPath string, redirectURIs []string) error {
-	pub, err := loadPublicJWKS(jwksPath)
-	if err != nil {
-		return fmt.Errorf("load JWKS %s: %w", jwksPath, err)
+	if cfg.confClientID != "" && cfg.confClientSec != "" {
+		// The OIDC Basic certification plan and the FAPI 2.0
+		// client_secret_basic test rows expect a confidential
+		// client; the public client cannot satisfy those modules.
+		// Three registrations cover the three auth-method
+		// variants OFCS exercises (basic / post, plus a distinct
+		// second basic client for the cross-client refresh test).
+		seeds = append(seeds,
+			op.ConfidentialClient{
+				ID:           cfg.confClientID,
+				Secret:       cfg.confClientSec,
+				AuthMethod:   op.AuthClientSecretBasic,
+				RedirectURIs: cfg.redirectURIs,
+				Scopes:       scopeCatalog,
+			},
+			op.ConfidentialClient{
+				ID:           cfg.confClientID + "-post",
+				Secret:       cfg.confClientSec,
+				AuthMethod:   op.AuthClientSecretPost,
+				RedirectURIs: cfg.redirectURIs,
+				Scopes:       scopeCatalog,
+			},
+			op.ConfidentialClient{
+				ID:           cfg.confClientID + "-2",
+				Secret:       cfg.confClientSec,
+				AuthMethod:   op.AuthClientSecretBasic,
+				RedirectURIs: cfg.redirectURIs,
+				Scopes:       scopeCatalog,
+			},
+		)
 	}
-	return st.RegisterClient(context.Background(), &store.Client{
-		ID:                      clientID,
-		RedirectURIs:            withFAPIDummyRedirectURIs(redirectURIs),
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
-		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
-		TokenEndpointAuthMethod: privateKeyJWT,
-		JWKs:                    pub,
-		Source:                  store.ClientSourceStatic,
-	})
+	if isFAPIProfile(cfg.profile) {
+		fapiURIs := withFAPIDummyRedirectURIs(cfg.redirectURIs)
+		for _, entry := range []struct {
+			id   string
+			path string
+		}{
+			{"demo-fapi", cfg.fapiClient1JWKS},
+			{"demo-fapi-2", cfg.fapiClient2JWKS},
+		} {
+			pub, err := op.LoadPublicJWKS(entry.path)
+			if err != nil {
+				return nil, fmt.Errorf("load JWKS %s: %w", entry.path, err)
+			}
+			seeds = append(seeds, op.PrivateKeyJWTClient{
+				ID:           entry.id,
+				JWKS:         pub,
+				RedirectURIs: fapiURIs,
+				Scopes:       fapiScopeCatalog,
+			})
+		}
+	}
+	return seeds, nil
 }
 
 // withFAPIDummyRedirectURIs returns base extended with the dummy-query
@@ -396,116 +413,29 @@ func withFAPIDummyRedirectURIs(base []string) []string {
 	return out
 }
 
-// loadPublicJWKS reads a JWKS file from disk and returns the JSON
-// bytes with each key's "d" parameter removed. The OFCS plan template
-// embeds the same JWKS with "d" present so it can sign private_key_jwt
-// assertions; the OP must store only the public half.
-func loadPublicJWKS(path string) ([]byte, error) {
-	//nolint:gosec // G304: op-demo is a dev binary that reads from operator-supplied flags by design.
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var set struct {
-		Keys []map[string]any `json:"keys"`
-	}
-	if err := json.Unmarshal(raw, &set); err != nil {
-		return nil, fmt.Errorf("parse JWKS: %w", err)
-	}
-	if len(set.Keys) == 0 {
-		return nil, errors.New("JWKS contains no keys")
-	}
-	for _, k := range set.Keys {
-		delete(k, "d")
-	}
-	return json.Marshal(set)
-}
+// demoSubject is the single subject every successful login binds to.
+// op-demo seeds one user with username "demo" and password "demo"; the
+// OFCS scripts (OFCS_DEMO_USER / OFCS_DEMO_PASS env defaults) drive
+// the same credentials so a multi-plan run completes without an
+// embedder-supplied user database.
+const demoSubject = "demo-user"
 
-// seedClient registers the public demo client used by manual flows
-// (curl smoke tests, the OP-managed login UI). The library has no
-// implicit clients, so without this seed the /authorize endpoint
-// would reject every request as unknown_client.
-func seedClient(st *inmem.Store, clientID string, redirectURIs []string) error {
-	return st.RegisterClient(context.Background(), &store.Client{
-		ID:                      clientID,
-		RedirectURIs:            redirectURIs,
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
-		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
-		TokenEndpointAuthMethod: "none",
-		PublicClient:            true,
-		Source:                  store.ClientSourceStatic,
-	})
-}
+// demoUsername / demoPassword are the credentials seedDemoUser
+// registers. The library's PrimaryPassword Step verifies the password
+// at runtime through Argon2id; the cleartext lives only in this
+// dev binary's seed path.
+const (
+	demoUsername = "demo"
+	demoPassword = "demo"
+)
 
-// seedConfidentialClient registers a second client that authenticates
-// with a shared secret. The OIDC Basic certification plan and the
-// FAPI 2.0 client_secret_basic test rows expect this shape: a public
-// client (auth_method="none") cannot satisfy those modules because
-// the spec mandates confidential auth at the token endpoint. The seed
-// shares the same redirect URIs so a single conformance run covers
-// both client postures without restarting the binary.
-//
-// The library binds each Client to exactly one
-// TokenEndpointAuthMethod, so a parallel registration with
-// client_secret_post is needed to satisfy variants that test that
-// method (oidcc-server-client-secret-post). It carries the same
-// redirect URIs, scopes, and secret as the basic registration and
-// shares the suffix "-post" on the client_id.
-//
-// The secret is hashed through [op.HashClientSecret] (argon2id with
-// the library defaults) before being stored; the raw value is kept
-// only for the duration of seedConfidentialClient.
-func seedConfidentialClient(st *inmem.Store, clientID, clientSecret string, redirectURIs []string) error {
-	hash, err := op.HashClientSecret(clientSecret)
-	if err != nil {
-		return fmt.Errorf("hash client secret: %w", err)
-	}
-	if err := st.RegisterClient(context.Background(), &store.Client{
-		ID:                      clientID,
-		RedirectURIs:            redirectURIs,
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
-		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
-		TokenEndpointAuthMethod: "client_secret_basic",
-		SecretHash:              hash,
-		Source:                  store.ClientSourceStatic,
-	}); err != nil {
-		return err
-	}
-	if err := st.RegisterClient(context.Background(), &store.Client{
-		ID:                      clientID + "-post",
-		RedirectURIs:            redirectURIs,
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
-		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
-		TokenEndpointAuthMethod: "client_secret_post",
-		SecretHash:              hash,
-		Source:                  store.ClientSourceStatic,
-	}); err != nil {
-		return err
-	}
-	// A third basic-auth client distinct from clientID so OFCS modules
-	// that exercise "second client must NOT be able to refresh first
-	// client's token" (oidcc-refresh-token) can pin client2 to a
-	// genuinely different client_id without changing auth method.
-	return st.RegisterClient(context.Background(), &store.Client{
-		ID:                      clientID + "-2",
-		RedirectURIs:            redirectURIs,
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
-		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
-		TokenEndpointAuthMethod: "client_secret_basic",
-		SecretHash:              hash,
-		Source:                  store.ClientSourceStatic,
-	})
-}
-
-// seedDemoUser populates the user record [stubAuthenticator] binds
-// every successful login to. /userinfo and id_token claim assembly
-// look up the subject through [store.UserStore.FindBySubject]; without
-// this seed the openid scope would yield a token whose subject does
-// not resolve and the conformance run would surface "unknown subject".
+// seedDemoUser populates the user record the PrimaryPassword Step
+// resolves on a successful login. /userinfo and id_token claim assembly
+// look up the subject through [store.UserStore.FindBySubject], and the
+// password ceremony resolves [demoUsername] → demoSubject through
+// [store.UserPasswordStore.FindByUsername]. The hash is produced via
+// [op.HashPassword] so it slots into the library verifier without
+// special handling.
 //
 // The claim values are deliberately conventional ("name", "email",
 // "email_verified") so OFCS profile_response checks pass with no
@@ -514,9 +444,13 @@ func seedConfidentialClient(st *inmem.Store, clientID, clientSecret string, redi
 // code and a dev-only seed has no need to participate in that
 // machinery — the value just feeds the "updated_at" claim, which OFCS
 // only checks for shape, not freshness.
-func seedDemoUser(st *inmem.Store) {
+func seedDemoUser(st *inmem.Store) error {
+	hash, err := op.HashPassword(demoPassword)
+	if err != nil {
+		return fmt.Errorf("hash demo password: %w", err)
+	}
 	updatedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	st.PutUser(context.Background(), &store.User{
+	st.PutUserWithPassword(context.Background(), &store.User{
 		Subject: demoSubject,
 		Claims: map[string]any{
 			// profile (OIDC Core 1.0 §5.4)
@@ -551,7 +485,8 @@ func seedDemoUser(st *inmem.Store) {
 			"phone_number_verified": true,
 		},
 		UpdatedAt: updatedAt,
-	})
+	}, demoUsername, hash)
+	return nil
 }
 
 // parseRedirectURIs splits the -redirect-uri flag on commas and trims

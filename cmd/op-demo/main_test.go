@@ -23,8 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/op/store"
-	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+	"github.com/libraz/go-oidc-provider/op"
 )
 
 var (
@@ -42,34 +41,68 @@ func baseTestConfig(addr string) runConfig {
 	}
 }
 
-func TestSeedClient_RegistersDemoClient(t *testing.T) {
+func TestBuildClientSeeds_PublicClientShape(t *testing.T) {
 	t.Parallel()
 
-	st := inmem.New()
 	uris := []string{"https://app.example/cb-1", "https://app.example/cb-2"}
-	if err := seedClient(st, "demo-client", uris); err != nil {
-		t.Fatalf("seedClient: %v", err)
+	cfg := runConfig{
+		clientID:     "demo-client",
+		redirectURIs: uris,
 	}
-	got, err := st.GetClient(context.Background(), "demo-client")
+	seeds, err := buildClientSeeds(cfg)
 	if err != nil {
-		t.Fatalf("GetClient: %v", err)
+		t.Fatalf("buildClientSeeds: %v", err)
 	}
-	if got.ID != "demo-client" {
-		t.Errorf("ID = %q, want demo-client", got.ID)
+	if len(seeds) == 0 {
+		t.Fatal("buildClientSeeds: returned empty slice")
 	}
-	if len(got.RedirectURIs) != len(uris) {
-		t.Fatalf("RedirectURIs len = %d, want %d", len(got.RedirectURIs), len(uris))
+	pub, ok := seeds[0].(op.PublicClient)
+	if !ok {
+		t.Fatalf("seeds[0] = %T, want op.PublicClient", seeds[0])
+	}
+	if pub.ID != "demo-client" {
+		t.Errorf("ID = %q, want demo-client", pub.ID)
+	}
+	if len(pub.RedirectURIs) != len(uris) {
+		t.Fatalf("RedirectURIs len = %d, want %d", len(pub.RedirectURIs), len(uris))
 	}
 	for i, want := range uris {
-		if got.RedirectURIs[i] != want {
-			t.Errorf("RedirectURIs[%d] = %q, want %q", i, got.RedirectURIs[i], want)
+		if pub.RedirectURIs[i] != want {
+			t.Errorf("RedirectURIs[%d] = %q, want %q", i, pub.RedirectURIs[i], want)
 		}
 	}
-	if !got.PublicClient {
-		t.Error("PublicClient = false, want true")
+}
+
+func TestBuildClientSeeds_ConfidentialTrio(t *testing.T) {
+	t.Parallel()
+
+	cfg := runConfig{
+		clientID:      "demo-client",
+		redirectURIs:  []string{"https://app.example/cb"},
+		confClientID:  "demo-conf",
+		confClientSec: "demo-conf-secret",
 	}
-	if got.Source != store.ClientSourceStatic {
-		t.Errorf("Source = %q, want %q", got.Source, store.ClientSourceStatic)
+	seeds, err := buildClientSeeds(cfg)
+	if err != nil {
+		t.Fatalf("buildClientSeeds: %v", err)
+	}
+	got := map[string]op.AuthMethod{}
+	for _, s := range seeds {
+		c, ok := s.(op.ConfidentialClient)
+		if !ok {
+			continue
+		}
+		got[c.ID] = c.AuthMethod
+	}
+	want := map[string]op.AuthMethod{
+		"demo-conf":      op.AuthClientSecretBasic,
+		"demo-conf-post": op.AuthClientSecretPost,
+		"demo-conf-2":    op.AuthClientSecretBasic,
+	}
+	for id, method := range want {
+		if got[id] != method {
+			t.Errorf("ConfidentialClient[%q].AuthMethod = %q, want %q", id, got[id], method)
+		}
 	}
 }
 
