@@ -131,6 +131,30 @@ func RequiresNonce(p Profile) bool {
 	}
 }
 
+// RequiresPAR reports whether p mandates that every authorization
+// request reach /authorize via a [RFC 9126] pushed authorization
+// request_uri. Bare-wire-form and JAR-only (request= without
+// request_uri=) requests are rejected with invalid_request when
+// this is true.
+//
+// FAPI 2.0 Baseline §5.3.1 and Message Signing both require PAR;
+// the profile elevates RFC 9126's optional opt-in to a MUST. Vanilla
+// OIDC Core deployments leave this false so the legacy direct-form
+// /authorize path stays functional.
+//
+// [FAPICIBA] and [IGovHigh] return false because their option
+// surfaces are scheduled for v1.x / v2+.
+func RequiresPAR(p Profile) bool {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return true
+	case FAPICIBA, IGovHigh, profileUnspecified:
+		return false
+	default:
+		return false
+	}
+}
+
 // AllowedClientAuthMethods returns the closed set of client
 // authentication methods p accepts at the token endpoint, or nil
 // when p imposes no restriction. Returned values are the canonical

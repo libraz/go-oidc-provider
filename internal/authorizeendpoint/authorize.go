@@ -137,6 +137,15 @@ func resolveAuthorizeRequest(
 	} else if parReq != nil {
 		return parReq, true
 	}
+	if deps.RequirePAR {
+		// PAR consumption did not fire (no urn:ietf:params:oauth:request_uri:
+		// prefix), and the active profile mandates PAR. Reject before
+		// JAR / bare-form processing — under FAPI 2.0 §5.3.1 a request
+		// that omits the request_uri is invalid_request regardless of
+		// whether it carries a JAR request_object.
+		renderAuthorizeError(w, errPARRequired)
+		return nil, false
+	}
 	merged, jarHandled, jarStop := resolveJARRequestIfNeeded(r.Context(), w, deps, queryClientID, values)
 	if jarStop {
 		return nil, false

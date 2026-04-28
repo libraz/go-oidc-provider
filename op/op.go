@@ -763,6 +763,19 @@ func (c *config) requireNonce() bool {
 	return false
 }
 
+// requirePAR reports whether the active [profile.Profile] set
+// mandates that every /authorize request reach the OP via a PAR
+// request_uri. FAPI 2.0 §5.3.1 requires PAR; vanilla OIDC Core does
+// not. The disjunctive resolution mirrors [config.requirePKCE].
+func (c *config) requirePAR() bool {
+	for _, p := range c.profiles {
+		if profile.RequiresPAR(p) {
+			return true
+		}
+	}
+	return false
+}
+
 // requireJARMResponseMode reports whether the active
 // [profile.Profile] set mandates that every /authorize response be
 // JARM-wrapped. FAPI 2.0 Message Signing §5.5 is the only profile
@@ -898,6 +911,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
 		RequirePKCE:             cfg.requirePKCE(),
 		RequireNonce:            cfg.requireNonce(),
+		RequirePAR:              cfg.requirePAR(),
 		Issuer:                  cfg.issuer,
 	})
 	mux.Handle(authorizePath, handler)

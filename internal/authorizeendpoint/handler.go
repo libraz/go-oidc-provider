@@ -186,6 +186,15 @@ type Deps struct {
 	// [authorize.Policy.NonceRequired].
 	RequireNonce bool
 
+	// RequirePAR, when true, makes /authorize reject any request that
+	// did not arrive via a [RFC 9126] pushed authorization request_uri.
+	// Bare-wire-form requests (client_id + redirect_uri + response_type
+	// in the URL) and JAR-only requests (request=<JWT> without a PAR
+	// request_uri) both surface invalid_request. FAPI 2.0 §5.3.1
+	// upgrades RFC 9126's optional opt-in to a MUST; vanilla OIDC Core
+	// deployments leave this false so the legacy path keeps working.
+	RequirePAR bool
+
 	// Issuer is the OP's canonical issuer URL. The handler stamps it
 	// onto every /authorize response (success and error) as the
 	// RFC 9207 "iss" parameter — defense-in-depth against mix-up

@@ -35,6 +35,17 @@ var errPARClientMismatch = &authorize.Error{
 	Description: "request_uri client_id does not match request client_id",
 }
 
+// errPARRequired is the wire response when the active profile (FAPI 2.0
+// Baseline / Message Signing) mandates PAR but the /authorize request
+// arrived without a urn:ietf:params:oauth:request_uri: prefixed
+// request_uri. Per RFC 9126 §2.3 / FAPI 2.0 §5.3.1 this is
+// invalid_request, not invalid_request_uri (the latter implies a PAR
+// URI was offered and rejected).
+var errPARRequired = &authorize.Error{
+	Code:        "invalid_request",
+	Description: "this OP requires authorization requests to be pushed via the PAR endpoint",
+}
+
 // resolvePARIfNeeded inspects the incoming /authorize values for a
 // request_uri parameter and, when present, replaces the parsed request
 // with the snapshot recovered from the persisted PAR record. The function
