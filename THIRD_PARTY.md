@@ -8,6 +8,8 @@ The project itself is licensed under Apache-2.0 (see `LICENSE` and `NOTICE` at t
 
 | Module | License | Source |
 |---|---|---|
+| `github.com/beorn7/perks/quantile` | MIT | <https://github.com/beorn7/perks/blob/v1.0.1/LICENSE> |
+| `github.com/cespare/xxhash/v2` | MIT | <https://github.com/cespare/xxhash/blob/v2.3.0/LICENSE.txt> |
 | `github.com/fxamacker/cbor/v2` | MIT | <https://github.com/fxamacker/cbor/blob/v2.9.0/LICENSE> |
 | `github.com/go-jose/go-jose/v4` | Apache-2.0 | <https://github.com/go-jose/go-jose/blob/v4.1.2/LICENSE> |
 | `github.com/go-jose/go-jose/v4/json` | BSD-3-Clause | <https://github.com/go-jose/go-jose/blob/v4.1.2/json/LICENSE> |
@@ -17,6 +19,12 @@ The project itself is licensed under Apache-2.0 (see `LICENSE` and `NOTICE` at t
 | `github.com/google/go-tpm` | Apache-2.0 | <https://github.com/google/go-tpm/blob/v0.9.5/LICENSE> |
 | `github.com/google/uuid` | BSD-3-Clause | <https://github.com/google/uuid/blob/v1.6.0/LICENSE> |
 | `github.com/mitchellh/mapstructure` | MIT | <https://github.com/mitchellh/mapstructure/blob/v1.5.0/LICENSE> |
+| `github.com/munnerz/goautoneg` | BSD-3-Clause | <https://github.com/munnerz/goautoneg/blob/a7dc8b61c822/LICENSE> |
+| `github.com/prometheus/client_golang/prometheus` | Apache-2.0 | <https://github.com/prometheus/client_golang/blob/v1.23.2/LICENSE> |
+| `github.com/prometheus/client_model/go` | Apache-2.0 | <https://github.com/prometheus/client_model/blob/v0.6.2/LICENSE> |
+| `github.com/prometheus/common` | Apache-2.0 | <https://github.com/prometheus/common/blob/v0.66.1/LICENSE> |
 | `github.com/x448/float16` | MIT | <https://github.com/x448/float16/blob/v0.8.4/LICENSE> |
+| `go.yaml.in/yaml/v2` | Apache-2.0 | <https://github.com/yaml/go-yaml/blob/v2.4.2/LICENSE> |
 | `golang.org/x/crypto` | BSD-3-Clause | <https://cs.opensource.google/go/x/crypto/+/v0.40.0:LICENSE> |
-| `golang.org/x/sys/unix` | BSD-3-Clause | <https://cs.opensource.google/go/x/sys/+/v0.34.0:LICENSE> |
+| `golang.org/x/sys/unix` | BSD-3-Clause | <https://cs.opensource.google/go/x/sys/+/v0.35.0:LICENSE> |
+| `google.golang.org/protobuf` | BSD-3-Clause | <https://github.com/protocolbuffers/protobuf-go/blob/v1.36.8/LICENSE> |

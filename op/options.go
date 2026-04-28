@@ -12,7 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -267,6 +271,18 @@ type config struct {
 	// pre-ADR-0012 wire shape when the request omits acr_values. See
 	// docs/adr/0012-acr-policy-seam.md for the full rationale.
 	acrPolicy ACRPolicy
+
+	// promRegistry is the Prometheus registry supplied by the embedder
+	// through [WithPrometheus]. Nil disables metrics. The library only
+	// registers collectors; the registry's lifecycle is the embedder's.
+	promRegistry *prometheus.Registry
+
+	// metricsCollector is the metric-handle bundle the audit bridge
+	// updates from the OP's emission chain. It is populated by
+	// [op.New] when promRegistry is non-nil; nil otherwise. Stored on
+	// the config so the per-mount audit-emitter helper can reach it
+	// without growing a separate plumbing path.
+	metricsCollector *metrics.Collector
 }
 
 // claimsParameterSupported returns the effective discovery
@@ -1156,6 +1172,47 @@ func (c *config) effectiveAuditLogger() *slog.Logger {
 		return c.auditLogger
 	}
 	return c.logger
+}
+
+// effectiveAuditEmitter returns the [audit.Emitter] handler-mount
+// sites consume. The base layer is [audit.Slog] over
+// [config.effectiveAuditLogger]; when [WithPrometheus] is configured
+// the result is wrapped with a [metrics.Bridge] so a single emission
+// fires both the slog audit line and the matching counter.
+//
+//nolint:ireturn // audit.Emitter is the package contract; the bridged variant is private so callers must obtain it through this helper.
+func (c *config) effectiveAuditEmitter() audit.Emitter {
+	base := audit.Slog(c.effectiveAuditLogger())
+	if c.metricsCollector == nil {
+		return base
+	}
+	return metrics.NewBridge(c.metricsCollector, base)
+}
+
+// WithPrometheus registers a curated counter set on registry. The OP
+// updates the counters from its audit-event emission chain; the
+// embedder remains responsible for the HTTP request lifecycle (e.g.
+// per-endpoint duration histograms via promhttp middleware) and for
+// exposing the registry over /metrics. Only client_id values present
+// in the static-client seed list are emitted as label values; dynamic
+// clients are bucketed into the empty label so label cardinality stays
+// bounded. PII labels (subject, IP, user-agent) are never emitted.
+//
+// The registry's lifecycle is the embedder's responsibility — the
+// library calls Register but never Unregister.
+//
+// Stable since v0.1.
+func WithPrometheus(registry *prometheus.Registry) Option {
+	return optionFunc(func(c *config) error {
+		if registry == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithPrometheus requires a non-nil registry",
+			}
+		}
+		c.promRegistry = registry
+		return nil
+	})
 }
 
 // WithAuditLogger injects the [*slog.Logger] the library routes

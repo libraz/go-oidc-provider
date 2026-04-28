@@ -10,6 +10,11 @@ package op
 // area without parsing a free-form message. The catalogue mirrors
 // design 002 §N.2.
 //
+// When [WithPrometheus] is configured, a curated subset of these
+// events is mirrored onto Prometheus counters by the package-internal
+// metrics bridge — a single emission updates both the slog audit
+// stream and the matching counter.
+//
 // Stable since v0.1. New events MAY be added in a minor release;
 // existing event names are part of the API surface and only renamed
 // in a major release with a deprecation notice.

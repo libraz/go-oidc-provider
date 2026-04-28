@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
@@ -27,6 +26,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
@@ -112,6 +112,9 @@ func New(opts ...Option) (*Provider, error) {
 	if err := seedStaticClients(cfg); err != nil {
 		return nil, err
 	}
+	if err := buildMetricsCollector(cfg); err != nil {
+		return nil, err
+	}
 	keySet, err := keys.NewSet(toKeyEntries(cfg.keyset))
 	if err != nil {
 		return nil, &Error{
@@ -170,6 +173,40 @@ func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust) http.Handler {
 		}
 		h.ServeHTTP(w, clone)
 	})
+}
+
+// buildMetricsCollector populates [config.metricsCollector] when
+// [WithPrometheus] supplied a registry. The function builds the
+// static-client allowlist and the endpoint-name reverse map up front
+// so the bridge and the middleware see the same closed sets — adding
+// an endpoint to the router without listing it here causes that
+// endpoint's histogram observations to land in the "other" bucket
+// rather than leaking the literal path as a label value.
+//
+// The collector is registered on the embedder-supplied registry; any
+// AlreadyRegisteredError is surfaced as a configuration error so a
+// double-construction in tests fails fast instead of corrupting the
+// metric names.
+func buildMetricsCollector(cfg *config) error {
+	if cfg.promRegistry == nil {
+		return nil
+	}
+	staticIDs := make(map[string]struct{}, len(cfg.staticClients))
+	for i := range cfg.staticClients {
+		staticIDs[cfg.staticClients[i].ID] = struct{}{}
+	}
+	collector, err := metrics.New(cfg.promRegistry, metrics.Options{
+		StaticClientIDs: staticIDs,
+	})
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithPrometheus collector registration failed",
+			Cause:       err,
+		}
+	}
+	cfg.metricsCollector = collector
+	return nil
 }
 
 // wrapWithProfileMiddleware decorates the [Provider]'s router with
@@ -604,7 +641,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		PairwiseEnabled:          false, // WithPairwiseSubject not yet implemented; v1.0 placeholder.
 		ValidateMetadata:         wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                   cfg.logger,
-		Audit:                    audit.Slog(cfg.effectiveAuditLogger()),
+		Audit:                    cfg.effectiveAuditEmitter(),
 		OnClientDeleted:          cfg.dcr.OnClientDeleted,
 	}
 	handler := registrationendpoint.Handler(deps)
@@ -1196,7 +1233,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		Clients:   cfg.store.Clients(),
 		Grants:    cfg.store.Grants(),
 		Deliverer: deliverer,
-		Emitter:   audit.Slog(cfg.effectiveAuditLogger()),
+		Emitter:   cfg.effectiveAuditEmitter(),
 		Clock:     cfg.clock,
 	})
 	if err != nil {
