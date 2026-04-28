@@ -42,18 +42,30 @@ graceful shutdown), see [`examples/`](#examples) below.
 ## Examples
 
 All examples are built behind the `example` build tag so they are
-excluded from `go test ./...` and from production go.sum:
+excluded from `go test ./...` and from production go.sum. The
+numbering convention groups examples by topic — 0x = bootstrap,
+1x = UI / scopes, 2x = MFA, 4x = governance, 5x = FAPI helpers:
 
 | Path | Demonstrates |
 |---|---|
-| [`examples/minimal`](examples/minimal/main.go) | Smallest boot: `op.New` with the four required options. |
-| [`examples/fapi2`](examples/fapi2/main.go) | FAPI 2.0 Baseline profile: `op.WithProfile`, PAR / JAR / DPoP features, `private_key_jwt` client with inline JWKs. |
-| [`examples/custom-interaction`](examples/custom-interaction/main.go) | Plug a non-default `interaction.Driver` via `op.WithInteraction` — example ships a tiny inline-HTML driver. |
+| [`examples/01-minimal`](examples/01-minimal/main.go) | Smallest boot: `op.New` with the four required options. |
+| [`examples/02-bundle`](examples/02-bundle/main.go) | Comprehensive wiring: LoginFlow + clients + scopes + first-party. |
+| [`examples/03-fapi2`](examples/03-fapi2/main.go) | FAPI 2.0 Baseline profile: PAR / JAR / DPoP, `private_key_jwt` client. |
+| [`examples/04-custom-interaction`](examples/04-custom-interaction/main.go) | Swap to `interaction.JSONDriver` instead of the default HTML driver. |
+| [`examples/10-react-login`](examples/10-react-login/main.go) | Delegate login / consent / logout screens to a SPA via `op.WithReactUI`. |
+| [`examples/11-custom-consent-ui`](examples/11-custom-consent-ui/main.go) | Custom consent template via `op.WithConsentUI`. |
+| [`examples/12-scopes-public-private`](examples/12-scopes-public-private/main.go) | `op.PublicScope` / `op.InternalScope` — discovery vs admin-only scopes. |
+| [`examples/20-mfa-totp`](examples/20-mfa-totp/main.go) | Password + always-TOTP via `op.LoginFlow` + `op.RuleAlways`. |
+| [`examples/21-risk-based-mfa`](examples/21-risk-based-mfa/main.go) | Risk-driven step-up via `op.RuleRisk` and a custom `RiskAssessor`. |
+| [`examples/22-login-captcha`](examples/22-login-captcha/main.go) | Captcha after N failed attempts via `op.RuleAfterFailedAttempts`. |
+| [`examples/23-step-up`](examples/23-step-up/main.go) | RFC 9470 ACR step-up via `op.RuleACR`. |
+| [`examples/40-first-party-skip-consent`](examples/40-first-party-skip-consent/main.go) | Skip the consent prompt for first-party clients via `op.WithFirstPartyClients`. |
+| [`examples/50-fapi-tls-jwks`](examples/50-fapi-tls-jwks/main.go) | FAPI helpers: `op.FAPITLSConfig` + `op.LoadPublicJWKS`. |
 
 Run any of them with the build tag, e.g.:
 
 ```sh
-go run -tags example ./examples/minimal
+go run -tags example ./examples/01-minimal
 ```
 
 ## Standards
