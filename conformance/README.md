@@ -83,6 +83,14 @@ are scaffolded:
    `OFCS_DEMO_USER` / `OFCS_DEMO_PASS` if you have re-seeded the
    demo authenticator.
 
+   To run a list of modules end-to-end (creates each instance, drives
+   every browser URL OFCS exposes including multi-step tests, polls
+   until terminal, prints pass/fail):
+
+   ```sh
+   scripts/conformance.sh batch <plan-id> oidcc-server oidcc-userinfo-get ...
+   ```
+
 4. Stop op-demo when done:
 
    ```sh

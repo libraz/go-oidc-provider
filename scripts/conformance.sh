@@ -15,6 +15,15 @@
 #               -> forward callback to OFCS -> POST implicit-bridge body.
 #               OFCS_DEMO_USER / OFCS_DEMO_PASS env vars override the
 #               default "demo"/"demo" credentials seeded by op-demo.
+#   batch <plan-id> <module> [module...]
+#               Trigger each named OFCS module under the given plan,
+#               drive every browser URL OFCS exposes (handles
+#               multi-step tests like prompt-none / max-age /
+#               id-token-hint / refresh-token), poll until terminal,
+#               and report pass/fail per module plus a summary line.
+#               The variant defaults to client_secret_basic + code +
+#               default response_mode; oidcc-server-client-secret-post
+#               is auto-promoted to client_secret_post.
 #   help        Show this help text.
 #
 # OFCS itself is NOT started by this script — see conformance/README.md
@@ -315,12 +324,110 @@ forward_implicit_bridge() {
     -o /dev/null -w '[drive forward] implicit_post=%{http_code}\n'
 }
 
+OFCS_API="https://localhost:8443"
+
+# json_field <stdin-json> <key>: dump a top-level key via python so
+# parsing stays tolerant of OFCS's occasional whitespace/case quirks.
+json_field() {
+  python3 -c "import json,sys; print((json.load(sys.stdin) or {}).get('$1','') or '')"
+}
+
+# drive_all_urls <runner-id> [max_iters]: poll the runner for queued
+# browser URLs and feed each unseen one through `drive`. Bails when
+# /api/info/<id> reports a terminal state.
+drive_all_urls() {
+  local id="$1" max_iters="${2:-40}"
+  local driven=" " urls url s found i
+  for ((i=0; i<max_iters; i++)); do
+    urls="$(curl -sk "${OFCS_API}/api/runner/$id" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for u in (d.get("browser") or {}).get("urls") or []:
+    print(u)
+' 2>/dev/null || true)"
+    found=0
+    while IFS= read -r url; do
+      [[ -z "$url" ]] && continue
+      [[ "$driven" == *" $url "* ]] && continue
+      echo "  -> driving step URL"
+      cmd_drive "$url" || true
+      driven+="$url "
+      found=1
+      sleep 1
+    done <<< "$urls"
+    if [[ "$found" -eq 0 ]]; then
+      # No new URLs since last poll. RUNNING and WAITING are both
+      # "still working"; only FINISHED / INTERRUPTED are terminal.
+      s="$(curl -sk "${OFCS_API}/api/info/$id" \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' \
+        2>/dev/null || true)"
+      [[ "$s" == "FINISHED" || "$s" == "INTERRUPTED" ]] && return 0
+      sleep 1
+    fi
+  done
+}
+
+cmd_batch() {
+  local plan="${1:-}"
+  if [[ -z "$plan" || $# -lt 2 ]]; then
+    echo "[batch] usage: $0 batch <plan-id> <module> [module...]" >&2
+    exit 1
+  fi
+  shift
+  local default_variant client_secret_post_variant
+  default_variant='%7B%22client_auth_type%22%3A%22client_secret_basic%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
+  client_secret_post_variant='%7B%22client_auth_type%22%3A%22client_secret_post%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
+  local pass=0 fail=0 err=0 m v resp id info status result jar
+  for m in "$@"; do
+    echo
+    echo "==== $m ===="
+    jar="$(mktemp /tmp/ofcs-batch-cookies.XXXXXX)"
+    OFCS_DRIVE_COOKIES="$jar"
+    export OFCS_DRIVE_COOKIES
+    v="$default_variant"
+    if [[ "$m" == "oidcc-server-client-secret-post" ]]; then
+      v="$client_secret_post_variant"
+    fi
+    resp="$(curl -sk -X POST "${OFCS_API}/api/runner?test=${m}&plan=${plan}&variant=${v}" \
+      -H 'Content-Type: application/json')"
+    id="$(printf '%s' "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)"
+    if [[ -z "$id" ]]; then
+      echo "[batch] could not start ${m}: ${resp}"
+      err=$((err+1))
+      rm -f "$jar"
+      continue
+    fi
+    echo "id=$id"
+    sleep 1
+    drive_all_urls "$id" 40
+    # Final poll for termination.
+    info=""
+    for _ in $(seq 1 30); do
+      info="$(curl -sk "${OFCS_API}/api/info/$id")"
+      status="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)"
+      [[ "$status" == "FINISHED" ]] && break
+      sleep 1
+    done
+    result="$(printf '%s' "$info" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result","") or "")' 2>/dev/null || true)"
+    echo "result=${status}/${result}"
+    case "$result" in
+      PASSED) pass=$((pass+1));;
+      *)      fail=$((fail+1));;
+    esac
+    rm -f "$jar"
+    unset OFCS_DRIVE_COOKIES
+  done
+  echo
+  echo "==== summary: pass=${pass} fail=${fail} err=${err} ===="
+}
+
 case "${1:-help}" in
   certs)     cmd_certs ;;
   op-up)     cmd_op_up ;;
   op-down)   cmd_op_down ;;
   op-status) cmd_op_status ;;
   drive)     shift; cmd_drive "$@" ;;
+  batch)     shift; cmd_batch "$@" ;;
   help|-h|--help) usage ;;
   *)
     echo "unknown sub-command: $1" >&2
