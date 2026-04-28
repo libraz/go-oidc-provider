@@ -252,6 +252,13 @@ func seedClient(st *inmem.Store, clientID string, redirectURIs []string) error {
 // shares the same redirect URIs so a single conformance run covers
 // both client postures without restarting the binary.
 //
+// The library binds each Client to exactly one
+// TokenEndpointAuthMethod, so a parallel registration with
+// client_secret_post is needed to satisfy variants that test that
+// method (oidcc-server-client-secret-post). It carries the same
+// redirect URIs, scopes, and secret as the basic registration and
+// shares the suffix "-post" on the client_id.
+//
 // The secret is hashed through [op.HashClientSecret] (argon2id with
 // the library defaults) before being stored; the raw value is kept
 // only for the duration of seedConfidentialClient.
@@ -260,13 +267,25 @@ func seedConfidentialClient(st *inmem.Store, clientID, clientSecret string, redi
 	if err != nil {
 		return fmt.Errorf("hash client secret: %w", err)
 	}
-	return st.RegisterClient(context.Background(), &store.Client{
+	if err := st.RegisterClient(context.Background(), &store.Client{
 		ID:                      clientID,
 		RedirectURIs:            redirectURIs,
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
 		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
 		TokenEndpointAuthMethod: "client_secret_basic",
+		SecretHash:              hash,
+		Source:                  store.ClientSourceStatic,
+	}); err != nil {
+		return err
+	}
+	return st.RegisterClient(context.Background(), &store.Client{
+		ID:                      clientID + "-post",
+		RedirectURIs:            redirectURIs,
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_post",
 		SecretHash:              hash,
 		Source:                  store.ClientSourceStatic,
 	})
