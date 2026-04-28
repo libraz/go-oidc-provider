@@ -267,12 +267,24 @@ func (v *Verifier) checkNonce(nonce string) error {
 // an [*http.Request] before calling [Verifier.Verify]. The OP-side
 // HTTP handlers use this entry point; tests that need finer control
 // over the URL / Host pair go through [Verifier.Verify] directly.
+//
+// RFC 9449 §4.1 requires exactly one DPoP proof per request; multiple
+// "DPoP" header values surface as [ErrProofMalformed] so the handler
+// emits invalid_request rather than silently picking the first proof.
 func (v *Verifier) VerifyHTTPRequest(ctx context.Context, r *http.Request, accessToken string) (*VerifyResult, error) {
 	if r == nil {
 		return nil, fmt.Errorf("%w: nil request", ErrProofMalformed)
 	}
+	headers := r.Header.Values("DPoP")
+	if len(headers) > 1 {
+		return nil, fmt.Errorf("%w: multiple DPoP proofs", ErrProofMalformed)
+	}
+	header := ""
+	if len(headers) == 1 {
+		header = headers[0]
+	}
 	return v.Verify(ctx, VerifyInput{
-		ProofHeader: r.Header.Get("DPoP"),
+		ProofHeader: header,
 		Method:      r.Method,
 		URL:         r.URL,
 		Host:        r.Host,

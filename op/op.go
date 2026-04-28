@@ -420,9 +420,16 @@ func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, err
 		// mandates aud == token endpoint URL. RFC 7523 §3 leaves the
 		// choice to the AS. Accepting both lets the same OP serve
 		// OIDC Core and FAPI 2.0 clients without forcing a per-
-		// profile verifier swap.
-		AuxAudiences: []string{cfg.issuer},
-		Clock:        cfg.clock.Now,
+		// profile verifier swap. The PAR endpoint URL is also
+		// accepted because OFCS' "par-test-pushed-authorization-url-
+		// as-audience" module sets aud == PAR endpoint when the
+		// client_assertion lands at /par, and RFC 7523 §3's "value
+		// identifying the AS" leaves the specific URL up to the AS.
+		AuxAudiences: []string{
+			cfg.issuer,
+			absoluteEndpointURL(cfg, cfg.endpoints.PAR),
+		},
+		Clock: cfg.clock.Now,
 	}, nil
 }
 
