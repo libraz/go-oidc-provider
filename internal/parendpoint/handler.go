@@ -110,6 +110,14 @@ type Deps struct {
 	// with invalid_request_object; "request_uri" inside a /par body
 	// is always rejected per RFC 9126 §3.
 	JAR *jar.Verifier
+
+	// RequirePKCE, when true, makes /par reject any request that omits
+	// a code_challenge. The flag mirrors
+	// [authorizeendpoint.Deps.RequirePKCE]; both endpoints share a
+	// validator so a profile that mandates PKCE blocks the same way
+	// regardless of whether the client pushes the request first or
+	// posts the parameters straight to /authorize.
+	RequirePKCE bool
 }
 
 // Handler returns the HTTP handler the OP mounts at its PAR endpoint. The

@@ -140,8 +140,16 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 	if err := validateIssue(in); err != nil {
 		return "", err
 	}
-	if err := pkce.ValidateChallenge(in.CodeChallenge, in.CodeChallengeMethod); err != nil {
-		return "", err
+	// PKCE is opt-in at the request layer: an empty challenge here means
+	// the authorize layer accepted a non-PKCE request because the active
+	// profile does not require it. The exchange-side check
+	// ([Exchanger.Exchange]) mirrors this — when the stored challenge is
+	// empty, the verifier is also forbidden, so a client cannot fabricate
+	// a code_verifier for a code that was never bound to one.
+	if in.CodeChallenge != "" {
+		if err := pkce.ValidateChallenge(in.CodeChallenge, in.CodeChallengeMethod); err != nil {
+			return "", err
+		}
 	}
 	id, err := newID()
 	if err != nil {
@@ -294,8 +302,18 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 	if rec.RedirectURI != in.RedirectURI {
 		return nil, ErrRedirectURIMismatch
 	}
-	if err := pkce.Verify(rec.CodeChallenge, rec.CodeChallengeMethod, in.CodeVerifier); err != nil {
-		return nil, err
+	// PKCE is opt-in. When the issued record carries a challenge the
+	// exchange MUST verify against it; when it does not the exchange
+	// MUST forbid a code_verifier so a client cannot smuggle one onto
+	// a code that was never bound to PKCE.
+	if rec.CodeChallenge == "" {
+		if in.CodeVerifier != "" {
+			return nil, pkce.ErrVerifierMismatch
+		}
+	} else {
+		if err := pkce.Verify(rec.CodeChallenge, rec.CodeChallengeMethod, in.CodeVerifier); err != nil {
+			return nil, err
+		}
 	}
 	return &Exchanged{
 		ClientID:   rec.ClientID,

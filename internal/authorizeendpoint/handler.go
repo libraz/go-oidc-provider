@@ -168,6 +168,16 @@ type Deps struct {
 	// surfaces its own error first; it has no effect when the request
 	// already opted into JARM.
 	RequireJARMResponseMode bool
+
+	// RequirePKCE, when true, makes /authorize reject any request that
+	// omits a code_challenge. The library's overall posture is OAuth
+	// 2.1 — PKCE is good practice everywhere — but the OpenID Connect
+	// Basic certification profile drives the OP without PKCE, so the
+	// flag is opt-in rather than always-on. Set this whenever an
+	// active [profile.Profile] mandates PKCE (FAPI 2.0); leave it
+	// false to permit the OIDC vanilla path. The flag is forwarded
+	// verbatim to [authorize.Policy.PKCERequired].
+	RequirePKCE bool
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

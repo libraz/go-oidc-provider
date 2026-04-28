@@ -341,24 +341,35 @@ func TestHandler_RequestURIInBody_Rejected(t *testing.T) {
 	}
 }
 
-// TestHandler_MissingPKCE_Rejected returns 400 invalid_request when the
-// posted authorization parameters omit code_challenge.
-func TestHandler_MissingPKCE_Rejected(t *testing.T) {
+// TestHandler_MissingPKCE_AcceptedUnderNoProfile asserts that an
+// authorization request without code_challenge is accepted when no
+// profile is active. PKCE is profile-conditional in v0.x: the
+// library's overall posture is OAuth 2.1 (PKCE good practice
+// everywhere), but the OpenID Connect Basic certification suite
+// drives the OP without PKCE because OIDC Core 1.0 predates RFC
+// 7636. The test pins the new contract so a regression that
+// re-instates the always-required gate becomes loud.
+func TestHandler_MissingPKCE_AcceptedUnderNoProfile(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
 	client, secret := f.confidentialClient(t)
 	form := goodAuthorizeForm(client.ID, client.RedirectURIs[0])
 	form.Del("code_challenge")
+	form.Del("code_challenge_method")
 	resp := f.post(t, form, client.ID, secret)
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status=%d want 400", resp.StatusCode)
+	// The PAR endpoint accepts the request and persists a
+	// request_uri; the response is 201 Created with a
+	// request_uri / expires_in payload. Profile-mandated PKCE
+	// is covered separately by the FAPI 2.0 fixtures.
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status=%d want 201", resp.StatusCode)
 	}
 	body := decodeJSON(t, resp)
-	if body["error"] != "invalid_request" {
-		t.Errorf("error=%v want invalid_request", body["error"])
+	if _, ok := body["request_uri"].(string); !ok {
+		t.Errorf("response missing request_uri: %v", body)
 	}
 }
 

@@ -64,7 +64,7 @@ func TestParseRequest_HappyGET(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	if err := req.Validate(goodClient(), nil); err != nil {
+	if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }
@@ -80,7 +80,7 @@ func TestParseRequest_HappyPOST(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRequest: %v", err)
 	}
-	if err := req.Validate(goodClient(), nil); err != nil {
+	if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true}); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 }
@@ -205,7 +205,7 @@ func TestValidate_SentinelTable(t *testing.T) {
 			case parseErr != nil:
 				gotErr = parseErr
 			default:
-				gotErr = req.Validate(goodClient(), nil)
+				gotErr = req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true})
 			}
 			if !errors.Is(gotErr, tc.want) {
 				t.Fatalf("err=%v want %v", gotErr, tc.want)
@@ -215,6 +215,63 @@ func TestValidate_SentinelTable(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRequest_Validate_PKCEPolicyConditional covers the profile-
+// conditional gate: with Policy{PKCERequired:false} a request that
+// omits code_challenge MUST be accepted (the OIDC vanilla path that
+// the OIDC Basic certification suite drives), while with
+// Policy{PKCERequired:true} the same request MUST be rejected with
+// ErrPKCERequired (the FAPI 2.0 / OAuth 2.1 posture). The two
+// branches share a single fixture so a regression that flips the
+// default surfaces here.
+func TestRequest_Validate_PKCEPolicyConditional(t *testing.T) {
+	t.Parallel()
+
+	build := func(t *testing.T) *authorize.Request {
+		t.Helper()
+		v := goodValues()
+		v.Del("code_challenge")
+		v.Del("code_challenge_method")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		return req
+	}
+
+	t.Run("absent_challenge_accepted_when_not_required", func(t *testing.T) {
+		t.Parallel()
+		req := build(t)
+		if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: false}); err != nil {
+			t.Fatalf("Validate: %v want nil", err)
+		}
+	})
+
+	t.Run("absent_challenge_rejected_when_required", func(t *testing.T) {
+		t.Parallel()
+		req := build(t)
+		err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true})
+		if !errors.Is(err, authorize.ErrPKCERequired) {
+			t.Fatalf("err=%v want ErrPKCERequired", err)
+		}
+	})
+
+	t.Run("present_challenge_format_validated_even_when_optional", func(t *testing.T) {
+		t.Parallel()
+		// Half-supplied pairs (challenge with no method) MUST still
+		// fail format validation regardless of the required flag —
+		// otherwise a downgrade would be possible.
+		v := goodValues()
+		v.Del("code_challenge_method")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: false}); !errors.Is(err, authorize.ErrPKCEMethodUnsupported) {
+			t.Errorf("err=%v want ErrPKCEMethodUnsupported", err)
+		}
+	})
 }
 
 // TestParseValues_DuplicateParameter covers both branches of the duplicate
@@ -231,7 +288,7 @@ func TestParseValues_DuplicateParameter(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseValues: %v", err)
 		}
-		if err := req.Validate(goodClient(), nil); err != nil {
+		if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true}); err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
 	})
@@ -312,7 +369,7 @@ func TestParseValues_MaxAgeBoundaries(t *testing.T) {
 		if req.MaxAge == nil || *req.MaxAge != 0 {
 			t.Errorf("MaxAge=%v want pointer to 0", req.MaxAge)
 		}
-		if err := req.Validate(goodClient(), nil); err != nil {
+		if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true}); err != nil {
 			t.Errorf("Validate: %v", err)
 		}
 	})
@@ -330,7 +387,7 @@ func TestValidate_PromptCombinations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseValues: %v", err)
 	}
-	if err := req.Validate(goodClient(), nil); err != nil {
+	if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true}); err != nil {
 		t.Errorf("Validate: %v", err)
 	}
 }
@@ -370,7 +427,7 @@ func TestValidate_ScopeAllowedClients(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseValues: %v", err)
 		}
-		if err := req.Validate(clientWithBilling(), reg); err != nil {
+		if err := req.Validate(clientWithBilling(), reg, authorize.Policy{PKCERequired: true}); err != nil {
 			t.Errorf("listed client must be admitted: %v", err)
 		}
 	})
@@ -387,7 +444,7 @@ func TestValidate_ScopeAllowedClients(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseValues: %v", err)
 		}
-		gotErr := req.Validate(clientWithBilling(), reg)
+		gotErr := req.Validate(clientWithBilling(), reg, authorize.Policy{PKCERequired: true})
 		if !errors.Is(gotErr, authorize.ErrScopeClientNotAllowed) {
 			t.Fatalf("err=%v want ErrScopeClientNotAllowed", gotErr)
 		}
@@ -409,7 +466,7 @@ func TestValidate_ScopeAllowedClients(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseValues: %v", err)
 		}
-		if err := req.Validate(clientWithBilling(), nil); err != nil {
+		if err := req.Validate(clientWithBilling(), nil, authorize.Policy{PKCERequired: true}); err != nil {
 			t.Errorf("nil registry must skip allowlist enforcement, got %v", err)
 		}
 	})

@@ -92,7 +92,7 @@ func TestValidate_AcceptsKnownResponseModes(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseValues: %v", err)
 			}
-			if err := req.Validate(client, nil); err != nil {
+			if err := req.Validate(client, nil, authorize.Policy{PKCERequired: true}); err != nil {
 				t.Errorf("Validate: %v", err)
 			}
 		})
@@ -108,7 +108,7 @@ func TestValidate_RejectsUnknownResponseMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseValues: %v", err)
 	}
-	err = req.Validate(jarmTestClient(), nil)
+	err = req.Validate(jarmTestClient(), nil, authorize.Policy{PKCERequired: true})
 	if !errors.Is(err, authorize.ErrResponseModeUnsupported) {
 		t.Fatalf("Validate err=%v want ErrResponseModeUnsupported", err)
 	}

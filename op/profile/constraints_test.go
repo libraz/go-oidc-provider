@@ -43,6 +43,31 @@ func TestRequiredFeatures(t *testing.T) {
 	}
 }
 
+func TestRequiresPKCE(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want bool
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, true},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
+		{"fapi-ciba", profile.FAPICIBA, false},
+		{"igov-high", profile.IGovHigh, false},
+		{"zero", profile.Profile(0), false},
+		{"unknown", profile.Profile(99), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := profile.RequiresPKCE(tc.in); got != tc.want {
+				t.Errorf("RequiresPKCE(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRequiredAnyOf(t *testing.T) {
 	t.Parallel()
 

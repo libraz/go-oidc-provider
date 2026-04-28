@@ -77,6 +77,32 @@ func MaxAccessTokenTTL(p Profile) time.Duration {
 	}
 }
 
+// RequiresPKCE reports whether p mandates that every authorization-
+// code request carries a code_challenge. The library's overall posture
+// is OAuth 2.1 / RFC 9700 — PKCE is good practice on every flow — but
+// the OpenID Connect Basic certification suite drives the OP without
+// PKCE because OIDC Core 1.0 predates RFC 7636 and the certified
+// shape stays compatible with that vintage. Treating PKCE as
+// profile-conditional resolves the conflict: OIDC vanilla deployments
+// (and the Basic certification run) accept the spec-compliant non-
+// PKCE path, while every FAPI 2.0 deployment keeps the stronger MUST
+// the profile mandates (FAPI 2.0 §2.1.1, citing RFC 7636).
+//
+// [FAPICIBA] and [IGovHigh] return false because their option
+// surfaces are scheduled for v1.x / v2+; the helper is intentionally
+// conservative — a future profile that needs PKCE will be added here
+// rather than relied on as the default.
+func RequiresPKCE(p Profile) bool {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return true
+	case FAPICIBA, IGovHigh, profileUnspecified:
+		return false
+	default:
+		return false
+	}
+}
+
 // AllowedClientAuthMethods returns the closed set of client
 // authentication methods p accepts at the token endpoint, or nil
 // when p imposes no restriction. Returned values are the canonical

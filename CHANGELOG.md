@@ -9,6 +9,28 @@ in any minor release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking**: PKCE enforcement is now profile-conditional. The
+  authorization endpoint previously rejected every request that
+  omitted `code_challenge`; it now does so only when the active
+  [profile.Profile] mandates PKCE (FAPI 2.0 Baseline / Message
+  Signing). Vanilla OIDC deployments — and the OpenID Connect Basic
+  certification suite, which drives the OP without PKCE because OIDC
+  Core 1.0 predates RFC 7636 — accept the spec-compliant non-PKCE
+  path. The library's overall posture stays OAuth 2.1 / RFC 9700: a
+  request that supplies `code_challenge` partially (e.g. challenge
+  without method) is rejected on format grounds even when PKCE is
+  not required, so a downgrade attack cannot smuggle a half-formed
+  pair through the gate. The grant-side mirror at
+  `internal/grants/authcode` refuses a `code_verifier` on a code
+  that was issued without a challenge, blocking the symmetric
+  smuggling attempt at `/token`. New helpers
+  `profile.RequiresPKCE(p)` and `internal/authorize.Policy` carry
+  the bit through the pipeline. Tests in `op/profile`,
+  `internal/authorize`, `internal/parendpoint`, and
+  `internal/grants/authcode` cover both branches.
+
 ### Added
 
 - `op.HashClientSecret(secret)` helper that returns an argon2id encoding

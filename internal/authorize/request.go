@@ -215,6 +215,24 @@ func parseMultiValues(v url.Values) (map[string]string, error) {
 	return out, nil
 }
 
+// Policy carries the runtime policy bits the [Request.Validate]
+// pipeline consults. A zero value means "no profile is active": PKCE
+// is recommended but not enforced when the request omits
+// code_challenge entirely. Setting [Policy.PKCERequired] reverses
+// that — every request MUST carry a code_challenge — and matches the
+// FAPI 2.0 / OAuth 2.1 stance.
+//
+// The struct is intentionally shaped as a struct rather than a
+// growing parameter list so future policy bits (DPoP-required,
+// nonce-mandatory) can land without rewiring every caller.
+type Policy struct {
+	// PKCERequired forces every authorization-code request to carry a
+	// code_challenge. Embedders configure this through the public
+	// [op.WithProfile] surface; the validator does not consult the
+	// profile itself, only the resolved bit.
+	PKCERequired bool
+}
+
 // Validate cross-checks the parsed [Request] against the registered client
 // and the OP's policy. The order is deliberate: client_id and redirect_uri
 // run first because the eventual HTTP layer cannot redirect errors back to
@@ -224,12 +242,16 @@ func parseMultiValues(v url.Values) (map[string]string, error) {
 // AllowedClients allowlist check; the registered-client scope intersection
 // still runs.
 //
+// policy carries runtime knobs that toggle individual checks (PKCE
+// requirement, future profile-driven flags). A zero value selects the
+// permissive defaults — only the spec-MUST checks fire.
+//
 // Callers MUST consult [IsRedirectSafe] before deciding whether to redirect
 // on the returned error. The boundary is: every error produced before
 // redirect_uri verification (ErrClientIDRequired, ErrRedirectURIRequired,
 // ErrRedirectURIInvalid) is NOT redirect-safe; every error produced after
 // is.
-func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registry) error {
+func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registry, policy Policy) error {
 	if err := req.validateRedirectTarget(client); err != nil {
 		return err
 	}
@@ -248,7 +270,7 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 	if err := req.validateNonce(); err != nil {
 		return err
 	}
-	if err := req.validatePKCE(); err != nil {
+	if err := req.validatePKCE(policy.PKCERequired); err != nil {
 		return err
 	}
 	if err := req.validatePrompt(); err != nil {
@@ -335,11 +357,23 @@ func (req *Request) validateNonce() error {
 	return nil
 }
 
-// validatePKCE enforces the library's PKCE-mandatory policy and delegates
-// challenge format checks to [pkce.ValidateChallenge].
-func (req *Request) validatePKCE() error {
+// validatePKCE enforces the OP's PKCE policy and delegates challenge
+// format checks to [pkce.ValidateChallenge]. When required is true,
+// every request MUST carry a code_challenge (FAPI 2.0 / OAuth 2.1
+// posture). When required is false, an absent challenge falls
+// through silently and the PKCE flow is opted out for this request;
+// a present challenge is still format-validated so a half-supplied
+// pair (challenge but no method, or vice versa) produces a clear
+// error rather than silent acceptance.
+func (req *Request) validatePKCE(required bool) error {
 	if req.CodeChallenge == "" {
-		return ErrPKCERequired
+		if required {
+			return ErrPKCERequired
+		}
+		// PKCE is not active for this request. The grant-side code
+		// path keys verification on the stored CodeChallenge, so an
+		// empty value disables the verifier symmetrically.
+		return nil
 	}
 	if req.CodeChallengeMethod == "" || req.CodeChallengeMethod != pkce.Method {
 		return ErrPKCEMethodUnsupported

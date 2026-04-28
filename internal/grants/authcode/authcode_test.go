@@ -124,6 +124,68 @@ func TestIssue_AndExchange_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestIssue_AndExchange_NoPKCE_RoundTrip covers the profile-conditional
+// PKCE path: when the authorize layer accepted a request without
+// code_challenge (because no profile mandated PKCE), Issue MUST persist
+// an empty challenge and Exchange MUST accept the matching code without
+// a code_verifier. The exchange with a non-empty verifier is rejected
+// to block a downgrade where a client smuggles a verifier onto a code
+// that was never bound to PKCE.
+func TestIssue_AndExchange_NoPKCE_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	in := goodInput("ignored")
+	in.CodeChallenge = ""
+	in.CodeChallengeMethod = ""
+
+	code, err := f.issuer.Issue(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Issue without PKCE: %v", err)
+	}
+
+	out, err := f.exchanger.Exchange(context.Background(), authcode.ExchangeInput{
+		Code:        code,
+		ClientID:    "client-1",
+		RedirectURI: "https://rp.example.com/cb",
+	})
+	if err != nil {
+		t.Fatalf("Exchange without verifier: %v", err)
+	}
+	if out.Subject != "user-1" {
+		t.Errorf("Subject=%q want user-1", out.Subject)
+	}
+}
+
+// TestExchange_NoPKCE_RejectsSmuggledVerifier covers the downgrade
+// guard: a record issued without PKCE MUST refuse a code_verifier on
+// exchange. Without this branch a client could fabricate a verifier
+// for a code that was never bound to one.
+func TestExchange_NoPKCE_RejectsSmuggledVerifier(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	in := goodInput("ignored")
+	in.CodeChallenge = ""
+	in.CodeChallengeMethod = ""
+
+	code, err := f.issuer.Issue(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	_, err = f.exchanger.Exchange(context.Background(), authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: "smuggled-verifier-smuggled-verifier-smuggled-1234",
+	})
+	if !errors.Is(err, pkce.ErrVerifierMismatch) {
+		t.Errorf("err=%v want ErrVerifierMismatch", err)
+	}
+}
+
 func TestIssue_RejectsMissingFields(t *testing.T) {
 	t.Parallel()
 

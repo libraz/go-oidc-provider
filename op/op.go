@@ -598,6 +598,7 @@ func mountPAREndpoint(
 			JAR:                      jarVerifier,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			RequirePKCE:              cfg.requirePKCE(),
 		}),
 	)
 	return nil
@@ -713,6 +714,29 @@ func (c *config) requireSenderConstrainedTokens() bool {
 			// tables; FAPI-CIBA requires sender-constrained tokens
 			// the same way and will land here when the profile
 			// graduates from placeholder.
+		}
+	}
+	return false
+}
+
+// requirePKCE reports whether the active [profile.Profile] set
+// mandates that every authorization-code request carry a
+// code_challenge. The library's overall posture is OAuth 2.1 — PKCE
+// is good practice on every flow — but the OpenID Connect Basic
+// certification profile drives the OP without PKCE because OIDC
+// Core 1.0 predates RFC 7636. Treating PKCE as profile-conditional
+// resolves the conflict: vanilla deployments accept the spec-
+// compliant non-PKCE path, while every FAPI 2.0 deployment keeps
+// the stronger MUST the profile mandates.
+//
+// Multiple profiles MAY be active simultaneously; the helper
+// returns true on the first profile that requires PKCE so a
+// disjunctive set ("FAPI 2.0 Baseline OR something looser") still
+// resolves to "PKCE required".
+func (c *config) requirePKCE() bool {
+	for _, p := range c.profiles {
+		if profile.RequiresPKCE(p) {
+			return true
 		}
 	}
 	return false
@@ -851,6 +875,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		InteractionPath:         interactionPath,
 		Clock:                   cfg.clock,
 		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
+		RequirePKCE:             cfg.requirePKCE(),
 	})
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)
