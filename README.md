@@ -87,5 +87,5 @@ dependencies opt-in.
 
 Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 Third-party dependency licenses are tracked in
-[`LICENSES/THIRD_PARTY.md`](LICENSES/THIRD_PARTY.md), regenerated
-from `go.mod` by `make licenses`.
+[`THIRD_PARTY.md`](THIRD_PARTY.md), regenerated from `go.mod` by
+`make licenses`.
