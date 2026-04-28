@@ -70,6 +70,19 @@ are scaffolded:
 3. Run the imported plan from the OFCS UI. Each module reports
    PASS / WARNING / FAILURE; export the JSON summary when complete.
 
+   For modules that block on the browser-redirect step, copy the
+   `Authorize` URL OFCS prints in its log and feed it to the harness:
+
+   ```sh
+   scripts/conformance.sh drive 'https://host.docker.internal:9443/oidc/authorize?...'
+   ```
+
+   The `drive` sub-command walks op-demo's SSR interaction (login →
+   consent), captures the OFCS callback redirect, and posts the
+   implicit-bridge body OFCS expects. Override credentials with
+   `OFCS_DEMO_USER` / `OFCS_DEMO_PASS` if you have re-seeded the
+   demo authenticator.
+
 4. Stop op-demo when done:
 
    ```sh

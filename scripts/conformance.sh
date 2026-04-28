@@ -10,6 +10,11 @@
 #               conformance/op-demo.pid so op-down can stop it.
 #   op-down     Stop the background op-demo started by op-up.
 #   op-status   Print whether op-demo is running.
+#   drive <url> Walk an OFCS test through op-demo's SSR interaction:
+#               GET <authorize-url> -> POST credentials -> POST consent
+#               -> forward callback to OFCS -> POST implicit-bridge body.
+#               OFCS_DEMO_USER / OFCS_DEMO_PASS env vars override the
+#               default "demo"/"demo" credentials seeded by op-demo.
 #   help        Show this help text.
 #
 # OFCS itself is NOT started by this script — see conformance/README.md
@@ -155,11 +160,124 @@ cmd_op_status() {
   fi
 }
 
+# extract_field <html> <name> -> first <input name="..." value="..."> match.
+extract_field() {
+  printf '%s' "$1" \
+    | grep -oE "name=\"$2\" value=\"[^\"]*\"" \
+    | head -1 \
+    | sed -E "s/.*value=\"([^\"]*)\"/\1/"
+}
+
+# split_body <raw-response> -> body (stripping the HTTP header block).
+split_body() {
+  printf '%s' "$1" | awk 'flag{print} /^[[:space:]]*$/{flag=1}'
+}
+
+cmd_drive() {
+  local auth_url="${1:-}"
+  if [[ -z "$auth_url" ]]; then
+    echo "[drive] usage: $0 drive <authorize-url>" >&2
+    echo "[drive] obtain the URL from the OFCS test runner ('Browser' link)" >&2
+    exit 1
+  fi
+
+  local user="${OFCS_DEMO_USER:-demo}"
+  local pass="${OFCS_DEMO_PASS:-demo}"
+  local cookies
+  cookies="$(mktemp /tmp/ofcs-cookies.XXXXXX)"
+  trap 'rm -f "$cookies"' EXIT
+
+  # --resolve forces host.docker.internal to localhost from the host so
+  # the same DNS name works inside and outside docker. -k is required
+  # because conformance/certs/localhost.pem is self-signed.
+  local curl_base=(curl -sk
+    --resolve "host.docker.internal:9443:127.0.0.1"
+    --cookie-jar "$cookies" --cookie "$cookies")
+
+  echo "[drive 1/3] GET ${auth_url}"
+  local prompt interaction_url body state_ref csrf
+  prompt="$("${curl_base[@]}" -L "$auth_url" -i \
+    -w '\n__EFFECTIVE_URL__=%{url_effective}\n')"
+  interaction_url="$(printf '%s' "$prompt" \
+    | awk -F= '/^__EFFECTIVE_URL__=/{print $2}')"
+  prompt="$(printf '%s' "$prompt" | grep -v '^__EFFECTIVE_URL__=')"
+  body="$(split_body "$prompt")"
+  state_ref="$(extract_field "$body" state_ref)"
+  csrf="$(extract_field "$body" csrf_token)"
+
+  if [[ -z "$state_ref" || -z "$csrf" || -z "$interaction_url" ]]; then
+    echo "[drive] failed to parse interaction state from initial prompt" >&2
+    exit 1
+  fi
+  echo "[drive 1/3] interaction_url=${interaction_url}"
+
+  echo "[drive 2/3] POST credentials (user=${user})"
+  local pwd_resp body2 state_ref2 csrf2 approved
+  pwd_resp="$("${curl_base[@]}" -X POST "$interaction_url" \
+    -H "Origin: ${ISSUER}" \
+    --data-urlencode "state_ref=$state_ref" \
+    --data-urlencode "csrf_token=$csrf" \
+    --data-urlencode "username=$user" \
+    --data-urlencode "password=$pass" -i)"
+  body2="$(split_body "$pwd_resp")"
+  state_ref2="$(extract_field "$body2" state_ref)"
+  csrf2="$(extract_field "$body2" csrf_token)"
+  approved="$(extract_field "$body2" approved_scopes)"
+
+  if [[ -z "$state_ref2" ]]; then
+    echo "[drive] login failed; consent prompt missing state_ref" >&2
+    printf '%s\n' "$body2" | head -40 >&2
+    exit 1
+  fi
+
+  echo "[drive 3/3] POST consent (approved_scopes=${approved})"
+  # -L would follow the success redirect into OFCS where session cookies
+  # don't apply; capture redirect_url instead and re-issue ourselves.
+  local final redirect
+  set +e
+  final="$(curl -sk \
+    --resolve "host.docker.internal:9443:127.0.0.1" \
+    --cookie-jar "$cookies" --cookie "$cookies" \
+    -X POST "$interaction_url" \
+    -H "Origin: ${ISSUER}" \
+    --data-urlencode "state_ref=$state_ref2" \
+    --data-urlencode "csrf_token=$csrf2" \
+    --data-urlencode "approved_scopes=$approved" \
+    -o /dev/null -w '%{http_code} %{redirect_url}\n')"
+  set -e
+  echo "[drive 3/3] response=${final}"
+  redirect="$(printf '%s' "$final" | awk '{print $2}')"
+  if [[ -z "$redirect" \
+    || "$redirect" != https://localhost.emobix.co.uk:8443/* ]]; then
+    echo "[drive] no OFCS callback redirect; aborting" >&2
+    exit 1
+  fi
+
+  echo "[drive forward] GET ${redirect}"
+  local cb_html impl alias_base query
+  cb_html="$(curl -sk "$redirect")"
+  # OFCS HTML-escapes the slash in the implicit-bridge URL.
+  impl="$(printf '%s' "$cb_html" \
+    | grep -oE 'implicit\\?/[A-Za-z0-9]+' | head -1 | tr -d '\\')"
+  if [[ -z "$impl" ]]; then
+    echo "[drive forward] callback page has no implicit-bridge URL"
+    return 0
+  fi
+  alias_base="$(printf '%s' "$redirect" | sed -E 's|/callback\?.*$||')"
+  query="$(printf '%s' "$redirect" | sed -E 's|^[^?]*\?|?|')"
+  echo "[drive forward] POST ${alias_base}/${impl}"
+  curl -sk -X POST "${alias_base}/${impl}" \
+    -H 'Content-Type: text/plain' \
+    --data-binary "$query" \
+    -o /dev/null -w '[drive forward] implicit_post=%{http_code}\n'
+}
+
 case "${1:-help}" in
   certs)     cmd_certs ;;
   op-up)     cmd_op_up ;;
   op-down)   cmd_op_down ;;
   op-status) cmd_op_status ;;
+  drive)     shift; cmd_drive "$@" ;;
   help|-h|--help) usage ;;
   *)
     echo "unknown sub-command: $1" >&2
