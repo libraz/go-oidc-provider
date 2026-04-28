@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"errors"
 	"net/url"
 	"sync"
@@ -44,6 +45,15 @@ func newEdKey(t testing.TB) signKey {
 		t.Fatalf("ed25519.GenerateKey: %v", err)
 	}
 	return signKey{priv: priv, alg: josev4.EdDSA}
+}
+
+func newPS256Key(t testing.TB) signKey {
+	t.Helper()
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	return signKey{priv: priv, alg: josev4.PS256}
 }
 
 // signProof returns a compact-serialised DPoP proof carrying claims and
@@ -176,6 +186,26 @@ func TestVerify_HappyEd25519(t *testing.T) {
 		TLS:         true,
 	}); err != nil {
 		t.Fatalf("Verify: %v", err)
+	}
+}
+
+func TestVerify_HappyPS256(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	key := newPS256Key(t)
+	raw := signProof(t, key, goodClaims(now), "")
+	v := newVerifier(t, now)
+	out, err := v.Verify(context.Background(), dpop.VerifyInput{
+		ProofHeader: raw,
+		Method:      "POST",
+		URL:         mustParseURL(t, "https://op.example/oidc/token"),
+		TLS:         true,
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.JKT == "" {
+		t.Fatal("JKT must be populated")
 	}
 }
 

@@ -23,8 +23,8 @@
 //     (FAPI 2.0 §3.1.3 allow-list intersected with the OP's enabled
 //     methods; the example does not enable mTLS so tls_client_auth /
 //     self_signed_tls_client_auth are filtered out).
-//   - "dpop_signing_alg_values_supported": ["ES256", "EdDSA"] (DPoP
-//     feature on, RFC 9449 §5.1).
+//   - "dpop_signing_alg_values_supported": ["ES256", "EdDSA", "PS256"]
+//     (DPoP feature on, RFC 9449 §5.1).
 //   - "request_parameter_supported": true and the request-object alg
 //     advertisement (JAR feature on).
 //   - "pushed_authorization_request_endpoint" present (PAR feature on).

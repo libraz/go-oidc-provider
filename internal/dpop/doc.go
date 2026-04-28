@@ -22,9 +22,10 @@
 //
 // # Algorithm policy
 //
-// v0.x accepts ES256 and EdDSA proofs. RS-family algorithms are rejected
-// because RFC 9449 §4.1 strongly discourages them on the proof JWT;
-// symmetric and "none" are rejected structurally because the input goes
-// through [internal/jose.ParseSigned], which already enforces the project
+// v0.x accepts ES256, EdDSA, and PS256 proofs. RS256 (PKCS#1 v1.5) is
+// rejected — modern profiles steer RSA toward PSS and the OFCS
+// negative-test pipeline relies on the rejection; symmetric and "none"
+// are rejected structurally because the input goes through
+// [internal/jose.ParseSigned], which already enforces the project
 // allow-list. ES384 is reserved for a future jose-package expansion.
 package dpop

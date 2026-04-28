@@ -16,10 +16,10 @@ import (
 
 func TestThumbprint_RFC7638Vector(t *testing.T) {
 	t.Parallel()
-	// RFC 7638 §3.1 worked example uses an RSA key, but our package
-	// only supports EC / OKP. Re-run against an EC P-256 key generated
-	// from a deterministic seed so the test pins the hashing path
-	// without re-implementing the canonical encoding.
+	// RFC 7638 §3.1 worked example uses an RSA key, but the canonical
+	// encoding is identical across key types. Re-run against an EC
+	// P-256 key generated from a deterministic seed so the test pins
+	// the hashing path without re-implementing the canonical encoding.
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -113,14 +113,32 @@ func TestThumbprint_RejectsPrivate(t *testing.T) {
 	}
 }
 
-func TestThumbprint_RejectsRSA(t *testing.T) {
+func TestThumbprint_AcceptsRSA2048(t *testing.T) {
 	t.Parallel()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa.GenerateKey: %v", err)
 	}
+	got, err := dpop.Thumbprint(&josev4.JSONWebKey{Key: &priv.PublicKey})
+	if err != nil {
+		t.Fatalf("dpop.Thumbprint(RSA-2048): %v", err)
+	}
+	if len(got) != 43 {
+		t.Errorf("len(thumbprint)=%d want 43; got=%q", len(got), got)
+	}
+}
+
+func TestThumbprint_RejectsSmallRSA(t *testing.T) {
+	t.Parallel()
+	// 1024 is below the FAPI / RFC 7518 floor; the verifier must
+	// reject so PS256 cannot be used to weaken the binding. The
+	// short key is the test subject — gosec G403 is expected here.
+	priv, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentional sub-spec key for the rejection path
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
 	if _, err := dpop.Thumbprint(&josev4.JSONWebKey{Key: &priv.PublicKey}); err == nil {
-		t.Fatal("dpop.Thumbprint(RSA) must error: DPoP allow-list excludes RS-family")
+		t.Fatal("dpop.Thumbprint(RSA-1024) must error: modulus below 2048 bits")
 	}
 }
 

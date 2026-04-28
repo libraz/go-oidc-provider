@@ -126,8 +126,9 @@ func Build(in Input) Document {
 	if in.Features.DPoP {
 		// RFC 9449 §5.1: emit the alg values the OP accepts on
 		// proof JWTs. The list mirrors [internal/dpop] allowed
-		// algorithms; ES256 / EdDSA is the FAPI 2.0 baseline.
-		doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA"}
+		// algorithms; ES256 / EdDSA / PS256 covers FAPI 2.0
+		// baseline plus the FAPI-recommended RSA-PSS scheme.
+		doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA", "PS256"}
 	}
 	if in.Features.MTLS {
 		// RFC 8705 §3.3: the OP signals that it issues

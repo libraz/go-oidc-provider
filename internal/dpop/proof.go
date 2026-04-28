@@ -19,16 +19,19 @@ import (
 const proofTyp = "dpop+jwt"
 
 // allowedProofAlgs is the set of "alg" values [parseProof] accepts on
-// the JWS header. ES256 and EdDSA are FAPI 2.0 baseline; RS256 is
-// excluded because RFC 9449 §4.1 explicitly discourages it on the
-// proof JWT (the JWK is RP-supplied and RS256's larger keys widen the
-// per-request CPU cost). ES384 is reserved for a future jose-package
-// expansion (see [internal/tokens] §150 on the same gating).
+// the JWS header. ES256 / EdDSA are FAPI 2.0 baseline; PS256 is included
+// because RFC 9449 §4.1 permits any asymmetric JWS algorithm "deemed
+// secure" and PS256 (RSASSA-PSS) is the FAPI-recommended RSA scheme.
+// RS256 (PKCS#1 v1.5) is excluded — modern profiles steer RSA toward PSS
+// and OFCS's negative-test pipeline relies on this rejection. ES384 is
+// reserved for a future jose-package expansion (see [internal/tokens]
+// §150 on the same gating).
 //
 //nolint:gochecknoglobals // closed allow-list, intentional package state.
 var allowedProofAlgs = map[jose.Algorithm]struct{}{
 	jose.AlgES256: {},
 	jose.AlgEdDSA: {},
+	jose.AlgPS256: {},
 }
 
 // proofClaims is the decoded claim bundle of a DPoP proof JWT. RFC 9449
