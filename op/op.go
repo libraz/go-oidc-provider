@@ -274,6 +274,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			MTLS:                           mtlsVerifier,
 			AssertionVerifier:              assertionVerifier,
 			AccessTokenTTL:                 cfg.accessTokenTTL,
+			RefreshTokenTTL:                cfg.refreshTokenTTL,
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 		}),

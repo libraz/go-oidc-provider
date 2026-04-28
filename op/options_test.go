@@ -348,6 +348,36 @@ func TestWithAccessTokenTTL_FAPI2BaselineAcceptsAtCap(t *testing.T) {
 	}
 }
 
+func TestWithRefreshTokenTTL_RejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithRefreshTokenTTL(-1*time.Second))...)
+	if err == nil {
+		t.Fatal("expected error for negative TTL, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-negative") {
+		t.Errorf("err = %v, want it to mention non-negative", err)
+	}
+}
+
+func TestWithRefreshTokenTTL_AcceptsZero(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithRefreshTokenTTL(0))...)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWithRefreshTokenTTL_AcceptsCustomValue(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithRefreshTokenTTL(7*24*time.Hour))...)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestWithAccessTokenTTL_FAPI2BaselineAcceptsStricter(t *testing.T) {
 	t.Parallel()
 

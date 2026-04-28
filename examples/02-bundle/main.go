@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -95,7 +96,20 @@ func main() {
 			},
 		),
 		op.WithFirstPartyClients("first-party-spa"),
-		op.WithScope(op.PublicScope("openid", "Sign you in")),
+		// Token lifetimes. Defaults are 5m (access) / 30d (refresh);
+		// the values below tighten access tokens and shorten refresh
+		// tokens for a higher-touch session. WithProfile(FAPI2*) caps
+		// access at 10m (FAPI 2.0 §3.1.9); refresh has no profile cap.
+		// Refresh tokens are issued only when the granted scope
+		// includes "openid" AND the client GrantTypes contains
+		// "refresh_token" — see [op.ScopeNameOfflineAccess] godoc for
+		// the rationale.
+		op.WithAccessTokenTTL(2*time.Minute),
+		op.WithRefreshTokenTTL(7*24*time.Hour),
+		// OIDC standard scopes (openid, profile, email, address, phone,
+		// offline_access) are auto-registered with library defaults; the
+		// calls below override the built-in entries only to attach
+		// custom titles for the consent prompt.
 		op.WithScope(op.PublicScope("profile", "Access your profile")),
 		op.WithScope(op.PublicScope("email", "Read your email address")),
 	)

@@ -42,8 +42,19 @@ const (
 	// ScopeNamePhone releases phone_number and phone_number_verified.
 	ScopeNamePhone ScopeName = "phone"
 
-	// ScopeNameOfflineAccess permits issuance of a refresh_token at the
-	// token endpoint per OpenID Connect Core 1.0 §11.
+	// ScopeNameOfflineAccess is the OpenID Connect Core 1.0 §11
+	// scope value. The library advertises it in the discovery
+	// document's `scopes_supported` for OIDC compatibility but does
+	// NOT use it as a control flag: refresh tokens are issued whenever
+	// the granted scope contains "openid" AND the client's GrantTypes
+	// includes "refresh_token". A request that adds "offline_access"
+	// to the granted scope is rejected as scope widening at the
+	// refresh-time exchange (see internal/grants/refresh).
+	//
+	// To disable refresh tokens for a client, omit "refresh_token"
+	// from the client's GrantTypes; to disable them globally, override
+	// [WithGrants]. Refresh-token lifetime is controlled by
+	// [WithRefreshTokenTTL].
 	ScopeNameOfflineAccess ScopeName = "offline_access"
 )
 

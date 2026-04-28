@@ -148,6 +148,12 @@ type config struct {
 	// fallback. Negative values are rejected at the option site.
 	accessTokenTTL time.Duration
 
+	// refreshTokenTTL is the lifetime of issued refresh tokens. Zero
+	// before [config.applyDefaults] runs; the defaults pass populates
+	// it with [DefaultRefreshTokenTTL]. Negative values are rejected
+	// at the option site.
+	refreshTokenTTL time.Duration
+
 	// dpopNonces is the [DPoPNonceSource] supplied through
 	// [WithDPoPNonceSource]. Nil means the RFC 9449 §8 / §9 nonce
 	// flow is disabled; the verifier accepts proofs without a nonce
@@ -230,6 +236,13 @@ func newConfig(opts []Option) (*config, error) {
 // inside spec without further tuning.
 const DefaultAccessTokenTTL = 5 * time.Minute
 
+// DefaultRefreshTokenTTL is the lifetime applied to issued refresh
+// tokens when the embedder does not call [WithRefreshTokenTTL]. Thirty
+// days mirrors the typical "long-lived but bounded" posture for
+// authorization-code-derived refresh tokens; embedders facing
+// stricter risk profiles can shorten it through the option.
+const DefaultRefreshTokenTTL = 30 * 24 * time.Hour
+
 // applyDefaults fills in optional fields with their library defaults.
 func (c *config) applyDefaults() {
 	if c.clock == nil {
@@ -270,6 +283,9 @@ func (c *config) applyDefaults() {
 	}
 	if c.accessTokenTTL == 0 {
 		c.accessTokenTTL = DefaultAccessTokenTTL
+	}
+	if c.refreshTokenTTL == 0 {
+		c.refreshTokenTTL = DefaultRefreshTokenTTL
 	}
 }
 
@@ -1147,6 +1163,34 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 			}
 		}
 		c.accessTokenTTL = ttl
+		return nil
+	})
+}
+
+// WithRefreshTokenTTL overrides the lifetime applied to issued refresh
+// tokens. Zero means "use [DefaultRefreshTokenTTL]" (30 days); a
+// negative value is rejected at the option site so the
+// misconfiguration surfaces at startup rather than silently issuing
+// tokens with the wrong cadence.
+//
+// Refresh tokens are issued only when the granted scope contains
+// "openid" AND the client's GrantTypes includes "refresh_token"; the
+// "offline_access" scope is advertised in discovery for OIDC
+// compatibility but does not gate issuance (see
+// [ScopeNameOfflineAccess]). To disable refresh tokens entirely,
+// remove "refresh_token" from the per-client GrantTypes or from the
+// global [WithGrants] set.
+//
+// Stable since v0.2.
+func WithRefreshTokenTTL(ttl time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if ttl < 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithRefreshTokenTTL requires a non-negative duration",
+			}
+		}
+		c.refreshTokenTTL = ttl
 		return nil
 	})
 }
