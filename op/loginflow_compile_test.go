@@ -246,23 +246,42 @@ func TestProjectStepToFlow_BuiltinSteps_RejectMissingDeps(t *testing.T) {
 	}
 }
 
-// TestProjectStepToFlow_PrimaryPasswordDeferred pins the
-// PrimaryPassword path returns the documented "wiring deferred"
-// message. The test exists to flip red the moment the
-// password-credential store contract lands: removing the deferred
-// branch silently from projectStepToFlow would otherwise leave
-// embedders staring at a nil-Authenticator runtime panic.
-func TestProjectStepToFlow_PrimaryPasswordDeferred(t *testing.T) {
+// TestProjectStepToFlow_PrimaryPassword_BuildsSuccessfully pins the
+// PrimaryPassword wiring lands cleanly when the store dependency is
+// supplied. Begin / Continue ceremony semantics are covered by
+// [internal/authn/password]'s own tests; this case only asserts the
+// op.New compile path accepts the configuration.
+func TestProjectStepToFlow_PrimaryPassword_BuildsSuccessfully(t *testing.T) {
 	t.Parallel()
 	st := inmem.New()
-	flow := op.LoginFlow{Primary: op.PrimaryPassword{Store: st.Users()}}
+	flow := op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}}
+	opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(flow))
+	if _, err := op.New(opts...); err != nil {
+		t.Fatalf("op.New: unexpected error: %v", err)
+	}
+}
+
+// TestProjectStepToFlow_PrimaryPassword_RejectsNilStore mirrors the
+// other built-in Steps' nil-dependency cases: the builder MUST return
+// a typed *op.Error pointing at the offending Step when Store is nil.
+func TestProjectStepToFlow_PrimaryPassword_RejectsNilStore(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	flow := op.LoginFlow{Primary: op.PrimaryPassword{}}
 	opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(flow))
 	_, err := op.New(opts...)
 	if err == nil {
 		t.Fatalf("op.New: expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "PrimaryPassword wiring is deferred") {
-		t.Fatalf("op.New: error %q does not contain deferred-message", err.Error())
+	if !strings.Contains(err.Error(), "PrimaryPassword.Store is nil") {
+		t.Fatalf("op.New: error %q does not contain field-level message", err.Error())
+	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("op.New: expected *op.Error, got %T", err)
+	}
+	if typed.Code != "configuration_error" {
+		t.Fatalf("op.Error.Code = %q, want %q", typed.Code, "configuration_error")
 	}
 }
 

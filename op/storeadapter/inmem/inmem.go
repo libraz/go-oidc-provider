@@ -204,6 +204,23 @@ func (s *Store) PutUser(_ context.Context, u *store.User) {
 	s.users.put(u)
 }
 
+// PutUserWithPassword seeds u together with a username→subject mapping
+// and the supplied PHC-encoded password hash so tests can drive the
+// PrimaryPassword Step end-to-end. The password hash is stored verbatim;
+// callers are responsible for encoding (typically via
+// [internal/authn/password.NewHasher]). The helper overwrites any prior
+// record for the same Subject.
+func (s *Store) PutUserWithPassword(_ context.Context, u *store.User, username string, passwordHash []byte) {
+	s.users.putWithPassword(u, username, passwordHash)
+}
+
+// UserPasswords returns the in-memory implementation of
+// [store.UserPasswordStore], the substore the built-in PrimaryPassword
+// Step requires. The returned value is the same underlying state as
+// [Store.Users]; the split lets callers wire the password-only API
+// where the LoginFlow compiler expects [store.UserPasswordStore].
+func (s *Store) UserPasswords() store.UserPasswordStore { return s.users }
+
 // RegisterClient implements [store.ClientRegistry].
 func (s *Store) RegisterClient(ctx context.Context, c *store.Client) error {
 	return s.clients.Register(ctx, c)
@@ -905,12 +922,18 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 // --- UserStore ---------------------------------------------------------------
 
 type userStore struct {
-	mu sync.RWMutex
-	m  map[string]*store.User
+	mu        sync.RWMutex
+	m         map[string]*store.User
+	usernames map[string]string // username → subject
+	hashes    map[string][]byte // subject → PHC-encoded password hash
 }
 
 func newUserStore() *userStore {
-	return &userStore{m: make(map[string]*store.User)}
+	return &userStore{
+		m:         make(map[string]*store.User),
+		usernames: make(map[string]string),
+		hashes:    make(map[string][]byte),
+	}
 }
 
 func (s *userStore) FindBySubject(_ context.Context, sub string) (*store.User, error) {
@@ -923,6 +946,32 @@ func (s *userStore) FindBySubject(_ context.Context, sub string) (*store.User, e
 	return cloneUser(u), nil
 }
 
+func (s *userStore) FindByUsername(_ context.Context, username string) (*store.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sub, ok := s.usernames[username]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	u, ok := s.m[sub]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return cloneUser(u), nil
+}
+
+func (s *userStore) ReadPasswordHash(_ context.Context, subject string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	hash, ok := s.hashes[subject]
+	if !ok || len(hash) == 0 {
+		return nil, store.ErrNotFound
+	}
+	out := make([]byte, len(hash))
+	copy(out, hash)
+	return out, nil
+}
+
 func (s *userStore) put(u *store.User) {
 	if u == nil {
 		return
@@ -930,6 +979,23 @@ func (s *userStore) put(u *store.User) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.m[u.Subject] = cloneUser(u)
+}
+
+func (s *userStore) putWithPassword(u *store.User, username string, hash []byte) {
+	if u == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[u.Subject] = cloneUser(u)
+	if username != "" {
+		s.usernames[username] = u.Subject
+	}
+	if len(hash) > 0 {
+		stored := make([]byte, len(hash))
+		copy(stored, hash)
+		s.hashes[u.Subject] = stored
+	}
 }
 
 func cloneUser(u *store.User) *store.User {

@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
+	"github.com/libraz/go-oidc-provider/internal/authn/password"
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -125,6 +126,19 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 		Subject:  in.Subject,
 		AuthTime: in.AuthTime,
 	}}, nil
+}
+
+// buildPrimaryPassword constructs the internal [password.Authenticator]
+// that drives the [PrimaryPassword] step. The builder validates the
+// store dependency up-front so a misconfigured PrimaryPassword
+// surfaces at op.New time rather than at the first authorize request.
+//
+//nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
+func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) {
+	if s.Store == nil {
+		return nil, errors.New("op: PrimaryPassword.Store is nil")
+	}
+	return password.NewAuthenticator(s.Store)
 }
 
 // buildPrimaryPasskey constructs the internal [passkey.Verifier] +

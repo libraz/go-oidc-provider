@@ -28,30 +28,6 @@ import (
 // requirement.
 var errStepBuiltinNotCompiled = errors.New("op: built-in Step requires LoginFlow compilation; use ExternalStep for direct dispatch")
 
-// HashAdapter is the password-hash adapter consumed by
-// [PrimaryPassword]. Implementations encapsulate a specific hash
-// algorithm (argon2id, bcrypt, scrypt) and its tuning parameters; the
-// library never inspects the encoded form.
-//
-// The interface is intentionally narrow: the library only needs to
-// hash a fresh password (Hash) and verify an existing one (Verify).
-// Migration between encodings is the embedder's responsibility and
-// runs through a custom HashAdapter that recognises both legacy and
-// preferred shapes.
-//
-// Implementations MUST be safe for concurrent use by multiple
-// goroutines.
-type HashAdapter interface {
-	// Hash returns the encoded form of password. The encoding is
-	// algorithm-specific and opaque to the library.
-	Hash(password string) (string, error)
-
-	// Verify reports nil when password matches the previously-Hashed
-	// encoded value, or a non-nil error otherwise. Implementations
-	// MUST run in constant time relative to password length.
-	Verify(encoded, password string) error
-}
-
 // EmailDelivery is the dispatcher [StepEmailOTP] uses to deliver a
 // numeric one-time code to the user's e-mail address. Implementations
 // integrate with the embedder's outbound mail provider (SMTP, SES,
@@ -166,24 +142,22 @@ func (k StepKind) IsUserDefined() bool {
 }
 
 // PrimaryPassword is the built-in primary-credential [Step] backed by
-// a [store.UserStore] and an optional [HashAdapter]. It is the most
-// common first factor: the embedder supplies the user-account store
-// and the library handles prompt rendering, password validation, and
-// failed-attempt accounting.
+// a [store.UserPasswordStore]. It is the most common first factor: the
+// embedder supplies a store that resolves usernames to subjects and
+// returns the encoded password hash, and the library drives prompt
+// rendering and constant-time Argon2id verification.
 //
-// When Hash is nil the library uses argon2id with its built-in
-// defaults. Override only when migrating from a legacy hash format
-// (bcrypt, scrypt) — the migration path is the embedder's
-// responsibility.
+// The library accepts password hashes in PHC argon2id encoding
+// (`$argon2id$v=19$m=...,t=...,p=...$<salt>$<hash>`). Embedders with
+// legacy encodings (bcrypt, scrypt, custom) wrap their own
+// [Authenticator] in [ExternalStep] until a hash-migration surface
+// lands; v0.x intentionally omits it so the verifier path stays
+// branch-free and the library never inspects unfamiliar encodings.
 type PrimaryPassword struct {
 	// Store is the user-account store the password is verified
 	// against. MUST be non-nil; the orchestrator rejects a flow with
 	// a nil Store at construction time.
-	Store store.UserStore
-
-	// Hash is the password-hash adapter. When nil the library uses
-	// argon2id with its built-in defaults.
-	Hash HashAdapter
+	Store store.UserPasswordStore
 }
 
 // Begin implements [Step]. PrimaryPassword is a configuration

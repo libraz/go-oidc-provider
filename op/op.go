@@ -1189,14 +1189,12 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 // compiler. The projection lives in op/ (not internal/authn/) because
 // the rule "internal MUST NOT import op" forbids the inverse path.
 //
-// Built-in Step values (PrimaryPassword / StepTOTP / …) are not yet
-// wired to internal Authenticator primitives — their construction-
-// time dependencies (TOTP encryption codec, passkey RP origin, hash
-// adapter) are exposed by follow-up options. Until those land the
-// embedder uses [op.ExternalStep] to wrap an already-constructed
-// [Authenticator] for the LoginFlow seam; calling compileLoginFlow on
-// a built-in Step returns [authn.ErrBuiltinStepNotWired] with a
-// pointer to that workaround.
+// Built-in Steps (PrimaryPassword / PrimaryPasskey / StepTOTP /
+// StepEmailOTP / StepRecoveryCode / StepCaptcha) are wired to their
+// internal Authenticator primitives through the matching builders in
+// loginflow_compile.go. ExternalStep continues to forward an
+// already-constructed [Authenticator] verbatim for embedders with
+// proprietary factors.
 func compileLoginFlow(flow LoginFlow) (*authn.CompiledLoginFlow, error) {
 	primary, err := projectStepToFlow("Primary", flow.Primary)
 	if err != nil {
@@ -1240,15 +1238,14 @@ func compileLoginFlow(flow LoginFlow) (*authn.CompiledLoginFlow, error) {
 //   - [ExternalStep] (embedder-wrapped Authenticator): forwarded
 //     verbatim, the orchestrator drives the wrapped authenticator
 //     directly.
-//   - Built-in Steps with construction-time wiring (PrimaryPasskey,
-//     StepTOTP, StepEmailOTP, StepRecoveryCode, StepCaptcha): the
-//     matching builder synthesises the internal authenticator from
-//     the Step's public fields. Validation errors surface as a
-//     typed *Error pointing at the offending Step.
-//   - PrimaryPassword: deferred. The construction-time deps
-//     (PasswordCredentialStore + verifier) are not yet exposed
-//     publicly. Surface the explanation verbatim so the upgrade
-//     path is obvious; embedders use [ExternalStep] today.
+//   - Built-in Steps with construction-time wiring (PrimaryPassword,
+//     PrimaryPasskey, StepTOTP, StepEmailOTP, StepRecoveryCode,
+//     StepCaptcha): the matching builder synthesises the internal
+//     authenticator from the Step's public fields. Validation errors
+//     surface as a typed *Error pointing at the offending Step.
+//   - Unrecognised Step values: surface a configuration_error pointing
+//     at the offending Step so the upgrade path is obvious; embedders
+//     use [ExternalStep] until a missing built-in lands.
 func projectStepToFlow(where string, s Step) (authn.LoginFlowStep, error) {
 	if s == nil {
 		return authn.LoginFlowStep{}, &Error{
@@ -1280,12 +1277,12 @@ func projectExternalStep(where string, ext ExternalStep) (authn.LoginFlowStep, e
 	}, nil
 }
 
-// projectBuiltinStep dispatches a built-in [Step] (PrimaryPasskey,
-// StepTOTP, StepEmailOTP, StepRecoveryCode, StepCaptcha) to the
-// matching builder in loginflow_compile.go and wraps the constructed
-// authenticator in a [authn.LoginFlowStep]. PrimaryPassword and any
-// unrecognised Step value surface the deferred-wiring error so the
-// embedder is pointed at the ExternalStep workaround.
+// projectBuiltinStep dispatches a built-in [Step] (PrimaryPassword,
+// PrimaryPasskey, StepTOTP, StepEmailOTP, StepRecoveryCode,
+// StepCaptcha) to the matching builder in loginflow_compile.go and
+// wraps the constructed authenticator in a [authn.LoginFlowStep]. An
+// unrecognised Step value surfaces a configuration_error pointing the
+// embedder at [ExternalStep].
 func projectBuiltinStep(where string, s Step) (authn.LoginFlowStep, error) {
 	switch v := s.(type) {
 	case PrimaryPasskey:
@@ -1319,18 +1316,11 @@ func projectBuiltinStep(where string, s Step) (authn.LoginFlowStep, error) {
 		}
 		return authn.LoginFlowStep{Kind: string(StepKindCaptcha), Authenticator: auth, IsCaptcha: true}, nil
 	case PrimaryPassword:
-		// PrimaryPassword wiring is deferred: the password-credential
-		// store interface and the username -> subject lookup contract
-		// are still being designed. Embedders compose a password
-		// factor through ExternalStep today; the ExternalStep wraps
-		// their own Authenticator so credential storage stays inside
-		// the embedder's process.
-		_ = v
-		return authn.LoginFlowStep{}, &Error{
-			Code:        codeConfiguration,
-			Description: "WithLoginFlow: " + where + " PrimaryPassword wiring is deferred; wrap your own Authenticator in op.ExternalStep until the password-credential store contract lands",
-			Cause:       authn.ErrBuiltinStepNotWired,
+		auth, err := buildPrimaryPassword(v)
+		if err != nil {
+			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
+		return authn.LoginFlowStep{Kind: string(StepKindPassword), Authenticator: auth}, nil
 	default:
 		// An unrecognised Step shape (a future built-in we forgot to
 		// wire, or an embedder-defined value type that satisfies Step
