@@ -294,6 +294,90 @@ func TestNewVerifier_RequiresResolver(t *testing.T) {
 	}
 }
 
+// newStrictTestVerifier wires a verifier configured with the FAPI 2.0
+// Message Signing posture (RequireNbf + 60s lifetime cap). Use it to
+// exercise the OFCS conformance modules
+// "ensure-request-object-without-nbf-fails",
+// "ensure-request-object-with-exp-over-60-fails", and
+// "ensure-request-object-with-nbf-over-60-fails".
+func newStrictTestVerifier(t *testing.T, now time.Time, keys *josev4.JSONWebKeySet) *jar.Verifier {
+	t.Helper()
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:      testIssuer,
+		Resolver:    &staticResolver{keys: keys},
+		Clock:       fakeClock{now: now},
+		RequireNbf:  true,
+		MaxLifetime: 60 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return v
+}
+
+func TestVerify_FAPI2_RejectsMissingNbf(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	c := happyClaims(now)
+	delete(c, "nbf")
+	c["exp"] = now.Add(30 * time.Second).Unix()
+	raw, keys := makeRequestObject(t, c)
+	v := newStrictTestVerifier(t, now, keys)
+	_, err := v.Verify(context.Background(), raw, testClientID, newClient())
+	if !errors.Is(err, jar.ErrNotYetValid) {
+		t.Fatalf("err=%v want ErrNotYetValid", err)
+	}
+}
+
+func TestVerify_FAPI2_RejectsExpOver60Future(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	c := happyClaims(now)
+	c["nbf"] = now.Unix()
+	c["exp"] = now.Add(2 * time.Minute).Unix()
+	raw, keys := makeRequestObject(t, c)
+	v := newStrictTestVerifier(t, now, keys)
+	_, err := v.Verify(context.Background(), raw, testClientID, newClient())
+	if !errors.Is(err, jar.ErrExpired) {
+		t.Fatalf("err=%v want ErrExpired", err)
+	}
+}
+
+func TestVerify_FAPI2_RejectsNbfOver60Past(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	c := happyClaims(now)
+	c["nbf"] = now.Add(-2 * time.Minute).Unix()
+	c["exp"] = now.Add(30 * time.Second).Unix()
+	c["iat"] = now.Add(-2 * time.Minute).Unix()
+	raw, keys := makeRequestObject(t, c)
+	v := newStrictTestVerifier(t, now, keys)
+	_, err := v.Verify(context.Background(), raw, testClientID, newClient())
+	// assertIat fires first when iat is also out of window; either
+	// surface is acceptable as long as the verifier rejects.
+	if err == nil {
+		t.Fatal("expected error rejecting nbf > 60s in past, got nil")
+	}
+}
+
+func TestVerify_FAPI2_AcceptsWithinWindow(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	c := happyClaims(now)
+	c["nbf"] = now.Add(-30 * time.Second).Unix()
+	c["iat"] = now.Add(-30 * time.Second).Unix()
+	c["exp"] = now.Add(30 * time.Second).Unix()
+	raw, keys := makeRequestObject(t, c)
+	v := newStrictTestVerifier(t, now, keys)
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("err=%v want nil", err)
+	}
+}
+
 func TestVerifier_AllowedAlgs_DefaultIncludesAll(t *testing.T) {
 	t.Parallel()
 	v, err := jar.NewVerifier(jar.VerifierConfig{

@@ -56,6 +56,8 @@ type Verifier struct {
 	allowedAlgs   map[jose.Algorithm]struct{}
 	maxFutureSkew time.Duration
 	maxAge        time.Duration
+	requireNbf    bool
+	maxLifetime   time.Duration
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier].
@@ -86,6 +88,18 @@ type VerifierConfig struct {
 	// MaxAge overrides [DefaultMaxAge]. Zero or negative falls back to
 	// the default.
 	MaxAge time.Duration
+
+	// RequireNbf, when true, rejects request objects whose "nbf" claim
+	// is absent. RFC 9101 §6.1 marks "nbf" optional but FAPI 2.0
+	// Message Signing §5.6 mandates its presence; embedders running
+	// under that profile flip this on.
+	RequireNbf bool
+
+	// MaxLifetime, when positive, caps how far "exp" may lie in the
+	// future and how far "nbf" may lie in the past relative to "now".
+	// FAPI 2.0 Message Signing §5.6 mandates a 60-second window.
+	// Zero leaves the cap disabled (back-compat).
+	MaxLifetime time.Duration
 }
 
 // NewVerifier builds a [*Verifier] from cfg. The function returns an
@@ -128,6 +142,8 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		allowedAlgs:   allowed,
 		maxFutureSkew: skew,
 		maxAge:        maxAge,
+		requireNbf:    cfg.RequireNbf,
+		maxLifetime:   cfg.MaxLifetime,
 	}, nil
 }
 
@@ -259,10 +275,10 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 		return err
 	}
 	now := v.clock.Now()
-	if err := assertExp(obj, now); err != nil {
+	if err := assertExp(obj, now, v.maxLifetime); err != nil {
 		return err
 	}
-	if err := assertNbf(obj, now, v.maxFutureSkew); err != nil {
+	if err := assertNbf(obj, now, v.maxFutureSkew, v.maxLifetime, v.requireNbf); err != nil {
 		return err
 	}
 	if err := assertIat(obj, now, v.maxFutureSkew, v.maxAge); err != nil {
@@ -323,27 +339,46 @@ func assertAudience(obj *Object, issuer string) error {
 
 // assertExp enforces a non-empty "exp" claim that has not already
 // passed. The verifier does not apply a skew tolerance here: an "exp"
-// in the past is unambiguous.
-func assertExp(obj *Object, now time.Time) error {
+// in the past is unambiguous. When maxLifetime is positive (FAPI 2.0
+// Message Signing §5.6 imposes a 60s cap) the function additionally
+// rejects request objects whose "exp" lies further in the future than
+// that — the strict ceiling matches the OFCS conformance test
+// "ensure-request-object-with-exp-over-60-fails".
+func assertExp(obj *Object, now time.Time, maxLifetime time.Duration) error {
 	exp, ok := claimSeconds(obj.Claims, "exp")
 	if !ok {
 		return fmt.Errorf("%w: missing exp", ErrExpired)
 	}
-	if !time.Unix(exp, 0).After(now) {
+	expTime := time.Unix(exp, 0)
+	if !expTime.After(now) {
 		return ErrExpired
+	}
+	if maxLifetime > 0 && expTime.Sub(now) > maxLifetime {
+		return fmt.Errorf("%w: exp lies more than %s in the future", ErrExpired, maxLifetime)
 	}
 	return nil
 }
 
-// assertNbf enforces "nbf" not lying in the future beyond the configured
-// skew window. An absent "nbf" is permitted.
-func assertNbf(obj *Object, now time.Time, skew time.Duration) error {
+// assertNbf enforces "nbf" not lying in the future beyond skew. When
+// requireNbf is true (FAPI 2.0 Message Signing) an absent "nbf" is
+// rejected. When maxLifetime is positive the function also caps how
+// far in the past "nbf" may lie — RFC 9101 §6.1 phrases the window as
+// "request objects MUST be short-lived"; the OFCS test
+// "ensure-request-object-with-nbf-over-60-fails" pins 60s.
+func assertNbf(obj *Object, now time.Time, skew, maxLifetime time.Duration, requireNbf bool) error {
 	nbf, ok := claimSeconds(obj.Claims, "nbf")
 	if !ok {
+		if requireNbf {
+			return fmt.Errorf("%w: missing nbf", ErrNotYetValid)
+		}
 		return nil
 	}
-	if time.Unix(nbf, 0).After(now.Add(skew)) {
+	nbfTime := time.Unix(nbf, 0)
+	if nbfTime.After(now.Add(skew)) {
 		return ErrNotYetValid
+	}
+	if maxLifetime > 0 && now.Sub(nbfTime) > maxLifetime {
+		return fmt.Errorf("%w: nbf lies more than %s in the past", ErrNotYetValid, maxLifetime)
 	}
 	return nil
 }
