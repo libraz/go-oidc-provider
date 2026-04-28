@@ -237,7 +237,7 @@ func seedClient(st *inmem.Store, clientID string, redirectURIs []string) error {
 		RedirectURIs:            redirectURIs,
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email"},
+		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
 		TokenEndpointAuthMethod: "none",
 		PublicClient:            true,
 		Source:                  store.ClientSourceStatic,
@@ -265,7 +265,7 @@ func seedConfidentialClient(st *inmem.Store, clientID, clientSecret string, redi
 		RedirectURIs:            redirectURIs,
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email"},
+		Scopes:                  []string{"openid", "profile", "email", "address", "phone", "offline_access"},
 		TokenEndpointAuthMethod: "client_secret_basic",
 		SecretHash:              hash,
 		Source:                  store.ClientSourceStatic,
@@ -286,14 +286,42 @@ func seedConfidentialClient(st *inmem.Store, clientID, clientSecret string, redi
 // machinery — the value just feeds the "updated_at" claim, which OFCS
 // only checks for shape, not freshness.
 func seedDemoUser(st *inmem.Store) {
+	updatedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	st.PutUser(context.Background(), &store.User{
 		Subject: demoSubject,
 		Claims: map[string]any{
-			"name":           "Demo User",
+			// profile (OIDC Core 1.0 §5.4)
+			"name":               "Demo User",
+			"family_name":        "User",
+			"given_name":         "Demo",
+			"middle_name":        "Q.",
+			"nickname":           "demo",
+			"preferred_username": "demo",
+			"profile":            "https://example.com/demo",
+			"picture":            "https://example.com/demo.jpg",
+			"website":            "https://example.com",
+			"gender":             "other",
+			"birthdate":          "2000-01-01",
+			"zoneinfo":           "UTC",
+			"locale":             "en-US",
+			"updated_at":         updatedAt.Unix(),
+			// email
 			"email":          "demo-user@example.com",
 			"email_verified": true,
+			// address — OIDC §5.1.1 structured value
+			"address": map[string]any{
+				"formatted":      "123 Demo Street\nDemo City DC 12345\nUS",
+				"street_address": "123 Demo Street",
+				"locality":       "Demo City",
+				"region":         "DC",
+				"postal_code":    "12345",
+				"country":        "US",
+			},
+			// phone
+			"phone_number":          "+1-555-0100",
+			"phone_number_verified": true,
 		},
-		UpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt: updatedAt,
 	})
 }
 
