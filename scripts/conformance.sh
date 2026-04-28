@@ -184,9 +184,20 @@ cmd_drive() {
   local user="${OFCS_DEMO_USER:-demo}"
   local pass="${OFCS_DEMO_PASS:-demo}"
   local cookies
-  cookies="$(mktemp /tmp/ofcs-cookies.XXXXXX)"
-  # Expand $cookies at trap-set time: by EXIT it is out of scope (local).
-  trap "rm -f '$cookies'" EXIT
+  # Multi-step OFCS tests (prompt-none, max-age, id-token-hint) call
+  # /authorize twice and rely on the first call to plant a session
+  # cookie the second uses for silent re-auth. Honor OFCS_DRIVE_COOKIES
+  # so a wrapping runner can pin one cookie jar across both drives;
+  # otherwise allocate a per-call temp file and clean up on exit.
+  if [[ -n "${OFCS_DRIVE_COOKIES:-}" ]]; then
+    cookies="$OFCS_DRIVE_COOKIES"
+    [[ -e "$cookies" ]] || touch "$cookies"
+    # No EXIT cleanup — the caller owns the file's lifetime.
+  else
+    cookies="$(mktemp /tmp/ofcs-cookies.XXXXXX)"
+    # Expand $cookies at trap-set time: by EXIT it is out of scope (local).
+    trap "rm -f '$cookies'" EXIT
+  fi
 
   # --resolve forces host.docker.internal to localhost from the host so
   # the same DNS name works inside and outside docker. -k is required
@@ -223,13 +234,24 @@ cmd_drive() {
   echo "[drive 1/3] interaction_url=${interaction_url}"
 
   echo "[drive 2/3] POST credentials (user=${user})"
-  local pwd_resp body2 state_ref2 csrf2 approved
+  local pwd_resp body2 state_ref2 csrf2 approved pwd_redirect
   pwd_resp="$("${curl_base[@]}" -X POST "$interaction_url" \
     -H "Origin: ${ISSUER}" \
     --data-urlencode "state_ref=$state_ref" \
     --data-urlencode "csrf_token=$csrf" \
     --data-urlencode "username=$user" \
     --data-urlencode "password=$pass" -i)"
+  # If the OP granted consent silently (cookie-stored prior consent,
+  # prompt=login on a session that already approved this client) the
+  # credentials POST returns a 302 straight to the OFCS callback —
+  # there is no consent prompt to walk. Forward the implicit-bridge.
+  pwd_redirect="$(printf '%s' "$pwd_resp" \
+    | awk 'tolower($1)=="location:"{print $2; exit}' | tr -d '\r')"
+  if [[ "$pwd_redirect" == https://localhost.emobix.co.uk:8443/* ]]; then
+    echo "[drive 2/3] OP skipped consent (silent approval) — redirect=${pwd_redirect}"
+    forward_implicit_bridge "$pwd_redirect" ""
+    return 0
+  fi
   body2="$(split_body "$pwd_resp")"
   state_ref2="$(extract_field "$body2" state_ref)"
   csrf2="$(extract_field "$body2" csrf_token)"
