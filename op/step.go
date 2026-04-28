@@ -239,17 +239,21 @@ type StepTOTP struct {
 	Store store.TOTPStore
 
 	// EncryptionKey is the AES-256-GCM key used to seal the shared
-	// secret at rest. MUST be exactly 32 bytes. The library binds the
-	// subject identifier as additional authenticated data, so a blob
-	// exfiltrated from one row fails to decrypt under a different
-	// subject. MUST be non-empty.
+	// secret at rest. When non-empty, MUST be exactly 32 bytes; an
+	// empty value falls back to [WithMFAEncryptionKey] /
+	// [WithMFAEncryptionKeys] configured on the Provider. The library
+	// binds the subject identifier as additional authenticated data,
+	// so a blob exfiltrated from one row fails to decrypt under a
+	// different subject.
 	EncryptionKey []byte
 
 	// EncryptionKeyPrev is the rotation history accepted on
 	// decryption. Each entry MUST be exactly 32 bytes. The current
 	// key is tried first; on failure each previous key is tried in
-	// order. Retain previous keys until every persisted record has
-	// been re-sealed under EncryptionKey.
+	// order. An empty value falls back to the rotation slot
+	// configured through [WithMFAEncryptionKeys] on the Provider.
+	// Retain previous keys until every persisted record has been
+	// re-sealed under the active key.
 	EncryptionKeyPrev [][]byte
 }
 

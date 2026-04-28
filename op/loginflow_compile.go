@@ -173,25 +173,28 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) {
 
 // buildStepTOTP constructs the internal [totp.Codec] + [totp.Verifier]
 // + [totp.Authenticator] that drives the [StepTOTP] step. The codec is
-// built from the public [StepTOTP.EncryptionKey] and rotation history
-// so the embedder controls key material entirely; the library never
-// retains the bytes beyond the codec instance.
+// built from the public [StepTOTP.EncryptionKey] and rotation history,
+// or — when those fields are empty — from the Provider-level fallback
+// configured through [WithMFAEncryptionKey] / [WithMFAEncryptionKeys].
+// A non-empty per-step key always wins (more-specific-wins). The
+// library never retains the bytes beyond the codec instance.
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-func buildStepTOTP(s StepTOTP) (authn.Authenticator, error) {
+func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (authn.Authenticator, error) {
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepTOTP.Store is nil",
 		}
 	}
-	if len(s.EncryptionKey) == 0 {
+	current, prev := selectTOTPKeys(s, fallbackCurrent, fallbackPrev)
+	if len(current) == 0 {
 		return nil, &Error{
 			Code:        codeConfiguration,
-			Description: "StepTOTP.EncryptionKey is required (32 bytes)",
+			Description: "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKey at the Provider level)",
 		}
 	}
-	codec, err := totp.NewCodec(s.EncryptionKey, s.EncryptionKeyPrev...)
+	codec, err := totp.NewCodec(current, prev...)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -201,6 +204,23 @@ func buildStepTOTP(s StepTOTP) (authn.Authenticator, error) {
 	}
 	verifier := &totp.Verifier{Codec: codec}
 	return totp.NewAuthenticator(verifier, s.Store)
+}
+
+// selectTOTPKeys resolves the per-step versus Provider-level encryption
+// keys for a [StepTOTP]. A non-empty [StepTOTP.EncryptionKey] always
+// wins (more-specific-wins); the rotation slot follows the same rule
+// independently so an embedder can override only the active key while
+// keeping the global rotation history.
+func selectTOTPKeys(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) ([]byte, [][]byte) {
+	current := s.EncryptionKey
+	if len(current) == 0 {
+		current = fallbackCurrent
+	}
+	prev := s.EncryptionKeyPrev
+	if len(prev) == 0 {
+		prev = fallbackPrev
+	}
+	return current, prev
 }
 
 // buildStepEmailOTP constructs the internal [emailotp.Authenticator]

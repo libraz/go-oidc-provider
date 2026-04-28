@@ -179,7 +179,7 @@ func TestProjectStepToFlow_BuiltinSteps_RejectMissingDeps(t *testing.T) {
 					Then: op.StepTOTP{Store: st.TOTPs()},
 				}}}
 			},
-			wantSubstr: "EncryptionKey is required",
+			wantSubstr: "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKey at the Provider level)",
 		},
 		{
 			name: "StepEmailOTP/nil-mailer",
@@ -275,6 +275,56 @@ func TestProjectStepToFlow_PrimaryPassword_RejectsNilStore(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "PrimaryPassword.Store is nil") {
 		t.Fatalf("op.New: error %q does not contain field-level message", err.Error())
+	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("op.New: expected *op.Error, got %T", err)
+	}
+	if typed.Code != "configuration_error" {
+		t.Fatalf("op.Error.Code = %q, want %q", typed.Code, "configuration_error")
+	}
+}
+
+// TestProjectStepToFlow_StepTOTP_FallsBackToProviderKey pins the
+// Provider-level fallback contract: when [op.StepTOTP.EncryptionKey]
+// is empty the builder consults the
+// [op.WithMFAEncryptionKey] / [op.WithMFAEncryptionKeys] surface and
+// op.New constructs successfully.
+func TestProjectStepToFlow_StepTOTP_FallsBackToProviderKey(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	flow := op.LoginFlow{Primary: externalPrimary(), Rules: []op.Rule{{
+		When: func(op.LoginContext) bool { return true },
+		Then: op.StepTOTP{Store: st.TOTPs()},
+	}}}
+	opts := append(validBaseOptsWithStore(t, st),
+		op.WithMFAEncryptionKey(bytes32("global-mfa-key-32-bytes-padding-")),
+		op.WithLoginFlow(flow),
+	)
+	if _, err := op.New(opts...); err != nil {
+		t.Fatalf("op.New: unexpected error with global fallback: %v", err)
+	}
+}
+
+// TestProjectStepToFlow_StepTOTP_RejectsMissingKeyAndFallback covers
+// the negative path: with neither a per-step key nor a global fallback
+// configured, op.New MUST surface a configuration error mentioning
+// both the per-step field and the Provider-level option.
+func TestProjectStepToFlow_StepTOTP_RejectsMissingKeyAndFallback(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	flow := op.LoginFlow{Primary: externalPrimary(), Rules: []op.Rule{{
+		When: func(op.LoginContext) bool { return true },
+		Then: op.StepTOTP{Store: st.TOTPs()},
+	}}}
+	opts := append(validBaseOptsWithStore(t, st), op.WithLoginFlow(flow))
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatalf("op.New: expected error when neither per-step nor global key is set")
+	}
+	want := "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKey at the Provider level)"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("op.New: error %q does not contain %q", err.Error(), want)
 	}
 	var typed *op.Error
 	if !errors.As(err, &typed) {

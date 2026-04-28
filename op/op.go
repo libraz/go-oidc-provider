@@ -1247,7 +1247,7 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 	}
 	var compiled *authn.CompiledLoginFlow
 	if cfg.loginFlowSet {
-		compiled, err = compileLoginFlow(cfg.loginFlow)
+		compiled, err = compileLoginFlow(cfg.loginFlow, cfg)
 		if err != nil {
 			// projectStepToFlow / authn.CompileLoginFlow already
 			// produce typed *Error / contextual messages; wrap only
@@ -1295,14 +1295,18 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 // loginflow_compile.go. ExternalStep continues to forward an
 // already-constructed [Authenticator] verbatim for embedders with
 // proprietary factors.
-func compileLoginFlow(flow LoginFlow) (*authn.CompiledLoginFlow, error) {
-	primary, err := projectStepToFlow("Primary", flow.Primary)
+//
+// cfg supplies the Provider-level fallbacks the per-step builders
+// consult when the Step omits its own field (e.g. StepTOTP defers to
+// [WithMFAEncryptionKey] when [StepTOTP.EncryptionKey] is empty).
+func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, error) {
+	primary, err := projectStepToFlow("Primary", flow.Primary, cfg)
 	if err != nil {
 		return nil, err
 	}
 	rules := make([]authn.LoginFlowRule, 0, len(flow.Rules))
 	for i, r := range flow.Rules {
-		then, perr := projectStepToFlow("Rules["+strconv.Itoa(i)+"].Then", r.Then)
+		then, perr := projectStepToFlow("Rules["+strconv.Itoa(i)+"].Then", r.Then, cfg)
 		if perr != nil {
 			return nil, perr
 		}
@@ -1346,7 +1350,10 @@ func compileLoginFlow(flow LoginFlow) (*authn.CompiledLoginFlow, error) {
 //   - Unrecognised Step values: surface a configuration_error pointing
 //     at the offending Step so the upgrade path is obvious; embedders
 //     use [ExternalStep] until a missing built-in lands.
-func projectStepToFlow(where string, s Step) (authn.LoginFlowStep, error) {
+//
+// cfg threads the Provider-level fallbacks (e.g. MFA encryption keys)
+// through to the built-in builders.
+func projectStepToFlow(where string, s Step, cfg *config) (authn.LoginFlowStep, error) {
 	if s == nil {
 		return authn.LoginFlowStep{}, &Error{
 			Code:        codeConfiguration,
@@ -1356,7 +1363,7 @@ func projectStepToFlow(where string, s Step) (authn.LoginFlowStep, error) {
 	if ext, ok := s.(ExternalStep); ok {
 		return projectExternalStep(where, ext)
 	}
-	return projectBuiltinStep(where, s)
+	return projectBuiltinStep(where, s, cfg)
 }
 
 // projectExternalStep is the [projectStepToFlow] arm for an
@@ -1383,7 +1390,10 @@ func projectExternalStep(where string, ext ExternalStep) (authn.LoginFlowStep, e
 // wraps the constructed authenticator in a [authn.LoginFlowStep]. An
 // unrecognised Step value surfaces a configuration_error pointing the
 // embedder at [ExternalStep].
-func projectBuiltinStep(where string, s Step) (authn.LoginFlowStep, error) {
+//
+// cfg supplies the Provider-level fallbacks the per-step builders
+// consult when the Step omits its own field.
+func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep, error) {
 	switch v := s.(type) {
 	case PrimaryPasskey:
 		auth, err := buildPrimaryPasskey(v)
@@ -1392,7 +1402,8 @@ func projectBuiltinStep(where string, s Step) (authn.LoginFlowStep, error) {
 		}
 		return authn.LoginFlowStep{Kind: string(StepKindPasskey), Authenticator: auth}, nil
 	case StepTOTP:
-		auth, err := buildStepTOTP(v)
+		fallbackCurrent, fallbackPrev := totpFallbackKeys(cfg)
+		auth, err := buildStepTOTP(v, fallbackCurrent, fallbackPrev)
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
@@ -1432,6 +1443,23 @@ func projectBuiltinStep(where string, s Step) (authn.LoginFlowStep, error) {
 			Cause:       authn.ErrBuiltinStepNotWired,
 		}
 	}
+}
+
+// totpFallbackKeys returns the Provider-level TOTP encryption keys
+// configured through [WithMFAEncryptionKey] / [WithMFAEncryptionKeys].
+// The first return value is the active key (or nil when the option is
+// unset), the second is the rotation history (nil when absent or when
+// only the active key was supplied). Splitting the slice this way lets
+// [buildStepTOTP] feed [selectTOTPKeys] without re-parsing the layout.
+func totpFallbackKeys(cfg *config) ([]byte, [][]byte) {
+	if len(cfg.mfaEncryptionKeys) == 0 {
+		return nil, nil
+	}
+	current := cfg.mfaEncryptionKeys[0]
+	if len(cfg.mfaEncryptionKeys) == 1 {
+		return current, nil
+	}
+	return current, cfg.mfaEncryptionKeys[1:]
 }
 
 // projectStepError wraps a builder failure into a typed [Error] that

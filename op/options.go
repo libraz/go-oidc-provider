@@ -62,6 +62,17 @@ type config struct {
 	// each; validation runs in [validate].
 	cookieKeys [][]byte
 
+	// mfaEncryptionKeys carries the AES-256-GCM keys used to seal
+	// per-user TOTP shared secrets at rest. The first entry is the
+	// active encryption key; the remainder are rotation slots tried
+	// in order on decryption only. Each entry is 32 bytes.
+	//
+	// The slice backs every [StepTOTP] whose own EncryptionKey is
+	// empty; a per-step EncryptionKey overrides the global value when
+	// present. Defensive-copied at intake so a later mutation of the
+	// caller's slice cannot silently change the OP's keys at runtime.
+	mfaEncryptionKeys [][]byte
+
 	// trustedProxies holds the CIDRs from [WithTrustedProxies]. Empty
 	// means "no proxy trusted"; X-Forwarded-* headers are ignored.
 	trustedProxies []string
@@ -1477,6 +1488,68 @@ func WithCookieKeys(keys ...[]byte) Option {
 		return nil
 	})
 }
+
+// WithMFAEncryptionKey registers a single AES-256-GCM key (32 bytes)
+// used to seal per-user TOTP shared secrets at rest. It is a
+// convenience wrapper over [WithMFAEncryptionKeys] for the common
+// single-key case.
+//
+// The key backs every [StepTOTP] whose own EncryptionKey is empty;
+// a per-step EncryptionKey overrides the global value when present.
+// Stable since v0.1.
+func WithMFAEncryptionKey(key []byte) Option {
+	return WithMFAEncryptionKeys(key)
+}
+
+// WithMFAEncryptionKeys registers the AES-256-GCM keys used to seal
+// per-user TOTP shared secrets at rest. The first key is the active
+// encryption key; remaining keys are accepted on decryption only,
+// supporting graceful rotation. Every key MUST be 32 bytes; an empty
+// list is rejected so the misconfiguration surfaces at startup.
+//
+// Each call replaces any keys configured by a previous
+// WithMFAEncryptionKeys / [WithMFAEncryptionKey] call. Pass every
+// active and rotated key in a single call.
+//
+// The keys back every [StepTOTP] whose own EncryptionKey is empty;
+// a per-step EncryptionKey overrides the global value when present
+// (more-specific-wins). Retain previous keys until every persisted
+// TOTP record has been re-sealed under the active key.
+// Stable since v0.1.
+func WithMFAEncryptionKeys(keys ...[]byte) Option {
+	return optionFunc(func(c *config) error {
+		if len(keys) == 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithMFAEncryptionKeys requires at least one key",
+			}
+		}
+		for i, k := range keys {
+			if len(k) != mfaEncryptionKeyLen {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithMFAEncryptionKey/WithMFAEncryptionKeys: entry " + strconv.Itoa(i) + " is not 32 bytes",
+				}
+			}
+		}
+		// Defensive copy so a later mutation of the caller's slice does
+		// not silently change the OP's keys at runtime.
+		cp := make([][]byte, len(keys))
+		for i, k := range keys {
+			b := make([]byte, len(k))
+			copy(b, k)
+			cp[i] = b
+		}
+		c.mfaEncryptionKeys = cp
+		return nil
+	})
+}
+
+// mfaEncryptionKeyLen mirrors the AES-256-GCM key length the TOTP
+// codec accepts. The constant is duplicated here so option-level
+// validation can return a stable [*Error] without instantiating the
+// codec.
+const mfaEncryptionKeyLen = 32
 
 // WithTrustedProxies declares the CIDRs from which the [Provider] should
 // honour [X-Forwarded-*] headers. When a request arrives from outside these

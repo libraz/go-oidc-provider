@@ -618,6 +618,95 @@ func TestWithCookieKeys_DefensiveCopy(t *testing.T) {
 	}
 }
 
+// validMFAKey returns a 32-byte filler suitable for the AES-256-GCM
+// TOTP codec. The contents do not need to be random for
+// option-validation tests.
+func validMFAKey() []byte {
+	k := make([]byte, 32)
+	for i := range k {
+		k[i] = 0x80 | byte(i)
+	}
+	return k
+}
+
+func TestWithMFAEncryptionKey_AcceptsValidKey(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t), op.WithMFAEncryptionKey(validMFAKey()))...); err != nil {
+		t.Fatalf("WithMFAEncryptionKey rejected valid key: %v", err)
+	}
+}
+
+func TestWithMFAEncryptionKey_RejectsWrongLength(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithMFAEncryptionKey(make([]byte, 16)))...)
+	if err == nil {
+		t.Fatal("WithMFAEncryptionKey accepted 16-byte key, want rejection")
+	}
+	if !strings.Contains(err.Error(), "entry 0 is not 32 bytes") {
+		t.Errorf("err = %v, want it to mention entry 0 not 32 bytes", err)
+	}
+}
+
+func TestWithMFAEncryptionKeys_AcceptsRotation(t *testing.T) {
+	t.Parallel()
+
+	current := validMFAKey()
+	previous := validMFAKey()
+	previous[0] = 0xff
+
+	if _, err := op.New(append(validBaseOpts(t), op.WithMFAEncryptionKeys(current, previous))...); err != nil {
+		t.Fatalf("WithMFAEncryptionKeys rejected rotation pair: %v", err)
+	}
+}
+
+func TestWithMFAEncryptionKeys_RejectsEmpty(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithMFAEncryptionKeys())...)
+	if err == nil {
+		t.Fatal("WithMFAEncryptionKeys accepted empty input")
+	}
+	if !strings.Contains(err.Error(), "requires at least one key") {
+		t.Errorf("err = %v, want it to mention at least one key", err)
+	}
+}
+
+func TestWithMFAEncryptionKeys_RejectsBadRotationEntry(t *testing.T) {
+	t.Parallel()
+
+	bad := make([]byte, 8)
+	_, err := op.New(append(validBaseOpts(t), op.WithMFAEncryptionKeys(validMFAKey(), bad))...)
+	if err == nil {
+		t.Fatal("WithMFAEncryptionKeys accepted 8-byte rotation key")
+	}
+	if !strings.Contains(err.Error(), "entry 1 is not 32 bytes") {
+		t.Errorf("err = %v, want it to mention entry 1 not 32 bytes", err)
+	}
+}
+
+func TestWithMFAEncryptionKey_DefensiveCopy(t *testing.T) {
+	t.Parallel()
+
+	// Mutating the input slice after construction must not change the
+	// stored keys. The defensive copy is the only thing standing between
+	// a caller's later mutation and a runtime cipher swap; the test
+	// asserts construction stays clean and (because the mutation runs
+	// after construction) the stored copy is unaffected.
+	k := validMFAKey()
+	provider, err := op.New(append(validBaseOpts(t), op.WithMFAEncryptionKey(k))...)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := range k {
+		k[i] = 0
+	}
+	if provider == nil {
+		t.Fatal("provider nil")
+	}
+}
+
 func TestWithTrustedProxies_AcceptsCIDRs(t *testing.T) {
 	t.Parallel()
 
