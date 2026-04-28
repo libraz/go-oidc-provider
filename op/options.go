@@ -26,7 +26,6 @@ import (
 // Option configures a [Provider] passed to [New]. Options compose: the order
 // in which they appear in the New call determines the order in which they
 // are applied. Where two options set the same field, the later one wins.
-//
 // Implementors of new options should construct an [Option] via the
 // unexported optionFunc type below; users of the package do not implement
 // the Option interface directly.
@@ -154,6 +153,16 @@ type config struct {
 	// at the option site.
 	refreshTokenTTL time.Duration
 
+	// refreshGracePeriod stores the [WithRefreshGracePeriod] override.
+	// Zero signals "use library default" (a 60-second window matching
+	// RFC 9700 §2.2.2). Negative signals "set explicitly to zero" so a
+	// caller that wants the strict no-grace posture can express it
+	// without colliding with the zero-value sentinel; the option layer
+	// normalises a negative value to a true zero before storing.
+	refreshGracePeriod       time.Duration
+	refreshGracePeriodSet    bool
+	refreshGracePeriodIsZero bool
+
 	// dpopNonces is the [DPoPNonceSource] supplied through
 	// [WithDPoPNonceSource]. Nil means the RFC 9449 §8 / §9 nonce
 	// flow is disabled; the verifier accepts proofs without a nonce
@@ -161,13 +170,26 @@ type config struct {
 	// challenge. At most one source may be registered.
 	dpopNonces DPoPNonceSource
 
-	// Login flow / UI / static-clients (Wave H, plan 005).
+	// allowPrivateNetworkJWKS, when true, suppresses the SSRF
+	// deny-list the JAR / JWKS fetcher applies to RP-controlled URIs.
+	// The default false rejects loopback / link-local / RFC 1918
+	// hosts so an attacker-controlled jwks_uri cannot pivot the OP
+	// onto an internal service. Embedders fronting their RPs with
+	// private DNS opt in via [WithAllowPrivateNetworkJWKS].
+	allowPrivateNetworkJWKS bool
 
+	// allowPrivateNetworkJAR mirrors [allowPrivateNetworkJWKS] for
+	// the JAR request_uri fetcher in /authorize. The two gates are
+	// kept independent so an embedder can grant private-network
+	// access for one fetcher without widening the other.
+	allowPrivateNetworkJAR bool
+
+	// Login flow / UI / static-clients (Wave H, plan 005).
 	// loginFlow stores the [LoginFlow] supplied through
 	// [WithLoginFlow]. The zero value (Primary == nil) signals
 	// "not configured"; a non-zero value is staged for the H1-D
 	// orchestrator wiring and rejected at [config.validate] until
-	// that wiring lands. See docs/plans/005-login-and-ui-shell.md
+	// that wiring lands.05-login-and-ui-shell.md
 	// §3.1.
 	loginFlow LoginFlow
 
@@ -209,6 +231,36 @@ type config struct {
 	// [config.staticClients] in [config.validate] so unknown ids
 	// fail at construction time.
 	firstPartyClients []string
+
+	// claimsParameterSupportedSet records whether
+	// [WithClaimsParameterSupported] was invoked. When false the
+	// library defaults to true (the parser is always wired). When
+	// true the value of [claimsParameterSupportedOff] decides whether
+	// the wire is told the OP honours the parameter; the parser still
+	// runs server-side either way so a malformed payload is rejected
+	// uniformly.
+	claimsParameterSupportedSet bool
+
+	// claimsParameterSupportedOff, when true, makes
+	// [config.claimsParameterSupported] return false: the discovery
+	// document advertises the absence of §5.5 support and the
+	// authorize / par parsers ignore any incoming "claims" payload.
+	// The boolean is the negative of the option argument so the zero
+	// value keeps the library default of "supported".
+	claimsParameterSupportedOff bool
+}
+
+// claimsParameterSupported returns the effective discovery
+// advertisement for the OIDC Core 1.0 §5.5 "claims" parameter. The
+// library default is true; embedders flip the bit via
+// [WithClaimsParameterSupported]. The function is consulted by both
+// the discovery builder and the authorize parser so the wire and the
+// runtime stay in lock-step.
+func (c *config) claimsParameterSupported() bool {
+	if !c.claimsParameterSupportedSet {
+		return true
+	}
+	return !c.claimsParameterSupportedOff
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -263,7 +315,7 @@ func (c *config) applyDefaults() {
 	defaults := defaultEndpoints()
 	c.endpoints = defaults.merge(c.endpoints)
 	if c.interactionD == nil {
-		// docs/plans/005-login-and-ui-shell.md §3.4: when neither a
+		// 05-login-and-ui-shell.md §3.4: when neither a
 		// custom [interaction.Driver] nor a SPA shell is configured
 		// the OP boots into a working HTML login surface. With a
 		// SPA shell active the default falls away so the embedder's
@@ -358,6 +410,35 @@ func isStandardScope(name string) bool {
 	return false
 }
 
+// emitPartialWiringWarnings logs one warning per registered option whose
+// runtime wiring is still in flight. The warning is intentionally a log
+// line and not a constructor error: the options have shipped, embedders
+// already call them in working binaries, and the partial wiring does
+// not produce wrong protocol output — it leaves SPA mounts unserved.
+// Surfacing the gap through the configured logger lets operators notice
+// the limitation in their boot logs without breaking existing call
+// sites.
+// The warnings are emitted at WARN so a discardHandler-backed logger
+// (the library default when [WithLogger] is not called) drops them
+// silently and only operators who opt in to logging see them.
+func (c *config) emitPartialWiringWarnings() {
+	if c.logger == nil {
+		return
+	}
+	if c.reactUISet {
+		c.logger.Warn(
+			"WithReactUI is partially wired: the Provider suppresses the default HTML driver, but the configured LoginMount/ConsentMount/LogoutMount and StaticDir are not yet served by op.New. Embedders must mount their SPA externally; JSON state endpoints under the configured mounts land in a follow-up release.",
+			"option", "WithReactUI",
+		)
+	}
+	if c.consentUISet {
+		c.logger.Warn(
+			"WithConsentUI is registered but the supplied Template is not yet rendered by any handler. The option is a no-op until the consent-interaction wiring lands;05-login-and-ui-shell.md §3.5.",
+			"option", "WithConsentUI",
+		)
+	}
+}
+
 // validate checks that required fields are set and that combinations of
 // options are internally consistent. It runs after applyDefaults so that
 // "missing required" errors are not masked by a default value.
@@ -432,12 +513,11 @@ func (c *config) validateNetwork() error {
 
 // validateFirstPartyClients enforces the cross-cutting invariants
 // between [WithFirstPartyClients] and the static-client surface:
-//
 //   - every advertised client_id MUST appear in [config.staticClients]
 //     after every option has been applied (the option site cannot
 //     enforce this because the two options are order-independent);
 //   - no FAPI 2.0 profile MAY be active simultaneously, per
-//     docs/plans/005-login-and-ui-shell.md §3.10. FAPI 2.0 forbids
+//     05-login-and-ui-shell.md §3.10. FAPI 2.0 forbids
 //     auto-consent because the profile mandates explicit user
 //     authorization for every protected resource.
 func (c *config) validateFirstPartyClients() error {
@@ -469,7 +549,6 @@ func (c *config) validateFirstPartyClients() error {
 
 // validateLoginFlow enforces the cross-cutting invariants between
 // [WithLoginFlow] and the legacy authenticator surface:
-//
 //   - [WithLoginFlow] is mutually exclusive with [WithAuthenticators].
 //     The two surfaces drive the orchestrator through different code
 //     paths; combining them invites silent misordering. Reject at the
@@ -506,7 +585,7 @@ func (c *config) validateLoginFlow() error {
 // [StepKind.IsUserDefined] returns true). The check is conservative —
 // built-in [Step] values declare their own kinds at the type level,
 // only [ExternalStep] gives the embedder a free choice — but
-// surfacing a clear error at New() spares the embedder from finding
+// surfacing a clear error at New spares the embedder from finding
 // out at the first authentication request.
 func validateLoginFlowKinds(flow LoginFlow) error {
 	if ext, ok := flow.Primary.(ExternalStep); ok {
@@ -598,7 +677,6 @@ func (c *config) validateLocales() error {
 // after [config.applyDefaults] so default-on features are visible to
 // the lookup, and after [config.validateScopes] so scope-shape errors
 // surface first.
-//
 // The rule is one-directional: a profile MUST NOT be relaxed by a
 // later option, but stricter-than-profile configurations are
 // permitted (an embedder may layer additional [WithFeature] calls on
@@ -655,7 +733,58 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 				"; got " + c.accessTokenTTL.String(),
 		}
 	}
+	if profileForcesZeroRefreshGrace(p) && c.refreshGracePeriodSet && !c.refreshGracePeriodIsZero {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" requires WithRefreshGracePeriod(0); got " +
+				c.refreshGracePeriod.String(),
+		}
+	}
+	if profileForcesDPoPNonce(p) && hasDPoPFeature(enabled) && c.dpopNonces == nil {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" requires WithDPoPNonceSource when WithFeature(DPoP) is active",
+		}
+	}
 	return nil
+}
+
+// profileForcesDPoPNonce reports whether p mandates the RFC 9449 §8/§9
+// nonce challenge flow. FAPI 2.0 Message Signing §5.3.4 requires the
+// AS to issue a server-side DPoP nonce; the future FAPI CIBA / iGov
+// profiles inherit the same posture but are placeholders today.
+func profileForcesDPoPNonce(p profile.Profile) bool {
+	switch p {
+	case profile.FAPI2MessageSigning:
+		return true
+	case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+		return false
+	}
+	return false
+}
+
+// hasDPoPFeature reports whether [feature.DPoP] is in have. The check
+// is split out so [validateProfile] reads as a guarded clause rather
+// than poking the map directly.
+func hasDPoPFeature(have map[feature.Flag]struct{}) bool {
+	_, ok := have[feature.DPoP]
+	return ok
+}
+
+// profileForcesZeroRefreshGrace reports whether p mandates a strict
+// no-grace refresh window per FAPI 2.0 §J.7.2 §3.1.7. The list is the
+// same set the runtime gate in [effectiveRefreshGrace] consults so a
+// validation error and the runtime override never disagree.
+func profileForcesZeroRefreshGrace(p profile.Profile) bool {
+	switch p {
+	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+		return true
+	case profile.FAPICIBA, profile.IGovHigh:
+		return false
+	}
+	return false
 }
 
 // anyEnabled reports whether any flag in want is present in have. The
@@ -791,7 +920,6 @@ func (c *config) validateRegistration() error {
 
 // validateScopes enforces the [WithScope] invariants and builds
 // [config.scopeIndex] for the post-validate config:
-//
 //   - every registered Scope has a non-empty Name
 //   - no two registrations share a Name
 //   - no OIDC standard scope is registered with Public: false (the
@@ -903,7 +1031,6 @@ func validateKeyset(ks Keyset) error {
 // WithIssuer sets the OP issuer URL. The value MUST be an absolute https URL
 // with no query or fragment, per OpenID Connect Discovery 1.0 §3. The URL is
 // parsed eagerly; malformed values fail [New] rather than the first request.
-//
 // Stable since v0.1.
 func WithIssuer(issuer string) Option {
 	return optionFunc(func(c *config) error {
@@ -924,7 +1051,6 @@ func WithIssuer(issuer string) Option {
 // Callers MUST supply a non-nil [store.Store]; the library does not provide a
 // default backend at this layer because the choice of persistence is part of
 // the deployment shape rather than the library configuration.
-//
 // Stable since v0.1.
 func WithStore(s store.Store) Option {
 	return optionFunc(func(c *config) error {
@@ -939,11 +1065,9 @@ func WithStore(s store.Store) Option {
 // WithKeyset registers the OP signing keys. The first entry is the active
 // signer; subsequent entries are kept in JWKS so RPs can verify tokens
 // issued under previous keys during a rotation window.
-//
 // Every entry MUST be ECDSA on curve P-256 (the v1.0 ES256 policy from
-// docs/plans/002-product-design.md §J.5 / §K.3). Supplying any other key
+// 02-product-design.md §J.5 / §K.3). Supplying any other key
 // shape causes [New] to fail at construction time.
-//
 // Stable since v0.1.
 func WithKeyset(ks Keyset) Option {
 	return optionFunc(func(c *config) error {
@@ -957,9 +1081,8 @@ func WithKeyset(ks Keyset) Option {
 
 // WithClock injects the wall-clock implementation used for token expiry,
 // audit timestamps, and rate-limit windows. If unset, the [Provider] uses a
-// real wall clock backed by [time.Now]. Tests SHOULD inject a deterministic
+// real wall clock backed by [time.Now()]. Tests SHOULD inject a deterministic
 // clock so the whole flow shares the same fake time.
-//
 // Stable since v0.1.
 func WithClock(clock Clock) Option {
 	return optionFunc(func(c *config) error {
@@ -972,7 +1095,6 @@ func WithClock(clock Clock) Option {
 // diagnostics. If unset, the [Provider] discards every record. Callers
 // SHOULD pass a logger backed by their service's slog handler so OP events
 // appear in the same stream as the rest of the application.
-//
 // The supplied logger's handler is wrapped with the library's redaction
 // hook (see internal/redact) so attributes named after the canonical
 // OAuth/OIDC secrets — access_token, refresh_token, id_token, code,
@@ -980,7 +1102,6 @@ func WithClock(clock Clock) Option {
 // authorization, cookie, set-cookie — are masked before they reach
 // the underlying handler. The wrapping is idempotent: passing a
 // logger whose handler is already redact-wrapped is a no-op.
-//
 // Stable since v0.1.
 func WithLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
@@ -997,7 +1118,7 @@ func WithLogger(logger *slog.Logger) Option {
 // wins; otherwise the operational logger from [WithLogger] is used so
 // audit records are not silently dropped just because the embedder
 // did not split the streams. A nil return collapses the emitter to
-// [audit.Discard] — that path is reachable only when neither option
+// [audit.Discard()] — that path is reachable only when neither option
 // was supplied.
 func (c *config) effectiveAuditLogger() *slog.Logger {
 	if c.auditLogger != nil {
@@ -1011,17 +1132,14 @@ func (c *config) effectiveAuditLogger() *slog.Logger {
 // "audit"="true" so log shippers can split them onto a dedicated
 // retention bucket without parsing the [AuditEvent] name; the
 // design rationale is in design 002 §N.1.
-//
 // If unset, the [Provider] uses the operational logger from
 // [WithLogger]; if neither is configured, audit records are dropped.
 // Embedders SHOULD pass a logger pointed at long-retention storage
 // (S3-backed handler, BigQuery sink, ELK index, …) so audit lines
 // outlive the operational stream.
-//
 // The supplied logger's handler is wrapped with the same redaction
 // hook as [WithLogger] so a regression that puts a token into an
 // [AuditEvent] extras map cannot escape the wire posture.
-//
 // Stable since v0.1.
 func WithAuditLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
@@ -1037,11 +1155,9 @@ func WithAuditLogger(logger *slog.Logger) Option {
 // HTTP endpoints. The default is "/oidc". The discovery document is always
 // served under /.well-known regardless of this value (per OpenID Connect
 // Discovery 1.0 §4); every other endpoint is routed under prefix.
-//
 // The supplied prefix MUST start with "/" and MUST NOT end with "/". Empty
 // values reject; the empty-prefix case (mounting at root) is supported by
 // passing "/" explicitly.
-//
 // Stable since v0.1.
 func WithMountPrefix(prefix string) Option {
 	return optionFunc(func(c *config) error {
@@ -1071,7 +1187,6 @@ func WithMountPrefix(prefix string) Option {
 // WithEndpoints overrides individual endpoint paths. Empty fields in e
 // retain the library default; populated fields replace the corresponding
 // path. The discovery document reflects every override automatically.
-//
 // Stable since v0.1.
 func WithEndpoints(e Endpoints) Option {
 	return optionFunc(func(c *config) error {
@@ -1084,7 +1199,6 @@ func WithEndpoints(e Endpoints) Option {
 // token endpoint. Calling this option replaces the default
 // (authorization_code + refresh_token) entirely; pass every grant the
 // deployment needs in a single call.
-//
 // Stable since v0.1.
 func WithGrants(grants ...grant.Type) Option {
 	return optionFunc(func(c *config) error {
@@ -1117,7 +1231,6 @@ func WithGrants(grants ...grant.Type) Option {
 
 // WithFeature enables an optional protocol extension. The option may be
 // repeated; each call adds to the enabled set.
-//
 // Idempotent: enabling a flag that is already present is a silent
 // no-op rather than a configuration error. This matches the
 // auto-enable contract [WithProfile] introduced (ADR 0008 item 8 /
@@ -1125,7 +1238,6 @@ func WithGrants(grants ...grant.Type) Option {
 // `WithProfile(FAPI2Baseline)` plus `WithFeature(feature.PAR)` —
 // either order, before or after — without the second call failing
 // because the profile already activated the flag.
-//
 // Stable since v0.1.
 func WithFeature(f feature.Flag) Option {
 	return optionFunc(func(c *config) error {
@@ -1147,12 +1259,10 @@ func WithFeature(f feature.Flag) Option {
 // tokens. Zero means "use [DefaultAccessTokenTTL]"; a negative value
 // is rejected at the option site so the misconfiguration surfaces at
 // startup rather than silently expiring tokens at the wrong cadence.
-//
 // When [WithProfile] is also configured, the embedder's TTL MUST stay
 // at or below the profile's bound (see [profile.MaxAccessTokenTTL] —
 // FAPI 2.0 §3.1.9 caps at 10 minutes). Stricter-than-profile values
 // are accepted; a value above the bound fails [New].
-//
 // Stable since v0.1.
 func WithAccessTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
@@ -1172,7 +1282,6 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 // negative value is rejected at the option site so the
 // misconfiguration surfaces at startup rather than silently issuing
 // tokens with the wrong cadence.
-//
 // Refresh tokens are issued only when the granted scope contains
 // "openid" AND the client's GrantTypes includes "refresh_token"; the
 // "offline_access" scope is advertised in discovery for OIDC
@@ -1180,7 +1289,6 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 // [ScopeNameOfflineAccess]). To disable refresh tokens entirely,
 // remove "refresh_token" from the per-client GrantTypes or from the
 // global [WithGrants] set.
-//
 // Stable since v0.2.
 func WithRefreshTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
@@ -1195,18 +1303,46 @@ func WithRefreshTokenTTL(ttl time.Duration) Option {
 	})
 }
 
+// WithClaimsParameterSupported toggles the OP's handling of the OIDC
+// Core 1.0 §5.5 "claims" request parameter. The library default is
+// true: the parser is always wired; the discovery document advertises
+// claims_parameter_supported: true; the authorize / par endpoints
+// honour any incoming payload by persisting it on the originating
+// grant; the userinfo and id_token issuance paths project the
+// requested claims when the user store has matching values. Passing
+// false flips the discovery advertisement off, makes the authorize /
+// par parsers silently drop the parameter (no invalid_request), and
+// disables the userinfo / id_token projection. See ADR 0011 for the
+// rationale and the spec ambiguity it resolves.
+//
+// The toggle is provided so an embedder that does not want to expose
+// per-claim consent (e.g. a deployment whose RPs already negotiate
+// claims out-of-band) can match the ory/hydra posture without losing
+// scope-driven release. It does not affect the parser's malformed-
+// JSON rejection: a payload that is genuinely malformed is still
+// rejected at the wire boundary irrespective of the toggle, because
+// the parser also services the FAPI 2.0 conformance flow which
+// expects a uniform invalid_request shape.
+//
+// Stable since v0.x (ADR 0011 implementation).
+func WithClaimsParameterSupported(enabled bool) Option {
+	return optionFunc(func(c *config) error {
+		c.claimsParameterSupportedSet = true
+		c.claimsParameterSupportedOff = !enabled
+		return nil
+	})
+}
+
 // WithProfile activates an industry security profile. Profiles compose
 // multiplicatively: enabling FAPI2Baseline implies its underlying features
 // and policies. Repeated profiles are rejected.
-//
 // As of plan 005 §3.6, WithProfile auto-enables every flag returned by
 // [profile.RequiredFeatures] for the supplied profile. The auto-enable is
 // idempotent: a flag already present in the configured feature set is
 // silently skipped (NOT rejected as a duplicate), so an embedder may
 // layer [WithFeature] before or after [WithProfile] without surprise.
 // This is the explicit "add-only" contract from
-// docs/plans/005-login-and-ui-shell.md §3.6.
-//
+// 05-login-and-ui-shell.md §3.6.
 // Stable since v0.1.
 func WithProfile(p profile.Profile) Option {
 	return optionFunc(func(c *config) error {
@@ -1225,7 +1361,7 @@ func WithProfile(p profile.Profile) Option {
 			}
 		}
 		c.profiles = append(c.profiles, p)
-		// docs/plans/005-login-and-ui-shell.md §3.6 — auto-enable
+		// 05-login-and-ui-shell.md §3.6 — auto-enable
 		// every required feature idempotently. The duplicate check
 		// in [WithFeature] is bypassed because the auto-enable
 		// contract is "silently skip", not "fail loudly": embedders
@@ -1249,7 +1385,6 @@ func WithProfile(p profile.Profile) Option {
 // [interaction.JSONDriver], which speaks JSON over HTTP: every prompt
 // is written as a JSON envelope and every submission is decoded from a
 // JSON body. SSR or framework-specific Drivers replace it.
-//
 // Stable since v0.1.
 func WithInteraction(d interaction.Driver) Option {
 	return optionFunc(func(c *config) error {
@@ -1267,7 +1402,6 @@ func WithInteraction(d interaction.Driver) Option {
 // WithCookieKey registers a single AES-256-GCM key (32 bytes) for cookie
 // encryption. It is a convenience wrapper over [WithCookieKeys] for the
 // common single-key case.
-//
 // Stable since v0.1.
 func WithCookieKey(key []byte) Option {
 	return WithCookieKeys(key)
@@ -1276,12 +1410,10 @@ func WithCookieKey(key []byte) Option {
 // WithCookieKeys registers the AES-256-GCM keys used for cookie encryption.
 // The first key is the active encryption key; remaining keys are accepted on
 // decryption only, supporting graceful rotation per
-// docs/plans/002-product-design.md §F.2. Every key MUST be 32 bytes; an
+// 02-product-design.md §F.2. Every key MUST be 32 bytes; an
 // empty list is rejected so the misconfiguration surfaces at startup.
-//
 // Each call replaces any keys configured by a previous WithCookieKeys/
 // [WithCookieKey] call. Pass every active and rotated key in a single call.
-//
 // Stable since v0.1.
 func WithCookieKeys(keys ...[]byte) Option {
 	return optionFunc(func(c *config) error {
@@ -1307,11 +1439,9 @@ func WithCookieKeys(keys ...[]byte) Option {
 // WithTrustedProxies declares the CIDRs from which the [Provider] should
 // honour [X-Forwarded-*] headers. When a request arrives from outside these
 // ranges the headers are ignored, preventing IP / scheme spoofing
-// (docs/plans/002-product-design.md §F.5).
-//
+// .
 // CIDRs may be IPv4 or IPv6; both notations are accepted. Each call
 // replaces the previous list — pass every trusted CIDR in a single call.
-//
 // Stable since v0.1.
 func WithTrustedProxies(cidrs ...string) Option {
 	return optionFunc(func(c *config) error {
@@ -1340,11 +1470,9 @@ func WithTrustedProxies(cidrs ...string) Option {
 // origin the [store.ClientStore] returns; this option only handles entries
 // that cannot be derived from a registered redirect_uri (admin SPAs,
 // management consoles, etc.) per §F.4.
-//
 // Origins MUST be absolute URLs with non-empty scheme and host. The path,
 // query, and fragment are stripped. Each call appends to the configured
 // list; duplicates are deduplicated at allowlist build time.
-//
 // Stable since v0.1.
 func WithCORSOrigins(origins ...string) Option {
 	return optionFunc(func(c *config) error {
@@ -1371,7 +1499,6 @@ func WithCORSOrigins(origins ...string) Option {
 // WithScope registers metadata for a single OAuth scope. Calling the
 // option multiple times accumulates entries; duplicate Name values
 // across calls are rejected at [New] construction time.
-//
 // Standard OIDC scopes (openid, profile, email, address, phone,
 // offline_access) are recognised automatically with built-in defaults
 // (Public: true, no UI text). Registering a standard scope through
@@ -1379,11 +1506,9 @@ func WithCORSOrigins(origins ...string) Option {
 // translations or claim mappings — but registering one with
 // Public: false fails [New] so the discovery document never violates
 // OpenID Connect Discovery 1.0 §3.
-//
 // AllowedClients is enforced at the authorize and token endpoints: a
 // non-empty list restricts the scope to the listed client_id values
 // and any other client receives invalid_scope per RFC 6749 §5.2.
-//
 // Stable since v0.1.
 func WithScope(s Scope) Option {
 	return optionFunc(func(c *config) error {
@@ -1400,14 +1525,12 @@ func WithScope(s Scope) Option {
 
 // WithCrossSiteFlow opts the [Provider] into [SameSite=None] cookies so the
 // authorization endpoint can be embedded across origins (iframe / external
-// SPA) per docs/plans/002-product-design.md §F.3. The default is off
+// SPA)02-product-design.md §F.3. The default is off
 // because cross-site cookies have a higher CSRF blast radius; enable only
 // when the deployment requires the embedded flow.
-//
 // Experimental: the flag is wired through configuration but the cross-site
 // flow surface is still being designed; the option name and semantics may
 // change before v1.0.
-//
 // [SameSite=None]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie/SameSite#none
 func WithCrossSiteFlow() Option {
 	return optionFunc(func(c *config) error {
@@ -1422,12 +1545,10 @@ func WithCrossSiteFlow() Option {
 // Calling WithAuthenticators multiple times appends to the configured
 // set; duplicates by [Authenticator.Type] are rejected at [New]
 // construction time.
-//
 // At least one authenticator is required for an interactive [Provider]
 // to mount /authorize. The orchestrator surfaces the empty-set case
 // as a construction error at [New] time; this option only stores the
 // registered values.
-//
 // Experimental: the option name and contract are stable but per-
 // authenticator semantics may still evolve before v1.0.
 func WithAuthenticators(a ...Authenticator) Option {
@@ -1457,9 +1578,7 @@ func WithAuthenticators(a ...Authenticator) Option {
 // configuration error so duplicate registrations surface as
 // misconfigurations rather than silently overwriting the earlier
 // value.
-//
-// See docs/plans/002-product-design.md §M.6.1.
-//
+// 02-product-design.md §M.6.1.
 // Experimental: the verifier contract is stable but the orchestrator
 // trigger points around it may still evolve before v1.0.
 func WithCaptchaVerifier(v CaptchaVerifier) Option {
@@ -1485,9 +1604,7 @@ func WithCaptchaVerifier(v CaptchaVerifier) Option {
 // [RiskStage]. At most one assessor is permitted; a second
 // [WithRiskAssessor] call fails [New] with a structured configuration
 // error.
-//
-// See docs/plans/002-product-design.md §M.6.2.
-//
+// 02-product-design.md §M.6.2.
 // Experimental: the assessor contract is stable but the orchestrator
 // trigger points around it may still evolve before v1.0.
 func WithRiskAssessor(a RiskAssessor) Option {
@@ -1514,9 +1631,7 @@ func WithRiskAssessor(a RiskAssessor) Option {
 // each registered observer in registration order. This is the brute-
 // force / risk-counter feed; general audit events are emitted by the
 // library to slog (§N.2) and observers MUST NOT duplicate them here.
-//
-// See docs/plans/002-product-design.md §M.6.3.
-//
+// 02-product-design.md §M.6.3.
 // Experimental: the observer contract is stable but the orchestrator
 // emission points around it may still evolve before v1.0.
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
@@ -1533,16 +1648,14 @@ func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 }
 
 // WithInteractions registers non-factor [Interaction] values (T&C,
-// KYC, device-trust prompts, ...). Order is preserved within an
+// KYC, device-trust prompts...). Order is preserved within an
 // [InteractionTrigger] bucket; cross-trigger ordering is orchestrator-
 // defined per §E.9. Calling WithInteractions multiple times appends;
 // duplicates by [Interaction.Name] are rejected at [New] construction
 // time.
-//
 // The library-built-in consent screen is registered automatically by
 // the orchestrator; user extensions ship with a unique dotted
 // [Interaction.Name] (e.g., "myorg.tos.accept").
-//
 // Experimental: the contract is stable but per-interaction semantics
 // may still evolve before v1.0.
 func WithInteractions(i ...Interaction) Option {
@@ -1572,14 +1685,12 @@ func WithInteractions(i ...Interaction) Option {
 // default (a fresh client with [WithBackchannelLogoutTimeout] applied
 // and a CheckRedirect that refuses 3xx hops) is correct for the spec
 // posture.
-//
 // Pass a custom client when the deployment already maintains a shared
 // outbound transport (instrumentation, proxy resolution, custom
 // dialer, …). Embedders that override the client SHOULD preserve a
 // CheckRedirect that returns [http.ErrUseLastResponse] so the OP
 // continues to refuse redirects on a sensitive POST; the design notes
 // in 002 §H.2 explain why.
-//
 // Stable since v0.1.
 func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 	return optionFunc(func(c *config) error {
@@ -1592,12 +1703,10 @@ func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 // for a single relying party to acknowledge a Logout Token POST. The
 // budget applies per RP; the coordinator dispatches in parallel, so a
 // slow RP does not delay deliveries to its peers.
-//
 // A zero or negative duration substitutes the package default
 // (5 seconds). Embedders SHOULD keep the value low — back-channel
 // logout is best-effort, and a long timeout merely keeps the OP
 // holding state on a likely-broken RP.
-//
 // Stable since v0.1.
 func WithBackchannelLogoutTimeout(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
@@ -1614,16 +1723,13 @@ func WithBackchannelLogoutTimeout(d time.Duration) Option {
 // `use_dpop_nonce` challenge along with a fresh value from
 // [DPoPNonceSource.IssueNonce] in the response's `DPoP-Nonce`
 // header.
-//
 // Without this option the provider preserves the v0.x posture:
 // proofs without a nonce claim are accepted and the challenge is
 // never emitted. The option is independent of [WithFeature]
 // (feature.DPoP); the nonce flow only fires when DPoP is also
 // enabled because the verifier itself is wired only on that flag.
-//
 // At most one source may be registered; a second [WithDPoPNonceSource]
 // call fails [New] so a typo cannot silently win.
-//
 // Stable since v0.1.
 func WithDPoPNonceSource(source DPoPNonceSource) Option {
 	return optionFunc(func(c *config) error {
@@ -1644,19 +1750,126 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 	})
 }
 
+// WithRefreshGracePeriod overrides the RFC 9700 §2.2.2 grace window
+// the token endpoint applies to a replayed refresh token. Inside the
+// window a parallel client retry that races the rotated child returns
+// the same response without revoking the chain; outside it the
+// replay is treated as theft and the family is revoked. The library
+// default (60 seconds) absorbs typical SPA / mobile retry storms; a
+// stricter posture passes a smaller positive duration. Pass zero to
+// disable the window entirely so any replay revokes immediately —
+// FAPI 2.0 §J.7.2 §3.1.7 mandates this for FAPI2Baseline /
+// FAPI2MessageSigning, and the option layer enforces the bound at
+// construction time when those profiles are active (a non-zero value
+// supplied alongside the profile produces a configuration error).
+// Negative values are rejected at the option site; the API treats
+// "no grace" as the explicit zero so accidental sign-flip cannot
+// silently widen the window.
+// Stable since v0.x.
+func WithRefreshGracePeriod(d time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if d < 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithRefreshGracePeriod must not be negative",
+			}
+		}
+		if c.refreshGracePeriodSet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithRefreshGracePeriod may be called at most once",
+			}
+		}
+		c.refreshGracePeriod = d
+		c.refreshGracePeriodSet = true
+		c.refreshGracePeriodIsZero = d == 0
+		return nil
+	})
+}
+
+// effectiveRefreshGrace returns the refresh-token grace window the
+// token endpoint should apply. The function honours [WithRefreshGracePeriod]
+// when called, else returns 0 so the internal exchanger falls back
+// to its [refresh.GraceTTLDefault]. A FAPI 2.0 profile forces a
+// strict zero so the constraint is uniform across grants without the
+// embedder having to opt in.
+func (c *config) effectiveRefreshGrace() time.Duration {
+	if c.requireZeroRefreshGrace() {
+		return -1
+	}
+	if !c.refreshGracePeriodSet {
+		return 0
+	}
+	if c.refreshGracePeriodIsZero {
+		// Pass through as a negative sentinel so the internal
+		// exchanger treats it as "explicit zero", not "use default".
+		return -1
+	}
+	return c.refreshGracePeriod
+}
+
+// requireZeroRefreshGrace reports whether an active profile mandates
+// a zero grace window per FAPI 2.0 §J.7.2 §3.1.7. Both FAPI2Baseline
+// and FAPI2MessageSigning impose the rule; the future CIBA / iGov
+// profiles inherit the same posture but are placeholders today.
+func (c *config) requireZeroRefreshGrace() bool {
+	for _, p := range c.profiles {
+		switch p {
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+			return true
+		case profile.FAPICIBA, profile.IGovHigh:
+			// v1.x / v2+; placeholder only today.
+		}
+	}
+	return false
+}
+
+// WithAllowPrivateNetworkJWKS suppresses the SSRF deny-list the
+// internal JWKS fetcher applies to RP-controlled JWKS URIs. The
+// default posture rejects URLs whose host is a literal "localhost",
+// resolves to a loopback / link-local / RFC 1918 / ULA address, or
+// uses a non-http(s) scheme; the OP does this so an attacker-
+// controlled jwks_uri value cannot pivot the OP onto an internal
+// service.
+// Embedders that legitimately host their RPs on a private network
+// (CI, on-prem deployment with an internal RP) opt in via this
+// option. The opt-in is JWKS-specific so the analogous JAR
+// request_uri fetcher remains independently gated by
+// [WithAllowPrivateNetworkJAR].
+// Stable since v0.x.
+func WithAllowPrivateNetworkJWKS() Option {
+	return optionFunc(func(c *config) error {
+		c.allowPrivateNetworkJWKS = true
+		return nil
+	})
+}
+
+// WithAllowPrivateNetworkJAR is the JAR request_uri counterpart of
+// [WithAllowPrivateNetworkJWKS]. It suppresses the SSRF deny-list
+// applied to RP-controlled request_uri values when /authorize fetches
+// the request object. The option is independent of the JWKS opt-in so
+// embedders can grant private-network access to one fetcher without
+// widening the other. The default false posture is the safe choice
+// for production deployments.
+// Stable since v0.x.
+func WithAllowPrivateNetworkJAR() Option {
+	return optionFunc(func(c *config) error {
+		c.allowPrivateNetworkJAR = true
+		return nil
+	})
+}
+
 // ReactUI declares the SPA-shell mount points and optional asset root
 // the [Provider] should expose so the embedder's React (or framework-
 // neutral SPA) frontend can drive the login / consent / RP-Initiated
 // Logout flows. The struct is supplied to [WithReactUI]; the option
 // stores it on config and the H1-D orchestrator wiring later
 // translates the mount points into JSON state endpoints.
-//
-// docs/plans/005-login-and-ui-shell.md §3.5 / ADR 0008 item 7. The
+// 05-login-and-ui-shell.md §3.5 / ADR 0008 item 7. The
 // scope is deliberately limited to login / consent / RP-Initiated
 // Logout: ADR 0007 has ruled out front-channel logout and session
 // management iframes, so [ReactUI] does not carry mounts for those
 // surfaces.
-//
 // Experimental: the field set is being introduced in v0.x and MAY
 // gain optional fields before v1.0. Embedders SHOULD construct
 // [ReactUI] with named field initialisation so future additions
@@ -1692,12 +1905,10 @@ type ReactUI struct {
 // consent screen when the embedder wants to keep the HTML driver but
 // override the consent body. Mutually exclusive with [WithReactUI];
 // supplying both fails [New] with a structured configuration error.
-//
-// docs/plans/005-login-and-ui-shell.md §3.5. The struct field set is
+// 05-login-and-ui-shell.md §3.5. The struct field set is
 // intentionally narrow: the consent ceremony has a fixed data model
 // (client metadata + scope list + CSRF token) and the embedder
 // supplies an [*template.Template] that consumes it.
-//
 // Experimental: the field set is being introduced in v0.x. The plan
 // reserves a Strings field for an i18n bundle once the public i18n
 // surface stabilises; the field is omitted today so embedders are
@@ -1715,7 +1926,6 @@ type ConsentUI struct {
 // The option compiles the flow into an internal runtime structure at
 // [New] and routes the authenticator chain through the
 // LoginFlow / Rule / Decider evaluation loop.
-//
 // Validation:
 //   - Primary MUST be non-nil. A flow with a nil Primary is rejected
 //     at the option site.
@@ -1723,7 +1933,7 @@ type ConsentUI struct {
 //     kinds are rejected so the orchestrator's completed-step
 //     deduplication has a unique discriminator per rule.
 //   - Decider MAY be nil; the orchestrator treats nil as "always
-//     defer to rules" per docs/plans/005-login-and-ui-shell.md §3.1.
+//     defer to rules"05-login-and-ui-shell.md §3.1.
 //   - Repeated [WithLoginFlow] calls are rejected so the
 //     misconfiguration surfaces at [New].
 //   - WithLoginFlow is mutually exclusive with [WithAuthenticators];
@@ -1736,7 +1946,6 @@ type ConsentUI struct {
 // which wraps an already-constructed [Authenticator]. Passing a
 // built-in Step directly fails [New] with a clear pointer to the
 // workaround.
-//
 // Experimental: the LoginFlow seam is being introduced in v0.x.
 // Field names and evaluation order MAY change before v1.0.
 func WithLoginFlow(flow LoginFlow) Option {
@@ -1779,10 +1988,9 @@ func WithLoginFlow(flow LoginFlow) Option {
 // WithReactUI registers the [ReactUI] mount points the SPA frontend
 // hosts. With a SPA shell active the default-driver fallback in
 // [config.applyDefaults] short-circuits so the embedder's SPA owns
-// rendering; the OP serves JSON state endpoints under the configured
-// mounts. Mutually exclusive with [WithConsentUI]; supplying both
-// fails [New].
-//
+// rendering; the OP falls back to [interaction.JSONDriver] for the
+// /interaction state endpoint. Mutually exclusive with [WithConsentUI];
+// supplying both fails [New].
 // Validation:
 //   - LoginMount MUST be non-empty and MUST start with "/".
 //   - ConsentMount and LogoutMount MAY be empty; when set they MUST
@@ -1791,8 +1999,16 @@ func WithLoginFlow(flow LoginFlow) Option {
 //     construction time (an [os.Stat] check) so a typo fails [New]
 //     rather than the first request.
 //
-// Experimental: Pending H1-D orchestrator hookup; the JSON state
-// endpoints are mounted by H1-D.
+// Experimental — partial wiring: as of v0.x, [New] validates the
+// option, suppresses the default HTML driver, and emits a WARN log
+// line through the configured logger documenting the gap. The
+// configured LoginMount, ConsentMount, LogoutMount, and StaticDir
+// are NOT yet mounted by the [Provider] — embedders must serve their
+// SPA externally (typically via an outer mux that routes the SPA
+// paths to the bundle directory and forwards everything else to the
+// Provider). Auto-mounted JSON state endpoints under the configured
+// mounts land in a follow-up release; tracking
+// 05-login-and-ui-shell.md §3.5.
 func WithReactUI(ui ReactUI) Option {
 	return optionFunc(func(c *config) error {
 		if err := checkReactUIPrecondition(c); err != nil {
@@ -1887,12 +2103,18 @@ func validateReactUIStaticDir(dir string) error {
 // WithConsentUI registers the [ConsentUI] template the HTML driver
 // uses for the consent screen. Mutually exclusive with [WithReactUI];
 // supplying both fails [New] with a structured configuration error.
-//
 // Validation:
 //   - Template MUST be non-nil.
 //   - Repeated [WithConsentUI] calls are rejected.
 //
-// Experimental: Pending H1-D wiring to the consent interaction.
+// Experimental — no-op today: as of v0.x, [New] validates the option
+// and emits a WARN log line through the configured logger but does
+// NOT yet route the supplied Template into any consent renderer. The
+// option is reserved so the v1.0 surface can be planned without
+// shipping a placeholder type later; embedders can register a
+// template now and have it consumed automatically once the
+// consent-interaction wiring lands. Tracking
+// 05-login-and-ui-shell.md §3.5.
 func WithConsentUI(ui ConsentUI) Option {
 	return optionFunc(func(c *config) error {
 		if c.consentUISet {
@@ -1926,13 +2148,11 @@ func WithConsentUI(ui ConsentUI) Option {
 // [ConfidentialClient.Secret] reaching [HashClientSecret]) surfaces at
 // the option site with the seed's index in the description so the
 // caller can locate the offending entry.
-//
 // Repeated calls append to the configured set so embedders MAY layer
 // builders (a base set plus a deployment-specific overlay) without
 // duplicate-rejection. The aggregate slice feeds the H1-D orchestrator
 // hookup; today the records are stored on config and consumed by the
 // orchestrator wiring that lands in a follow-up.
-//
 // Stable since v0.1.
 func WithStaticClients(seeds ...ClientSeed) Option {
 	return optionFunc(func(c *config) error {
@@ -1968,8 +2188,7 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 // path is gated on the matching [store.Client.Source] being
 // [store.ClientSourceStatic] or [store.ClientSourceAdmin] —
 // [store.ClientSourceDynamic] (RFC 7591 self-registered) is excluded
-// per docs/plans/005-login-and-ui-shell.md §3.10.
-//
+// 05-login-and-ui-shell.md §3.10.
 // Validation:
 //   - The id list MUST be non-empty.
 //   - Duplicate ids within a single call are rejected; repeated calls

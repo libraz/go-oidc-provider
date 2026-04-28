@@ -78,7 +78,7 @@ func resolveJARRequestIfNeeded(
 	}
 	raw := requestObject
 	if requestURI != "" {
-		fetched, ok := fetchJARRequestURI(ctx, w, client, requestURI)
+		fetched, ok := fetchJARRequestURI(ctx, w, client, requestURI, deps.AllowPrivateNetworkJAR)
 		if !ok {
 			return nil, true, true
 		}
@@ -115,13 +115,14 @@ func fetchJARRequestURI(
 	w http.ResponseWriter,
 	client *store.Client,
 	uri string,
+	allowPrivate bool,
 ) (string, bool) {
 	if !isPreregisteredRequestURI(client, uri) {
 		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
 			"request_uri is not preregistered for this client")
 		return "", false
 	}
-	if err := assertJARRequestURISafe(ctx, uri); err != nil {
+	if err := assertJARRequestURISafe(ctx, uri, allowPrivate); err != nil {
 		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI, err.Error())
 		return "", false
 	}
@@ -175,13 +176,10 @@ func isPreregisteredRequestURI(c *store.Client, uri string) bool {
 // assertJARRequestURISafe enforces the SSRF-style deny-list on a JAR
 // request_uri before the HTTP fetcher dials. The list mirrors the
 // JWKS fetcher in [internal/jar]: only http / https schemes, no
-// loopback or RFC 1918 hosts. A future op.WithAllowPrivateNetworkJAR
-// option would flip this gate; v0.x has no opt-in and the deny is
-// hard-coded.
-//
-// TODO(jar): expose op.WithAllowPrivateNetworkJAR so embedders that
-// front their RPs with private DNS can opt in explicitly.
-func assertJARRequestURISafe(ctx context.Context, raw string) error {
+// loopback or RFC 1918 hosts. When allowPrivate is true the deny-list
+// is suppressed so embedders fronting their RPs with private DNS can
+// opt in via op.WithAllowPrivateNetworkJAR.
+func assertJARRequestURISafe(ctx context.Context, raw string, allowPrivate bool) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return errors.New("request_uri is not a parseable URL")
@@ -193,11 +191,14 @@ func assertJARRequestURISafe(ctx context.Context, raw string) error {
 	if host == "" {
 		return errors.New("request_uri is missing host")
 	}
-	if isLocalHostnameLiteral(host) {
+	if allowPrivate {
+		return nil
+	}
+	if jar.IsLocalHostname(host) {
 		return fmt.Errorf("request_uri host %q is loopback", host)
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIPLiteral(ip) {
+		if jar.IsPrivateIP(ip) {
 			return fmt.Errorf("request_uri host %q is loopback / private", host)
 		}
 		return nil
@@ -209,39 +210,11 @@ func assertJARRequestURISafe(ctx context.Context, raw string) error {
 		return fmt.Errorf("request_uri host %q cannot be resolved", host)
 	}
 	for _, addr := range addrs {
-		if isPrivateIPLiteral(addr.IP) {
+		if jar.IsPrivateIP(addr.IP) {
 			return fmt.Errorf("request_uri host %q resolves to a private IP", host)
 		}
 	}
 	return nil
-}
-
-// isLocalHostnameLiteral mirrors the helper in [internal/jar]. Keeping
-// a duplicate here avoids exposing jar internals; the list is short
-// enough that the duplication is cheaper than a new exported API.
-func isLocalHostnameLiteral(host string) bool {
-	h := strings.ToLower(host)
-	switch h {
-	case "localhost", "localhost.", "ip6-localhost", "ip6-loopback":
-		return true
-	default:
-		return false
-	}
-}
-
-// isPrivateIPLiteral mirrors the helper in [internal/jar]. Same
-// rationale as [isLocalHostnameLiteral].
-func isPrivateIPLiteral(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	if ip.IsPrivate() {
-		return true
-	}
-	return false
 }
 
 // writeJAREnvelopeError translates a [jar] sentinel into the OAuth

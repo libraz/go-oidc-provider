@@ -11,7 +11,6 @@ import (
 // [TOTPStore.Put]. The struct is a plain data carrier: every policy
 // decision (lockout thresholds, skew window, secret encryption) lives in
 // internal/authn/totp.
-//
 // Backends MUST treat the record as opaque. In particular,
 // SecretCiphertext is the AES-256-GCM blob (nonce || ciphertext || tag)
 // produced by the library; the backend MUST NOT inspect, parse, or
@@ -41,7 +40,7 @@ type TOTPRecord struct {
 
 	// FailedCount is the cumulative number of wrong codes the user has
 	// entered within the current 24-hour window (see
-	// docs/plans/002-product-design.md §M.6). It increments on every
+	// 02-product-design.md §M.6). It increments on every
 	// [internal/authn/totp.Verifier.Verify] miss and resets on success
 	// or after the 24-hour rollover. Backends MUST persist the field
 	// verbatim; the library updates it through [TOTPStore.Put].
@@ -67,7 +66,6 @@ type TOTPRecord struct {
 // rewrite the record — but the library accesses it through a
 // non-transactional handle today because the writes are localised to a
 // single row and do not need to be atomic with token issuance.
-//
 // Backends MUST NOT log or audit SecretCiphertext: the encryption is
 // at-rest defence in depth, not a substitute for log hygiene.
 type TOTPStore interface {

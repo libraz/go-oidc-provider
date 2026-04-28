@@ -436,9 +436,31 @@ type defaultResolver struct {
 // NewDefaultResolver returns a resolver suitable for production. It
 // uses an in-process JWKS cache keyed by URL with a 5-minute default
 // TTL and applies the SSRF / body-cap / content-type protections in
-// [httpJWKSFetcher].
-func NewDefaultResolver(clock timex.Clock) *DefaultResolver {
-	return &DefaultResolver{inner: &defaultResolver{fetcher: newHTTPJWKSFetcher(clock)}}
+// [httpJWKSFetcher]. Apply [AllowPrivateNetwork] when the OP must
+// reach a JWKS endpoint on a private network — the deny-list rejects
+// loopback / link-local / RFC 1918 hosts otherwise.
+func NewDefaultResolver(clock timex.Clock, opts ...ResolverOption) *DefaultResolver {
+	fetcher := newHTTPJWKSFetcher(clock)
+	for _, opt := range opts {
+		if opt != nil {
+			opt(fetcher)
+		}
+	}
+	return &DefaultResolver{inner: &defaultResolver{fetcher: fetcher}}
+}
+
+// ResolverOption customises a [DefaultResolver] at construction.
+// Applied in order; later values override earlier ones for the same
+// underlying field.
+type ResolverOption func(*httpJWKSFetcher)
+
+// AllowPrivateNetwork disables the SSRF deny-list on the JWKS fetcher
+// so the OP may reach RP JWKS endpoints whose hosts resolve to
+// loopback / link-local / RFC 1918 addresses. The opt-in is required
+// because the default posture rejects every private network to
+// neutralise SSRF attacks via attacker-controlled jwks_uri values.
+func AllowPrivateNetwork() ResolverOption {
+	return func(f *httpJWKSFetcher) { f.allowPrivate = true }
 }
 
 // DefaultResolver is the exported wrapper around the package-private

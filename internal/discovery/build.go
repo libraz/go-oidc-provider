@@ -49,6 +49,12 @@ type Input struct {
 	// Public flag is true) so the discovery builder does not need
 	// any policy of its own.
 	ScopesSupported []string
+
+	// ClaimsParameterSupported reports whether the OP honours the
+	// OIDC Core 1.0 §5.5 "claims" request parameter. The library
+	// defaults to true; embedders that prefer to ignore the parameter
+	// supply false via op.WithClaimsParameterSupported(false).
+	ClaimsParameterSupported bool
 }
 
 // EndpointPaths mirrors op.Endpoints with internal-friendly types.
@@ -218,6 +224,12 @@ func Build(in Input) Document {
 	// emits it unconditionally — it is defense-in-depth against
 	// mix-up attacks and is mandated by FAPI 2.0 §5.3.2.2.
 	doc.AuthorizationResponseIssParameterSupported = true
+	// OIDC Core 1.0 §5.5: advertise "claims" support when the OP has
+	// not opted out. The library default is true (the parser is
+	// always wired); op.WithClaimsParameterSupported(false) flips
+	// this to false so the field is dropped from the wire and the
+	// authorize / par parsers ignore the parameter.
+	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
 	return doc
 }
 

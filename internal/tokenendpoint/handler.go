@@ -81,6 +81,13 @@ type Deps struct {
 	// minting the id_token.
 	Grants store.GrantStore
 
+	// UserStore is the read-only end-user lookup the handler consults
+	// when projecting the OIDC Core 1.0 §5.5 "claims" request payload
+	// onto the id_token (per ADR 0011). A nil value silently disables
+	// the projection — the issued id_token then carries only the
+	// standard claims plus the per-grant ACR/AMR/auth_time.
+	UserStore store.UserStore
+
 	// Keys is the active OP keyset. The first entry signs newly-issued
 	// JWTs; retiring entries are advertised in JWKS only.
 	Keys *keys.Set

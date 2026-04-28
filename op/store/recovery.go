@@ -9,7 +9,6 @@ import (
 // library never persists the plaintext value: Hash is the modular-crypt
 // argon2id encoding produced by internal/authn/recovery, and ConsumedAt
 // is stamped the first (and only) time the user redeems the code.
-//
 // Backends MUST treat the struct as opaque. In particular, Hash is a
 // self-describing argon2id encoding and the backend MUST NOT inspect or
 // re-encode it.
@@ -33,7 +32,6 @@ type RecoveryCode struct {
 // place, and writes the new state back through [RecoveryStore.Put]. A
 // fresh Generate replaces the whole batch: callers MUST overwrite the
 // previous record rather than appending.
-//
 // The struct is a plain data carrier; every policy decision (batch size,
 // argon2id parameters, alphabet) lives in internal/authn/recovery.
 type RecoveryBatch struct {
@@ -60,9 +58,8 @@ type RecoveryBatch struct {
 // batch — but the library accesses it through a non-transactional handle
 // today because the writes are localised to a single row and do not need
 // to be atomic with token issuance.
-//
 // Recovery codes are NOT a primary authentication path: per
-// docs/plans/002-product-design.md §O.3, full account recovery (lost
+// 02-product-design.md §O.3, full account recovery (lost
 // device AND lost recovery codes) requires out-of-band support and is
 // intentionally not automated by the library. Backends MUST NOT log or
 // audit Hash values: they are display-once material and a leak in the

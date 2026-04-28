@@ -13,7 +13,6 @@ import (
 // generated code. The interface is intentionally narrow: the library
 // is transport-agnostic, so SMTP / SES / SendGrid / queue dispatch
 // are all the embedder's choice.
-//
 // Implementations MUST treat [EmailOTPMessage.Code] as
 // plaintext-equivalent material — never log, audit, or persist it.
 // A non-nil error stops the authenticator chain (the user is shown
@@ -109,10 +108,8 @@ const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 // [FactorEmailOTP] factor. Embedders register the returned value
 // through [WithAuthenticators] alongside any other factors they
 // support.
-//
 // Behaviour highlights (full design in
-// docs/plans/002-product-design.md §E.2):
-//
+// 02-product-design.md §E.2):
 //   - Two-screen UX: "auth.email_otp.send" collects the address;
 //     "auth.email_otp.verify" collects the 6-digit code.
 //   - Constant shape: the verify prompt is emitted regardless of
@@ -181,7 +178,7 @@ func emailOTPClock(c Clock) timex.Clock {
 }
 
 // clockAdapter bridges [Clock] to [timex.Clock]. The two interfaces
-// share the same single Now() method but live in different packages,
+// share the same single Now method but live in different packages,
 // so a one-line wrapper keeps the dependency direction clean.
 type clockAdapter struct{ c Clock }
 

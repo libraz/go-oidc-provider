@@ -29,6 +29,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
+	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -99,6 +100,15 @@ func New(opts ...Option) (*Provider, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	cfg.emitPartialWiringWarnings()
+	trust, err := proxy.NewTrust(cfg.trustedProxies)
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "WithTrustedProxies rejected by parser",
+			Cause:       err,
+		}
+	}
 	if err := seedStaticClients(cfg); err != nil {
 		return nil, err
 	}
@@ -120,6 +130,7 @@ func New(opts ...Option) (*Provider, error) {
 		return nil, err
 	}
 	handler := wrapWithProfileMiddleware(mux, cfg)
+	handler = wrapWithTrustedProxy(handler, trust)
 	return &Provider{
 		cfg:     cfg,
 		keys:    keySet,
@@ -128,6 +139,37 @@ func New(opts ...Option) (*Provider, error) {
 		mux:     mux,
 		handler: handler,
 	}, nil
+}
+
+// wrapWithTrustedProxy decorates h with a middleware that resolves
+// X-Forwarded-* headers per [proxy.Resolve] when the request arrives
+// from a CIDR registered through [WithTrustedProxies]. The middleware
+// rewrites a clone of the request so downstream handlers (issuer
+// matching, redirect_uri scheme checks, DPoP htu canonicalisation,
+// cookie Secure decisions) observe the externally-visible scheme and
+// host instead of the in-cluster values reported by the standard
+// library on the inbound listener. Untrusted requests pass through
+// unchanged so a hostile client cannot forge headers.
+//
+// When [WithTrustedProxies] is empty the trust rejects every CIDR and
+// the middleware is functionally a no-op; the wrap is still applied
+// unconditionally so the request flow stays uniform across deployments.
+func wrapWithTrustedProxy(h http.Handler, t *proxy.Trust) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resolved := proxy.Resolve(r, t)
+		if !resolved.Trusted {
+			h.ServeHTTP(w, r)
+			return
+		}
+		clone := r.Clone(r.Context())
+		if clone.URL != nil && resolved.Scheme != "" {
+			clone.URL.Scheme = resolved.Scheme
+		}
+		if resolved.Host != "" {
+			clone.Host = resolved.Host
+		}
+		h.ServeHTTP(w, clone)
+	})
 }
 
 // wrapWithProfileMiddleware decorates the [Provider]'s router with
@@ -254,6 +296,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Keys:       keySet,
 			Issuer:     cfg.issuer,
 			UserStore:  cfg.store.Users(),
+			Grants:     cfg.store.Grants(),
 			Clock:      cfg.clock,
 			Leeway:     defaultUserInfoLeeway,
 			DPoP:       dpopVerifier,
@@ -269,6 +312,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Codes:                          cfg.store.AuthorizationCodes(),
 			RefreshTokens:                  cfg.store.RefreshTokens(),
 			Grants:                         cfg.store.Grants(),
+			UserStore:                      cfg.store.Users(),
 			Keys:                           keySet,
 			Clock:                          cfg.clock,
 			Scopes:                         scopes,
@@ -278,6 +322,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			AssertionVerifier:              assertionVerifier,
 			AccessTokenTTL:                 cfg.accessTokenTTL,
 			RefreshTokenTTL:                cfg.refreshTokenTTL,
+			RefreshTokenGraceTTL:           cfg.effectiveRefreshGrace(),
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 		}),
@@ -391,9 +436,13 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 			break
 		}
 	}
+	resolverOpts := []jar.ResolverOption{}
+	if cfg.allowPrivateNetworkJWKS {
+		resolverOpts = append(resolverOpts, jar.AllowPrivateNetwork())
+	}
 	v, err := jar.NewVerifier(jar.VerifierConfig{
 		Issuer:      cfg.issuer,
-		Resolver:    jar.NewDefaultResolver(cfg.clock),
+		Resolver:    jar.NewDefaultResolver(cfg.clock, resolverOpts...),
 		Clock:       cfg.clock,
 		RequireNbf:  requireNbf,
 		MaxLifetime: maxLifetime,
@@ -554,6 +603,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		ValidateMetadata:         wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                   cfg.logger,
 		Audit:                    audit.Slog(cfg.effectiveAuditLogger()),
+		OnClientDeleted:          cfg.dcr.OnClientDeleted,
 	}
 	handler := registrationendpoint.Handler(deps)
 	registerPath := joinPath(cfg.mountPrefix, cfg.endpoints.Register)
@@ -644,6 +694,7 @@ func mountPAREndpoint(
 			RequireNonce:               cfg.requireNonce(),
 			RequireStateOrNonce:        cfg.requireStateOrNonce(),
 			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
+			ClaimsParameterEnabled:     cfg.claimsParameterSupported(),
 		}),
 	)
 	return nil
@@ -1030,6 +1081,8 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		RequireStateOrNonce:     cfg.requireStateOrNonce(),
 		RequirePAR:              cfg.requirePAR(),
 		Issuer:                  cfg.issuer,
+		AllowPrivateNetworkJAR:  cfg.allowPrivateNetworkJAR,
+		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
 	})
 	mux.Handle(authorizePath, handler)
 	mux.Handle(interactionPath+"/{uid}", handler)
@@ -1565,6 +1618,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 		GrantsSupported:           grantStrings,
 		ScopesSupported:           scopes.PublicNames(),
 		ProfileAllowedAuthMethods: cfg.profileAllowedAuthMethodNames(),
+		ClaimsParameterSupported:  cfg.claimsParameterSupported(),
 	}
 }
 

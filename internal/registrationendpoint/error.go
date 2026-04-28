@@ -67,7 +67,7 @@ func stampNoStore(w http.ResponseWriter) {
 // safe to embed in error_description without leaking internal details
 // (DB names, SQL fragments, stack traces). The rules are: strip control
 // characters and CR/LF, collapse whitespace, and truncate to 200
-// characters per docs/plans/002-product-design.md §J.4.1.
+// characters02-product-design.md §J.4.1.
 func sanitizeDescription(s string) string {
 	if s == "" {
 		return s

@@ -18,7 +18,6 @@ import (
 // matches the §M.6.1 default; deployments that need a different
 // threshold drive the same logic through their own
 // [LoginAttemptObserver] and bump [State.LastFailures] externally.
-//
 // Captcha events themselves do NOT increment the counter — captcha is
 // out-of-band from the brute-force feed (see §M.6.1).
 const captchaFailureThreshold = 3
@@ -66,7 +65,6 @@ const (
 // the in-flight chain. The HTTP layer (task C) persists [State] across
 // requests using whatever encoding it picks; the orchestrator does no
 // I/O of its own.
-//
 // Callers that need to copy a State (e.g., to journal it) MUST treat
 // [State.Factors] and [State.InteractionsRun] as the values to deep-
 // copy; mutating them after a [Tick] returns is undefined.
@@ -96,7 +94,7 @@ type State struct {
 
 	// AuthTime is the wall-clock time the interaction was created.
 	// The orchestrator passes it to every [BeginInput.AuthTime]
-	// so [time.Now] never has to be called from authenticator code.
+	// so [time.Now()] never has to be called from authenticator code.
 	AuthTime time.Time
 
 	// Factors is the per-step record of every successful
@@ -184,7 +182,6 @@ type State struct {
 	// constants (None=0, Low=1, Medium=2, High=3) so a rule
 	// predicate `score >= threshold` works uniformly across the
 	// orchestrator-cached and embedder-supplied paths.
-	//
 	// The orchestrator MUST NOT re-call [LoginFlow.Risk] once a
 	// non-zero score is cached: external risk APIs are paid, and
 	// plan 005 §3.1 makes this an explicit budget invariant.
@@ -200,7 +197,7 @@ type State struct {
 
 // Input is the per-tick payload the HTTP layer hands to
 // [Orchestrator.Tick]. The orchestrator does no clock reads of its
-// own; [Input.Now] is the single source of "current time" for a tick,
+// own; [Input.Now()] is the single source of "current time" for a tick,
 // so a deterministic [Clock] in tests yields a deterministic chain
 // run.
 type Input struct {
@@ -215,7 +212,7 @@ type Input struct {
 
 	// Now is the wall-clock time for this tick. The HTTP layer
 	// reads it from the configured [Clock] and passes it through
-	// so the orchestrator never calls [time.Now] directly.
+	// so the orchestrator never calls [time.Now()] directly.
 	Now time.Time
 }
 
@@ -245,7 +242,7 @@ var (
 	// ErrNoEligibleAuthenticator is returned when, at
 	// [PhaseAuthn], no registered [Authenticator] satisfies the
 	// chain constraints (Subject already required by candidate set,
-	// risk-required factor not registered, ...). The HTTP layer
+	// risk-required factor not registered...). The HTTP layer
 	// surfaces a fixed error response.
 	ErrNoEligibleAuthenticator = errors.New("authn: no eligible authenticator")
 
@@ -305,7 +302,6 @@ type Config struct {
 	// option layer rejects the combination at op.New, and [New] here
 	// re-asserts the invariant so the internal package surface is
 	// also self-protecting.
-	//
 	// When non-nil the orchestrator drives the chain through
 	// [advanceLoginFlow] instead of the legacy [advanceAuthn] path.
 	// Risk, Captcha, and Observers continue to work; the differences
@@ -401,13 +397,11 @@ func validateAuthenticators(auths []Authenticator) error {
 }
 
 // Tick advances st by one orchestrator step. The method is pure: no
-// goroutines, no [time.Now], no network. Tick returns the updated
+// goroutines, no [time.Now()], no network. Tick returns the updated
 // [State] (always — even on error, so the HTTP layer can persist
 // counters that did update before the failure) and the [interaction.Step] the
 // SPA should render next, if any.
-//
 // The state machine, in order:
-//
 //  1. Reject ticks against a completed chain ([ErrChainComplete]).
 //  2. If a submission is present, route it to the entity that issued
 //     the StateRef (captcha verifier, active authenticator, or active
@@ -417,7 +411,7 @@ func validateAuthenticators(auths []Authenticator) error {
 //  5. Run the [PhaseAfterAuthn] interaction queue.
 //  6. Emit the terminal [interaction.Step] from [PhaseDone].
 //
-// See docs/plans/002-product-design.md §E.2 / §E.6.1 / §M.6 for the
+// 02-product-design.md §E.2 / §E.6.1 / §M.6 for the
 // invariants this method preserves.
 func (o *Orchestrator) Tick(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
 	if st.Phase == PhaseDone {
@@ -674,7 +668,6 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 // advanceAuthn picks the next factor candidate. The branches handle
 // the captcha-before-factor case, the risk consult, and the
 // subject-required factor skip rule.
-//
 // When [Config.LoginFlow] is configured the function delegates to
 // [advanceLoginFlow]; the legacy [Config.Authenticators] body below is
 // used only when LoginFlow is nil.

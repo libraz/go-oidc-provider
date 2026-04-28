@@ -3,13 +3,10 @@
 // authorization request into a normalised [Request] and, against a registered
 // [store.Client], decides whether the request is structurally and policy-wise
 // admissible.
-//
 // The package never reads the wall clock, never performs I/O, and never
 // resolves a session. Those couplings live in the HTTP layer that composes
 // this validator with session resolution and the [interaction.Driver].
-//
 // # Wire mapping
-//
 // Each sentinel returned by the package carries an OAuth wire code (one of
 // "invalid_request", "unsupported_response_type", "invalid_scope") via the
 // [Error] type. The HTTP layer translates those codes uniformly: the
@@ -24,9 +21,8 @@ package authorize
 import "errors"
 
 // Error is a wire-coded validation failure. Code is the OAuth error
-// identifier ("invalid_request", "invalid_scope", ...) and Description is a
+// identifier ("invalid_request", "invalid_scope"...) and Description is a
 // human-readable string suitable for the error_description query parameter.
-//
 // Sentinels declared in this file are exposed as singleton *Error pointers;
 // callers MUST compare with [errors.Is] rather than direct equality so that
 // future wrapping does not break the check. The [Error.Is] method preserves
@@ -65,7 +61,6 @@ func newErr(code, description string) *Error {
 // Sentinel errors. Each maps to a single OAuth wire code so the HTTP layer
 // can translate uniformly. The grouping below also documents the
 // redirect-safety boundary enforced by [IsRedirectSafe]:
-//
 //   - ErrClientIDRequired, ErrRedirectURIRequired, ErrRedirectURIInvalid:
 //     fired BEFORE the redirect target is trusted. Callers MUST NOT redirect.
 //   - Every other sentinel: fired AFTER redirect_uri verification. Callers
@@ -107,8 +102,8 @@ var (
 	ErrScopeClientNotAllowed = newErr("invalid_scope", "scope is restricted to a different client")
 
 	// ErrPKCERequired indicates the client omitted code_challenge. PKCE is
-	// mandatory regardless of client type per the product design
-	// (docs/plans/002-product-design.md §A.12.3). Maps to invalid_request.
+	// mandatory regardless of client type per project policy. Maps to
+	// invalid_request.
 	ErrPKCERequired = newErr("invalid_request", "code_challenge is required")
 
 	// ErrPKCEMethodUnsupported indicates code_challenge_method was absent
@@ -178,6 +173,14 @@ var (
 	// can surface bare empty / non-JWS values uniformly. Maps to
 	// invalid_request_object.
 	ErrRequestObjectInvalid = newErr("invalid_request_object", "request object is malformed")
+
+	// ErrClaimsRequestInvalid indicates the OIDC Core §5.5 "claims"
+	// parameter is present but not valid JSON, or its top-level
+	// shape is not an object, or a per-claim entry is not null/object.
+	// The wire layer surfaces it on the redirect channel because the
+	// parser only fires AFTER redirect_uri validation passed (see
+	// [Request.Validate] ordering). Maps to invalid_request.
+	ErrClaimsRequestInvalid = newErr("invalid_request", "claims parameter is not valid JSON")
 )
 
 // IsRedirectSafe reports whether err arose AFTER redirect_uri validation
@@ -185,7 +188,6 @@ var (
 // OAuth error parameters. Errors that fire before the redirect target is
 // trusted (missing client_id, missing or unregistered redirect_uri) return
 // false: the HTTP layer MUST render an inline error page in those cases.
-//
 // Errors not produced by this package return false; the caller has not
 // validated, so we cannot make any redirect-safety claim.
 func IsRedirectSafe(err error) bool {

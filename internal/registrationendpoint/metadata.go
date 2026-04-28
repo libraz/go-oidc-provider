@@ -22,7 +22,6 @@ const maxBodyBytes = 64 * 1024
 // ClientMetadata is the internal-package mirror of op.ClientMetadata.
 // internal/* must not import op/ (ADR 0001), so the type is declared
 // here and the op layer converts between the two through a thin shim.
-//
 // Field documentation lives on the public op.ClientMetadata; this type
 // intentionally carries the same shape so the conversion remains a
 // field-for-field copy.
@@ -147,10 +146,9 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 }
 
 // validatePolicy enforces the structural rules from
-// docs/plans/002-product-design.md §A.6.2 / §A.6.2.2. It returns the
+// 02-product-design.md §A.6.2 / §A.6.2.2. It returns the
 // canonicalised metadata (defaults applied, scopes parsed) on success
 // and a [validationError] on the first rule violation.
-//
 // The validator does not invoke [Deps.ValidateMetadata]; the handler
 // runs that hook after structural validation passes so embedder code
 // only sees metadata that already cleared the library checks.
@@ -303,7 +301,7 @@ func validateSubjectType(t string, pairwiseEnabled bool) error {
 }
 
 // validateIDTokenAlg enforces the v1.0 ES256-only policy
-// (docs/plans/002-product-design.md §K.3).
+// .
 func validateIDTokenAlg(alg string) error {
 	if alg != "ES256" {
 		return errInvalidClientMetadata("id_token_signed_response_alg " + alg + " is not supported (ES256 only)")
@@ -381,7 +379,7 @@ func cloneStrings(in []string) []string {
 }
 
 // Library defaults for the OIDC profile fields when the caller leaves
-// them blank. The values mirror docs/plans/002-product-design.md
+// them blank. The values mirror 02-product-design.md
 // §A.6.2 / §K.3.
 const (
 	defaultAuthMethod      = "client_secret_basic"

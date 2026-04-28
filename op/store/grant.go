@@ -38,6 +38,27 @@ type Grant struct {
 	// opaque to the library aside from null/non-null checks.
 	Claims map[string]any
 
+	// AuthTime is the wall-clock time at which the user most recently
+	// authenticated for this grant. The token endpoint copies it into
+	// the auth_time claim of issued ID tokens (OpenID Connect Core
+	// 1.0 §2). Empty time signals "no recorded authentication" and the
+	// claim is omitted.
+	AuthTime time.Time
+
+	// ACR is the Authentication Context Class Reference (OpenID
+	// Connect Core 1.0 §2) the originating authentication satisfied.
+	// The token endpoint copies it into the acr claim of issued ID
+	// tokens; OIDC Core §12 requires that refresh-token-derived ID
+	// tokens carry the same acr as the original. Empty when the
+	// underlying authenticator did not assert a class.
+	ACR string
+
+	// AMR lists the Authentication Methods References (RFC 8176 §2)
+	// recorded at the originating authentication. The token endpoint
+	// copies the slice verbatim into the amr claim of issued ID
+	// tokens; OIDC Core §12 requires the same set across refreshes.
+	AMR []string
+
 	// CreatedAt is the wall-clock time at which the grant was first
 	// recorded. Supplied by the caller.
 	CreatedAt time.Time

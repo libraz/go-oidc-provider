@@ -17,7 +17,7 @@ import (
 const JSONContentType = "application/json; charset=utf-8"
 
 // noStoreCacheControl is the value applied to every response written via
-// [WriteJSON]. Per docs/plans/002-product-design.md §A.12.9, every dynamic
+// [WriteJSON].02-product-design.md §A.12.9, every dynamic
 // authentication-flow response must instruct caches not to retain the body.
 // Discovery / JWKS use a different (cacheable) profile applied by their own
 // handlers.
@@ -28,7 +28,6 @@ const noStoreCacheControl = "no-store"
 // responses are never cached. If marshalling fails it writes a 500 with an
 // opaque "server_error" body — the marshal error is otherwise unobservable
 // and would result in the client seeing only a partial payload.
-//
 // WriteJSON returns the marshal/write error so the caller can record it in
 // audit logs. The HTTP response is always finalised regardless of the
 // returned error so callers must not write to the [http.ResponseWriter]

@@ -7,20 +7,18 @@ package authn
 // verbatim: the zero value of [AAL0] is reserved so that uninitialised
 // authentication state is structurally distinguishable from a successful
 // AAL1 login. Callers that need the literal NIST mapping use [AAL.ACRURI].
-//
 // The level is computed by the orchestrator from the per-factor
 // [internal/authn.Factor] records emitted during a chain run; it is never
 // read from the RP's authorization request. See
-// docs/plans/002-product-design.md §E.6.1 ("acr/amr の信頼源は session の
+// 02-product-design.md §E.6.1 ("acr/amr の信頼源は session の
 // amr_history のみ") for the rationale.
-//
 // Stable since v0.1.
 type AAL int
 
 // AAL constants. The naming follows the package convention of upper-case
 // abbreviations; [AAL.String] returns the upper-case form ("AAL0",
-// "AAL1", ...) so log lines and audit records read consistently. RFC 8485
-// uses lower-case ("aal0", ...) inside acr_values strings; that wire form
+// "AAL1"...) so log lines and audit records read consistently. RFC 8485
+// uses lower-case ("aal0"...) inside acr_values strings; that wire form
 // is intentionally not surfaced here because the library does not negotiate
 // acr through 8485-style tokens in v1.0.
 const (
@@ -71,7 +69,6 @@ func (l AAL) String() string {
 // the library writes into the id_token "acr" claim for a session that
 // closed at this level. The mapping is the InCommon / US-Federal
 // equivalence table commonly used in the wild for NIST SP 800-63B AAL:
-//
 //   - AAL0 -> "" (no claim emitted; OIDC Core 1.0 §2 makes "acr"
 //     optional, and an empty string lets the JSON encoder drop it).
 //   - AAL1 -> "urn:mace:incommon:iap:bronze". The InCommon Identity

@@ -12,7 +12,7 @@ import (
 )
 
 // Brute-force defence thresholds. The values come straight from
-// docs/plans/002-product-design.md §M.6 and are intentionally not
+// 02-product-design.md §M.6 and are intentionally not
 // exposed as configuration: tuning them per-deployment would silently
 // weaken the defence and make incident response harder to reason about.
 const (
@@ -119,12 +119,10 @@ type Result struct {
 
 // Verifier verifies RFC 6238 codes against a persisted [store.TOTPRecord]
 // and maintains the 24-hour brute-force counter described in
-// docs/plans/002-product-design.md §M.6.
-//
+// 02-product-design.md §M.6.
 // The zero value is not usable: callers MUST set Codec at minimum.
 // Clock falls back to [timex.SystemClock] and Skew falls back to
 // [defaultSkew] (one step on each side) when zero.
-//
 // Verifier is immutable after construction and safe for concurrent use.
 type Verifier struct {
 	// Clock supplies the wall-clock reading used for the step
@@ -147,9 +145,7 @@ type Verifier struct {
 // persisting the record through [store.TOTPStore.Put] when the outcome
 // is OutcomeSuccess, OutcomeWrongCode, or OutcomeResetRequired; on
 // OutcomeLocked the record is unchanged and Put is unnecessary.
-//
 // Verify performs the following sequence:
-//
 //  1. Reject the call if rec.ConfirmedAt is zero (ErrNotConfirmed).
 //  2. Reject the call with ErrLocked if rec.LockedUntil is in the
 //     future.
@@ -230,7 +226,7 @@ func (v *Verifier) match(secret []byte, code string, now time.Time) bool {
 	current := step(now)
 	// Iterate from the centre outward so the common-case (no drift)
 	// terminates fastest. The current-offset branch is guarded against
-	// underflow; step() already clamps negative Unix time to zero.
+	// underflow; step already clamps negative Unix time to zero.
 	for i := range skew + 1 {
 		offset := uint64(i)
 		if v.matchStep(secret, codeBytes, current+offset) {

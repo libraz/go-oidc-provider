@@ -10,7 +10,7 @@ import (
 )
 
 // Brute-force defence thresholds. The values match the TOTP adapter
-// (docs/plans/002-product-design.md §M.6); the two factors share a
+// ; the two factors share a
 // rolling 24-hour window so an attacker who pivots between them
 // cannot reset the counter.
 const (
@@ -117,7 +117,6 @@ type Result struct {
 // Verifier verifies email-OTP codes against a persisted
 // [store.EmailOTPRecord] and maintains the 24-hour brute-force
 // counter.
-//
 // The zero value uses [timex.SystemClock]; callers that need a
 // deterministic clock for tests inject one through [Verifier.Clock].
 type Verifier struct {
@@ -133,7 +132,6 @@ type Verifier struct {
 // [store.EmailOTPStore.Put] when the outcome is OutcomeSuccess,
 // OutcomeWrongCode, or OutcomeResetRequired; on OutcomeLocked /
 // OutcomeExpired the record is unchanged and Put is unnecessary.
-//
 // A record with a zero [store.EmailOTPRecord.SentAt] is treated as a
 // sentinel that always fails verify: the authenticator persists such
 // records when the user-typed email did not match the bound claim,

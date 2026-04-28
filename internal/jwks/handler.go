@@ -9,7 +9,7 @@ import (
 
 // CacheControl is the value the handler stamps on every successful
 // response. It targets a 24-hour cache with a 1-hour stale-while-revalidate
-// window per docs/plans/002-product-design.md §F.6, which lets RP caches
+// window02-product-design.md §F.6, which lets RP caches
 // absorb a key rotation without taking the OP out of the verification path.
 const CacheControl = "public, max-age=86400, stale-while-revalidate=3600"
 

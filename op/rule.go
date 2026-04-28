@@ -5,15 +5,13 @@ package op
 // declarative half of [LoginFlow] orchestration: when the predicate
 // is a pure function of [LoginContext], the rule table-tests cleanly
 // and the orchestrator can short-circuit on completion.
-//
 // The orchestrator iterates [LoginFlow.Rules] in declaration order on
 // each evaluation pass, runs the first rule whose [Rule.When] returns
 // true and whose [Rule.Then.Kind] is not in
 // [LoginContext.CompletedSteps], then re-enters the loop. When no
 // rule matches the flow grants. See
-// docs/plans/005-login-and-ui-shell.md §3.1 for the full evaluation
+// 05-login-and-ui-shell.md §3.1 for the full evaluation
 // pseudocode.
-//
 // A nil When is treated as the constant-true predicate. A nil Then is
 // rejected at construction time.
 type Rule struct {
@@ -59,7 +57,6 @@ func RuleAfterFailedAttempts(n int, then Step) Rule {
 // Embedders typically pair the rule with a stronger second factor:
 // `RuleRisk(RiskScoreHigh, StepTOTP{...})` requests TOTP only when
 // the configured [RiskAssessor] reports the highest level.
-//
 // When [LoginFlow.Risk] is nil the orchestrator does not invoke an
 // assessor and [LoginContext.RiskScore] stays at [RiskScoreNone]; in
 // that case a [RuleRisk] with a non-zero threshold silently never
@@ -130,7 +127,6 @@ func RuleACR(acr string, then Step) Rule {
 // inspection. The predicate MUST be a pure function of
 // [LoginContext]; the orchestrator does not promise to invoke it
 // exactly once per pass.
-//
 // A nil pred is treated as the constant-false predicate.
 func RuleWhen(pred func(LoginContext) bool, then Step) Rule {
 	if pred == nil {

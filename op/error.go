@@ -24,15 +24,23 @@ type Error struct {
 	Cause error
 }
 
-// Error implements the error interface.
+// Error implements the error interface. When [Error.Cause] is non-nil
+// its message is appended so callers using fmt-style formatting still
+// see the underlying reason, mirroring the pre-catalogue behaviour
+// where wrappers used %w. The wire form sent to clients is built
+// separately (see the endpoint encoders) and never includes Cause.
 func (e *Error) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Description == "" {
-		return e.Code
+	head := e.Code
+	if e.Description != "" {
+		head = e.Code + ": " + e.Description
 	}
-	return e.Code + ": " + e.Description
+	if e.Cause != nil {
+		return head + ": " + e.Cause.Error()
+	}
+	return head
 }
 
 // Unwrap exposes the underlying cause to [errors.Is] and [errors.As].

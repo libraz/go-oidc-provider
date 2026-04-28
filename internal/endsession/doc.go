@@ -4,17 +4,13 @@
 // either redirects the browser to a preregistered
 // post_logout_redirect_uri or renders a minimal logout-confirmation
 // page.
-//
 // # Spec reference
-//
 // OpenID Connect RP-Initiated Logout 1.0 (final). Section 2 enumerates
 // the request parameters; Section 3 covers redirection back to the RP.
 // The OP-side validation rules below mirror that text and the
 // production-grade posture documented in
-// docs/plans/002-product-design.md §H.
-//
+// 02-product-design.md §H.
 // # Request parameters
-//
 //   - id_token_hint (RECOMMENDED): an id_token previously issued by
 //     the OP. Signature is verified; the "aud" claim identifies the
 //     requesting client.
@@ -35,10 +31,8 @@
 //     not localise; the parameter is parsed and discarded.
 //
 // # Validation policy
-//
 // The handler short-circuits to a 400 page (NOT a redirect) on any
 // failure that prevents the OP from identifying a registered client:
-//
 //   - id_token_hint that does not parse, carries an unknown kid, or
 //     fails signature verification.
 //   - client_id parameter that disagrees with the id_token_hint's
@@ -51,13 +45,10 @@
 // The error response is a small static text/html body with a strict
 // Content-Security-Policy header. The OP never redirects to an
 // unvetted URI on the error path.
-//
 // # User-visible policy choices
-//
 // The implementation makes four choices that diverge from a purely
 // permissive reading of the spec; each is intentional and documented
 // here so future regressions surface in code review.
-//
 //   - Expired id_tokens are accepted. The user wants to log out from
 //     a stale tab; the spec does not require freshness for
 //     id_token_hint and enforcing exp would degrade the UX without
@@ -83,9 +74,7 @@
 //     behaviour is the only safe option.
 //
 // # Layering
-//
 // The handler depends on:
-//
 //   - [internal/sessions.Manager] — Resolve / Logout the active session.
 //   - [internal/cookie.Profile] / [internal/cookie.Clear] — produce
 //     the Set-Cookie header that retires

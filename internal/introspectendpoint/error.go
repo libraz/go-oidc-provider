@@ -1,8 +1,9 @@
 package introspectendpoint
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // RFC 6749 §5.2 wire codes the handler emits for pre-authentication
@@ -14,28 +15,13 @@ const (
 	errServerError    = "server_error"
 )
 
-// errorResponse is the JSON envelope the introspection endpoint returns
-// for pre-authentication failures (RFC 6749 §5.2). It mirrors the token
-// and PAR endpoints so embedders see a single error surface across all
-// three.
-type errorResponse struct {
-	Error            string `json:"error"`
-	ErrorDescription string `json:"error_description,omitempty"`
-}
-
-// writeError emits the §5.2 envelope with the supplied status, code, and
-// description. Cache-Control is stamped here so every error path
-// automatically satisfies RFC 7662 §4; callers MUST NOT re-stamp it.
+// writeError emits the RFC 6749 §5.2 envelope with the supplied status,
+// code, and description. The implementation delegates to
+// [httpx.WriteError] so the JSON shape, Content-Type, Cache-Control:
+// no-store, and Pragma: no-cache headers stay synchronised across every
+// endpoint that emits an OAuth error envelope.
 func writeError(w http.ResponseWriter, status int, code, description string) {
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	body := errorResponse{Error: code, ErrorDescription: description}
-	// Encoding a tiny fixed-shape struct into a buffered writer never
-	// fails in practice; an error here would be a programmer bug, not a
-	// runtime fault. Mirror the parendpoint posture and drop the error
-	// rather than risk a partial body collision.
-	_ = json.NewEncoder(w).Encode(body)
+	_ = httpx.WriteError(w, status, code, description)
 }
 
 // writeInvalidClient is the dedicated 401 path for the "invalid_client"
@@ -51,8 +37,9 @@ func writeInvalidClient(w http.ResponseWriter, basic bool, description string) {
 }
 
 // stampNoStore writes the cache-control header RFC 7662 §4 mandates on
-// every introspection response (success or error). Centralising the
-// helper keeps the success and error paths from drifting.
+// every introspection success response. The error path goes through
+// [httpx.WriteError] which stamps the same headers; this helper covers
+// the success path so the two never drift.
 func stampNoStore(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")

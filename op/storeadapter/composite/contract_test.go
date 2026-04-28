@@ -3,6 +3,7 @@ package composite_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/store/contract"
@@ -42,7 +43,7 @@ func TestContract_HotColdSplit(t *testing.T) {
 		// type-assertion based ClientRegistry detection succeeds; the
 		// composite intentionally hides ClientRegistry behind an
 		// accessor so this thin adapter is the single bridge.
-		return contract.Backend{Store: &registryFacade{Store: s}, Now: now}
+		return contract.Backend{Store: &registryFacade{Store: s}, Now: func() time.Time { return now }}
 	}
 
 	contract.Run(t, factory)

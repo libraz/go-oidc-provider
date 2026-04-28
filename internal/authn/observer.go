@@ -33,13 +33,11 @@ const (
 // and is the stream operators read; this stream feeds backend logic
 // (counters, denylist updates, ML ingest) and is intended to be
 // consumed by code, not humans.
-//
 // LoginAttempt MUST NEVER carry plaintext credentials (passwords,
 // OTP codes, recovery codes, email OTP codes, WebAuthn signatures).
 // On failure paths Subject is empty or a salted hash to avoid
 // enumeration through the observer feed.
-//
-// See docs/plans/002-product-design.md §M.6.3.
+// 02-product-design.md §M.6.3.
 type LoginAttempt struct {
 	// Subject is the OP-internal subject identifier on success
 	// paths; empty or a salted hash on failure paths to avoid
@@ -81,7 +79,6 @@ type LoginAttempt struct {
 // orchestrator fans out every [LoginAttempt] to every registered
 // observer in registration order; observers are expected to be
 // non-blocking (push-to-channel / increment-counter style).
-//
 // Implementations MUST be safe for concurrent use by multiple
 // goroutines. Long-running work belongs in a worker the observer
 // hands off to; the orchestrator does not retry on observer errors

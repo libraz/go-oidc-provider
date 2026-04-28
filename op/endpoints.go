@@ -4,14 +4,12 @@ package op
 // router. Empty strings retain the library default; the [Provider] always
 // substitutes a value, so callers MAY pass a partially-populated struct to
 // override only the paths they care about.
-//
 // Paths MUST start with "/". The [Provider] strips the configured mount
 // prefix from incoming requests before consulting these values, so the
 // stored value is always relative to the mount point.
-//
 // The default values are listed in the matching field comments. They mirror
 // OpenID Connect Core 1.0 / OpenID Connect Discovery 1.0 conventions and
-// the project conventions documented in docs/plans/002-product-design.md
+// the project conventions documented02-product-design.md
 // §K.1.
 type Endpoints struct {
 	// Discovery overrides /.well-known/openid-configuration. It is mounted

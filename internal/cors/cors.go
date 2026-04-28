@@ -1,8 +1,7 @@
 // Package cors implements the two CORS profiles required by
-// docs/plans/002-product-design.md §F.4: a strict per-origin echo for the
-// authenticated endpoints (token, userinfo, interaction, session, ...) and a
+// 02-product-design.md §F.4: a strict per-origin echo for the
+// authenticated endpoints (token, userinfo, interaction, session...) and a
 // permissive wildcard for the public metadata endpoints (discovery, JWKS).
-//
 // The package emits headers only; it does not handle business logic and
 // never short-circuits a non-preflight request. Callers wrap their handlers
 // in [Strict.Handler] (or [Public.Handler]) and continue serving as normal.
@@ -55,7 +54,6 @@ var allowedMethods = []string{
 }
 
 // Handler wraps next with CORS logic. The wrapper:
-//
 //  1. For an OPTIONS request with Origin + Access-Control-Request-Method:
 //     answer the preflight directly. Allowed origins receive 204 with the
 //     full header set; rejected origins receive 403 with no CORS headers.

@@ -1,9 +1,9 @@
 // Package timex centralises every read of the wall clock used by the
 // library. All other packages MUST obtain the current time through a [Clock]
-// rather than calling [time.Now] directly so that tests can inject a fake
+// rather than calling [time.Now()] directly so that tests can inject a fake
 // clock and so that token TTLs, audit timestamps, and rate limits remain
 // consistent across the codebase. The forbidigo lint rule blocks direct
-// `time.Now()` calls so the only sanctioned caller is [systemClock.Now].
+// `time.Now()` calls so the only sanctioned caller is [systemClock.Now()].
 package timex
 
 import "time"
@@ -21,8 +21,8 @@ type ClockFunc func() time.Time
 // Now implements [Clock].
 func (f ClockFunc) Now() time.Time { return f() }
 
-// SystemClock is the default [Clock] backed by [time.Now]. It is the only
-// place in the codebase permitted to call [time.Now] directly. Exposed as
+// SystemClock is the default [Clock] backed by [time.Now()]. It is the only
+// place in the codebase permitted to call [time.Now()] directly. Exposed as
 // a global because every caller wants the same wall clock; tests inject a
 // distinct [Clock] through dependency injection rather than swapping this
 // value.
@@ -32,7 +32,7 @@ var SystemClock Clock = systemClock{}
 
 type systemClock struct{}
 
-//nolint:forbidigo // SystemClock is the single permitted time.Now caller.
+//nolint:forbidigo // SystemClock is the single permitted time.Now() caller.
 func (systemClock) Now() time.Time { return time.Now() }
 
 // Now is a convenience wrapper around [SystemClock]. Library code SHOULD

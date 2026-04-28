@@ -45,7 +45,7 @@ func mtlsFixture(tb testing.TB) *fixture {
 
 // generateMTLSLeaf produces a self-signed leaf certificate suitable for
 // driving the mTLS handler tests. The cert is deterministic in
-// validity bounds (no time.Now) but uses fresh key material per call
+// validity bounds (no time.Now()) but uses fresh key material per call
 // so distinct tests cannot accidentally bind to the same thumbprint.
 func generateMTLSLeaf(tb testing.TB) *x509.Certificate {
 	tb.Helper()

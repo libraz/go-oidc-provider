@@ -30,7 +30,7 @@ var sessionCases = []subtest{
 func sessionSaveFind(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	s := newSession(b.Now, "s-1")
+	s := newSession(b.Now(), "s-1")
 	if err := b.Store.Sessions().Save(ctx, s); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -46,12 +46,12 @@ func sessionSaveFind(t *testing.T, f Factory) {
 func sessionTouch(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	s := newSession(b.Now, "s-touch")
+	s := newSession(b.Now(), "s-touch")
 	if err := b.Store.Sessions().Save(ctx, s); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	newExp := b.Now.Add(2 * time.Hour)
-	newUpd := b.Now.Add(time.Minute)
+	newExp := b.Now().Add(2 * time.Hour)
+	newUpd := b.Now().Add(time.Minute)
 	if err := b.Store.Sessions().Touch(ctx, "s-touch", newExp, newUpd); err != nil {
 		t.Fatalf("Touch: %v", err)
 	}
@@ -69,7 +69,7 @@ func sessionTouch(t *testing.T, f Factory) {
 
 func sessionTouchMissing(t *testing.T, f Factory) {
 	b := f(t)
-	err := b.Store.Sessions().Touch(context.Background(), "absent", b.Now, b.Now)
+	err := b.Store.Sessions().Touch(context.Background(), "absent", b.Now(), b.Now())
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Touch missing: want ErrNotFound, got %v", err)
 	}
@@ -78,7 +78,7 @@ func sessionTouchMissing(t *testing.T, f Factory) {
 func sessionDelete(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	s := newSession(b.Now, "s-del")
+	s := newSession(b.Now(), "s-del")
 	if err := b.Store.Sessions().Save(ctx, s); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -94,8 +94,8 @@ func sessionDelete(t *testing.T, f Factory) {
 func sessionExpired(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	s := newSession(b.Now, "s-exp")
-	s.ExpiresAt = b.Now.Add(-time.Hour)
+	s := newSession(b.Now(), "s-exp")
+	s.ExpiresAt = b.Now().Add(-time.Hour)
 	if err := b.Store.Sessions().Save(ctx, s); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -107,13 +107,13 @@ func sessionExpired(t *testing.T, f Factory) {
 func sessionListByChooserGroup(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	a := newSession(b.Now, "s-a")
+	a := newSession(b.Now(), "s-a")
 	a.ChooserGroupID = "cg-list"
 	a.Subject = "user-a"
-	bb := newSession(b.Now, "s-b")
+	bb := newSession(b.Now(), "s-b")
 	bb.ChooserGroupID = "cg-list"
 	bb.Subject = "user-b"
-	other := newSession(b.Now, "s-other")
+	other := newSession(b.Now(), "s-other")
 	other.ChooserGroupID = "cg-other"
 	for _, s := range []*store.Session{a, bb, other} {
 		if err := b.Store.Sessions().Save(ctx, s); err != nil {
@@ -137,11 +137,11 @@ func sessionListByChooserGroup(t *testing.T, f Factory) {
 func sessionListByChooserGroupSkipsExpired(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	live := newSession(b.Now, "s-live")
+	live := newSession(b.Now(), "s-live")
 	live.ChooserGroupID = "cg-mixed"
-	dead := newSession(b.Now, "s-dead")
+	dead := newSession(b.Now(), "s-dead")
 	dead.ChooserGroupID = "cg-mixed"
-	dead.ExpiresAt = b.Now.Add(-time.Hour)
+	dead.ExpiresAt = b.Now().Add(-time.Hour)
 	for _, s := range []*store.Session{live, dead} {
 		if err := b.Store.Sessions().Save(ctx, s); err != nil {
 			t.Fatalf("Save %s: %v", s.ID, err)
@@ -168,7 +168,7 @@ var parCases = []subtest{
 func parSaveFind(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	par := newPAR(b.Now, "urn:par:1")
+	par := newPAR(b.Now(), "urn:par:1")
 	if err := b.Store.PushedAuthRequests().Save(ctx, par); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -184,7 +184,7 @@ func parSaveFind(t *testing.T, f Factory) {
 func parConsumeOnce(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	par := newPAR(b.Now, "urn:par:2")
+	par := newPAR(b.Now(), "urn:par:2")
 	if err := b.Store.PushedAuthRequests().Save(ctx, par); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -204,8 +204,8 @@ func parConsumeOnce(t *testing.T, f Factory) {
 func parExpired(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	par := newPAR(b.Now, "urn:par:exp")
-	par.ExpiresAt = b.Now.Add(-time.Hour)
+	par := newPAR(b.Now(), "urn:par:exp")
+	par.ExpiresAt = b.Now().Add(-time.Hour)
 	if err := b.Store.PushedAuthRequests().Save(ctx, par); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -226,7 +226,7 @@ var interactionCases = []subtest{
 func interactionSaveFind(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	i := newInteraction(b.Now, "i-1")
+	i := newInteraction(b.Now(), "i-1")
 	if err := b.Store.Interactions().Save(ctx, i); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -242,7 +242,7 @@ func interactionSaveFind(t *testing.T, f Factory) {
 func interactionDelete(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	i := newInteraction(b.Now, "i-del")
+	i := newInteraction(b.Now(), "i-del")
 	if err := b.Store.Interactions().Save(ctx, i); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -258,8 +258,8 @@ func interactionDelete(t *testing.T, f Factory) {
 func interactionExpired(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	i := newInteraction(b.Now, "i-exp")
-	i.ExpiresAt = b.Now.Add(-time.Hour)
+	i := newInteraction(b.Now(), "i-exp")
+	i.ExpiresAt = b.Now().Add(-time.Hour)
 	if err := b.Store.Interactions().Save(ctx, i); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -280,7 +280,7 @@ var jtiCases = []subtest{
 func jtiMarkHas(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	expiresAt := b.Now.Add(time.Hour)
+	expiresAt := b.Now().Add(time.Hour)
 	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-1", expiresAt); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
@@ -307,7 +307,7 @@ func jtiHasMissing(t *testing.T, f Factory) {
 func jtiReplay(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	expiresAt := b.Now.Add(time.Hour)
+	expiresAt := b.Now().Add(time.Hour)
 	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-replay", expiresAt); err != nil {
 		t.Fatalf("first Mark: %v", err)
 	}
@@ -337,7 +337,7 @@ func txBeginCommit(t *testing.T, f Factory) {
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
 	requireSubstoresNonNil(t, tx)
-	code := newAuthCode(b.Now, "tx-ac")
+	code := newAuthCode(b.Now(), "tx-ac")
 	if err := tx.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save in tx: %v", err)
 	}
@@ -370,7 +370,7 @@ func txBeginRollback(t *testing.T, f Factory) {
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
 	}
-	code := newAuthCode(b.Now, "tx-rb")
+	code := newAuthCode(b.Now(), "tx-rb")
 	if err := tx.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save in tx: %v", err)
 	}
@@ -408,7 +408,7 @@ func txCrossSubstore(t *testing.T, f Factory) {
 		t.Fatalf("BeginTx: %v", err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
-	if err := saveCrossSubstore(ctx, tx, b.Now); err != nil {
+	if err := saveCrossSubstore(ctx, tx, b.Now()); err != nil {
 		t.Fatalf("save in tx: %v", err)
 	}
 	if err := tx.Commit(); err != nil {

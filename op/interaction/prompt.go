@@ -4,16 +4,15 @@ import "time"
 
 // PromptData is the sealed interface implemented by every concrete
 // prompt-data type the library exposes. The set is closed by design
-// (docs/plans/002-product-design.md §E.2): the orchestrator must be
+// : the orchestrator must be
 // able to enumerate which fields can leak to the SPA, and an open
 // `map[string]any` escape hatch would forbid that audit. New
 // PromptData shapes ship with the library; user-extension factors and
 // interactions consume one of the existing shapes (most often a
 // [FieldSpec]-driven Inputs slice on a built-in PromptData) or, when
 // they truly need new state, contribute a typed shape upstream.
-//
 // Sealing pattern: the interface declares an unexported
-// isPromptData() method that only types in this package can satisfy.
+// isPromptData method that only types in this package can satisfy.
 // The following will not compile in user code because the method is
 // unexported:
 //
@@ -64,7 +63,6 @@ type EmailOTPVerifyPromptData struct {
 func (EmailOTPVerifyPromptData) isPromptData() {}
 
 // PasskeyPromptData backs Prompt.Type "auth.passkey".
-//
 // Challenge and AllowCredentials must be exposed to the SPA verbatim
 // because WebAuthn (§E.4) consumes them in the browser. The orchestrator
 // guarantees Challenge is freshly generated per attempt with at least
@@ -85,7 +83,6 @@ func (PasskeyPromptData) isPromptData() {}
 
 // PasskeyCredentialDescriptor mirrors the WebAuthn
 // PublicKeyCredentialDescriptor structure exposed to navigator.credentials.
-//
 // The shape is dictated by the WebAuthn Level 3 specification and is
 // therefore copied verbatim from the browser API: any divergence would
 // force the SPA into a translation step the orchestrator already does.

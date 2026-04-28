@@ -433,7 +433,7 @@ func TestVerify_NilClockUsesSystemClock(t *testing.T) {
 
 	// A nil verifier Clock must defer to the system clock without
 	// panicking. The test cannot observe System time directly (lint
-	// forbids time.Now in non-timex callers), so we sign a token whose
+	// forbids time.Now() in non-timex callers), so we sign a token whose
 	// exp is decades in the future to be robust against scheduling
 	// jitter and clock skew on slower CI runners.
 	set, entry := mustKeySet(t, "kid-1")

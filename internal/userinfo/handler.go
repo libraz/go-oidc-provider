@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
@@ -43,6 +44,14 @@ type HandlerDeps struct {
 	// after the bearer token has verified. It MUST return
 	// [store.ErrNotFound] when the subject does not exist.
 	UserStore store.UserStore
+
+	// Grants is the read-only grant lookup the handler consults to
+	// honour any OIDC Core 1.0 §5.5 "claims" request that was
+	// persisted on the originating grant. A nil store disables the
+	// per-claim projection — the handler falls back to scope-derived
+	// release, which is the v0.x default for embedders that have not
+	// yet wired the grant store into the userinfo handler.
+	Grants store.GrantStore
 
 	// Clock supplies the current wall-clock reading consumed by the
 	// access-token verifier. A nil Clock falls back to the system
@@ -291,7 +300,7 @@ func (e *bearerError) Error() string { return e.desc }
 //     present both with error="invalid_request".
 //   - §2.3 (URI query) is intentionally skipped: RFC 9700 §2.4 calls
 //     query-string credentials out as a hardening risk, and the
-//     handler MUST NOT consult [http.Request.URL.Query].
+//     handler MUST NOT consult [http.Request.URL.Query()].
 //
 // The "no credentials at all" case returns a bearerError with
 // missing=true so the caller can emit a bare challenge.
@@ -422,12 +431,44 @@ func assembleClaims(
 		Scopes:            claims.Scope,
 		Source:            source,
 		CustomScopeClaims: deps.CustomScopeClaims,
+		Claims:            lookupClaimsRequest(ctx, deps, claims.Subject, claims.ClientID),
 	})
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return nil, false
 	}
 	return out, true
+}
+
+// lookupClaimsRequest resolves the OIDC Core 1.0 §5.5 "claims" payload
+// that was persisted on the grant from which claims.Subject /
+// claims.ClientID's access token descends. Returns nil when:
+//
+//   - the deps.Grants substore is not wired (embedders that have not
+//     yet adopted the per-claim projection),
+//   - the lookup fails (the grant was revoked between issuance and the
+//     userinfo call),
+//   - the grant carries no §5.5 payload (every claim was scope-driven).
+//
+// The resolution path uses [store.GrantStore.FindBySubjectClient] which
+// returns the active grant for the (subject, client) pair. Multiple
+// historical grants are not exercised by the v0.x library; the path
+// will continue to read the latest active grant, which matches the
+// expectation that consent only ever broadens, not narrows, between
+// issuances of the same chain.
+func lookupClaimsRequest(
+	ctx context.Context,
+	deps HandlerDeps,
+	subject, clientID string,
+) *authorize.ClaimsRequest {
+	if deps.Grants == nil || subject == "" || clientID == "" {
+		return nil
+	}
+	g, err := deps.Grants.FindBySubjectClient(ctx, subject, clientID)
+	if err != nil || g == nil {
+		return nil
+	}
+	return authorize.DecodeClaimsFromGrant(g.Claims)
 }
 
 // userClaims returns the claim source map for u, defending against a

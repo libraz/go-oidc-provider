@@ -41,6 +41,7 @@ var Sensitive = []string{
 	"registration_access_token",
 	"initial_access_token",
 	"request",
+	"request_uri",
 	"assertion",
 	"client_assertion",
 }

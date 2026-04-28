@@ -75,6 +75,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
+	applyClaimsToggle(req, deps.ClaimsParameterEnabled)
 	if err := req.Validate(client, deps.Scopes, authorize.Policy{
 		PKCERequired:         deps.RequirePKCE,
 		NonceRequired:        deps.RequireNonce,
@@ -322,6 +323,18 @@ func parseAuthorizeRequest(w http.ResponseWriter, values url.Values, authenticat
 	// downstream Validate path uniform with /authorize.
 	req.ClientID = authenticatedID
 	return req, true
+}
+
+// applyClaimsToggle enforces op.WithClaimsParameterSupported(false) at
+// the /par boundary by clearing any parsed §5.5 payload before the
+// snapshot is persisted. The function is a no-op when the toggle is
+// on (the wire payload survives onto the snapshot intact) so callers
+// can invoke it unconditionally.
+func applyClaimsToggle(req *authorize.Request, enabled bool) {
+	if enabled {
+		return
+	}
+	req.Claims = nil
 }
 
 // writeAuthorizeError translates an [authorize.Error] (or any other error

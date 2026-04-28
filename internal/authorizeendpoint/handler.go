@@ -17,7 +17,7 @@ import (
 )
 
 // Default timing budgets the handler uses when [Deps] does not override
-// them. The values match docs/plans/002-product-design.md §F.1 (interaction
+// them. The values match 02-product-design.md §F.1 (interaction
 // cookie lifetime) and §A.12 (authorization-code TTL).
 const (
 	// DefaultAuthCodeTTL is the lifetime of an issued authorization code.
@@ -209,6 +209,25 @@ type Deps struct {
 	// the emission so vanilla OIDC Core deployments that have not
 	// adopted RFC 9207 keep the legacy wire shape.
 	Issuer string
+
+	// AllowPrivateNetworkJAR disables the SSRF deny-list applied to a
+	// JAR request_uri before the OP fetches the request object. The
+	// default posture rejects loopback / link-local / RFC 1918 hosts;
+	// embedders that front their RPs with private DNS opt in via
+	// op.WithAllowPrivateNetworkJAR.
+	AllowPrivateNetworkJAR bool
+
+	// ClaimsParameterEnabled, when false, makes /authorize discard
+	// any parsed OIDC Core 1.0 §5.5 "claims" payload before the
+	// snapshot is persisted. The library default is true (the wiring
+	// layer leaves the field at zero value when the embedder calls
+	// op.WithClaimsParameterSupported(true) or omits the option
+	// entirely; op.WithClaimsParameterSupported(false) flips this to
+	// false on the wire layer). The parser still rejects a malformed
+	// payload so the wire shape stays uniform with FAPI 2.0; the
+	// flag only governs whether the (validated) payload survives
+	// onto the grant for downstream projection.
+	ClaimsParameterEnabled bool
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.
@@ -245,7 +264,6 @@ func (r resolved) now() time.Time {
 // Handler returns the HTTP handler the OP mounts at its authorize and
 // interaction endpoints. The returned handler is safe for concurrent use;
 // deps MUST NOT be mutated after the call.
-//
 // The function panics on a configuration that cannot satisfy the contract
 // (nil store, nil codec). Callers should construct [Deps] from validated
 // configuration so the panic path is unreachable in production.

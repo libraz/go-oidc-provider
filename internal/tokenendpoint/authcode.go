@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
@@ -309,19 +310,21 @@ func issueAuthCodeResponse(
 	binding tokenBinding,
 ) {
 	now := deps.now().UTC()
+	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
 	accessToken, err := mintAccessToken(
 		deps,
 		exchanged.Subject,
 		client.ID,
 		exchanged.Scope,
 		now,
-		lookupAuthTime(ctx, deps, exchanged.GrantID),
+		authCtx.AuthTime,
 		binding,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
+	idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
 	idToken, err := mintAuthCodeIDToken(deps, mintIDTokenInput{
 		Subject:     exchanged.Subject,
 		ClientID:    client.ID,
@@ -329,7 +332,10 @@ func issueAuthCodeResponse(
 		AccessToken: accessToken,
 		Code:        code,
 		Now:         now,
-		AuthTime:    lookupAuthTime(ctx, deps, exchanged.GrantID),
+		AuthTime:    authCtx.AuthTime,
+		ACR:         authCtx.ACR,
+		AMR:         authCtx.AMR,
+		Extra:       idTokenExtra,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -352,8 +358,7 @@ func issueAuthCodeResponse(
 
 // mintIDTokenInput collects the parameters [mintAuthCodeIDToken] needs.
 // The struct exists so the function stays under the linter's parameter
-// limit and so future fields (acr / amr) can be added without churning
-// every call site.
+// limit.
 type mintIDTokenInput struct {
 	Subject     string
 	ClientID    string
@@ -362,6 +367,15 @@ type mintIDTokenInput struct {
 	Code        string
 	Now         time.Time
 	AuthTime    int64
+	ACR         string
+	AMR         []string
+
+	// Extra is the projected non-standard claim set assembled from the
+	// grant's persisted OIDC Core 1.0 §5.5 "claims" payload (id_token
+	// location). Empty / nil leaves the encoded JWT free of additions
+	// beyond the standard fields. Standard-claim collisions are
+	// rejected by [tokens.SignIDToken].
+	Extra map[string]any
 }
 
 // mintAccessToken signs the JWT-shaped access token (RFC 9068). When
@@ -412,6 +426,9 @@ func mintAuthCodeIDToken(deps Deps, in mintIDTokenInput) (string, error) {
 		Nonce:     in.Nonce,
 		AtHash:    tokens.Hash(in.AccessToken),
 		CHash:     tokens.Hash(in.Code),
+		ACR:       in.ACR,
+		AMR:       append([]string(nil), in.AMR...),
+		Extra:     in.Extra,
 	}
 	return tokens.SignIDToken(activeSigningKey(deps), claims)
 }
@@ -452,19 +469,100 @@ func maybeIssueRefreshToken(
 	})
 }
 
-// lookupAuthTime resolves the "auth_time" claim from the originating
-// grant. The library uses [store.Grant.UpdatedAt] as the proxy for the
-// last interactive authentication: every consent prompt or re-auth
-// touches the grant, so its updated_at advances when the user freshly
-// authenticated. Returns 0 when the grant cannot be located so the
-// claim is omitted from the id_token.
-func lookupAuthTime(ctx context.Context, deps Deps, grantID string) int64 {
+// authContext captures the fields the id_token issuance path reads
+// from the originating grant. Empty values are valid: the encoder
+// omits omitempty claims when the relevant field is zero.
+type authContext struct {
+	AuthTime int64
+	ACR      string
+	AMR      []string
+
+	// Claims is the OIDC Core 1.0 §5.5 "claims" request payload that
+	// was persisted on the grant at the originating /authorize
+	// request. Nil when the request did not carry the parameter.
+	// The id_token issuer reads it (along with the user store) to
+	// project the requested id_token claims.
+	Claims *authorize.ClaimsRequest
+}
+
+// lookupAuthContext resolves the auth_time / acr / amr claims from
+// the originating grant. The grant carries the values stamped at the
+// last interactive authentication; OIDC Core 1.0 §12 requires the
+// refresh-token-derived id_token to carry the same acr/amr as the
+// original, and the authorization_code-derived id_token uses the same
+// source so both grant paths agree. AuthTime falls back to the grant's
+// UpdatedAt when the explicit field was not populated (records
+// persisted before the field was added still produce a useful claim).
+func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authContext {
 	if grantID == "" {
-		return 0
+		return authContext{}
 	}
 	g, err := deps.Grants.Find(ctx, grantID)
-	if err != nil || g == nil || g.UpdatedAt.IsZero() {
-		return 0
+	if err != nil || g == nil {
+		return authContext{}
 	}
-	return g.UpdatedAt.Unix()
+	out := authContext{ACR: g.ACR}
+	if !g.AuthTime.IsZero() {
+		out.AuthTime = g.AuthTime.Unix()
+	} else if !g.UpdatedAt.IsZero() {
+		out.AuthTime = g.UpdatedAt.Unix()
+	}
+	if len(g.AMR) > 0 {
+		out.AMR = append([]string(nil), g.AMR...)
+	}
+	out.Claims = authorize.DecodeClaimsFromGrant(g.Claims)
+	return out
+}
+
+// projectIDTokenClaims walks the grant's id_token "claims" payload
+// (OIDC Core 1.0 §5.5) and returns the non-standard claims map the
+// id_token issuer feeds into [tokens.IDTokenClaims.Extra]. The user
+// store is the source of truth for values; claims with no stored
+// value or that fail the spec's "value" / "values" constraint are
+// silently omitted, matching the project's "omit on absent" stance
+// (ADR 0011).
+//
+// The function returns nil for an empty request, no user lookup, or a
+// nil deps.UserStore so the caller can guard the Extra assignment
+// with a simple non-nil check.
+func projectIDTokenClaims(
+	ctx context.Context,
+	deps Deps,
+	subject string,
+	req *authorize.ClaimsRequest,
+) map[string]any {
+	if req == nil || len(req.IDToken) == 0 {
+		return nil
+	}
+	if deps.UserStore == nil || subject == "" {
+		return nil
+	}
+	user, err := deps.UserStore.FindBySubject(ctx, subject)
+	if err != nil || user == nil {
+		return nil
+	}
+	out := map[string]any{}
+	for name, spec := range req.IDToken {
+		switch name {
+		case "sub", "iss", "aud", "iat", "exp", "auth_time", "nonce",
+			"acr", "amr", "azp", "at_hash", "c_hash", "sid":
+			// Standard id_token claims are issued by the library
+			// itself; the projector never overwrites them. The
+			// "acr" claim in particular is delegated to the
+			// ACR policy seam (see ADR 0012); here we ignore it.
+			continue
+		}
+		v, ok := user.Claims[name]
+		if !ok {
+			continue
+		}
+		if !spec.Allows(v) {
+			continue
+		}
+		out[name] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

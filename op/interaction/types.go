@@ -6,12 +6,11 @@ import "time"
 // §3.1.2.1). The constants are exported so callers parsing or
 // asserting against the request value can do so without a stringly-
 // typed copy.
-//
 // Note: these names live in a different namespace from
 // [Prompt.Type] (which uses dotted prefixes like "auth.password").
 // Sharing constants between the two would have been ambiguous; the
 // orchestrator keeps them deliberately separate per
-// docs/plans/002-product-design.md §E.2.3.
+// 02-product-design.md §E.2.3.
 const (
 	// PromptLogin is the "login" value of the OIDC prompt parameter:
 	// the RP asks the OP to re-authenticate the user.
@@ -35,9 +34,7 @@ const (
 // Prompt is the unit of UI an [op.Authenticator] or [op.Interaction]
 // returns. The SPA reads Prompt verbatim; the [PromptData] type
 // projection determines which concrete fields are safe to expose.
-//
 // Prompt.Type follows the namespace rules in §E.2.3:
-//
 //   - "auth.*"        — Authenticator-emitted prompts ("auth.password",
 //     "auth.totp", "auth.email_otp.send", "auth.email_otp.verify",
 //     "auth.passkey", "auth.recovery_code", "auth.<myorg>.<factor>.*").
@@ -67,15 +64,13 @@ type Prompt struct {
 
 	// StateRef is an opaque continuation token the SPA echoes back
 	// in the next [FormSubmission]. The orchestrator binds it to:
-	//
-	//   - the interaction uid (cross-uid replay rejected),
-	//   - the [op.Authenticator] / [op.Interaction] instance
-	//     (cross-factor reuse rejected),
-	//   - a short TTL (default 10 minutes; expiry restarts the
-	//     factor),
-	//   - single-use semantics (a successful Continue invalidates
-	//     it).
-	//
+	//  - the interaction uid (cross-uid replay rejected),
+	//  - the [op.Authenticator] / [op.Interaction] instance
+	//  (cross-factor reuse rejected),
+	//  - a short TTL (default 10 minutes; expiry restarts the
+	//  factor),
+	//  - single-use semantics (a successful Continue invalidates
+	//  it).
 	// StateRef MUST NOT carry plaintext secrets (OTP codes, TOTP
 	// shared secrets, recovery codes, email OTP codes) — the rule
 	// applies even when the value is HMAC-signed. See §E.2.1 for
@@ -88,7 +83,6 @@ type Prompt struct {
 	// into a hidden form field; on submission the endpoint accepts
 	// the value through either an X-CSRF-Token header (the SPA
 	// pattern) or a "csrf_token" form field (the SSR pattern).
-	//
 	// The field is empty for non-prompt-stage flows that the
 	// orchestrator does not protect with the double-submit pattern.
 	// JSON-mode SPAs may ignore it; they read the cookie via
@@ -116,7 +110,6 @@ type Step struct {
 	// via [op.ContinueInput.Scratch] on the next submission. The
 	// Driver never sees Scratch; it is round-tripped server-side
 	// through the orchestrator's state blob only.
-	//
 	// Scratch is meaningful only on Prompt steps. Stateless factors
 	// (TOTP, password, recovery code) leave it nil; factors that
 	// need to remember per-ceremony state across the
@@ -138,7 +131,7 @@ type Result struct {
 	// AuthTime is the wall-clock time at which the factor confirmed
 	// the user. Implementations read it from
 	// [op.BeginInput.AuthTime] or the orchestrator [op.Clock];
-	// direct [time.Now] calls are forbidden by depguard.
+	// direct [time.Now()] calls are forbidden by depguard.
 	AuthTime time.Time
 
 	// Scope is the scope subset the user approved. It is meaningful

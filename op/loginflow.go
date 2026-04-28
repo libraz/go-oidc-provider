@@ -5,16 +5,13 @@ package op
 // conditional [Rule] entries, an optional imperative [Decider], and an
 // optional [RiskAssessor] used by [RuleRisk] and the orchestrator's
 // risk gates.
-//
 // LoginFlow is the recommended embedder seam: it separates the
 // orchestration of factors (Rules + Decider) from their implementation
 // (Step values). Embedders who need finer control fall back to the
 // low-level [Authenticator] / [Interaction] surface, which remains
 // supported for the duration of v0.x and into v1.0.
-//
-// See docs/plans/005-login-and-ui-shell.md §3.1 for the evaluation
+// 05-login-and-ui-shell.md §3.1 for the evaluation
 // semantics.
-//
 // Experimental: the LoginFlow seam is being introduced in v0.x. Field
 // names and evaluation order MAY change before v1.0.
 type LoginFlow struct {
@@ -51,7 +48,6 @@ type LoginFlow struct {
 // [LoginContext.RiskScore] carries. The values are an ordered scale —
 // higher numeric values denote higher risk — so callers can compare
 // with `score >= threshold`.
-//
 // The mapping from a [RiskAssessor]'s probabilistic output to one of
 // the four levels is the embedder's responsibility; the library does
 // not prescribe a numeric cut-off.
@@ -83,9 +79,7 @@ const (
 // [Decider] sees during a LoginFlow evaluation pass. The orchestrator
 // rebuilds the value on every pass so a rule that fires advances
 // [CompletedSteps] before the next predicate runs.
-//
 // LoginContext fields are populated as follows:
-//
 //   - Identity is the result of [LoginFlow.Primary] (and any prior
 //     step that re-binds the subject). It is the zero [Identity]
 //     value before Primary completes.

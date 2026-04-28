@@ -943,12 +943,15 @@ p.write_text(json.dumps({
 PY
   local plan_name plan_id modules m
   while IFS= read -r plan_name; do
+    if [[ -n "${BASELINE_PLAN_FILTER:-}" ]] && ! [[ "${plan_name}" =~ ${BASELINE_PLAN_FILTER} ]]; then
+      continue
+    fi
     plan_id="$(PLAN_IDS_FILE="${plan_ids_file}" PLAN_NAME="${plan_name}" \
       python3 -c 'import json,os,pathlib; print(json.loads(pathlib.Path(os.environ["PLAN_IDS_FILE"]).read_text())[os.environ["PLAN_NAME"]]["id"])')"
     echo
     echo "==== plan ${plan_name} (id=${plan_id}) ===="
     local plan_info
-    plan_info="$(curl -sk "${OFCS_API}/api/info/plan/${plan_id}")"
+    plan_info="$(curl -sk "${OFCS_API}/api/plan/${plan_id}")"
     modules="$(printf '%s' "${plan_info}" | python3 -c '
 import json, os, re, sys
 data = json.load(sys.stdin)

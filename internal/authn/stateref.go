@@ -97,11 +97,9 @@ type StateRefPayload struct {
 // tag, an expiry timestamp, and a 16-byte random nonce so two tokens
 // emitted at the same step never share bytes (defends against a SPA
 // that caches the token alongside other request state).
-//
 // StateRefSigner is immutable after construction and safe for
 // concurrent use by multiple goroutines.
-//
-// See docs/plans/002-product-design.md §E.2.1 for the security
+// 02-product-design.md §E.2.1 for the security
 // requirements StateRef satisfies (no plaintext secrets, single-use,
 // short TTL, cross-interaction-replay rejection).
 type StateRefSigner struct {

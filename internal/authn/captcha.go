@@ -9,8 +9,7 @@ import (
 // are derived by the orchestrator: the SPA cannot influence them
 // beyond the Token bytes itself, which the verifier MUST validate
 // against the upstream provider server-side.
-//
-// See docs/plans/002-product-design.md §M.6.1 for the full design
+// 02-product-design.md §M.6.1 for the full design
 // rationale.
 type CaptchaInput struct {
 	// Token is the captcha token the SPA collected from the upstream
@@ -32,20 +31,16 @@ type CaptchaInput struct {
 // CaptchaVerifier validates a captcha token against the upstream
 // provider. Implementations MUST contact the provider server-side;
 // SPA-supplied "captcha passed" flags MUST NOT be trusted.
-//
 // Tokens are one-shot. Implementations should rely on the upstream
 // provider's enforcement; the orchestrator additionally rejects same-
 // token re-use within a short window so a leaked token cannot be
 // replayed across attempts.
-//
 // On failure the orchestrator returns the fixed response
 // `challenge_required: true`; the upstream reason is intentionally
 // not surfaced to the SPA (enumeration defence).
-//
 // CaptchaInput / its result MUST NOT appear in id_token, interaction
 // JSON, or anywhere observable by the SPA beyond the literal
 // challenge_required flag.
-//
 // Implementations MUST be safe for concurrent use by multiple
 // goroutines.
 type CaptchaVerifier interface {

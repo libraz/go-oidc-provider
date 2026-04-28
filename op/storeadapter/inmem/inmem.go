@@ -35,7 +35,7 @@
 // Records carrying an ExpiresAt field (sessions, interactions, PAR records,
 // authorization codes, refresh tokens, JTIs) are filtered through the
 // configured [Clock] on every Find/Consume. A record whose ExpiresAt is
-// strictly before [Clock.Now] is treated as absent: the lookup returns
+// strictly before [Clock.Now()] is treated as absent: the lookup returns
 // [store.ErrNotFound] and Consume returns the same. The records remain in
 // the map for diagnostic purposes; production backends typically run a
 // sweeper, but the reference implementation deliberately omits one to keep
@@ -670,6 +670,7 @@ func cloneGrant(g *store.Grant) *store.Grant {
 	out := *g
 	out.Scope = slices.Clone(g.Scope)
 	out.Claims = maps.Clone(g.Claims)
+	out.AMR = slices.Clone(g.AMR)
 	return &out
 }
 
@@ -1139,7 +1140,7 @@ func cloneRAT(t *store.RegistrationAccessToken) *store.RegistrationAccessToken {
 
 // --- helpers -----------------------------------------------------------------
 
-// isExpired reports whether t is strictly before clock.Now. The zero time is
+// isExpired reports whether t is strictly before clock.Now(). The zero time is
 // treated as "no expiry" so records may opt out of expiry by leaving the
 // field unset.
 func isExpired(t time.Time, clock Clock) bool {

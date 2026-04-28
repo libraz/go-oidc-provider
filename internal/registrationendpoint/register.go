@@ -45,10 +45,9 @@ type registrationResponse struct {
 }
 
 // handleRegister implements POST /register (RFC 7591 §3). The function
-// follows the docs/plans/002-product-design.md §A.6.2.2 error matrix:
+// follows the 02-product-design.md §A.6.2.2 error matrix:
 // IAT verification first, then content-type / body parse, then
 // metadata validation, then secret / RAT generation, then persistence.
-//
 // Decomposing the body keeps cyclop's max-complexity gate happy while
 // the readable flow lives in this top-level function.
 func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {

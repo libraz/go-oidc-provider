@@ -32,7 +32,7 @@ func iatPutGet(t *testing.T, f Factory) {
 	b := f(t)
 	s := requireIATStore(t, b.Store)
 	ctx := context.Background()
-	tok := newIAT(b.Now, "iat-1", "hash-1")
+	tok := newIAT(b.Now(), "iat-1", "hash-1")
 	if err := s.Put(ctx, tok); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -55,7 +55,7 @@ func iatPutDuplicate(t *testing.T, f Factory) {
 	b := f(t)
 	s := requireIATStore(t, b.Store)
 	ctx := context.Background()
-	tok := newIAT(b.Now, "iat-dup", "hash-dup")
+	tok := newIAT(b.Now(), "iat-dup", "hash-dup")
 	if err := s.Put(ctx, tok); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -78,7 +78,7 @@ func iatIncrementUsesSequence(t *testing.T, f Factory) {
 	b := f(t)
 	s := requireIATStore(t, b.Store)
 	ctx := context.Background()
-	tok := newIAT(b.Now, "iat-seq", "hash-seq")
+	tok := newIAT(b.Now(), "iat-seq", "hash-seq")
 	tok.MaxUses = 3
 	if err := s.Put(ctx, tok); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -108,7 +108,7 @@ func iatIncrementUsesExceedsCap(t *testing.T, f Factory) {
 	s := requireIATStore(t, b.Store)
 	ctx := context.Background()
 	// MaxUses == 0 means single-use (1).
-	tok := newIAT(b.Now, "iat-cap", "hash-cap")
+	tok := newIAT(b.Now(), "iat-cap", "hash-cap")
 	tok.MaxUses = 0
 	if err := s.Put(ctx, tok); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -126,7 +126,7 @@ func iatDelete(t *testing.T, f Factory) {
 	b := f(t)
 	s := requireIATStore(t, b.Store)
 	ctx := context.Background()
-	tok := newIAT(b.Now, "iat-del", "hash-del")
+	tok := newIAT(b.Now(), "iat-del", "hash-del")
 	if err := s.Put(ctx, tok); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -162,7 +162,7 @@ func ratPutGet(t *testing.T, f Factory) {
 	b := f(t)
 	s := requireRATStore(t, b.Store)
 	ctx := context.Background()
-	tok := newRAT(b.Now, "client-1", "hash-1")
+	tok := newRAT(b.Now(), "client-1", "hash-1")
 	if err := s.Put(ctx, tok); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -179,11 +179,11 @@ func ratPutUpsert(t *testing.T, f Factory) {
 	b := f(t)
 	s := requireRATStore(t, b.Store)
 	ctx := context.Background()
-	original := newRAT(b.Now, "client-rotate", "hash-old")
+	original := newRAT(b.Now(), "client-rotate", "hash-old")
 	if err := s.Put(ctx, original); err != nil {
 		t.Fatalf("Put original: %v", err)
 	}
-	rotated := newRAT(b.Now.Add(time.Minute), "client-rotate", "hash-new")
+	rotated := newRAT(b.Now().Add(time.Minute), "client-rotate", "hash-new")
 	if err := s.Put(ctx, rotated); err != nil {
 		t.Fatalf("Put rotated: %v", err)
 	}
@@ -194,7 +194,7 @@ func ratPutUpsert(t *testing.T, f Factory) {
 	if got.HashedValue != "hash-new" {
 		t.Fatalf("Put did not upsert HashedValue: got %q", got.HashedValue)
 	}
-	if !got.CreatedAt.Equal(b.Now.Add(time.Minute)) {
+	if !got.CreatedAt.Equal(b.Now().Add(time.Minute)) {
 		t.Fatalf("Put did not upsert CreatedAt: got %v", got.CreatedAt)
 	}
 }
@@ -212,7 +212,7 @@ func ratDelete(t *testing.T, f Factory) {
 	b := f(t)
 	s := requireRATStore(t, b.Store)
 	ctx := context.Background()
-	tok := newRAT(b.Now, "client-del", "hash-del")
+	tok := newRAT(b.Now(), "client-del", "hash-del")
 	if err := s.Put(ctx, tok); err != nil {
 		t.Fatalf("Put: %v", err)
 	}

@@ -301,7 +301,7 @@ func TestWithLogger_AcceptedAndUsable(t *testing.T) {
 }
 
 // testingDiscard is an [io.Writer] that drops every write. It exists so the
-// logger test does not depend on [io.Discard] behaviour or a buffer.
+// logger test does not depend on [io.Discard()] behaviour or a buffer.
 type testingDiscard struct{}
 
 func (testingDiscard) Write(p []byte) (int, error) { return len(p), nil }

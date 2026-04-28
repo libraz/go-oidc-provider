@@ -205,8 +205,9 @@ func (f *httpJWKSFetcher) fetch(ctx context.Context, jwksURI string) (*josev4.JS
 // punts on that hardening because the JWKS fetcher already runs with
 // a hard timeout.
 //
-// TODO(jar): add op.WithAllowPrivateNetworkJWKS so embedders that
-// front their RPs with a private DNS name can opt in explicitly.
+// Embedders that front their RPs with private DNS can opt in by
+// passing [AllowPrivateNetwork] to [NewDefaultResolver]; the
+// public op-package alias is op.WithAllowPrivateNetworkJWKS.
 func (f *httpJWKSFetcher) assertSafeURL(raw string) error {
 	if f.allowPrivate {
 		return nil
@@ -222,11 +223,11 @@ func (f *httpJWKSFetcher) assertSafeURL(raw string) error {
 	if host == "" {
 		return fmt.Errorf("%w: missing host", ErrJWKSFetch)
 	}
-	if isLocalHostname(host) {
+	if IsLocalHostname(host) {
 		return fmt.Errorf("%w: host %q is loopback / localhost", ErrJWKSFetch, host)
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
+		if IsPrivateIP(ip) {
 			return fmt.Errorf("%w: host %q is loopback / link-local / private", ErrJWKSFetch, host)
 		}
 		return nil
@@ -247,17 +248,19 @@ func (f *httpJWKSFetcher) assertResolvedHostSafe(host string) error {
 		return fmt.Errorf("%w: lookup %q: %w", ErrJWKSFetch, host, lookupErr)
 	}
 	for _, addr := range addrs {
-		if isPrivateIP(addr.IP) {
+		if IsPrivateIP(addr.IP) {
 			return fmt.Errorf("%w: host %q resolves to a private IP", ErrJWKSFetch, host)
 		}
 	}
 	return nil
 }
 
-// isLocalHostname reports whether host is a literal "localhost" string
+// IsLocalHostname reports whether host is a literal "localhost" string
 // or one of its common variants. The check is case-insensitive because
-// DNS is.
-func isLocalHostname(host string) bool {
+// DNS is. The function is exported so the authorize-endpoint JAR
+// request_uri fetcher reuses the same allow-list without the two
+// packages drifting.
+func IsLocalHostname(host string) bool {
 	h := strings.ToLower(host)
 	switch h {
 	case "localhost", "localhost.", "ip6-localhost", "ip6-loopback":
@@ -267,12 +270,13 @@ func isLocalHostname(host string) bool {
 	}
 }
 
-// isPrivateIP reports whether ip falls inside one of the deny-listed
+// IsPrivateIP reports whether ip falls inside one of the deny-listed
 // ranges: loopback (127.0.0.0/8 + ::1), link-local (169.254.0.0/16 +
 // fe80::/10), and the RFC 1918 / ULA private blocks. The list is
-// closed; a future op.WithAllowPrivateNetworkJWKS opt-in flips the
-// gate at the fetcher level rather than poking holes in this check.
-func isPrivateIP(ip net.IP) bool {
+// closed; the [WithAllowPrivateNetwork] opt-in flips the gate at the
+// fetcher level rather than poking holes in this check. Exported for
+// the authorize-endpoint JAR request_uri fetcher to share.
+func IsPrivateIP(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}

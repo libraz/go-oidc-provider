@@ -47,7 +47,7 @@ type Backend struct {
 	// Now is the wall-clock the backend will report from its internal
 	// clock. The harness uses Now+1h for ExpiresAt fields it wants alive
 	// and Now-1h for fields it wants pre-expired.
-	Now time.Time
+	Now func() time.Time
 }
 
 // Run drives every contract sub-test against the backend produced by f. Each
@@ -234,7 +234,7 @@ var authCodeCases = []subtest{
 func authCodeSaveFind(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	code := newAuthCode(b.Now, "ac-1")
+	code := newAuthCode(b.Now(), "ac-1")
 	if err := b.Store.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -250,7 +250,7 @@ func authCodeSaveFind(t *testing.T, f Factory) {
 func authCodeConsumeOnce(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	code := newAuthCode(b.Now, "ac-2")
+	code := newAuthCode(b.Now(), "ac-2")
 	if err := b.Store.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -293,8 +293,8 @@ func authCodeConsumeMissing(t *testing.T, f Factory) {
 func authCodeExpired(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	code := newAuthCode(b.Now, "ac-exp")
-	code.ExpiresAt = b.Now.Add(-time.Hour)
+	code := newAuthCode(b.Now(), "ac-exp")
+	code.ExpiresAt = b.Now().Add(-time.Hour)
 	if err := b.Store.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -309,7 +309,7 @@ func authCodeExpired(t *testing.T, f Factory) {
 func authCodeDuplicateSave(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	code := newAuthCode(b.Now, "ac-dup")
+	code := newAuthCode(b.Now(), "ac-dup")
 	if err := b.Store.AuthorizationCodes().Save(ctx, code); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -331,7 +331,7 @@ var refreshCases = []subtest{
 func refreshSaveFindConsume(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	rt := newRefresh(b.Now, "rt-1", nil)
+	rt := newRefresh(b.Now(), "rt-1", nil)
 	if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -358,10 +358,10 @@ func refreshSaveFindConsume(t *testing.T, f Factory) {
 func refreshRevokeChain(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	root := newRefresh(b.Now, "root", nil)
-	mid := newRefresh(b.Now, "mid", strPtr("root"))
-	leaf := newRefresh(b.Now, "leaf", strPtr("mid"))
-	other := newRefresh(b.Now, "other", nil)
+	root := newRefresh(b.Now(), "root", nil)
+	mid := newRefresh(b.Now(), "mid", strPtr("root"))
+	leaf := newRefresh(b.Now(), "leaf", strPtr("mid"))
+	other := newRefresh(b.Now(), "other", nil)
 	for _, rt := range []*store.RefreshToken{root, mid, leaf, other} {
 		if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
 			t.Fatalf("Save %s: %v", rt.ID, err)
@@ -422,7 +422,7 @@ var grantCases = []subtest{
 func grantSaveFind(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	g := newGrant(b.Now, "g-1", "sub-1", "client-1")
+	g := newGrant(b.Now(), "g-1", "sub-1", "client-1")
 	if err := b.Store.Grants().Save(ctx, g); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -446,10 +446,10 @@ func grantFindMissing(t *testing.T, f Factory) {
 func grantFindBySubjectClient(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	older := newGrant(b.Now.Add(-2*time.Hour), "g-old", "sub", "client")
-	older.UpdatedAt = b.Now.Add(-2 * time.Hour)
-	newer := newGrant(b.Now, "g-new", "sub", "client")
-	newer.UpdatedAt = b.Now
+	older := newGrant(b.Now().Add(-2*time.Hour), "g-old", "sub", "client")
+	older.UpdatedAt = b.Now().Add(-2 * time.Hour)
+	newer := newGrant(b.Now(), "g-new", "sub", "client")
+	newer.UpdatedAt = b.Now()
 	for _, g := range []*store.Grant{older, newer} {
 		if err := b.Store.Grants().Save(ctx, g); err != nil {
 			t.Fatalf("Save %s: %v", g.ID, err)
@@ -476,9 +476,9 @@ func grantListBySubject(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
 	rows := []*store.Grant{
-		newGrant(b.Now, "g-a", "sub", "client-a"),
-		newGrant(b.Now, "g-b", "sub", "client-b"),
-		newGrant(b.Now, "g-other", "other-sub", "client-a"),
+		newGrant(b.Now(), "g-a", "sub", "client-a"),
+		newGrant(b.Now(), "g-b", "sub", "client-b"),
+		newGrant(b.Now(), "g-other", "other-sub", "client-a"),
 	}
 	for _, g := range rows {
 		if err := b.Store.Grants().Save(ctx, g); err != nil {
@@ -521,7 +521,7 @@ func grantListBySubjectEmpty(t *testing.T, f Factory) {
 func grantDelete(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
-	g := newGrant(b.Now, "g-del", "sub", "client")
+	g := newGrant(b.Now(), "g-del", "sub", "client")
 	if err := b.Store.Grants().Save(ctx, g); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

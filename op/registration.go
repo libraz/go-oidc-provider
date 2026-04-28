@@ -92,6 +92,24 @@ type RegistrationOption struct {
 	// admits. Zero applies the default (1, single-use). Negative
 	// values are rejected at construction time.
 	IATUses int
+
+	// OnClientDeleted is the optional cascade hook invoked after a
+	// successful DELETE /register/{client_id} (RFC 7592 §2.3). The
+	// library removes the client and the registration access token
+	// itself; this hook lets the embedder revoke any
+	// access_token / refresh_token / session records the client
+	// holds (the library cannot do this in-tree because the v1.0
+	// store interfaces do not publish a "by client" enumeration).
+	//
+	// The hook runs in the request goroutine after the deletes
+	// complete and before the 204 is written. A non-nil error is
+	// logged through the configured slog handler but does not change
+	// the response — the client record is already gone, and
+	// surfacing the error to the RP would imply a recoverable
+	// failure that the embedder cannot retry. Implementations MUST
+	// be safe for concurrent use; the registration handler is
+	// invoked from every request goroutine.
+	OnClientDeleted func(ctx context.Context, clientID string) error
 }
 
 // ClientMetadata is the OpenID Connect Dynamic Client Registration 1.0

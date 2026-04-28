@@ -145,7 +145,7 @@ func runReadWorker(t *testing.T, ctx context.Context, s *composite.Store, epheme
 }
 
 // uniqueID builds a deterministic record ID from the worker and iteration
-// counters. crypto/rand is forbidden in this package and time.Now is
+// counters. crypto/rand is forbidden in this package and time.Now() is
 // off-limits, so we lean on the input space being collision-free by
 // construction.
 func uniqueID(prefix string, worker, iter int) string {

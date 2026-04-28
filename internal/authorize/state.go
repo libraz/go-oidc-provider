@@ -75,6 +75,12 @@ type RequestSnapshot struct {
 	// Empty when the request did not arrive via /par.
 	PARRequestURI string `json:"par_request_uri,omitempty"`
 
+	// Claims mirrors [Request.Claims]. The snapshot persists the
+	// parsed OIDC Core 1.0 §5.5 "claims" parameter so the token
+	// endpoint and userinfo endpoint can project the requested
+	// claims without re-parsing the wire form.
+	Claims *ClaimsRequest `json:"claims,omitempty"`
+
 	// CreatedUnix is the unix-seconds timestamp at which the snapshot was
 	// taken. The HTTP layer uses it for diagnostic logging; the field is
 	// not consumed by [RequestSnapshot.ToRequest].
@@ -83,7 +89,7 @@ type RequestSnapshot struct {
 
 // SnapshotFrom captures the validated [Request] into a serialisable shape.
 // The supplied now is recorded verbatim into [RequestSnapshot.CreatedUnix]
-// so the caller controls the wall-clock reading (no implicit time.Now).
+// so the caller controls the wall-clock reading (no implicit time.Now()).
 //
 // SnapshotFrom does not validate req — the caller is expected to have run
 // [Request.Validate] first. A nil req returns the zero snapshot, which the
@@ -114,6 +120,7 @@ func SnapshotFrom(req *Request, now time.Time) RequestSnapshot {
 		ResponseMode:        req.ResponseMode,
 		DPoPJKT:             req.DPoPJKT,
 		PARRequestURI:       req.PARRequestURI,
+		Claims:              CloneClaimsRequest(req.Claims),
 		CreatedUnix:         now.UTC().Unix(),
 	}
 }
@@ -144,6 +151,7 @@ func (s RequestSnapshot) ToRequest() *Request {
 		ResponseMode:        s.ResponseMode,
 		DPoPJKT:             s.DPoPJKT,
 		PARRequestURI:       s.PARRequestURI,
+		Claims:              CloneClaimsRequest(s.Claims),
 	}
 }
 

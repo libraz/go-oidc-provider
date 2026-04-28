@@ -311,7 +311,7 @@ func TestVerify_DefaultsClockToSystem(t *testing.T) {
 	now := timex.SystemClock.Now()
 	rec := newRecord(t, codec, "user-alice", secret, now.Add(-time.Hour))
 
-	// The default-clock verifier reads time.Now twice (once to compute
+	// The default-clock verifier reads time.Now() twice (once to compute
 	// the candidate code, once inside Verify). The skew window absorbs
 	// the gap so long as the test does not run for more than 30s; in
 	// practice Verify finishes in microseconds.

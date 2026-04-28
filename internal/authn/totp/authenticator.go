@@ -11,7 +11,7 @@ import (
 )
 
 // PromptType is the [interaction.Prompt.Type] the adapter emits. The string is
-// fixed by docs/plans/002-product-design.md §E.2 and matches the
+// fixed by 02-product-design.md §E.2 and matches the
 // constant set [op.Authenticator.Prompts] returns.
 const PromptType = "auth.totp"
 
@@ -44,7 +44,6 @@ var ErrCodeMissing = errors.New("totp: code field is missing")
 // TOTP math + brute-force counter) to a [store.TOTPStore] (the
 // persisted record) so the orchestrator can drive the factor without
 // knowing about either.
-//
 // Construct through [NewAuthenticator]; the zero value is not usable.
 type Authenticator struct {
 	verifier *Verifier
@@ -80,7 +79,7 @@ func NewAuthenticator(verifier *Verifier, totpStore store.TOTPStore) (*Authentic
 func (*Authenticator) Type() authn.FactorType { return authn.FactorTOTP }
 
 // AAL implements [authn.Authenticator]. TOTP contributes AAL2 — the
-// RFC 8176 §2 mapping in docs/plans/002-product-design.md §E.2.
+// RFC 8176 §2 mapping02-product-design.md §E.2.
 func (*Authenticator) AAL() authn.AAL { return authn.AAL2 }
 
 // AMR implements [authn.Authenticator]. TOTP maps to RFC 8176 §2 "otp".
@@ -116,9 +115,7 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 // record again (the adapter is stateless across Begin / Continue),
 // verifies the submitted code through the [Verifier], and persists
 // the (possibly mutated) record before returning.
-//
 // Outcomes:
-//
 //   - On [OutcomeSuccess]: [interaction.Step.Result] is populated with the
 //     bound subject and the orchestrator's [authn.ContinueInput.AuthTime].
 //   - On [OutcomeWrongCode] (recoverable): [interaction.Step.Prompt] is re-

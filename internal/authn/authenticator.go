@@ -14,14 +14,12 @@ import (
 // constants are the wire form and not just symbolic names. New built-in
 // values ship with the library; embedders extend the namespace through
 // dotted user identifiers (see [FactorType.IsUserDefined]).
-//
-// See docs/plans/002-product-design.md §E.2 for the full schema.
+// 02-product-design.md §E.2 for the full schema.
 type FactorType string
 
 // Built-in [FactorType] values. The string content is the canonical
 // identifier; renaming any of these breaks audit log continuity and
 // orchestrator routing tables and is therefore a v1.0 freeze surface.
-//
 // User extensions: any FactorType whose string value contains a "." is
 // treated as user-defined (e.g., "myorg.sms_otp"). Reserved bare names
 // are exhausted by the constants below; pick a prefix.
@@ -79,10 +77,9 @@ func (t FactorType) String() string { return string(t) }
 // to start a ceremony. Subject is empty when the user has not yet been
 // identified (the first factor in the chain); subsequent factors
 // receive the subject the previous factor's [interaction.Result] returned.
-//
 // AuthTime is the orchestrator's reference clock for this attempt
 // (typically the wall-clock time the interaction was created). Authn
-// implementations MUST NOT call [time.Now] directly; reading AuthTime
+// implementations MUST NOT call [time.Now()] directly; reading AuthTime
 // keeps the chain run consistent with the [Clock] the [Provider] was
 // configured with.
 type BeginInput struct {
@@ -115,7 +112,6 @@ type BeginInput struct {
 // adapters use Subject to look up the user's persisted credentials
 // (TOTP record, WebAuthn credentials, recovery batch) without keeping
 // per-interaction state of their own.
-//
 // AuthTime is the same reference clock [BeginInput.AuthTime] carries
 // for this attempt; threading it through Continue lets the adapter
 // stamp [interaction.Result.AuthTime] consistently regardless of how many
@@ -159,22 +155,18 @@ type ContinueInput struct {
 // Authenticator is the protocol-side state machine for a single
 // authentication factor. Implementations are stateless across calls;
 // per-attempt state is carried by [interaction.Prompt.StateRef].
-//
 // Multi-screen factors (e.g., email OTP: enter address -> enter code)
 // are expressed by returning a [interaction.Step] that contains a
 // [interaction.Prompt] from [Authenticator.Begin] and further Prompts
 // from [Authenticator.Continue] until [interaction.Step.Result] is
 // populated and the factor is complete.
-//
-// Implementation responsibilities (docs/plans/002-product-design.md
-// §E.2.2):
-//
+// Implementation responsibilities:
 //   - User-existence leak defence is the implementation's
 //     responsibility: response shape and timing MUST be identical for
 //     registered vs unknown identifiers.
 //   - [Authenticator.AMR] MUST return one of the RFC 8176 §2 registered
 //     values ("pwd", "otp", "hwk", "swk", "face", "fpt", "iris", "geo",
-//     "kba", ...) or an empty string. Foreign values are dropped by
+//     "kba"...) or an empty string. Foreign values are dropped by
 //     the orchestrator (warning audit log) and never reach amr_history.
 //   - [Authenticator.Prompts] MUST declare every [interaction.Prompt.Type]
 //     the authenticator may emit so a Driver can validate its routing
@@ -214,22 +206,20 @@ type Authenticator interface {
 }
 
 // Interaction is a non-authentication screen unit (T&C acceptance,
-// KYC gate, device-trust prompt, ...). Unlike [Authenticator], an
+// KYC gate, device-trust prompt...). Unlike [Authenticator], an
 // Interaction does not bind a subject — the subject is already known.
 // Interactions do not contribute to amr / acr; they only inject
 // [interaction.Prompt] sequences at the chosen [InteractionTrigger]
 // point.
-//
 // Built-in: the consent screen (§A.5) is registered automatically.
 // User extensions ship with a unique [Interaction.Name] prefixed by
 // the org identifier (e.g., "myorg.tos.accept"). See §E.9.
-//
 // Implementations MUST be safe for concurrent use by multiple
 // goroutines.
 type Interaction interface {
 	// Name returns the unique identifier for this interaction. User
 	// extensions MUST use a dotted prefix the org owns; built-ins
-	// reserve the bare names ("consent", ...).
+	// reserve the bare names ("consent"...).
 	Name() string
 
 	// Trigger reports when the orchestrator inserts the interaction

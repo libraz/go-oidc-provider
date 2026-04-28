@@ -115,7 +115,6 @@ func extractAuthorizeValues(r *http.Request) (url.Values, error) {
 
 // resolveAuthorizeRequest is the parse + PAR / JAR-consumption gate.
 // The order is:
-//
 //  1. PAR: a "request_uri" matching the urn:ietf:params:oauth:request_uri:
 //     prefix is consumed from the persisted record (RFC 9126 §2.3) and
 //     every other parameter except client_id is ignored.
@@ -158,6 +157,15 @@ func resolveAuthorizeRequest(
 	if err != nil {
 		writeAuthorizeParseError(w, r, err)
 		return nil, false
+	}
+	if !deps.ClaimsParameterEnabled {
+		// op.WithClaimsParameterSupported(false): drop the parsed
+		// payload so the snapshot, the persisted grant, and the
+		// downstream id_token / userinfo projection all behave as if
+		// the parameter had been silently ignored. The wire-level
+		// rejection of a malformed payload still fires above so a
+		// hostile RP cannot probe the OP through claims-shaped junk.
+		req.Claims = nil
 	}
 	return req, true
 }
@@ -288,7 +296,7 @@ func resolveSession(r *http.Request, deps resolved) (*sessions.Active, error) {
 }
 
 // computeAuthorizeHint runs the decision matrix described in
-// docs/plans/002-product-design.md §A.12.2. The outcome depends on three
+// 02-product-design.md §A.12.2. The outcome depends on three
 // orthogonal inputs: whether a session exists, whether the request forces
 // a fresh login (prompt=login or max_age violation), and whether the
 // existing grant covers the requested scope (or no grant exists at all).
@@ -391,7 +399,6 @@ func decideHintInteractive(s hintState) authorizeHint {
 // __Host-oidc_interaction cookie, and redirects the browser to
 // /interaction/{uid}. The orchestrator runs on the first GET and
 // emits the initial prompt.
-//
 // existing is the grant the dispatcher resolved for (subject,
 // client_id), or nil when no cached grant covers this attempt. When
 // existing is non-nil and already covers the requested scope, the

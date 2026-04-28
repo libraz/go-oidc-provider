@@ -15,13 +15,11 @@ import (
 const maxSubmissionBytes = 32 * 1024
 
 // Driver is the contract a caller implements to plug a UI into the
-// [op.Provider]. The new shape (see docs/plans/002-product-design.md
-// §E.1 / §E.2) is intentionally thin: every protocol-visible decision
+// [op.Provider]. The new shape is intentionally thin: every protocol-visible decision
 // — factor sequencing, captcha gating, risk routing, prompt
 // validation — is the orchestrator's. The Driver only renders the
 // orchestrator's chosen [Prompt] for the SPA and parses the SPA's
 // reply back into a [FormSubmission].
-//
 // Implementations MUST be safe for concurrent use; the library calls
 // every method from request-scoped goroutines.
 type Driver interface {
@@ -48,7 +46,6 @@ type Driver interface {
 // application/json and [JSONDriver.ParseSubmission] decodes a
 // [FormSubmission] from the request body. Embedders that ship a SPA
 // can use it as-is; SSR or framework-specific Drivers replace it.
-//
 // JSONDriver is safe for concurrent use; it carries no state.
 type JSONDriver struct{}
 

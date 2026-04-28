@@ -29,8 +29,12 @@ type ErrorBody struct {
 // The Cache-Control: no-store header is applied unconditionally because
 // even errors must not be cached: an attacker who tricks a cache into
 // storing an error response can replay it to legitimate users (RFC 6749
-// §5.1).
+// §5.1). Pragma: no-cache is stamped alongside for HTTP/1.0 caches the
+// RFC 6749 §5.1 recommendation set still mentions; the duplicate value
+// is cheap and the gain in interop with legacy intermediaries is
+// straightforward.
 func WriteError(w http.ResponseWriter, status int, code, description string) error {
+	w.Header().Set("Pragma", "no-cache")
 	return WriteJSON(w, status, ErrorBody{
 		Error:            code,
 		ErrorDescription: description,

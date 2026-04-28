@@ -1,9 +1,8 @@
 // Package proxy parses [X-Forwarded-*] headers when the request arrives from a
 // trusted reverse proxy. The behaviour follows
-// docs/plans/002-product-design.md §F.5: untrusted requests fall back to
+// 02-product-design.md §F.5: untrusted requests fall back to
 // [http.Request.RemoteAddr] so a hostile client cannot spoof its source IP or
 // scheme by injecting headers.
-//
 // The package operates on raw values (CIDR strings, RemoteAddr strings) so it
 // does not depend on the rest of the OIDC stack and can be unit-tested in
 // isolation.
@@ -28,7 +27,6 @@ type Trust struct {
 // NewTrust parses the supplied CIDR strings and returns an immutable [Trust]
 // value. An empty input yields a trust that rejects every forwarded header,
 // which is the safe default when running without a reverse proxy.
-//
 // CIDRs may be IPv4 or IPv6 in standard "prefix/length" notation. Empty
 // strings are rejected so configuration mistakes surface at startup rather
 // than silently widening the trust boundary.
@@ -91,9 +89,7 @@ type Resolved struct {
 }
 
 // Resolve inspects r and t to produce a [Resolved] view of the request.
-//
 // Behaviour matrix (§F.5):
-//
 //   - Trust empty                       → forwarded headers ignored, scheme
 //     comes from r.URL/r.TLS, ClientIP from r.RemoteAddr.
 //   - Trust set, RemoteAddr ∉ trust     → forwarded headers ignored, audit

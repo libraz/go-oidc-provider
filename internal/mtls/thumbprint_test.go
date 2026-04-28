@@ -19,7 +19,7 @@ import (
 // tests. The key material is fresh ECDSA P-256 because the rest of the
 // library (and FAPI 2.0) anchors on that curve.
 //
-// The function does NOT call time.Now: the NotBefore / NotAfter values
+// The function does NOT call time.Now(): the NotBefore / NotAfter values
 // are pinned to literal timestamps so the cert bytes are deterministic
 // across runs of the test.
 func generateLeaf(tb testing.TB) *x509.Certificate {

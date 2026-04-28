@@ -75,7 +75,7 @@ type Config struct {
 	Deliverer Deliverer
 
 	// Emitter receives the per-delivery audit record. A nil value
-	// substitutes [audit.Discard] so the coordinator is safe to
+	// substitutes [audit.Discard()] so the coordinator is safe to
 	// construct without a wired audit logger.
 	Emitter audit.Emitter
 

@@ -12,7 +12,7 @@ import (
 // the mutated batch. The orchestrator branches on it to decide whether
 // to advance the authenticator chain, prompt the user to retry, or
 // route to the support-driven recovery flow per
-// docs/plans/002-product-design.md §O.3.
+// 02-product-design.md §O.3.
 type Outcome int
 
 const (
@@ -108,9 +108,7 @@ type Verifier struct {
 // batch through [store.RecoveryStore.Put] when the outcome is
 // [OutcomeSuccess]; on every other outcome the batch is unchanged and
 // Put is unnecessary.
-//
 // The function performs the following sequence:
-//
 //  1. Reject the call with [ErrNoCodes] if batch is nil or batch.Codes
 //     is empty.
 //  2. Walk the slot list. For every slot whose ConsumedAt is zero, run

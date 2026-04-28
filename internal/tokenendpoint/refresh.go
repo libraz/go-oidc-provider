@@ -201,8 +201,8 @@ func issueRefreshResponse(
 	binding tokenBinding,
 ) {
 	now := deps.now().UTC()
-	authTime := lookupAuthTime(ctx, deps, exchanged.GrantID)
-	accessToken, err := mintAccessToken(deps, exchanged.Subject, client.ID, exchanged.Scope, now, authTime, binding)
+	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
+	accessToken, err := mintAccessToken(deps, exchanged.Subject, client.ID, exchanged.Scope, now, authCtx.AuthTime, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -212,7 +212,9 @@ func issueRefreshResponse(
 		ClientID: client.ID,
 		Scope:    exchanged.Scope,
 		Now:      now,
-		AuthTime: authTime,
+		AuthTime: authCtx.AuthTime,
+		ACR:      authCtx.ACR,
+		AMR:      authCtx.AMR,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -246,13 +248,17 @@ type refreshIDTokenInput struct {
 	Scope    []string
 	Now      time.Time
 	AuthTime int64
+	ACR      string
+	AMR      []string
 }
 
 // maybeMintRefreshIDToken signs an id_token only when the rotated grant
 // carries the "openid" scope. The token omits at_hash / c_hash / nonce
 // because no fresh authentication occurred (OIDC Core 1.0 §12 — the
 // refresh-token id_token re-issues identity claims but does not bind a
-// fresh access token to a fresh authorization code).
+// fresh access token to a fresh authorization code). acr / amr are
+// copied from the originating authentication so the spec's "same as
+// the original ID Token" requirement holds across rotations.
 func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) {
 	if !scopeContainsOpenID(in.Scope) {
 		return "", nil
@@ -264,6 +270,8 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 		IssuedAt:  in.Now.Unix(),
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
 		AuthTime:  in.AuthTime,
+		ACR:       in.ACR,
+		AMR:       append([]string(nil), in.AMR...),
 	}
 	return tokens.SignIDToken(activeSigningKey(deps), claims)
 }

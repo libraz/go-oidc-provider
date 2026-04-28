@@ -17,8 +17,11 @@ const (
 	AuthorizationCode
 
 	// RefreshToken selects the refresh_token grant from RFC 6749 §6.
-	// Refresh tokens are only issued when offline_access is requested
-	// and the client is permitted by [op.store.Client.GrantTypes].
+	// The library issues refresh tokens only when the granted scope
+	// includes "openid" AND the client lists "refresh_token" in
+	// [op.store.Client.GrantTypes]; non-OIDC clients therefore do not
+	// silently accumulate long-lived credentials. The "offline_access"
+	// scope is accepted for OIDC compatibility but is not the gate.
 	RefreshToken
 
 	// ClientCredentials selects the client_credentials grant from

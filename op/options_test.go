@@ -257,13 +257,16 @@ func TestWithProfile_FAPI2Baseline_AcceptsMTLS(t *testing.T) {
 // TestWithProfile_FAPI2MessageSigning_AutoEnablesJARM confirms the
 // auto-enable contract extends to the Message Signing requirement
 // set (JARM is added to RequiredFeatures alongside PAR / JAR). The
-// embedder only needs to supply the disjunctive DPoP/MTLS choice.
+// embedder only needs to supply the disjunctive DPoP/MTLS choice and,
+// when DPoP is the chosen sender constraint, the RFC 9449 §8 / §9
+// nonce source FAPI 2.0 §5.3.4 mandates.
 func TestWithProfile_FAPI2MessageSigning_AutoEnablesJARM(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithProfile(profile.FAPI2MessageSigning),
 		op.WithFeature(feature.DPoP),
+		op.WithDPoPNonceSource(stubDPoPNonceSource{}),
 	)...)
 	if err != nil {
 		t.Fatalf("WithProfile auto-enable did not satisfy JARM requirement: %v", err)
@@ -274,16 +277,46 @@ func TestWithProfile_FAPI2MessageSigning_AcceptsFullStack(t *testing.T) {
 	t.Parallel()
 
 	// PAR / JAR / JARM are auto-enabled by [op.WithProfile]; the
-	// disjunctive DPoP/MTLS requirement is the only remaining flag
-	// the embedder must supply.
+	// disjunctive DPoP/MTLS requirement plus the FAPI 2.0 Message
+	// Signing nonce source are the only flags the embedder must supply.
 	_, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithProfile(profile.FAPI2MessageSigning),
 		op.WithFeature(feature.DPoP),
+		op.WithDPoPNonceSource(stubDPoPNonceSource{}),
 	)...)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestWithProfile_FAPI2MessageSigning_RequiresDPoPNonceSource confirms
+// the FAPI 2.0 §5.3.4 mandate: when the profile is active and DPoP is
+// the chosen sender constraint, the embedder MUST supply a nonce
+// source. Omitting it produces a configuration error at op.New time
+// rather than a silent runtime degradation.
+func TestWithProfile_FAPI2MessageSigning_RequiresDPoPNonceSource(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2MessageSigning),
+		op.WithFeature(feature.DPoP),
+	)...)
+	if err == nil {
+		t.Fatal("expected configuration error when DPoP nonce source is omitted, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithDPoPNonceSource") {
+		t.Errorf("err = %v, want it to mention WithDPoPNonceSource", err)
+	}
+}
+
+// stubDPoPNonceSource is a minimal [DPoPNonceSource] used by tests
+// that need to satisfy the FAPI 2.0 Message Signing nonce mandate
+// without exercising the runtime nonce flow. It always issues "n"
+// and accepts any non-empty value.
+type stubDPoPNonceSource struct{}
+
+func (stubDPoPNonceSource) IssueNonce() string         { return "n" }
+func (stubDPoPNonceSource) Validate(nonce string) bool { return nonce != "" }
 
 func TestWithAccessTokenTTL_RejectsNegative(t *testing.T) {
 	t.Parallel()

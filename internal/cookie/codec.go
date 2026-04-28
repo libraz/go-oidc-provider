@@ -1,13 +1,11 @@
 // Package cookie implements the OP's cookie layer. It owns AES-256-GCM
 // encryption with key rotation, the [__Host-] profile policy, and the helpers
 // that translate a logical "set this cookie" into an [http.Cookie] with the
-// production-grade defaults required by docs/plans/002-product-design.md §F.1.
-//
+// production-grade defaults required by 02-product-design.md §F.1.
 // The package is intentionally agnostic of the cookie payload format: callers
 // supply raw bytes, the codec produces an opaque base64url string, and the
 // caller decides whether the bytes are JSON, CBOR, or anything else. Higher
 // layers (session, interaction) wrap the codec with their own typed payloads.
-//
 // [__Host-]: https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-rfc6265bis-13#section-4.1.3.2
 package cookie
 
@@ -40,7 +38,6 @@ var ErrDecrypt = errors.New("cookie: ciphertext failed authentication")
 // Codec encrypts and decrypts cookie payloads using AES-256-GCM. The first
 // key is the encryption key; subsequent keys are tried in order during
 // decryption to support graceful rotation per §F.2.
-//
 // A Codec is immutable and safe for concurrent use.
 type Codec struct {
 	current cipher.AEAD
@@ -50,7 +47,6 @@ type Codec struct {
 // NewCodec constructs a [Codec] from the supplied keys. The first key is used
 // for new encryptions; remaining keys are accepted only on decryption to
 // support rotation.
-//
 // Every key must be exactly 32 bytes; an empty list is rejected so that
 // "WithCookieKey was forgotten" surfaces at startup rather than at runtime.
 func NewCodec(current []byte, previous ...[]byte) (*Codec, error) {

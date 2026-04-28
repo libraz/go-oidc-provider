@@ -50,7 +50,7 @@ func mergeQueryJWT(redirectURI, jwtToken string) (string, error) {
 
 // mergeFragmentJWT appends "response=<jwt>" to the URL fragment of
 // redirectURI. JARM mandates the fragment carry the same URL-encoded
-// form as the query mode, so the helper reuses [url.Values.Encode]
+// form as the query mode, so the helper reuses [url.Values.Encode()]
 // rather than handcrafting the encoding.
 //
 // Existing fragment content is preserved when it parses cleanly as

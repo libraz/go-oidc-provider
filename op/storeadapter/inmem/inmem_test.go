@@ -27,7 +27,7 @@ func newFactory(now time.Time) contract.Factory {
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
 		s := inmem.New(inmem.WithClock(fakeClock{now: now}))
-		return contract.Backend{Store: s, Now: now}
+		return contract.Backend{Store: s, Now: func() time.Time { return now }}
 	}
 }
 

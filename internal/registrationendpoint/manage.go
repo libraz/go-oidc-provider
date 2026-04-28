@@ -35,7 +35,7 @@ func handleRead(w http.ResponseWriter, r *http.Request, deps Deps, clientID stri
 // handleUpdate implements PUT /register/{client_id} (RFC 7592 §2.2).
 // The handler accepts the same metadata shape as POST /register, runs
 // the same validators, rotates the RAT (per
-// docs/plans/002-product-design.md §A.6.2.2 peer divergence), and
+// 02-product-design.md §A.6.2.2 peer divergence), and
 // updates the client.
 func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
@@ -197,11 +197,14 @@ func secretHashForUpdate(existing *store.Client, confidential bool) string {
 }
 
 // handleDelete implements DELETE /register/{client_id} (RFC 7592 §2.3).
-// The handler revokes the RAT, deletes the client, and returns 204.
-// Existing access_token / refresh_token / session revocation is
-// documented in §A.6.2.2 as the desired behaviour but is left as a
-// TODO in v1.0 because the cross-cutting revocation orchestration
-// requires the back-channel logout subsystem to be wired first.
+// The handler revokes the RAT, deletes the client, invokes the
+// embedder-supplied [Deps.OnClientDeleted] cascade hook, and returns
+// 204. The library does not perform a built-in cascade because the
+// store surfaces required to enumerate access_token / refresh_token /
+// session records keyed by client are not part of v1.0 — embedders
+// that maintain those indexes wire the cascade through the hook;
+// 02-product-design.md §A.6.2.2 captures the eventual
+// shape.
 func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID string) {
 	ctx := r.Context()
 	if _, ok := verifyRAT(ctx, w, r, deps, clientID); !ok {
@@ -217,11 +220,15 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return
 	}
-	// TODO: revoke outstanding access_token / refresh_token / session
-	// records and emit Back-Channel logout per
-	// docs/plans/002-product-design.md §A.6.2.2. The cross-cutting
-	// revocation orchestration requires the back-channel logout
-	// subsystem to be wired first.
+	if deps.OnClientDeleted != nil {
+		if err := deps.OnClientDeleted(ctx, clientID); err != nil {
+			// Cascade failure does not roll the deletion back: the
+			// client record is already gone and re-creating it under
+			// the same id would clash with the RFC 7591 §3 contract.
+			// Log and proceed so the RP still observes the 204.
+			deps.logger().Error("dcr.client.cascade_failed", "err", err, "client_id", clientID)
+		}
+	}
 	deps.audit().Emit(ctx, audit.Event{
 		Name:     auditDCRClientDeleted,
 		Level:    audit.LevelInfo,

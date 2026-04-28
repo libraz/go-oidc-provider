@@ -10,8 +10,7 @@ import (
 // [RiskAssessor.Assess] call is being made. The values are stable;
 // callers MAY persist them in audit logs or correlate them with
 // metrics.
-//
-// See docs/plans/002-product-design.md §M.6.2 for the full per-stage
+// 02-product-design.md §M.6.2 for the full per-stage
 // design rationale.
 type RiskStage int
 
@@ -44,7 +43,6 @@ const (
 // orchestrator owns trust evaluation (RemoteIP normalisation through
 // the §F.5 trusted-proxy chain, UserAgent truncation) and the
 // assessor consumes only the post-trust values.
-//
 // RiskInput MUST NOT be serialised to the SPA, id_token, or any
 // user-observable surface. It lives only in the server boundary.
 type RiskInput struct {
@@ -106,7 +104,6 @@ const (
 // returning RequiredFactors=["sms_otp"] tells the orchestrator to
 // require that factor next, and AAL emerges naturally from
 // [Authenticator.AAL] of whichever factor satisfies it.
-//
 // RiskOutcome MUST NOT be serialised to the SPA, id_token, or any
 // user-observable surface. Reason is a stable enum-like code used
 // only in audit logs (e.g., "anomaly.geoip_mismatch",
@@ -137,11 +134,9 @@ type RiskOutcome struct {
 // RiskAssessor is the engine the orchestrator consults at each
 // [RiskStage] of a chain run. Implementations are stateless across
 // calls; per-attempt state lives in the assessor's own backing store.
-//
 // Implementations MUST be safe for concurrent use by multiple
 // goroutines.
-//
-// See docs/plans/002-product-design.md §M.6.2 / §M.6.4 for the full
+// 02-product-design.md §M.6.2 / §M.6.4 for the full
 // design and the SPA-exposure constraints.
 type RiskAssessor interface {
 	// Assess evaluates the RiskInput and returns the orchestrator

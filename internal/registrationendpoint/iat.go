@@ -30,7 +30,6 @@ type iatVerification struct {
 // header, hashes it with sha256, and looks the IAT up in the store.
 // On any failure the function writes the 401 response and returns
 // ok=false so the caller stops processing.
-//
 // When [Deps.Open] is true the function returns an [iatVerification]
 // with Open=true and ok=true so the caller can skip consumption.
 func verifyIAT(
@@ -107,8 +106,7 @@ func verifyIAT(
 // consumeIAT atomically increments the IAT's Uses counter. It is
 // called after structural validation has passed but before the client
 // is persisted; a [store.ErrConflict] surfaces as a 400 invalid_token
-// race per docs/plans/002-product-design.md §A.6.2.2.
-//
+// race02-product-design.md §A.6.2.2.
 // On success the function returns ok=true; on any failure it writes
 // the response envelope and returns ok=false.
 func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVerification) bool {

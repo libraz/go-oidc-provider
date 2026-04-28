@@ -12,8 +12,7 @@ import (
 // Embedders never implement this interface themselves: the library
 // ships three concrete builders ([PublicClient], [ConfidentialClient],
 // [PrivateKeyJWTClient]) that cover every static-client posture
-// docs/plans/005-login-and-ui-shell.md §3.7 enumerates.
-//
+// 05-login-and-ui-shell.md §3.7 enumerates.
 // The unexported method is deliberate: it locks the surface to the
 // shipped builders so an embedder cannot accidentally bypass the
 // Source: ClientSourceStatic invariant by constructing a custom
@@ -25,16 +24,16 @@ type ClientSeed interface {
 	seed() (store.Client, error)
 }
 
-// defaultGrantTypes returns the wire-form grant_types every typed
+// defaultGrantTypes() returns the wire-form grant_types every typed
 // builder defaults to when [PublicClient.GrantTypes] et al. are left
-// empty. The list matches docs/plans/005-login-and-ui-shell.md §3.7
+// empty. The list matches 05-login-and-ui-shell.md §3.7
 // (authorization_code + refresh_token) and is returned afresh on every
 // call so callers may freely mutate it.
 func defaultGrantTypes() []string {
 	return []string{"authorization_code", "refresh_token"}
 }
 
-// defaultResponseTypes returns the wire-form response_types every
+// defaultResponseTypes() returns the wire-form response_types every
 // typed builder defaults to when [PublicClient.ResponseTypes] et al.
 // are left empty. v1.0 ships with "code" only; the helper returns a
 // fresh slice so callers may freely mutate it.
@@ -47,7 +46,6 @@ func defaultResponseTypes() []string {
 // PublicClient: true, Source: ClientSourceStatic, and
 // TokenEndpointAuthMethod: "none"; PKCE compensates for the lack of
 // confidential authentication.
-//
 // Hand to [WithStaticClients] to register at construction time:
 //
 //	op.WithStaticClients(
@@ -115,7 +113,6 @@ func (c PublicClient) seed() (store.Client, error) {
 // [HashClientSecret] (argon2id with the library's defaults) before
 // assembling the [store.Client] record; the plaintext leaves only as
 // the hash field.
-//
 // AuthMethod selects the credential transport:
 // [AuthClientSecretBasic] (the default) or [AuthClientSecretPost].
 // Other [AuthMethod] values are accepted by the type but the

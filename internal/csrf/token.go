@@ -1,5 +1,5 @@
 // Package csrf implements the CSRF defences described in
-// docs/plans/002-product-design.md §F.3.1: HMAC-bound double-submit tokens
+// 02-product-design.md §F.3.1: HMAC-bound double-submit tokens
 // plus Origin / Referer allowlist checking. The package emits no HTML, sets
 // no cookies, and reads no request bodies; higher layers wire it into the
 // interaction and account handlers.
@@ -58,7 +58,6 @@ func NewSigner(key []byte) (*Signer, error) {
 // returned string is suitable both as the [__Host-oidc_csrf] cookie value
 // and as the [X-CSRF] header — the double-submit pattern relies on the two
 // being literally identical.
-//
 // Format: "<nonce_b64>.<unix_seconds>.<hmac_b64>" where the HMAC covers the
 // concatenation "sessionID|nonce|unix_seconds". The format is opaque to
 // callers; treat it as a single token.
@@ -111,7 +110,6 @@ func (s *Signer) Verify(token, sessionID string, now time.Time, maxAge time.Dura
 }
 
 // compute returns the HMAC-SHA256 tag of "sessionID|nonce|iat".
-//
 // The pipe separator is needed because sessionID is variable-length; without
 // a delimiter, an attacker could move bytes between fields and still hit the
 // same MAC. Pipes never appear in our session IDs (UUIDs / opaque tokens) so

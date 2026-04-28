@@ -47,7 +47,7 @@ type Config struct {
 	// Store is the SessionStore backing the chooser group; required.
 	Store store.SessionStore
 
-	// Clock returns the current wall-clock time. Defaults to [time.Now]
+	// Clock returns the current wall-clock time. Defaults to [time.Now()]
 	// when nil. Tests inject a deterministic clock here.
 	Clock func() time.Time
 

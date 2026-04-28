@@ -112,6 +112,14 @@ type Request struct {
 	// so the eventual code emission can mark the record one-time-used
 	// (RFC 9126 §2.2). It is never parsed from the wire form.
 	PARRequestURI string
+
+	// Claims is the parsed OIDC Core 1.0 §5.5 "claims" request
+	// parameter. Nil when the wire form omitted the parameter or when
+	// the OP is configured to ignore it. The grant emission path
+	// round-trips this field through [RequestSnapshot] so the token
+	// and userinfo endpoints can honour the requested claim
+	// projection without re-parsing the wire form.
+	Claims *ClaimsRequest
 }
 
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
@@ -148,6 +156,10 @@ func ParseValues(v url.Values) (*Request, error) {
 	if err != nil {
 		return nil, err
 	}
+	claims, err := ParseClaimsRequest(singles["claims"])
+	if err != nil {
+		return nil, err
+	}
 	return &Request{
 		ClientID:            singles["client_id"],
 		ResponseType:        singles["response_type"],
@@ -166,6 +178,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		RequestObject:       singles["request"],
 		RequestURI:          singles["request_uri"],
 		DPoPJKT:             singles["dpop_jkt"],
+		Claims:              claims,
 	}, nil
 }
 
@@ -187,6 +200,7 @@ var singleParseFields = []string{
 	"request",
 	"request_uri",
 	"dpop_jkt",
+	"claims",
 }
 
 // parseSingleValues extracts every single-valued parameter from v,
@@ -484,7 +498,7 @@ func translatePKCEErr(err error) error {
 }
 
 // extractValues returns the [url.Values] the parser should consume.
-// GET requests use [http.Request.URL.Query]; POST requests use the parsed
+// GET requests use [http.Request.URL.Query()]; POST requests use the parsed
 // form. Other methods return an empty value set so the per-parameter
 // "required" checks fire in the validator.
 func extractValues(r *http.Request) (url.Values, error) {

@@ -1,5 +1,5 @@
 // Package log is the library's thin wrapper over [log/slog]. Library code
-// MUST go through this package rather than reaching for [slog.Default] so
+// MUST go through this package rather than reaching for [slog.Default()] so
 // that callers can inject a logger with their own handler, and so that we
 // have a single place to enforce redaction of sensitive attributes.
 package log

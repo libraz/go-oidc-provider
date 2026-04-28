@@ -11,7 +11,7 @@ import (
 )
 
 // PromptType is the [interaction.Prompt.Type] the adapter emits, fixed by
-// docs/plans/002-product-design.md §E.2.
+// 02-product-design.md §E.2.
 const PromptType = "auth.recovery_code"
 
 // CodeFieldName is the [interaction.FieldSpec.Name] the adapter expects in
@@ -47,7 +47,6 @@ var ErrCodeMissing = errors.New("recovery: code field is missing")
 // hashes / matches / consumes codes) to a [store.RecoveryStore] (the
 // persisted batch) so the orchestrator can drive the factor without
 // knowing about either.
-//
 // Construct through [NewAuthenticator]; the zero value is not usable.
 type Authenticator struct {
 	verifier *Verifier
@@ -116,7 +115,6 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 // Continue implements [authn.Authenticator]. It loads the batch,
 // verifies the submitted code through the [Verifier], persists the
 // mutated batch on success, and returns the matching [interaction.Step]:
-//
 //   - On [OutcomeSuccess]: [interaction.Step.Result] is populated with the
 //     bound subject and the orchestrator's
 //     [authn.ContinueInput.AuthTime]. The persisted batch carries the

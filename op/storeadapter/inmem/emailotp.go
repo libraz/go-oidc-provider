@@ -17,7 +17,7 @@ import (
 // it freely, and every Put clones the supplied pointer so a later
 // mutation by the caller does not leak into the map.
 //
-// Records whose ExpiresAt is strictly before [Clock.Now] are treated
+// Records whose ExpiresAt is strictly before [Clock.Now()] are treated
 // as absent: Get returns [store.ErrNotFound]. The expired record is
 // left in the map for diagnostic purposes; production backends
 // typically run a sweeper, but the reference implementation

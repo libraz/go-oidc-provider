@@ -155,6 +155,14 @@ type Deps struct {
 	// §5.3.2.1.1 "either a state or a nonce" rule is enforced at
 	// both endpoints so a request loses either way.
 	RequireStateOrNonce bool
+
+	// ClaimsParameterEnabled mirrors
+	// [authorizeendpoint.Deps.ClaimsParameterEnabled] for the /par
+	// endpoint: when false, any parsed OIDC Core 1.0 §5.5 "claims"
+	// payload is discarded before the PAR record is persisted so the
+	// downstream /authorize → /token flow behaves as if the
+	// parameter had been silently ignored.
+	ClaimsParameterEnabled bool
 }
 
 // Handler returns the HTTP handler the OP mounts at its PAR endpoint. The

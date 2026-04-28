@@ -185,4 +185,15 @@ type Document struct {
 	// mandates it. The library always emits "iss" so the field is
 	// always true when emitted (omitempty drops the false default).
 	AuthorizationResponseIssParameterSupported bool `json:"authorization_response_iss_parameter_supported,omitempty"`
+
+	// ClaimsParameterSupported reports whether the OP honours the
+	// OIDC Core 1.0 §5.5 "claims" request parameter — i.e. parses the
+	// payload, persists it on the originating grant, and projects the
+	// requested claims onto the id_token / userinfo responses (per
+	// ADR 0011). The library defaults to true because the parser is
+	// always wired; embedders that prefer to ignore the parameter can
+	// opt out via op.WithClaimsParameterSupported(false), which sets
+	// this field to false and routes incoming requests around the
+	// parser.
+	ClaimsParameterSupported bool `json:"claims_parameter_supported,omitempty"`
 }

@@ -15,14 +15,14 @@ import (
 )
 
 // PromptType is the [interaction.Prompt.Type] the adapter emits. The
-// string is fixed by docs/plans/002-product-design.md §E.2 and matches
+// string is fixed by 02-product-design.md §E.2 and matches
 // the constant set [op.Authenticator.Prompts] returns.
 const PromptType = "auth.passkey"
 
 // ResponseFieldName is the [interaction.FieldSpec.Name] the adapter
 // expects in [interaction.FormSubmission.Values]. The SPA serialises
 // the WebAuthn AssertionResponse to JSON (per
-// PublicKeyCredential.toJSON()) and submits it under this key.
+// PublicKeyCredential.toJSON) and submits it under this key.
 const ResponseFieldName = "response"
 
 // responseMaxBytes caps the WebAuthn assertion response the adapter
@@ -56,7 +56,6 @@ var ErrSessionMissing = errors.New("passkey: session scratch is missing")
 // assertion ceremony) to a [store.PasskeyStore] (the persistent
 // credential record) so the orchestrator can drive the factor without
 // knowing about either.
-//
 // The session that ferries the challenge and allow-list across the
 // Begin → Continue boundary rides the orchestrator's
 // [interaction.Step.Scratch] / [op.ContinueInput.Scratch] channel; it
@@ -121,7 +120,6 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 // registered credentials, kicks off a WebAuthn assertion ceremony, and
 // returns the prompt with the challenge plus the encoded session in
 // [interaction.Step.Scratch].
-//
 // Subject is required; v1.0 does not support discoverable-credential
 // flows where the subject is unknown until after the assertion. A
 // subject with no registered credentials returns
@@ -158,9 +156,7 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 // the store, and validates the SPA-supplied assertion response through
 // the [Verifier]. On success it persists the rotated credential record
 // (sign counter, UV / BS flags, clone-warning).
-//
 // Outcomes:
-//
 //   - On success: [interaction.Step.Result] is populated with the
 //     bound subject and the orchestrator's [authn.ContinueInput.AuthTime].
 //   - On [ErrCloneDetected]: the updated credential record is
@@ -285,7 +281,7 @@ func (a *Authenticator) persistCredential(ctx context.Context, subject string, c
 // prompt builds the [interaction.PasskeyPromptData] payload exposed to
 // the SPA. Challenge bytes ride [Session.Challenge] (base64url-decoded);
 // the allow-list is projected from the credential records so the SPA
-// can hand it to navigator.credentials.get() without re-reading the
+// can hand it to navigator.credentials.get without re-reading the
 // store. The session is NOT embedded here — it travels separately
 // through [interaction.Step.Scratch].
 func (*Authenticator) prompt(session Session, creds []Credential) *interaction.Prompt {

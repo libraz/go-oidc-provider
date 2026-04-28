@@ -10,7 +10,6 @@ import (
 // invalidates the previous record by overwriting it. Backends MUST treat
 // the struct as opaque; CodeSalt and CodeHash are produced by
 // internal/authn/emailotp and SHOULD NOT be parsed or re-encoded.
-//
 // Records carry plaintext-equivalent material (CodeHash + Salt are a
 // 6-digit code's preimage; brute-forceable in milliseconds without the
 // brute-force counter). Backends MUST NOT log or audit either field.
@@ -53,7 +52,7 @@ type EmailOTPRecord struct {
 
 	// FirstFailureAt is the wall-clock time of the first failed verify
 	// in the current window. It anchors the 24-hour rollover (see
-	// docs/plans/002-product-design.md §M.6). A zero value means "no
+	// 02-product-design.md §M.6). A zero value means "no
 	// failures recorded yet".
 	FirstFailureAt time.Time
 
@@ -68,7 +67,6 @@ type EmailOTPRecord struct {
 // record) but the library accesses it through a non-transactional handle
 // because the writes are localised to a single row and do not need to
 // be atomic with token issuance.
-//
 // Backends MUST NOT log or audit CodeHash / CodeSalt: those values
 // reduce to the 6-digit plaintext under brute force without the OP's
 // rate-limit counters.

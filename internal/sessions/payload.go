@@ -1,8 +1,7 @@
 // Package sessions implements the chooser-group session manager described in
-// docs/plans/002-product-design.md §A.9 / §F.1. It owns the encrypted
+// 02-product-design.md §A.9 / §F.1. It owns the encrypted
 // __Host-oidc_session cookie payload and orchestrates the SessionStore
 // operations that maintain the multi-account chooser group.
-//
 // The package treats the chooser group as the stable browsing context: a
 // single browser holds at most one chooser_group_id for the lifetime of the
 // cookie, and individual accounts inside the group come and go via the
@@ -23,7 +22,6 @@ import (
 // session cookie ciphertext. It prevents a payload encrypted for the
 // session cookie from authenticating against the interaction cookie even
 // though both cookies share the same AES key (cookie name pinning).
-//
 // The value is intentionally short: AEAD AAD does not need to be human-
 // readable, only stable across encryptions and across deployments.
 const cookieAAD = "oidc-session"
@@ -69,7 +67,6 @@ func NewCodec(inner *cookie.Codec) (*Codec, error) {
 // Encode marshals p to its on-the-wire form and encrypts it under the
 // session AAD. The returned string is the value to place in the
 // __Host-oidc_session cookie.
-//
 // Encode rejects empty ChooserGroupID / CurrentSessionID because those are
 // programming errors — the manager always populates both fields before
 // calling Encode.
@@ -87,7 +84,7 @@ func (c *Codec) Encode(p Payload) (string, error) {
 	return c.inner.Seal(raw, []byte(cookieAAD))
 }
 
-// Decode reverses [Codec.Encode]. It returns an opaque [ErrCookieInvalid]
+// Decode reverses [Codec.Encode()]. It returns an opaque [ErrCookieInvalid]
 // for every failure mode (parse error, AAD mismatch, AEAD failure) so the
 // resolver cannot be used as an oracle.
 func (c *Codec) Decode(value string) (Payload, error) {

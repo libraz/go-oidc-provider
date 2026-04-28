@@ -3,7 +3,6 @@ package op
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
@@ -20,7 +19,6 @@ import (
 // reCAPTCHA, hCaptcha, …) and submits the resulting token under this
 // key. The constant is exported so SPA documentation references the
 // canonical wire name without a stringly-typed copy.
-//
 // The [StepCaptcha] path is independent of the legacy after-N-failures
 // captcha gate: a [LoginFlow] without a registered StepCaptcha still
 // emits the orchestrator's built-in captcha prompt when
@@ -52,7 +50,6 @@ var errCaptchaVerifierNil = errors.New("op: StepCaptcha.Verifier is nil")
 // captcha challenges through the same Begin / Continue dispatch path
 // as factor-shaped Steps. The wrapper is internal; embedders compose
 // captcha through [StepCaptcha].
-//
 // The adapter reports an inert [FactorType] / [authn.AAL0] / empty
 // AMR so any leak into the factor pipeline is harmless. The orchestrator
 // filters captcha-shaped Steps out of [State.Factors] via the compile
@@ -136,7 +133,10 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) {
 	if s.Store == nil {
-		return nil, errors.New("op: PrimaryPassword.Store is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "PrimaryPassword.Store is nil",
+		}
 	}
 	return password.NewAuthenticator(s.Store)
 }
@@ -150,7 +150,10 @@ func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) {
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) {
 	if s.Store == nil {
-		return nil, errors.New("op: PrimaryPasskey.Store is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "PrimaryPasskey.Store is nil",
+		}
 	}
 	v, err := passkey.New(passkey.Config{
 		RPID:          s.RPID,
@@ -159,7 +162,11 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) {
 		SessionTTL:    s.SessionTTL,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("op: PrimaryPasskey: %w", err)
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "PrimaryPasskey rejected by parser",
+			Cause:       err,
+		}
 	}
 	return passkey.NewAuthenticator(v, s.Store)
 }
@@ -173,14 +180,24 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) {
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepTOTP(s StepTOTP) (authn.Authenticator, error) {
 	if s.Store == nil {
-		return nil, errors.New("op: StepTOTP.Store is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepTOTP.Store is nil",
+		}
 	}
 	if len(s.EncryptionKey) == 0 {
-		return nil, errors.New("op: StepTOTP.EncryptionKey is required (32 bytes)")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepTOTP.EncryptionKey is required (32 bytes)",
+		}
 	}
 	codec, err := totp.NewCodec(s.EncryptionKey, s.EncryptionKeyPrev...)
 	if err != nil {
-		return nil, fmt.Errorf("op: StepTOTP: %w", err)
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepTOTP rejected by parser",
+			Cause:       err,
+		}
 	}
 	verifier := &totp.Verifier{Codec: codec}
 	return totp.NewAuthenticator(verifier, s.Store)
@@ -195,13 +212,22 @@ func buildStepTOTP(s StepTOTP) (authn.Authenticator, error) {
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepEmailOTP(s StepEmailOTP) (authn.Authenticator, error) {
 	if s.Store == nil {
-		return nil, errors.New("op: StepEmailOTP.Store is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepEmailOTP.Store is nil",
+		}
 	}
 	if s.Sender == nil {
-		return nil, errors.New("op: StepEmailOTP.Sender is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepEmailOTP.Sender is nil",
+		}
 	}
 	if s.Users == nil {
-		return nil, errors.New("op: StepEmailOTP.Users is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepEmailOTP.Users is nil",
+		}
 	}
 	mailer := emailotp.MailerFunc(func(ctx context.Context, msg emailotp.Message) error {
 		return s.Sender.Send(ctx, msg.To, msg.Code)
@@ -218,12 +244,15 @@ func buildStepEmailOTP(s StepEmailOTP) (authn.Authenticator, error) {
 // [recovery.Authenticator] that drives the [StepRecoveryCode] step.
 // The verifier carries no construction-time configuration today; the
 // argon2id parameters and lockout policy are pinned by
-// [internal/authn/recovery] per docs/plans/002-product-design.md §M.6.
+// [internal/authn/recovery]02-product-design.md §M.6.
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepRecoveryCode(s StepRecoveryCode) (authn.Authenticator, error) {
 	if s.Store == nil {
-		return nil, errors.New("op: StepRecoveryCode.Store is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepRecoveryCode.Store is nil",
+		}
 	}
 	verifier := &recovery.Verifier{}
 	return recovery.NewAuthenticator(verifier, s.Store)
@@ -237,7 +266,10 @@ func buildStepRecoveryCode(s StepRecoveryCode) (authn.Authenticator, error) {
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepCaptcha(s StepCaptcha) (authn.Authenticator, error) {
 	if s.Verifier == nil {
-		return nil, errors.New("op: StepCaptcha.Verifier is nil")
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "StepCaptcha.Verifier is nil",
+		}
 	}
 	return captchaStepAdapter{verifier: s.Verifier}, nil
 }

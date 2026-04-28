@@ -21,7 +21,7 @@ type Clock interface {
 	Now() time.Time
 }
 
-// Audit event names mirror docs/plans/002-product-design.md §N.2.
+// Audit event names mirror 02-product-design.md §N.2.
 // The strings here MUST agree with the public op.AuditEvent constants
 // in op/audit.go; the registrationendpoint_test package contains a
 // guard that compares both lists.
@@ -112,21 +112,36 @@ type Deps struct {
 	ValidateMetadata func(ctx context.Context, m ClientMetadata) error
 
 	// Logger is the slog handler the endpoint emits diagnostic
-	// records on. A nil Logger installs [slog.Default].
+	// records on. A nil Logger installs [slog.Default()].
 	Logger *slog.Logger
 
 	// Audit is the structured audit-event sink. A nil Emitter
-	// collapses to [audit.Discard] so handler code can call
+	// collapses to [audit.Discard()] so handler code can call
 	// deps.audit().Emit unconditionally without a nil-check.
 	Audit audit.Emitter
+
+	// OnClientDeleted is the optional cascade hook the handler invokes
+	// after a successful DELETE /register/{client_id}. It runs in the
+	// request goroutine after the client and RAT have been removed,
+	// before the 204 is written. The library does not invoke a
+	// built-in cascade because revoking outstanding access_token /
+	// refresh_token / session records keyed by client requires store
+	// surfaces (ListByClient / DeleteByClient) that v1.0 does not
+	// publish; embedders that hold those indexes in their own backend
+	// wire the cascade through this hook. A non-nil error is logged
+	// but does not abort the response — the client record is already
+	// gone, and surfacing the error to the RP would imply a
+	// recoverable failure that the embedder cannot retry.
+	// 02-product-design.md §A.6.2.2 sketches the desired
+	// final shape; the hook is the explicit seam until the store
+	// surfaces grow to support the cascade in-tree.
+	OnClientDeleted func(ctx context.Context, clientID string) error
 }
 
 // Handler returns the HTTP handler the OP mounts at /register and
 // /register/{client_id}. The returned handler is safe for concurrent
 // use; deps MUST NOT be mutated after the call.
-//
 // The handler routes by method and path:
-//
 //   - POST <RegisterPath>             -> handleRegister (RFC 7591 §3)
 //   - GET  <RegisterPath>/{client_id} -> handleRead    (RFC 7592 §2.1)
 //   - PUT  <RegisterPath>/{client_id} -> handleUpdate  (RFC 7592 §2.2)
@@ -163,7 +178,7 @@ func (d *Deps) now() time.Time {
 	return d.Clock.Now()
 }
 
-// logger returns the configured [*slog.Logger] or [slog.Default] when
+// logger returns the configured [*slog.Logger] or [slog.Default()] when
 // the caller did not supply one. The helper exists so handler code
 // can call deps.logger().Warn(...) without nil-checks.
 func (d *Deps) logger() *slog.Logger {
@@ -174,7 +189,7 @@ func (d *Deps) logger() *slog.Logger {
 }
 
 // audit returns the audit sink the handler uses. A nil [Deps.Audit]
-// collapses to [audit.Discard] so handler code can call
+// collapses to [audit.Discard()] so handler code can call
 // deps.audit().Emit unconditionally without a nil-check.
 func (d *Deps) audit() audit.Emitter { //nolint:ireturn // audit.Emitter is the package's audit-sink contract; returning the interface is required so the discard fallback can flow through one helper.
 	if d.Audit == nil {
@@ -229,7 +244,6 @@ func serveManagement(w http.ResponseWriter, r *http.Request, deps Deps, clientID
 // RFC 7592 management endpoints. The function returns ("", false) when
 // the request targets the bare /register path and (id, true) when it
 // targets /register/{id}.
-//
 // The op layer routes /register and /register/{client_id} to the same
 // handler instance via two http.ServeMux entries; this helper does
 // the second-stage discrimination.
@@ -267,7 +281,6 @@ func joinPath(mountPrefix, endpoint string) string {
 // registrationClientURI returns the registration_client_uri value the
 // OP advertises in successful registration responses. The URL is
 // formed by joining issuer + mountPrefix + registerPath + clientID.
-//
 // The Issuer is the canonical anchor on purpose: RFC 7592 §2 mandates
 // that the URL be reachable by the RP, and the OP advertises a single
 // stable Issuer through discovery. Tests that drive the handler via

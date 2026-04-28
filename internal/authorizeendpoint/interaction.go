@@ -359,7 +359,16 @@ func terminateInteraction(
 		return
 	}
 	grantScope := chooseGrantScope(result.Scope, req.Scope)
-	grant, err := upsertGrant(r.Context(), deps, result.Subject, rec.ClientID, grantScope, deps.now())
+	grant, err := upsertGrant(r.Context(), deps, grantUpsert{
+		Subject:  result.Subject,
+		ClientID: rec.ClientID,
+		Scope:    grantScope,
+		AuthTime: result.AuthTime,
+		ACR:      acr,
+		AMR:      amr,
+		Claims:   req.Claims,
+		Now:      deps.now(),
+	})
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not record grant")
 		return
@@ -452,18 +461,52 @@ func chooseGrantScope(approved, requested []string) []string {
 	return append([]string(nil), requested...)
 }
 
+// grantUpsert collects the inputs upsertGrant needs. The struct exists
+// so the helper stays under the linter's parameter limit and so future
+// fields (e.g., per-claim consent payload) can be added without
+// churning the call site.
+type grantUpsert struct {
+	Subject  string
+	ClientID string
+	Scope    []string
+	AuthTime time.Time
+	ACR      string
+	AMR      []string
+
+	// Claims is the parsed OIDC Core 1.0 §5.5 "claims" request
+	// parameter as carried by the authorize / PAR request. The
+	// upsertGrant helper persists it onto the grant record so the
+	// userinfo and id_token issuance paths can honour the requested
+	// claim projection. A nil pointer leaves the grant's existing
+	// Claims map untouched.
+	Claims *authorize.ClaimsRequest
+
+	Now time.Time
+}
+
 // upsertGrant ensures a grant exists for (subject, clientID) covering
-// at least the supplied scope. Returns the persisted grant.
+// at least the supplied scope. The auth context (AuthTime, ACR, AMR) is
+// refreshed on every call so the persisted record always reflects the
+// most recent interactive authentication; OIDC Core 1.0 §12 requires
+// refresh-token-derived id_tokens to carry the same acr/amr as the
+// originating authentication, and the library reads them back through
+// the grant on every token issuance.
 func upsertGrant(
 	ctx context.Context,
 	deps resolved,
-	subject, clientID string,
-	scope []string,
-	now time.Time,
+	in grantUpsert,
 ) (*store.Grant, error) {
-	existing, err := deps.Grants.FindBySubjectClient(ctx, subject, clientID)
-	if err == nil && existing != nil && scopeIsSubset(scope, existing.Scope) {
-		existing.UpdatedAt = now.UTC()
+	now := in.Now.UTC()
+	encodedClaims := authorize.EncodeClaimsToGrant(in.Claims)
+	existing, err := deps.Grants.FindBySubjectClient(ctx, in.Subject, in.ClientID)
+	if err == nil && existing != nil && scopeIsSubset(in.Scope, existing.Scope) {
+		existing.UpdatedAt = now
+		existing.AuthTime = in.AuthTime
+		existing.ACR = in.ACR
+		existing.AMR = append(existing.AMR[:0:0], in.AMR...)
+		if encodedClaims != nil {
+			existing.Claims = encodedClaims
+		}
 		if err := deps.Grants.Save(ctx, existing); err != nil {
 			return nil, fmt.Errorf("authorizeendpoint: refresh grant: %w", err)
 		}
@@ -475,11 +518,15 @@ func upsertGrant(
 	}
 	g := &store.Grant{
 		ID:        grantID,
-		Subject:   subject,
-		ClientID:  clientID,
-		Scope:     append([]string(nil), scope...),
-		CreatedAt: now.UTC(),
-		UpdatedAt: now.UTC(),
+		Subject:   in.Subject,
+		ClientID:  in.ClientID,
+		Scope:     append([]string(nil), in.Scope...),
+		AuthTime:  in.AuthTime,
+		ACR:       in.ACR,
+		AMR:       append([]string(nil), in.AMR...),
+		Claims:    encodedClaims,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if err := deps.Grants.Save(ctx, g); err != nil {
 		return nil, fmt.Errorf("authorizeendpoint: persist grant: %w", err)
