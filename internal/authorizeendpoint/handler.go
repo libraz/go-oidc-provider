@@ -181,10 +181,17 @@ type Deps struct {
 
 	// RequireNonce, when true, makes /authorize reject any request
 	// that omits the nonce parameter. OIDC Core 1.0 makes nonce
-	// OPTIONAL for code-flow; FAPI 2.0 (Baseline / Message Signing)
-	// upgrades it to MUST. The flag is forwarded verbatim to
+	// OPTIONAL for code-flow. The flag is forwarded verbatim to
 	// [authorize.Policy.NonceRequired].
 	RequireNonce bool
+
+	// RequireStateOrNonce, when true, makes /authorize reject any
+	// request that carries neither state nor nonce. FAPI 2.0
+	// §5.3.2.1.1 ("include either a state or a nonce parameter") is
+	// the canonical source; vanilla OIDC Core leaves this false
+	// because state is RECOMMENDED but not REQUIRED. The flag is
+	// forwarded verbatim to [authorize.Policy.StateOrNonceRequired].
+	RequireStateOrNonce bool
 
 	// RequirePAR, when true, makes /authorize reject any request that
 	// did not arrive via a [RFC 9126] pushed authorization request_uri.

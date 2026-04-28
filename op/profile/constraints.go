@@ -112,15 +112,39 @@ func RequiresPKCE(p Profile) bool {
 // (see https://openid.net/specs/openid-connect-core-1_0-27.html#NonceNotes),
 // so default deployments and the Basic run accept the omission.
 //
-// FAPI 2.0 Baseline §5.3.2.1.1 and Message Signing both require
-// every authorization request to contain a nonce — the profile
-// upgrades the OIDC OPTIONAL to a MUST regardless of response_type.
+// FAPI 2.0 Baseline §5.3.2.1.1 mandates "either a state or a nonce",
+// not "nonce". The "state OR nonce" rule lives on [RequiresStateOrNonce]
+// because the OFCS conformance suite verifies it via two separate
+// modules (-without-nonce-success and -without-state-success): each
+// removes one of the parameters and expects success when the other
+// is present. A profile that mandated nonce alone would fail the
+// "without-nonce-success" module.
+//
+// No shipping profile currently sets RequiresNonce. The helper exists
+// so embedders that want a strict nonce-on-every-request stance can
+// wire their own [Policy.NonceRequired]; a future profile that needs
+// it will be added here rather than relied on as the default.
 //
 // [FAPICIBA] and [IGovHigh] return false because their option
-// surfaces are scheduled for v1.x / v2+; the helper is intentionally
-// conservative — a future profile that needs nonce will be added
-// here rather than relied on as the default.
+// surfaces are scheduled for v1.x / v2+.
 func RequiresNonce(p Profile) bool {
+	switch p {
+	case FAPICIBA, IGovHigh, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
+		return false
+	default:
+		return false
+	}
+}
+
+// RequiresStateOrNonce reports whether p mandates that every
+// authorization request carry at least one of the state / nonce
+// parameters. FAPI 2.0 §5.3.2.1.1 ("include either a state or a
+// nonce parameter") is the canonical source. Vanilla OIDC Core
+// leaves this false because state is RECOMMENDED but not REQUIRED.
+//
+// [FAPICIBA] and [IGovHigh] return false because their option
+// surfaces are scheduled for v1.x / v2+.
+func RequiresStateOrNonce(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true

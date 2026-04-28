@@ -606,6 +606,7 @@ func mountPAREndpoint(
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			RequirePKCE:              cfg.requirePKCE(),
 			RequireNonce:             cfg.requireNonce(),
+			RequireStateOrNonce:      cfg.requireStateOrNonce(),
 		}),
 	)
 	return nil
@@ -751,12 +752,27 @@ func (c *config) requirePKCE() bool {
 
 // requireNonce reports whether the active [profile.Profile] set
 // mandates that every authorization request carry a nonce. OIDC
-// Core 1.0 makes nonce OPTIONAL for code-flow; FAPI 2.0 (Baseline
-// and Message Signing) upgrades it to a MUST. The disjunctive
-// resolution mirrors [config.requirePKCE].
+// Core 1.0 makes nonce OPTIONAL for code-flow; no shipping profile
+// currently elevates this to a strict MUST (FAPI 2.0 satisfies its
+// replay-mitigation rule via [config.requireStateOrNonce] instead).
+// The disjunctive resolution mirrors [config.requirePKCE] so
+// embedders that wire a custom profile keep the same surface.
 func (c *config) requireNonce() bool {
 	for _, p := range c.profiles {
 		if profile.RequiresNonce(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// requireStateOrNonce reports whether the active [profile.Profile]
+// set mandates that every authorization request carry at least one
+// of state / nonce. FAPI 2.0 §5.3.2.1.1 is the canonical source.
+// The disjunctive resolution mirrors [config.requirePKCE].
+func (c *config) requireStateOrNonce() bool {
+	for _, p := range c.profiles {
+		if profile.RequiresStateOrNonce(p) {
 			return true
 		}
 	}
@@ -911,6 +927,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
 		RequirePKCE:             cfg.requirePKCE(),
 		RequireNonce:            cfg.requireNonce(),
+		RequireStateOrNonce:     cfg.requireStateOrNonce(),
 		RequirePAR:              cfg.requirePAR(),
 		Issuer:                  cfg.issuer,
 	})

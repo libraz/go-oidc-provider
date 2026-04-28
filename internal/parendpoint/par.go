@@ -60,8 +60,9 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	if err := req.Validate(client, deps.Scopes, authorize.Policy{
-		PKCERequired:  deps.RequirePKCE,
-		NonceRequired: deps.RequireNonce,
+		PKCERequired:         deps.RequirePKCE,
+		NonceRequired:        deps.RequireNonce,
+		StateOrNonceRequired: deps.RequireStateOrNonce,
 	}); err != nil {
 		writeAuthorizeError(w, err)
 		return

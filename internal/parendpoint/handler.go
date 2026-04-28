@@ -125,6 +125,13 @@ type Deps struct {
 	// validator so a profile that mandates nonce blocks the same way
 	// at /par and /authorize.
 	RequireNonce bool
+
+	// RequireStateOrNonce, when true, makes /par reject any request
+	// that carries neither state nor nonce. The flag mirrors
+	// [authorizeendpoint.Deps.RequireStateOrNonce]; the FAPI 2.0
+	// §5.3.2.1.1 "either a state or a nonce" rule is enforced at
+	// both endpoints so a request loses either way.
+	RequireStateOrNonce bool
 }
 
 // Handler returns the HTTP handler the OP mounts at its PAR endpoint. The

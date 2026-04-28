@@ -119,8 +119,8 @@ func TestValidate_SentinelTable(t *testing.T) {
 			wantRedirectOK: true,
 		},
 		{
-			name:           "missing_state",
-			mutate:         func(v url.Values) { v.Del("state") },
+			name:           "missing_state_and_nonce",
+			mutate:         func(v url.Values) { v.Del("state"); v.Del("nonce") },
 			want:           authorize.ErrStateRequired,
 			wantRedirectOK: true,
 		},
@@ -205,7 +205,11 @@ func TestValidate_SentinelTable(t *testing.T) {
 			case parseErr != nil:
 				gotErr = parseErr
 			default:
-				gotErr = req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true, NonceRequired: true})
+				gotErr = req.Validate(goodClient(), nil, authorize.Policy{
+					PKCERequired:         true,
+					NonceRequired:        true,
+					StateOrNonceRequired: true,
+				})
 			}
 			if !errors.Is(gotErr, tc.want) {
 				t.Fatalf("err=%v want %v", gotErr, tc.want)

@@ -234,10 +234,20 @@ type Policy struct {
 
 	// NonceRequired forces every authorization request to carry a
 	// nonce parameter. OIDC Core 1.0 makes nonce OPTIONAL for code-
-	// flow; FAPI 2.0 (Baseline and Message Signing) upgrades it to a
-	// MUST. As with PKCERequired the validator only consults the
+	// flow. As with PKCERequired the validator only consults the
 	// resolved bit, not the profile set itself.
+	//
+	// FAPI 2.0 Baseline / Message Signing do NOT set this bit: the
+	// profile mandates "state OR nonce", which the [StateOrNonceRequired]
+	// gate enforces instead. NonceRequired remains available for
+	// embedders that want a strict nonce-on-every-request policy.
 	NonceRequired bool
+
+	// StateOrNonceRequired forces every authorization request to carry
+	// at least one of state / nonce, satisfying FAPI 2.0 §5.3.2.1.1's
+	// "either a state or a nonce" rule. Vanilla OIDC Core leaves this
+	// false because state is RECOMMENDED, not required.
+	StateOrNonceRequired bool
 }
 
 // Validate cross-checks the parsed [Request] against the registered client
@@ -268,7 +278,7 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 	if err := req.validateResponseMode(); err != nil {
 		return err
 	}
-	if err := req.validateState(); err != nil {
+	if err := req.validateState(policy.StateOrNonceRequired); err != nil {
 		return err
 	}
 	if err := req.validateScope(client, scopes); err != nil {
@@ -328,10 +338,18 @@ func (req *Request) validateResponseMode() error {
 	}
 }
 
-// validateState enforces the FAPI-2.0 upgrade of OIDC's RECOMMENDED state
-// to MUST.
-func (req *Request) validateState() error {
-	if req.State == "" {
+// validateState reports an error when state is required but absent.
+// OAuth 2.0 / 2.1 RECOMMEND state as a CSRF defence; FAPI 2.0 ID2
+// §5.3.2.1.1 mandates that clients include "either a state or a
+// nonce" — i.e. at least one of the two, not both. The check is
+// therefore satisfied if EITHER state is present OR a nonce is. This
+// matches the OFCS expectation that "ensure-authorization-request-
+// without-state-success" succeeds when nonce is supplied.
+func (req *Request) validateState(stateOrNonceRequired bool) error {
+	if !stateOrNonceRequired {
+		return nil
+	}
+	if req.State == "" && req.Nonce == "" {
 		return ErrStateRequired
 	}
 	return nil
