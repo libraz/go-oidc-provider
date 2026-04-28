@@ -90,7 +90,13 @@ DNS.2 = host.docker.internal
 IP.1  = 127.0.0.1
 IP.2  = ::1
 EOF
-  openssl ecparam -name prime256v1 -genkey -noout -out "${KEY_FILE}"
+  # RSA-2048 (not ECDSA) — OFCS's FAPI 1.0 RW cipher allowlist (still
+  # applied under FAPI 2.0 by DisallowInsecureCipher) only contains
+  # TLS_DHE_RSA_* and TLS_ECDHE_RSA_* GCM suites. An ECDSA cert can
+  # only negotiate TLS_ECDHE_ECDSA_* ciphers, which OFCS treats as
+  # "non-permitted" and fails the test on. RSA keeps the cipher within
+  # the OFCS-recognised allowlist.
+  openssl genrsa -out "${KEY_FILE}" 2048
   openssl req -new -x509 -days 30 \
     -key "${KEY_FILE}" \
     -out "${CERT_FILE}" \
@@ -325,17 +331,23 @@ forward_implicit_bridge() {
   fi
   alias_base="$(printf '%s' "$redirect" | sed -E 's|/callback\?.*$||')"
   # When the redirect target carries the response in the query string
-  # (code flow / response_mode=query), the implicit-bridge body MUST
-  # be empty: OFCS interprets a non-empty body as "the response was
-  # ALSO in the URL fragment", which makes FAPI 2.0's
-  # RejectAuthCodeInUrlFragment fire. POSTing an empty body still
-  # advances the runner state machine (OFCS records the
-  # implicit-submit happened) without lying about fragment content.
+  # (code flow / response_mode=query), the implicit-bridge body must
+  # NOT replay the same code/state — otherwise OFCS interprets it as
+  # "the response was also in the URL fragment" and FAPI 2.0's
+  # RejectAuthCodeInUrlFragment fires. But it also cannot be empty:
+  # FAPI 2.0 conditions read callback_params.code as a string and
+  # throw on JsonNull. Send explicit empty values for code/state so
+  # OFCS records "fragment present, no code, no state".
   if [[ "$redirect" == *"?code="* || "$redirect" == *"&code="* \
         || "$redirect" == *"?error="* || "$redirect" == *"&error="* ]]; then
-    query=""
+    # Empty values for code/state without a leading "?" — OFCS parses
+    # the body as a raw query string, so a leading "?" would corrupt
+    # the first key (e.g. "?code"). FAPI 2.0 conditions require
+    # callback_params.code to be a string (not JsonNull), so explicit
+    # empty strings keep RejectAuthCodeInUrlFragment happy.
+    query="code=&state="
   else
-    query="$(printf '%s' "$redirect" | sed -E 's|^[^?]*\?|?|')"
+    query="$(printf '%s' "$redirect" | sed -E 's|^[^?]*\?||')"
   fi
   echo "[drive forward] POST ${alias_base}/${impl}"
   curl -sk -X POST "${alias_base}/${impl}" \
@@ -394,9 +406,15 @@ cmd_batch() {
     exit 1
   fi
   shift
-  local default_variant client_secret_post_variant
+  # The default variant is OIDC Core (client_secret_basic + code +
+  # default response_mode). FAPI 2.0 module launches need a different
+  # variant — set BATCH_VARIANT to a urlencoded JSON object to override.
+  # The fapi2_baseline_variant constant below is the prebuilt one for
+  # the standard plain_fapi run.
+  local default_variant client_secret_post_variant fapi2_baseline_variant
   default_variant='%7B%22client_auth_type%22%3A%22client_secret_basic%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
   client_secret_post_variant='%7B%22client_auth_type%22%3A%22client_secret_post%22%2C%22response_type%22%3A%22code%22%2C%22response_mode%22%3A%22default%22%7D'
+  fapi2_baseline_variant='%7B%22client_auth_type%22%3A%22private_key_jwt%22%2C%22sender_constrain%22%3A%22dpop%22%2C%22fapi_profile%22%3A%22plain_fapi%22%2C%22openid%22%3A%22openid_connect%22%2C%22fapi_request_method%22%3A%22unsigned%22%2C%22fapi_response_mode%22%3A%22plain_response%22%7D'
   local pass=0 fail=0 skip=0 err=0 m v resp id info status result jar
   for m in "$@"; do
     echo
@@ -404,9 +422,14 @@ cmd_batch() {
     jar="$(mktemp /tmp/ofcs-batch-cookies.XXXXXX)"
     OFCS_DRIVE_COOKIES="$jar"
     export OFCS_DRIVE_COOKIES
-    v="$default_variant"
-    if [[ "$m" == "oidcc-server-client-secret-post" ]]; then
+    if [[ -n "${BATCH_VARIANT:-}" ]]; then
+      v="$BATCH_VARIANT"
+    elif [[ "$m" == fapi2-security-profile-id2-* || "$m" == fapi2-message-signing-id1-* ]]; then
+      v="$fapi2_baseline_variant"
+    elif [[ "$m" == "oidcc-server-client-secret-post" ]]; then
       v="$client_secret_post_variant"
+    else
+      v="$default_variant"
     fi
     resp="$(curl -sk -X POST "${OFCS_API}/api/runner?test=${m}&plan=${plan}&variant=${v}" \
       -H 'Content-Type: application/json')"
