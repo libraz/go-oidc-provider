@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -77,29 +77,29 @@ func NewAuthenticator(verifier *Verifier, recoveryStore store.RecoveryStore) (*A
 	return &Authenticator{verifier: verifier, store: recoveryStore}, nil
 }
 
-// Type implements [op.Authenticator]. Always returns
-// [op.FactorRecoveryCode].
-func (*Authenticator) Type() op.FactorType { return op.FactorRecoveryCode }
+// Type implements [authn.Authenticator]. Always returns
+// [authn.FactorRecoveryCode].
+func (*Authenticator) Type() authn.FactorType { return authn.FactorRecoveryCode }
 
-// AAL implements [op.Authenticator]. Recovery codes are a substitute
+// AAL implements [authn.Authenticator]. Recovery codes are a substitute
 // for AAL2 — the primary MFA factor the user lost.
-func (*Authenticator) AAL() op.AAL { return op.AAL2 }
+func (*Authenticator) AAL() authn.AAL { return authn.AAL2 }
 
-// AMR implements [op.Authenticator]. Recovery codes map to RFC 8176
+// AMR implements [authn.Authenticator]. Recovery codes map to RFC 8176
 // §2 "otp" (single-use shared-secret-derived code).
 func (*Authenticator) AMR() string { return "otp" }
 
-// Prompts implements [op.Authenticator]. The adapter emits a single
+// Prompts implements [authn.Authenticator]. The adapter emits a single
 // prompt type; the slice is read-only by contract.
 func (*Authenticator) Prompts() []string { return []string{PromptType} }
 
-// Begin implements [op.Authenticator]. It reads the persisted batch
+// Begin implements [authn.Authenticator]. It reads the persisted batch
 // to surface [interaction.RecoveryCodePromptData.AttemptsRemaining] (the count
 // of unconsumed slots) and emits the [PromptType] prompt. Begin
 // surfaces [store.ErrNotFound] when the user has no batch generated
 // so the orchestrator can stop the chain rather than silently rolling
 // over to the next factor.
-func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interaction.Step, error) {
+func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
@@ -113,20 +113,20 @@ func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interactio
 	return interaction.Step{Prompt: a.prompt(batch)}, nil
 }
 
-// Continue implements [op.Authenticator]. It loads the batch,
+// Continue implements [authn.Authenticator]. It loads the batch,
 // verifies the submitted code through the [Verifier], persists the
 // mutated batch on success, and returns the matching [interaction.Step]:
 //
 //   - On [OutcomeSuccess]: [interaction.Step.Result] is populated with the
 //     bound subject and the orchestrator's
-//     [op.ContinueInput.AuthTime]. The persisted batch carries the
+//     [authn.ContinueInput.AuthTime]. The persisted batch carries the
 //     stamped ConsumedAt on the matched slot.
 //   - On [OutcomeInvalid]: [interaction.Step.Prompt] is re-emitted with
 //     [interaction.RecoveryCodePromptData.AttemptsRemaining] unchanged (no slot
 //     was consumed).
 //   - On [OutcomeAllConsumed] / [OutcomeNoCodes]: the matching error
 //     is returned so the orchestrator stops the chain.
-func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
+func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
@@ -188,4 +188,4 @@ func (*Authenticator) prompt(batch *store.RecoveryBatch) *interaction.Prompt {
 
 // Compile-time confirmation that *Authenticator satisfies the public
 // interface.
-var _ op.Authenticator = (*Authenticator)(nil)
+var _ authn.Authenticator = (*Authenticator)(nil)

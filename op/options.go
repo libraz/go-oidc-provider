@@ -3,9 +3,11 @@ package op
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -152,6 +154,55 @@ type config struct {
 	// claim and the endpoints never emit the use_dpop_nonce
 	// challenge. At most one source may be registered.
 	dpopNonces DPoPNonceSource
+
+	// Login flow / UI / static-clients (Wave H, plan 005).
+
+	// loginFlow stores the [LoginFlow] supplied through
+	// [WithLoginFlow]. The zero value (Primary == nil) signals
+	// "not configured"; a non-zero value is staged for the H1-D
+	// orchestrator wiring and rejected at [config.validate] until
+	// that wiring lands. See docs/plans/005-login-and-ui-shell.md
+	// §3.1.
+	loginFlow LoginFlow
+
+	// loginFlowSet records whether [WithLoginFlow] was invoked,
+	// independent of whether the supplied flow had a non-nil
+	// Primary. The flag is used to reject duplicate registrations
+	// without forcing the orchestrator to re-inspect the zero value.
+	loginFlowSet bool
+
+	// reactUI stores the [ReactUI] supplied through [WithReactUI].
+	// The zero value signals "no SPA shell"; a non-zero value
+	// causes the default-driver fallback in [config.applyDefaults]
+	// to short-circuit so the embedder's SPA owns rendering.
+	reactUI ReactUI
+
+	// reactUISet records whether [WithReactUI] was invoked.
+	// Distinct from a populated reactUI value because future
+	// revisions may permit a partially-populated [ReactUI] zero
+	// value (e.g., LoginMount only).
+	reactUISet bool
+
+	// consentUI stores the [ConsentUI] supplied through
+	// [WithConsentUI]. Mutually exclusive with [config.reactUI];
+	// validation runs at the option site so the conflict surfaces
+	// at construction time.
+	consentUI ConsentUI
+
+	// consentUISet records whether [WithConsentUI] was invoked.
+	consentUISet bool
+
+	// staticClients carries the [store.Client] records produced by
+	// every [WithStaticClients] call (in invocation order, in seed
+	// order within each call). The slice is the H1-D orchestrator's
+	// input; the option layer only validates seeds and aggregates.
+	staticClients []store.Client
+
+	// firstPartyClients carries the client_id values supplied
+	// through [WithFirstPartyClients]. Validated against
+	// [config.staticClients] in [config.validate] so unknown ids
+	// fail at construction time.
+	firstPartyClients []string
 }
 
 // newConfig applies opts in order to a fresh config and returns the result
@@ -199,7 +250,15 @@ func (c *config) applyDefaults() {
 	defaults := defaultEndpoints()
 	c.endpoints = defaults.merge(c.endpoints)
 	if c.interactionD == nil {
-		c.interactionD = interaction.JSONDriver{}
+		// docs/plans/005-login-and-ui-shell.md §3.4: when neither a
+		// custom [interaction.Driver] nor a SPA shell is configured
+		// the OP boots into a working HTML login surface. With a
+		// SPA shell active the default falls away so the embedder's
+		// SPA owns rendering and the JSON state endpoints stay the
+		// only protocol surface.
+		if !c.reactUISet {
+			c.interactionD = interaction.HTMLDriver{}
+		}
 	}
 	if len(c.grants) == 0 {
 		c.grants = []grant.Type{grant.AuthorizationCode, grant.RefreshToken}
@@ -287,6 +346,34 @@ func isStandardScope(name string) bool {
 // options are internally consistent. It runs after applyDefaults so that
 // "missing required" errors are not masked by a default value.
 func (c *config) validate() error {
+	if err := c.validateRequired(); err != nil {
+		return err
+	}
+	if err := c.validateNetwork(); err != nil {
+		return err
+	}
+	for _, fn := range []func() error{
+		c.validateScopes,
+		c.validateProfiles,
+		c.validateRegistration,
+		c.validateAuthenticators,
+		c.validateInteractions,
+		c.validateLocales,
+		c.validateFirstPartyClients,
+		c.validateLoginFlow,
+	} {
+		if err := fn(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRequired enforces the four-argument boot contract (Issuer +
+// Store + Keyset + cookie keys) plus keyset shape. Split out so
+// [validate] stays under the gocognit ceiling and so a future "what
+// MUST be set" check has one obvious home.
+func (c *config) validateRequired() error {
 	if c.issuer == "" {
 		return ErrIssuerRequired
 	}
@@ -302,9 +389,14 @@ func (c *config) validate() error {
 	if err := validateCookieKeys(c.cookieKeys); err != nil {
 		return err
 	}
-	if err := validateCookieKeysRequired(c.grants, c.cookieKeys); err != nil {
-		return err
-	}
+	return validateCookieKeysRequired(c.grants, c.cookieKeys)
+}
+
+// validateNetwork wraps the trusted-proxy and CORS-origin parsers.
+// They share a single shape — parser returns an error, validate wraps
+// it as a configuration error — so collapsing them here keeps the
+// option-name strings together with the wrapper that surfaces them.
+func (c *config) validateNetwork() error {
 	if _, err := proxy.NewTrust(c.trustedProxies); err != nil {
 		return &Error{
 			Code:        codeConfiguration,
@@ -319,25 +411,147 @@ func (c *config) validate() error {
 			Cause:       err,
 		}
 	}
-	if err := c.validateScopes(); err != nil {
-		return err
+	return nil
+}
+
+// validateFirstPartyClients enforces the cross-cutting invariants
+// between [WithFirstPartyClients] and the static-client surface:
+//
+//   - every advertised client_id MUST appear in [config.staticClients]
+//     after every option has been applied (the option site cannot
+//     enforce this because the two options are order-independent);
+//   - no FAPI 2.0 profile MAY be active simultaneously, per
+//     docs/plans/005-login-and-ui-shell.md §3.10. FAPI 2.0 forbids
+//     auto-consent because the profile mandates explicit user
+//     authorization for every protected resource.
+func (c *config) validateFirstPartyClients() error {
+	if len(c.firstPartyClients) == 0 {
+		return nil
 	}
-	if err := c.validateProfiles(); err != nil {
-		return err
+	for _, p := range c.profiles {
+		if isFAPI2Profile(p) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithFirstPartyClients is incompatible with FAPI 2.0 profile " + p.String(),
+			}
+		}
 	}
-	if err := c.validateRegistration(); err != nil {
-		return err
+	known := make(map[string]struct{}, len(c.staticClients))
+	for _, sc := range c.staticClients {
+		known[sc.ID] = struct{}{}
 	}
-	if err := c.validateAuthenticators(); err != nil {
-		return err
+	for _, id := range c.firstPartyClients {
+		if _, ok := known[id]; !ok {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithFirstPartyClients: unknown client_id " + id,
+			}
+		}
 	}
-	if err := c.validateInteractions(); err != nil {
-		return err
+	return nil
+}
+
+// validateLoginFlow enforces the cross-cutting invariants between
+// [WithLoginFlow] and the legacy authenticator surface:
+//
+//   - [WithLoginFlow] is mutually exclusive with [WithAuthenticators].
+//     The two surfaces drive the orchestrator through different code
+//     paths; combining them invites silent misordering. Reject at the
+//     option-validation phase so the embedder sees a clear error
+//     before the orchestrator construction returns its own (less
+//     specific) refusal.
+//   - When [WithLoginFlow] is present, its [op.ExternalStep]
+//     KindLabel values MUST be user-defined (dotted prefix) so they
+//     cannot collide with the built-in [StepKind] reserved
+//     identifiers.
+//
+// The compiler-level checks (duplicate StepKind across rules, nil
+// Authenticator inside ExternalStep, …) live in
+// [authn.CompileLoginFlow]; this method handles the option-layer
+// shape.
+func (c *config) validateLoginFlow() error {
+	if !c.loginFlowSet {
+		return nil
 	}
-	if err := c.validateLocales(); err != nil {
+	if len(c.authenticators) > 0 {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow is mutually exclusive with WithAuthenticators",
+		}
+	}
+	if err := validateLoginFlowKinds(c.loginFlow); err != nil {
 		return err
 	}
 	return nil
+}
+
+// validateLoginFlowKinds asserts that every [ExternalStep] KindLabel
+// participating in the LoginFlow uses a dotted prefix (so
+// [StepKind.IsUserDefined] returns true). The check is conservative —
+// built-in [Step] values declare their own kinds at the type level,
+// only [ExternalStep] gives the embedder a free choice — but
+// surfacing a clear error at New() spares the embedder from finding
+// out at the first authentication request.
+func validateLoginFlowKinds(flow LoginFlow) error {
+	if ext, ok := flow.Primary.(ExternalStep); ok {
+		if err := checkExternalStepKind("Primary", ext); err != nil {
+			return err
+		}
+	}
+	for i, r := range flow.Rules {
+		if ext, ok := r.Then.(ExternalStep); ok {
+			if err := checkExternalStepKind("Rules["+strconv.Itoa(i)+"].Then", ext); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkExternalStepKind enforces the non-empty and user-defined
+// invariants on an [ExternalStep] declaration. The label string is
+// inlined into the error message so the embedder can locate the
+// offending entry.
+func checkExternalStepKind(where string, ext ExternalStep) error {
+	if ext.Authenticator == nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + ".Authenticator must not be nil",
+		}
+	}
+	if ext.KindLabel == "" {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + ".KindLabel must not be empty",
+		}
+	}
+	if ext.KindLabel.IsBuiltin() {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + ".KindLabel must not collide with a built-in StepKind (" + ext.KindLabel.String() + ")",
+		}
+	}
+	if !ext.KindLabel.IsUserDefined() {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + ".KindLabel must use a dotted prefix (e.g., \"myorg.factor\") so it cannot collide with future built-ins",
+		}
+	}
+	return nil
+}
+
+// isFAPI2Profile reports whether p is one of the FAPI 2.0 family
+// profiles. Centralising the check lets future first-party / FAPI
+// interactions extend the predicate without scattering profile
+// enumerations across the option layer.
+func isFAPI2Profile(p profile.Profile) bool {
+	switch p {
+	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+		return true
+	case profile.FAPICIBA, profile.IGovHigh:
+		return false
+	}
+	return false
 }
 
 // validateLocales rejects a [WithDefaultLocale] value that is not
@@ -886,8 +1100,15 @@ func WithGrants(grants ...grant.Type) Option {
 }
 
 // WithFeature enables an optional protocol extension. The option may be
-// repeated; each call adds to the enabled set. Duplicate enables are
-// rejected to surface configuration mistakes.
+// repeated; each call adds to the enabled set.
+//
+// Idempotent: enabling a flag that is already present is a silent
+// no-op rather than a configuration error. This matches the
+// auto-enable contract [WithProfile] introduced (ADR 0008 item 8 /
+// plan 005 §3.6) so an embedder may write
+// `WithProfile(FAPI2Baseline)` plus `WithFeature(feature.PAR)` —
+// either order, before or after — without the second call failing
+// because the profile already activated the flag.
 //
 // Stable since v0.1.
 func WithFeature(f feature.Flag) Option {
@@ -898,13 +1119,8 @@ func WithFeature(f feature.Flag) Option {
 				Description: "WithFeature received an unknown feature flag",
 			}
 		}
-		for _, existing := range c.features {
-			if existing == f {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithFeature received duplicate flag " + f.String(),
-				}
-			}
+		if featureEnabled(c.features, f) {
+			return nil
 		}
 		c.features = append(c.features, f)
 		return nil
@@ -939,6 +1155,14 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 // multiplicatively: enabling FAPI2Baseline implies its underlying features
 // and policies. Repeated profiles are rejected.
 //
+// As of plan 005 §3.6, WithProfile auto-enables every flag returned by
+// [profile.RequiredFeatures] for the supplied profile. The auto-enable is
+// idempotent: a flag already present in the configured feature set is
+// silently skipped (NOT rejected as a duplicate), so an embedder may
+// layer [WithFeature] before or after [WithProfile] without surprise.
+// This is the explicit "add-only" contract from
+// docs/plans/005-login-and-ui-shell.md §3.6.
+//
 // Stable since v0.1.
 func WithProfile(p profile.Profile) Option {
 	return optionFunc(func(c *config) error {
@@ -957,6 +1181,21 @@ func WithProfile(p profile.Profile) Option {
 			}
 		}
 		c.profiles = append(c.profiles, p)
+		// docs/plans/005-login-and-ui-shell.md §3.6 — auto-enable
+		// every required feature idempotently. The duplicate check
+		// in [WithFeature] is bypassed because the auto-enable
+		// contract is "silently skip", not "fail loudly": embedders
+		// must remain free to call [WithFeature] explicitly before
+		// or after [WithProfile].
+		for _, req := range profile.RequiredFeatures(p) {
+			if !req.IsValid() {
+				continue
+			}
+			if featureEnabled(c.features, req) {
+				continue
+			}
+			c.features = append(c.features, req)
+		}
 		return nil
 	})
 }
@@ -1357,6 +1596,373 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 			}
 		}
 		c.dpopNonces = source
+		return nil
+	})
+}
+
+// ReactUI declares the SPA-shell mount points and optional asset root
+// the [Provider] should expose so the embedder's React (or framework-
+// neutral SPA) frontend can drive the login / consent / RP-Initiated
+// Logout flows. The struct is supplied to [WithReactUI]; the option
+// stores it on config and the H1-D orchestrator wiring later
+// translates the mount points into JSON state endpoints.
+//
+// docs/plans/005-login-and-ui-shell.md §3.5 / ADR 0008 item 7. The
+// scope is deliberately limited to login / consent / RP-Initiated
+// Logout: ADR 0007 has ruled out front-channel logout and session
+// management iframes, so [ReactUI] does not carry mounts for those
+// surfaces.
+//
+// Experimental: the field set is being introduced in v0.x and MAY
+// gain optional fields before v1.0. Embedders SHOULD construct
+// [ReactUI] with named field initialisation so future additions
+// remain source-compatible.
+type ReactUI struct {
+	// LoginMount is the URL path the SPA's login entry HTML lives
+	// under (typically "/login"). MUST be non-empty and MUST start
+	// with "/"; an empty value rejects [WithReactUI] at the option
+	// site so the misconfiguration surfaces at construction time.
+	LoginMount string
+
+	// ConsentMount is the URL path the consent screen renders
+	// under. Empty means the SPA serves the consent screen from
+	// LoginMount and an internal route discriminator. When set
+	// MUST start with "/".
+	ConsentMount string
+
+	// LogoutMount is the URL path the RP-Initiated Logout
+	// confirmation screen renders under. Empty means the OP
+	// renders a built-in confirmation; when set MUST start with
+	// "/".
+	LogoutMount string
+
+	// StaticDir is the on-disk directory the [Provider] serves
+	// the SPA's static assets from. Empty means the embedder
+	// hosts the assets behind a reverse proxy; when set the path
+	// MUST exist at construction time so a typo surfaces at
+	// [New] rather than the first request.
+	StaticDir string
+}
+
+// ConsentUI declares the template the [Provider] uses to render the
+// consent screen when the embedder wants to keep the HTML driver but
+// override the consent body. Mutually exclusive with [WithReactUI];
+// supplying both fails [New] with a structured configuration error.
+//
+// docs/plans/005-login-and-ui-shell.md §3.5. The struct field set is
+// intentionally narrow: the consent ceremony has a fixed data model
+// (client metadata + scope list + CSRF token) and the embedder
+// supplies an [*template.Template] that consumes it.
+//
+// Experimental: the field set is being introduced in v0.x. The plan
+// reserves a Strings field for an i18n bundle once the public i18n
+// surface stabilises; the field is omitted today so embedders are
+// not pinned to a placeholder type.
+type ConsentUI struct {
+	// Template is the [html/template.Template] the consent screen
+	// renders. The library passes the canonical consent context
+	// (Client, Scopes, CSRFToken) at render time. MUST be non-nil;
+	// the option site rejects a nil template so the
+	// misconfiguration surfaces at [New].
+	Template *template.Template
+}
+
+// WithLoginFlow registers the [LoginFlow] the orchestrator drives.
+// The option compiles the flow into an internal runtime structure at
+// [New] and routes the authenticator chain through the
+// LoginFlow / Rule / Decider evaluation loop.
+//
+// Validation:
+//   - Primary MUST be non-nil. A flow with a nil Primary is rejected
+//     at the option site.
+//   - No two [Rule.Then] entries may share a [Step.Kind]; duplicate
+//     kinds are rejected so the orchestrator's completed-step
+//     deduplication has a unique discriminator per rule.
+//   - Decider MAY be nil; the orchestrator treats nil as "always
+//     defer to rules" per docs/plans/005-login-and-ui-shell.md §3.1.
+//   - Repeated [WithLoginFlow] calls are rejected so the
+//     misconfiguration surfaces at [New].
+//   - WithLoginFlow is mutually exclusive with [WithAuthenticators];
+//     combining the two surfaces would silently reorder factors.
+//
+// Built-in [Step] values (PrimaryPassword, StepTOTP, …) carry
+// configuration-time dependencies (TOTP encryption codec, passkey RP
+// origin, hash adapter) that are exposed through follow-up options;
+// until those land embedders adopt the seam through [ExternalStep],
+// which wraps an already-constructed [Authenticator]. Passing a
+// built-in Step directly fails [New] with a clear pointer to the
+// workaround.
+//
+// Experimental: the LoginFlow seam is being introduced in v0.x.
+// Field names and evaluation order MAY change before v1.0.
+func WithLoginFlow(flow LoginFlow) Option {
+	return optionFunc(func(c *config) error {
+		if c.loginFlowSet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithLoginFlow may be called at most once",
+			}
+		}
+		if flow.Primary == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithLoginFlow: LoginFlow.Primary must not be nil",
+			}
+		}
+		seen := make(map[StepKind]struct{}, len(flow.Rules))
+		for i, r := range flow.Rules {
+			if r.Then == nil {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not be nil",
+				}
+			}
+			k := r.Then.Kind()
+			if _, dup := seen[k]; dup {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithLoginFlow: duplicate StepKind " + k.String() + " across Rules",
+				}
+			}
+			seen[k] = struct{}{}
+		}
+		c.loginFlow = flow
+		c.loginFlowSet = true
+		return nil
+	})
+}
+
+// WithReactUI registers the [ReactUI] mount points the SPA frontend
+// hosts. With a SPA shell active the default-driver fallback in
+// [config.applyDefaults] short-circuits so the embedder's SPA owns
+// rendering; the OP serves JSON state endpoints under the configured
+// mounts. Mutually exclusive with [WithConsentUI]; supplying both
+// fails [New].
+//
+// Validation:
+//   - LoginMount MUST be non-empty and MUST start with "/".
+//   - ConsentMount and LogoutMount MAY be empty; when set they MUST
+//     start with "/".
+//   - StaticDir MAY be empty; when set the directory MUST exist at
+//     construction time (an [os.Stat] check) so a typo fails [New]
+//     rather than the first request.
+//
+// Experimental: Pending H1-D orchestrator hookup; the JSON state
+// endpoints are mounted by H1-D.
+func WithReactUI(ui ReactUI) Option {
+	return optionFunc(func(c *config) error {
+		if err := checkReactUIPrecondition(c); err != nil {
+			return err
+		}
+		if err := validateReactUIMounts(ui); err != nil {
+			return err
+		}
+		if err := validateReactUIStaticDir(ui.StaticDir); err != nil {
+			return err
+		}
+		c.reactUI = ui
+		c.reactUISet = true
+		return nil
+	})
+}
+
+// checkReactUIPrecondition rejects repeated [WithReactUI] calls and the
+// [WithConsentUI] mutual-exclusion case. Split out so [WithReactUI]
+// stays under the gocognit ceiling now that mount / StaticDir checks
+// also live in helpers.
+func checkReactUIPrecondition(c *config) error {
+	if c.reactUISet {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithReactUI may be called at most once",
+		}
+	}
+	if c.consentUISet {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithReactUI is mutually exclusive with WithConsentUI",
+		}
+	}
+	return nil
+}
+
+// validateReactUIMounts enforces the LoginMount-required and
+// "every mount path begins with /" rules. The error message names the
+// offending field so an embedder fixes the right line in their boot
+// sequence.
+func validateReactUIMounts(ui ReactUI) error {
+	if ui.LoginMount == "" {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithReactUI: LoginMount must not be empty",
+		}
+	}
+	for _, m := range []struct{ name, value string }{
+		{"LoginMount", ui.LoginMount},
+		{"ConsentMount", ui.ConsentMount},
+		{"LogoutMount", ui.LogoutMount},
+	} {
+		if m.value == "" {
+			continue
+		}
+		if !strings.HasPrefix(m.value, "/") {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithReactUI: " + m.name + " must start with \"/\"",
+			}
+		}
+	}
+	return nil
+}
+
+// validateReactUIStaticDir checks that a non-empty StaticDir refers to
+// an accessible directory at construction time. An empty value means
+// "let the embedder serve the SPA bundle through their own reverse
+// proxy" and is allowed.
+func validateReactUIStaticDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithReactUI: StaticDir " + dir + " not accessible",
+			Cause:       err,
+		}
+	}
+	if !info.IsDir() {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithReactUI: StaticDir " + dir + " is not a directory",
+		}
+	}
+	return nil
+}
+
+// WithConsentUI registers the [ConsentUI] template the HTML driver
+// uses for the consent screen. Mutually exclusive with [WithReactUI];
+// supplying both fails [New] with a structured configuration error.
+//
+// Validation:
+//   - Template MUST be non-nil.
+//   - Repeated [WithConsentUI] calls are rejected.
+//
+// Experimental: Pending H1-D wiring to the consent interaction.
+func WithConsentUI(ui ConsentUI) Option {
+	return optionFunc(func(c *config) error {
+		if c.consentUISet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithConsentUI may be called at most once",
+			}
+		}
+		if c.reactUISet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithConsentUI is mutually exclusive with WithReactUI",
+			}
+		}
+		if ui.Template == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithConsentUI: Template must not be nil",
+			}
+		}
+		c.consentUI = ui
+		c.consentUISet = true
+		return nil
+	})
+}
+
+// WithStaticClients seeds the [Provider]'s static-client surface from
+// the supplied [ClientSeed] values. Each seed is projected onto a
+// [store.Client] record via its [ClientSeed.seed] method; any error
+// from the projection (most commonly an empty
+// [ConfidentialClient.Secret] reaching [HashClientSecret]) surfaces at
+// the option site with the seed's index in the description so the
+// caller can locate the offending entry.
+//
+// Repeated calls append to the configured set so embedders MAY layer
+// builders (a base set plus a deployment-specific overlay) without
+// duplicate-rejection. The aggregate slice feeds the H1-D orchestrator
+// hookup; today the records are stored on config and consumed by the
+// orchestrator wiring that lands in a follow-up.
+//
+// Stable since v0.1.
+func WithStaticClients(seeds ...ClientSeed) Option {
+	return optionFunc(func(c *config) error {
+		if len(seeds) == 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithStaticClients requires at least one ClientSeed",
+			}
+		}
+		for i, s := range seeds {
+			if s == nil {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithStaticClients[" + strconv.Itoa(i) + "]: nil ClientSeed",
+				}
+			}
+			rec, err := s.seed()
+			if err != nil {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithStaticClients[" + strconv.Itoa(i) + "]: " + err.Error(),
+					Cause:       err,
+				}
+			}
+			c.staticClients = append(c.staticClients, rec)
+		}
+		return nil
+	})
+}
+
+// WithFirstPartyClients marks the listed client_id values as first-
+// party so the consent prompt is skipped for them. The auto-consent
+// path is gated on the matching [store.Client.Source] being
+// [store.ClientSourceStatic] or [store.ClientSourceAdmin] —
+// [store.ClientSourceDynamic] (RFC 7591 self-registered) is excluded
+// per docs/plans/005-login-and-ui-shell.md §3.10.
+//
+// Validation:
+//   - The id list MUST be non-empty.
+//   - Duplicate ids within a single call are rejected; repeated calls
+//     append so embedders may layer deployment-specific entries.
+//   - Every advertised id MUST appear in [WithStaticClients] after
+//     every option has been applied; the cross-option check runs in
+//     [config.validate] so the two options are order-independent.
+//   - FAPI 2.0 profiles forbid first-party auto-consent; combining
+//     [WithFirstPartyClients] with [WithProfile(profile.FAPI2*)]
+//     fails [New].
+//
+// Stable since v0.1.
+func WithFirstPartyClients(ids ...string) Option {
+	return optionFunc(func(c *config) error {
+		if len(ids) == 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithFirstPartyClients requires at least one client_id",
+			}
+		}
+		seen := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			if id == "" {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithFirstPartyClients: client_id must not be empty",
+				}
+			}
+			if _, dup := seen[id]; dup {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithFirstPartyClients: duplicate client_id " + id,
+				}
+			}
+			seen[id] = struct{}{}
+		}
+		c.firstPartyClients = append(c.firstPartyClients, ids...)
 		return nil
 	})
 }

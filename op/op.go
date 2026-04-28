@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -1122,8 +1124,18 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 // authorize-code mint observes the approved scope subset before any
 // user-extension can short-circuit the chain.
 func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
-	if len(cfg.authenticators) == 0 {
+	if len(cfg.authenticators) == 0 && !cfg.loginFlowSet {
 		return nil, nil //nolint:nilnil // documented "no orchestrator configured" sentinel
+	}
+	if cfg.loginFlowSet && len(cfg.authenticators) > 0 {
+		// Defence in depth: validateLoginFlow already rejects this
+		// combination, but the orchestrator constructor re-asserts
+		// the invariant so a refactor that loses the option-layer
+		// check still surfaces the misconfiguration here.
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow is mutually exclusive with WithAuthenticators",
+		}
 	}
 	signer, err := authn.NewStateRefSigner(deriveStateRefKey(cfg.cookieKeys[0]))
 	if err != nil {
@@ -1131,6 +1143,25 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 			Code:        codeConfiguration,
 			Description: "stateref signer construction failed",
 			Cause:       err,
+		}
+	}
+	var compiled *authn.CompiledLoginFlow
+	if cfg.loginFlowSet {
+		compiled, err = compileLoginFlow(cfg.loginFlow)
+		if err != nil {
+			// projectStepToFlow / authn.CompileLoginFlow already
+			// produce typed *Error / contextual messages; wrap only
+			// non-typed errors here so the outer message stays
+			// compact.
+			var typed *Error
+			if errors.As(err, &typed) {
+				return nil, typed
+			}
+			return nil, &Error{
+				Code:        codeConfiguration,
+				Description: "WithLoginFlow: " + err.Error(),
+				Cause:       err,
+			}
 		}
 	}
 	interactions := buildBuiltInInteractions(cfg)
@@ -1141,6 +1172,7 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 		Captcha:        cfg.captcha,
 		Observers:      cfg.loginObservers,
 		StateRefSigner: signer,
+		LoginFlow:      compiled,
 	})
 	if err != nil {
 		return nil, &Error{
@@ -1150,6 +1182,252 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 		}
 	}
 	return orch, nil
+}
+
+// compileLoginFlow projects the public [LoginFlow] onto the internal
+// [authn.LoginFlowSpec] shape and hands it to the authn-package
+// compiler. The projection lives in op/ (not internal/authn/) because
+// the rule "internal MUST NOT import op" forbids the inverse path.
+//
+// Built-in Step values (PrimaryPassword / StepTOTP / …) are not yet
+// wired to internal Authenticator primitives — their construction-
+// time dependencies (TOTP encryption codec, passkey RP origin, hash
+// adapter) are exposed by follow-up options. Until those land the
+// embedder uses [op.ExternalStep] to wrap an already-constructed
+// [Authenticator] for the LoginFlow seam; calling compileLoginFlow on
+// a built-in Step returns [authn.ErrBuiltinStepNotWired] with a
+// pointer to that workaround.
+func compileLoginFlow(flow LoginFlow) (*authn.CompiledLoginFlow, error) {
+	primary, err := projectStepToFlow("Primary", flow.Primary)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]authn.LoginFlowRule, 0, len(flow.Rules))
+	for i, r := range flow.Rules {
+		then, perr := projectStepToFlow("Rules["+strconv.Itoa(i)+"].Then", r.Then)
+		if perr != nil {
+			return nil, perr
+		}
+		// Capture the public predicate inside a closure that adapts
+		// the LoginFlowContext shape to the public LoginContext one.
+		// The closure preserves nil semantics: a nil When projects to
+		// a nil compiled predicate (the compiler then substitutes the
+		// constant-false predicate).
+		pred := r.When
+		var when func(authn.LoginFlowContext) bool
+		if pred != nil {
+			when = func(lc authn.LoginFlowContext) bool {
+				return pred(toPublicLoginContext(lc))
+			}
+		}
+		rules = append(rules, authn.LoginFlowRule{When: when, Then: then})
+	}
+	spec := authn.LoginFlowSpec{
+		Primary: primary,
+		Rules:   rules,
+		Risk:    flow.Risk,
+	}
+	if flow.Decider != nil {
+		spec.Decider = &deciderAdapter{inner: flow.Decider}
+	}
+	return authn.CompileLoginFlow(spec)
+}
+
+// projectStepToFlow projects a single public [Step] onto the
+// internal [authn.LoginFlowStep] shape. The dispatch handles every
+// shape the public surface exposes today:
+//
+//   - [ExternalStep] (embedder-wrapped Authenticator): forwarded
+//     verbatim, the orchestrator drives the wrapped authenticator
+//     directly.
+//   - Built-in Steps with construction-time wiring (PrimaryPasskey,
+//     StepTOTP, StepEmailOTP, StepRecoveryCode, StepCaptcha): the
+//     matching builder synthesises the internal authenticator from
+//     the Step's public fields. Validation errors surface as a
+//     typed *Error pointing at the offending Step.
+//   - PrimaryPassword: deferred. The construction-time deps
+//     (PasswordCredentialStore + verifier) are not yet exposed
+//     publicly. Surface the explanation verbatim so the upgrade
+//     path is obvious; embedders use [ExternalStep] today.
+func projectStepToFlow(where string, s Step) (authn.LoginFlowStep, error) {
+	if s == nil {
+		return authn.LoginFlowStep{}, &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + " must not be nil",
+		}
+	}
+	if ext, ok := s.(ExternalStep); ok {
+		return projectExternalStep(where, ext)
+	}
+	return projectBuiltinStep(where, s)
+}
+
+// projectExternalStep is the [projectStepToFlow] arm for an
+// [ExternalStep]: validate the wrapped authenticator and forward
+// verbatim. The split keeps [projectStepToFlow] under the cyclop
+// budget without conflating the ExternalStep contract (verbatim
+// forward) with the built-in builder dispatch.
+func projectExternalStep(where string, ext ExternalStep) (authn.LoginFlowStep, error) {
+	if ext.Authenticator == nil {
+		return authn.LoginFlowStep{}, &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + " ExternalStep.Authenticator must not be nil",
+		}
+	}
+	return authn.LoginFlowStep{
+		Kind:          string(ext.KindLabel),
+		Authenticator: ext.Authenticator,
+	}, nil
+}
+
+// projectBuiltinStep dispatches a built-in [Step] (PrimaryPasskey,
+// StepTOTP, StepEmailOTP, StepRecoveryCode, StepCaptcha) to the
+// matching builder in loginflow_compile.go and wraps the constructed
+// authenticator in a [authn.LoginFlowStep]. PrimaryPassword and any
+// unrecognised Step value surface the deferred-wiring error so the
+// embedder is pointed at the ExternalStep workaround.
+func projectBuiltinStep(where string, s Step) (authn.LoginFlowStep, error) {
+	switch v := s.(type) {
+	case PrimaryPasskey:
+		auth, err := buildPrimaryPasskey(v)
+		if err != nil {
+			return authn.LoginFlowStep{}, projectStepError(where, err)
+		}
+		return authn.LoginFlowStep{Kind: string(StepKindPasskey), Authenticator: auth}, nil
+	case StepTOTP:
+		auth, err := buildStepTOTP(v)
+		if err != nil {
+			return authn.LoginFlowStep{}, projectStepError(where, err)
+		}
+		return authn.LoginFlowStep{Kind: string(StepKindTOTP), Authenticator: auth}, nil
+	case StepEmailOTP:
+		auth, err := buildStepEmailOTP(v)
+		if err != nil {
+			return authn.LoginFlowStep{}, projectStepError(where, err)
+		}
+		return authn.LoginFlowStep{Kind: string(StepKindEmailOTP), Authenticator: auth}, nil
+	case StepRecoveryCode:
+		auth, err := buildStepRecoveryCode(v)
+		if err != nil {
+			return authn.LoginFlowStep{}, projectStepError(where, err)
+		}
+		return authn.LoginFlowStep{Kind: string(StepKindRecoveryCode), Authenticator: auth}, nil
+	case StepCaptcha:
+		auth, err := buildStepCaptcha(v)
+		if err != nil {
+			return authn.LoginFlowStep{}, projectStepError(where, err)
+		}
+		return authn.LoginFlowStep{Kind: string(StepKindCaptcha), Authenticator: auth, IsCaptcha: true}, nil
+	case PrimaryPassword:
+		// PrimaryPassword wiring is deferred: the password-credential
+		// store interface and the username -> subject lookup contract
+		// are still being designed. Embedders compose a password
+		// factor through ExternalStep today; the ExternalStep wraps
+		// their own Authenticator so credential storage stays inside
+		// the embedder's process.
+		_ = v
+		return authn.LoginFlowStep{}, &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + " PrimaryPassword wiring is deferred; wrap your own Authenticator in op.ExternalStep until the password-credential store contract lands",
+			Cause:       authn.ErrBuiltinStepNotWired,
+		}
+	default:
+		// An unrecognised Step shape (a future built-in we forgot to
+		// wire, or an embedder-defined value type that satisfies Step
+		// but is not ExternalStep). Surface the same actionable
+		// message so the upgrade path stays obvious.
+		return authn.LoginFlowStep{}, &Error{
+			Code:        codeConfiguration,
+			Description: "WithLoginFlow: " + where + " uses built-in Step " + string(s.Kind()) + " whose primitive is not yet exposed; wrap your own Authenticator in op.ExternalStep until the matching option lands",
+			Cause:       authn.ErrBuiltinStepNotWired,
+		}
+	}
+}
+
+// projectStepError wraps a builder failure into a typed [Error] that
+// names the offending Step's location ("Primary", "Rules[0].Then",
+// ...). Centralising the wrapping keeps the [projectStepToFlow]
+// switch arms readable.
+func projectStepError(where string, err error) error {
+	return &Error{
+		Code:        codeConfiguration,
+		Description: "WithLoginFlow: " + where + ": " + err.Error(),
+		Cause:       err,
+	}
+}
+
+// toPublicLoginContext projects the internal [authn.LoginFlowContext]
+// onto the public [LoginContext] surface rule predicates consume. The
+// numeric RiskScore field maps verbatim because the public
+// [op.RiskScore] constants share the internal numeric ordering.
+func toPublicLoginContext(lc authn.LoginFlowContext) LoginContext {
+	scopes := make(ScopeSet, len(lc.RequestedScopes))
+	for _, s := range lc.RequestedScopes {
+		scopes[ScopeName(s)] = struct{}{}
+	}
+	completed := make([]StepKind, len(lc.CompletedKinds))
+	for i, k := range lc.CompletedKinds {
+		completed[i] = StepKind(k)
+	}
+	return LoginContext{
+		Identity:        Identity{Subject: Subject(lc.Subject)},
+		ClientID:        lc.ClientID,
+		RequestedScopes: scopes,
+		FailedAttempts:  lc.FailedAttempts,
+		RiskScore:       RiskScore(lc.RiskScore),
+		NewDevice:       lc.NewDevice,
+		CompletedSteps:  completed,
+		ACRValues:       lc.ACRValues,
+		Remote: ClientHints{
+			RemoteIP:       lc.RemoteIP,
+			UserAgent:      lc.UserAgent,
+			AcceptLanguage: lc.AcceptLanguage,
+		},
+	}
+}
+
+// deciderAdapter projects the public [Decider] surface onto the
+// internal [authn.LoginFlowDecider]. The adapter translates each
+// public [Decision] case into its internal counterpart so the
+// orchestrator's switch stays closed (LoginFlowDecision is a sealed
+// sum). An unrecognised public Decision projects to LoginFlowPass
+// (the safe default) — Decision is itself a sealed sum so the path is
+// only reachable if the op package adds a new Decision case without
+// updating this adapter.
+type deciderAdapter struct {
+	inner Decider
+}
+
+// Decide implements [authn.LoginFlowDecider]. The adapter rebuilds the
+// public LoginContext from the internal projection, calls the
+// embedder's Decider, and translates the returned Decision back. A
+// Require{Step} decision projects the wrapped Step back through
+// projectStepToFlow so a Decider that returns an unwrapped built-in
+// Step surfaces as ErrInvalidStep at the orchestrator (the
+// dynamic-compile path is intentionally absent — see plan 005 H1-D §6).
+func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn // sealed-sum LoginFlowDecision is the contract.
+	d := a.inner.Decide(ctx, toPublicLoginContext(lc))
+	switch v := d.(type) {
+	case Allow:
+		return authn.LoginFlowAllow{}
+	case Pass:
+		return authn.LoginFlowPass{}
+	case Deny:
+		return authn.LoginFlowDeny{Reason: v.Reason}
+	case Require:
+		// Project the Decider-returned Step lazily. If the Step is
+		// not registered in the compiled flow's byKind map, the
+		// orchestrator surfaces ErrInvalidStep rather than
+		// dynamically extending the flow.
+		if v.Step == nil {
+			return authn.LoginFlowPass{}
+		}
+		return authn.LoginFlowRequire{
+			Step: authn.LoginFlowStep{Kind: string(v.Step.Kind())},
+		}
+	default:
+		return authn.LoginFlowPass{}
+	}
 }
 
 // buildBuiltInInteractions prepends the library-built-in interactions

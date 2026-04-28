@@ -166,6 +166,36 @@ type State struct {
 	// mint the authorization code with the approved scope rather
 	// than the full requested set.
 	ApprovedScopes []string `json:"approved_scopes,omitempty"`
+
+	// CompletedStepKinds records which [LoginFlow] step kinds have
+	// run during this attempt. Empty when [Config.LoginFlow] is not
+	// configured. The slice is the dedup unit for [LoginFlowRule]
+	// re-evaluation: a rule whose Then.Kind is already present is
+	// skipped on subsequent passes so the same step cannot run twice
+	// in a chain. The dedup invariant defends against timing-oracle
+	// attacks where an attacker repeatedly triggers the same Step to
+	// extract per-attempt timing.
+	CompletedStepKinds []string `json:"completed_step_kinds,omitempty"`
+
+	// RiskScoreCached is the orchestrator's one-shot evaluation of
+	// [Config.LoginFlow.Risk] at chain start. Zero means "no signal
+	// available or no LoginFlow / no Risk configured"; the cached
+	// value mirrors the numeric ordering of the public op.RiskScore
+	// constants (None=0, Low=1, Medium=2, High=3) so a rule
+	// predicate `score >= threshold` works uniformly across the
+	// orchestrator-cached and embedder-supplied paths.
+	//
+	// The orchestrator MUST NOT re-call [LoginFlow.Risk] once a
+	// non-zero score is cached: external risk APIs are paid, and
+	// plan 005 §3.1 makes this an explicit budget invariant.
+	RiskScoreCached int `json:"risk_score_cached,omitempty"`
+
+	// ActiveStepKind is the [LoginFlowStep.Kind] of the active
+	// LoginFlow step, or "" when no LoginFlow step is mid-ceremony.
+	// The orchestrator uses it to route a submission back through the
+	// per-step authenticator and to append to [CompletedStepKinds]
+	// once the step's Result lands.
+	ActiveStepKind string `json:"active_step_kind,omitempty"`
 }
 
 // Input is the per-tick payload the HTTP layer hands to
@@ -269,6 +299,22 @@ type Config struct {
 	// Nil means "discard"; the orchestrator never panics on a nil
 	// logger.
 	Logger *slog.Logger
+
+	// LoginFlow is the optional compiled high-level flow. Mutually
+	// exclusive with [Authenticators] at construction time: the public
+	// option layer rejects the combination at op.New, and [New] here
+	// re-asserts the invariant so the internal package surface is
+	// also self-protecting.
+	//
+	// When non-nil the orchestrator drives the chain through
+	// [advanceLoginFlow] instead of the legacy [advanceAuthn] path.
+	// Risk, Captcha, and Observers continue to work; the differences
+	// are: factor selection follows [CompiledLoginFlow.primary] +
+	// [CompiledLoginFlow.rules] / [CompiledLoginFlow.decider]
+	// instead of the [Config.Authenticators] slice; Risk is invoked
+	// at most once per chain (see [State.RiskScoreCached]); panic
+	// recovery wraps every embedder predicate / decider.
+	LoginFlow *CompiledLoginFlow
 }
 
 // Orchestrator runs the authenticator chain state machine. It is a
@@ -288,22 +334,14 @@ type Orchestrator struct {
 // [op.New] construction time so deployment misconfigurations cannot
 // reach the first request.
 func New(cfg Config) (*Orchestrator, error) {
-	if len(cfg.Authenticators) == 0 {
-		return nil, errors.New("authn: at least one Authenticator required")
+	if err := validateChainShape(cfg); err != nil {
+		return nil, err
 	}
 	if cfg.StateRefSigner == nil {
 		return nil, errors.New("authn: StateRefSigner required")
 	}
-	seenType := make(map[FactorType]struct{}, len(cfg.Authenticators))
-	for _, a := range cfg.Authenticators {
-		if a == nil {
-			return nil, errors.New("authn: nil Authenticator")
-		}
-		t := a.Type()
-		if _, dup := seenType[t]; dup {
-			return nil, fmt.Errorf("authn: duplicate Authenticator type %q", t)
-		}
-		seenType[t] = struct{}{}
+	if err := validateAuthenticators(cfg.Authenticators); err != nil {
+		return nil, err
 	}
 	seenName := make(map[string]struct{}, len(cfg.Interactions))
 	deduped := make([]Interaction, 0, len(cfg.Interactions))
@@ -327,6 +365,39 @@ func New(cfg Config) (*Orchestrator, error) {
 		logger = slog.New(discardHandler{})
 	}
 	return &Orchestrator{cfg: cfg, logger: logger}, nil
+}
+
+// validateChainShape enforces the LoginFlow / Authenticators
+// either-or invariant: exactly one of the two must be supplied.
+// Split out so [New] stays under the gocognit ceiling now that
+// LoginFlow added a third construction-time precondition.
+func validateChainShape(cfg Config) error {
+	if cfg.LoginFlow != nil && len(cfg.Authenticators) > 0 {
+		return errors.New("authn: LoginFlow and Authenticators are mutually exclusive")
+	}
+	if cfg.LoginFlow == nil && len(cfg.Authenticators) == 0 {
+		return errors.New("authn: at least one Authenticator required")
+	}
+	return nil
+}
+
+// validateAuthenticators rejects nil entries and duplicate
+// [FactorType] values in the legacy chain. The LoginFlow path does
+// not flow through this helper — its primary / rule steps are
+// validated by [CompileLoginFlow] at op.New time.
+func validateAuthenticators(auths []Authenticator) error {
+	seen := make(map[FactorType]struct{}, len(auths))
+	for _, a := range auths {
+		if a == nil {
+			return errors.New("authn: nil Authenticator")
+		}
+		t := a.Type()
+		if _, dup := seen[t]; dup {
+			return fmt.Errorf("authn: duplicate Authenticator type %q", t)
+		}
+		seen[t] = struct{}{}
+	}
+	return nil
 }
 
 // Tick advances st by one orchestrator step. The method is pure: no
@@ -386,6 +457,8 @@ func (o *Orchestrator) consumeSubmission(ctx context.Context, st State, in Input
 		return o.handleAuthSubmission(ctx, st, in)
 	case strings.HasPrefix(payload.Tag, tagInteractionPrefix):
 		return o.handleInteractionSubmission(ctx, st, in)
+	case strings.HasPrefix(payload.Tag, tagLoginFlowPrefix):
+		return o.handleLoginFlowSubmission(ctx, st, in, strings.TrimPrefix(payload.Tag, tagLoginFlowPrefix))
 	default:
 		return st, interaction.Step{}, ErrInvalidStateRef
 	}
@@ -527,7 +600,13 @@ func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (Sta
 		return o.advancePhaseInteractions(ctx, st, in.Now, TriggerBeforeAuthn, PhaseAuthn)
 	case PhaseAuthn:
 		next, step, err := o.advanceAuthn(ctx, st, in.Now)
-		return next, step, false, err
+		// LoginFlow path may transition to PhaseAfterAuthn without
+		// emitting a Prompt (Allow / no-rule-matched / decider-Pass
+		// + empty rules). Detect the phase change so the dispatcher
+		// re-enters with the updated phase rather than tripping the
+		// stuck-chain guard.
+		transition := next.Phase != PhaseAuthn
+		return next, step, transition, err
 	case PhaseAfterAuthn:
 		return o.advancePhaseInteractions(ctx, st, in.Now, TriggerAfterAuthn, PhaseDone)
 	case PhaseDone:
@@ -595,7 +674,14 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 // advanceAuthn picks the next factor candidate. The branches handle
 // the captcha-before-factor case, the risk consult, and the
 // subject-required factor skip rule.
+//
+// When [Config.LoginFlow] is configured the function delegates to
+// [advanceLoginFlow]; the legacy [Config.Authenticators] body below is
+// used only when LoginFlow is nil.
 func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time) (State, interaction.Step, error) {
+	if o.cfg.LoginFlow != nil {
+		return o.advanceLoginFlow(ctx, st, now)
+	}
 	required, denied, err := o.runRiskPreFactor(ctx, st, now)
 	if err != nil {
 		return st, interaction.Step{}, err
@@ -967,6 +1053,13 @@ const (
 	tagCaptcha           = "captcha"
 	tagAuthPrefix        = "auth:"
 	tagInteractionPrefix = "interaction:"
+	// tagLoginFlowPrefix carries the active LoginFlow [StepKind] so
+	// a submission against a LoginFlow-driven step routes back to the
+	// per-step Authenticator. The kind is appended verbatim so two
+	// Steps with different kinds emit distinguishable StateRef
+	// payloads — the security invariant from plan 005 H1-D §1
+	// ("StateRef per-Step tagging").
+	tagLoginFlowPrefix = "loginflow:"
 )
 
 // discardHandler is the slog handler the orchestrator uses when the

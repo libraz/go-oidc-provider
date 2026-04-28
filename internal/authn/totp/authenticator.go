@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -76,26 +76,26 @@ func NewAuthenticator(verifier *Verifier, totpStore store.TOTPStore) (*Authentic
 	return &Authenticator{verifier: verifier, store: totpStore}, nil
 }
 
-// Type implements [op.Authenticator]. Always returns [op.FactorTOTP].
-func (*Authenticator) Type() op.FactorType { return op.FactorTOTP }
+// Type implements [authn.Authenticator]. Always returns [authn.FactorTOTP].
+func (*Authenticator) Type() authn.FactorType { return authn.FactorTOTP }
 
-// AAL implements [op.Authenticator]. TOTP contributes AAL2 — the
+// AAL implements [authn.Authenticator]. TOTP contributes AAL2 — the
 // RFC 8176 §2 mapping in docs/plans/002-product-design.md §E.2.
-func (*Authenticator) AAL() op.AAL { return op.AAL2 }
+func (*Authenticator) AAL() authn.AAL { return authn.AAL2 }
 
-// AMR implements [op.Authenticator]. TOTP maps to RFC 8176 §2 "otp".
+// AMR implements [authn.Authenticator]. TOTP maps to RFC 8176 §2 "otp".
 func (*Authenticator) AMR() string { return "otp" }
 
-// Prompts implements [op.Authenticator]. The adapter emits a single
+// Prompts implements [authn.Authenticator]. The adapter emits a single
 // prompt type; the slice is read-only by contract.
 func (*Authenticator) Prompts() []string { return []string{PromptType} }
 
-// Begin implements [op.Authenticator]. It reads the persisted record
-// for [op.BeginInput.Subject] and emits the [PromptType] prompt with
+// Begin implements [authn.Authenticator]. It reads the persisted record
+// for [authn.BeginInput.Subject] and emits the [PromptType] prompt with
 // the current [interaction.TOTPPromptData.AttemptsRemaining]. A locked record
 // surfaces [ErrLocked] verbatim so the orchestrator can stop the
 // chain instead of pretending the factor is available.
-func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interaction.Step, error) {
+func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
@@ -112,7 +112,7 @@ func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interactio
 	return interaction.Step{Prompt: a.prompt(rec)}, nil
 }
 
-// Continue implements [op.Authenticator]. It reads the persisted
+// Continue implements [authn.Authenticator]. It reads the persisted
 // record again (the adapter is stateless across Begin / Continue),
 // verifies the submitted code through the [Verifier], and persists
 // the (possibly mutated) record before returning.
@@ -120,7 +120,7 @@ func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interactio
 // Outcomes:
 //
 //   - On [OutcomeSuccess]: [interaction.Step.Result] is populated with the
-//     bound subject and the orchestrator's [op.ContinueInput.AuthTime].
+//     bound subject and the orchestrator's [authn.ContinueInput.AuthTime].
 //   - On [OutcomeWrongCode] (recoverable): [interaction.Step.Prompt] is re-
 //     emitted with [interaction.TOTPPromptData.AttemptsRemaining] decremented;
 //     the orchestrator advances [State.StepCounter] so the previous
@@ -128,7 +128,7 @@ func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interactio
 //   - On [OutcomeLocked] / [OutcomeResetRequired]: the matching error
 //     is returned so the orchestrator stops the chain. The persisted
 //     record carries the lockout stamp.
-func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
+func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
@@ -195,4 +195,4 @@ func (*Authenticator) prompt(rec *store.TOTPRecord) *interaction.Prompt {
 // and store fields are reference-typed; a value-receiver method set
 // would force unnecessary copies when the orchestrator hands the
 // adapter through interface boundaries.
-var _ op.Authenticator = (*Authenticator)(nil)
+var _ authn.Authenticator = (*Authenticator)(nil)

@@ -9,7 +9,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -93,18 +93,18 @@ func NewAuthenticator(verifier *Verifier, passkeyStore store.PasskeyStore) (*Aut
 	return &Authenticator{verifier: verifier, store: passkeyStore}, nil
 }
 
-// Type implements [op.Authenticator]. Always returns [op.FactorPasskey].
-func (*Authenticator) Type() op.FactorType { return op.FactorPasskey }
+// Type implements [authn.Authenticator]. Always returns [authn.FactorPasskey].
+func (*Authenticator) Type() authn.FactorType { return authn.FactorPasskey }
 
-// AAL implements [op.Authenticator]. v1.0 passkeys default to AAL2
+// AAL implements [authn.Authenticator]. v1.0 passkeys default to AAL2
 // even when user-verification is set — the conservative reading of
-// NIST SP 800-63B §5.1.7 documented on [op.AAL] (passkeys default to
+// NIST SP 800-63B §5.1.7 documented on [authn.AAL] (passkeys default to
 // AAL2 unless the deployment explicitly raises the level on a
 // hardware-attested cross-platform key). The orchestrator takes the
 // maximum across factors when computing the session AAL.
-func (*Authenticator) AAL() op.AAL { return op.AAL2 }
+func (*Authenticator) AAL() authn.AAL { return authn.AAL2 }
 
-// AMR implements [op.Authenticator]. The WebAuthn user-verification bit
+// AMR implements [authn.Authenticator]. The WebAuthn user-verification bit
 // drives the runtime amr value: a user-verified assertion contributes
 // "hwk" (hardware key with verified user) and a presence-only assertion
 // contributes "swk". v1.0 reports the static value "hwk" because the
@@ -113,11 +113,11 @@ func (*Authenticator) AAL() op.AAL { return op.AAL2 }
 // separate adapter instance with a different AMR string.
 func (*Authenticator) AMR() string { return "hwk" }
 
-// Prompts implements [op.Authenticator]. The adapter emits a single
+// Prompts implements [authn.Authenticator]. The adapter emits a single
 // prompt type; the slice is read-only by contract.
 func (*Authenticator) Prompts() []string { return []string{PromptType} }
 
-// Begin implements [op.Authenticator]. It loads the subject's
+// Begin implements [authn.Authenticator]. It loads the subject's
 // registered credentials, kicks off a WebAuthn assertion ceremony, and
 // returns the prompt with the challenge plus the encoded session in
 // [interaction.Step.Scratch].
@@ -128,7 +128,7 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 // [ErrCredentialNotRegistered] — the orchestrator surfaces that as a
 // chain failure rather than treating "no passkey" as "skip this
 // factor".
-func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interaction.Step, error) {
+func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
@@ -153,7 +153,7 @@ func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interactio
 	}, nil
 }
 
-// Continue implements [op.Authenticator]. It decodes the session from
+// Continue implements [authn.Authenticator]. It decodes the session from
 // the orchestrator-supplied scratch, replays the credential list from
 // the store, and validates the SPA-supplied assertion response through
 // the [Verifier]. On success it persists the rotated credential record
@@ -162,14 +162,14 @@ func (a *Authenticator) Begin(ctx context.Context, in op.BeginInput) (interactio
 // Outcomes:
 //
 //   - On success: [interaction.Step.Result] is populated with the
-//     bound subject and the orchestrator's [op.ContinueInput.AuthTime].
+//     bound subject and the orchestrator's [authn.ContinueInput.AuthTime].
 //   - On [ErrCloneDetected]: the updated credential record is
 //     persisted (so the audit trail is intact) but the error is
 //     surfaced verbatim. The orchestrator owns the policy decision.
 //   - On any other error (parse failure, signature failure, expired
 //     session): the error flows through unchanged so the orchestrator
 //     can stop the chain.
-func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (interaction.Step, error) {
+func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	response, session, err := a.parseContinueInput(in)
 	if err != nil {
 		return interaction.Step{}, err
@@ -191,7 +191,7 @@ func (a *Authenticator) Continue(ctx context.Context, in op.ContinueInput) (inte
 // for [Verifier.FinishLogin]. The split keeps [Authenticator.Continue]
 // below the gocognit budget while preserving the trust-boundary checks
 // (subject, scratch, field presence, byte cap, JSON shape).
-func (a *Authenticator) parseContinueInput(in op.ContinueInput) ([]byte, *Session, error) {
+func (a *Authenticator) parseContinueInput(in authn.ContinueInput) ([]byte, *Session, error) {
 	if in.Subject == "" {
 		return nil, nil, ErrSubjectRequired
 	}
@@ -318,7 +318,7 @@ func (*Authenticator) prompt(session Session, creds []Credential) *interaction.P
 // interface. The receiver is a pointer because verifier and store are
 // reference-typed; a value-receiver method set would force an
 // unnecessary copy at every interface dispatch.
-var _ op.Authenticator = (*Authenticator)(nil)
+var _ authn.Authenticator = (*Authenticator)(nil)
 
 // credentialFromRecord projects a [store.PasskeyRecord] onto the
 // package's [Credential] shape so the verifier can consume it. The
