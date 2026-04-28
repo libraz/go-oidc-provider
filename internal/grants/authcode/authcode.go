@@ -127,6 +127,7 @@ type IssueInput struct {
 	CodeChallengeMethod string
 	Nonce               string
 	State               string
+	DPoPJKT             string
 }
 
 // Issue validates the PKCE pair, generates an opaque code, and persists the
@@ -167,6 +168,7 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 		CodeChallengeMethod: in.CodeChallengeMethod,
 		Nonce:               in.Nonce,
 		State:               in.State,
+		DPoPJKT:             in.DPoPJKT,
 		ExpiresAt:           now.Add(i.ttl),
 		CreatedAt:           now,
 	}
@@ -258,6 +260,13 @@ type Exchanged struct {
 	// authorization endpoint, copied into the issued ID Token.
 	Nonce string
 
+	// DPoPJKT is the SHA-256 thumbprint the client committed to via
+	// the RFC 9449 §10 "dpop_jkt" parameter at the authorization
+	// endpoint. Empty when no commitment was made. The token endpoint
+	// rejects an inbound DPoP proof whose thumbprint does not match a
+	// non-empty value here.
+	DPoPJKT string
+
 	// ConsumedAt is the wall-clock time at which the store committed the
 	// consumption. It is populated by the store, not the clock injected
 	// into the exchanger, so the audit trail reflects the persistence
@@ -321,6 +330,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		GrantID:    rec.GrantID,
 		Scope:      append([]string(nil), rec.Scope...),
 		Nonce:      rec.Nonce,
+		DPoPJKT:    rec.DPoPJKT,
 		ConsumedAt: *rec.ConsumedAt,
 	}, nil
 }

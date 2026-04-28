@@ -94,6 +94,16 @@ type Request struct {
 	// and PAR forms by inspecting the URN prefix; the validator only
 	// enforces that the value parses as a URI when present.
 	RequestURI string
+
+	// DPoPJKT is the RFC 9449 §10 "dpop_jkt" parameter — the SHA-256
+	// thumbprint of the DPoP key the client commits to using at the
+	// token endpoint. Empty when the wire form omitted it. The
+	// validator does not check the format here; the HTTP layer
+	// matches it against the inbound DPoP proof's JKT (when both are
+	// present) and persists it onto the authorization_code so the
+	// /token endpoint can refuse a proof signed with a different
+	// key.
+	DPoPJKT string
 }
 
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
@@ -147,6 +157,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		ResponseMode:        singles["response_mode"],
 		RequestObject:       singles["request"],
 		RequestURI:          singles["request_uri"],
+		DPoPJKT:             singles["dpop_jkt"],
 	}, nil
 }
 
@@ -167,6 +178,7 @@ var singleParseFields = []string{
 	"response_mode",
 	"request",
 	"request_uri",
+	"dpop_jkt",
 }
 
 // parseSingleValues extracts every single-valued parameter from v,

@@ -12,6 +12,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -63,6 +64,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	values, ok = consumeJARRequestObject(r.Context(), w, deps, client, values)
+	if !ok {
+		return
+	}
+	values, ok = bindDPoPProof(r, w, deps, values)
 	if !ok {
 		return
 	}
@@ -176,6 +181,85 @@ func jarDescriptionFor(err error) string {
 		return "request object is malformed"
 	default:
 		return "request object verification failed"
+	}
+}
+
+// bindDPoPProof verifies the optional DPoP header on the /par request
+// and reconciles the proof's thumbprint with any "dpop_jkt" already
+// present in values (form parameter or merged JAR claim). The contract
+// implements RFC 9449 §10:
+//
+//   - No DPoP header, no dpop_jkt: no-op (the request remains unbound).
+//   - No DPoP header, with dpop_jkt: the value flows through unchanged
+//     so the eventual /token endpoint can still enforce the binding.
+//   - With DPoP header, no dpop_jkt: the proof's thumbprint is stamped
+//     onto values["dpop_jkt"] so the /authorize → /token chain inherits
+//     the binding without the client having to commit twice.
+//   - With DPoP header AND dpop_jkt: the two MUST match — a divergence
+//     means the client signed a different key than it just committed
+//     to, and §10 mandates rejection.
+//
+// A nil [Deps.DPoP] disables verification; a missing DPoP header is
+// always tolerated because RFC 9449 §10.1 makes the header optional at
+// /par. Errors emit the response body and the function returns
+// ok=false so the caller stops.
+func bindDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps, values url.Values) (url.Values, bool) {
+	if deps.DPoP == nil {
+		return values, true
+	}
+	if r.Header.Get("DPoP") == "" {
+		return values, true
+	}
+	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
+	if err != nil {
+		writeDPoPError(w, err)
+		return nil, false
+	}
+	committed := values.Get("dpop_jkt")
+	if committed != "" && committed != res.JKT {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"DPoP proof key does not match the dpop_jkt commitment")
+		return nil, false
+	}
+	out := cloneValues(values)
+	out.Set("dpop_jkt", res.JKT)
+	return out, true
+}
+
+// cloneValues returns a deep copy of in so [bindDPoPProof] can mutate
+// the returned value without aliasing the caller's slice headers.
+func cloneValues(in url.Values) url.Values {
+	out := make(url.Values, len(in))
+	for k, v := range in {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
+
+// writeDPoPError translates a [dpop.Err*] sentinel onto the wire form.
+// RFC 9449 §7 prescribes "invalid_dpop_proof" but the PAR endpoint
+// reuses the existing "invalid_request" envelope for parity with the
+// token endpoint and for OFCS expectations under PAR-2.3. The nonce
+// challenge is handled separately because RFC 9449 §8 mandates the
+// dedicated "use_dpop_nonce" code plus a fresh nonce header — the
+// PAR handler does not yet wire a nonce issuer, so the proof simply
+// does not exercise that path.
+func writeDPoPError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, dpop.ErrProofMalformed),
+		errors.Is(err, dpop.ErrProofMissingJTI):
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof malformed")
+	case errors.Is(err, dpop.ErrProofSignature):
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof signature invalid")
+	case errors.Is(err, dpop.ErrProofIatWindow):
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof iat outside acceptable window")
+	case errors.Is(err, dpop.ErrProofReplayed):
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof replayed")
+	case errors.Is(err, dpop.ErrProofHTMMismatch),
+		errors.Is(err, dpop.ErrProofHTUMismatch):
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof does not bind to this request")
+	default:
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof verification failed")
 	}
 }
 

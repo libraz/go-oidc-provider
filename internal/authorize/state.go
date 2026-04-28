@@ -63,6 +63,12 @@ type RequestSnapshot struct {
 	// error emitter can dispatch JARM as the original request asked.
 	ResponseMode string `json:"response_mode,omitempty"`
 
+	// DPoPJKT mirrors [Request.DPoPJKT]. The snapshot carries it across
+	// the interaction redirect so the eventual authorization_code can
+	// be bound to the same DPoP key the client committed to at the
+	// authorization endpoint.
+	DPoPJKT string `json:"dpop_jkt,omitempty"`
+
 	// CreatedUnix is the unix-seconds timestamp at which the snapshot was
 	// taken. The HTTP layer uses it for diagnostic logging; the field is
 	// not consumed by [RequestSnapshot.ToRequest].
@@ -100,6 +106,7 @@ func SnapshotFrom(req *Request, now time.Time) RequestSnapshot {
 		MaxAge:              maxAge,
 		LoginHint:           req.LoginHint,
 		ResponseMode:        req.ResponseMode,
+		DPoPJKT:             req.DPoPJKT,
 		CreatedUnix:         now.UTC().Unix(),
 	}
 }
@@ -128,6 +135,7 @@ func (s RequestSnapshot) ToRequest() *Request {
 		MaxAge:              maxAge,
 		LoginHint:           s.LoginHint,
 		ResponseMode:        s.ResponseMode,
+		DPoPJKT:             s.DPoPJKT,
 	}
 }
 

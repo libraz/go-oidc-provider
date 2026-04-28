@@ -280,7 +280,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes, assertionVerifier); err != nil {
+	if err := mountPAREndpoint(mux, cfg, scopes, assertionVerifier, dpopVerifier); err != nil {
 		return nil, err
 	}
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, assertionVerifier)
@@ -613,6 +613,7 @@ func mountPAREndpoint(
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	assertionVerifier clientauth.AssertionVerifier,
+	dpopVerifier *dpop.Verifier,
 ) error {
 	if !featureEnabled(cfg.features, feature.PAR) {
 		return nil
@@ -630,6 +631,7 @@ func mountPAREndpoint(
 			Scopes:                     scopes,
 			Clock:                      cfg.clock,
 			JAR:                        jarVerifier,
+			DPoP:                       dpopVerifier,
 			AssertionVerifier:          assertionVerifier,
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
 			RequirePKCE:                cfg.requirePKCE(),

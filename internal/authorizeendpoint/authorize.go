@@ -545,6 +545,7 @@ func mintAndRedirect(
 		CodeChallengeMethod: req.CodeChallengeMethod,
 		Nonce:               req.Nonce,
 		State:               req.State,
+		DPoPJKT:             req.DPoPJKT,
 		ExpiresAt:           now.Add(deps.AuthCodeTTL),
 		CreatedAt:           now,
 	}

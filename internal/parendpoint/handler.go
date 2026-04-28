@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -110,6 +111,18 @@ type Deps struct {
 	// with invalid_request_object; "request_uri" inside a /par body
 	// is always rejected per RFC 9126 §3.
 	JAR *jar.Verifier
+
+	// DPoP, when non-nil, makes /par accept and verify a "DPoP"
+	// header (RFC 9449 §4) on the inbound POST. The verifier's
+	// thumbprint is bound onto the persisted PAR snapshot as
+	// "dpop_jkt" so the eventual /token request must present a
+	// proof signed with the same key (RFC 9449 §10.1). The handler
+	// also enforces the §10 mismatch rule: when the request
+	// already carries a "dpop_jkt" parameter (form or merged
+	// request-object claim), it MUST equal the proof's thumbprint.
+	// A nil verifier disables both behaviours; the existing form
+	// "dpop_jkt" still flows through to the snapshot unchanged.
+	DPoP *dpop.Verifier
 
 	// RequireSignedRequestObject, when true, makes /par reject any
 	// request that omits the "request" parameter. FAPI 2.0 Message

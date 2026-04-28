@@ -59,6 +59,15 @@ type AuthorizationCode struct {
 	// endpoint does not echo it.
 	State string
 
+	// DPoPJKT is the SHA-256 thumbprint of the DPoP key the client
+	// committed to at the authorization endpoint via the RFC 9449 §10
+	// "dpop_jkt" parameter. Empty when the client did not commit to a
+	// key. The token endpoint enforces the binding: when DPoPJKT is
+	// non-empty, an inbound DPoP proof MUST carry the same thumbprint;
+	// when empty the DPoP proof's own thumbprint stands in (the proof
+	// itself binds the access token).
+	DPoPJKT string
+
 	// ExpiresAt is the wall-clock time at which the code becomes invalid
 	// regardless of consumption status. Backends MAY garbage-collect rows
 	// where ExpiresAt is in the past.

@@ -48,7 +48,36 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
+	if !enforceDPoPJKTBinding(w, exchanged, binding) {
+		return
+	}
 	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, binding)
+}
+
+// enforceDPoPJKTBinding implements the RFC 9449 §10 contract: when the
+// authorization request committed to a DPoP key via the "dpop_jkt"
+// parameter, the token endpoint MUST refuse a proof that does not
+// match. A non-empty stored thumbprint also requires a proof to be
+// presented at all — admitting an unbound token would let an attacker
+// who stole the code circumvent the commitment.
+//
+// When the stored thumbprint is empty the inbound proof's JKT is the
+// only binding, so this function is a no-op.
+func enforceDPoPJKTBinding(w http.ResponseWriter, exchanged *authcode.Exchanged, binding tokenBinding) bool {
+	if exchanged == nil || exchanged.DPoPJKT == "" {
+		return true
+	}
+	if binding.DPoPJKT == "" {
+		writeError(w, http.StatusBadRequest, errInvalidGrant,
+			"authorization code is bound to a DPoP key but no proof was presented")
+		return false
+	}
+	if binding.DPoPJKT != exchanged.DPoPJKT {
+		writeError(w, http.StatusBadRequest, errInvalidGrant,
+			"DPoP proof key does not match the dpop_jkt commitment")
+		return false
+	}
+	return true
 }
 
 // tokenBinding bundles the sender-constraint fields a token-endpoint
