@@ -59,13 +59,15 @@ const shutdownGrace = 5 * time.Second
 // runConfig groups the demo's startup knobs so run() does not grow a
 // long positional signature as flags accumulate.
 type runConfig struct {
-	listen       string
-	issuer       string
-	mount        string
-	clientID     string
-	redirectURIs []string
-	tlsCert      string
-	tlsKey       string
+	listen        string
+	issuer        string
+	mount         string
+	clientID      string
+	redirectURIs  []string
+	confClientID  string
+	confClientSec string
+	tlsCert       string
+	tlsKey        string
 }
 
 func main() {
@@ -87,6 +89,14 @@ func mainErr() error {
 		redirectURI = flag.String("redirect-uri", "https://localhost.emobix.co.uk:8443/test/a/op-demo/callback", "comma-separated list of redirect_uri values seeded for the demo client. The OFCS routes each test plan's callback at /test/a/<alias>/callback, so a multi-plan conformance run needs every plan's URI seeded up front.")
 		tlsCert     = flag.String("tls-cert", "", "path to PEM-encoded TLS certificate; empty to serve plain HTTP. Must be paired with -tls-key.")
 		tlsKey      = flag.String("tls-key", "", "path to PEM-encoded TLS private key; empty to serve plain HTTP. Must be paired with -tls-cert.")
+		// confClientID / confClientSec back the second (confidential)
+		// seed client. The OIDC Basic certification plan and the
+		// FAPI 2.0 client_secret_basic test rows expect a client that
+		// authenticates with a shared secret; the public client driven
+		// by -client-id alone is incompatible with those plans by
+		// design. Override either flag to reseed at startup.
+		confClientID  = flag.String("confidential-client-id", "demo-confidential", "client_id of the confidential seed client (client_secret_basic auth). Empty disables the confidential seed.")
+		confClientSec = flag.String("confidential-client-secret", "demo-confidential-secret", "client_secret for the confidential seed client. Empty disables the confidential seed.")
 	)
 	flag.Parse()
 
@@ -96,13 +106,15 @@ func mainErr() error {
 	defer stop()
 
 	cfg := runConfig{
-		listen:       *listen,
-		issuer:       *issuer,
-		mount:        *mount,
-		clientID:     *clientID,
-		redirectURIs: parseRedirectURIs(*redirectURI),
-		tlsCert:      *tlsCert,
-		tlsKey:       *tlsKey,
+		listen:        *listen,
+		issuer:        *issuer,
+		mount:         *mount,
+		clientID:      *clientID,
+		redirectURIs:  parseRedirectURIs(*redirectURI),
+		confClientID:  *confClientID,
+		confClientSec: *confClientSec,
+		tlsCert:       *tlsCert,
+		tlsKey:        *tlsKey,
 	}
 	if err := run(ctx, cfg, logger); err != nil {
 		logger.Error("op-demo: fatal", "err", err)
@@ -133,11 +145,10 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		return errors.New("op-demo: -redirect-uri must list at least one URI")
 	}
 
-	st := inmem.New()
-	if err := seedClient(st, cfg.clientID, cfg.redirectURIs); err != nil {
-		return fmt.Errorf("seed demo client: %w", err)
+	st, err := bootstrapStore(cfg)
+	if err != nil {
+		return err
 	}
-	seedDemoUser(st)
 
 	provider, err := op.New(
 		op.WithIssuer(cfg.issuer),
@@ -198,10 +209,28 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 	return nil
 }
 
-// seedClient registers the single demo client used by manual flows
-// and the OFCS test plans. The library has no implicit clients, so
-// without this seed the /authorize endpoint would reject every
-// request as unknown_client.
+// bootstrapStore returns the in-memory store seeded with the public
+// client, the optional confidential client, and the demo user. The
+// helper exists so [run] stays under the gocognit budget; the seed
+// branches are intentionally split out rather than inlined.
+func bootstrapStore(cfg runConfig) (*inmem.Store, error) {
+	st := inmem.New()
+	if err := seedClient(st, cfg.clientID, cfg.redirectURIs); err != nil {
+		return nil, fmt.Errorf("seed demo client: %w", err)
+	}
+	if cfg.confClientID != "" && cfg.confClientSec != "" {
+		if err := seedConfidentialClient(st, cfg.confClientID, cfg.confClientSec, cfg.redirectURIs); err != nil {
+			return nil, fmt.Errorf("seed confidential client: %w", err)
+		}
+	}
+	seedDemoUser(st)
+	return st, nil
+}
+
+// seedClient registers the public demo client used by manual flows
+// (curl smoke tests, the OP-managed login UI). The library has no
+// implicit clients, so without this seed the /authorize endpoint
+// would reject every request as unknown_client.
 func seedClient(st *inmem.Store, clientID string, redirectURIs []string) error {
 	return st.RegisterClient(context.Background(), &store.Client{
 		ID:                      clientID,
@@ -211,6 +240,34 @@ func seedClient(st *inmem.Store, clientID string, redirectURIs []string) error {
 		Scopes:                  []string{"openid", "profile", "email"},
 		TokenEndpointAuthMethod: "none",
 		PublicClient:            true,
+		Source:                  store.ClientSourceStatic,
+	})
+}
+
+// seedConfidentialClient registers a second client that authenticates
+// with a shared secret. The OIDC Basic certification plan and the
+// FAPI 2.0 client_secret_basic test rows expect this shape: a public
+// client (auth_method="none") cannot satisfy those modules because
+// the spec mandates confidential auth at the token endpoint. The seed
+// shares the same redirect URIs so a single conformance run covers
+// both client postures without restarting the binary.
+//
+// The secret is hashed through [op.HashClientSecret] (argon2id with
+// the library defaults) before being stored; the raw value is kept
+// only for the duration of seedConfidentialClient.
+func seedConfidentialClient(st *inmem.Store, clientID, clientSecret string, redirectURIs []string) error {
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		return fmt.Errorf("hash client secret: %w", err)
+	}
+	return st.RegisterClient(context.Background(), &store.Client{
+		ID:                      clientID,
+		RedirectURIs:            redirectURIs,
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		SecretHash:              hash,
 		Source:                  store.ClientSourceStatic,
 	})
 }

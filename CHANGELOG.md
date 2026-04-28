@@ -11,6 +11,28 @@ in any minor release.
 
 ### Added
 
+- `op.HashClientSecret(secret)` helper that returns an argon2id encoding
+  suitable for `store.Client.SecretHash`. The function wraps the
+  library's reference Argon2id verifier with its default parameters
+  (64 MiB / 3 iterations / 1 lane / 32-byte hash + 16-byte salt). It
+  exists so embedders that seed confidential clients programmatically
+  — at startup, in tests, or in fixture scripts — do not have to
+  reach into `internal/` or invent a hash format the OP's verifier
+  would reject. A round-trip test (`op.TestHashClientSecret_*`)
+  asserts the encoding carries the modular-crypt prefix and that two
+  calls produce different outputs (fresh-salt invariant).
+
+- `cmd/op-demo` now optionally seeds a confidential client alongside
+  the existing public one. New flags `-confidential-client-id` and
+  `-confidential-client-secret` (defaults `demo-confidential` /
+  `demo-confidential-secret`) drive the seed; setting either to ""
+  disables it. The OIDC Basic certification plan and the FAPI 2.0
+  client_secret_basic test rows mandate confidential auth at the
+  token endpoint, so a public-only seed (auth_method="none") is
+  incompatible with those test paths by design. Both clients share
+  the same redirect URIs so a single op-demo run covers both
+  postures without restarting.
+
 - `interaction.Prompt.CSRFToken` field plus a `csrf_token` form-field
   fallback at `/interaction/{uid}` POST, so a server-rendered HTML
   driver can satisfy the double-submit CSRF check without
