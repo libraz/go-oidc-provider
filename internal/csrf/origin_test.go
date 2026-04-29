@@ -52,6 +52,71 @@ func TestCanonicalOrigin_RejectsRelativeURLs(t *testing.T) {
 	}
 }
 
+func TestCanonicalOrigin_RejectsHardeningCases(t *testing.T) {
+	t.Parallel()
+
+	//nolint:gosec // test fixtures; the userinfo-bearing URLs are the rejection targets.
+	cases := map[string]string{
+		"userinfo":      "https://user:pass@trusted.example",
+		"userinfo_only": "https://user@trusted.example",
+		// Note: `https://evil.example/?@trusted.example` is NOT in this
+		// rejection set because url.Parse correctly resolves its host to
+		// `evil.example` with the rest treated as a query. The follow-up
+		// test TestCanonicalOrigin_UserinfoAtObfuscationDoesNotPromoteToTrusted
+		// pins that the canonicalization stays on evil.example.
+		"javascript_scheme": "javascript:alert(1)",
+		"data_scheme":       "data:text/html,<script>",
+		"file_scheme":       "file:///etc/passwd",
+		"ftp_scheme":        "ftp://trusted.example",
+		"ws_scheme":         "ws://trusted.example",
+		"opaque_mailto":     "mailto:admin@trusted.example",
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			canon, err := csrf.CanonicalOrigin(in)
+			if err == nil {
+				t.Errorf("CanonicalOrigin(%q) accepted hostile input as %q", in, canon)
+			}
+		})
+	}
+}
+
+func TestCanonicalOrigin_UserinfoAtObfuscationDoesNotPromoteToTrusted(t *testing.T) {
+	t.Parallel()
+
+	// Concrete regression: `https://evil.example/?@trusted.example` is a
+	// query-only URL whose host is `evil.example`. Even if a downstream
+	// parser misread the userinfo, the result must NOT canonicalise to
+	// `https://trusted.example`.
+	got, err := csrf.CanonicalOrigin("https://evil.example/?@trusted.example")
+	if err == nil && got == "https://trusted.example" {
+		t.Errorf("evil URL canonicalised to trusted origin: %q", got)
+	}
+}
+
+func TestCheckOrigin_RejectsUserinfoOrigin(t *testing.T) {
+	t.Parallel()
+
+	a, _ := csrf.NewAllowlist([]string{"https://app.example.com"})
+	r := newPOST(t)
+	r.Header.Set("Origin", "https://attacker:pwn@app.example.com")
+	if err := csrf.CheckOrigin(r, a); !errors.Is(err, csrf.ErrOriginRejected) {
+		t.Errorf("err=%v want ErrOriginRejected (userinfo in Origin)", err)
+	}
+}
+
+func TestCheckOrigin_RejectsForeignSchemeOrigin(t *testing.T) {
+	t.Parallel()
+
+	a, _ := csrf.NewAllowlist([]string{"https://app.example.com"})
+	r := newPOST(t)
+	r.Header.Set("Origin", "javascript:alert(1)")
+	if err := csrf.CheckOrigin(r, a); !errors.Is(err, csrf.ErrOriginRejected) {
+		t.Errorf("err=%v want ErrOriginRejected (non-http(s) Origin)", err)
+	}
+}
+
 func TestNewAllowlist_RejectsBadEntries(t *testing.T) {
 	t.Parallel()
 

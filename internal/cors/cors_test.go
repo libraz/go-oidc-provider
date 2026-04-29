@@ -223,6 +223,64 @@ func TestPublic_PreflightAccepts(t *testing.T) {
 	}
 }
 
+func TestStrict_Preflight_IntersectsRequestedHeaders(t *testing.T) {
+	t.Parallel()
+
+	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	r := newReq(t, http.MethodOptions, "/oidc/token")
+	r.Header.Set("Origin", "https://app.example.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	r.Header.Set("Access-Control-Request-Headers", "Content-Type, X-Pwn, Authorization, Cookie")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	got := rec.Header().Get("Access-Control-Allow-Headers")
+	// Only the headers the OP actually accepts may be echoed.
+	if !strings.Contains(got, "Content-Type") {
+		t.Errorf("ACAH=%q must echo Content-Type", got)
+	}
+	if !strings.Contains(got, "Authorization") {
+		t.Errorf("ACAH=%q must echo Authorization", got)
+	}
+	if strings.Contains(strings.ToLower(got), "x-pwn") {
+		t.Errorf("ACAH=%q must NOT echo unsupported X-Pwn", got)
+	}
+	if strings.Contains(strings.ToLower(got), "cookie") {
+		t.Errorf("ACAH=%q must NOT echo Cookie (forbidden header anyway)", got)
+	}
+}
+
+func TestStrict_Preflight_NoRequestHeaders_FallsBackToStatic(t *testing.T) {
+	t.Parallel()
+
+	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	r := newReq(t, http.MethodOptions, "/oidc/token")
+	r.Header.Set("Origin", "https://app.example.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, DPoP, X-CSRF" {
+		t.Errorf("ACAH=%q want full static list when ACRH absent", got)
+	}
+}
+
+func TestStrict_Preflight_AllRequestedHeadersUnsupported(t *testing.T) {
+	t.Parallel()
+
+	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	r := newReq(t, http.MethodOptions, "/oidc/token")
+	r.Header.Set("Origin", "https://app.example.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	r.Header.Set("Access-Control-Request-Headers", "X-Pwn, X-Other")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
+		t.Errorf("ACAH=%q want empty when no requested header is accepted", got)
+	}
+}
+
 func TestStrict_VaryDeduplicatedWhenInnerAlreadySet(t *testing.T) {
 	t.Parallel()
 

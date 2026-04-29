@@ -1,9 +1,19 @@
 package discovery
 
 import (
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
 	"slices"
 	"strings"
 )
+
+// ErrIssuerInvalid is returned by [Validate] when the issuer URL fails
+// the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4 shape constraints. The
+// caller wraps this into the public op.Error envelope so the op layer
+// can surface a configuration error from [op.New].
+var ErrIssuerInvalid = errors.New("discovery: issuer is not a valid OIDC issuer URL")
 
 // Input is the configuration discovery needs from the [op.Provider]
 // constructor in order to build the metadata document. The struct is
@@ -94,8 +104,82 @@ type Features struct {
 	DynamicRegistration bool
 }
 
+// ValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4
+// shape constraints on the issuer URL: an absolute https URL with no
+// trailing slash, no query, and no fragment. Loopback hosts
+// (localhost, 127.0.0.1, [::1]) are exempted from the https
+// requirement so a development boot can use a plain-text scheme;
+// production deployments are still required to publish the issuer
+// over TLS.
+//
+// The validator is invoked by [Build] (defense in depth: op.WithIssuer
+// performs a similar check at the option site, but a future regression
+// that loosens the option-layer rule must not silently land in the
+// wire metadata).
+func ValidateIssuer(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("%w: empty issuer", ErrIssuerInvalid)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("%w: parse: %w", ErrIssuerInvalid, err)
+	}
+	if !u.IsAbs() {
+		return fmt.Errorf("%w: must be absolute", ErrIssuerInvalid)
+	}
+	if u.RawQuery != "" {
+		return fmt.Errorf("%w: must not carry a query", ErrIssuerInvalid)
+	}
+	if u.Fragment != "" {
+		return fmt.Errorf("%w: must not carry a fragment", ErrIssuerInvalid)
+	}
+	if strings.HasSuffix(u.Path, "/") {
+		// OIDC Discovery 1.0 §3 / RFC 8414 §3 forbid both a bare
+		// trailing slash ("https://idp.example.com/") and a trailing
+		// slash on a non-empty path ("https://idp.example.com/oidc/")
+		// because the issuer identifier is concatenated verbatim with
+		// "/.well-known/..." to produce the configuration URI.
+		return fmt.Errorf("%w: must not end with a trailing slash", ErrIssuerInvalid)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+		return fmt.Errorf("%w: http scheme is permitted only for loopback hosts (localhost / 127.0.0.1 / [::1])", ErrIssuerInvalid)
+	default:
+		return fmt.Errorf("%w: scheme %q is not permitted", ErrIssuerInvalid, u.Scheme)
+	}
+}
+
+// isLoopbackHost reports whether host names a loopback target.
+// Returns true for the literal "localhost" (case-insensitive), the
+// canonical loopback IPv4 address 127.0.0.1, the entire 127.0.0.0/8
+// block (some test setups bind 127.0.0.2), and the IPv6 loopback ::1.
+// The check is closed: any host that does not match falls through to
+// the production-grade https-only path.
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
 // Build returns a [Document] populated from in. Absolute URLs are formed
-// by joining the issuer, mount prefix, and endpoint paths.
+// by joining the issuer, mount prefix, and endpoint paths. The function
+// is total: callers that need to surface a configuration error from a
+// malformed issuer call [ValidateIssuer] before [Build]. The op-layer
+// wiring runs the validator in [op.New] so a misconfigured issuer
+// surfaces at construction time, not the first /.well-known fetch.
 func Build(in Input) Document {
 	doc := Document{
 		Issuer:                            in.Issuer,

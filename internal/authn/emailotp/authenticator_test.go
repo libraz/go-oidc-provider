@@ -294,8 +294,16 @@ func TestContinueVerifyCorrectCodeEmitsResult(t *testing.T) {
 	if !step.Result.AuthTime.Equal(authTime) {
 		t.Errorf("AuthTime = %v, want %v", step.Result.AuthTime, authTime)
 	}
-	if _, err := recStore.Get(context.Background(), "sub-1"); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("record not deleted after success: err = %v", err)
+	// H-AUTHN-1: success now persists the record with ConsumedAt
+	// stamped instead of deleting it. The single-use invariant is
+	// enforced by the ConsumedAt guard on the next verify, not by
+	// row absence.
+	rec, gerr := recStore.Get(context.Background(), "sub-1")
+	if gerr != nil {
+		t.Fatalf("record dropped after success: err = %v", gerr)
+	}
+	if rec.ConsumedAt.IsZero() {
+		t.Errorf("ConsumedAt not stamped on persisted record")
 	}
 }
 
@@ -372,5 +380,80 @@ func TestContinueRequiresSubject(t *testing.T) {
 	_, err := a.Continue(context.Background(), authn.ContinueInput{})
 	if !errors.Is(err, emailotp.ErrSubjectRequired) {
 		t.Errorf("err = %v, want ErrSubjectRequired", err)
+	}
+}
+
+// TestContinueVerifySuccessStampsConsumedAt asserts the record is
+// persisted with a non-zero ConsumedAt after a successful redeem so a
+// transient Delete failure cannot leave a re-redeemable record.
+func TestContinueVerifySuccessStampsConsumedAt(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	a, mailer, recStore := newFixture(t, now)
+
+	code := driveSendStep(t, a, mailer, "sub-1")
+	step, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject:    "sub-1",
+		Scratch:    emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: code}},
+	})
+	if err != nil {
+		t.Fatalf("Continue (verify): %v", err)
+	}
+	if step.Result == nil {
+		t.Fatalf("expected Result, got %+v", step)
+	}
+	rec, gerr := recStore.Get(context.Background(), "sub-1")
+	if gerr != nil {
+		t.Fatalf("Get persisted record after success: %v", gerr)
+	}
+	if rec.ConsumedAt.IsZero() {
+		t.Error("ConsumedAt is zero after successful verify; record left re-redeemable")
+	}
+}
+
+// TestContinueVerifyReplayRejected asserts a second verify against the
+// same code (e.g. from a leaked SPA log) is rejected, exercising the
+// ConsumedAt guard added for H-AUTHN-1.
+func TestContinueVerifyReplayRejected(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	a, mailer, _ := newFixture(t, now)
+
+	code := driveSendStep(t, a, mailer, "sub-1")
+	if _, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject:    "sub-1",
+		Scratch:    emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: code}},
+	}); err != nil {
+		t.Fatalf("first Continue: %v", err)
+	}
+	_, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject:    "sub-1",
+		Scratch:    emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: code}},
+	})
+	if !errors.Is(err, emailotp.ErrExpired) {
+		t.Errorf("replay err = %v, want ErrExpired", err)
+	}
+}
+
+// TestVerifyConsumedRecordRejectedDirect exercises the verifier-level
+// ConsumedAt guard (the authenticator wraps it as ErrExpired).
+func TestVerifyConsumedRecordRejectedDirect(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	v := &emailotp.Verifier{Clock: &emailotp.FakeClock{T: now}}
+	rec := &store.EmailOTPRecord{
+		Subject:    "sub-1",
+		ExpiresAt:  now.Add(5 * time.Minute),
+		ConsumedAt: now.Add(-time.Minute),
+	}
+	res, err := v.Verify(context.Background(), rec, "000000")
+	if !errors.Is(err, emailotp.ErrConsumed) {
+		t.Errorf("err = %v, want ErrConsumed", err)
+	}
+	if res == nil || res.Outcome != emailotp.OutcomeConsumed {
+		t.Errorf("Outcome = %+v, want OutcomeConsumed", res)
 	}
 }

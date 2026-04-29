@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strconv"
@@ -58,16 +59,25 @@ func NewSigner(key []byte) (*Signer, error) {
 // returned string is suitable both as the [__Host-oidc_csrf] cookie value
 // and as the [X-CSRF] header — the double-submit pattern relies on the two
 // being literally identical.
-// Format: "<nonce_b64>.<unix_seconds>.<hmac_b64>" where the HMAC covers the
-// concatenation "sessionID|nonce|unix_seconds". The format is opaque to
-// callers; treat it as a single token.
+// Format: "<nonce_b64>.<unix_seconds>.<hmac_b64>" where the HMAC covers a
+// length-prefixed canonicalisation of (sessionID, nonce, iat, ""). The
+// format is opaque to callers; treat it as a single token.
 func (s *Signer) Issue(sessionID string, issuedAt time.Time) (string, error) {
+	return s.IssueScoped(sessionID, "", issuedAt)
+}
+
+// IssueScoped mints a token additionally bound to a per-request scope
+// string (e.g. an interaction nonce or a form action ID). The scope is
+// folded into the HMAC input so a token issued for one form cannot be
+// replayed against another even when both share the session. An empty
+// scope reduces to [Issue] semantics.
+func (s *Signer) IssueScoped(sessionID, scope string, issuedAt time.Time) (string, error) {
 	nonce := make([]byte, nonceLen)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("csrf: read nonce: %w", err)
 	}
 	iat := issuedAt.UTC().Unix()
-	mac := s.compute(sessionID, nonce, iat)
+	mac := s.compute(sessionID, nonce, iat, scope)
 	return strings.Join([]string{
 		base64.RawURLEncoding.EncodeToString(nonce),
 		strconv.FormatInt(iat, 10),
@@ -80,6 +90,13 @@ func (s *Signer) Issue(sessionID string, issuedAt time.Time) (string, error) {
 // maxAge of zero disables the freshness check (used for session-lifetime
 // tokens that must remain valid until logout).
 func (s *Signer) Verify(token, sessionID string, now time.Time, maxAge time.Duration) error {
+	return s.VerifyScoped(token, sessionID, "", now, maxAge)
+}
+
+// VerifyScoped is the [IssueScoped] counterpart. The scope MUST equal the
+// one supplied at issuance, otherwise the HMAC tag mismatches and the token
+// is rejected. Pass an empty scope to verify a token minted by [Issue].
+func (s *Signer) VerifyScoped(token, sessionID, scope string, now time.Time, maxAge time.Duration) error {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return ErrTokenInvalid
@@ -96,7 +113,7 @@ func (s *Signer) Verify(token, sessionID string, now time.Time, maxAge time.Dura
 	if err != nil {
 		return ErrTokenInvalid
 	}
-	want := s.compute(sessionID, nonce, iat)
+	want := s.compute(sessionID, nonce, iat, scope)
 	if !hmac.Equal(got, want) {
 		return ErrTokenInvalid
 	}
@@ -109,18 +126,33 @@ func (s *Signer) Verify(token, sessionID string, now time.Time, maxAge time.Dura
 	return nil
 }
 
-// compute returns the HMAC-SHA256 tag of "sessionID|nonce|iat".
-// The pipe separator is needed because sessionID is variable-length; without
-// a delimiter, an attacker could move bytes between fields and still hit the
-// same MAC. Pipes never appear in our session IDs (UUIDs / opaque tokens) so
-// the separator is unambiguous.
-func (s *Signer) compute(sessionID string, nonce []byte, iat int64) []byte {
+// compute returns the HMAC-SHA256 tag of the canonical encoding
+//
+//	uint32be(len(sessionID)) || sessionID || uint32be(len(nonce)) || nonce || int64be(iat) || optional binding
+//
+// Length-prefixed framing eliminates the boundary-shifting collisions that
+// any single-byte separator (the previous "|") would have permitted: a
+// (sessionID, nonce) pair and a different (sessionID', nonce') with the same
+// concatenation now produce different inputs because the two length prefixes
+// disagree. Adding the optional [Issue]-time binding keeps a single MAC
+// implementation across both APIs.
+func (s *Signer) compute(sessionID string, nonce []byte, iat int64, binding string) []byte {
 	h := hmac.New(sha256.New, s.key)
-	_, _ = h.Write([]byte(sessionID))
-	_, _ = h.Write([]byte{'|'})
+	var lenBuf [4]byte
+	sid := []byte(sessionID)
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(sid))) //nolint:gosec // len fits in uint32 by construction.
+	_, _ = h.Write(lenBuf[:])
+	_, _ = h.Write(sid)
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(nonce))) //nolint:gosec // 16 fits in uint32.
+	_, _ = h.Write(lenBuf[:])
 	_, _ = h.Write(nonce)
-	_, _ = h.Write([]byte{'|'})
-	_, _ = h.Write([]byte(strconv.FormatInt(iat, 10)))
+	var iatBuf [8]byte
+	binary.BigEndian.PutUint64(iatBuf[:], uint64(iat)) //nolint:gosec // signed↔unsigned reinterpret is intentional.
+	_, _ = h.Write(iatBuf[:])
+	bind := []byte(binding)
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(bind))) //nolint:gosec // len fits in uint32 by construction.
+	_, _ = h.Write(lenBuf[:])
+	_, _ = h.Write(bind)
 	return h.Sum(nil)
 }
 

@@ -107,19 +107,27 @@ type RefreshToken struct {
 //     library will then call [RefreshTokenStore.RevokeChain] with the
 //     replayed token's chain root to invalidate every descendant.
 type RefreshTokenStore interface {
-	// Save persists a freshly issued refresh token. It MUST return
-	// [ErrAlreadyExists] if a record with the same ID already exists.
+	// Save persists a freshly issued refresh token. The implementation
+	// MUST hash [RefreshToken.ID] (SHA-256, ideally HMAC'd with a
+	// server-side pepper) before persisting and MUST NOT store the raw
+	// value; see the package doc for the hash-on-store contract. Save
+	// MUST return [ErrAlreadyExists] if a record whose hashed ID
+	// collides with an existing row already exists.
 	Save(ctx context.Context, token *RefreshToken) error
 
 	// Find returns the refresh token identified by id without consuming
-	// it. It MUST return [ErrNotFound] when no such record exists.
+	// it. The implementation MUST hash the presented id and look up the
+	// resulting digest, comparing against the stored hash in constant
+	// time. It MUST return [ErrNotFound] when no such record exists.
 	Find(ctx context.Context, id string) (*RefreshToken, error)
 
 	// Consume atomically marks the refresh token as consumed and returns
-	// the resulting record. It MUST return [ErrNotFound] when the record
-	// is absent, [ErrAlreadyConsumed] when the record's ConsumedAt was
-	// already set on entry, and a non-nil error if the compare-and-set
-	// fails. The returned record's ConsumedAt MUST be non-nil on success.
+	// the resulting record. The implementation MUST hash the presented
+	// id and look up the resulting digest. It MUST return [ErrNotFound]
+	// when the record is absent, [ErrAlreadyConsumed] when the record's
+	// ConsumedAt was already set on entry, and a non-nil error if the
+	// compare-and-set fails. The returned record's ConsumedAt MUST be
+	// non-nil on success.
 	Consume(ctx context.Context, id string) (*RefreshToken, error)
 
 	// RevokeChain revokes every refresh token in the rotation chain whose

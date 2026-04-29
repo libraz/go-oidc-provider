@@ -45,4 +45,12 @@ const (
 	// oracle, but kept distinct here so log analysis can tell them
 	// apart.
 	descClientNotFound = "invalid client"
+
+	// descCSRFRejected is rendered when a hint-less POST /end_session
+	// fails the double-submit CSRF gate (missing or mismatched
+	// __Host-oidc_logout_csrf cookie, missing form field, or a
+	// foreign Origin / Referer header). The single message conflates
+	// the failure modes intentionally so the response is not an
+	// oracle for the sub-cause.
+	descCSRFRejected = "logout request rejected"
 )

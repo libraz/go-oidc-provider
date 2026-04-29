@@ -103,10 +103,14 @@ func RuleScope(scope string, then Step) Rule {
 }
 
 // RuleACR returns a [Rule] that matches when acr is present in
-// [LoginContext.ACRValues]. The list is the parsed RFC 9470
-// `acr_values` request parameter, so the rule lets an embedder
-// implement OIDC step-up: re-authenticate when the relying party asks
-// for a stronger ACR than the current session asserts.
+// [LoginContext.ACRValues]. The list is the parsed OIDC Core 1.0
+// §3.1.2.1 `acr_values` request parameter, so the rule lets an
+// embedder implement OIDC step-up: re-authenticate when the relying
+// party asks for a stronger ACR than the current session asserts. The
+// satisfaction predicate (which acr counts as "good enough") is the
+// embedder's responsibility. RFC 9470 reuses the parameter name in
+// the orthogonal RS→AS challenge direction, which the library does
+// not implement.
 func RuleACR(acr string, then Step) Rule {
 	return Rule{
 		When: func(lc LoginContext) bool {

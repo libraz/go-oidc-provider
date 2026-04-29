@@ -179,6 +179,10 @@ func jarDescriptionFor(err error) string {
 		return "no matching client jwk"
 	case errors.Is(err, jar.ErrJWKSConfigured):
 		return "client has no JWKs or JWKsURI"
+	case errors.Is(err, jar.ErrJTIMissing):
+		return "request object missing jti"
+	case errors.Is(err, jar.ErrJTIReplayed):
+		return "request object jti already consumed"
 	case errors.Is(err, jar.ErrParse):
 		return "request object is malformed"
 	default:

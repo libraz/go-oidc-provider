@@ -49,7 +49,7 @@ type ACRResolveOutput struct {
 // ACRResolver bridges the public [op.ACRPolicy] seam to the wire layer.
 // The library wires a non-nil resolver from the configured policy at
 // op.New time; tests that exercise the authorize endpoint directly may
-// leave the field nil to preserve the pre-ADR-0012 behaviour (the
+// leave the field nil to preserve the legacy behaviour (the
 // per-factor aggregator's acr / amr flow through unchanged).
 type ACRResolver func(ctx context.Context, in ACRResolveInput) ACRResolveOutput
 
@@ -280,8 +280,8 @@ type Deps struct {
 	// resolver from the [op.ACRPolicy] supplied via [op.WithACRPolicy]
 	// (defaulting to [op.DefaultACRPolicy]); tests that exercise the
 	// authorize endpoint directly may leave the field nil to preserve
-	// the pre-ADR-0012 wire shape (the aggregator's acr / amr flow
-	// through unchanged). See ADR 0012 for the rationale.
+	// the legacy wire shape (the aggregator's acr / amr flow through
+	// unchanged).
 	ACRResolver ACRResolver
 }
 

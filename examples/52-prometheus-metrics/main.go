@@ -32,8 +32,7 @@
 // force, code re-use). Embedders that want HTTP-level metrics
 // (oidc_http_requests_total etc.) wrap the OP handler with
 // promhttp.InstrumentHandlerCounter or otelhttp's middleware; the
-// library deliberately does not do that itself per
-// docs/plans/002-product-design.md §F.4.
+// library deliberately does not do that itself.
 //
 // PRODUCTION CAVEATS: this example mounts /metrics on the same listener
 // as the OP for brevity; production deployments expose /metrics on a

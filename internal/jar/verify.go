@@ -57,6 +57,8 @@ type Verifier struct {
 	maxFutureSkew time.Duration
 	maxAge        time.Duration
 	requireNbf    bool
+	allowMissJTI  bool
+	jtis          store.ConsumedJTIStore
 	maxLifetime   time.Duration
 }
 
@@ -89,11 +91,54 @@ type VerifierConfig struct {
 	// the default.
 	MaxAge time.Duration
 
-	// RequireNbf, when true, rejects request objects whose "nbf" claim
-	// is absent. RFC 9101 §6.1 marks "nbf" optional but FAPI 2.0
-	// Message Signing §5.6 mandates its presence; embedders running
-	// under that profile flip this on.
+	// RequireNbf, when true, rejects request objects whose "nbf"
+	// claim is absent. The flag exists so callers can pin the
+	// FAPI 2.0 Message Signing §5.6 posture explicitly; the
+	// runtime default is also true and is suppressed only by
+	// [VerifierConfig.AllowMissingNbf]. RFC 9101 §6.1 marks "nbf"
+	// optional but every modern signed-request-object flow expects
+	// it.
 	RequireNbf bool
+
+	// AllowMissingNbf, when true, restores the back-compat posture
+	// of admitting request objects without an "nbf" claim. The
+	// default (false) rejects nbf-less request objects so the
+	// safer FAPI 2.0 Message Signing §5.6 stance applies uniformly
+	// to every JAR-enabling deployment. Embedders that need to
+	// admit nbf-less RPs (legacy clients that pre-date the FAPI 2.0
+	// mandate) opt in by setting the flag; the explicit opt-in
+	// surfaces the looser stance in the embedder's boot code so a
+	// future audit can locate it with a grep.
+	//
+	// Mutually independent of [VerifierConfig.RequireNbf]: when
+	// both are set, AllowMissingNbf wins (the explicit opt-out
+	// dominates). The two-flag shape exists so the zero value of
+	// the struct does not silently flip the default behaviour
+	// when an existing call site adds new fields above the
+	// RequireNbf entry.
+	AllowMissingNbf bool
+
+	// JTIs is the replay store the verifier consults for the
+	// request object's "jti" claim. RFC 9101 §10.8 names jti as
+	// the replay-defence anchor; supplying a store enables the
+	// per-jti gate, and the gate fires whenever a request object
+	// carries a jti (legacy RPs that omit jti are still rejected
+	// as [ErrJTIMissing] unless [AllowMissingJTI] is set). Required
+	// for production wiring; tests that exercise paths upstream of
+	// the jti gate may leave the field nil and instead set
+	// [AllowMissingJTI] to skip the check entirely.
+	JTIs store.ConsumedJTIStore
+
+	// AllowMissingJTI, when true, admits request objects without a
+	// "jti" claim. The default (false) rejects jti-less request
+	// objects with [ErrJTIMissing] so the replay-defence floor
+	// applies uniformly to every JAR-enabling deployment. RFC 9101
+	// §6.1 marks jti optional but §10.8 mandates a replay defence
+	// anchored on jti; embedders that need to admit legacy RPs
+	// (that pre-date the §10.8 strengthening) opt in here. The
+	// flag is also honoured when [JTIs] is nil so JAR can be wired
+	// in test setups without a JTI store.
+	AllowMissingJTI bool
 
 	// MaxLifetime, when positive, caps how far "exp" may lie in the
 	// future and how far "nbf" may lie in the past relative to "now".
@@ -135,6 +180,23 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		}
 		allowed[a] = struct{}{}
 	}
+	// Default posture is RFC 9101 §6.1 ("nbf" optional). FAPI 2.0
+	// Message Signing §5.6 mandates nbf; the FAPI profile flips
+	// [VerifierConfig.RequireNbf] on at op-level wiring so the
+	// stricter stance lands on FAPI deployments without breaking
+	// non-FAPI back-compat. [VerifierConfig.AllowMissingNbf] remains
+	// available as an explicit opt-out for the rare profile that
+	// flipped RequireNbf on but needs to admit a legacy RP.
+	requireNbf := cfg.RequireNbf && !cfg.AllowMissingNbf
+	// JTI replay gate: a non-nil store lets the verifier mark every
+	// jti the request object carries (RFC 9101 §10.8). When the
+	// store is nil the embedder MUST set AllowMissingJTI to
+	// acknowledge the floor is being bypassed; otherwise NewVerifier
+	// fails fast at startup so the gap surfaces during boot rather
+	// than at the first request.
+	if cfg.JTIs == nil && !cfg.AllowMissingJTI {
+		return nil, errors.New("jar: NewVerifier requires JTIs store (or AllowMissingJTI to opt out)")
+	}
 	return &Verifier{
 		clock:         clock,
 		resolver:      cfg.Resolver,
@@ -142,7 +204,9 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		allowedAlgs:   allowed,
 		maxFutureSkew: skew,
 		maxAge:        maxAge,
-		requireNbf:    cfg.RequireNbf,
+		requireNbf:    requireNbf,
+		allowMissJTI:  cfg.AllowMissingJTI,
+		jtis:          cfg.JTIs,
 		maxLifetime:   cfg.MaxLifetime,
 	}, nil
 }
@@ -221,7 +285,66 @@ func (v *Verifier) Verify(ctx context.Context, raw, expectedClientID string, cli
 	if err := v.validateClaims(parsed, expectedClientID); err != nil {
 		return nil, err
 	}
+	if err := v.consumeJTI(ctx, parsed, expectedClientID); err != nil {
+		return nil, err
+	}
 	return parsed, nil
+}
+
+// consumeJTI enforces the RFC 9101 §10.8 replay-defence floor on the
+// request object's "jti" claim. The function runs after the rest of
+// the claim validation succeeds so a malformed or stale request
+// object never advances the consumed-jti table. The mark key is
+// scoped to the client_id ("jar:" + clientID + ":" + jti) so two
+// clients minting the same jti by coincidence do not collide.
+//
+// When the verifier was constructed with a nil JTIs store, the
+// embedder explicitly opted into [VerifierConfig.AllowMissingJTI];
+// the function then admits every request object regardless of jti
+// presence. The opt-in is the only path that bypasses the gate.
+func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string) error {
+	jti, _ := obj.Claims["jti"].(string)
+	if jti == "" {
+		if v.allowMissJTI {
+			return nil
+		}
+		return ErrJTIMissing
+	}
+	if v.jtis == nil {
+		// AllowMissingJTI=true with no store: skip the gate.
+		return nil
+	}
+	expiresAt, ok := jtiExpiry(obj.Claims, v.clock.Now())
+	if !ok {
+		// "exp" was already validated upstream; reaching this branch
+		// means the claim disappeared between the two reads, which is
+		// a malformed-object class.
+		return fmt.Errorf("%w: jti consume: missing exp", ErrParse)
+	}
+	key := "jar:" + clientID + ":" + jti
+	if err := v.jtis.Mark(ctx, key, expiresAt); err != nil {
+		if errors.Is(err, store.ErrAlreadyConsumed) {
+			return ErrJTIReplayed
+		}
+		return fmt.Errorf("jar: mark jti: %w", err)
+	}
+	return nil
+}
+
+// jtiExpiry reads the request object's "exp" claim and projects it
+// onto the wall clock the verifier is using. The value bounds the
+// jti record's TTL in the consumed-jti store; readers eviction
+// triggers off the same value.
+func jtiExpiry(claims map[string]any, now time.Time) (time.Time, bool) {
+	exp, ok := claimSeconds(claims, "exp")
+	if !ok {
+		return time.Time{}, false
+	}
+	t := time.Unix(exp, 0)
+	if !t.After(now) {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // decodeVerifiedClaims is the post-signature variant of

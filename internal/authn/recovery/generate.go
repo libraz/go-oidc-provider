@@ -2,6 +2,8 @@ package recovery
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -67,4 +69,40 @@ func (v *Verifier) Generate(_ context.Context, subject string) (*GenerationResul
 		Batch:          batch,
 		PlaintextCodes: plaintext,
 	}, nil
+}
+
+// Replace generates a fresh batch and persists it through the supplied
+// [store.RecoveryStore], overwriting any prior batch for subject in a
+// single Put call. The function is the documented entry point for
+// "the user wants to invalidate every previously printed code and
+// receive a new sheet": the prior hashes are wiped and the displayed
+// plaintext codes are returned exactly once on the
+// [GenerationResult.PlaintextCodes] field.
+//
+// Atomicity: the [store.RecoveryStore.Put] call is upsert-style, so
+// the new batch overwrites the prior one in a single round trip.
+// Callers fronting the call with a transactional store get full
+// atomicity for free; callers running the inmem reference get the
+// same guarantee through the in-memory mutex. A failure during Put
+// returns the error verbatim and the [GenerationResult] is nil so a
+// caller cannot accidentally surface plaintext that was never
+// persisted.
+//
+// The ctx parameter is forwarded to the store so a caller's
+// cancellation propagates to the backend.
+func (v *Verifier) Replace(ctx context.Context, recStore store.RecoveryStore, subject string) (*GenerationResult, error) {
+	if recStore == nil {
+		return nil, errors.New("recovery: store is required")
+	}
+	if subject == "" {
+		return nil, errors.New("recovery: subject is required")
+	}
+	res, err := v.Generate(ctx, subject)
+	if err != nil {
+		return nil, err
+	}
+	if err := recStore.Put(ctx, res.Batch); err != nil {
+		return nil, fmt.Errorf("recovery: persist replacement batch: %w", err)
+	}
+	return res, nil
 }

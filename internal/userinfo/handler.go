@@ -93,11 +93,11 @@ type HandlerDeps struct {
 	// AccessTokens is the [store.AccessTokenRegistry] consulted after
 	// signature / cnf checks pass to reject tokens that have been
 	// revoked since issuance (RFC 6749 §4.1.2 cascade, RFC 7662 §2.2
-	// implicit "active" semantics, ADR 0013). The lookup runs late on
-	// purpose: an obviously-malformed or expired token is rejected
-	// without paying for the registry round-trip. A nil value disables
-	// the check entirely; the handler then returns the pre-ADR-0013
-	// behaviour (bearer tokens stay valid until exp regardless of any
+	// implicit "active" semantics). The lookup runs late on purpose:
+	// an obviously-malformed or expired token is rejected without
+	// paying for the registry round-trip. A nil value disables the
+	// check entirely; the handler then returns the legacy behaviour
+	// (bearer tokens stay valid until exp regardless of any
 	// revocation that landed between issuance and the call).
 	AccessTokens store.AccessTokenRegistry
 }
@@ -411,8 +411,8 @@ func respondBearerExtractError(w http.ResponseWriter, err error) {
 // token from a configured deployment), while tokens constructed
 // directly by tests or by an external issuer with their own registry
 // have no row here and should not be silently rejected. The cascade
-// effect ADR 0013 codifies comes from RevokeByGrant / RevokeByJTI
-// flipping rows we did register; allowing nil keeps the legacy wire
+// effect comes from RevokeByGrant / RevokeByJTI flipping rows we did
+// register; allowing nil keeps the legacy wire
 // shape for everything else. A nil deps.AccessTokens disables the
 // check entirely.
 func enforceRevocationStatus(
@@ -427,7 +427,7 @@ func enforceRevocationStatus(
 	rec, err := deps.AccessTokens.Find(ctx, claims.JTI)
 	if err != nil {
 		// Treat lookup errors as fatal: silently allowing the request
-		// would re-introduce the cascade gap ADR 0013 closes.
+		// would re-introduce a cascade gap where revoked tokens still verify.
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return false
 	}

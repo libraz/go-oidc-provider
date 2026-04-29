@@ -49,10 +49,44 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
+	if !enforcePKCEDowngradeGuard(w, client, exchanged) {
+		return
+	}
 	if !enforceDPoPJKTBinding(w, exchanged, binding) {
 		return
 	}
 	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, binding)
+}
+
+// enforcePKCEDowngradeGuard refuses an authorization_code exchange
+// when a public client redeems a code that was issued without a PKCE
+// challenge. RFC 9700 §2.1.1 (OAuth 2.0 Security Best Current
+// Practice) requires PKCE on every public-client code flow; this
+// check is defence-in-depth in case the
+// authorize-side gate (which is profile-conditional) was misconfigured
+// or bypassed via a forged stored record. Confidential clients are
+// free to opt out of PKCE per RFC 6749 §4.1, so the guard scopes to
+// [store.Client.PublicClient] and [store.Client.TokenEndpointAuthMethod]
+// == "none". The error code is "invalid_grant" because the violation
+// is a property of the redeemed grant, not of the request shape.
+func enforcePKCEDowngradeGuard(
+	w http.ResponseWriter,
+	client *store.Client,
+	exchanged *authcode.Exchanged,
+) bool {
+	if exchanged == nil || client == nil {
+		return true
+	}
+	publicClient := client.PublicClient || client.TokenEndpointAuthMethod == "none"
+	if !publicClient {
+		return true
+	}
+	if exchanged.HadCodeChallenge {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errInvalidGrant,
+		"PKCE is required for public clients (RFC 9700 §2.1.1)")
+	return false
 }
 
 // enforceDPoPJKTBinding implements the RFC 9449 §10 contract: when the
@@ -203,7 +237,10 @@ func parseAuthCodeRequest(w http.ResponseWriter, r *http.Request) (authCodeInput
 	// fall through here lets a non-PKCE code redeem against the
 	// authorize policy that issued it; the gate cannot be lifted at
 	// /token because the token endpoint does not know the active
-	// profile.
+	// profile. The complementary defence-in-depth check —
+	// [enforcePKCEDowngradeGuard] — runs after Exchange and rejects
+	// public-client codes that lack a challenge (RFC 9700 §2.1.1)
+	// regardless of whether a verifier was supplied.
 	return in, true
 }
 
@@ -290,8 +327,7 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	}
 	// Revoke access tokens first so the userinfo / introspection paths
 	// reject any AT a sibling refresh might mint racing the cascade.
-	// The order is documented in ADR 0013 §"Code-replay cascade": "AT
-	// first, RT second" — a refresh-grant racing the revocation can
+	// AT first, RT second: a refresh-grant racing the revocation can
 	// still mint an AT, but that AT also passes through Register which
 	// is a fresh row, leaving the next refresh attempt blocked once
 	// the RT half of the cascade lands.
@@ -396,7 +432,7 @@ type mintIDTokenInput struct {
 // mintAccessToken signs the JWT-shaped access token (RFC 9068) and,
 // when the configured registry is non-nil, registers a matching shadow
 // row so the userinfo / introspection / revocation paths can reject
-// the token after a future revocation (RFC 6749 §4.1.2 / ADR 0013).
+// the token after a future revocation (RFC 6749 §4.1.2).
 // When the binding carries a DPoP JKT (RFC 9449 §6) or an mTLS
 // thumbprint (RFC 8705 §3.1) the token is sender-constrained: the
 // "cnf" claim carries the corresponding member ("jkt" or "x5t#S256")
@@ -421,6 +457,19 @@ func mintAccessToken(
 		return "", err
 	}
 	expiresAt := tokens.ExpiresIn(now, deps.AccessTokenTTL)
+	// TODO(v1.x): RFC 8707 (Resource Indicators for OAuth 2.0)
+	// support. Today the access token's "aud" defaults to the OP
+	// issuer URL, which makes every token usable at every resource
+	// server that trusts the OP. RFC 8707 lets a client supply the
+	// "resource" parameter at /authorize and /token to scope the
+	// audience to a specific RS, and lets the OP advertise
+	// resource_indicators_supported in discovery. The full
+	// implementation requires: (a) an authorize-side parser, (b) a
+	// validate-time allowlist check (per-client / per-scope), (c)
+	// an "aud"-narrowing path here, and (d) a discovery flag. The
+	// current single-issuer audience is correct for v1.0 because
+	// the library still ships before any RFC-8707-aware RS in the
+	// example tree.
 	claims := tokens.AccessTokenClaims{
 		Issuer:       deps.Issuer,
 		Subject:      subject,
@@ -561,8 +610,7 @@ func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authConte
 // id_token issuer feeds into [tokens.IDTokenClaims.Extra]. The user
 // store is the source of truth for values; claims with no stored
 // value or that fail the spec's "value" / "values" constraint are
-// silently omitted, matching the project's "omit on absent" stance
-// (ADR 0011).
+// silently omitted, matching the project's "omit on absent" stance.
 //
 // The function returns nil for an empty request, no user lookup, or a
 // nil deps.UserStore so the caller can guard the Extra assignment
@@ -591,7 +639,7 @@ func projectIDTokenClaims(
 			// Standard id_token claims are issued by the library
 			// itself; the projector never overwrites them. The
 			// "acr" claim in particular is delegated to the
-			// ACR policy seam (see ADR 0012); here we ignore it.
+			// ACR policy seam; here we ignore it.
 			continue
 		}
 		v, ok := user.Claims[name]

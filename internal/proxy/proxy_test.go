@@ -191,6 +191,107 @@ func TestResolve_IPv6Trust(t *testing.T) {
 	}
 }
 
+func TestResolve_TrustedRemote_MalformedTokenSkippedNotAborted(t *testing.T) {
+	t.Parallel()
+
+	tr, err := proxy.NewTrust([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("NewTrust: %v", err)
+	}
+	req := newRequest(t, "http://op.example.com/x")
+	req.RemoteAddr = "10.1.1.1:80"
+	// Mix a malformed token with valid client and trusted-proxy entries.
+	// The walker must skip "junk" and still surface 198.51.100.42 as the
+	// authoritative client IP.
+	req.Header.Set("X-Forwarded-For", "198.51.100.42, junk, 10.5.5.5")
+
+	got := proxy.Resolve(req, tr)
+	if got.ClientIP.String() != "198.51.100.42" {
+		t.Errorf("ClientIP=%v want 198.51.100.42 (skip-on-error preserves earlier valid token)", got.ClientIP)
+	}
+}
+
+func TestResolve_TrustedRemote_XFHAllowlistAccepts(t *testing.T) {
+	t.Parallel()
+
+	tr, err := proxy.NewTrustWithHosts(
+		[]string{"10.0.0.0/8"},
+		[]string{"op.public.example.com"},
+	)
+	if err != nil {
+		t.Fatalf("NewTrustWithHosts: %v", err)
+	}
+	req := newRequest(t, "http://op.example.com/x")
+	req.RemoteAddr = "10.1.1.1:80"
+	req.Header.Set("X-Forwarded-Host", "op.public.example.com")
+
+	got := proxy.Resolve(req, tr)
+	if got.Host != "op.public.example.com" {
+		t.Errorf("Host=%q want op.public.example.com", got.Host)
+	}
+}
+
+func TestResolve_TrustedRemote_XFHAllowlistRejectsForeignHost(t *testing.T) {
+	t.Parallel()
+
+	tr, err := proxy.NewTrustWithHosts(
+		[]string{"10.0.0.0/8"},
+		[]string{"op.public.example.com"},
+	)
+	if err != nil {
+		t.Fatalf("NewTrustWithHosts: %v", err)
+	}
+	req := newRequest(t, "http://op.example.com/x")
+	req.RemoteAddr = "10.1.1.1:80"
+	// Even though the request comes from a trusted proxy, the XFH value
+	// is client-supplied and the allowlist must override.
+	req.Header.Set("X-Forwarded-Host", "evil.example.com")
+
+	got := proxy.Resolve(req, tr)
+	if got.Host != "op.example.com" {
+		t.Errorf("Host=%q want op.example.com (XFH allowlist rejected forgery)", got.Host)
+	}
+}
+
+func TestResolve_TrustedRemote_XFHAllowlistEmpty_PreservesLegacy(t *testing.T) {
+	t.Parallel()
+
+	// An empty allowlist preserves the pre-hardening behaviour of honouring
+	// any XFH value from a trusted proxy.
+	tr, err := proxy.NewTrust([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("NewTrust: %v", err)
+	}
+	req := newRequest(t, "http://op.example.com/x")
+	req.RemoteAddr = "10.1.1.1:80"
+	req.Header.Set("X-Forwarded-Host", "anything.example.com")
+
+	got := proxy.Resolve(req, tr)
+	if got.Host != "anything.example.com" {
+		t.Errorf("Host=%q want anything.example.com (legacy passthrough)", got.Host)
+	}
+}
+
+func TestResolve_TrustedRemote_XFHAllowlistStripsPort(t *testing.T) {
+	t.Parallel()
+
+	tr, err := proxy.NewTrustWithHosts(
+		[]string{"10.0.0.0/8"},
+		[]string{"op.public.example.com"},
+	)
+	if err != nil {
+		t.Fatalf("NewTrustWithHosts: %v", err)
+	}
+	req := newRequest(t, "http://op.example.com/x")
+	req.RemoteAddr = "10.1.1.1:80"
+	req.Header.Set("X-Forwarded-Host", "op.public.example.com:8443")
+
+	got := proxy.Resolve(req, tr)
+	if got.Host != "op.public.example.com:8443" {
+		t.Errorf("Host=%q want op.public.example.com:8443 (port preserved)", got.Host)
+	}
+}
+
 func TestResolve_HTTPSDerivedFromTLS(t *testing.T) {
 	t.Parallel()
 

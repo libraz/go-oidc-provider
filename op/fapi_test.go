@@ -210,3 +210,82 @@ func TestLoadPublicJWKS_RejectsEmptyKeyset(t *testing.T) {
 		t.Errorf("description=%q must explain the empty keyset", e.Description)
 	}
 }
+
+// TestLoadPublicJWKS_DoesNotLeakAbsolutePath pins the F-4 contract:
+// the error description MUST identify the bad file by its base name
+// only, never by its absolute filesystem path. A leaked path lets an
+// attacker who reads error_description / audit logs map the host's
+// directory layout, which the OP must not expose.
+//
+// The check covers all three error paths LoadPublicJWKS can take —
+// missing file, malformed JSON, empty keyset — so a future refactor
+// that adds a fourth branch must keep the pattern.
+func TestLoadPublicJWKS_DoesNotLeakAbsolutePath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Verify that the temp dir genuinely produces an absolute path so
+	// the assertion below has teeth.
+	probe := filepath.Join(dir, "probe.json")
+	if !filepath.IsAbs(probe) {
+		t.Fatalf("test setup: t.TempDir produced a non-absolute path %q", probe)
+	}
+
+	cases := []struct {
+		name  string
+		setup func(t *testing.T) string
+	}{
+		{
+			name: "missing file",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				return filepath.Join(dir, "missing-secret-tenant.json")
+			},
+		},
+		{
+			name: "malformed json",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				p := filepath.Join(dir, "broken-secret-tenant.json")
+				if err := os.WriteFile(p, []byte("not json"), 0o600); err != nil {
+					t.Fatalf("write fixture: %v", err)
+				}
+				return p
+			},
+		},
+		{
+			name: "empty keyset",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				p := filepath.Join(dir, "blank-secret-tenant.json")
+				if err := os.WriteFile(p, []byte(`{"keys":[]}`), 0o600); err != nil {
+					t.Fatalf("write fixture: %v", err)
+				}
+				return p
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := tc.setup(t)
+			_, err := op.LoadPublicJWKS(path)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			var e *op.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("error is not *op.Error: %v", err)
+			}
+			if strings.Contains(e.Description, dir) {
+				t.Errorf("description=%q leaks the absolute directory %q", e.Description, dir)
+			}
+			base := filepath.Base(path)
+			if !strings.Contains(e.Description, base) {
+				t.Errorf("description=%q must mention the base name %q so operators can locate the bad input", e.Description, base)
+			}
+		})
+	}
+}

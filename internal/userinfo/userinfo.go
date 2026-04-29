@@ -74,8 +74,7 @@ type Input struct {
 	// payload by adding the requested claim names on top of the
 	// scope-derived allow-list, applying the spec's "MUST equal" /
 	// "MUST be one of" constraints when present, and silently
-	// omitting any claim whose data is absent from Source (see
-	// ADR 0011 for the rationale).
+	// omitting any claim whose data is absent from Source.
 	Claims *authorize.ClaimsRequest
 }
 
@@ -115,8 +114,8 @@ func Build(in Input) (map[string]any, error) {
 //   - A claim already released by scope is skipped (no double-write).
 //   - A claim whose name does not exist in Source is silently omitted —
 //     the spec stops at "OP MUST attempt to provide" for essential
-//     claims, and the project's posture (ADR 0011) is to omit on
-//     absent rather than emit a JSON null.
+//     claims, and the project's posture is to omit on absent rather
+//     than emit a JSON null.
 //   - When the spec carries a "value" / "values" constraint and the
 //     stored value disagrees, the claim is omitted (the OP cannot
 //     satisfy the constraint and the spec permits omission).

@@ -90,23 +90,32 @@ type AuthorizationCode struct {
 // the resulting refresh token, and update the grant in a single atomic
 // operation (RFC 6749 §10.5).
 type AuthorizationCodeStore interface {
-	// Save persists a freshly issued authorization code. It MUST return
-	// [ErrAlreadyExists] if a record with the same ID already exists; the
+	// Save persists a freshly issued authorization code. The
+	// implementation MUST hash [AuthorizationCode.ID] (SHA-256, ideally
+	// HMAC'd with a server-side pepper) before persisting and MUST NOT
+	// store the raw value; see the package doc for the hash-on-store
+	// contract. Save MUST return [ErrAlreadyExists] if a record whose
+	// hashed ID collides with an existing row already exists; the
 	// library treats that as a fatal randomness or clock fault.
 	Save(ctx context.Context, code *AuthorizationCode) error
 
 	// Find returns the authorization code identified by id without
-	// consuming it. It MUST return [ErrNotFound] when no such record
-	// exists. Find is exposed for diagnostics and for handlers that need
-	// to validate parameters before opening a transaction; the
-	// authoritative single-use check lives in [AuthorizationCodeStore.Consume].
+	// consuming it. The implementation MUST hash the presented id and
+	// look up the resulting digest, comparing against the stored hash
+	// in constant time. It MUST return [ErrNotFound] when no such
+	// record exists. Find is exposed for diagnostics and for handlers
+	// that need to validate parameters before opening a transaction;
+	// the authoritative single-use check lives in
+	// [AuthorizationCodeStore.Consume].
 	Find(ctx context.Context, id string) (*AuthorizationCode, error)
 
 	// Consume atomically marks the authorization code as consumed and
-	// returns the record. It MUST return [ErrNotFound] if no such record
-	// exists, [ErrAlreadyConsumed] if the record's ConsumedAt was already
-	// set on entry, and a non-nil error if the underlying compare-and-set
-	// fails. After a successful Consume the returned record's ConsumedAt
-	// MUST be non-nil so that callers can audit the consumption time.
+	// returns the record. The implementation MUST hash the presented id
+	// and look up the resulting digest. It MUST return [ErrNotFound] if
+	// no such record exists, [ErrAlreadyConsumed] if the record's
+	// ConsumedAt was already set on entry, and a non-nil error if the
+	// underlying compare-and-set fails. After a successful Consume the
+	// returned record's ConsumedAt MUST be non-nil so that callers can
+	// audit the consumption time.
 	Consume(ctx context.Context, id string) (*AuthorizationCode, error)
 }

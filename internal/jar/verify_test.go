@@ -61,12 +61,23 @@ func happyClaims(now time.Time) map[string]any {
 // newTestVerifier wires a verifier with a fake clock pinned to now and
 // the supplied keyset. It returns the verifier so individual tests can
 // drive [jar.Verifier.Verify] directly.
+//
+// The helper sets [jar.VerifierConfig.AllowMissingNbf] and
+// [jar.VerifierConfig.AllowMissingJTI] because the shared [happyClaims]
+// fixture below does not include "nbf" / "jti" — the runtime defaults
+// reject nbf-less and jti-less request objects so without the opt-outs
+// every claim-shape test would fail before reaching the assertion
+// under test. The dedicated [newStrictTestVerifier] helper exercises
+// the FAPI 2.0 stance, and [newJTITestVerifier] exercises the jti
+// gate specifically.
 func newTestVerifier(t *testing.T, now time.Time, keys *josev4.JSONWebKeySet) *jar.Verifier {
 	t.Helper()
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:   testIssuer,
-		Resolver: &staticResolver{keys: keys},
-		Clock:    fakeClock{now: now},
+		Issuer:          testIssuer,
+		Resolver:        &staticResolver{keys: keys},
+		Clock:           fakeClock{now: now},
+		AllowMissingNbf: true,
+		AllowMissingJTI: true,
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -265,9 +276,10 @@ func TestVerify_RejectsUnconfiguredClient(t *testing.T) {
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	raw, _ := makeRequestObject(t, happyClaims(now))
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:   testIssuer,
-		Resolver: &staticResolver{err: jar.ErrJWKSConfigured},
-		Clock:    fakeClock{now: now},
+		Issuer:          testIssuer,
+		Resolver:        &staticResolver{err: jar.ErrJWKSConfigured},
+		Clock:           fakeClock{now: now},
+		AllowMissingJTI: true,
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -303,11 +315,12 @@ func TestNewVerifier_RequiresResolver(t *testing.T) {
 func newStrictTestVerifier(t *testing.T, now time.Time, keys *josev4.JSONWebKeySet) *jar.Verifier {
 	t.Helper()
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:      testIssuer,
-		Resolver:    &staticResolver{keys: keys},
-		Clock:       fakeClock{now: now},
-		RequireNbf:  true,
-		MaxLifetime: 60 * time.Minute,
+		Issuer:          testIssuer,
+		Resolver:        &staticResolver{keys: keys},
+		Clock:           fakeClock{now: now},
+		RequireNbf:      true,
+		MaxLifetime:     60 * time.Minute,
+		AllowMissingJTI: true,
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
@@ -394,8 +407,9 @@ func TestVerify_FAPI2_AcceptsWithinWindow(t *testing.T) {
 func TestVerifier_AllowedAlgs_DefaultIncludesAll(t *testing.T) {
 	t.Parallel()
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:   testIssuer,
-		Resolver: &staticResolver{},
+		Issuer:          testIssuer,
+		Resolver:        &staticResolver{},
+		AllowMissingJTI: true,
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)

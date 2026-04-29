@@ -524,7 +524,14 @@ func TestProvider_RevokeInitialAccessToken_HappyPath(t *testing.T) {
 	}
 }
 
-func TestProvider_RevokeInitialAccessToken_NotFoundPropagates(t *testing.T) {
+// TestProvider_RevokeInitialAccessToken_NotFoundIsIdempotent pins the
+// "missing token is not an error" semantics: the operation's
+// post-condition is "the token does not exist", which holds whether
+// the row was deleted by this call or had already been deleted by a
+// prior one. Returning store.ErrNotFound would force every embedder
+// to wrap the call in errors.Is just to defend against the harmless
+// concurrent-revoke race.
+func TestProvider_RevokeInitialAccessToken_NotFoundIsIdempotent(t *testing.T) {
 	t.Parallel()
 
 	clock := dcrFixedClock()
@@ -536,9 +543,29 @@ func TestProvider_RevokeInitialAccessToken_NotFoundPropagates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("op.New: %v", err)
 	}
-	err = provider.RevokeInitialAccessToken(context.Background(), "no-such-id")
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("expected store.ErrNotFound, got %v", err)
+	if err := provider.RevokeInitialAccessToken(context.Background(), "no-such-id"); err != nil {
+		t.Fatalf("missing IAT must report success, got %v", err)
+	}
+	// Second revoke after a successful issue+revoke MUST also report
+	// success: the post-condition still holds.
+	issued, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+	if err := provider.RevokeInitialAccessToken(context.Background(), issued.ID); err != nil {
+		t.Fatalf("first revoke: %v", err)
+	}
+	secondErr := provider.RevokeInitialAccessToken(context.Background(), issued.ID)
+	if secondErr != nil {
+		t.Fatalf("second revoke must be idempotent, got %v", secondErr)
+	}
+	// store.ErrNotFound MUST NOT propagate through the public
+	// surface: callers branch on idempotent success, not on the
+	// internal error sentinel. Pin the contract explicitly so a
+	// regression that re-introduced the wrapping fails this test
+	// rather than the implicit nil-check above.
+	if errors.Is(secondErr, store.ErrNotFound) {
+		t.Errorf("ErrNotFound leaked through the public surface: %v", secondErr)
 	}
 }
 

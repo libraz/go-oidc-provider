@@ -143,8 +143,8 @@ func resolveJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVeri
 		return response{}, false
 	}
 	if deps.AccessTokens != nil {
-		// ADR 0013: a token whose JTI has been flipped to revoked in
-		// the registry collapses onto {"active": false} per RFC 7662
+		// A token whose JTI has been flipped to revoked in the
+		// registry collapses onto {"active": false} per RFC 7662
 		// §2.2. The check is silent — no introspection metadata leaks
 		// for revoked tokens — so a curious resource server cannot
 		// probe revocation patterns. A missing row (rec == nil) is

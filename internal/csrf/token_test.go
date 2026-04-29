@@ -170,6 +170,82 @@ func TestSigner_Verify_RejectsKeyMismatch(t *testing.T) {
 	}
 }
 
+func TestSigner_LengthPrefix_PreventsBoundaryShift(t *testing.T) {
+	t.Parallel()
+
+	// With length-prefixed framing, distinct splits of the input that
+	// share the same concatenated bytes must produce distinct MACs.
+	// The token issued for (sessionID="ab", scope="cd") and the
+	// verification for (sessionID="abc", scope="d") happen to share the
+	// concatenation "abcd" but the length prefixes (2,2) versus (3,1)
+	// disagree, so the MAC tag must NOT match.
+	s, err := csrf.NewSigner(newKey(t))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	tokAB, err := s.IssueScoped("ab", "cd", now)
+	if err != nil {
+		t.Fatalf("IssueScoped: %v", err)
+	}
+	if err := s.VerifyScoped(tokAB, "abc", "d", now, time.Hour); !errors.Is(err, csrf.ErrTokenInvalid) {
+		t.Errorf("err=%v want ErrTokenInvalid (boundary collision)", err)
+	}
+
+	// Same boundary-shift exercise without scope confusion: pure
+	// sessionID variants that would have collided under the old "|"
+	// separator if a sessionID ever contained a pipe.
+	tokA, err := s.Issue("a|b", now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := s.Verify(tokA, "a", now, time.Hour); !errors.Is(err, csrf.ErrTokenInvalid) {
+		t.Errorf("err=%v want ErrTokenInvalid (sessionID boundary)", err)
+	}
+}
+
+func TestSigner_IssueScoped_BindsScope(t *testing.T) {
+	t.Parallel()
+
+	s, err := csrf.NewSigner(newKey(t))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	tok, err := s.IssueScoped("session", "form-A", now)
+	if err != nil {
+		t.Fatalf("IssueScoped: %v", err)
+	}
+	if err := s.VerifyScoped(tok, "session", "form-A", now, time.Hour); err != nil {
+		t.Errorf("VerifyScoped same scope: %v", err)
+	}
+	if err := s.VerifyScoped(tok, "session", "form-B", now, time.Hour); !errors.Is(err, csrf.ErrTokenInvalid) {
+		t.Errorf("err=%v want ErrTokenInvalid (different scope)", err)
+	}
+	// And the un-scoped Verify must also reject.
+	if err := s.Verify(tok, "session", now, time.Hour); !errors.Is(err, csrf.ErrTokenInvalid) {
+		t.Errorf("err=%v want ErrTokenInvalid (un-scoped Verify on scoped token)", err)
+	}
+}
+
+func TestSigner_Issue_BackwardCompatibleWithVerifyScopedEmpty(t *testing.T) {
+	t.Parallel()
+
+	s, err := csrf.NewSigner(newKey(t))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	tok, err := s.Issue("session", now)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	// VerifyScoped("") must accept tokens minted by Issue.
+	if err := s.VerifyScoped(tok, "session", "", now, time.Hour); err != nil {
+		t.Errorf("VerifyScoped empty scope rejected Issue token: %v", err)
+	}
+}
+
 func TestConstantTimeEqual(t *testing.T) {
 	t.Parallel()
 

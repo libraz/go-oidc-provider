@@ -45,7 +45,7 @@
 //
 // # Boundary discipline
 //
-// internal/* MUST NOT import the public op/ package (ADR 0001). The
+// internal/* MUST NOT import the public op/ package. The
 // [ClientMetadata] type declared here mirrors op.ClientMetadata; the
 // op layer converts between the two through a thin shim. The
 // [Deps.ValidateMetadata] hook receives the internal type; the op

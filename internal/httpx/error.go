@@ -83,18 +83,24 @@ func buildBearerChallenge(code, description, realm, scope string) string {
 	return out
 }
 
-// escapeQuoted replaces the two characters that would otherwise break the
-// `quoted-string` ABNF in RFC 7235 §2.1: backslash and double-quote. The
-// header generator never emits CTLs because OAuth error codes / scopes are
-// drawn from a restricted alphabet (RFC 6749 §A.7-A.8).
+// escapeQuoted produces a `quoted-string` (RFC 7235 §2.1) safe encoding.
+// Backslash and double-quote are escaped; control characters (bytes below
+// 0x20 and the 0x7F DEL) are dropped entirely. The drop is the CRLF-injection
+// defence: an attacker who could push a CR or LF through into a description
+// field would otherwise smuggle a header break into the WWW-Authenticate
+// value. The library never legitimately needs CTLs in OAuth error fields.
 func escapeQuoted(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := range len(s) {
-		switch s[i] {
+		c := s[i]
+		if c < 0x20 || c == 0x7F {
+			continue
+		}
+		switch c {
 		case '\\', '"':
-			out = append(out, '\\', s[i])
+			out = append(out, '\\', c)
 		default:
-			out = append(out, s[i])
+			out = append(out, c)
 		}
 	}
 	return string(out)

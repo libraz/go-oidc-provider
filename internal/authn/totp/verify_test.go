@@ -297,6 +297,59 @@ func TestVerify_NilRecord(t *testing.T) {
 	}
 }
 
+// TestVerify_ReplaysSameStepRejected asserts the M-AUTHN-5 replay
+// defence: a second verify with the same code within the same 30s
+// window is rejected as ErrWrongCode without incrementing the
+// brute-force counter, while a code computed at a strictly later
+// step is accepted normally.
+func TestVerify_ReplaysSameStepRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	code := totp.Code(f.secret, f.clock.t)
+
+	res, err := f.verifier.Verify(context.Background(), f.record, code)
+	if err != nil {
+		t.Fatalf("first Verify: %v", err)
+	}
+	if res.Outcome != totp.OutcomeSuccess {
+		t.Fatalf("first outcome=%v want Success", res.Outcome)
+	}
+	// Snapshot the step now: Result.Record aliases the input pointer
+	// so subsequent Verify calls would mutate this value through the
+	// alias and the comparison further down would silently equal.
+	firstStep := res.Record.LastAcceptedStep
+	if firstStep == 0 {
+		t.Errorf("LastAcceptedStep=0 after success; replay defence disabled")
+	}
+
+	// Replay the same code at the same wall-clock time. Without the
+	// LastAcceptedStep guard the verifier would happily match again.
+	res2, err2 := f.verifier.Verify(context.Background(), f.record, code)
+	if !errors.Is(err2, totp.ErrWrongCode) {
+		t.Fatalf("replay err=%v want ErrWrongCode", err2)
+	}
+	if res2.Record.FailedCount != 0 {
+		t.Errorf("FailedCount=%d want 0 (replay must not punish)", res2.Record.FailedCount)
+	}
+
+	// Advance the clock to the next step boundary and verify a freshly
+	// computed code redeems normally.
+	f.clock.t = f.clock.t.Add(31 * time.Second)
+	next := totp.Code(f.secret, f.clock.t)
+	res3, err3 := f.verifier.Verify(context.Background(), f.record, next)
+	if err3 != nil {
+		t.Fatalf("next-step Verify: %v", err3)
+	}
+	if res3.Outcome != totp.OutcomeSuccess {
+		t.Errorf("next-step outcome=%v want Success", res3.Outcome)
+	}
+	if res3.Record.LastAcceptedStep <= firstStep {
+		t.Errorf("LastAcceptedStep did not advance: was=%d now=%d",
+			firstStep, res3.Record.LastAcceptedStep)
+	}
+}
+
 func TestVerify_DefaultsClockToSystem(t *testing.T) {
 	t.Parallel()
 

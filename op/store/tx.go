@@ -20,9 +20,9 @@ import "context"
 // structural rather than a runtime warning.
 //
 // Note that [SessionStore] is intentionally outside the cluster: the OP
-// does not coordinate Session writes with token-endpoint transactions
-// (see ADR 0014). Embedders MAY route Sessions to a volatile cache
-// independently of the cluster anchor.
+// does not coordinate Session writes with token-endpoint transactions.
+// Embedders MAY route Sessions to a volatile cache independently of
+// the cluster anchor.
 type Transactional interface {
 	// BeginTx starts a new transaction and returns a [Tx] handle. The
 	// transaction is aborted if the caller fails to call either
@@ -40,7 +40,7 @@ type Transactional interface {
 // Note that [SessionStore], [InteractionStore], and [ConsumedJTIStore] are
 // intentionally absent from Tx. Sessions because the OP tolerates session
 // loss as a re-login event and does not pair Session writes with
-// token-endpoint commits (ADR 0014); interactions because losing them is
+// token-endpoint commits; interactions because losing them is
 // recoverable; JTIs because the operation is idempotent and benefits from
 // being a single round trip. Exposing them here would invite buggy
 // callers to enrol them by reflex.

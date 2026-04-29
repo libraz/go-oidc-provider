@@ -26,6 +26,21 @@ const preflightMaxAge = 10 * time.Minute
 // requires a config change rather than a runtime override.
 const allowedHeaders = "Content-Type, Authorization, DPoP, X-CSRF"
 
+// allowedHeadersSet is the lower-cased lookup table for [allowedHeaders].
+// It is consulted on every preflight to intersect the request's
+// Access-Control-Request-Headers list with the policy: the response only
+// echoes the subset the OP actually accepts, so an attacker cannot trick the
+// browser into permitting a header (e.g. Cookie) the OP never reads.
+//
+//nolint:gochecknoglobals // Static derived value mirrors allowedHeaders.
+var allowedHeadersSet = func() map[string]struct{} {
+	out := make(map[string]struct{}, 4)
+	for _, h := range strings.Split(allowedHeaders, ",") {
+		out[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
+	}
+	return out
+}()
+
 // Strict is the credentialed-CORS layer used on token / userinfo /
 // interaction / session / account endpoints. It echoes the request's Origin
 // only when the origin is in the configured allowlist; mismatches are
@@ -82,7 +97,7 @@ func (s *Strict) Handler(next http.Handler) http.Handler {
 		allowed := err == nil && s.allow.Contains(canon)
 
 		if isPreflight(r) {
-			s.servePreflight(w, origin, allowed)
+			s.servePreflight(w, r, origin, allowed)
 			return
 		}
 		if allowed {
@@ -95,7 +110,16 @@ func (s *Strict) Handler(next http.Handler) http.Handler {
 // servePreflight handles the OPTIONS request. Allowed origins get the full
 // header set + 204; rejected origins get 403 with no CORS surface (no
 // information leak about what *would* have been accepted).
-func (s *Strict) servePreflight(w http.ResponseWriter, origin string, allowed bool) {
+//
+// The Access-Control-Allow-Headers value is the intersection of
+// [allowedHeadersSet] with the browser's Access-Control-Request-Headers
+// list. When the request omits the header the static [allowedHeaders] is
+// echoed verbatim (the conservative default that mirrors browser behaviour
+// for "no special headers"); when the request lists a header the OP does
+// not accept, the unsupported entry is silently dropped from the response so
+// the browser's CORS check fails for that specific header without leaking a
+// list of known-good names.
+func (s *Strict) servePreflight(w http.ResponseWriter, r *http.Request, origin string, allowed bool) {
 	if !allowed {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
@@ -104,9 +128,32 @@ func (s *Strict) servePreflight(w http.ResponseWriter, origin string, allowed bo
 	h.Set("Access-Control-Allow-Origin", origin)
 	h.Set("Access-Control-Allow-Credentials", "true")
 	h.Set("Access-Control-Allow-Methods", strings.Join(allowedMethods, ", "))
-	h.Set("Access-Control-Allow-Headers", allowedHeaders)
+	h.Set("Access-Control-Allow-Headers", intersectAllowedHeaders(r.Header.Get("Access-Control-Request-Headers")))
 	h.Set("Access-Control-Max-Age", strconv.Itoa(int(preflightMaxAge.Seconds())))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// intersectAllowedHeaders returns the subset of requested headers the OP
+// actually accepts, comma-joined, preserving the request's casing for the
+// echoed names. An empty request defaults to the full static [allowedHeaders]
+// so the existing "browser sent no ACRH" path stays compatible.
+func intersectAllowedHeaders(requested string) string {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return allowedHeaders
+	}
+	parts := strings.Split(requested, ",")
+	out := make([]string, 0, len(parts))
+	for _, raw := range parts {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, ok := allowedHeadersSet[strings.ToLower(name)]; ok {
+			out = append(out, name)
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 // stampActual writes the response headers required on a non-preflight

@@ -161,9 +161,23 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	out := fromWebauthnCredential(*wc)
 	if wc.Authenticator.CloneWarning {
 		// Surface the clone signal as a structured error but still
-		// return the updated credential so the orchestrator can
-		// stamp the audit trail. The orchestrator owns the policy
-		// decision (fail vs. warn vs. step-up).
+		// return a credential pointer so the orchestrator can stamp
+		// the audit trail. We deliberately DO NOT propagate the new
+		// (and possibly attacker-controlled) sign counter here:
+		// trusting the assertion's counter would let an attacker
+		// raise the persisted SignCount to UINT32_MAX and lock out
+		// the legitimate authenticator forever. Recover the prior
+		// counter from the caller-supplied credential record so the
+		// CloneWarning bit is the only persisted change.
+		var stored Credential
+		for _, c := range credentials {
+			if bytes.Equal(c.ID, parsed.RawID) {
+				stored = c
+				break
+			}
+		}
+		out.Authenticator.SignCount = stored.Authenticator.SignCount
+		out.Authenticator.CloneWarning = true
 		return &out, ErrCloneDetected
 	}
 	return &out, nil

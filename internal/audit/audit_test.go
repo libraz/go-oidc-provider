@@ -108,6 +108,48 @@ func TestSlog_OmitsEmptyCanonicalFields(t *testing.T) {
 	}
 }
 
+// TestSlog_RedactsExtrasWithoutWrapper pins M-AUDIT: the slog emitter
+// masks sensitive extras keys via [redact.IsSensitive] before handing
+// them to slog.Any, so an embedder that wires a plain slog.JSONHandler
+// (without [redact.WrapHandler]) still cannot leak refresh tokens or
+// client secrets that flowed through the audit pipeline.
+func TestSlog_RedactsExtrasWithoutWrapper(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	// Deliberately bare handler — no redact wrapper.
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	em := audit.Slog(logger)
+
+	//nolint:gosec // test fixture; the literal values ARE the assertion targets the redactor must mask.
+	em.Emit(context.Background(), audit.Event{
+		Name: "token.refreshed",
+		Extras: map[string]any{
+			"client_id":         "spa",
+			"refresh_token":     "shh-its-a-secret",
+			"new_refresh_token": "shh-also-a-secret",
+			"password_hash":     "$argon2id$...",
+		},
+	})
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("decode: %v\n%s", err, buf.String())
+	}
+	extras, ok := rec["extras"].(map[string]any)
+	if !ok {
+		t.Fatalf("extras group missing: %T", rec["extras"])
+	}
+	if extras["client_id"] != "spa" {
+		t.Errorf("client_id should be unredacted, got %v", extras["client_id"])
+	}
+	for _, key := range []string{"refresh_token", "new_refresh_token", "password_hash"} {
+		if got := extras[key]; got != "[REDACTED]" {
+			t.Errorf("extras[%q]=%v want [REDACTED]", key, got)
+		}
+	}
+}
+
 func TestSlog_LevelMapping(t *testing.T) {
 	t.Parallel()
 

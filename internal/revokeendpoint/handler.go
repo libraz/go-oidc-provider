@@ -116,11 +116,11 @@ type Deps struct {
 
 	// AccessTokens is the [store.AccessTokenRegistry] consulted by the
 	// JWT branch to flip the access-token shadow row to revoked (RFC
-	// 7009 §2 + ADR 0013). The call is idempotent: a missing row
-	// returns nil so the endpoint stays on the §2.2 "always 200" path.
-	// A nil value disables the per-token revocation surface and the
-	// JWT branch falls back to the pre-ADR-0013 "no-op acknowledgement"
-	// behaviour: the wire response stays 200 but the token continues
+	// 7009 §2). The call is idempotent: a missing row returns nil so
+	// the endpoint stays on the §2.2 "always 200" path. A nil value
+	// disables the per-token revocation surface and the JWT branch
+	// falls back to the legacy "no-op acknowledgement" behaviour: the
+	// wire response stays 200 but the token continues
 	// to verify until exp.
 	AccessTokens store.AccessTokenRegistry
 }

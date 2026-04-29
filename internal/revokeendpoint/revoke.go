@@ -114,7 +114,7 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 		// dispatcher uniform).
 		return false
 	}
-	// ADR 0013: flip the registry row so a subsequent userinfo /
+	// Flip the registry row so a subsequent userinfo /
 	// introspection call against the same JTI returns invalid_token
 	// / {"active": false}. RevokeByJTI is idempotent — a missing row
 	// returns nil — so the endpoint stays on the RFC 7009 §2.2
@@ -144,6 +144,13 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 	if deps.RefreshTokens == nil {
 		return false
 	}
+	// [op/store.RefreshTokenStore.Find] is ID-keyed (godoc on the
+	// store interface). The library's bearer-string format is the
+	// row ID itself in the inmem reference adapter; backends that
+	// hash bearer strings into the ID column hand the hashed ID
+	// across the wire to clients (so the parameter the RP submits
+	// at /revoke matches the stored ID). Either shape passes
+	// through this lookup unchanged.
 	rec, err := deps.RefreshTokens.Find(ctx, token)
 	if err != nil || rec == nil {
 		// ErrNotFound and any other store error collapse onto a
@@ -175,6 +182,17 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 // The walk terminates at the first record whose ParentID is nil;
 // [chainWalkLimit] caps the iteration count so a corrupted store
 // cannot loop forever.
+//
+// The walk consumes [op/store.RefreshTokenStore.Find] — whose
+// contract is "returns the refresh token identified by id" (see the
+// godoc on [op/store.RefreshTokenStore.Find] for the wire-level
+// statement). Both startID (the Find result of the bearer string
+// supplied by the client) and every [op/store.RefreshToken.ParentID]
+// it dereferences are interpreted as ID values, never as bearer
+// secrets. The contract assumes the backend's ID space and ParentID
+// pointer agree — the library guarantees this on every Save call —
+// and a backend that hashes bearer strings into the ID column simply
+// produces opaque IDs that this walk treats as such.
 //
 // The helper is a self-contained copy of
 // [internal/grants/refresh.findChainRoot]; we deliberately do not

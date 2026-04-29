@@ -1,6 +1,8 @@
 package jarm
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"errors"
 	"fmt"
 	"time"
@@ -64,6 +66,7 @@ type Payload struct {
 // value is immutable and safe for concurrent use.
 type Signer struct {
 	key    tokens.SigningKey
+	alg    josev4.SignatureAlgorithm
 	issuer string
 	clock  timex.Clock
 	expiry time.Duration
@@ -96,13 +99,19 @@ type SignerConfig struct {
 }
 
 // NewSigner builds a [*Signer] from cfg. It returns an error when a
-// required field is missing so the embedder fails fast at startup.
+// required field is missing or when the supplied key cannot be mapped
+// onto a project-allowed JWS algorithm; the embedder fails fast at
+// startup rather than at the first response.
 func NewSigner(cfg SignerConfig) (*Signer, error) {
 	if cfg.Key.Signer == nil {
 		return nil, errors.New("jarm: NewSigner requires Key.Signer")
 	}
 	if cfg.Issuer == "" {
 		return nil, errors.New("jarm: NewSigner requires Issuer")
+	}
+	alg, err := deriveJWSAlgorithm(cfg.Key)
+	if err != nil {
+		return nil, err
 	}
 	clock := cfg.Clock
 	if clock == nil {
@@ -114,10 +123,33 @@ func NewSigner(cfg SignerConfig) (*Signer, error) {
 	}
 	return &Signer{
 		key:    cfg.Key,
+		alg:    alg,
 		issuer: cfg.Issuer,
 		clock:  clock,
 		expiry: expiry,
 	}, nil
+}
+
+// deriveJWSAlgorithm picks the JWS "alg" header for a [tokens.SigningKey]
+// based on the public key shape. v0.x ships ECDSA P-256 only because
+// [internal/keys.NewSet] rejects every other key shape on construction
+// (see internal/jose F-4); a key reaching this function therefore
+// MUST be a P-256 ECDSA key. The switch surfaces "unknown key shape"
+// as a fail-fast error at [NewSigner] time rather than silently
+// returning ES256 for the wrong key — and provides the natural
+// extension point for additional algorithms when the keys package
+// gains support for them.
+func deriveJWSAlgorithm(key tokens.SigningKey) (josev4.SignatureAlgorithm, error) {
+	pub := key.Signer.Public()
+	switch k := pub.(type) {
+	case *ecdsa.PublicKey:
+		if k.Curve != elliptic.P256() {
+			return "", fmt.Errorf("%w: ECDSA key uses curve %q, want P-256", ErrEncode, k.Params().Name)
+		}
+		return josev4.ES256, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported key type %T (v0.x supports ECDSA P-256 only; see internal/keys.NewSet)", ErrEncode, pub)
+	}
 }
 
 // Issuer returns the issuer string this signer stamps onto every JWT.
@@ -141,11 +173,19 @@ func (s *Signer) Sign(p Payload) (string, error) {
 		issuer = s.issuer
 	}
 	now := s.clock.Now().UTC()
+	// "nbf" is set equal to "iat" so JARM consumers running under
+	// FAPI 2.0 Message Signing §5.6 can apply a uniform nbf-or-fail
+	// rule (closes L-JARM-NBF). RFC 9101 / draft-ietf-oauth-jwsreq
+	// neither mandate nbf on response objects nor forbid it; pinning
+	// the value to iat keeps the wire shape compatible with relaxed
+	// consumers while satisfying strict ones.
+	iat := now.Unix()
 	claims := map[string]any{
 		"iss": issuer,
 		"aud": p.Audience,
 		"exp": p.ExpiresAt.UTC().Unix(),
-		"iat": now.Unix(),
+		"iat": iat,
+		"nbf": iat,
 	}
 	if p.State != "" {
 		claims["state"] = p.State
@@ -162,7 +202,7 @@ func (s *Signer) Sign(p Payload) (string, error) {
 	if p.ErrorURI != "" {
 		claims["error_uri"] = p.ErrorURI
 	}
-	signer, err := newSigner(s.key)
+	signer, err := newSigner(s.key, s.alg)
 	if err != nil {
 		return "", err
 	}
@@ -207,18 +247,21 @@ func validatePayload(p Payload) error {
 }
 
 // newSigner builds the [josev4.Signer] used by [Signer.Sign]. The
-// configuration mirrors [internal/tokens.newSigner] so both endpoints
-// emit JWTs with identical "kid" / "typ" / "alg" headers; the
-// duplication is preferred over importing the unexported helper.
+// algorithm is supplied by the caller (already derived from the key
+// shape at [NewSigner] construction time via [deriveJWSAlgorithm]) so
+// runtime never reads a stale ES256 default for an RSA / Ed25519 key.
+// The configuration mirrors [internal/tokens.newSigner] so both
+// endpoints emit JWTs with identical "kid" / "typ" / "alg" headers;
+// the duplication is preferred over importing the unexported helper.
 //
 //nolint:ireturn // wraps third-party josev4.Signer; the interface is the package's contract.
-func newSigner(key tokens.SigningKey) (josev4.Signer, error) {
+func newSigner(key tokens.SigningKey, alg josev4.SignatureAlgorithm) (josev4.Signer, error) {
 	sk := josev4.SigningKey{
-		Algorithm: josev4.ES256,
+		Algorithm: alg,
 		Key: josev4.JSONWebKey{
 			Key:       key.Signer,
 			KeyID:     key.KeyID,
-			Algorithm: string(josev4.ES256),
+			Algorithm: string(alg),
 			Use:       "sig",
 		},
 	}

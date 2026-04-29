@@ -1,7 +1,7 @@
 //go:build example
 
-// Example 12 demonstrates the public/internal scope split documented
-// in ADR 0004. Scopes flagged Public appear in the discovery
+// Example 12 demonstrates the public/internal scope split. Scopes
+// flagged Public appear in the discovery
 // document's `scopes_supported` and on the consent prompt; scopes
 // flagged internal are accepted at /authorize but never advertised
 // and never rendered for user approval.

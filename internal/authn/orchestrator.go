@@ -947,11 +947,20 @@ func (o *Orchestrator) appendFactor(st State, auth Authenticator, result interac
 	}
 	uv := false
 	if auth.Type() == FactorPasskey {
-		switch auth.AMR() {
-		case "hwk":
-			uv = true
-		case "swk":
-			uv = false
+		// Prefer the real UV bit from the assertion when the
+		// authenticator implements [UserVerificationReporter]. The
+		// hard-coded "hwk" -> true / "swk" -> false fall-back
+		// preserves the legacy contract for adapters that do not
+		// surface the bit (M-AUTHN-7).
+		if reporter, ok := auth.(UserVerificationReporter); ok {
+			uv = reporter.LastUserVerified(result.Subject)
+		} else {
+			switch auth.AMR() {
+			case "hwk":
+				uv = true
+			case "swk":
+				uv = false
+			}
 		}
 	}
 	st.Factors = append(st.Factors, Factor{

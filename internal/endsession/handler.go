@@ -76,14 +76,15 @@ type Deps struct {
 	// RP-Initiated Logout 1.0 §5 expectation that "the OP MAY
 	// revoke any active access tokens" once the user signs out.
 	// A nil value disables the cascade — the embedder either runs
-	// without ADR 0013 wiring, or accepts that access tokens
-	// outlive the session until their JWT exp is reached.
+	// without the access-token registry wired, or accepts that
+	// access tokens outlive the session until their JWT exp is
+	// reached.
 	Grants store.GrantStore
 
-	// AccessTokens revokes the per-grant access-token shadow rows
-	// ADR 0013 introduces. A nil value disables the cascade for
-	// the same reasons listed on [Deps.Grants]; both fields
-	// propagate together through [op.New].
+	// AccessTokens revokes the per-grant access-token shadow rows.
+	// A nil value disables the cascade for the same reasons listed
+	// on [Deps.Grants]; both fields propagate together through
+	// [op.New].
 	AccessTokens store.AccessTokenRegistry
 }
 
@@ -112,6 +113,18 @@ type request struct {
 // resolves the requesting client, terminates the session, and emits
 // the response. Decomposing the body keeps the function under the
 // project's gocognit / cyclop caps.
+//
+// The serve flow forks on the presence of id_token_hint:
+//
+//   - With a valid hint, the hint itself proves the requester
+//     possesses an OP-signed token bound to the requesting client.
+//     Both GET and POST are accepted directly.
+//   - Without a hint, an unauthenticated GET is indistinguishable
+//     from a cross-site CSRF probe (e.g. <img src=...>). The handler
+//     emits an interstitial confirmation page on GET and requires a
+//     POST carrying a double-submit __Host- CSRF token before the
+//     session is terminated. This is the OIDC RP-Initiated Logout
+//     1.0 §5 plus an OWASP-grade CSRF defense.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	values, ok := readValues(w, r)
 	if !ok {
@@ -125,8 +138,46 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !validatePostLogout(w, client, req.postLogout) {
 		return
 	}
+	if !enforceCSRFGate(w, r, req) {
+		return
+	}
 	terminateSession(w, r, deps)
 	emitResponse(w, r, req)
+}
+
+// enforceCSRFGate is the CSRF guard for the hint-less branch of the
+// /end_session flow. The function returns true when the caller may
+// proceed to terminateSession, false when the response has already
+// been written (interstitial page on GET, error on a forged POST).
+//
+// The gate fires only when id_token_hint is absent: a hint-bearing
+// request has already proven the caller possesses an OP-signed token
+// for the requesting client, which a cross-site script cannot forge.
+//
+// On a hint-less GET the function renders the interstitial
+// confirmation page (HTTP 200) and returns false so the caller
+// stops without touching the session. On a hint-less POST the
+// function validates the double-submit __Host- CSRF cookie + form
+// field plus the Origin / Referer header; any failure produces a
+// 400 error page and returns false.
+func enforceCSRFGate(w http.ResponseWriter, r *http.Request, req request) bool {
+	if req.idTokenHint != "" {
+		return true
+	}
+	if r.Method == http.MethodGet {
+		renderLogoutConfirmation(w, r, req)
+		return false
+	}
+	if !validateOriginOrReferer(r) {
+		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
+		return false
+	}
+	if !validateConfirmToken(r) {
+		writeLogoutError(w, http.StatusBadRequest, descCSRFRejected)
+		return false
+	}
+	clearConfirmCookie(w)
+	return true
 }
 
 // readValues enforces the method / content-type / size invariants and
@@ -205,7 +256,7 @@ func resolveByIDTokenHint(
 	deps Deps,
 	req request,
 ) (*store.Client, bool) {
-	aud, err := verifyIDTokenHint(deps.Keys, req.idTokenHint)
+	aud, err := verifyIDTokenHint(deps.Keys, deps.Issuer, req.idTokenHint)
 	if err != nil {
 		writeLogoutError(w, http.StatusBadRequest, descIDTokenInvalid)
 		return nil, false
@@ -294,7 +345,7 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 	clearSessionCookie(w)
 }
 
-// revokeAccessTokens cascades RP-Initiated Logout to the ADR 0013
+// revokeAccessTokens cascades RP-Initiated Logout to the
 // access-token registry: every grant the subject currently holds is
 // retired so subsequent /userinfo, /introspection, and resource-server
 // validations reject the outstanding bearer JWTs immediately rather
@@ -352,34 +403,45 @@ func clearSessionCookie(w http.ResponseWriter) {
 // otherwise. The redirect URI has already been validated against the
 // resolved client; state is echoed verbatim per OIDC RP-Initiated
 // Logout 1.0 §3.
+//
+// On a malformed post_logout_redirect_uri (which validatePostLogout
+// has already accepted as preregistered, so a parse failure here is a
+// programmer bug or a corrupted client record) the function falls
+// through to the static confirmation page rather than emitting the
+// raw value as a Location header. Surfacing the malformed string as a
+// redirect target risks an open-redirect surface against any future
+// regression that loosens validatePostLogout's exact-match rule.
 func emitResponse(w http.ResponseWriter, r *http.Request, req request) {
 	if req.postLogout == "" {
 		writeLoggedOutPage(w)
 		return
 	}
-	target := buildPostLogoutRedirect(req.postLogout, req.state)
+	target, ok := buildPostLogoutRedirect(req.postLogout, req.state)
+	if !ok {
+		writeLoggedOutPage(w)
+		return
+	}
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // buildPostLogoutRedirect composes the post-logout redirect target.
 // The function is split out so the query-merge logic can be unit-
-// tested without invoking the HTTP machinery.
-func buildPostLogoutRedirect(postLogout, state string) string {
-	if state == "" {
-		return postLogout
-	}
+// tested without invoking the HTTP machinery. The bool reports whether
+// the URI parsed successfully; a parse failure short-circuits the
+// caller onto the static confirmation page rather than emitting the
+// raw (potentially attacker-shaped) value as a Location header.
+func buildPostLogoutRedirect(postLogout, state string) (string, bool) {
 	u, err := url.Parse(postLogout)
 	if err != nil {
-		// validatePostLogout has already accepted the URI as
-		// preregistered; a parse failure here is a programmer bug.
-		// Return the original URI unchanged so the audit log surfaces
-		// the malformed value.
-		return postLogout
+		return "", false
+	}
+	if state == "" {
+		return postLogout, true
 	}
 	q := u.Query()
 	q.Set("state", state)
 	u.RawQuery = q.Encode()
-	return u.String()
+	return u.String(), true
 }
 
 // isFormContent reports whether ct is application/x-www-form-urlencoded,

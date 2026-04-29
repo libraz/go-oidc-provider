@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -116,10 +117,18 @@ func (f *jarFixture) jarSign(t *testing.T, claims map[string]any) string {
 func (f *jarFixture) happyClaims() map[string]any {
 	_, challenge := pkcePair()
 	return map[string]any{
-		"iss":                   f.rp.ID,
-		"aud":                   f.prov.Issuer,
-		"exp":                   f.clock.now.Add(5 * time.Minute).Unix(),
-		"iat":                   f.clock.now.Unix(),
+		"iss": f.rp.ID,
+		"aud": f.prov.Issuer,
+		"exp": f.clock.now.Add(5 * time.Minute).Unix(),
+		"iat": f.clock.now.Unix(),
+		// nbf is now required by default per L-JAR-NBF; pin it to iat
+		// so the FAPI 2.0 Message Signing §5.6 posture is satisfied
+		// uniformly across the test suite. jti is required by default
+		// per RFC 9101 §10.8; the helper mints a fresh value per call
+		// so successive request objects do not collide on the
+		// consumed-jti gate.
+		"nbf":                   f.clock.now.Unix(),
+		"jti":                   freshJTI(),
 		"client_id":             f.rp.ID,
 		"response_type":         "code",
 		"redirect_uri":          f.rp.RedirectURIs[0],
@@ -304,6 +313,18 @@ func TestPAR_JAR_RequireSigned_AcceptsSignedRequest(t *testing.T) {
 // postPARForm issues a POST to endpoint with the supplied form and Basic
 // auth pair. The helper exists so the JAR-specific suite reads one line
 // per HTTP call without depending on the package-private fixture.post.
+// freshJTI returns a 128-bit random "jti" suitable for a single
+// request object. The function uses crypto/rand directly so a single
+// test never produces colliding values across successive request
+// objects in the same fixture.
+func freshJTI() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return "jti-" + hex.EncodeToString(b[:])
+}
+
 func postPARForm(tb testing.TB, endpoint string, form url.Values, basicID, basicSecret string) *http.Response {
 	tb.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint,

@@ -41,6 +41,59 @@ func TestWriteJSON_HappyPath(t *testing.T) {
 	}
 }
 
+func TestWriteJSON_StampsNoSniffHeader(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	if err := httpx.WriteJSON(rec, http.StatusOK, map[string]int{"x": 1}); err != nil {
+		t.Fatalf("WriteJSON: %v", err)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options=%q want nosniff", got)
+	}
+}
+
+func TestWriteJSON_ServerErrorAlsoStampsNoSniff(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	_ = httpx.WriteJSON(rec, http.StatusOK, unmarshallable{Ch: make(chan int)})
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options=%q want nosniff (fallback path)", got)
+	}
+}
+
+func TestWriteOAuthBearerChallenge_DropsControlCharacters(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	// CRLF injection attempt smuggled through error_description.
+	err := httpx.WriteOAuthBearerChallenge(
+		rec,
+		http.StatusUnauthorized,
+		"invalid_token",
+		"oops\r\nX-Injected: yes",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("WriteOAuthBearerChallenge: %v", err)
+	}
+	got := rec.Header().Get("WWW-Authenticate")
+	if contains(got, "\r") || contains(got, "\n") {
+		t.Errorf("WWW-Authenticate=%q must not contain raw CR/LF", got)
+	}
+	if contains(got, "X-Injected") {
+		// The literal string isn't a control character so it survives, but
+		// crucially no header break separates it from the parent line.
+		// We verify that by asserting the response carries exactly one
+		// WWW-Authenticate header value.
+		if vals := rec.Header().Values("WWW-Authenticate"); len(vals) != 1 {
+			t.Errorf("got %d WWW-Authenticate headers, want 1 (CRLF injection)", len(vals))
+		}
+	}
+}
+
 func TestWriteJSON_StatusEchoes(t *testing.T) {
 	t.Parallel()
 

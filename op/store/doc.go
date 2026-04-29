@@ -40,6 +40,27 @@
 // contract: a backend that returns a different error for one of the listed
 // failure modes does not satisfy the interface even if it compiles.
 //
+// # Hash-on-store contract for opaque bearer tokens
+//
+// Authorization codes ([AuthorizationCode.ID]), refresh tokens
+// ([RefreshToken.ID]), and pushed-authorization-request URIs
+// ([PushedAuthRequest.URI]) are opaque bearer secrets: possession of
+// the value alone authorises the holder to redeem the artefact at the
+// token endpoint. Backend implementations therefore MUST hash the
+// presented token before persisting it (SHA-256 with a server-side
+// pepper is the recommended construction) and MUST NOT store the raw
+// value. Save records the hash; Find / Consume hash the presented
+// token and look the digest up; comparison against the stored hash
+// SHOULD be performed in constant time so a database leak compounded
+// by a timing oracle still fails closed.
+//
+// The contract is enforced by every backend in this repository (the
+// reference [github.com/libraz/go-oidc-provider/op/storeadapter/inmem]
+// implementation hashes via SHA-256 without a pepper, intentionally
+// trading the additional defence for transparency in tests). External
+// backends — SQL, Redis, DynamoDB — are responsible for honouring the
+// same invariant.
+//
 // # Stability
 //
 // The store package is part of the public API of go-oidc-provider and follows

@@ -139,7 +139,7 @@ type Deps struct {
 	// issuance metadata. A nil value disables the check entirely; the
 	// handler then reports {"active": true} for any token that
 	// verifies and is still inside its exp window, mirroring the
-	// pre-ADR-0013 behaviour.
+	// legacy behaviour.
 	AccessTokens store.AccessTokenRegistry
 }
 

@@ -65,7 +65,7 @@ func TestAccessTokenRegister_Duplicate(t *testing.T) {
 }
 
 // TestAccessTokenFind_AbsentReturnsNil locks in the (nil, nil) absent
-// shape ADR 0013 specifies. A typed ErrNotFound would also be valid
+// shape. A typed ErrNotFound would also be valid
 // per the interface; this test pins the inmem return so callers that
 // expect (nil, nil) (the userinfo / introspection paths) keep working.
 func TestAccessTokenFind_AbsentReturnsNil(t *testing.T) {

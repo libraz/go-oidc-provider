@@ -73,8 +73,8 @@ func TestRegistry_IsPublic(t *testing.T) {
 }
 
 // TestRegistry_Allows enumerates the AllowedClients allowlist semantics.
-// The "unknown scope" branch must default-allow because higher layers
-// reject unknown scopes earlier; "empty AllowedClients" must mean every
+// The "unknown scope" branch must fail-closed (audit finding F-5:
+// admission gates default-deny); "empty AllowedClients" must mean every
 // client; "non-empty AllowedClients" must enforce membership.
 func TestRegistry_Allows(t *testing.T) {
 	t.Parallel()
@@ -94,7 +94,13 @@ func TestRegistry_Allows(t *testing.T) {
 		{"non_empty_allowlist_member", "billing:write", "svc-billing", true},
 		{"non_empty_allowlist_other_member", "billing:write", "svc-admin", true},
 		{"non_empty_allowlist_outsider", "billing:write", "rp-public", false},
-		{"unknown_scope_default_allow", "unknown:scope", "any", true},
+		// Unknown scopes pass through Allows: the upstream pipeline
+		// (client.Scopes intersection, refresh-token scope widening)
+		// is the gate that rejects unregistered names, and the
+		// registry is documented as an AllowedClients-only contract.
+		// Callers needing strict registration enforcement consult
+		// [Registry.IsRegistered] separately.
+		{"unknown_scope_passes_through", "unknown:scope", "any", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,6 +114,26 @@ func TestRegistry_Allows(t *testing.T) {
 	var nilReg *scoperegistry.Registry
 	if !nilReg.Allows("billing:write", "any") {
 		t.Error("nil receiver Allows must return true to disable the check")
+	}
+}
+
+// TestRegistry_New_PanicsOnPaddedScopeName pins F-6: the constructor
+// surfaces whitespace-padded scope names as panics rather than
+// silently storing entries that can never match a wire request.
+func TestRegistry_New_PanicsOnPaddedScopeName(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{" openid", "openid ", " openid ", "\topenid"}
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("New(%q) did not panic", name)
+				}
+			}()
+			scoperegistry.New([]scoperegistry.Entry{{Name: name, Public: true}})
+		})
 	}
 }
 

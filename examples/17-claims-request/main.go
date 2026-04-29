@@ -27,15 +27,14 @@
 //	code_challenge_method=S256&\
 //	claims=$(printf %s \"$CLAIMS\" | jq -sRr @uri)"
 //
-// Behaviour summary (per ADR 0011):
+// Behaviour summary:
 //
 //   - The library default is claims_parameter_supported = true.
 //     [op.WithClaimsParameterSupported] flips the discovery bit and
 //     the parser; the parser still rejects malformed JSON either way
 //     so the wire shape stays consistent across the FAPI 2.0 path.
 //   - Essential claims that the [store.UserStore] does not return are
-//     omitted from the response, not surfaced as an error. ADR 0011
-//     documents the rationale.
+//     omitted from the response, not surfaced as an error.
 //   - Voluntary requests (JSON null on the wire) layer onto the
 //     existing scope-driven release; the parser does not narrow the
 //     claim set, only widens it.

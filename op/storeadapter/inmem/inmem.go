@@ -44,6 +44,9 @@ package inmem
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"maps"
 	"slices"
@@ -53,6 +56,30 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// hashKey is the in-memory analogue of the SHA-256-with-pepper
+// fingerprint a production backend SHOULD use to persist
+// authorization-code / refresh-token / PAR-uri rows. The reference
+// implementation has no pepper: storing the raw SHA-256 hash exists to
+// pin the hash-on-store contract documented in [op/store/doc.go]
+// (a snapshot of the in-memory map MUST NOT contain the bearer
+// secret) and to keep the read paths constant-time relative to a
+// non-existent key. Production backends MAY reuse this helper but
+// SHOULD apply HMAC with a server-side pepper before storage.
+func hashKey(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// constantTimeKeyMatch reports whether stored and presented hash to the
+// same digest, comparing in constant time relative to the digest
+// length. The check is structurally redundant given map lookup is
+// keyed on the digest, but a constant-time compare keeps the helper
+// safe to copy into a backend that walks a slice or otherwise diverges
+// from the map-lookup model.
+func constantTimeKeyMatch(stored, presented string) bool {
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(presented)) == 1
+}
 
 // Clock returns the wall-clock time used to evaluate record expiry. It is
 // declared here rather than imported from [github.com/libraz/go-oidc-provider/op]
@@ -379,31 +406,52 @@ func (s *authCodeStore) Save(_ context.Context, code *store.AuthorizationCode) e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.m[code.ID]; exists {
+	key := hashKey(code.ID)
+	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	s.m[code.ID] = cloneAuthCode(code)
+	stored := cloneAuthCode(code)
+	// Drop the raw ID from the stored record. The map key is the
+	// hashed token; the stored record retains the hash so callers
+	// inspecting the underlying map see only the digest, never the
+	// bearer secret. Find / Consume restore the raw ID from the
+	// lookup parameter before handing the record back.
+	stored.ID = key
+	s.m[key] = stored
 	return nil
 }
 
 func (s *authCodeStore) Find(_ context.Context, id string) (*store.AuthorizationCode, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rec, ok := s.m[id]
+	key := hashKey(id)
+	rec, ok := s.m[key]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if !constantTimeKeyMatch(rec.ID, key) {
+		// Defensive: the digest stored alongside the record diverged
+		// from the map key. The reference impl maintains the
+		// invariant; the check guards against a future refactor.
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, s.clock) {
 		return nil, store.ErrNotFound
 	}
-	return cloneAuthCode(rec), nil
+	out := cloneAuthCode(rec)
+	out.ID = id
+	return out, nil
 }
 
 func (s *authCodeStore) Consume(_ context.Context, id string) (*store.AuthorizationCode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.m[id]
+	key := hashKey(id)
+	rec, ok := s.m[key]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if !constantTimeKeyMatch(rec.ID, key) {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, s.clock) {
@@ -414,7 +462,9 @@ func (s *authCodeStore) Consume(_ context.Context, id string) (*store.Authorizat
 	}
 	now := s.clock.Now()
 	rec.ConsumedAt = &now
-	return cloneAuthCode(rec), nil
+	out := cloneAuthCode(rec)
+	out.ID = id
+	return out, nil
 }
 
 func cloneAuthCode(c *store.AuthorizationCode) *store.AuthorizationCode {
@@ -448,31 +498,42 @@ func (s *refreshStore) Save(_ context.Context, token *store.RefreshToken) error 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.m[token.ID]; exists {
+	key := hashKey(token.ID)
+	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	s.m[token.ID] = cloneRefresh(token)
+	s.m[key] = storeRefresh(token, key)
 	return nil
 }
 
 func (s *refreshStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rec, ok := s.m[id]
+	key := hashKey(id)
+	rec, ok := s.m[key]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if !constantTimeKeyMatch(rec.ID, key) {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, s.clock) {
 		return nil, store.ErrNotFound
 	}
-	return cloneRefresh(rec), nil
+	out := cloneRefresh(rec)
+	out.ID = id
+	return out, nil
 }
 
 func (s *refreshStore) Consume(_ context.Context, id string) (*store.RefreshToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.m[id]
+	key := hashKey(id)
+	rec, ok := s.m[key]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if !constantTimeKeyMatch(rec.ID, key) {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, s.clock) {
@@ -483,18 +544,35 @@ func (s *refreshStore) Consume(_ context.Context, id string) (*store.RefreshToke
 	}
 	now := s.clock.Now()
 	rec.ConsumedAt = &now
-	return cloneRefresh(rec), nil
+	out := cloneRefresh(rec)
+	out.ID = id
+	return out, nil
 }
 
 func (s *refreshStore) RevokeChain(_ context.Context, rootID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[rootID]; !ok {
+	rootKey := hashKey(rootID)
+	if _, ok := s.m[rootKey]; !ok {
 		return store.ErrNotFound
 	}
 	now := s.clock.Now()
-	revokeChainLocked(s.m, rootID, now)
+	revokeChainLocked(s.m, rootKey, now)
 	return nil
+}
+
+// storeRefresh produces the in-memory representation of token: a clone
+// with the raw ID replaced by its hash key. Storing the digest as the
+// map key means a snapshot of the underlying map (heap dump, debugger
+// inspection) cannot reconstruct the bearer secret the OP issued.
+// ParentID is left as the raw parent identifier so callers reading the
+// record back via Find / Consume see the same value they passed in;
+// [revokeOneGeneration] hashes ParentID on the fly to walk into the
+// hash-keyed map.
+func storeRefresh(token *store.RefreshToken, key string) *store.RefreshToken {
+	stored := cloneRefresh(token)
+	stored.ID = key
+	return stored
 }
 
 func (s *refreshStore) RevokeByGrant(_ context.Context, grantID string) error {
@@ -526,6 +604,11 @@ func revokeChainLocked(m map[string]*store.RefreshToken, rootID string, now time
 // revokeOneGeneration scans m and stamps every record whose parent is already
 // in revoked. Returns true if any new record was added so the caller can loop
 // until a fixed point.
+//
+// The map keys are SHA-256 hashes of the raw bearer secret (see
+// [storeRefresh]); [store.RefreshToken.ParentID] is stored as the raw
+// parent identifier. The walk hashes ParentID on the fly so the
+// parent-revoked check is a single map lookup keyed on the digest.
 func revokeOneGeneration(m map[string]*store.RefreshToken, revoked map[string]struct{}, now time.Time) bool {
 	grew := false
 	for id, rec := range m {
@@ -535,7 +618,8 @@ func revokeOneGeneration(m map[string]*store.RefreshToken, revoked map[string]st
 		if rec.ParentID == nil {
 			continue
 		}
-		if _, parentRevoked := revoked[*rec.ParentID]; !parentRevoked {
+		parentKey := hashKey(*rec.ParentID)
+		if _, parentRevoked := revoked[parentKey]; !parentRevoked {
 			continue
 		}
 		markRevoked(rec, now)
@@ -779,31 +863,44 @@ func (s *parStore) Save(_ context.Context, par *store.PushedAuthRequest) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.m[par.URI]; exists {
+	key := hashKey(par.URI)
+	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	s.m[par.URI] = clonePAR(par)
+	stored := clonePAR(par)
+	stored.URI = key
+	s.m[key] = stored
 	return nil
 }
 
 func (s *parStore) Find(_ context.Context, uri string) (*store.PushedAuthRequest, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rec, ok := s.m[uri]
+	key := hashKey(uri)
+	rec, ok := s.m[key]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if !constantTimeKeyMatch(rec.URI, key) {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, s.clock) {
 		return nil, store.ErrNotFound
 	}
-	return clonePAR(rec), nil
+	out := clonePAR(rec)
+	out.URI = uri
+	return out, nil
 }
 
 func (s *parStore) Consume(_ context.Context, uri string) (*store.PushedAuthRequest, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.m[uri]
+	key := hashKey(uri)
+	rec, ok := s.m[key]
 	if !ok {
+		return nil, store.ErrNotFound
+	}
+	if !constantTimeKeyMatch(rec.URI, key) {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, s.clock) {
@@ -814,7 +911,9 @@ func (s *parStore) Consume(_ context.Context, uri string) (*store.PushedAuthRequ
 	}
 	now := s.clock.Now()
 	rec.ConsumedAt = &now
-	return clonePAR(rec), nil
+	out := clonePAR(rec)
+	out.URI = uri
+	return out, nil
 }
 
 func clonePAR(p *store.PushedAuthRequest) *store.PushedAuthRequest {
@@ -1017,10 +1116,18 @@ func cloneUser(u *store.User) *store.User {
 type iatStore struct {
 	mu sync.Mutex
 	m  map[string]*store.InitialAccessToken
+	// byHash indexes records by [store.InitialAccessToken.HashedValue]
+	// so [GetByHash] is a single map lookup rather than a linear scan
+	// over m. The two maps share the same record pointer; mutations
+	// through Put / IncrementUses are visible through both views.
+	byHash map[string]*store.InitialAccessToken
 }
 
 func newIATStore() *iatStore {
-	return &iatStore{m: make(map[string]*store.InitialAccessToken)}
+	return &iatStore{
+		m:      make(map[string]*store.InitialAccessToken),
+		byHash: make(map[string]*store.InitialAccessToken),
+	}
 }
 
 func (s *iatStore) Put(_ context.Context, t *store.InitialAccessToken) error {
@@ -1032,19 +1139,34 @@ func (s *iatStore) Put(_ context.Context, t *store.InitialAccessToken) error {
 	if _, exists := s.m[t.ID]; exists {
 		return store.ErrAlreadyExists
 	}
-	s.m[t.ID] = cloneIAT(t)
+	rec := cloneIAT(t)
+	s.m[t.ID] = rec
+	if rec.HashedValue != "" {
+		s.byHash[rec.HashedValue] = rec
+	}
 	return nil
 }
 
+// GetByHash looks the IAT up by its [InitialAccessToken.HashedValue]
+// in O(1) via the byHash index. The caller hashes the presented bearer
+// secret (SHA-256, hex-encoded) and passes the digest verbatim; the
+// constant-time compare against the stored digest is a structural
+// belt-and-braces guard that guarantees safety even if a future
+// refactor switches the index to a slice scan.
 func (s *iatStore) GetByHash(_ context.Context, hash string) (*store.InitialAccessToken, error) {
+	if hash == "" {
+		return nil, store.ErrNotFound
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, rec := range s.m {
-		if rec.HashedValue == hash {
-			return cloneIAT(rec), nil
-		}
+	rec, ok := s.byHash[hash]
+	if !ok {
+		return nil, store.ErrNotFound
 	}
-	return nil, store.ErrNotFound
+	if !constantTimeKeyMatch(rec.HashedValue, hash) {
+		return nil, store.ErrNotFound
+	}
+	return cloneIAT(rec), nil
 }
 
 // IncrementUses atomically increments the Uses counter and reports the new
@@ -1075,10 +1197,19 @@ func (s *iatStore) IncrementUses(_ context.Context, id string) (int, error) {
 func (s *iatStore) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[id]; !ok {
+	rec, ok := s.m[id]
+	if !ok {
 		return store.ErrNotFound
 	}
 	delete(s.m, id)
+	if rec != nil && rec.HashedValue != "" {
+		// Only drop the byHash entry when it still points at this
+		// record; a colliding HashedValue rotation could otherwise
+		// orphan the surviving entry.
+		if cur, present := s.byHash[rec.HashedValue]; present && cur == rec {
+			delete(s.byHash, rec.HashedValue)
+		}
+	}
 	return nil
 }
 

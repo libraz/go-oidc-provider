@@ -100,8 +100,7 @@ type InitialAccessTokenStore interface {
 // RegistrationAccessToken is the per-client bearer credential issued
 // by RFC 7591 §3.2.1 and used to authenticate the RFC 7592 management
 // endpoints. There is at most one active RAT per client_id; PUT
-// /register/{client_id} rotates it (see plans/002-product-design.md
-// §A.6.2 and ADR 0005).
+// /register/{client_id} rotates it.
 //
 // As with [InitialAccessToken], the secret value is never stored: the
 // backend persists only [HashedValue].

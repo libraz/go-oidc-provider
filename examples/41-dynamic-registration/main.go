@@ -40,7 +40,7 @@
 // Deletion fires the OnClientDeleted hook below so the embedder can
 // cascade access_token / refresh_token / session purges through its
 // own data layer (the v1.0 store interfaces do not publish "by client"
-// enumeration in-tree per docs/plans/002-product-design.md §A.6.2).
+// enumeration in-tree).
 //
 // PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
 // store, and a public HTTP listener. Production embedders run this

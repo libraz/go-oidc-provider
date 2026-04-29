@@ -20,7 +20,7 @@ import (
 const maxBodyBytes = 64 * 1024
 
 // ClientMetadata is the internal-package mirror of op.ClientMetadata.
-// internal/* must not import op/ (ADR 0001), so the type is declared
+// internal/* must not import op/, so the type is declared
 // here and the op layer converts between the two through a thin shim.
 // Field documentation lives on the public op.ClientMetadata; this type
 // intentionally carries the same shape so the conversion remains a
@@ -212,37 +212,83 @@ func applyMetadataDefaults(m ClientMetadata, allowedGrantTypes, allowedResponseT
 }
 
 // validateRedirectURIs enforces the RFC 6749 §3.1.2 baseline plus the
-// minimum §J.6 rule the handler implements in v1.0: every URL must be
-// absolute and parseable, and (with a TODO for the full §J.6 native
-// rules) only https / explicit non-localhost http schemes are admitted
-// at this layer. The caller's [ValidateMetadata] hook may tighten
-// further.
+// RFC 8252 §7.3 native-app loopback carve-out: every URL MUST be
+// absolute, parseable, fragment-free, and either an https URL or a
+// plain http URL whose host is a loopback literal (127.0.0.1, [::1],
+// or localhost). Any other http URL — public hosts, private hosts,
+// arbitrary domain names — is rejected so a hostile DCR cannot
+// register a non-TLS redirect target on the open internet. The
+// caller's [ValidateMetadata] hook may tighten further.
 func validateRedirectURIs(uris []string) error {
 	if len(uris) == 0 {
 		return errInvalidRedirectURI("redirect_uris is required")
 	}
 	for _, raw := range uris {
-		if raw == "" {
-			return errInvalidRedirectURI("redirect_uri must not be empty")
-		}
-		u, err := url.Parse(raw)
-		if err != nil {
-			return errInvalidRedirectURI("redirect_uri is not a valid URL")
-		}
-		if !u.IsAbs() {
-			return errInvalidRedirectURI("redirect_uri must be absolute")
-		}
-		if u.Fragment != "" {
-			return errInvalidRedirectURI("redirect_uri must not contain a fragment")
-		}
-		// TODO: §J.6 native-app rules (loopback IP literal, custom
-		// scheme rDNS, "http://localhost" carve-out). v1.0 admits
-		// only https + http for now; the embedder hook can tighten.
-		if u.Scheme != "https" && u.Scheme != "http" {
-			return errInvalidRedirectURI("redirect_uri scheme must be https (http is restricted)")
+		if err := validateRedirectURI(raw); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// validateRedirectURI enforces the per-URI rules. Split out from
+// [validateRedirectURIs] so the per-row check stays under the
+// project's gocognit / cyclop caps and so the error messages stay
+// per-URI rather than masking the offending entry behind a generic
+// loop diagnostic.
+func validateRedirectURI(raw string) error {
+	if raw == "" {
+		return errInvalidRedirectURI("redirect_uri must not be empty")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errInvalidRedirectURI("redirect_uri is not a valid URL")
+	}
+	if !u.IsAbs() {
+		return errInvalidRedirectURI("redirect_uri must be absolute")
+	}
+	if u.Fragment != "" {
+		return errInvalidRedirectURI("redirect_uri must not contain a fragment")
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if !isLoopbackRedirectHost(u.Hostname()) {
+			return errInvalidRedirectURI("redirect_uri http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+		}
+		return nil
+	default:
+		// Custom schemes (myapp:// for native-app rDNS) are rejected
+		// at this layer; the [ValidateMetadata] embedder hook is the
+		// seam for embedders that admit them under their own policy.
+		return errInvalidRedirectURI("redirect_uri scheme must be https (http is restricted to loopback)")
+	}
+}
+
+// isLoopbackRedirectHost reports whether host is a loopback literal
+// the RFC 8252 §7.3 native-app carve-out admits over plain http. The
+// match is case-insensitive on the textual "localhost" token and
+// numeric on the IP literals; any other value (private IPs, public
+// names, "::") falls through to the rejection path.
+func isLoopbackRedirectHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	// Hostname() strips the bracket from "[::1]"; net.ParseIP
+	// accepts both "127.0.0.1" and "::1" verbatim. We only admit
+	// the exact loopback addresses, not the entire 127.0.0.0/8
+	// block, because a DCR-supplied redirect_uri carries the URI
+	// the client is expected to receive on — there is no operational
+	// reason to accept 127.0.0.2.
+	switch host {
+	case "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // validateGrantTypes enforces the AllowedGrantTypes whitelist. An

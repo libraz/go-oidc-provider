@@ -172,3 +172,49 @@ func TestDecodeJSON_RejectsMalformed(t *testing.T) {
 		t.Errorf("err=%v want ErrInvalidBody", err)
 	}
 }
+
+// closeTrackingBody wraps an [io.Reader] with a closer that records whether
+// Close was invoked. It exists so the test can assert the body was drained
+// via [defer body.Close()] inside readBounded.
+type closeTrackingBody struct {
+	io.Reader
+	closed bool
+}
+
+func (c *closeTrackingBody) Close() error {
+	c.closed = true
+	return nil
+}
+
+func TestDecodeJSON_ClosesBody(t *testing.T) {
+	t.Parallel()
+
+	body := &closeTrackingBody{Reader: strings.NewReader(`{"type":"x","method":"y"}`)}
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", http.NoBody)
+	r.Header.Set("Content-Type", "application/json")
+	r.Body = body
+
+	var p loginPayload
+	if err := httpx.DecodeJSON(r, &p); err != nil {
+		t.Fatalf("DecodeJSON: %v", err)
+	}
+	if !body.closed {
+		t.Error("body.Close was not invoked")
+	}
+}
+
+func TestDecodeForm_ClosesBody(t *testing.T) {
+	t.Parallel()
+
+	body := &closeTrackingBody{Reader: strings.NewReader("a=1")}
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", http.NoBody)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Body = body
+
+	if _, err := httpx.DecodeForm(r); err != nil {
+		t.Fatalf("DecodeForm: %v", err)
+	}
+	if !body.closed {
+		t.Error("body.Close was not invoked")
+	}
+}

@@ -155,26 +155,39 @@ func verifySecret(opts VerifyOpts, presented, stored string) error {
 }
 
 // runDummyVerify performs a constant-time hash on the presented secret
-// when the credentials are about to be rejected for a structural reason
+// (or a fixed-cost ECDSA verify on a synthetic signature) when the
+// credentials are about to be rejected for a structural reason
 // (unknown client, mismatched id, disallowed method). Without it the
-// "unknown client" path completes much faster than the "wrong secret"
-// path and an attacker can enumerate clients by latency alone.
+// "unknown client" path completes much faster than the "wrong secret /
+// wrong signature" path and an attacker can enumerate clients by
+// latency alone.
 //
 // Errors from the dummy verifier are intentionally ignored — the
 // function exists to consume time, not to produce a result.
+//
+// MethodNone has no cryptographic check on the verify branch, so the
+// dummy is a no-op there: padding it would create a timing channel in
+// the opposite direction.
 func runDummyVerify(creds *Credentials, opts VerifyOpts) {
-	if opts.SecretVerifier == nil {
-		return
-	}
 	switch creds.Method {
 	case MethodSecretBasic:
-		dummyVerify(creds.SecretBasic)
+		if opts.SecretVerifier != nil {
+			dummyVerify(creds.SecretBasic)
+		}
 	case MethodSecretPost:
-		dummyVerify(creds.SecretPost)
+		if opts.SecretVerifier != nil {
+			dummyVerify(creds.SecretPost)
+		}
+	case MethodPrivateKeyJWT:
+		// Fixed-cost ECDSA P-256 verify: matches the work factor a
+		// real AssertionVerifier would burn on signature verification
+		// before any claim check, so unknown-client rejection takes
+		// roughly the same wall-clock as wrong-signature rejection.
+		// The shim runs even when AssertionVerifier is nil because the
+		// timing oracle exists independent of the embedder's
+		// configuration choice.
+		dummyJWTVerify()
 	default:
-		// MethodNone, MethodPrivateKeyJWT — no secret to cushion. The
-		// verifiers for those methods have their own constant-time
-		// pathways (signature verification, no-op acceptance), so we
-		// don't need to fabricate work here.
+		// MethodNone — no cryptographic check on the verify branch.
 	}
 }

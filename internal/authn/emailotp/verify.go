@@ -72,6 +72,12 @@ const (
 	// carries the stamped 24-hour LockedUntil; the orchestrator MUST
 	// persist it before the user is redirected to the recovery flow.
 	OutcomeResetRequired
+
+	// OutcomeConsumed means the persisted record carries a non-zero
+	// ConsumedAt stamp: the code was already redeemed in a prior
+	// successful verify and is no longer eligible. The record is
+	// unchanged. Returned alongside [ErrConsumed].
+	OutcomeConsumed
 )
 
 // Sentinel errors. Returned values are wrapped through [errors.Is]
@@ -101,6 +107,12 @@ var (
 	// terminal state and route the user to the recovery / step-up
 	// reset flow.
 	ErrResetRequired = errors.New("emailotp: factor reset required")
+
+	// ErrConsumed is returned when the persisted record's ConsumedAt
+	// is non-zero. The caller MUST NOT advance the chain on this
+	// signal: the code has already been redeemed and a replay against
+	// the same record is rejected as if the code did not exist.
+	ErrConsumed = errors.New("emailotp: code already consumed")
 )
 
 // Result is the verdict bundle [Verifier.Verify] returns. The Record
@@ -142,6 +154,13 @@ func (v *Verifier) Verify(_ context.Context, rec *store.EmailOTPRecord, code str
 		return nil, ErrNoChallenge
 	}
 	now := v.now()
+	if !rec.ConsumedAt.IsZero() {
+		// The code has already been redeemed. Reject without mutating
+		// the record so a transient retry cannot reset the counter.
+		// The caller's brute-force counter (the orchestrator)
+		// observes the failure independently of this record's state.
+		return &Result{Outcome: OutcomeConsumed, Record: rec}, ErrConsumed
+	}
 	if !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
 		return &Result{Outcome: OutcomeLocked, Record: rec}, ErrLocked
 	}
@@ -154,6 +173,7 @@ func (v *Verifier) Verify(_ context.Context, rec *store.EmailOTPRecord, code str
 		rec.FailedCount = 0
 		rec.FirstFailureAt = time.Time{}
 		rec.LockedUntil = time.Time{}
+		rec.ConsumedAt = now
 		return &Result{Outcome: OutcomeSuccess, Record: rec}, nil
 	}
 	if rec.FirstFailureAt.IsZero() || now.Sub(rec.FirstFailureAt) > counterWindow {

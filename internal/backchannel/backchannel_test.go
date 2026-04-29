@@ -159,6 +159,7 @@ func TestHTTPDeliverer_PostsFormBody(t *testing.T) {
 	defer srv.Close()
 
 	deliverer := backchannel.NewHTTPDeliverer(2 * time.Second)
+	deliverer.AllowPrivateNetwork = true // httptest binds to 127.0.0.1
 	err := deliverer.Deliver(context.Background(),
 		backchannel.Target{ClientID: "c", URL: srv.URL},
 		"signed.token.value")
@@ -180,6 +181,7 @@ func TestHTTPDeliverer_FailsOnNon2xx(t *testing.T) {
 	}))
 	defer srv.Close()
 	d := backchannel.NewHTTPDeliverer(time.Second)
+	d.AllowPrivateNetwork = true // httptest binds to 127.0.0.1
 	if err := d.Deliver(context.Background(),
 		backchannel.Target{URL: srv.URL}, "tok"); err == nil {
 		t.Fatal("expected non-nil error on 500")
@@ -194,6 +196,7 @@ func TestHTTPDeliverer_RefusesRedirect(t *testing.T) {
 	}))
 	defer srv.Close()
 	d := backchannel.NewHTTPDeliverer(time.Second)
+	d.AllowPrivateNetwork = true // httptest binds to 127.0.0.1
 	if err := d.Deliver(context.Background(),
 		backchannel.Target{URL: srv.URL}, "tok"); err == nil {
 		t.Fatal("expected error when RP returns 3xx")

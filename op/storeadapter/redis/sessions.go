@@ -21,8 +21,8 @@ import (
 // ListByChooserGroup performs lazy cleanup of stale IDs whose parent
 // record has been evicted by Redis TTL.
 //
-// SessionStore lives outside the transactional cluster (ADR 0014):
-// the OP does not coordinate Session writes with token-endpoint
+// SessionStore lives outside the transactional cluster: the OP does
+// not coordinate Session writes with token-endpoint
 // commits, so the adapter does not implement a tx-bound variant.
 // Embedders pair this implementation with a transactional backend
 // for the rest of the catalogue via op/storeadapter/composite.

@@ -94,7 +94,16 @@ func CheckOrigin(r *http.Request, allow *Allowlist) error {
 // CanonicalOrigin reduces a URL to "scheme://host[:port]" form. The default
 // ports for http (80) and https (443) are stripped so "https://x" and
 // "https://x:443" compare equal.
+//
+// Hardening: only the http and https schemes are accepted; userinfo
+// ("user:pass@host"), opaque URLs ("javascript:..."), and absent host
+// components are rejected because each has been used in past parser-confusion
+// attacks (e.g. "https://evil.example/?@trusted.example" where attackers rely
+// on a downstream parser misreading the userinfo segment).
 func CanonicalOrigin(raw string) (string, error) {
+	if raw == "" {
+		return "", errors.New("csrf: origin must not be empty")
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", err
@@ -103,7 +112,19 @@ func CanonicalOrigin(raw string) (string, error) {
 		return "", errors.New("csrf: origin must be an absolute URL")
 	}
 	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", errors.New("csrf: origin scheme must be http or https")
+	}
+	if u.Opaque != "" {
+		return "", errors.New("csrf: opaque URLs are not valid origins")
+	}
+	if u.User != nil {
+		return "", errors.New("csrf: userinfo is not allowed in an origin")
+	}
 	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", errors.New("csrf: origin must include a host")
+	}
 	port := u.Port()
 	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
 		port = ""

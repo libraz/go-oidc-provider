@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -65,6 +66,21 @@ var ErrSessionMissing = errors.New("passkey: session scratch is missing")
 type Authenticator struct {
 	verifier *Verifier
 	store    store.PasskeyStore
+
+	// uvCache records the UserVerified bit observed on the most
+	// recent successful Continue, keyed by subject. The orchestrator
+	// reads it through [authn.UserVerificationReporter.LastUserVerified]
+	// at appendFactor time so the chain emits "hwk" vs "swk" based on
+	// the real assertion's UV bit (M-AUTHN-7) rather than a
+	// hard-coded mapping driven by [Authenticator.AMR].
+	//
+	// Entries persist across attempts within the same process; this
+	// is acceptable because the cache is read once per Continue and
+	// always overwritten by a fresh assertion. The map is bounded by
+	// the user population that authenticates against this OP
+	// instance — which is the same bound as every other per-subject
+	// cache embedders accept.
+	uvCache sync.Map // map[string]bool
 }
 
 // ErrVerifierRequired / ErrStoreRequired are returned by
@@ -219,6 +235,14 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 		if perr := a.persistCredential(ctx, subject, cred); perr != nil {
 			return interaction.Step{}, perr
 		}
+		// Record the UV bit so the orchestrator's appendFactor path
+		// can emit "hwk" vs "swk" from the real assertion rather
+		// than from the static AMR string (M-AUTHN-7).
+		uv := false
+		if cred != nil {
+			uv = cred.Flags.UserVerified
+		}
+		a.uvCache.Store(subject, uv)
 		return interaction.Step{Result: &interaction.Result{Subject: subject, AuthTime: authTime}}, nil
 	case errors.Is(ferr, ErrCloneDetected):
 		if cred != nil {
@@ -230,6 +254,23 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 	default:
 		return interaction.Step{}, ferr
 	}
+}
+
+// LastUserVerified implements [authn.UserVerificationReporter]. The
+// orchestrator consults the value at appendFactor time so the
+// resulting [authn.Factor.UserVerified] reflects the assertion's real
+// UV bit (M-AUTHN-7), driving the RFC 8176 "hwk" vs "swk" choice in
+// [authn.Factor.AMRValue]. Returns false when no successful Continue
+// has run for subject in this process — the orchestrator's amr_history
+// then falls back to "swk" (presence-only), which is the conservative
+// default.
+func (a *Authenticator) LastUserVerified(subject string) bool {
+	v, ok := a.uvCache.Load(subject)
+	if !ok {
+		return false
+	}
+	uv, _ := v.(bool)
+	return uv
 }
 
 // loadCredentials reads the subject's registered passkeys and projects

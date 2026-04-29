@@ -1,0 +1,201 @@
+package mtls_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/mtls"
+)
+
+// TestParseTrustedProxies_RejectsMalformed pins the construction-time
+// guard: a malformed CIDR / IP literal MUST fail [ParseTrustedProxies]
+// so the embedder cannot drop a bad entry into [ProxyConfig.TrustedProxies]
+// and silently widen the allow-list to "no source at all".
+func TestParseTrustedProxies_RejectsMalformed(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		"not-a-cidr",
+		"10.0.0.0/33",      // mask too large for IPv4
+		"::1/200",          // mask too large for IPv6
+		"10.0.0.0/8/extra", // double-slash garbage
+		"",                 // empty string
+		"300.300.300.300",  // each octet out of range
+		"fe80::zz",         // bad IPv6 hex
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			if _, err := mtls.ParseTrustedProxies([]string{raw}); err == nil {
+				t.Errorf("ParseTrustedProxies(%q) accepted; want error", raw)
+			}
+		})
+	}
+}
+
+// TestParseTrustedProxies_AcceptsCIDRandBareIP confirms both the
+// "10.0.0.0/8" and the convenience "10.0.0.1" (no mask) shapes parse.
+// Embedders pinning a single proxy IP often forget the /32; the helper
+// promotes the bare form to the host-mask prefix.
+func TestParseTrustedProxies_AcceptsCIDRandBareIP(t *testing.T) {
+	t.Parallel()
+
+	prefixes, err := mtls.ParseTrustedProxies([]string{"10.0.0.0/8", "192.168.1.1", "::1", "fd00::/8"})
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies: %v", err)
+	}
+	if len(prefixes) != 4 {
+		t.Fatalf("len(prefixes)=%d want 4", len(prefixes))
+	}
+	if prefixes[1].Bits() != 32 {
+		t.Errorf("bare IPv4 prefix bits=%d want 32", prefixes[1].Bits())
+	}
+	if prefixes[2].Bits() != 128 {
+		t.Errorf("bare IPv6 prefix bits=%d want 128", prefixes[2].Bits())
+	}
+}
+
+// TestCertificateFromRequest_TrustedProxyHonoured covers the happy
+// path: a request whose RemoteAddr lies inside a configured prefix
+// MUST consume the cert from the header.
+func TestCertificateFromRequest_TrustedProxyHonoured(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "10.0.0.5:54321"
+	req.Header.Set("X-Client-Cert", pemEncode(t, cert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
+	}
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(cert) {
+		t.Errorf("returned cert thumbprint differs from input")
+	}
+}
+
+// TestCertificateFromRequest_UntrustedSourceIgnoresHeader closes the
+// H-FAPI-1 vector: an attacker who reaches the OP directly (bypassing
+// the reverse proxy) MUST NOT be able to forge a client cert by setting
+// the proxy header. The function returns [ErrNoClientCert] — the same
+// sentinel as the "no header" path — so the wire response is
+// indistinguishable from a missing source.
+func TestCertificateFromRequest_UntrustedSourceIgnoresHeader(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	// Attacker reaches the OP from the public internet; the proxy
+	// would have terminated upstream and rewritten the header, but
+	// the attacker bypasses the proxy entirely.
+	req.RemoteAddr = "203.0.113.7:55555"
+	req.Header.Set("X-Client-Cert", pemEncode(t, cert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
+	}
+	_, err := mtls.CertificateFromRequest(req, cfg)
+	if !errors.Is(err, mtls.ErrNoClientCert) {
+		t.Errorf("err=%v want ErrNoClientCert (untrusted source MUST NOT spoof cert)", err)
+	}
+}
+
+// TestCertificateFromRequest_HeaderWithoutTrustedProxiesRejects pins
+// the configuration-time guard: an embedder who sets HeaderName but
+// forgets to populate TrustedProxies MUST get the safe-by-default
+// behaviour of "header path disabled", not "header path open to every
+// source".
+func TestCertificateFromRequest_HeaderWithoutTrustedProxiesRejects(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "10.0.0.5:54321"
+	req.Header.Set("X-Client-Cert", pemEncode(t, cert))
+
+	cfg := mtls.ProxyConfig{HeaderName: "X-Client-Cert"} // empty TrustedProxies
+	_, err := mtls.CertificateFromRequest(req, cfg)
+	if !errors.Is(err, mtls.ErrNoClientCert) {
+		t.Errorf("err=%v want ErrNoClientCert (HeaderName without TrustedProxies MUST fail closed)", err)
+	}
+}
+
+// TestCertificateFromRequest_IPv6TrustedProxyHonoured exercises the
+// IPv6 branch of [remoteIsTrusted]. The fixture uses a bracketed IPv6
+// "host:port" form because that is what [http.Server] writes into
+// [http.Request.RemoteAddr] for IPv6 connections.
+func TestCertificateFromRequest_IPv6TrustedProxyHonoured(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "[fd00::1]:55555"
+	req.Header.Set("X-Client-Cert", pemEncode(t, cert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "fd00::/8"),
+	}
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest (IPv6 trusted): %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(cert) {
+		t.Errorf("returned cert thumbprint differs from input")
+	}
+}
+
+// TestCertificateFromRequest_IPv6UntrustedRejects mirrors the IPv4
+// negative case for IPv6 sources.
+func TestCertificateFromRequest_IPv6UntrustedRejects(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "[2001:db8::1]:55555"
+	req.Header.Set("X-Client-Cert", pemEncode(t, cert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "fd00::/8"),
+	}
+	_, err := mtls.CertificateFromRequest(req, cfg)
+	if !errors.Is(err, mtls.ErrNoClientCert) {
+		t.Errorf("err=%v want ErrNoClientCert (untrusted IPv6 source MUST NOT spoof cert)", err)
+	}
+}
+
+// TestCertificateFromRequest_BareIPRemoteAddrTolerated covers the
+// edge case where the std library writes a bare IP literal into
+// RemoteAddr (no port). The helper [parseRemoteAddr] tolerates the
+// shape so a non-conformant transport does not collapse to "always
+// untrusted".
+func TestCertificateFromRequest_BareIPRemoteAddrTolerated(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "10.0.0.5"
+	req.Header.Set("X-Client-Cert", pemEncode(t, cert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
+	}
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest (bare IP): %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(cert) {
+		t.Errorf("returned cert thumbprint differs from input")
+	}
+}

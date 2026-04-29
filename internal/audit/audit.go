@@ -3,6 +3,8 @@ package audit
 import (
 	"context"
 	"log/slog"
+
+	"github.com/libraz/go-oidc-provider/internal/redact"
 )
 
 // Level is the audit-record severity. The values mirror the slog
@@ -175,11 +177,25 @@ func attrsFor(ev Event) []slog.Attr {
 	if len(ev.Extras) > 0 {
 		extras := make([]slog.Attr, 0, len(ev.Extras))
 		for k, v := range ev.Extras {
-			extras = append(extras, slog.Any(k, v))
+			extras = append(extras, extraAttr(k, v))
 		}
 		attrs = append(attrs, slog.Attr{Key: "extras", Value: slog.GroupValue(extras...)})
 	}
 	return attrs
+}
+
+// extraAttr converts a single Extras key/value pair into a slog
+// attribute, masking the value with the redactor sentinel when the key
+// (after canonicalisation) names a sensitive attribute. The
+// belt-and-braces masking happens regardless of whether the embedder
+// wraps their slog handler with [redact.WrapHandler]: an Extras map
+// that carries a fresh refresh_token still ships as "[REDACTED]" to
+// the underlying handler.
+func extraAttr(k string, v any) slog.Attr {
+	if redact.IsSensitive(k) {
+		return slog.String(k, redact.Sentinel)
+	}
+	return slog.Any(k, v)
 }
 
 // appendIfSet appends a string attribute only when value is non-empty.

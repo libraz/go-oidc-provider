@@ -7,8 +7,8 @@ package op
 //
 //	op.WithScope(op.PublicScope("read:projects", "Read your projects"))
 //
-// Per ADR 0004 [Scope.Public] is the only visibility axis (the field
-// is a `bool`, not a new type). The standard OIDC scopes are forced
+// [Scope.Public] is the only visibility axis (the field is a `bool`,
+// not a new type). The standard OIDC scopes are forced
 // Public: true regardless of how they are constructed; this helper
 // is therefore safe to use for every scope that should appear in
 // `scopes_supported`.

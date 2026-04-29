@@ -26,9 +26,9 @@ import (
 //  4. AT_a is now rejected at /userinfo (401 invalid_token).
 //  5. AT_a returns {"active": false} at /introspect.
 //
-// The test pins the ADR 0013 cascade: a single replayed code revokes
-// every access token the original issuance produced, not just the
-// refresh-token chain. RFC 6749 §4.1.2 / RFC 6819 §5.2.1.1.
+// The test pins the code-replay cascade: a single replayed code
+// revokes every access token the original issuance produced, not
+// just the refresh-token chain. RFC 6749 §4.1.2 / RFC 6819 §5.2.1.1.
 func TestEndToEnd_CodeReplayRevokesAT(t *testing.T) {
 	t.Parallel()
 	clock := fakeClock{now: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)}

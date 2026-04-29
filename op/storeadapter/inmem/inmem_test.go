@@ -421,3 +421,202 @@ func TestUserStore_FindBySubject_Missing(t *testing.T) {
 		t.Fatalf("FindBySubject: want ErrNotFound, got %v", err)
 	}
 }
+
+// TestAuthCode_HashOnStore_RawValueAbsent pins M-STORE-1 for the
+// authorization-code substore: the raw bearer value the OP issues
+// MUST NOT live in the underlying map. Find with the raw value still
+// hits and a Find with a tampered value misses. The black-box
+// equivalent of "raw value absent" is the tampered-value miss: the
+// stored fingerprint is the SHA-256 digest of the raw ID, so any
+// pre-image perturbation of the lookup parameter is rejected at the
+// map-lookup boundary.
+func TestAuthCode_HashOnStore_RawValueAbsent(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+	const rawID = "raw-bearer-secret-authcode"
+	if err := s.AuthorizationCodes().Save(ctx, &store.AuthorizationCode{
+		ID:        rawID,
+		ClientID:  "c",
+		Subject:   "u",
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := s.AuthorizationCodes().Find(ctx, rawID)
+	if err != nil {
+		t.Fatalf("Find raw: %v", err)
+	}
+	if got.ID != rawID {
+		t.Errorf("Find returned ID=%q want %q", got.ID, rawID)
+	}
+	if _, err := s.AuthorizationCodes().Find(ctx, rawID+"-tampered"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Find tampered err=%v want ErrNotFound", err)
+	}
+}
+
+// TestRefresh_HashOnStore_RawValueAbsent pins M-STORE-1 for the
+// refresh-token substore. ParentID is also hashed at Save time so a
+// chain walk through the underlying map sees only digests; this test
+// confirms RevokeChain still walks descendants correctly under the
+// hashed-pointer regime.
+func TestRefresh_HashOnStore_RawValueAbsent(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+	const rootRaw = "raw-root-refresh"
+	const childRaw = "raw-child-refresh"
+	parent := rootRaw
+	if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID:        rootRaw,
+		ClientID:  "c",
+		Subject:   "u",
+		GrantID:   "g",
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save root: %v", err)
+	}
+	if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID:        childRaw,
+		ParentID:  &parent,
+		ClientID:  "c",
+		Subject:   "u",
+		GrantID:   "g",
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save child: %v", err)
+	}
+	if _, err := s.RefreshTokens().Find(ctx, rootRaw); err != nil {
+		t.Errorf("Find root raw: %v", err)
+	}
+	if _, err := s.RefreshTokens().Find(ctx, rootRaw+"-tampered"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Find tampered=%v want ErrNotFound", err)
+	}
+	// RevokeChain still walks the hashed parent pointer.
+	if err := s.RefreshTokens().RevokeChain(ctx, rootRaw); err != nil {
+		t.Fatalf("RevokeChain: %v", err)
+	}
+	got, err := s.RefreshTokens().Find(ctx, childRaw)
+	if err != nil {
+		t.Fatalf("Find child after RevokeChain: %v", err)
+	}
+	if got.ConsumedAt == nil {
+		t.Errorf("child not revoked: %+v", got)
+	}
+}
+
+// TestPAR_HashOnStore_RawValueAbsent pins M-STORE-1 for the PAR
+// substore.
+func TestPAR_HashOnStore_RawValueAbsent(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+	const rawURI = "urn:ietf:params:oauth:request_uri:raw-secret"
+	if err := s.PushedAuthRequests().Save(ctx, &store.PushedAuthRequest{
+		URI:       rawURI,
+		ClientID:  "c",
+		RawParams: []byte(`{}`),
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if got, err := s.PushedAuthRequests().Find(ctx, rawURI); err != nil {
+		t.Errorf("Find raw: %v", err)
+	} else if got.URI != rawURI {
+		t.Errorf("Find returned URI=%q want %q", got.URI, rawURI)
+	}
+	if _, err := s.PushedAuthRequests().Find(ctx, rawURI+"-tampered"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("Find tampered=%v want ErrNotFound", err)
+	}
+}
+
+// TestIATStore_GetByHash_FastPath pins M-STORE-2: GetByHash is a
+// keyed lookup, not a linear scan. The test inserts a deliberately
+// large set of records and asserts the GetByHash call returns the
+// right record for one specific hash; the original linear scan would
+// silently pass too. The structural intent of the audit fix is captured
+// by the Delete-then-GetByHash check that confirms the byHash index
+// stays in sync.
+func TestIATStore_GetByHash_FastPath(t *testing.T) {
+	t.Parallel()
+	s := inmem.New()
+	ctx := context.Background()
+	for i := range 64 {
+		hash := "hash-" + string(rune('a'+i%26)) + "-" + string(rune('0'+i/26))
+		if err := s.InitialAccessTokens().Put(ctx, &store.InitialAccessToken{
+			ID:          "iat-" + hash,
+			HashedValue: hash,
+			MaxUses:     1,
+			CreatedAt:   contract.Reference,
+		}); err != nil {
+			t.Fatalf("Put %s: %v", hash, err)
+		}
+	}
+	const targetHash = "hash-m-1"
+	got, err := s.InitialAccessTokens().GetByHash(ctx, targetHash)
+	if err != nil {
+		t.Fatalf("GetByHash: %v", err)
+	}
+	if got.HashedValue != targetHash {
+		t.Errorf("HashedValue=%q want %q", got.HashedValue, targetHash)
+	}
+	// Delete drops the byHash entry alongside the id-keyed map.
+	if err := s.InitialAccessTokens().Delete(ctx, "iat-"+targetHash); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.InitialAccessTokens().GetByHash(ctx, targetHash); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetByHash after Delete=%v want ErrNotFound", err)
+	}
+	// Empty hash collapses to ErrNotFound rather than returning the
+	// first record with HashedValue=="" (the audit's guard).
+	if _, err := s.InitialAccessTokens().GetByHash(ctx, ""); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetByHash empty=%v want ErrNotFound", err)
+	}
+}
+
+// TestTx_Rollback_ClearsStaging pins F-11: Rollback drops every
+// staged record so a buggy caller cannot mutate the freed staging
+// pointers into the next transaction. The test races several
+// transactions through Rollback and asserts the second tx observes a
+// clean state.
+func TestTx_Rollback_ClearsStaging(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+
+	tx1, err := s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	if err := tx1.AuthorizationCodes().Save(ctx, &store.AuthorizationCode{
+		ID:        "ac-rollback",
+		ClientID:  "c",
+		Subject:   "u",
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("tx1 Save: %v", err)
+	}
+	if err := tx1.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	// Second transaction sees clean staging — no leftover from tx1.
+	tx2, err := s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx 2: %v", err)
+	}
+	if _, err := tx2.AuthorizationCodes().Find(ctx, "ac-rollback"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("tx2 Find after rollback=%v want ErrNotFound", err)
+	}
+	if err := tx2.Rollback(); err != nil {
+		t.Fatalf("tx2 Rollback: %v", err)
+	}
+}

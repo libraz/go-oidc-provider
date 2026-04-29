@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/go-webauthn/webauthn/protocol"
+	"github.com/go-webauthn/webauthn/webauthn"
 )
 
 // RegistrationChallenge wraps the JSON-shaped CredentialCreationOptions
@@ -67,13 +69,14 @@ var (
 //
 // The "existing" slice is the list of [Credential]s already registered
 // to the same subject. It is consulted by [Verifier.FinishRegistration]
-// to reject duplicate credential IDs ([ErrCredentialAlreadyExists]).
-// v1.0 does NOT forward the list to the authenticator as
-// excludeCredentials — the user agent therefore relies on its own
-// resident-key store (combined with the WebAuthn user handle) to
-// de-duplicate at registration time. v1.x will surface an option to
-// emit the exclude list once we have a corresponding configuration
-// knob for the orchestrator.
+// to reject duplicate credential IDs ([ErrCredentialAlreadyExists])
+// AND forwarded to the user agent as excludeCredentials so a CTAP2
+// authenticator already bound to the user refuses to register a
+// duplicate at the device level. The defence is layered: the SPA-side
+// exclude list short-circuits the round trip on a known-duplicate
+// authenticator, while the post-FinishRegistration check below
+// catches the residual case where a malicious or buggy SPA omitted
+// the exclude entry.
 //
 // The ctx parameter is accepted for symmetry with the storage API and
 // future cancellation but is not consulted today.
@@ -83,7 +86,8 @@ func (v *Verifier) BeginRegistration(_ context.Context, subject, name, displayNa
 	}
 	user := newWebauthnUser(subject, name, displayName, existing)
 
-	creation, sd, err := v.wa.BeginRegistration(user)
+	exclusions := buildExclusions(existing)
+	creation, sd, err := v.wa.BeginRegistration(user, webauthn.WithExclusions(exclusions))
 	if err != nil {
 		return nil, nil, fmt.Errorf("passkey: begin registration: %w", err)
 	}
@@ -154,7 +158,42 @@ func (v *Verifier) FinishRegistration(_ context.Context, session *Session, subje
 		}
 	}
 
+	// Enforce the AAGUID allowlist (M-AUTHN-2). The check runs
+	// after CreateCredential so the upstream library's attestation
+	// validation has already decided the AAGUID is authentic; an
+	// empty allowlist on the Verifier short-circuits to "any AAGUID
+	// allowed" so embedders that did not configure
+	// [Config.AAGUIDAllowlist] are unaffected.
+	if !v.AAGUIDAllowed(wc.Authenticator.AAGUID) {
+		return nil, fmt.Errorf("%w: AAGUID %x not in allowlist", ErrAttestationInvalid, wc.Authenticator.AAGUID)
+	}
+
 	out := fromWebauthnCredential(*wc)
 	out.CreatedAt = v.clock().Now().UTC()
 	return &out, nil
+}
+
+// buildExclusions projects the caller-supplied credentials onto the
+// [protocol.CredentialDescriptor] slice the upstream library hands the
+// authenticator as excludeCredentials. The transports list is cloned
+// so a later mutation by the caller cannot reach the underlying
+// session payload. An empty input returns an empty slice rather than
+// nil so the WithExclusions option emits a deterministic empty
+// list (matching the upstream API expectation that the option always
+// installs a non-nil value).
+func buildExclusions(existing []Credential) []protocol.CredentialDescriptor {
+	out := make([]protocol.CredentialDescriptor, 0, len(existing))
+	for _, c := range existing {
+		transports := make([]protocol.AuthenticatorTransport, len(c.Transports))
+		for i, t := range c.Transports {
+			transports[i] = protocol.AuthenticatorTransport(t)
+		}
+		out = append(out, protocol.CredentialDescriptor{
+			Type:            protocol.PublicKeyCredentialType,
+			CredentialID:    slices.Clone(c.ID),
+			Transport:       transports,
+			AttestationType: c.AttestationType,
+		})
+	}
+	return out
 }

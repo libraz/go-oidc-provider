@@ -150,7 +150,7 @@ func WithMaxValueBytes(n int) Option {
 
 // Store is the Redis adapter. It satisfies [store.Store] for the
 // volatile substores ([store.InteractionStore], [store.ConsumedJTIStore],
-// and [store.SessionStore] per ADR 0014); every other accessor returns
+// and [store.SessionStore]); every other accessor returns
 // a stub that panics on first call so misconfiguration surfaces loudly.
 // The adapter is intended to be composed with
 // [github.com/libraz/go-oidc-provider/op/storeadapter/composite] so
@@ -338,7 +338,7 @@ func (s *Store) RefreshTokens() store.RefreshTokenStore { panic(unimplemented("R
 func (s *Store) Grants() store.GrantStore { panic(unimplemented("Grants")) }
 
 // Sessions returns the [store.SessionStore] handle. Sessions are an
-// in-scope substore for the Redis adapter (ADR 0014): the OP does not
+// in-scope substore for the Redis adapter: the OP does not
 // coordinate Session writes with token-endpoint commits, so a volatile
 // cache is the appropriate backend. Embedders compose this accessor
 // with the other Kinds via op/storeadapter/composite.

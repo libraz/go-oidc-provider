@@ -10,7 +10,11 @@
 // dependency that needs scope policy (discovery, /authorize, /token).
 package scoperegistry
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
 
 // Entry is the internal representation of a single registered scope.
 // It mirrors the protocol-relevant subset of op.Scope: UI metadata
@@ -61,11 +65,25 @@ type Registry struct {
 // The constructor copies AllowedClients into freshly allocated slices
 // so a later mutation of the caller's slice cannot silently change
 // admission policy at runtime.
+//
+// New panics if any entry's Name has surrounding whitespace.
+// Whitespace-padded scope names cannot survive a round-trip through
+// the OAuth wire format (RFC 6749 §3.3 lists scope tokens as
+// space-delimited %x21 / %x23-5B / %x5D-7E sequences) so an entry
+// like " openid " could never match a real request; surfacing the bug
+// at construction time is preferable to a silent never-matches at
+// admission. The op layer SHOULD validate the same condition before
+// reaching this constructor; the panic is a structural backstop for
+// programmer errors.
 func New(entries []Entry) *Registry {
 	r := &Registry{byName: make(map[string]Entry, len(entries))}
 	for _, e := range entries {
 		if e.Name == "" {
 			continue
+		}
+		if strings.TrimSpace(e.Name) != e.Name {
+			//nolint:forbidigo // construction-time programmer error; op/op.go validates upstream and the panic is a structural backstop.
+			panic(fmt.Errorf("scoperegistry: scope name %q has surrounding whitespace", e.Name))
 		}
 		stored := Entry{
 			Name:           e.Name,
@@ -116,12 +134,21 @@ func (r *Registry) IsPublic(name string) bool {
 }
 
 // Allows reports whether clientID is permitted to request scope. The
-// rules are:
+// registry only governs the AllowedClients gate; admission of unknown
+// scopes is the responsibility of the upstream pipeline (the op layer
+// intersects with [store.Client.Scopes] before reaching this function,
+// and refresh-token scope widening rejects names outside the prior
+// grant). The rules are:
 //
-//   - Unknown scope: returns true. The OP's scope-acceptance pipeline
-//     is layered: this method only enforces the AllowedClients
-//     allowlist. Other validators (client.Scopes intersection,
-//     refresh-token scope widening) reject unknown scopes earlier.
+//   - nil receiver: returns true (no registry configured; admission
+//     is whatever the upstream pipeline already decided).
+//   - Unknown scope: returns true. The registry is an allowlist gate
+//     for *registered* AllowedClients restrictions; scopes that are
+//     not registered here are not subject to a per-client allowlist
+//     and pass through. Callers that need to reject unregistered
+//     scopes outright SHOULD consult [Registry.IsRegistered] before
+//     calling Allows (closes audit F-5: the contract is now explicit
+//     and tested rather than relying on caller defence-in-depth).
 //   - Registered scope with empty AllowedClients: returns true. An
 //     empty allowlist means "every client may request the scope".
 //   - Registered scope with non-empty AllowedClients: returns true

@@ -9,9 +9,9 @@ import (
 )
 
 // TestDefaultACRPolicyResolveBackCompat confirms that a request without
-// acr_values gets the AAL-derived InCommon URI, preserving the
-// pre-ADR-0012 wire shape so deployments that never asked for acr_values
-// see no change in their id_token wire form.
+// acr_values gets the AAL-derived InCommon URI, preserving the legacy
+// wire shape so deployments that never asked for acr_values see no
+// change in their id_token wire form.
 func TestDefaultACRPolicyResolveBackCompat(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

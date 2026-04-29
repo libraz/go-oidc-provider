@@ -76,4 +76,18 @@ var (
 	// HTTP layer can return invalid_request_object rather than
 	// 500-ing.
 	ErrJWKSConfigured = errors.New("jar: client has no JWKs or JWKsURI")
+
+	// ErrJTIMissing signals that the request object lacks a "jti"
+	// claim under the strict default. RFC 9101 §10.8 names jti as
+	// the replay-defence anchor; the verifier therefore rejects
+	// jti-less request objects unless [VerifierConfig.AllowMissingJTI]
+	// is set to admit legacy RPs.
+	ErrJTIMissing = errors.New("jar: request object missing jti")
+
+	// ErrJTIReplayed signals that the request object's "jti" claim
+	// has already been consumed within the configured window. The
+	// HTTP layer maps this onto invalid_request_object so an
+	// attacker observing a replay attempt cannot distinguish it from
+	// a malformed object via the error code.
+	ErrJTIReplayed = errors.New("jar: request object jti already consumed")
 )

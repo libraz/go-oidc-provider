@@ -14,9 +14,9 @@
 //
 // Redis volatile backend:
 //
-//   - Sessions — browser session records (per ADR 0014, the OP does
-//     not coordinate Session writes with token-endpoint commits, so a
-//     volatile cache is the right tier)
+//   - Sessions — browser session records (the OP does not coordinate
+//     Session writes with token-endpoint commits, so a volatile cache
+//     is the right tier)
 //   - Interactions — short-lived UI state during login / consent
 //   - ConsumedJTIs — DPoP and private_key_jwt replay protection
 //
@@ -142,7 +142,7 @@ func run() error {
 	// WithDefault. Three volatile Kinds (Sessions, Interactions,
 	// ConsumedJTIs) override to volatile via With(). composite.New
 	// rejects any configuration that would split TxClusterKinds across
-	// backends; Sessions is intentionally not in that set per ADR 0014.
+	// backends; Sessions is intentionally not in that set.
 	storage, err := composite.New(
 		composite.WithDefault(durable),
 		composite.With(composite.Sessions, volatile),

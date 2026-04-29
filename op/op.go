@@ -485,6 +485,7 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 		Resolver:    jar.NewDefaultResolver(cfg.clock, resolverOpts...),
 		Clock:       cfg.clock,
 		RequireNbf:  requireNbf,
+		JTIs:        cfg.store.ConsumedJTIs(),
 		MaxLifetime: maxLifetime,
 	})
 	if err != nil {

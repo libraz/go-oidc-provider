@@ -739,6 +739,85 @@ func buildSuccessAuthenticator(t op.FactorType, aal op.AAL, amr string) *stubAut
 	}
 }
 
+// uvReportingAuthenticator is a stubAuthenticator variant that
+// implements [authn.UserVerificationReporter]. The UV bit is set per
+// instance so a single test can exercise both the "real UV true" and
+// "real UV false" branches without sharing state.
+type uvReportingAuthenticator struct {
+	*stubAuthenticator
+	uv bool
+}
+
+func (u *uvReportingAuthenticator) LastUserVerified(_ string) bool { return u.uv }
+
+// TestTickPasskeyUVThreading asserts the orchestrator's appendFactor
+// path reads the assertion's real UV bit when the authenticator
+// implements [authn.UserVerificationReporter] (M-AUTHN-7) rather than
+// deriving UV from the static AMR string.
+func TestTickPasskeyUVThreading(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		uv   bool
+		want string
+	}{
+		{name: "uv-true", uv: true, want: "hwk"},
+		{name: "uv-false", uv: false, want: "swk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pk := &uvReportingAuthenticator{
+				stubAuthenticator: &stubAuthenticator{
+					typeID:  op.FactorPasskey,
+					aal:     op.AAL2,
+					amr:     "hwk",
+					prompts: []string{"auth.passkey"},
+					beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+						return interaction.Step{Prompt: &interaction.Prompt{
+							Type: "auth.passkey",
+							Data: interaction.PasskeyPromptData{Challenge: []byte("c")},
+						}}, nil
+					},
+					continueFn: func(_ context.Context, in op.ContinueInput) (interaction.Step, error) {
+						return interaction.Step{Result: &interaction.Result{Subject: "user-uv", AuthTime: in.AuthTime}}, nil
+					},
+				},
+				uv: tc.uv,
+			}
+			o, err := authn.New(authn.Config{
+				Authenticators: []op.Authenticator{pk},
+				StateRefSigner: newSigner(t),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			st := initialState()
+			st.Subject = "user-uv"
+			st1, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+			if err != nil {
+				t.Fatalf("first Tick: %v", err)
+			}
+			st2, _, err := o.Tick(context.Background(), st1, authn.Input{
+				Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"response": "{}"}},
+				Now:        fakeNow(),
+			})
+			if err != nil {
+				t.Fatalf("second Tick: %v", err)
+			}
+			if len(st2.Factors) != 1 {
+				t.Fatalf("Factors=%d want 1", len(st2.Factors))
+			}
+			if st2.Factors[0].UserVerified != tc.uv {
+				t.Errorf("Factors[0].UserVerified = %v, want %v", st2.Factors[0].UserVerified, tc.uv)
+			}
+			if got := st2.Factors[0].AMRValue(); got != tc.want {
+				t.Errorf("AMRValue() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // promptForFactor returns a canonical Prompt for a built-in factor
 // type. Tests that exercise custom factor types (e.g.,
 // "myorg.custom") receive a generic password-shaped prompt; the

@@ -70,9 +70,6 @@ type Session struct {
 //
 // Embedders MAY route SessionStore to a fast cache (Redis, Memcached) via
 // [op/storeadapter/composite] without violating any library invariant.
-// See [ADR 0014](../../docs/adr/0014-sessions-out-of-tx-cluster.md) for
-// the rationale and the future re-entry path if a feature later requires
-// Session-in-tx semantics.
 type SessionStore interface {
 	// Save persists a new session or replaces an existing one. Save MUST
 	// return [ErrAlreadyExists] if used in insert mode and the ID is

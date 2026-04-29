@@ -9,17 +9,16 @@ import "context"
 // the OP: reference products diverge on whether any MFA event satisfies
 // any acr_values entry (Auth0, Okta), require a configured per-acr
 // table (Keycloak), or delegate the call wholesale to the embedder
-// (panva). See ADR 0012 for the rationale and the spec ambiguity this
-// interface resolves.
+// (panva).
 //
 // The library default is [DefaultACRPolicy], which echoes the first
 // requested acr_values entry whenever the ceremony reached at least
 // [AAL1]. Embedders that need a stricter mapping (e.g. a NIST SP
 // 800-63 binding) supply their own policy via [WithACRPolicy].
 //
-// Stable since v0.x (ADR 0012 implementation). The interface is
-// experimental until v1.0; the parameter list MAY grow in a backward-
-// compatible way (additive arguments) before SemVer freezes it.
+// Stable since v0.x. The interface is experimental until v1.0; the
+// parameter list MAY grow in a backward-compatible way (additive
+// arguments) before SemVer freezes it.
 type ACRPolicy interface {
 	// Resolve returns the acr / amr / ok triple for the id_token. ok =
 	// false instructs the issuer to omit the acr claim entirely; amr is
@@ -42,7 +41,7 @@ type ACRPolicy interface {
 //
 //   - Resolve with an empty [LoginContext.ACRValues] returns the AAL's
 //     canonical InCommon URI ([AAL.ACRURI]) so the wire shape matches
-//     the pre-ADR-0012 default.
+//     the legacy default.
 //   - Resolve with non-empty ACRValues returns the first entry for
 //     which [DefaultACRPolicy.Satisfies] returns true, mirroring the
 //     OIDC Core 1.0 §3.1.2.1 "echo a requested value when satisfied"
@@ -54,7 +53,7 @@ type ACRPolicy interface {
 //     intentionally lax: strict deployments install their own
 //     [ACRPolicy] via [WithACRPolicy].
 //
-// Stable since v0.x (ADR 0012 implementation).
+// Stable since v0.x.
 type DefaultACRPolicy struct{}
 
 // Resolve implements [ACRPolicy].

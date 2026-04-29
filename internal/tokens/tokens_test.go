@@ -78,15 +78,92 @@ func TestSignIDToken_BasicShape(t *testing.T) {
 	if header["alg"] != "ES256" || header["kid"] != "k1" || header["typ"] != "JWT" {
 		t.Errorf("header=%v", header)
 	}
-	payload := decodePayload(t, jws)
+}
+
+// TestSignAccessToken_TypHeader pins RFC 9068 §2.1: a JWT-shaped
+// access token MUST carry typ="at+jwt" so a resource server can
+// distinguish it from an ID token (typ="JWT") and reject any inbound
+// JWT whose typ does not match — the structural defence against
+// cross-token confusion (RFC 9068 §5).
+func TestSignAccessToken_TypHeader(t *testing.T) {
+	t.Parallel()
+
+	key := newTestSigner(t)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jws, err := tokens.SignAccessToken(key, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-typ",
+		Scope:     []string{"openid"},
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	header := decodeHeader(t, jws)
+	if header["typ"] != "at+jwt" {
+		t.Errorf("typ=%v want at+jwt (RFC 9068 §2.1)", header["typ"])
+	}
+	if header["alg"] != "ES256" || header["kid"] != "k1" {
+		t.Errorf("header=%v", header)
+	}
+}
+
+// TestSignIDToken_TypHeader_Distinct pins the distinct typ between
+// id_token and access_token: an attacker who replays an ID token
+// against a resource server that strict-checks typ will be rejected
+// because the typ values differ ("JWT" vs "at+jwt", RFC 9068 §2.1).
+func TestSignIDToken_TypHeader_Distinct(t *testing.T) {
+	t.Parallel()
+
+	key := newTestSigner(t)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	idt, err := tokens.SignIDToken(key, tokens.IDTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"client-1"},
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Minute).Unix(),
+	})
+	if err != nil {
+		t.Fatalf("SignIDToken: %v", err)
+	}
+	at, err := tokens.SignAccessToken(key, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-distinct",
+		Scope:     []string{"openid"},
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	idHdr := decodeHeader(t, idt)
+	atHdr := decodeHeader(t, at)
+	if idHdr["typ"] == atHdr["typ"] {
+		t.Errorf("id_token typ=%v access_token typ=%v want distinct", idHdr["typ"], atHdr["typ"])
+	}
+	if idHdr["typ"] != "JWT" {
+		t.Errorf("id_token typ=%v want JWT", idHdr["typ"])
+	}
+	if atHdr["typ"] != "at+jwt" {
+		t.Errorf("access_token typ=%v want at+jwt", atHdr["typ"])
+	}
+	payload := decodePayload(t, idt)
 	if payload["iss"] != "https://op.example.com" || payload["sub"] != "user-1" {
 		t.Errorf("payload=%v", payload)
 	}
 	if payload["aud"] != "client-1" {
 		t.Errorf("aud=%v want bare-string for single audience", payload["aud"])
 	}
-	if payload["nonce"] != "n-0S6_WzA2Mj" {
-		t.Errorf("nonce=%v", payload["nonce"])
+	if _, ok := payload["nonce"]; ok {
+		t.Errorf("omitempty broken for nonce (none was supplied): %v", payload["nonce"])
 	}
 	if _, ok := payload["acr"]; ok {
 		t.Errorf("omitempty broken for acr: %v", payload["acr"])

@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"os"
+	"path/filepath"
 )
 
 // jwkPrivateParams enumerates the JWK members that hold private key
@@ -60,17 +61,22 @@ func FAPITLSConfig() *tls.Config {
 // preserved verbatim so the resulting bytes are a valid JWK Set the
 // OP can register on [store.Client.JWKs].
 //
-// The error path is intentionally narrow: failures wrap the file
-// path so the operator can locate the bad input, but no key
-// material — public or otherwise — is ever logged or formatted into
-// the error message.
+// The error path is intentionally narrow: failures identify the file
+// by its base name (via [filepath.Base]) so the operator can locate
+// the bad input without leaking the directory layout of the host
+// (audit logs / error_description responses MUST NOT carry an
+// absolute filesystem path that would expose host directory
+// layout). No key material —
+// public or otherwise — is ever logged or formatted into the error
+// message.
 func LoadPublicJWKS(path string) ([]byte, error) {
+	base := filepath.Base(path)
 	//nolint:gosec // G304: path is operator-supplied at construction time.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: read " + path,
+			Description: "LoadPublicJWKS: read " + base,
 			Cause:       err,
 		}
 	}
@@ -80,14 +86,14 @@ func LoadPublicJWKS(path string) ([]byte, error) {
 	if err := json.Unmarshal(raw, &set); err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: parse " + path,
+			Description: "LoadPublicJWKS: parse " + base,
 			Cause:       err,
 		}
 	}
 	if len(set.Keys) == 0 {
 		return nil, &Error{
 			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: " + path + " contains no keys",
+			Description: "LoadPublicJWKS: " + base + " contains no keys",
 		}
 	}
 	for _, k := range set.Keys {
@@ -99,7 +105,7 @@ func LoadPublicJWKS(path string) ([]byte, error) {
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
-			Description: "LoadPublicJWKS: marshal " + path,
+			Description: "LoadPublicJWKS: marshal " + base,
 			Cause:       err,
 		}
 	}

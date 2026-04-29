@@ -296,8 +296,7 @@ type config struct {
 	// [WithACRPolicy]. A nil value means "library default": the
 	// authorize endpoint installs [DefaultACRPolicy] which echoes the
 	// first satisfiable acr_values entry while preserving the
-	// pre-ADR-0012 wire shape when the request omits acr_values. See
-	// docs/adr/0012-acr-policy-seam.md for the full rationale.
+	// legacy wire shape when the request omits acr_values.
 	acrPolicy ACRPolicy
 
 	// promRegistry is the Prometheus registry supplied by the embedder
@@ -781,11 +780,18 @@ func (c *config) validateLocales() error {
 // after [config.applyDefaults] so default-on features are visible to
 // the lookup, and after [config.validateScopes] so scope-shape errors
 // surface first.
-// The rule is one-directional: a profile MUST NOT be relaxed by a
-// later option, but stricter-than-profile configurations are
-// permitted (an embedder may layer additional [WithFeature] calls on
-// top). The library therefore only fails [New] when a required flag
-// is missing — never when an extra flag is present.
+// The rule is one-directional and add-only: a profile MUST NOT be
+// relaxed by a later option, but stricter-than-profile configurations
+// are permitted (an embedder may layer additional [WithFeature] calls
+// on top). The library therefore only fails [New] when a required
+// flag is missing — never when an extra flag is present. The
+// add-only invariant is the defensive twin of the auto-enable
+// contract documented on [WithProfile]: WithProfile only appends to
+// [config.features] and no public [Option] removes a feature, so a
+// missing required feature can only originate from an internal
+// refactor that violates the contract. The check here surfaces that
+// regression as a configuration_error rather than letting the
+// runtime emit a profile-non-conformant response.
 func (c *config) validateProfiles() error {
 	if len(c.profiles) == 0 {
 		return nil
@@ -1133,8 +1139,11 @@ func validateKeyset(ks Keyset) error {
 }
 
 // WithIssuer sets the OP issuer URL. The value MUST be an absolute https URL
-// with no query or fragment, per OpenID Connect Discovery 1.0 §3. The URL is
-// parsed eagerly; malformed values fail [New] rather than the first request.
+// with a non-empty authority (host), and no query or fragment, per OpenID
+// Connect Discovery 1.0 §3. The URL is parsed eagerly; malformed values fail
+// [New] rather than the first request. The internal [discovery.ValidateIssuer]
+// pass repeats the same checks at metadata-build time as a defense-in-depth
+// seam.
 // Stable since v0.1.
 func WithIssuer(issuer string) Option {
 	return optionFunc(func(c *config) error {
@@ -1142,7 +1151,8 @@ func WithIssuer(issuer string) Option {
 			return ErrIssuerRequired
 		}
 		u, err := url.Parse(issuer)
-		if err != nil || !u.IsAbs() || u.Scheme != "https" || u.RawQuery != "" || u.Fragment != "" {
+		if err != nil || !u.IsAbs() || u.Scheme != "https" ||
+			u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 			return ErrIssuerInvalid
 		}
 		c.issuer = issuer
@@ -1378,8 +1388,7 @@ func WithGrants(grants ...grant.Type) Option {
 // repeated; each call adds to the enabled set.
 // Idempotent: enabling a flag that is already present is a silent
 // no-op rather than a configuration error. This matches the
-// auto-enable contract [WithProfile] introduced (ADR 0008 item 8 /
-// plan 005 §3.6) so an embedder may write
+// auto-enable contract [WithProfile] introduced so an embedder may write
 // `WithProfile(FAPI2Baseline)` plus `WithFeature(feature.PAR)` —
 // either order, before or after — without the second call failing
 // because the profile already activated the flag.
@@ -1509,8 +1518,7 @@ func WithClaimsSupported(claims ...string) Option {
 // requested claims when the user store has matching values. Passing
 // false flips the discovery advertisement off, makes the authorize /
 // par parsers silently drop the parameter (no invalid_request), and
-// disables the userinfo / id_token projection. See ADR 0011 for the
-// rationale and the spec ambiguity it resolves.
+// disables the userinfo / id_token projection.
 //
 // The toggle is provided so an embedder that does not want to expose
 // per-claim consent (e.g. a deployment whose RPs already negotiate
@@ -1521,7 +1529,7 @@ func WithClaimsSupported(claims ...string) Option {
 // the parser also services the FAPI 2.0 conformance flow which
 // expects a uniform invalid_request shape.
 //
-// Stable since v0.x (ADR 0011 implementation).
+// Stable since v0.x.
 func WithClaimsParameterSupported(enabled bool) Option {
 	return optionFunc(func(c *config) error {
 		c.claimsParameterSupportedSet = true
@@ -1567,13 +1575,10 @@ func WithOpenIDScopeOptional() Option {
 // binding, a configured per-acr table à la Keycloak) supply their
 // own implementation. Passing nil restores the library default.
 //
-// The option is the single seam ADR 0012 introduces. The default
-// installation is intentional: a deployment that omits the option
-// gets the OFCS-passing wire shape automatically. See
-// docs/adr/0012-acr-policy-seam.md for the rationale and the spec
-// ambiguity this resolves.
+// The default installation is intentional: a deployment that omits
+// the option gets the OFCS-passing wire shape automatically.
 //
-// Stable since v0.x (ADR 0012 implementation).
+// Stable since v0.x.
 func WithACRPolicy(p ACRPolicy) Option {
 	return optionFunc(func(c *config) error {
 		c.acrPolicy = p
@@ -2158,11 +2163,10 @@ func WithAllowPrivateNetworkJAR() Option {
 // neutral SPA) frontend can drive the login / consent / RP-Initiated
 // Logout flows. The struct is supplied to [WithReactUI]; the option
 // stores it on config and the H1-D orchestrator wiring later
-// translates the mount points into JSON state endpoints.
-// 05-login-and-ui-shell.md §3.5 / ADR 0008 item 7. The
+// translates the mount points into JSON state endpoints. The
 // scope is deliberately limited to login / consent / RP-Initiated
-// Logout: ADR 0007 has ruled out front-channel logout and session
-// management iframes, so [ReactUI] does not carry mounts for those
+// Logout: front-channel logout and session management iframes are
+// out of scope, so [ReactUI] does not carry mounts for those
 // surfaces.
 // Experimental: the field set is being introduced in v0.x and MAY
 // gain optional fields before v1.0. Embedders SHOULD construct

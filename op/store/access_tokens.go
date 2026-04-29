@@ -8,9 +8,8 @@ import (
 // AccessTokenRecord is the persistent shadow of an issued JWT access
 // token. Access tokens themselves stay self-contained on the wire (RFC
 // 9068); the record carries only what the OP needs to revoke or
-// introspect them after the fact. See ADR 0013 for the rationale (RFC
-// 6749 §4.1.2 code-replay revocation, RFC 6819 §5.2.1.1 detection
-// invariant) and the GC contract.
+// introspect them after the fact (RFC 6749 §4.1.2 code-replay
+// revocation, RFC 6819 §5.2.1.1 detection invariant).
 //
 // Records are append-mostly: [AccessTokenRegistry.Register] stores the
 // row at issuance, [AccessTokenRegistry.RevokeByJTI] /
@@ -61,8 +60,8 @@ type AccessTokenRecord struct {
 }
 
 // AccessTokenRegistry is the substore for the JWT access-token shadow
-// rows ADR 0013 introduces. The substore belongs to the transactional
-// cluster: a token issuance ([AccessTokenRegistry.Register]) accompanies
+// rows. The substore belongs to the transactional cluster: a token
+// issuance ([AccessTokenRegistry.Register]) accompanies
 // a grant write or refresh-token rotation, and the two operations must
 // commit atomically so a partially-issued token cannot reach the wire
 // without a matching registry row.

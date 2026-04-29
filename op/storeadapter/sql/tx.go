@@ -61,8 +61,8 @@ func (t *sqlTx) PushedAuthRequests() store.PushedAuthRequestStore { return t.par
 
 // AccessTokens returns the tx-bound access-token registry. Although
 // [store.Tx] does not expose this method directly, the library
-// reaches it through a runtime type assertion (see ADR 0013) so the
-// tx's view of the registry coordinates with grant writes.
+// reaches it through a runtime type assertion so the tx's view of
+// the registry coordinates with grant writes.
 //
 // This method is exported on the concrete *sqlTx type for embedders
 // who hold a typed handle and need to reach the registry inside a

@@ -52,16 +52,13 @@ const TTLDefault = 30 * 24 * time.Hour
 // GraceTTLDefault is the default RFC 9700 §2.2.2 grace window during
 // which a just-rotated refresh token is still accepted ("the previous
 // refresh token MAY be invalidated but MUST remain valid until the new
-// refresh token is delivered to the client successfully"). The OFCS
-// conformance suite probes the window with WaitFor30Seconds plus a
-// trailing WaitForOneSecond inside the request sequence and a few
-// hundred milliseconds of HTTP / DPoP setup latency, so the elapsed
-// time between rotation and the retry is closer to 32 seconds. A
-// 60-second default leaves comfortable headroom while keeping the
-// window short enough that replays cannot easily exploit a stolen
-// previous token. Pass a negative [ExchangerConfig.GraceTTL] to
-// disable the window and revert to strict single-use semantics.
-const GraceTTLDefault = 60 * time.Second
+// refresh token is delivered to the client successfully"). 30 seconds
+// is long enough to absorb a typical retry burst (HTTP timeout plus a
+// single re-issue) without leaving a stolen previous token usable for
+// an extended period. Pass a negative [ExchangerConfig.GraceTTL] to
+// disable the window and revert to strict single-use semantics; the
+// FAPI 2.0 profile already forces grace=0 when active.
+const GraceTTLDefault = 30 * time.Second
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //
@@ -401,8 +398,16 @@ func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err
 // the presented credentials match the consumed record, returns the
 // [Exchanged] projection callers should use without rotating the
 // chain. ok=false means the caller MUST fall through to the regular
-// replay path (which revokes the chain). tryGrace never revokes —
-// that is the caller's job once tryGrace returns false.
+// replay path (which revokes the chain).
+//
+// Validation failure inside the grace window (client_id mismatch or
+// scope widening) is treated as evidence of a stolen consumed token:
+// per RFC 9700 §2.2.2 such replays MUST revoke the chain. tryGrace
+// invokes [Exchanger.revokeChainBestEffort] directly on that branch
+// so the cascade is explicit at the call site (defence in depth: the
+// caller's [Exchanger.mapConsumeError] also revokes, but emitting the
+// revoke here keeps the contract local to the validation point and
+// survives future refactoring of the caller).
 func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged, bool) {
 	if e.graceTTL <= 0 {
 		return nil, false
@@ -420,7 +425,10 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 		// or scope widening). Surface as replay so the chain is
 		// revoked: a consumed token presented by a different client,
 		// or with a widened scope, is the same threat shape RFC 9700
-		// §2.2.2 calls out.
+		// §2.2.2 calls out. Revoke explicitly here so the cascade
+		// is anchored to the validation point even if the caller's
+		// post-grace error mapping is later refactored.
+		e.revokeChainBestEffort(ctx, in.Token)
 		return nil, false
 	}
 	return exchanged, true

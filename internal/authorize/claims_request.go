@@ -34,8 +34,8 @@ type ClaimSpec struct {
 	// Essential reports whether the wire form set "essential": true.
 	// Per OIDC Core §5.5.1, an essential request asks the OP to MUST
 	// attempt to provide the claim, but the spec stops short of
-	// promising the claim will be present — see ADR 0011 for the
-	// "omit on absent" rendering decision.
+	// promising the claim will be present — the library renders this
+	// as "omit on absent".
 	Essential bool `json:"essential,omitempty"`
 
 	// Value is the wire form's "value" member. The claims projector

@@ -1,12 +1,17 @@
 package clientauth
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -106,13 +111,21 @@ func (a *Argon2id) Hash(secret string) (string, error) {
 }
 
 // Verify implements [SecretVerifier]. It rejects malformed encodings,
-// version mismatches, and parameter values that fall below the verifier's
-// minima; otherwise it derives the candidate key and compares it in
-// constant time.
+// version mismatches, and parameter values that fall below the OWASP
+// 2024 minima ([Argon2idMinMemory] / [Argon2idMinIterations]); otherwise
+// it derives the candidate key and compares it in constant time.
 func (a *Argon2id) Verify(presented, stored string) error {
 	parsed, err := parseArgon2idEncoding(stored)
 	if err != nil {
 		return err
+	}
+	if parsed.memory < Argon2idMinMemory || parsed.iterations < Argon2idMinIterations {
+		// A stored hash whose Argon2id parameters fall below the OWASP
+		// floor would let an attacker that has compromised the database
+		// brute-force credentials cheaply. Refusing to verify against
+		// such a hash forces an operator to re-hash on next login
+		// rather than silently accept the weak material.
+		return ErrCredentialsInvalid
 	}
 	keyLen := len(parsed.hash)
 	// argon2.IDKey accepts uint32 for the key length; the parser caps
@@ -129,6 +142,17 @@ func (a *Argon2id) Verify(presented, stored string) error {
 	}
 	return nil
 }
+
+// Argon2idMinMemory is the OWASP 2024 minimum memory cost for
+// Argon2id, in KiB (19 MiB). The verifier rejects stored hashes whose
+// "m=" parameter is below this floor so a database leak cannot be
+// compounded by trivially-broken work factors.
+const Argon2idMinMemory uint32 = 19 * 1024
+
+// Argon2idMinIterations is the OWASP 2024 minimum iteration count
+// (time cost) for Argon2id. The verifier rejects stored hashes whose
+// "t=" parameter is below this floor.
+const Argon2idMinIterations uint32 = 2
 
 // maxArgon2idKeyLength is a defensive cap on the derived-key length the
 // verifier accepts. A legitimate encoding emitted by [Argon2id.Hash]
@@ -231,4 +255,77 @@ func dummyVerify(presented string) {
 	p := Argon2idDefaults()
 	_ = argon2.IDKey([]byte(presented), make([]byte, p.SaltLength),
 		p.Iterations, p.Memory, p.Parallelism, p.KeyLength)
+}
+
+// dummyJWTVerify is the private_key_jwt counterpart to [dummyVerify].
+// It runs a single ES256 signature verification against a fixed P-256
+// public key so the "unknown client" branch of [VerifyClient] takes
+// the same wall-clock budget as the verify branch that talks to a real
+// AssertionVerifier. Without this the latency between "no such client"
+// and "wrong signature" leaks client_id existence through timing alone
+// even when [runDummyVerify] is engaged on the secret-method side.
+//
+// The function never produces a result and never returns an error;
+// callers SHOULD invoke it for its side-effect on wall-clock cost
+// only.
+func dummyJWTVerify() {
+	pub := dummyECDSAKey()
+	// A deterministic message (zero-filled SHA-256 hash) and a
+	// non-zero (r, s) pair guarantee the verify call exercises
+	// the full P-256 ladder; the result is intentionally ignored.
+	digest := sha256.Sum256(nil)
+	_ = ecdsa.Verify(pub, digest[:], dummyECDSAR, dummyECDSAS)
+}
+
+// dummyECDSAKeyOnce / dummyECDSAKeyCache cache the public key the
+// dummy verify uses. Generating a fresh key per call would dominate
+// the dummy's wall-clock cost and violate the "fixed-cost" intent.
+//
+//nolint:gochecknoglobals // cache for the fixed-cost dummy key.
+var (
+	dummyECDSAKeyOnce  sync.Once
+	dummyECDSAKeyCache *ecdsa.PublicKey
+)
+
+// dummyECDSAR / dummyECDSAS are the fixed (r, s) pair the dummy verify
+// hands to ecdsa.Verify. Both are below the P-256 group order so the
+// verify call walks the full constant-time ladder before reporting
+// failure. The values are public, deterministic, and never used
+// outside the timing shim.
+//
+//nolint:gochecknoglobals // immutable fixed-cost dummy signature.
+var (
+	dummyECDSAR = new(big.Int).SetBytes([]byte{
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+		0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+	})
+	dummyECDSAS = new(big.Int).SetBytes([]byte{
+		0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+		0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
+		0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+		0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
+	})
+)
+
+// dummyECDSAKey returns the cached fixed P-256 public key the dummy
+// verify hands to ecdsa.Verify. The key is generated once per process
+// from crypto/rand; subsequent calls return the same value so the
+// dummy work factor is stable across invocations.
+func dummyECDSAKey() *ecdsa.PublicKey {
+	dummyECDSAKeyOnce.Do(func() {
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			// crypto/rand failure inside sync.Once is fatal: the
+			// dummy verify is useless without a key, and we have
+			// no error channel back to the caller. The same
+			// failure would crash any subsequent secret-related
+			// operation.
+			//nolint:forbidigo // unrecoverable RNG failure inside sync.Once; library cannot proceed without entropy.
+			panic(fmt.Errorf("authn: dummy P-256 keygen: %w", err))
+		}
+		dummyECDSAKeyCache = &priv.PublicKey
+	})
+	return dummyECDSAKeyCache
 }

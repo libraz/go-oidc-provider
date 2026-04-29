@@ -60,6 +60,17 @@ type EmailOTPRecord struct {
 	// outright. The library stamps a 1-hour lock at FailedCount==30 and
 	// a 24-hour lock at FailedCount==90. A zero value means "not locked".
 	LockedUntil time.Time
+
+	// ConsumedAt is the wall-clock time the code was successfully
+	// redeemed. A non-zero value means the record has already been
+	// used and any subsequent verify against the same record MUST be
+	// rejected. The library stamps the field on a successful Verify
+	// and writes the record back through [EmailOTPStore.Put] rather
+	// than relying on a Delete call that may fail silently. A zero
+	// value means "not yet consumed". Backends MAY sweep records with
+	// non-zero ConsumedAt older than a deployment-defined retention
+	// window; the library never reads them after the stamp.
+	ConsumedAt time.Time
 }
 
 // EmailOTPStore is the substore for pending email-OTP challenges. Like

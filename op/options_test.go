@@ -165,9 +165,8 @@ func TestWithGrants_RejectsDuplicate(t *testing.T) {
 func TestWithFeature_DuplicateIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	// ADR 0008 item 8 / plan 005 §3.6 — WithFeature for an already-
-	// enabled flag is a silent no-op so the
-	// `WithProfile(FAPI2Baseline) + WithFeature(feature.PAR)` pattern
+	// WithFeature for an already-enabled flag is a silent no-op so
+	// the `WithProfile(FAPI2Baseline) + WithFeature(feature.PAR)` pattern
 	// composes regardless of call order. The pre-idempotence behaviour
 	// (duplicate-rejection) lived in the v0 surface; this test pins
 	// the new contract.
@@ -195,6 +194,53 @@ func TestWithProfile_RejectsDuplicate(t *testing.T) {
 	)...)
 	if err == nil {
 		t.Fatal("expected error for duplicate profile, got nil")
+	}
+}
+
+// TestValidateProfile_NoFalsePositiveWithoutProfile pins the
+// contrapositive of the F-7 add-only invariant: when no profile is
+// active the validator MUST NOT demand any profile-required flag be
+// present. Features may be added without a matching profile (the
+// "stricter-than-default" posture documented on validateProfiles).
+func TestValidateProfile_NoFalsePositiveWithoutProfile(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithFeature(feature.PAR),
+	)...); err != nil {
+		t.Fatalf("WithFeature(PAR) without WithProfile failed: %v", err)
+	}
+}
+
+// TestValidateProfile_RejectsMissingRequiredFeature pins the F-7
+// add-only invariant directly through the unexported validate path:
+// a profile whose conjunctive required features are absent from
+// c.features MUST be rejected with a configuration error that names
+// the missing flag. The public option surface gives no way to drop
+// an auto-enabled feature, so we exercise the validator through
+// [validateConfigForTest] which builds a config without running the
+// WithProfile auto-enable loop. A regression that removed the
+// validator's add-only check (relying on auto-enable alone) would
+// let this fall through and fail.
+func TestValidateProfile_RejectsMissingRequiredFeature(t *testing.T) {
+	t.Parallel()
+
+	required := profile.RequiredFeatures(profile.FAPI2Baseline)
+	if len(required) == 0 {
+		t.Skip("FAPI2Baseline declares no required features; nothing to assert")
+	}
+	err := op.ValidateProfileFeatureSetForTest(profile.FAPI2Baseline, []feature.Flag{feature.DPoP})
+	if err == nil {
+		t.Fatal("expected configuration error when required features are missing, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing required feature must surface as server-side configuration error: %v", err)
+	}
+	// The error description must call out the first missing flag so
+	// an operator can locate the misconfiguration.
+	missing := required[0]
+	if !strings.Contains(err.Error(), missing.String()) {
+		t.Errorf("err description %q must mention missing flag %q", err, missing)
 	}
 }
 
@@ -771,7 +817,7 @@ func TestWithCORSOrigins_AppendsAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestWithScope_RejectsStandardScopeNonPublic enforces ADR-0004's
+// TestWithScope_RejectsStandardScopeNonPublic enforces the
 // construction-time guard: every OIDC standard scope MUST stay in the
 // discovery document, so registering one with Public:false is a
 // configuration bug surfaced at op.New rather than a silent runtime
@@ -845,8 +891,8 @@ func TestWithScope_RejectsEmptyName(t *testing.T) {
 }
 
 // TestWithScope_AcceptsCustomNonPublic registers a private custom scope
-// (the "internal-only API" use case from ADR-0004). Public:false is
-// permitted on custom names; only standard scopes are forced public.
+// (the "internal-only API" use case). Public:false is permitted on
+// custom names; only standard scopes are forced public.
 func TestWithScope_AcceptsCustomNonPublic(t *testing.T) {
 	t.Parallel()
 
@@ -876,7 +922,7 @@ func TestWithScope_AcceptsCustomWithAllowedClients(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Wave H1-E options coverage (plan 005, ADR 0008 items 6-9 & 12).
+// Options coverage.
 // ---------------------------------------------------------------------
 
 // stagedH1DStep is a [op.Step] used purely to give a test [op.LoginFlow]

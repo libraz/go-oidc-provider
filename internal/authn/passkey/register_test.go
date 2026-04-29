@@ -11,7 +11,9 @@ package passkey_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,5 +144,45 @@ func TestFinishRegistration_RejectsNilSession(t *testing.T) {
 	_, err := v.FinishRegistration(context.Background(), nil, "user-alice", "alice@example.com", "Alice", nil, []byte(`{}`))
 	if !errors.Is(err, passkey.ErrInvalidResponse) {
 		t.Fatalf("err=%v want ErrInvalidResponse", err)
+	}
+}
+
+// TestBeginRegistration_ExcludeCredentialsForwarded asserts the
+// caller-supplied existing credentials reach the SPA as
+// excludeCredentials so a CTAP2 authenticator already bound to the
+// user refuses a duplicate registration at the device level
+// (M-AUTHN-1).
+func TestBeginRegistration_ExcludeCredentialsForwarded(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	v := newTestVerifier(t, now)
+	existing := []passkey.Credential{{
+		ID:         []byte("credential-one"),
+		PublicKey:  []byte("pk-one"),
+		Transports: []string{"usb"},
+	}}
+	ch, _, err := v.BeginRegistration(context.Background(), "user-alice", "alice@example.com", "Alice", existing)
+	if err != nil {
+		t.Fatalf("BeginRegistration: %v", err)
+	}
+	// excludeCredentials is rendered as a JSON array under the
+	// "excludeCredentials" key of the publicKey options. We test the
+	// presence of the rendered key rather than the whole object shape
+	// so the assertion survives upstream library cosmetic changes.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(ch.PublicKey, &raw); err != nil {
+		t.Fatalf("Unmarshal PublicKey: %v", err)
+	}
+	excl, ok := raw["excludeCredentials"]
+	if !ok {
+		t.Fatalf("excludeCredentials key absent: %s", string(ch.PublicKey))
+	}
+	// The credential ID is base64url-encoded inside the descriptor; the
+	// upstream library round-trips it via protocol.URLEncodedBase64.
+	// Look for any non-empty array — the constant material would
+	// already imply the option threaded through.
+	if !strings.Contains(string(excl), "\"id\"") {
+		t.Errorf("excludeCredentials missing id field: %s", string(excl))
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -130,13 +131,17 @@ func (h *jarHarness) jarSign(t *testing.T, claims map[string]any) string {
 }
 
 // happyJARClaims returns a request-object claim bag that satisfies the
-// verifier when paired with the harness's clock and registered RP.
+// verifier when paired with the harness's clock and registered RP. The
+// fixture mints a fresh "jti" per call so successive request objects
+// in the same test do not collide on the consumed-jti gate (RFC 9101
+// §10.8).
 func (h *jarHarness) happyJARClaims() map[string]any {
 	return map[string]any{
 		"iss":                   h.rpID,
 		"aud":                   h.tk.Issuer,
 		"exp":                   h.clock.now.Add(5 * time.Minute).Unix(),
 		"iat":                   h.clock.now.Unix(),
+		"jti":                   freshJARJTI(),
 		"client_id":             h.rpID,
 		"response_type":         "code",
 		"redirect_uri":          h.redirectURI,
@@ -146,6 +151,18 @@ func (h *jarHarness) happyJARClaims() map[string]any {
 		"code_challenge":        e2eChallenge(),
 		"code_challenge_method": "S256",
 	}
+}
+
+// freshJARJTI mints a 128-bit random JWT identifier suitable for a
+// single end-to-end request object. crypto/rand is used directly so a
+// single test never produces colliding values across successive
+// request objects in the same fixture.
+func freshJARJTI() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return "jti-" + hex.EncodeToString(b[:])
 }
 
 // jarGet issues GET /authorize?client_id=...&request=<JWT> and returns

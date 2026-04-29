@@ -50,22 +50,30 @@ type PushedAuthRequest struct {
 // transaction so that a partial failure cannot leave a still-redeemable URI
 // next to an issued code.
 type PushedAuthRequestStore interface {
-	// Save persists a freshly created PAR record. It MUST return
-	// [ErrAlreadyExists] if a record with the same URI already exists;
-	// the library treats that as a fatal randomness fault.
+	// Save persists a freshly created PAR record. The implementation
+	// MUST hash [PushedAuthRequest.URI] (SHA-256, ideally HMAC'd with a
+	// server-side pepper) before persisting and MUST NOT store the raw
+	// value; see the package doc for the hash-on-store contract. Save
+	// MUST return [ErrAlreadyExists] if a record whose hashed URI
+	// collides with an existing row already exists; the library treats
+	// that as a fatal randomness fault.
 	Save(ctx context.Context, par *PushedAuthRequest) error
 
 	// Find returns the PAR record identified by uri without consuming
-	// it. It MUST return [ErrNotFound] when no such record exists. Find
-	// is exposed for diagnostics and pre-flight validation; the
-	// authoritative single-use check lives in
+	// it. The implementation MUST hash the presented uri and look up
+	// the resulting digest, comparing against the stored hash in
+	// constant time. It MUST return [ErrNotFound] when no such record
+	// exists. Find is exposed for diagnostics and pre-flight
+	// validation; the authoritative single-use check lives in
 	// [PushedAuthRequestStore.Consume].
 	Find(ctx context.Context, uri string) (*PushedAuthRequest, error)
 
 	// Consume atomically marks the PAR record as consumed and returns
-	// it. It MUST return [ErrNotFound] when the record is absent,
-	// [ErrAlreadyConsumed] when the record's ConsumedAt was already set
-	// on entry, and a non-nil error if the compare-and-set fails. The
-	// returned record's ConsumedAt MUST be non-nil on success.
+	// it. The implementation MUST hash the presented uri and look up
+	// the resulting digest. It MUST return [ErrNotFound] when the
+	// record is absent, [ErrAlreadyConsumed] when the record's
+	// ConsumedAt was already set on entry, and a non-nil error if the
+	// compare-and-set fails. The returned record's ConsumedAt MUST be
+	// non-nil on success.
 	Consume(ctx context.Context, uri string) (*PushedAuthRequest, error)
 }

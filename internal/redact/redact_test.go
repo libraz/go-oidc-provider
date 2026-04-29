@@ -36,6 +36,26 @@ func TestIsSensitive(t *testing.T) {
 		{"request", true},
 		{"request_uri", true},
 		{"Request-URI", true},
+		// M-REDACT substring matches: naming variants the exact-match
+		// catalogue cannot enumerate must still be redacted so a
+		// regression that ships "new_refresh_token" in a log record is
+		// masked rather than leaked.
+		{"password_hash", true},
+		{"new_refresh_token", true},
+		{"client_secret_jwt", true},
+		{"bearer_token", true},
+		{"client_assertion_jwt", true},
+		{"mfa_passcode", true},
+		{"old_pwd", true},
+		{"private_key_pem", true},
+		// Allowlisted false-positives the substring matcher would
+		// otherwise trip.
+		{"keypair_kid", false},
+		{"token_type", false},
+		{"secret_type", false},
+		{"token_endpoint", false},
+		{"id_token_signed_response_alg", false},
+		// Benign keys are still benign.
 		{"client_id", false},
 		{"sub", false},
 		{"iss", false},

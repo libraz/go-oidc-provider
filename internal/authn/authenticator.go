@@ -222,6 +222,33 @@ type Authenticator interface {
 	Continue(ctx context.Context, in ContinueInput) (interaction.Step, error)
 }
 
+// UserVerificationReporter is an optional interface an [Authenticator]
+// MAY implement to surface the WebAuthn-equivalent UV bit observed on
+// the most recently completed Continue. The orchestrator type-asserts
+// the registered authenticator after every successful Result and reads
+// LastUserVerified to populate [Factor.UserVerified] — which in turn
+// drives the RFC 8176 "hwk" / "swk" choice in [Factor.AMRValue].
+//
+// Authenticators that have no concept of user-verification (password,
+// TOTP, recovery codes, email OTP) do NOT implement this interface;
+// the orchestrator falls back to the legacy AMR-string derivation.
+// Today only the passkey adapter implements it: every other built-in
+// factor reports its UV state implicitly through its AMR mapping.
+//
+// Implementations MUST be safe for concurrent use. The orchestrator
+// dispatches a single Continue at a time per State, but the same
+// Authenticator value is shared across goroutines for different
+// attempts; a stateful "last UV bit" cache MUST guard the field with
+// a mutex (or store the value on a per-attempt scratch payload).
+type UserVerificationReporter interface {
+	// LastUserVerified reports the UV bit of the most recent
+	// successful Continue made under the supplied subject. Returns
+	// false when no successful Continue has run for the subject in
+	// this process, when the most recent attempt did not surface a
+	// UV bit, or when the implementation cannot recover the value.
+	LastUserVerified(subject string) bool
+}
+
 // Interaction is a non-authentication screen unit (T&C acceptance,
 // KYC gate, device-trust prompt...). Unlike [Authenticator], an
 // Interaction does not bind a subject — the subject is already known.

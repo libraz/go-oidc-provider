@@ -504,9 +504,20 @@ func (p *Provider) IssueInitialAccessToken(ctx context.Context, spec InitialAcce
 	}, nil
 }
 
-// RevokeInitialAccessToken deletes the IAT identified by id. It returns
-// [store.ErrNotFound] (wrapped) when no such token exists; callers MAY
-// treat that as success since the token is gone either way.
+// RevokeInitialAccessToken deletes the IAT identified by id. The
+// operation is idempotent: a missing token is reported as success
+// (nil) rather than [store.ErrNotFound] because the post-condition
+// the caller cares about — "the token does not exist" — is satisfied
+// either way. Treating "already gone" as an error would force every
+// embedder to wrap the call in [errors.Is] just to defend against
+// the harmless race where two operators revoke concurrently or the
+// IAT expired between lookup and revoke; we do that filtering once
+// here so the surface stays clean.
+//
+// All other store errors are wrapped in a configuration_error
+// [*Error] so callers can branch on [errors.As]. The empty id is
+// rejected up front so a caller who lost track of the value cannot
+// silently no-op a "delete every token" request.
 //
 // Returns [ErrDynamicRegistrationDisabled] when [WithDynamicRegistration]
 // was not configured.
@@ -522,7 +533,10 @@ func (p *Provider) RevokeInitialAccessToken(ctx context.Context, id string) erro
 	}
 	if err := p.cfg.store.InitialAccessTokens().Delete(ctx, id); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return err
+			// Idempotent: the token is already absent, so the
+			// caller's post-condition holds. Surfacing the error
+			// would force every embedder to swallow it manually.
+			return nil
 		}
 		return &Error{
 			Code:        codeServerError,

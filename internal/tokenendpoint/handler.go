@@ -83,7 +83,7 @@ type Deps struct {
 
 	// UserStore is the read-only end-user lookup the handler consults
 	// when projecting the OIDC Core 1.0 §5.5 "claims" request payload
-	// onto the id_token (per ADR 0011). A nil value silently disables
+	// onto the id_token. A nil value silently disables
 	// the projection — the issued id_token then carries only the
 	// standard claims plus the per-grant ACR/AMR/auth_time.
 	UserStore store.UserStore
@@ -190,10 +190,10 @@ type Deps struct {
 
 	// AccessTokens is the [store.AccessTokenRegistry] consulted on
 	// every issued access token (RFC 6749 §4.1.2 / RFC 6819 §5.2.1.1
-	// code-replay revocation, ADR 0013). The handler calls Register
-	// from each grant path and RevokeByGrant from the code-replay
-	// cascade. A nil value disables the registry entirely: the
-	// endpoint reverts to the pre-ADR-0013 behaviour where issued
+	// code-replay revocation). The handler calls Register from each
+	// grant path and RevokeByGrant from the code-replay cascade. A
+	// nil value disables the registry entirely: the endpoint reverts
+	// to the legacy behaviour where issued
 	// access tokens carry no shadow row, code replay revokes only
 	// refresh tokens, and userinfo / introspection / revocation
 	// cannot reject a token that has not yet expired. The library

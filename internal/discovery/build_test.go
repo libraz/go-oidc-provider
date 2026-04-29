@@ -1,10 +1,61 @@
 package discovery_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 )
+
+// TestValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0
+// §5.4 shape constraints on the issuer URL. The matrix fixes the
+// allowed shapes (https, no trailing slash, no query / fragment) and
+// the loopback-only carve-out for the http scheme (development boots
+// with a plain-text issuer must still surface as a misconfiguration
+// in production). Each row drives a single ValidateIssuer call.
+func TestValidateIssuer(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		issuer  string
+		wantErr bool
+	}{
+		{"empty", "", true},
+		{"plain-https", "https://idp.example.com", false},
+		{"https-with-port", "https://idp.example.com:8443", false},
+		{"https-with-path", "https://idp.example.com/oidc", false},
+		{"trailing-slash", "https://idp.example.com/", true},
+		{"trailing-slash-with-path", "https://idp.example.com/oidc/", true},
+		{"with-query", "https://idp.example.com/?foo=bar", true},
+		{"with-fragment", "https://idp.example.com/#x", true},
+		{"http-public", "http://idp.example.com", true},
+		{"http-localhost", "http://localhost:8080", false},
+		{"http-loopback-v4", "http://127.0.0.1:8080", false},
+		{"http-loopback-v6", "http://[::1]:8080", false},
+		{"http-private-ip", "http://10.0.0.1", true},
+		{"unknown-scheme", "ftp://idp.example.com", true},
+		{"relative", "/oidc", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := discovery.ValidateIssuer(tc.issuer)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ValidateIssuer(%q) = nil, want error", tc.issuer)
+				}
+				if !errors.Is(err, discovery.ErrIssuerInvalid) {
+					t.Errorf("ValidateIssuer(%q) error = %v, want errors.Is ErrIssuerInvalid", tc.issuer, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateIssuer(%q) unexpected error: %v", tc.issuer, err)
+			}
+		})
+	}
+}
 
 func TestBuild_FormsAbsoluteURLs(t *testing.T) {
 	t.Parallel()

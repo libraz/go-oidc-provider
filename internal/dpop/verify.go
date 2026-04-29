@@ -80,11 +80,12 @@ func IsNonceError(err error) bool {
 // startup with [NewVerifier]; the value is immutable and safe for
 // concurrent use.
 type Verifier struct {
-	clock      Clock
-	jtis       store.ConsumedJTIStore
-	iatWindow  time.Duration
-	replayLeew time.Duration
-	nonces     NonceVerifier
+	clock         Clock
+	jtis          store.ConsumedJTIStore
+	iatWindow     time.Duration
+	replayLeew    time.Duration
+	nonces        NonceVerifier
+	looseMethCase bool
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier].
@@ -109,6 +110,19 @@ type VerifierConfig struct {
 	// "use_dpop_nonce" challenge. A nil value (the default) leaves
 	// the proof's nonce claim unread, matching the v0.x posture.
 	Nonces NonceVerifier
+
+	// AllowLooseMethodCase, when true, compares the proof's "htm"
+	// claim to the request method under ASCII case folding rather
+	// than the RFC 9449 §4.3 byte-equal rule. The default false is
+	// strict (case-sensitive) so a proof carrying "post" against a
+	// "POST" request fails [ErrProofHTMMismatch]; embedders facing
+	// non-conforming RP libraries that up-case the verb in the
+	// proof opt in via this flag. The opt-in is deliberately narrow
+	// because tolerating case-variation widens the attack surface
+	// for proof-substitution across endpoints whose method differs
+	// only in case (none in HTTP today, but the RFC keeps the
+	// distinction structural for forward-compatibility).
+	AllowLooseMethodCase bool
 }
 
 // NewVerifier builds a [*Verifier] from cfg. The function returns an
@@ -127,11 +141,12 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		window = DefaultIatWindow
 	}
 	return &Verifier{
-		clock:      clock,
-		jtis:       cfg.JTIs,
-		iatWindow:  window,
-		replayLeew: window,
-		nonces:     cfg.Nonces,
+		clock:         clock,
+		jtis:          cfg.JTIs,
+		iatWindow:     window,
+		replayLeew:    window,
+		nonces:        cfg.Nonces,
+		looseMethCase: cfg.AllowLooseMethodCase,
 	}, nil
 }
 
@@ -195,7 +210,7 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 		return nil, err
 	}
 
-	if !equalFold(parsed.claims.HTM, in.Method) {
+	if !v.compareMethod(parsed.claims.HTM, in.Method) {
 		return nil, ErrProofHTMMismatch
 	}
 	requestURL := canonicalRequestURL(requestURLSource{URL: in.URL, Host: in.Host, TLS: in.TLS})
@@ -221,21 +236,30 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 		return nil, err
 	}
 
-	jkt, err := Thumbprint(parsed.jwk)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrProofMalformed, err)
-	}
-
-	// Replay detection runs LAST so a malformed proof never advances
-	// the consumed-jti table. The expiresAt value is now + window so
-	// a record naturally falls out of the store after the same
-	// duration the iat check would have rejected for.
+	// Mark the jti immediately after the nonce gate succeeds and
+	// before any further computation. The order closes a replay
+	// vector where an attacker observes a valid (htm/htu/iat/ath)
+	// proof, races the legitimate retry whose nonce-check fails on
+	// stale input, and then resubmits the SAME jti with a fresh
+	// nonce. Marking ahead of the thumbprint compute makes the jti
+	// gate atomic relative to nonce success: every nonce-passing
+	// proof advances the consumed-jti table, so a second use of
+	// the same jti — regardless of the second submission's nonce
+	// — surfaces as ErrProofReplayed. Pre-nonce failures (htm /
+	// htu / iat / ath / nonce) never reach this point, preserving
+	// the "malformed proof never advances the table" property the
+	// previous ordering relied on.
 	expiresAt := now.Add(v.replayLeew)
 	if err := v.jtis.Mark(ctx, parsed.claims.JTI, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return nil, ErrProofReplayed
 		}
 		return nil, fmt.Errorf("dpop: mark jti: %w", err)
+	}
+
+	jkt, err := Thumbprint(parsed.jwk)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrProofMalformed, err)
 	}
 
 	return &VerifyResult{JKT: jkt, JTI: parsed.claims.JTI}, nil
@@ -246,7 +270,10 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 // stale-nonce proof does not consume a jti slot the legitimate retry
 // would need: the client is expected to retry with a fresh proof
 // (new jti, new nonce), and burning the failed jti would force the
-// retry to surface as a spurious replay.
+// retry to surface as a spurious replay. A nonce-passing proof DOES
+// mark its jti immediately afterwards (see the M-FAPI-1 reorder
+// note in [Verifier.Verify]) so the same jti cannot be reused
+// against a fresh nonce.
 //
 // A nil [Verifier.nonces] disables the gate; this matches the v0.x
 // posture where proofs without a nonce claim were always accepted.
@@ -303,13 +330,24 @@ func AccessTokenHash(token string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
+// compareMethod runs the htm-vs-method comparison. The default posture
+// is byte-equal per RFC 9449 §4.3; when [VerifierConfig.AllowLooseMethodCase]
+// is set the comparison falls back to ASCII case folding so a proof
+// carrying "post" against a "POST" request still matches. The opt-in
+// is package-local rather than a global default because the spec
+// pins the rule and only RP libraries that violate it benefit from
+// the relaxation.
+func (v *Verifier) compareMethod(htm, method string) bool {
+	if v.looseMethCase {
+		return equalFold(htm, method)
+	}
+	return htm == method
+}
+
 // equalFold reports whether s and t are equal under ASCII case
-// folding. RFC 9449 §4.3 says HTTP method comparisons are case-
-// sensitive ("GET" matches only "GET"), but RP libraries occasionally
-// up-case the verb in the proof; we tolerate that on the proof side
-// because the OP itself normalises to upper-case in
-// [canonicalRequestURL]. The fold is bounded to ASCII because HTTP
-// methods are ASCII per RFC 9110.
+// folding. The helper is the relaxed branch of [Verifier.compareMethod];
+// it is also exercised by the proof parser. The fold is bounded to
+// ASCII because HTTP methods are ASCII per RFC 9110.
 func equalFold(a, b string) bool {
 	if len(a) != len(b) {
 		return false

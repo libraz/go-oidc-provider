@@ -196,8 +196,9 @@ func TestIntegration_PAREndpointDisabledByDefault_Returns404(t *testing.T) {
 
 // TestIntegration_Discovery_RegisteredScopesRespectVisibility wires the
 // full op.New → /.well-known/openid-configuration path and confirms the
-// ADR-0004 contract end-to-end: scopes registered with Public:true
-// appear in scopes_supported, scopes registered with Public:false do
+// scope visibility contract end-to-end: scopes registered with
+// Public:true appear in scopes_supported, scopes registered with
+// Public:false do
 // not. Standard OIDC scopes always appear because the standard-scope
 // fill in op.fillStandardScopes is unconditional.
 func TestIntegration_Discovery_RegisteredScopesRespectVisibility(t *testing.T) {

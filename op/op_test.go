@@ -266,6 +266,8 @@ func TestWithIssuer_RejectsMalformedURL(t *testing.T) {
 		{"with query", "https://idp.example.com?x=1", op.ErrIssuerInvalid},
 		{"with fragment", "https://idp.example.com#x", op.ErrIssuerInvalid},
 		{"relative", "/idp", op.ErrIssuerInvalid},
+		{"empty host with path", "https:///idp", op.ErrIssuerInvalid},
+		{"empty host bare", "https://", op.ErrIssuerInvalid},
 	}
 
 	for _, tc := range cases {

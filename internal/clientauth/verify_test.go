@@ -20,13 +20,7 @@ import (
 
 func newConfidentialClient(tb testing.TB, secret string) *store.Client {
 	tb.Helper()
-	v := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
-		Memory:      16 * 1024,
-		Iterations:  1,
-		Parallelism: 1,
-		SaltLength:  8,
-		KeyLength:   16,
-	}}
+	v := smallArgon2id()
 	hash, err := v.Hash(secret)
 	if err != nil {
 		tb.Fatalf("Hash: %v", err)
@@ -38,10 +32,15 @@ func newConfidentialClient(tb testing.TB, secret string) *store.Client {
 	}
 }
 
+// smallArgon2id returns an Argon2id verifier whose parameters are at
+// the OWASP floor [Argon2idMinMemory] / [Argon2idMinIterations] so the
+// test runs as fast as the floor allows. Older revisions of this
+// helper used sub-floor parameters; the verifier now rejects those as
+// part of L-STORE-F10.
 func smallArgon2id() *clientauth.Argon2id {
 	return &clientauth.Argon2id{Params: clientauth.Argon2idParams{
-		Memory:      16 * 1024,
-		Iterations:  1,
+		Memory:      clientauth.Argon2idMinMemory,
+		Iterations:  clientauth.Argon2idMinIterations,
 		Parallelism: 1,
 		SaltLength:  8,
 		KeyLength:   16,
@@ -497,6 +496,46 @@ func TestPrivateKeyJWTVerifier_JTIReplay_Rejected(t *testing.T) {
 	}
 	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionReplayed) {
 		t.Fatalf("replay err=%v want ErrAssertionReplayed", err)
+	}
+}
+
+// TestVerifyClient_PrivateKeyJWT_UnknownClient_DummyVerifyShim pins the
+// timing-oracle defence for private_key_jwt: when [VerifyClient] is
+// asked to authenticate against a nil registered client (e.g. unknown
+// client_id), the rejection path MUST run the fixed-cost dummy ECDSA
+// verify so the wall-clock budget mirrors the legitimate
+// signature-verify branch. The test exercises the shim through the
+// public surface: a single VerifyClient call against nil client with
+// MethodPrivateKeyJWT exits via runDummyVerify, and the code-coverage
+// hit on dummyJWTVerify is the regression guard.
+//
+// Tracks: M-CLIENTAUTH (security audit) — the original runDummyVerify
+// only padded the secret-based methods, leaking client_id existence
+// for OPs that accept private_key_jwt at the token endpoint.
+func TestVerifyClient_PrivateKeyJWT_UnknownClient_DummyVerifyShim(t *testing.T) {
+	t.Parallel()
+
+	creds := &clientauth.Credentials{
+		ClientID:     "client-1",
+		Method:       clientauth.MethodPrivateKeyJWT,
+		AssertionJWT: "irrelevant",
+	}
+	// nil client triggers the unknown-client branch; the verifier MUST
+	// run the dummy shim before returning the structural error so the
+	// rejection path consumes the same crypto work as a real verify.
+	if _, err := clientauth.VerifyClient(context.Background(), creds, nil, clientauth.VerifyOpts{}); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
+		t.Fatalf("nil client VerifyClient: err=%v want ErrCredentialsInvalid", err)
+	}
+
+	// Repeat with non-nil but mismatched client (different ID): the
+	// runDummyVerify call lives on the ErrClientMismatch path too, so
+	// both structural-rejection branches share the timing shim.
+	other := &store.Client{
+		ID:                      "other-id",
+		TokenEndpointAuthMethod: string(clientauth.MethodPrivateKeyJWT),
+	}
+	if _, err := clientauth.VerifyClient(context.Background(), creds, other, clientauth.VerifyOpts{}); !errors.Is(err, clientauth.ErrClientMismatch) {
+		t.Fatalf("mismatch VerifyClient: err=%v want ErrClientMismatch", err)
 	}
 }
 

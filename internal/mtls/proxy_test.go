@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"testing"
 
@@ -20,6 +21,22 @@ func pemEncode(tb testing.TB, cert *x509.Certificate) string {
 	tb.Helper()
 	block := &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}
 	return string(pem.EncodeToMemory(block))
+}
+
+// mustParsePrefixes is the test-side wrapper around
+// [mtls.ParseTrustedProxies]. It funnels the legacy "any source"
+// posture (used by the existing proxy tests) onto the new explicit
+// allow-list shape — every existing test pins a wide-open
+// 0.0.0.0/0 + ::/0 prefix because those tests target the cert-
+// parsing logic, not the proxy gating; the dedicated proxy-gating
+// tests in proxy_trust_test.go cover the negative path.
+func mustParsePrefixes(t testing.TB, cidrs ...string) []netip.Prefix {
+	t.Helper()
+	out, err := mtls.ParseTrustedProxies(cidrs)
+	if err != nil {
+		t.Fatalf("ParseTrustedProxies(%v): %v", cidrs, err)
+	}
+	return out
 }
 
 // TestCertificateFromRequest_TLSHandshake takes the leaf out of
@@ -70,7 +87,7 @@ func TestCertificateFromRequest_HeaderPath(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
 	req.Header.Set("X-Client-Cert", pemEncode(t, cert))
 
-	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
 	if err != nil {
 		t.Fatalf("CertificateFromRequest: %v", err)
 	}
@@ -88,7 +105,7 @@ func TestCertificateFromRequest_HeaderURLEncoded(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
 	req.Header.Set("X-Client-Cert", url.QueryEscape(pemEncode(t, cert)))
 
-	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
 	if err != nil {
 		t.Fatalf("CertificateFromRequest: %v", err)
 	}
@@ -103,7 +120,7 @@ func TestCertificateFromRequest_NoCert(t *testing.T) {
 	t.Parallel()
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
-	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
 	if !errors.Is(err, mtls.ErrNoClientCert) {
 		t.Errorf("err=%v want ErrNoClientCert", err)
 	}
@@ -133,7 +150,7 @@ func TestCertificateFromRequest_MalformedHeader(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
 	req.Header.Set("X-Client-Cert", "not a pem block")
 
-	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
 	if !errors.Is(err, mtls.ErrCertMalformed) {
 		t.Errorf("err=%v want ErrCertMalformed", err)
 	}
@@ -148,7 +165,7 @@ func TestCertificateFromRequest_WrongPEMType(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
 	req.Header.Set("X-Client-Cert", string(bogus))
 
-	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
 	if !errors.Is(err, mtls.ErrCertMalformed) {
 		t.Errorf("err=%v want ErrCertMalformed", err)
 	}
@@ -167,7 +184,7 @@ func TestCertificateFromRequest_PrefersHandshake(t *testing.T) {
 	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{handshake}}
 	req.Header.Set("X-Client-Cert", pemEncode(t, header))
 
-	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
 	if err != nil {
 		t.Fatalf("CertificateFromRequest: %v", err)
 	}
@@ -233,7 +250,7 @@ func TestCertificateFromRequest_OnlyConfiguredHeaderHonoured(t *testing.T) {
 			t.Parallel()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
 			req.Header.Set(headerName, pemBody)
-			_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+			_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
 			if !errors.Is(err, mtls.ErrNoClientCert) {
 				t.Errorf("header %q: err=%v want ErrNoClientCert (only configured name MUST be honoured)",
 					headerName, err)

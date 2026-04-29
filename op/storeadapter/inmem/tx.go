@@ -68,13 +68,46 @@ func (t *tx) Commit() error {
 
 // Rollback discards every staged write and releases the tx mutex. Rollback is
 // safe to call after Commit; subsequent calls are no-ops.
+//
+// The staging maps are cleared before the mutex is released so any
+// pointer the caller retained into a staged record is severed: a buggy
+// caller that holds onto a [store.AuthorizationCode] pointer obtained
+// inside the tx and mutates it after Rollback can no longer corrupt
+// future transactions, and the freed slots are eligible for GC
+// immediately rather than on the next BeginTx.
 func (t *tx) Rollback() error {
 	if !t.closed.CompareAndSwap(false, true) {
 		// Per godoc, Rollback after Commit is a deliberate no-op.
 		return nil
 	}
+	t.clearStaging()
 	t.owner.txMu.Unlock()
 	return nil
+}
+
+// clearStaging drops every staged add / update / delete map entry so a
+// rolled-back tx surrenders its temporary pointers eagerly. The
+// helper runs both on Rollback (where staging would otherwise be
+// reachable through the tx struct itself until GC sweeps the closed
+// transaction) and as part of the race-test surface for F-11.
+func (t *tx) clearStaging() {
+	if t.acStaging != nil {
+		clear(t.acStaging.added)
+		clear(t.acStaging.updated)
+	}
+	if t.rtStaging != nil {
+		clear(t.rtStaging.added)
+		clear(t.rtStaging.updated)
+		clear(t.rtStaging.revoked)
+	}
+	if t.grStaging != nil {
+		clear(t.grStaging.added)
+		clear(t.grStaging.deleted)
+	}
+	if t.parStaging != nil {
+		clear(t.parStaging.added)
+		clear(t.parStaging.updated)
+	}
 }
 
 // --- staging: authorization codes -------------------------------------------
@@ -109,16 +142,19 @@ func (a *txAuthCodes) Save(ctx context.Context, code *store.AuthorizationCode) e
 		return errors.New("inmem: nil authorization code")
 	}
 	st := a.tx.acStaging
-	if _, exists := st.added[code.ID]; exists {
+	key := hashKey(code.ID)
+	if _, exists := st.added[key]; exists {
 		return store.ErrAlreadyExists
 	}
 	st.parent.mu.RLock()
-	_, parentExists := st.parent.m[code.ID]
+	_, parentExists := st.parent.m[key]
 	st.parent.mu.RUnlock()
 	if parentExists {
 		return store.ErrAlreadyExists
 	}
-	st.added[code.ID] = cloneAuthCode(code)
+	stored := cloneAuthCode(code)
+	stored.ID = key
+	st.added[key] = stored
 	return nil
 }
 
@@ -129,14 +165,16 @@ func (a *txAuthCodes) Find(ctx context.Context, id string) (*store.Authorization
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rec := a.tx.acStaging.lookup(id)
+	rec := a.tx.acStaging.lookup(hashKey(id))
 	if rec == nil {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, a.tx.clock) {
 		return nil, store.ErrNotFound
 	}
-	return cloneAuthCode(rec), nil
+	out := cloneAuthCode(rec)
+	out.ID = id
+	return out, nil
 }
 
 func (a *txAuthCodes) Consume(ctx context.Context, id string) (*store.AuthorizationCode, error) {
@@ -147,7 +185,8 @@ func (a *txAuthCodes) Consume(ctx context.Context, id string) (*store.Authorizat
 		return nil, err
 	}
 	st := a.tx.acStaging
-	rec := st.lookup(id)
+	key := hashKey(id)
+	rec := st.lookup(key)
 	if rec == nil {
 		return nil, store.ErrNotFound
 	}
@@ -160,20 +199,23 @@ func (a *txAuthCodes) Consume(ctx context.Context, id string) (*store.Authorizat
 	updated := cloneAuthCode(rec)
 	now := a.tx.clock.Now()
 	updated.ConsumedAt = &now
-	st.updated[id] = updated
-	return cloneAuthCode(updated), nil
+	updated.ID = key
+	st.updated[key] = updated
+	out := cloneAuthCode(updated)
+	out.ID = id
+	return out, nil
 }
 
-func (s *authCodeStaging) lookup(id string) *store.AuthorizationCode {
-	if rec, ok := s.updated[id]; ok {
+func (s *authCodeStaging) lookup(key string) *store.AuthorizationCode {
+	if rec, ok := s.updated[key]; ok {
 		return rec
 	}
-	if rec, ok := s.added[id]; ok {
+	if rec, ok := s.added[key]; ok {
 		return rec
 	}
 	s.parent.mu.RLock()
 	defer s.parent.mu.RUnlock()
-	if rec, ok := s.parent.m[id]; ok {
+	if rec, ok := s.parent.m[key]; ok {
 		// Return a snapshot so subsequent mutations via Consume are
 		// confined to staging.
 		return cloneAuthCode(rec)
@@ -221,16 +263,17 @@ func (r *txRefreshes) Save(ctx context.Context, token *store.RefreshToken) error
 		return errors.New("inmem: nil refresh token")
 	}
 	st := r.tx.rtStaging
-	if _, exists := st.added[token.ID]; exists {
+	key := hashKey(token.ID)
+	if _, exists := st.added[key]; exists {
 		return store.ErrAlreadyExists
 	}
 	st.parent.mu.RLock()
-	_, parentExists := st.parent.m[token.ID]
+	_, parentExists := st.parent.m[key]
 	st.parent.mu.RUnlock()
 	if parentExists {
 		return store.ErrAlreadyExists
 	}
-	st.added[token.ID] = cloneRefresh(token)
+	st.added[key] = storeRefresh(token, key)
 	return nil
 }
 
@@ -241,14 +284,16 @@ func (r *txRefreshes) Find(ctx context.Context, id string) (*store.RefreshToken,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rec := r.tx.rtStaging.lookup(id)
+	rec := r.tx.rtStaging.lookup(hashKey(id))
 	if rec == nil {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, r.tx.clock) {
 		return nil, store.ErrNotFound
 	}
-	return cloneRefresh(rec), nil
+	out := cloneRefresh(rec)
+	out.ID = id
+	return out, nil
 }
 
 func (r *txRefreshes) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
@@ -259,7 +304,8 @@ func (r *txRefreshes) Consume(ctx context.Context, id string) (*store.RefreshTok
 		return nil, err
 	}
 	st := r.tx.rtStaging
-	rec := st.lookup(id)
+	key := hashKey(id)
+	rec := st.lookup(key)
 	if rec == nil {
 		return nil, store.ErrNotFound
 	}
@@ -272,8 +318,11 @@ func (r *txRefreshes) Consume(ctx context.Context, id string) (*store.RefreshTok
 	updated := cloneRefresh(rec)
 	now := r.tx.clock.Now()
 	updated.ConsumedAt = &now
-	st.updated[id] = updated
-	return cloneRefresh(updated), nil
+	updated.ID = key
+	st.updated[key] = updated
+	out := cloneRefresh(updated)
+	out.ID = id
+	return out, nil
 }
 
 func (r *txRefreshes) RevokeChain(ctx context.Context, rootID string) error {
@@ -284,7 +333,8 @@ func (r *txRefreshes) RevokeChain(ctx context.Context, rootID string) error {
 		return err
 	}
 	st := r.tx.rtStaging
-	rec := st.lookup(rootID)
+	rootKey := hashKey(rootID)
+	rec := st.lookup(rootKey)
 	if rec == nil {
 		return store.ErrNotFound
 	}
@@ -294,12 +344,13 @@ func (r *txRefreshes) RevokeChain(ctx context.Context, rootID string) error {
 	if rec.ConsumedAt == nil {
 		updated := cloneRefresh(rec)
 		updated.ConsumedAt = &now
-		st.updated[rootID] = updated
+		updated.ID = rootKey
+		st.updated[rootKey] = updated
 	}
-	st.revoked[rootID] = struct{}{}
+	st.revoked[rootKey] = struct{}{}
 	// Apply chain marking against the staging view so callers within the
 	// same tx see revoked descendants.
-	st.markChainStaged(rootID, now)
+	st.markChainStaged(rootKey, now)
 	return nil
 }
 
@@ -325,6 +376,7 @@ func (r *txRefreshes) RevokeByGrant(ctx context.Context, grantID string) error {
 			updated.ConsumedAt = &t
 		}
 		updated.Revoked = true
+		updated.ID = id // id here is the hashed key (matches the map key contract).
 		st.updated[id] = updated
 	})
 	return nil
@@ -342,6 +394,10 @@ func (s *refreshStaging) markChainStaged(rootID string, now time.Time) {
 // markOneGenerationStaged is the inner pass of markChainStaged. It returns
 // true when at least one new descendant was stamped so the outer loop
 // continues until no more descendants are reachable.
+//
+// id is the hashed staging-map key. rec.ParentID is stored as the raw
+// parent identifier (see [storeRefresh]) so the walk hashes it on the
+// fly to compare against the revoked set, which is keyed on digests.
 func (s *refreshStaging) markOneGenerationStaged(revoked map[string]struct{}, now time.Time) bool {
 	grew := false
 	s.iter(func(id string, rec *store.RefreshToken) {
@@ -351,7 +407,8 @@ func (s *refreshStaging) markOneGenerationStaged(revoked map[string]struct{}, no
 		if rec.ParentID == nil {
 			return
 		}
-		if _, parentRevoked := revoked[*rec.ParentID]; !parentRevoked {
+		parentKey := hashKey(*rec.ParentID)
+		if _, parentRevoked := revoked[parentKey]; !parentRevoked {
 			return
 		}
 		updated := cloneRefresh(rec)
@@ -359,6 +416,7 @@ func (s *refreshStaging) markOneGenerationStaged(revoked map[string]struct{}, no
 			t := now
 			updated.ConsumedAt = &t
 		}
+		updated.ID = id
 		s.updated[id] = updated
 		revoked[id] = struct{}{}
 		grew = true
@@ -621,16 +679,19 @@ func (p *txPARs) Save(ctx context.Context, par *store.PushedAuthRequest) error {
 		return errors.New("inmem: nil pushed authorization request")
 	}
 	st := p.tx.parStaging
-	if _, exists := st.added[par.URI]; exists {
+	key := hashKey(par.URI)
+	if _, exists := st.added[key]; exists {
 		return store.ErrAlreadyExists
 	}
 	st.parent.mu.RLock()
-	_, parentExists := st.parent.m[par.URI]
+	_, parentExists := st.parent.m[key]
 	st.parent.mu.RUnlock()
 	if parentExists {
 		return store.ErrAlreadyExists
 	}
-	st.added[par.URI] = clonePAR(par)
+	stored := clonePAR(par)
+	stored.URI = key
+	st.added[key] = stored
 	return nil
 }
 
@@ -641,14 +702,16 @@ func (p *txPARs) Find(ctx context.Context, uri string) (*store.PushedAuthRequest
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	rec := p.tx.parStaging.lookup(uri)
+	rec := p.tx.parStaging.lookup(hashKey(uri))
 	if rec == nil {
 		return nil, store.ErrNotFound
 	}
 	if isExpired(rec.ExpiresAt, p.tx.clock) {
 		return nil, store.ErrNotFound
 	}
-	return clonePAR(rec), nil
+	out := clonePAR(rec)
+	out.URI = uri
+	return out, nil
 }
 
 func (p *txPARs) Consume(ctx context.Context, uri string) (*store.PushedAuthRequest, error) {
@@ -659,7 +722,8 @@ func (p *txPARs) Consume(ctx context.Context, uri string) (*store.PushedAuthRequ
 		return nil, err
 	}
 	st := p.tx.parStaging
-	rec := st.lookup(uri)
+	key := hashKey(uri)
+	rec := st.lookup(key)
 	if rec == nil {
 		return nil, store.ErrNotFound
 	}
@@ -672,20 +736,23 @@ func (p *txPARs) Consume(ctx context.Context, uri string) (*store.PushedAuthRequ
 	updated := clonePAR(rec)
 	now := p.tx.clock.Now()
 	updated.ConsumedAt = &now
-	st.updated[uri] = updated
-	return clonePAR(updated), nil
+	updated.URI = key
+	st.updated[key] = updated
+	out := clonePAR(updated)
+	out.URI = uri
+	return out, nil
 }
 
-func (s *parStaging) lookup(uri string) *store.PushedAuthRequest {
-	if rec, ok := s.updated[uri]; ok {
+func (s *parStaging) lookup(key string) *store.PushedAuthRequest {
+	if rec, ok := s.updated[key]; ok {
 		return rec
 	}
-	if rec, ok := s.added[uri]; ok {
+	if rec, ok := s.added[key]; ok {
 		return rec
 	}
 	s.parent.mu.RLock()
 	defer s.parent.mu.RUnlock()
-	if rec, ok := s.parent.m[uri]; ok {
+	if rec, ok := s.parent.m[key]; ok {
 		return clonePAR(rec)
 	}
 	return nil

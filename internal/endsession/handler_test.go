@@ -259,6 +259,15 @@ func readBody(t *testing.T, resp *http.Response) string {
 	return string(b)
 }
 
+// TestHandler_GETLogoutNoHint enforces the H-PROTO-3 CSRF defense:
+// a GET /end_session without an id_token_hint MUST render an
+// interstitial confirmation page rather than terminating the session
+// directly. The page carries the double-submit __Host- CSRF cookie
+// and a matching form field; only a follow-up POST with both halves
+// of the token actually logs the user out. Without the gate a
+// cross-site <img src=...> probe could destroy the session, which
+// OIDC RP-Initiated Logout 1.0 §5 (and a corresponding CSRF defense)
+// rejects.
 func TestHandler_GETLogoutNoHint(t *testing.T) {
 	t.Parallel()
 
@@ -268,8 +277,16 @@ func TestHandler_GETLogoutNoHint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(body, "Signed out") {
-		t.Errorf("body missing logged-out marker: %s", body)
+	// Without an id_token_hint the OP MUST emit the interstitial
+	// confirmation page, not the static logged-out body.
+	if !strings.Contains(body, "Confirm sign-out") {
+		t.Errorf("body missing confirmation marker: %s", body)
+	}
+	if !strings.Contains(body, `name="logout_csrf"`) {
+		t.Errorf("body missing CSRF token form field: %s", body)
+	}
+	if !hasConfirmCookie(resp) {
+		t.Errorf("confirmation cookie not set; cookies=%v", resp.Cookies())
 	}
 	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
 		t.Errorf("Content-Type=%q want text/html", got)
@@ -279,7 +296,11 @@ func TestHandler_GETLogoutNoHint(t *testing.T) {
 	}
 }
 
-func TestHandler_GETLogoutWithSession(t *testing.T) {
+// TestHandler_GETLogoutNoHintWithSession confirms the interstitial
+// page does NOT terminate the session by itself. The user must POST
+// the form to actually log out; the GET MUST leave the session live
+// so a hostile cross-site GET cannot defeat the gate by side-effect.
+func TestHandler_GETLogoutNoHintWithSession(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
@@ -290,12 +311,158 @@ func TestHandler_GETLogoutWithSession(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
+	// The interstitial path MUST NOT clear the session cookie or
+	// remove the underlying session record; the user has not yet
+	// confirmed the logout.
+	if hasClearedSessionCookie(resp) {
+		t.Errorf("session cookie cleared on GET; CSRF gate bypassed")
+	}
+	if _, err := h.store.Sessions().Find(context.Background(), sessionID); err != nil {
+		t.Errorf("session record terminated by GET interstitial: err=%v", err)
+	}
+}
+
+// TestHandler_POSTLogoutNoHintCSRF exercises the happy path for the
+// hint-less POST: a request that carries both halves of the
+// double-submit token (cookie + form field) and a same-origin Origin
+// header is admitted, terminates the session, and clears the
+// confirmation cookie.
+func TestHandler_POSTLogoutNoHintCSRF(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, sessionID := h.issueSession(t)
+	getResp := h.doGET(t, url.Values{}, cookieValue)
+	defer getResp.Body.Close()
+	tok := readConfirmCookie(getResp)
+	if tok == "" {
+		t.Fatal("interstitial GET did not set the confirmation cookie")
+	}
+
+	form := url.Values{"logout_csrf": {tok}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.Header.Set("Origin", "https://op.example.com")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	r.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: tok})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
 	if !hasClearedSessionCookie(resp) {
-		t.Errorf("session cookie not cleared; cookies=%v", resp.Cookies())
+		t.Errorf("session cookie not cleared on confirmed logout")
 	}
 	if _, err := h.store.Sessions().Find(context.Background(), sessionID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("session record still present: err=%v", err)
 	}
+}
+
+// TestHandler_POSTLogoutNoHintMissingCookie rejects a POST whose
+// __Host-oidc_logout_csrf cookie is absent. The form field alone
+// MUST NOT pass the gate; without the cookie the request is
+// indistinguishable from a forged cross-site submission.
+func TestHandler_POSTLogoutNoHintMissingCookie(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, sessionID := h.issueSession(t)
+	form := url.Values{"logout_csrf": {"some-token"}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.Header.Set("Origin", "https://op.example.com")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	if hasClearedSessionCookie(resp) {
+		t.Errorf("session cookie cleared on rejected POST; CSRF gate bypassed")
+	}
+	if _, err := h.store.Sessions().Find(context.Background(), sessionID); err != nil {
+		t.Errorf("session record terminated by rejected POST: err=%v", err)
+	}
+}
+
+// TestHandler_POSTLogoutNoHintForeignOrigin rejects a POST whose
+// Origin header names a foreign host even when the double-submit
+// cookie + token agree. The Origin / Referer check is the
+// defense-in-depth gate that catches a SameSite=Lax browser quirk
+// where a top-level navigation could leak the cookie; without the
+// header check the cookie alone could be replayed cross-site.
+func TestHandler_POSTLogoutNoHintForeignOrigin(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, _ := h.issueSession(t)
+	getResp := h.doGET(t, url.Values{}, cookieValue)
+	defer getResp.Body.Close()
+	tok := readConfirmCookie(getResp)
+	if tok == "" {
+		t.Fatal("interstitial GET did not set the confirmation cookie")
+	}
+
+	form := url.Values{"logout_csrf": {tok}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.Header.Set("Origin", "https://attacker.example.com")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	r.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: tok})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400; foreign Origin must be rejected", resp.StatusCode)
+	}
+}
+
+// hasConfirmCookie reports whether resp carries a Set-Cookie header
+// that installs the interstitial CSRF cookie. The match is on name
+// only because the value is opaque (random per render).
+func hasConfirmCookie(resp *http.Response) bool {
+	for _, c := range resp.Cookies() {
+		if c.Name == "__Host-oidc_logout_csrf" && c.Value != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// readConfirmCookie returns the value of the interstitial CSRF
+// cookie carried by resp, or empty when absent. Used by the POST
+// rows so the test does not need to scrape the rendered HTML for
+// the token.
+func readConfirmCookie(resp *http.Response) string {
+	for _, c := range resp.Cookies() {
+		if c.Name == "__Host-oidc_logout_csrf" {
+			return c.Value
+		}
+	}
+	return ""
 }
 
 func TestHandler_RedirectHappyPath(t *testing.T) {
@@ -373,6 +540,58 @@ func TestHandler_RedirectWithoutState(t *testing.T) {
 	if got := resp.Header.Get("Location"); got != h.postLogoutURI {
 		// state absent → no ?state= appended.
 		t.Errorf("Location=%q want %q", got, h.postLogoutURI)
+	}
+}
+
+// TestHandler_IDTokenWrongIssuer rejects an id_token_hint that
+// carries a foreign iss claim. The check defends against a token
+// signed by a different OP being replayed at this /end_session;
+// without it, a token whose kid happens to match an OP key would be
+// admitted regardless of the issuing tenant.
+func TestHandler_IDTokenWrongIssuer(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, sessionID := h.issueSession(t)
+	idToken := h.signIDToken(t, func(c map[string]any) {
+		c["iss"] = "https://other-op.example.com"
+	})
+
+	v := url.Values{}
+	v.Set("id_token_hint", idToken)
+	resp := h.doGET(t, v, cookieValue)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
+	}
+	// The hostile id_token MUST NOT terminate the session.
+	if hasClearedSessionCookie(resp) {
+		t.Errorf("session cookie cleared on rejected id_token: %v", resp.Cookies())
+	}
+	if _, err := h.store.Sessions().Find(context.Background(), sessionID); err != nil {
+		t.Errorf("session terminated by foreign-issuer id_token: err=%v", err)
+	}
+}
+
+// TestHandler_IDTokenAZPMismatch rejects an id_token_hint whose azp
+// does not appear among aud. The check defends against a stolen
+// multi-aud token escaping its azp binding when the OP uses azp to
+// pick the requesting client.
+func TestHandler_IDTokenAZPMismatch(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	idToken := h.signIDToken(t, func(c map[string]any) {
+		c["aud"] = h.clientID
+		c["azp"] = "client-not-in-aud"
+	})
+
+	v := url.Values{}
+	v.Set("id_token_hint", idToken)
+	resp := h.doGET(t, v, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 (azp not in aud)", resp.StatusCode)
 	}
 }
 
@@ -580,8 +799,30 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle(h.endSessionPath, endsession.Handler(deps))
 
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.endSessionPath, http.NoBody)
+	// The hint-less flow now goes GET (interstitial) → POST (confirm).
+	getReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.endSessionPath, http.NoBody)
+	getReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	getW := httptest.NewRecorder()
+	mux.ServeHTTP(getW, getReq)
+	getResp := getW.Result()
+	tok := readConfirmCookie(getResp)
+	getResp.Body.Close()
+	if tok == "" {
+		t.Fatal("interstitial GET did not set the confirmation cookie")
+	}
+
+	form := url.Values{"logout_csrf": {tok}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.Header.Set("Origin", "https://op.example.com")
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	r.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: tok})
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
 	resp := w.Result()
@@ -601,7 +842,7 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 	}
 }
 
-// TestHandler_RevokesAccessTokensOnLogout verifies the ADR 0013
+// TestHandler_RevokesAccessTokensOnLogout verifies the access-token
 // cascade: when /end_session terminates the session, every
 // access-token record bound to a grant the subject still holds is
 // marked revoked. The test stops at the registry boundary; the
@@ -639,7 +880,29 @@ func TestHandler_RevokesAccessTokensOnLogout(t *testing.T) {
 		t.Fatalf("AccessTokens().Register: %v", err)
 	}
 
-	resp := h.doGET(t, url.Values{}, cookieValue)
+	// The hint-less flow needs the interstitial GET → POST to clear
+	// the CSRF gate; the cascade fires only after the confirmed POST.
+	getResp := h.doGET(t, url.Values{}, cookieValue)
+	tok := readConfirmCookie(getResp)
+	getResp.Body.Close()
+	if tok == "" {
+		t.Fatal("interstitial GET did not set the confirmation cookie")
+	}
+	form := url.Values{"logout_csrf": {tok}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.Header.Set("Origin", "https://op.example.com")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	r.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: tok})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
@@ -653,14 +916,14 @@ func TestHandler_RevokesAccessTokensOnLogout(t *testing.T) {
 		t.Fatal("AccessTokens().Find returned nil record")
 	}
 	if !rec.Revoked {
-		t.Errorf("AccessTokenRecord.Revoked=false want true (ADR 0013 cascade not wired)")
+		t.Errorf("AccessTokenRecord.Revoked=false want true (access-token cascade not wired)")
 	}
 }
 
 // TestHandler_AccessTokenCascadeNoCascadeWithoutDeps confirms the
 // cascade is opt-in: when [endsession.Deps] omits Grants /
-// AccessTokens (the embedder skipped ADR 0013 wiring), logout still
-// terminates the session but leaves the registry alone.
+// AccessTokens (the embedder skipped the registry wiring), logout
+// still terminates the session but leaves the registry alone.
 func TestHandler_AccessTokenCascadeNoCascadeWithoutDeps(t *testing.T) {
 	t.Parallel()
 
@@ -698,8 +961,30 @@ func TestHandler_AccessTokenCascadeNoCascadeWithoutDeps(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle(h.endSessionPath, endsession.Handler(deps))
-	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.endSessionPath, http.NoBody)
+
+	// Interstitial GET → confirmed POST so the CSRF gate passes.
+	getReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.endSessionPath, http.NoBody)
+	getReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	getW := httptest.NewRecorder()
+	mux.ServeHTTP(getW, getReq)
+	getResp := getW.Result()
+	tok := readConfirmCookie(getResp)
+	getResp.Body.Close()
+	if tok == "" {
+		t.Fatal("interstitial GET did not set the confirmation cookie")
+	}
+	form := url.Values{"logout_csrf": {tok}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.Header.Set("Origin", "https://op.example.com")
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	r.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: tok})
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
 	resp := w.Result()
@@ -717,6 +1002,53 @@ func TestHandler_AccessTokenCascadeNoCascadeWithoutDeps(t *testing.T) {
 	}
 	if rec.Revoked {
 		t.Errorf("AccessTokenRecord.Revoked=true want false; cascade fired without Grants/AccessTokens deps")
+	}
+}
+
+// TestHandler_PostLogoutMalformedFallback covers the L-PROTO-4
+// regression guard: when buildPostLogoutRedirect cannot parse the
+// pre-registered post_logout_redirect_uri, the handler MUST NOT
+// emit the raw value as a Location header. Falling onto the static
+// confirmation page closes the latent open-redirect surface that
+// would open if a future regression loosened the exact-match
+// validatePostLogout rule.
+//
+// The test drives the fallback by injecting a malformed URI directly
+// through the [op/store.Client.PostLogoutRedirectURIs] allowlist; an
+// embedder that registered an unparseable URI by mistake hits the
+// same path.
+func TestHandler_PostLogoutMalformedFallback(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	const malformed = "https://rp.example.com/cb%zz"
+	if err := h.store.RegisterClient(context.Background(), &store.Client{
+		ID:                      "client-bad-postlogout",
+		RedirectURIs:            []string{"https://rp.example.com/cb"},
+		PostLogoutRedirectURIs:  []string{malformed},
+		GrantTypes:              []string{"authorization_code"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	idToken := h.signIDToken(t, func(c map[string]any) {
+		c["aud"] = "client-bad-postlogout"
+	})
+	v := url.Values{}
+	v.Set("id_token_hint", idToken)
+	v.Set("post_logout_redirect_uri", malformed)
+	v.Set("state", "x")
+	resp := h.doGET(t, v, "")
+	defer resp.Body.Close()
+	// The malformed URI MUST NOT be echoed as a Location; the
+	// handler falls onto the static confirmation page instead.
+	if got := resp.Header.Get("Location"); got != "" {
+		t.Errorf("Location=%q want empty (malformed URI must not redirect)", got)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 (fallback page)", resp.StatusCode)
 	}
 }
 

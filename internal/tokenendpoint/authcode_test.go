@@ -216,6 +216,50 @@ func TestAuthCode_PublicClient_PKCE_OK(t *testing.T) {
 	}
 }
 
+// TestAuthCode_PublicClient_NoPKCE_Rejected pins the RFC 9700 §2.1.1
+// downgrade guard: a public client redeeming a code that was issued
+// without PKCE MUST be rejected at /token regardless of the active
+// profile's PKCE-mandatory posture. The guard is defence-in-depth in
+// case the authorize-side gate is misconfigured or the stored code
+// record was tampered with: a stolen code that lacks PKCE binding
+// would otherwise let an attacker impersonate the public client.
+//
+// Tracks: RFC 9700 §2.1.1 (Security BCP), which mandates PKCE on
+// every public-client code flow, and the analogous PKCE-downgrade
+// threat shape against public SPAs / native clients.
+func TestAuthCode_PublicClient_NoPKCE_Rejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client := f.publicClientFixture(t)
+	const codeID = "code-pub-no-pkce"
+	redirect := client.RedirectURIs[0]
+	// A code seeded WITHOUT a code_challenge for a public client.
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:          codeID,
+		ClientID:    client.ID,
+		Subject:     "user-1",
+		RedirectURI: redirect,
+		Scope:       []string{"openid"},
+	})
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", codeID)
+	form.Set("redirect_uri", redirect)
+	form.Set("client_id", client.ID)
+	resp := f.post(t, form, "", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 (public client + no PKCE must be rejected)", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_grant" {
+		t.Errorf("error=%v want invalid_grant", body["error"])
+	}
+}
+
 // TestAuthCode_Replay verifies that consuming the same code twice
 // surfaces invalid_grant on the second exchange.
 func TestAuthCode_Replay(t *testing.T) {

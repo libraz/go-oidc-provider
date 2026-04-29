@@ -267,6 +267,16 @@ type Exchanged struct {
 	// non-empty value here.
 	DPoPJKT string
 
+	// HadCodeChallenge reports whether the consumed code carried a
+	// PKCE challenge at issuance. The token endpoint consults this to
+	// run the RFC 9700 §2.1.1 / §A.12.3 downgrade guard: a public
+	// client whose code was issued without PKCE MUST be rejected at
+	// /token as defence-in-depth, regardless of the active profile's
+	// PKCE-mandatory posture. Surfacing the bit instead of the raw
+	// challenge string keeps the secret in the store while letting
+	// the token endpoint observe the boolean fact.
+	HadCodeChallenge bool
+
 	// ConsumedAt is the wall-clock time at which the store committed the
 	// consumption. It is populated by the store, not the clock injected
 	// into the exchanger, so the audit trail reflects the persistence
@@ -325,13 +335,14 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		}
 	}
 	return &Exchanged{
-		ClientID:   rec.ClientID,
-		Subject:    rec.Subject,
-		GrantID:    rec.GrantID,
-		Scope:      append([]string(nil), rec.Scope...),
-		Nonce:      rec.Nonce,
-		DPoPJKT:    rec.DPoPJKT,
-		ConsumedAt: *rec.ConsumedAt,
+		ClientID:         rec.ClientID,
+		Subject:          rec.Subject,
+		GrantID:          rec.GrantID,
+		Scope:            append([]string(nil), rec.Scope...),
+		Nonce:            rec.Nonce,
+		DPoPJKT:          rec.DPoPJKT,
+		HadCodeChallenge: rec.CodeChallenge != "",
+		ConsumedAt:       *rec.ConsumedAt,
 	}, nil
 }
 

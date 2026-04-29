@@ -59,6 +59,17 @@ type TOTPRecord struct {
 	// stamps a 1-hour lock at FailedCount==30 and a 24-hour lock at
 	// FailedCount==90. A zero value means "not locked".
 	LockedUntil time.Time
+
+	// LastAcceptedStep is the RFC 6238 step counter the most recent
+	// successful verify accepted (i.e., (now / step_duration) at the
+	// moment of the matched verify). The library refuses to accept a
+	// step value <= LastAcceptedStep on subsequent verifies so a
+	// network-level replay of a code within the same 30-second
+	// window cannot redeem twice. A zero value means "no successful
+	// verify recorded yet"; the library stamps the field on every
+	// OutcomeSuccess and writes the record back through
+	// [TOTPStore.Put].
+	LastAcceptedStep int64
 }
 
 // TOTPStore is the substore for RFC 6238 TOTP enrolments. It is a

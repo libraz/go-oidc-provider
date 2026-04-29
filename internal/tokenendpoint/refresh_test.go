@@ -299,7 +299,7 @@ func scopedFixture(tb testing.TB) *fixture {
 }
 
 // TestRefresh_ScopeAllowedClients_Rejected verifies that the
-// /token endpoint enforces ADR-0004's AllowedClients allowlist. The
+// /token endpoint enforces the AllowedClients allowlist. The
 // confidential client requests a scope locked to a different client and
 // MUST be rejected with invalid_scope before the refresh token is
 // consumed.
@@ -416,7 +416,7 @@ func TestRefresh_ScopeAllowedClients_Permitted(t *testing.T) {
 // /token (the granted scope is bound to the issued code at /authorize).
 // The AllowedClients allowlist is therefore enforced upstream by the
 // authorize endpoint; no /token-side authcode test is required for
-// ADR-0004 coverage.
+// allowlist coverage.
 
 // TestRefresh_HonoursClaimsRequest_IDToken verifies that an OIDC Core
 // 1.0 §5.5 "claims" request payload persisted on the originating grant

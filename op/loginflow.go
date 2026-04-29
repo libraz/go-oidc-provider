@@ -9,9 +9,9 @@ package op
 // orchestration of factors (Rules + Decider) from their implementation
 // (Step values). Embedders who need finer control fall back to the
 // low-level [Authenticator] / [Interaction] surface, which remains
-// supported for the duration of v0.x and into v1.0.
-// 05-login-and-ui-shell.md §3.1 for the evaluation
-// semantics.
+// supported for the duration of v0.x and into v1.0. See the package
+// godoc on [Rule] / [Decider] for the evaluation order the
+// orchestrator applies on each pass.
 // Experimental: the LoginFlow seam is being introduced in v0.x. Field
 // names and evaluation order MAY change before v1.0.
 type LoginFlow struct {
@@ -96,8 +96,10 @@ const (
 //     does not match a known fingerprint.
 //   - CompletedSteps is the ordered list of [StepKind] values that
 //     have already produced a [interaction.Result].
-//   - ACRValues is the RFC 9470 acr_values parameter from the
-//     authorize request. Used by [RuleACR] for step-up.
+//   - ACRValues is the OIDC Core 1.0 §3.1.2.1 acr_values parameter
+//     from the authorize request. Used by [RuleACR] for step-up
+//     (the related RFC 9470 challenge is the RS→AS direction the
+//     library does not implement).
 //   - Remote is the request's [ClientHints]: trusted-proxy-resolved
 //     IP, user-agent, accept-language header.
 //
@@ -129,8 +131,11 @@ type LoginContext struct {
 	// completion order.
 	CompletedSteps []StepKind
 
-	// ACRValues is the RFC 9470 acr_values request parameter, parsed
-	// into a slice in arrival order.
+	// ACRValues is the OIDC Core 1.0 §3.1.2.1 acr_values request
+	// parameter, parsed into a slice in arrival order. RFC 9470 reuses
+	// the parameter name in the RS→AS challenge direction, which the
+	// library does not implement; cite OIDC Core when documenting the
+	// AS-side intake.
 	ACRValues []string
 
 	// Remote is the request's de-proxied client hints.

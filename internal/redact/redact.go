@@ -13,16 +13,19 @@ import (
 const Sentinel = "[REDACTED]"
 
 // Sensitive is the closed list of attribute keys (lowercased) the
-// redactor treats as carrying secrets. Matching is case-insensitive
-// and structural — an attribute group called "code" matches even if
-// the caller wrote it as "Code". The list mirrors design 002 §K.6
-// and §A.12.8 (which extends the v1.0 list with state / nonce).
+// redactor matches verbatim. Matching is case-insensitive and
+// structural — an attribute group called "code" matches even if the
+// caller wrote it as "Code". The list covers the OIDC / OAuth
+// credential-bearing fields the OP itself produces (access_token,
+// refresh_token, id_token, client_secret, code, code_verifier,
+// password) plus the request-binding fields whose disclosure breaks
+// CSRF / replay defences (state, nonce).
 //
 // Keys MAY appear with surrounding HTTP-header punctuation (`Set-
 // Cookie`, `Authorization`); the matcher canonicalises hyphens and
 // underscores so a single entry covers both forms.
 //
-//nolint:gochecknoglobals // closed enumeration mirroring design 002 §K.6 / §A.12.8.
+//nolint:gochecknoglobals // closed enumeration of credential-bearing OIDC / OAuth fields.
 var Sensitive = []string{
 	"access_token",
 	"refresh_token",
@@ -46,13 +49,74 @@ var Sensitive = []string{
 	"client_assertion",
 }
 
+// sensitiveSubstrings is the closed list of needles that mark a key as
+// sensitive when they appear *anywhere* inside the canonicalised name.
+// The list catches naming variants the exact-match catalogue cannot
+// enumerate (e.g. `password_hash`, `new_refresh_token`,
+// `client_secret_jwt`, `bearer_token`). Substring matching trades a
+// little precision for a regression-resistant default; legitimate
+// false-positives are covered by [substringAllowlist].
+//
+//nolint:gochecknoglobals // closed enumeration; mirrors Sensitive.
+var sensitiveSubstrings = []string{
+	"secret",
+	"token",
+	"password",
+	"assertion",
+	"bearer",
+	"private_key",
+	"pwd",
+	"passcode",
+}
+
+// substringAllowlist is the canonical-form catalogue of keys that
+// would otherwise trip [sensitiveSubstrings] but are known to carry
+// only category metadata, never the secret itself. The list is
+// intentionally small; embedders wanting broader exemption SHOULD
+// route through their own [slog.HandlerOptions.ReplaceAttr].
+//
+//nolint:gochecknoglobals // closed enumeration paired with sensitiveSubstrings.
+var substringAllowlist = []string{
+	"keypair_kid",
+	"token_type",
+	"secret_type",
+	"token_endpoint",
+	"token_endpoint_auth_method",
+	"token_endpoint_auth_signing_alg",
+	"id_token_signed_response_alg",
+	"id_token_encrypted_response_alg",
+	"id_token_encrypted_response_enc",
+	"userinfo_signed_response_alg",
+	"request_object_signing_alg",
+	"introspection_endpoint",
+	"revocation_endpoint",
+}
+
 // IsSensitive reports whether key (after canonicalisation) names a
 // sensitive attribute. Callers SHOULD use this helper rather than
 // re-implementing the comparison so the catalogue stays single-source.
+//
+// The match is layered: an exact-match against [Sensitive] wins
+// first; otherwise a substring-match against [sensitiveSubstrings]
+// is consulted, with [substringAllowlist] suppressing known
+// false-positives.
 func IsSensitive(key string) bool {
 	canon := canonicalise(key)
+	if canon == "" {
+		return false
+	}
 	for _, s := range Sensitive {
 		if canon == s {
+			return true
+		}
+	}
+	for _, allow := range substringAllowlist {
+		if canon == allow {
+			return false
+		}
+	}
+	for _, needle := range sensitiveSubstrings {
+		if strings.Contains(canon, needle) {
 			return true
 		}
 	}

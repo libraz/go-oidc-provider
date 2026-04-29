@@ -26,16 +26,23 @@ const IdleTTLDefault = 14 * 24 * time.Hour
 // deleted. The cookie should be cleared in the response.
 var ErrCurrentSessionExpired = errors.New("sessions: current session expired")
 
+// AbsoluteTTLDefault is the default cap on a session's total wall-clock
+// lifetime. Idle activity refreshes ExpiresAt up to this bound; once
+// CreatedAt + AbsoluteTTLDefault is in the past the session is considered
+// expired and the next [Manager.Touch] tears it down.
+const AbsoluteTTLDefault = 30 * 24 * time.Hour
+
 // Manager orchestrates the SessionStore + cookie codec + clock. It owns the
 // chooser-group lifecycle without exposing the raw [*store.Session] type to
 // the HTTP layer.
 //
 // A Manager is immutable after construction and safe for concurrent use.
 type Manager struct {
-	codec   *Codec
-	store   store.SessionStore
-	clock   func() time.Time
-	idleTTL time.Duration
+	codec       *Codec
+	store       store.SessionStore
+	clock       func() time.Time
+	idleTTL     time.Duration
+	absoluteTTL time.Duration
 }
 
 // Config is the parameter bundle for [NewManager]. It exists to keep the
@@ -55,6 +62,14 @@ type Config struct {
 	// record on creation and refreshed on activity. Defaults to
 	// [IdleTTLDefault] when zero.
 	IdleTTL time.Duration
+
+	// AbsoluteTTL caps the total lifetime of a session regardless of
+	// idle refreshes. A zero value substitutes [AbsoluteTTLDefault]; a
+	// negative value disables the cap entirely (legacy behaviour). Once
+	// CreatedAt + AbsoluteTTL is in the past, [Manager.Touch] returns
+	// [ErrCurrentSessionExpired] and deletes the underlying record so a
+	// hijacked cookie cannot be kept alive indefinitely by a busy client.
+	AbsoluteTTL time.Duration
 }
 
 // NewManager constructs a [Manager] from cfg. It validates that the required
@@ -75,11 +90,20 @@ func NewManager(cfg Config) (*Manager, error) {
 	if idle == 0 {
 		idle = IdleTTLDefault
 	}
+	abs := cfg.AbsoluteTTL
+	switch {
+	case abs == 0:
+		abs = AbsoluteTTLDefault
+	case abs < 0:
+		// Caller explicitly disabled the cap.
+		abs = 0
+	}
 	return &Manager{
-		codec:   cfg.Codec,
-		store:   cfg.Store,
-		clock:   clock,
-		idleTTL: idle,
+		codec:       cfg.Codec,
+		store:       cfg.Store,
+		clock:       clock,
+		idleTTL:     idle,
+		absoluteTTL: abs,
 	}, nil
 }
 
@@ -203,8 +227,30 @@ func (m *Manager) Resolve(ctx context.Context, cookieValue string) (*Active, err
 // Touch refreshes the active session's idle timer to now + idleTTL. It is
 // a no-op when [Manager.Resolve] has already failed; callers should only
 // invoke Touch after a successful Resolve.
+//
+// When an absolute TTL is configured and the session's CreatedAt is older
+// than the cap, Touch deletes the record and returns [ErrCurrentSessionExpired]
+// so the caller clears the cookie. The deletion is best-effort: a delete
+// failure is wrapped and returned but the absolute-expiry signal still wins
+// — a backend hiccup must not silently keep an over-aged session alive.
 func (m *Manager) Touch(ctx context.Context, sessionID string) error {
 	now := m.clock().UTC()
+	if m.absoluteTTL > 0 {
+		sess, err := m.store.Find(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return ErrCurrentSessionExpired
+			}
+			return fmt.Errorf("sessions: find: %w", err)
+		}
+		if now.Sub(sess.CreatedAt) > m.absoluteTTL {
+			// Best-effort delete: ignore not-found, surface only real errors.
+			if derr := m.store.Delete(ctx, sessionID); derr != nil && !errors.Is(derr, store.ErrNotFound) {
+				return fmt.Errorf("sessions: delete absolute-expired: %w", derr)
+			}
+			return ErrCurrentSessionExpired
+		}
+	}
 	if err := m.store.Touch(ctx, sessionID, now.Add(m.idleTTL), now); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return ErrCurrentSessionExpired
@@ -212,6 +258,71 @@ func (m *Manager) Touch(ctx context.Context, sessionID string) error {
 		return fmt.Errorf("sessions: touch: %w", err)
 	}
 	return nil
+}
+
+// Rotate reissues a fresh session ID for the record currently keyed by
+// oldSessionID, returning a new cookie value bound to the same chooser
+// group / subject / auth metadata. It is the session-fixation defence for
+// re-authentication: the caller invokes Rotate immediately after the user
+// proves identity again so any pre-fixation cookie value the attacker may
+// have planted becomes useless.
+//
+// The rotation is implemented as Save(new) + Delete(old) without a
+// dedicated store contract, so any [store.SessionStore] implementation
+// works. A concurrent Rotate on the same oldSessionID either succeeds with
+// distinct new IDs (both records exist briefly until the old is deleted)
+// or fails with a wrapped store error; the function never silently
+// produces two cookies pointing at the same SessionID.
+//
+// On store.ErrNotFound for the lookup the function returns
+// [ErrCurrentSessionExpired] so the caller clears the cookie. A delete
+// failure on the old record after a successful Save is wrapped: the new
+// cookie is already valid, but the operator should investigate the leak.
+func (m *Manager) Rotate(ctx context.Context, oldSessionID string) (Outcome, error) {
+	if oldSessionID == "" {
+		return Outcome{}, errors.New("sessions: Rotate requires oldSessionID")
+	}
+	sess, err := m.store.Find(ctx, oldSessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return Outcome{}, ErrCurrentSessionExpired
+		}
+		return Outcome{}, fmt.Errorf("sessions: find: %w", err)
+	}
+	now := m.clock().UTC()
+	newID, err := newID()
+	if err != nil {
+		return Outcome{}, err
+	}
+	rotated := &store.Session{
+		ID:             newID,
+		Subject:        sess.Subject,
+		AuthTime:       sess.AuthTime,
+		AMR:            append([]string(nil), sess.AMR...),
+		ACR:            sess.ACR,
+		ChooserGroupID: sess.ChooserGroupID,
+		ExpiresAt:      now.Add(m.idleTTL),
+		// Preserve the original CreatedAt so the absolute-TTL clock is
+		// not reset by a rotation: an attacker who steals a cookie does
+		// not gain extra lifetime by triggering a rotation.
+		CreatedAt: sess.CreatedAt,
+		UpdatedAt: now,
+	}
+	if err := m.store.Save(ctx, rotated); err != nil {
+		return Outcome{}, fmt.Errorf("sessions: save rotated: %w", err)
+	}
+	if err := m.store.Delete(ctx, oldSessionID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return Outcome{}, fmt.Errorf("sessions: delete old: %w", err)
+	}
+	value, err := m.codec.Encode(Payload{
+		ChooserGroupID:   sess.ChooserGroupID,
+		CurrentSessionID: newID,
+		IssuedAt:         now.Unix(),
+	})
+	if err != nil {
+		return Outcome{}, err
+	}
+	return Outcome{Cookie: value, ChooserGroupID: sess.ChooserGroupID, SessionID: newID}, nil
 }
 
 // Logout deletes the supplied session. It does not clear other accounts in

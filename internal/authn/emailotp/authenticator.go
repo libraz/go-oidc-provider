@@ -304,26 +304,37 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		return interaction.Step{}, fmt.Errorf("emailotp: load record: %w", err)
 	}
 	res, verr := a.verifier.Verify(ctx, rec, code)
-	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeExpired {
-		// Locked / expired branches leave the record unchanged
-		// (verifier short-circuits before mutating counters); every
-		// other branch needs persisting.
+	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeExpired && res.Outcome != OutcomeConsumed {
+		// Locked / expired / consumed branches leave the record
+		// unchanged (verifier short-circuits before mutating
+		// counters); every other branch — including OutcomeSuccess,
+		// where ConsumedAt is now stamped — needs persisting so the
+		// single-use invariant survives a transient backend failure.
 		if perr := a.store.Put(ctx, res.Record); perr != nil {
 			return interaction.Step{}, fmt.Errorf("emailotp: persist record: %w", perr)
 		}
 	}
 	switch {
 	case verr == nil:
-		// Single-use semantics: drop the record on success so a
-		// replay of the same code (e.g. from a leaked SPA log) is
-		// rejected as ErrExpired by the next attempt.
-		_ = a.store.Delete(ctx, in.Subject)
+		// Single-use semantics: the verifier has stamped ConsumedAt
+		// on the record and the Put above persisted it. A replay of
+		// the same code (e.g. from a leaked SPA log) hits the
+		// ConsumedAt guard on the next Verify and is rejected as
+		// ErrConsumed. Delete is intentionally NOT called: a
+		// transient Delete failure must not leave a re-redeemable
+		// record behind.
 		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case errors.Is(verr, ErrWrongCode):
 		return interaction.Step{
 			Prompt:  a.verifyPromptFromRecord(ctx, rec),
 			Scratch: scratchVerify,
 		}, nil
+	case errors.Is(verr, ErrConsumed):
+		// Treat a replay attempt as a generic expiry from the SPA's
+		// perspective so the response shape stays constant with the
+		// "code never existed" branch. The orchestrator sees the
+		// underlying error verbatim through the wrapped chain.
+		return interaction.Step{}, ErrExpired
 	default:
 		// Locked / expired / reset-required flow through verbatim
 		// so the orchestrator can dispatch.

@@ -8,7 +8,7 @@
 //     clients) — added automatically.
 //  2. Extra origins passed to op.WithCORSOrigins — used for admin
 //     SPAs or management consoles whose origin does not appear in
-//     a redirect_uri (per docs/plans/002 §F.4).
+//     a redirect_uri.
 //
 // Run with the example build tag:
 //

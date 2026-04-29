@@ -2,6 +2,21 @@ package op
 
 import "context"
 
+// AuditDenyReasonKey is the slog attribute key under which the
+// orchestrator writes [Deny.Reason] when it emits the deny audit
+// event. The constant is the contract between the orchestrator's
+// audit emitter and the redaction handler installed by [WithLogger]
+// / [WithAuditLogger]: the redact substring matcher MUST keep this
+// key on its allow-list so a misbehaving [Decider] that puts a
+// credential or PII fragment into [Deny.Reason] cannot leak it
+// through the audit sink.
+//
+// External code SHOULD NOT depend on this constant for log
+// scraping — the audit envelope itself is authoritative — but
+// embedders writing integration tests can use it to assert the
+// emitted record carries the expected field.
+const AuditDenyReasonKey = "audit.deny.reason"
+
 // Decider is the imperative complement to [LoginFlow.Rules]. The
 // orchestrator consults the Decider on every evaluation pass before
 // it iterates the rule list; a non-[Pass] [Decision] short-circuits
@@ -75,7 +90,24 @@ func (Require) isDecision() {}
 // description.
 type Deny struct {
 	// Reason is the operator-facing explanation written to the audit
-	// log. It MUST NOT contain sensitive material (raw inputs, tokens).
+	// stream. The orchestrator emits it under the slog attribute key
+	// "audit.deny.reason" so operators can grep for the field
+	// directly.
+	//
+	// The string is treated as untrusted by the redaction handler the
+	// library wraps around every operational and audit logger (see
+	// internal/redact / [WithLogger] / [WithAuditLogger]): the
+	// "audit.deny.reason" key is on the redaction allow-list so a
+	// misbehaving [Decider] that copies a credential or PII fragment
+	// into Reason cannot leak it through the audit sink. Implementers
+	// SHOULD still keep Reason free of raw inputs, tokens, and PII —
+	// the redaction is defence-in-depth, not a sanitisation hook —
+	// but the library guarantees the field is masked when a
+	// regression slips through.
+	//
+	// The wire-side `error_description` returned to the user-agent is
+	// always the static OAuth string ("access_denied"); Reason is
+	// invisible to the relying party regardless of redaction.
 	Reason string
 }
 

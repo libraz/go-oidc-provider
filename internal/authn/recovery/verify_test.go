@@ -238,3 +238,95 @@ func TestVerify_DefaultsClockToSystem(t *testing.T) {
 		t.Errorf("ConsumedAt is zero — default clock did not stamp slot")
 	}
 }
+
+// fakeRecoveryStore is a minimal in-process [store.RecoveryStore] for
+// the Replace test. It captures the most recent Put so the assertion
+// can verify the prior batch was wiped.
+type fakeRecoveryStore struct {
+	current *store.RecoveryBatch
+}
+
+func (f *fakeRecoveryStore) Get(_ context.Context, subject string) (*store.RecoveryBatch, error) {
+	if f.current == nil || f.current.Subject != subject {
+		return nil, store.ErrNotFound
+	}
+	cp := *f.current
+	cp.Codes = append([]store.RecoveryCode(nil), f.current.Codes...)
+	return &cp, nil
+}
+
+func (f *fakeRecoveryStore) Put(_ context.Context, b *store.RecoveryBatch) error {
+	cp := *b
+	cp.Codes = append([]store.RecoveryCode(nil), b.Codes...)
+	f.current = &cp
+	return nil
+}
+
+func (f *fakeRecoveryStore) Delete(_ context.Context, _ string) error {
+	f.current = nil
+	return nil
+}
+
+// TestReplace_BatchWipesOldCodes asserts the Replace API generates a
+// fresh batch, persists it via Put, and that codes from the prior
+// batch fail to verify against the new one (M-RECOVERY).
+func TestReplace_BatchWipesOldCodes(t *testing.T) {
+	t.Parallel()
+
+	clk := &fakeClock{t: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	v := &recovery.Verifier{Clock: clk}
+	st := &fakeRecoveryStore{}
+
+	first, err := v.Generate(context.Background(), "user-alice")
+	if err != nil {
+		t.Fatalf("Generate first: %v", err)
+	}
+	if err := st.Put(context.Background(), first.Batch); err != nil {
+		t.Fatalf("Put first: %v", err)
+	}
+
+	clk.t = clk.t.Add(time.Hour)
+	second, err := v.Replace(context.Background(), st, "user-alice")
+	if err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	if second == nil || second.Batch == nil {
+		t.Fatal("Replace returned nil result")
+	}
+	if !second.Batch.GeneratedAt.Equal(clk.t) {
+		t.Errorf("GeneratedAt=%v want %v", second.Batch.GeneratedAt, clk.t)
+	}
+
+	// Confirm the persisted batch is the new one, not the old.
+	persisted, err := st.Get(context.Background(), "user-alice")
+	if err != nil {
+		t.Fatalf("Get after Replace: %v", err)
+	}
+	if persisted.Codes[0].Hash != second.Batch.Codes[0].Hash {
+		t.Error("persisted batch is not the replacement batch")
+	}
+
+	// Every old code must now be rejected as ErrCodeInvalid against
+	// the persisted batch.
+	for i, oldCode := range first.PlaintextCodes {
+		_, vErr := v.Verify(context.Background(), persisted, oldCode)
+		if !errors.Is(vErr, recovery.ErrCodeInvalid) {
+			t.Errorf("old code %d: err=%v want ErrCodeInvalid", i, vErr)
+		}
+	}
+}
+
+// TestReplace_RequiresStoreAndSubject asserts the construction-time
+// guards on Replace.
+func TestReplace_RequiresStoreAndSubject(t *testing.T) {
+	t.Parallel()
+
+	v := &recovery.Verifier{Clock: &fakeClock{t: time.Now()}}
+	if _, err := v.Replace(context.Background(), nil, "user-alice"); err == nil {
+		t.Error("Replace with nil store accepted")
+	}
+	st := &fakeRecoveryStore{}
+	if _, err := v.Replace(context.Background(), st, ""); err == nil {
+		t.Error("Replace with empty subject accepted")
+	}
+}

@@ -671,8 +671,8 @@ func TestValidate_PromptCombinations(t *testing.T) {
 	}
 }
 
-// TestValidate_ScopeAllowedClients pins the ADR-0004 contract at the
-// validator boundary. The scenarios are:
+// TestValidate_ScopeAllowedClients pins the AllowedClients contract
+// at the validator boundary. The scenarios are:
 //
 //   - allowlist contains the requesting client → no error.
 //   - allowlist excludes the requesting client → ErrScopeClientNotAllowed.

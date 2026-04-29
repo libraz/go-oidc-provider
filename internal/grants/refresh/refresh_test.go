@@ -508,6 +508,184 @@ func TestExchange_GraceWindow_ClientMismatchRevokes(t *testing.T) {
 	}
 }
 
+// TestExchange_GraceWindow_MismatchInsideWindowRevokesChain pins the
+// RFC 9700 §2.2.2 contract that a credential mismatch inside the
+// grace window MUST revoke the rotation chain. The original audit
+// concern (H-GRANT-2): if [Exchanger.tryGrace] surfaces ok=false on
+// validation failure without revoking, an attacker who learned a
+// just-rotated refresh token before its successor reaches the
+// legitimate client could keep replaying it (with a different
+// client_id) until the grace window expires. The chain root MUST be
+// revoked the moment the mismatch is observed; subsequent presentation
+// of the live successor MUST also be rejected.
+func TestExchange_GraceWindow_MismatchInsideWindowRevokesChain(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	root, err := f.issuer.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	first, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
+	if err != nil {
+		t.Fatalf("Exchange#1: %v", err)
+	}
+	parent := first.ConsumedID
+	child, err := f.issuer.Issue(ctx, refresh.IssueInput{
+		ClientID: first.ClientID,
+		Subject:  first.Subject,
+		GrantID:  first.GrantID,
+		Scope:    first.Scope,
+		ParentID: &parent,
+	})
+	if err != nil {
+		t.Fatalf("Issue child: %v", err)
+	}
+
+	// Within the grace window, an attacker re-presents the original
+	// token but claims a different client. tryGrace must NOT emit
+	// an InGrace projection AND must revoke the chain so the live
+	// successor is invalidated.
+	*f.cur = f.cur.Add(refresh.GraceTTLDefault / 4)
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{
+		Token:    root,
+		ClientID: "client-2",
+	}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("mismatch in grace window err=%v want ErrTokenReplayed", err)
+	}
+
+	// The legitimate successor MUST now be rejected: revoking the
+	// chain at the mismatch point is the whole point of the cascade.
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{
+		Token:    child,
+		ClientID: "client-1",
+	}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Errorf("successor after grace-window mismatch err=%v want ErrTokenReplayed (chain not revoked)", err)
+	}
+}
+
+// TestExchange_GraceWindow_ScopeWideningInsideWindowRevokesChain
+// covers the second mismatch shape: an attacker who captured the
+// just-consumed refresh token re-presents it with a widened scope
+// before the grace window expires. RFC 9700 §2.2.2 / §A.12.5 still
+// requires chain revocation — scope widening on a consumed token is
+// the same threat shape as client_id mismatch.
+func TestExchange_GraceWindow_ScopeWideningInsideWindowRevokesChain(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+
+	root, err := f.issuer.Issue(ctx, goodIssue()) // scope: openid profile email
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	first, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
+	if err != nil {
+		t.Fatalf("Exchange#1: %v", err)
+	}
+	parent := first.ConsumedID
+	child, err := f.issuer.Issue(ctx, refresh.IssueInput{
+		ClientID: first.ClientID,
+		Subject:  first.Subject,
+		GrantID:  first.GrantID,
+		Scope:    first.Scope,
+		ParentID: &parent,
+	})
+	if err != nil {
+		t.Fatalf("Issue child: %v", err)
+	}
+
+	*f.cur = f.cur.Add(refresh.GraceTTLDefault / 3)
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{
+		Token:          root,
+		ClientID:       "client-1",
+		RequestedScope: []string{"openid", "profile", "email", "admin"},
+	}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("scope-widening in grace window err=%v want ErrTokenReplayed", err)
+	}
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{
+		Token:    child,
+		ClientID: "client-1",
+	}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Errorf("successor after scope-widening mismatch err=%v want ErrTokenReplayed", err)
+	}
+}
+
+// TestExchange_GraceWindow_BoundaryTable pins the boundary semantics
+// of the configured grace window: 0s (strict),
+// 30s (default), 31s (one second past default), and 24h (a custom
+// override). The check shape is identical across rows; the elapsed
+// time relative to GraceTTL is the only varying axis.
+func TestExchange_GraceWindow_BoundaryTable(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		grace     time.Duration // ExchangerConfig.GraceTTL
+		elapsed   time.Duration // wall-clock advance after the first Exchange
+		wantGrace bool          // true = expect InGrace projection, false = expect ErrTokenReplayed
+	}{
+		// FAPI 2.0 strict mode: any second presentation is a replay.
+		{"strict_zero_disabled", -1, 0, false},
+		{"strict_zero_disabled_one_sec", -1, time.Second, false},
+
+		// Default 30s window: boundary cases around GraceTTLDefault.
+		{"default_at_zero", 0, 0, true},
+		{"default_at_29s", 0, 29 * time.Second, true},
+		{"default_at_30s", 0, refresh.GraceTTLDefault, true},
+		{"default_at_31s", 0, refresh.GraceTTLDefault + time.Second, false},
+		{"default_at_60s", 0, 2 * refresh.GraceTTLDefault, false},
+
+		// Custom 24h window (long-lived refresh requirement).
+		{"long_at_23h", 24 * time.Hour, 23 * time.Hour, true},
+		{"long_at_24h", 24 * time.Hour, 24 * time.Hour, true},
+		{"long_at_24h_plus_1s", 24 * time.Hour, 24*time.Hour + time.Second, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cur := t0
+			clk := func() time.Time { return cur }
+			st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
+			iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 30 * 24 * time.Hour})
+			if err != nil {
+				t.Fatalf("NewIssuer: %v", err)
+			}
+			exc, err := refresh.NewExchanger(refresh.ExchangerConfig{Store: st, Clock: clk, GraceTTL: tc.grace})
+			if err != nil {
+				t.Fatalf("NewExchanger: %v", err)
+			}
+			ctx := context.Background()
+			root, err := iss.Issue(ctx, goodIssue())
+			if err != nil {
+				t.Fatalf("Issue: %v", err)
+			}
+			if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+				t.Fatalf("first Exchange: %v", err)
+			}
+			cur = cur.Add(tc.elapsed)
+			out, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
+			if tc.wantGrace {
+				if err != nil {
+					t.Fatalf("grace=%v elapsed=%v err=%v want InGrace success", tc.grace, tc.elapsed, err)
+				}
+				if !out.InGrace {
+					t.Errorf("grace=%v elapsed=%v InGrace=false want true", tc.grace, tc.elapsed)
+				}
+			} else if !errors.Is(err, refresh.ErrTokenReplayed) {
+				t.Errorf("grace=%v elapsed=%v err=%v want ErrTokenReplayed", tc.grace, tc.elapsed, err)
+			}
+		})
+	}
+}
+
 // alwaysAliveRefreshStore is a test-local RefreshTokenStore that does no
 // expiry filtering at any layer. It exists so the refresh package's own
 // clock-based ErrTokenExpired check is exercised end-to-end; a real

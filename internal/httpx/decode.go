@@ -86,7 +86,13 @@ func DecodeJSON(r *http.Request, dst any) error {
 // [ErrBodyTooLarge] if the body would exceed the cap. Reading limit+1 bytes
 // distinguishes "exactly at the cap" (allowed) from "above the cap" (reject)
 // without re-reading the body.
+//
+// The body is closed best-effort on return so the underlying TCP connection
+// can be reused even when the caller forgets to close it. Close errors are
+// intentionally swallowed: the read result is what matters and a close
+// failure on a body the OP has already drained is not actionable.
 func readBounded(body io.ReadCloser, limit int64) ([]byte, error) {
+	defer func() { _ = body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(body, limit+1))
 	if err != nil {
 		return nil, ErrInvalidBody

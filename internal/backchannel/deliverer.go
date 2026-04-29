@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/jar"
 )
 
 // DefaultTimeout is the per-RP request budget the [HTTPDeliverer]
@@ -63,6 +66,14 @@ type Target struct {
 // CheckRedirect returns http.ErrUseLastResponse so the response is
 // surfaced verbatim and the coordinator records the unexpected 3xx
 // as a delivery failure.
+//
+// The deliverer also enforces an SSRF deny-list on every Target.URL:
+// loopback / link-local / RFC 1918 / IPv6 ULA destinations are
+// refused before the request is issued so a hostile RP cannot
+// register backchannel_logout_uri = "http://127.0.0.1/..." or
+// "http://169.254.169.254/..." and have the OP POST a signed
+// logout_token at an internal service. Embedders fronting their RPs
+// with private DNS opt out of the gate by setting AllowPrivateNetwork.
 type HTTPDeliverer struct {
 	// Client is the underlying [*http.Client]. A nil Client falls
 	// back to a package-default with the timeout below; embedders
@@ -73,6 +84,20 @@ type HTTPDeliverer struct {
 	// Timeout is the per-request budget. A zero value applies
 	// [DefaultTimeout].
 	Timeout time.Duration
+
+	// AllowPrivateNetwork, when true, suppresses the SSRF deny-list
+	// the deliverer applies to RP-controlled URIs. The default false
+	// rejects loopback / link-local / RFC 1918 hosts so an
+	// attacker-controlled backchannel_logout_uri cannot pivot the OP
+	// onto an internal service. Embedders fronting their RPs with
+	// private DNS opt in via op.WithBackchannelAllowPrivateNetwork.
+	AllowPrivateNetwork bool
+
+	// Resolver overrides the DNS resolver consulted when AllowPrivateNetwork
+	// is false. The default nil value falls back to [net.DefaultResolver];
+	// tests inject a stub so the SSRF guard can be exercised without a
+	// real DNS round-trip.
+	Resolver *net.Resolver
 }
 
 // NewHTTPDeliverer returns an [HTTPDeliverer] with the default
@@ -101,9 +126,21 @@ func NewHTTPDeliverer(timeout time.Duration) *HTTPDeliverer {
 // error on transport failure, a non-2xx status, or an unexpected
 // 3xx (because the deliverer refuses to follow redirects). The body
 // is drained to a small cap so the connection can be re-used.
+//
+// Before issuing the POST, Deliver runs an SSRF deny-list against
+// the parsed Target.URL: loopback, link-local, RFC 1918 / ULA, and
+// IPv6 unique-local addresses are rejected unless AllowPrivateNetwork
+// is true. The check is per-call (not cached) so a client that
+// rotates DNS at the last second cannot escape the gate by racing
+// the resolver; the cost is one DNS round-trip per delivery, which
+// is negligible against the network round-trip the POST itself
+// requires.
 func (d *HTTPDeliverer) Deliver(ctx context.Context, target Target, logoutToken string) error {
 	if target.URL == "" {
 		return errors.New("backchannel: empty Target.URL")
+	}
+	if err := d.assertSafeURL(ctx, target.URL); err != nil {
+		return err
 	}
 	form := url.Values{"logout_token": {logoutToken}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL,
@@ -126,6 +163,90 @@ func (d *HTTPDeliverer) Deliver(ctx context.Context, target Target, logoutToken 
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("backchannel: %s returned status %d", target.URL, resp.StatusCode)
+	}
+	return nil
+}
+
+// ErrPrivateNetworkBlocked is the sentinel returned when Target.URL
+// resolves to a deny-listed host (loopback / link-local / RFC 1918 /
+// IPv6 ULA). Callers can check for it with errors.Is to record an
+// audit event distinct from "RP returned 5xx"; the coordinator
+// already routes any non-nil delivery error through the failure
+// audit, so most callers do not branch on the sentinel.
+var ErrPrivateNetworkBlocked = errors.New("backchannel: target resolves to a deny-listed network")
+
+// assertSafeURL implements the SSRF deny-list. The function returns
+// nil when the deliverer was constructed with AllowPrivateNetwork
+// (the embedder has explicitly opted into private-network
+// destinations) or when the URL host resolves entirely to public
+// addresses. Any other shape — unparseable URL, scheme outside
+// http/https, missing host, IP literal in a deny-listed range, or a
+// hostname whose A/AAAA records include a deny-listed address —
+// returns [ErrPrivateNetworkBlocked] wrapped in a delivery diagnostic.
+//
+// The check mirrors the JAR JWKS fetcher's posture
+// ([internal/jar.IsLocalHostname] / [internal/jar.IsPrivateIP]) so
+// the two SSRF gates stay aligned; both packages reject the same set
+// of addresses against the same op-level allow-flag.
+func (d *HTTPDeliverer) assertSafeURL(ctx context.Context, raw string) error {
+	if d.AllowPrivateNetwork {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("backchannel: parse Target.URL %q: %w", raw, err)
+	}
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return fmt.Errorf("backchannel: Target.URL scheme %q not allowed", u.Scheme)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("backchannel: Target.URL %q is missing a host", raw)
+	}
+	if jar.IsLocalHostname(host) {
+		return fmt.Errorf("%w: host %q is loopback / localhost", ErrPrivateNetworkBlocked, host)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if jar.IsPrivateIP(ip) {
+			return fmt.Errorf("%w: host %q is loopback / link-local / private", ErrPrivateNetworkBlocked, host)
+		}
+		return nil
+	}
+	return d.assertResolvedHostSafe(ctx, host)
+}
+
+// assertResolvedHostSafe performs the DNS-time SSRF check. Split out
+// from [assertSafeURL] so the parser stays under the project gocognit
+// gate. The function honours [Deliverer.Resolver] when set so tests
+// can inject a stub; the production default is [net.DefaultResolver].
+//
+// The lookup uses a derived context with a hard timeout that mirrors
+// [DefaultTimeout]; without it a slow resolver could stall the entire
+// fan-out. A timeout collapses onto an error so the caller treats the
+// delivery as a transient failure (audit logged via the coordinator).
+func (d *HTTPDeliverer) assertResolvedHostSafe(ctx context.Context, host string) error {
+	resolver := d.Resolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	timeout := d.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	addrs, err := resolver.LookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return fmt.Errorf("backchannel: lookup %q: %w", host, err)
+	}
+	if len(addrs) == 0 {
+		return fmt.Errorf("backchannel: lookup %q returned no addresses", host)
+	}
+	for _, a := range addrs {
+		if jar.IsPrivateIP(a.IP) {
+			return fmt.Errorf("%w: host %q resolves to a private IP %s",
+				ErrPrivateNetworkBlocked, host, a.IP)
+		}
 	}
 	return nil
 }

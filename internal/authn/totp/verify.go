@@ -186,10 +186,26 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 		return nil, fmt.Errorf("totp: open secret: %w", err)
 	}
 
-	if v.match(secret, code, now) {
+	if matched, ok := v.matchStepValue(secret, code, now); ok {
+		// Reject a code whose step value has already been accepted by
+		// a prior successful verify. Without this guard a network-level
+		// replay (or a leaked code from the SPA buffer) could redeem
+		// twice within the same 30-second window. The check runs
+		// before mutating counters so a replay does not advance the
+		// brute-force counter either; the orchestrator's own attempt
+		// counter still observes the failure through the surfacing
+		// ErrWrongCode (M-AUTHN-5).
+		if rec.LastAcceptedStep != 0 && matched <= rec.LastAcceptedStep {
+			// Treat as a wrong-code outcome WITHOUT incrementing the
+			// brute-force counter (a replay should not punish the
+			// legitimate user) but emit the same sentinel so the
+			// orchestrator dispatches identically.
+			return &Result{Outcome: OutcomeWrongCode, Record: rec}, ErrWrongCode
+		}
 		rec.FailedCount = 0
 		rec.FirstFailureAt = time.Time{}
 		rec.LockedUntil = time.Time{}
+		rec.LastAcceptedStep = matched
 		return &Result{Outcome: OutcomeSuccess, Record: rec}, nil
 	}
 
@@ -211,35 +227,51 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 	return &Result{Outcome: OutcomeWrongCode, Record: rec}, ErrWrongCode
 }
 
-// match reports whether code equals the TOTP value at any step within
-// the configured skew window. The comparison is byte-wise constant-time
-// per match attempt; the loop itself short-circuits on success, which
-// leaks at most one bit of timing about which neighbouring step matched.
-// That is acceptable: the attacker already knows the window size, and
-// the bit does not narrow the secret search space.
-func (v *Verifier) match(secret []byte, code string, now time.Time) bool {
+// matchStepValue reports whether code equals the TOTP value at any
+// step within the configured skew window AND returns the matched
+// step counter. The step value is fed into
+// [store.TOTPRecord.LastAcceptedStep] so a subsequent verify against
+// the same step is rejected as a replay (M-AUTHN-5). The boolean is
+// the success flag; the int64 is meaningful only when the boolean
+// is true.
+//
+// The comparison is byte-wise constant-time per match attempt; the
+// loop itself short-circuits on success, which leaks at most one bit
+// of timing about which neighbouring step matched. That is
+// acceptable: the attacker already knows the window size, and the
+// bit does not narrow the secret search space.
+func (v *Verifier) matchStepValue(secret []byte, code string, now time.Time) (int64, bool) {
 	skew := v.skew()
 	if len(code) != digits {
-		return false
+		return 0, false
 	}
 	codeBytes := []byte(code)
 	current := step(now)
-	// Iterate from the centre outward so the common-case (no drift)
-	// terminates fastest. The current-offset branch is guarded against
-	// underflow; step already clamps negative Unix time to zero.
 	for i := range skew + 1 {
 		offset := uint64(i)
 		if v.matchStep(secret, codeBytes, current+offset) {
-			return true
+			return safeStep(current + offset), true
 		}
 		if offset == 0 {
 			continue
 		}
 		if current >= offset && v.matchStep(secret, codeBytes, current-offset) {
-			return true
+			return safeStep(current - offset), true
 		}
 	}
-	return false
+	return 0, false
+}
+
+// safeStep converts the unsigned step counter into the signed form
+// stored on the record. The cast is safe in practice because the step
+// counter cannot exceed 2^53 within any human-relevant horizon (year
+// 9000+); the explicit int64 conversion keeps the cmp expression in
+// [Verifier.Verify] clean.
+func safeStep(s uint64) int64 {
+	if s > uint64(1<<62) {
+		return 1 << 62
+	}
+	return int64(s)
 }
 
 // matchStep computes the TOTP at counter and reports whether it equals

@@ -51,11 +51,11 @@ func TestArgon2id_VerifyRejectsMalformed(t *testing.T) {
 func TestArgon2id_CustomParamsRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	// Use a small parameter set so the test is fast but still hits every
-	// branch of resolved/parameter handling.
+	// Use the smallest parameter set still at or above the OWASP floor
+	// the verifier enforces; anything weaker is rejected by Verify.
 	v := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
-		Memory:      16 * 1024,
-		Iterations:  1,
+		Memory:      clientauth.Argon2idMinMemory,
+		Iterations:  clientauth.Argon2idMinIterations,
 		Parallelism: 1,
 		SaltLength:  8,
 		KeyLength:   16,
@@ -66,5 +66,53 @@ func TestArgon2id_CustomParamsRoundTrip(t *testing.T) {
 	}
 	if err := v.Verify("hello", hash); err != nil {
 		t.Errorf("Verify: %v", err)
+	}
+}
+
+// TestArgon2id_VerifyRejectsWeakParams pins the OWASP 2024 floor: a
+// stored hash whose Argon2id m= parameter falls below
+// [Argon2idMinMemory] or whose t= parameter falls below
+// [Argon2idMinIterations] MUST be rejected as if the secret did not
+// match. The defence catches database leaks made worse by a legacy
+// hashing configuration the verifier no longer trusts.
+func TestArgon2id_VerifyRejectsWeakParams(t *testing.T) {
+	t.Parallel()
+
+	// Hash with deliberately weak parameters; the encoded string is
+	// well-formed, so only the floor check should reject Verify.
+	weakMemory := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
+		Memory:      clientauth.Argon2idMinMemory - 1024,
+		Iterations:  clientauth.Argon2idMinIterations,
+		Parallelism: 1,
+		SaltLength:  8,
+		KeyLength:   16,
+	}}
+	weakHash, err := weakMemory.Hash("hello")
+	if err != nil {
+		t.Fatalf("Hash (weak memory): %v", err)
+	}
+	verifier := &clientauth.Argon2id{}
+	if err := verifier.Verify("hello", weakHash); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
+		t.Errorf("weak memory Verify=%v want ErrCredentialsInvalid", err)
+	}
+
+	weakIter := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
+		Memory:      clientauth.Argon2idMinMemory,
+		Iterations:  clientauth.Argon2idMinIterations - 1,
+		Parallelism: 1,
+		SaltLength:  8,
+		KeyLength:   16,
+	}}
+	if weakIter.Params.Iterations == 0 {
+		// guard: cannot construct a sub-floor iteration count when the
+		// floor is already 1; skip the iter half of the test in that case.
+		return
+	}
+	weakIterHash, err := weakIter.Hash("hello")
+	if err != nil {
+		t.Fatalf("Hash (weak iter): %v", err)
+	}
+	if err := verifier.Verify("hello", weakIterHash); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
+		t.Errorf("weak iterations Verify=%v want ErrCredentialsInvalid", err)
 	}
 }

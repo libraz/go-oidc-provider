@@ -83,7 +83,7 @@ const (
 
 	// Sessions routes [store.SessionStore] calls. Outside the transactional
 	// cluster: the OP tolerates session loss as a re-login event and does
-	// not coordinate Session writes with token-endpoint commits (ADR 0014).
+	// not coordinate Session writes with token-endpoint commits.
 	// Embedders MAY route Sessions to a volatile cache (Redis, Memcached)
 	// without violating any invariant.
 	Sessions
@@ -182,7 +182,7 @@ var allKinds = []Kind{
 //
 // [Sessions] is intentionally absent: the OP does not coordinate Session
 // writes with token-endpoint commits, and embedders are expected to route
-// Sessions to a volatile cache. See ADR 0014.
+// Sessions to a volatile cache.
 //
 //nolint:gochecknoglobals // closed enumeration mirroring 002 §D.1.1.
 var TxClusterKinds = []Kind{
@@ -436,9 +436,9 @@ func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 
 // AccessTokens implements [store.Store] by routing the call through the
 // transactional-cluster anchor. Splitting the AT registry away from the
-// other transactional substores would re-introduce the very race
-// ADR 0013 closes (a code-replay cascade that revokes refresh tokens
-// in one backend and access tokens in another), so the composite
+// other transactional substores would re-introduce a code-replay
+// cascade that revokes refresh tokens in one backend and access
+// tokens in another, so the composite
 // rejects such configurations at construction time via
 // [TxClusterKinds].
 func (s *Store) AccessTokens() store.AccessTokenRegistry {

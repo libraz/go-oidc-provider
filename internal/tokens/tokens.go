@@ -112,6 +112,18 @@ type AccessTokenClaims struct {
 // asked to sign with a SigningKey whose Signer is nil.
 var ErrSignerInvalid = errors.New("tokens: SigningKey has nil Signer")
 
+// idTokenTypeHeader is the value of the "typ" JOSE header for ID Tokens
+// (OIDC Core 1.0 §2). RP libraries that strict-check the type expect
+// the legacy "JWT" value here.
+const idTokenTypeHeader = "JWT"
+
+// accessTokenTypeHeader is the value of the "typ" JOSE header for
+// JWT-shaped access tokens. RFC 9068 §2.1 requires the explicit
+// "at+jwt" media type so a resource server can distinguish access
+// tokens from ID tokens or other JWTs at parse time, frustrating
+// cross-token confusion attacks (RFC 9068 §5).
+const accessTokenTypeHeader = "at+jwt"
+
 // SignIDToken serialises claims as an ES256-signed compact JWS. The
 // "kid" header is set to key.KeyID; the "typ" header is "JWT" so RP
 // libraries that strict-check the type do not reject the token. The
@@ -128,7 +140,7 @@ func SignIDToken(key SigningKey, claims IDTokenClaims) (string, error) {
 	if err := validateNoStandardCollisions(claims.Extra, idTokenStandardKeys); err != nil {
 		return "", err
 	}
-	signer, err := newSigner(key)
+	signer, err := newSigner(key, idTokenTypeHeader)
 	if err != nil {
 		return "", err
 	}
@@ -138,12 +150,16 @@ func SignIDToken(key SigningKey, claims IDTokenClaims) (string, error) {
 
 // SignAccessToken serialises claims as an ES256-signed compact JWS. It
 // follows the same invariants as [SignIDToken]; "scope" is encoded as
-// the canonical space-delimited string per RFC 6749 §3.3.
+// the canonical space-delimited string per RFC 6749 §3.3. The "typ"
+// header is fixed to "at+jwt" per RFC 9068 §2.1: a resource server
+// MUST reject any access-token JWT whose typ is not exactly "at+jwt"
+// (or its case-insensitive equivalent), which structurally prevents
+// an attacker from substituting an ID token for an access token.
 func SignAccessToken(key SigningKey, claims AccessTokenClaims) (string, error) {
 	if key.Signer == nil {
 		return "", ErrSignerInvalid
 	}
-	signer, err := newSigner(key)
+	signer, err := newSigner(key, accessTokenTypeHeader)
 	if err != nil {
 		return "", err
 	}
@@ -293,6 +309,8 @@ func encodeConfirmation(in map[string]string) map[string]string {
 // array form whenever there is more than one audience and a bare
 // string otherwise so common RP libraries (which often expect a string
 // for the single-aud case) round-trip cleanly.
+//
+//nolint:ireturn // RFC 7519 §4.1.3 demands a string-or-array union; any is the only Go-side shape.
 func encodeAudience(aud []string) any {
 	switch len(aud) {
 	case 0:
@@ -317,8 +335,13 @@ func joinScope(scopes []string) string {
 // alg-specific state; sharing a signer across goroutines is allowed
 // but the per-call cost is negligible compared to the Sign step.
 //
+// typ selects the JOSE "typ" header: "JWT" for ID tokens (OIDC Core
+// 1.0 §2) and "at+jwt" for JWT-shaped access tokens (RFC 9068 §2.1).
+// Splitting the value at the call site keeps the cross-token
+// confusion guard structural rather than relying on a runtime check.
+//
 //nolint:ireturn // wraps third-party josev4.Signer; the interface is the package's contract.
-func newSigner(key SigningKey) (josev4.Signer, error) {
+func newSigner(key SigningKey, typ string) (josev4.Signer, error) {
 	sk := josev4.SigningKey{
 		Algorithm: josev4.ES256,
 		Key: josev4.JSONWebKey{
@@ -328,7 +351,7 @@ func newSigner(key SigningKey) (josev4.Signer, error) {
 			Use:       "sig",
 		},
 	}
-	opts := (&josev4.SignerOptions{}).WithType("JWT")
+	opts := (&josev4.SignerOptions{}).WithType(josev4.ContentType(typ))
 	signer, err := josev4.NewSigner(sk, opts)
 	if err != nil {
 		return nil, fmt.Errorf("tokens: build signer: %w", err)

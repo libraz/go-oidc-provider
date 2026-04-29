@@ -223,7 +223,9 @@ func TestParseSigned_CritHeaderRejectedAtVerify(t *testing.T) {
 		// time would land here. The structural property still holds
 		// (the JWS never reaches a trusted state), so we accept either
 		// classification as long as it is one of our sentinels.
-		if errors.Is(parseErr, jose.ErrMalformed) || errors.Is(parseErr, jose.ErrAlgorithmNotAllowed) {
+		if errors.Is(parseErr, jose.ErrMalformed) ||
+			errors.Is(parseErr, jose.ErrAlgorithmNotAllowed) ||
+			errors.Is(parseErr, jose.ErrCriticalHeader) {
 			return
 		}
 		t.Fatalf("unexpected ParseSigned error: %v", parseErr)
