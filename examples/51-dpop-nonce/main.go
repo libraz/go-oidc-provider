@@ -50,27 +50,18 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func main() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("dpop-nonce-1")
 
 	nonces, err := op.NewInMemoryDPoPNonceSource(context.Background(), 60*time.Second)
 	if err != nil {
@@ -80,8 +71,8 @@ func main() {
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
-		op.WithKeyset(op.Keyset{{KeyID: "dpop-nonce-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 		op.WithFeature(feature.DPoP),
 		op.WithDPoPNonceSource(nonces),
 		op.WithStaticClients(

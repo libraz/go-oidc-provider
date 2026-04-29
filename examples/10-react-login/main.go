@@ -24,26 +24,17 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"log"
 	"net/http"
 	"os"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func main() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("react-1")
 
 	const staticDir = "./web/dist"
 	if _, err := os.Stat(staticDir); err != nil {
@@ -53,8 +44,8 @@ func main() {
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
-		op.WithKeyset(op.Keyset{{KeyID: "react-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 		op.WithReactUI(op.ReactUI{
 			LoginMount:   "/login",
 			ConsentMount: "/consent",

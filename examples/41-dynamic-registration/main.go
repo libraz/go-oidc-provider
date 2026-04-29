@@ -60,32 +60,23 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func main() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("dcr-1")
 
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
-		op.WithKeyset(op.Keyset{{KeyID: "dcr-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 		op.WithDynamicRegistration(op.RegistrationOption{
 			// Open=false (the default) requires every POST /register
 			// to carry an Initial Access Token. Open=true is for

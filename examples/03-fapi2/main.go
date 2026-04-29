@@ -1,8 +1,9 @@
 //go:build example
 
-// Example fapi2 demonstrates the FAPI 2.0 Baseline wiring shape for an
-// OP. It enables the profile, the three required features
-// (PAR / JAR / DPoP), and pre-registers a confidential client whose
+// Example fapi2 demonstrates the FAPI 2.0 Baseline wiring shape for
+// an OP. A single [op.WithProfile] call activates the profile and
+// auto-enables the three features the spec requires (PAR / JAR /
+// DPoP); the example pre-registers a confidential client whose
 // authentication method is private_key_jwt with inline JWKs. The
 // example exists to make the constraint set the library imposes
 // auditable as docs-as-code: running the example and curling the
@@ -53,8 +54,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -69,14 +70,7 @@ const (
 )
 
 func main() {
-	opSigningKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate OP signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("fapi2-example-1")
 	clientPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatalf("generate client private key: %v", err)
@@ -103,12 +97,12 @@ func main() {
 	provider, err := op.New(
 		op.WithIssuer(demoIssuer),
 		op.WithStore(st),
-		op.WithKeyset(op.Keyset{{KeyID: "fapi2-example-1", Signer: opSigningKey}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
+		// WithProfile(FAPI2Baseline) auto-enables PAR / JAR / DPoP per
+		// the spec's required feature set; embedders do NOT need to
+		// call WithFeature(...) for them. A profile is one option.
 		op.WithProfile(profile.FAPI2Baseline),
-		op.WithFeature(feature.PAR),
-		op.WithFeature(feature.JAR),
-		op.WithFeature(feature.DPoP),
 	)
 	if err != nil {
 		log.Fatalf("op.New: %v", err)

@@ -23,15 +23,13 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -41,18 +39,7 @@ type alwaysOKCaptcha struct{}
 func (alwaysOKCaptcha) Verify(_ context.Context, _ op.CaptchaInput) error { return nil }
 
 func main() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
-	totpKey := make([]byte, 32)
-	if _, err := rand.Read(totpKey); err != nil {
-		log.Fatalf("generate TOTP key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("bundle-1")
 
 	st := inmem.New()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -65,7 +52,7 @@ func main() {
 			// without a TOTP enrolment can still sign in.
 			op.RuleAlways(op.StepTOTP{
 				Store:         st.TOTPs(),
-				EncryptionKey: totpKey,
+				EncryptionKey: keys.TOTPKey,
 			}),
 			// Captcha after 5 failed attempts in this session.
 			op.RuleAfterFailedAttempts(5, op.StepCaptcha{
@@ -77,8 +64,8 @@ func main() {
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(st),
-		op.WithKeyset(op.Keyset{{KeyID: "bundle-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 		op.WithLogger(logger),
 		op.WithLoginFlow(flow),
 		op.WithStaticClients(

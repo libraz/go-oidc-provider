@@ -30,12 +30,10 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"log"
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -48,14 +46,7 @@ type noopCaptcha struct{}
 func (noopCaptcha) Verify(_ context.Context, _ op.CaptchaInput) error { return nil }
 
 func main() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("captcha-1")
 
 	st := inmem.New()
 	flow := op.LoginFlow{
@@ -73,8 +64,8 @@ func main() {
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(st),
-		op.WithKeyset(op.Keyset{{KeyID: "captcha-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 		op.WithLoginFlow(flow),
 	)
 	if err != nil {

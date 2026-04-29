@@ -26,29 +26,19 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func main() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("fapi-1")
 
 	const jwksPath = "client.jwks.json"
 	pub, err := op.LoadPublicJWKS(jwksPath)
@@ -66,10 +56,10 @@ func main() {
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
-		op.WithKeyset(op.Keyset{{KeyID: "fapi-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
+		// WithProfile(FAPI2Baseline) auto-enables PAR / JAR / DPoP.
 		op.WithProfile(profile.FAPI2Baseline),
-		op.WithFeature(feature.DPoP),
 	)
 	if err != nil {
 		log.Fatalf("op.New: %v", err)

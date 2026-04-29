@@ -27,9 +27,6 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	databasesql "database/sql"
 	"fmt"
 	"log"
@@ -39,6 +36,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
@@ -50,14 +48,7 @@ func main() {
 }
 
 func run() error {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return fmt.Errorf("generate signing key: %w", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		return fmt.Errorf("generate cookie key: %w", err)
-	}
+	keys := devkeys.MustEphemeral("mysql-store-1")
 
 	dsn := mysqlDSN()
 	db, err := databasesql.Open("mysql", dsn)
@@ -96,8 +87,8 @@ func run() error {
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(storage),
-		op.WithKeyset(op.Keyset{{KeyID: "mysql-store-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://rp.example.com/cb"},

@@ -46,14 +46,12 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"io"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -65,20 +63,13 @@ const (
 )
 
 func main() {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("generate signing key: %v", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		log.Fatalf("generate cookie key: %v", err)
-	}
+	keys := devkeys.MustEphemeral("bcl-1")
 
 	provider, err := op.New(
 		op.WithIssuer("http://localhost"+opAddr),
 		op.WithStore(inmem.New()),
-		op.WithKeyset(op.Keyset{{KeyID: "bcl-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                               clientID,
 			Secret:                           "rotate-me-via-secret-manager",

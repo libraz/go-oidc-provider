@@ -55,9 +55,6 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	databasesql "database/sql"
 	"errors"
 	"fmt"
@@ -68,6 +65,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/composite"
@@ -82,14 +80,7 @@ func main() {
 }
 
 func run() error {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return fmt.Errorf("generate signing key: %w", err)
-	}
-	cookieKey := make([]byte, 32)
-	if _, err := rand.Read(cookieKey); err != nil {
-		return fmt.Errorf("generate cookie key: %w", err)
-	}
+	keys := devkeys.MustEphemeral("redis-volatile-1")
 
 	// --- Durable backend: SQL adapter against MySQL ----------------
 	dsn := mysqlDSN()
@@ -165,8 +156,8 @@ func run() error {
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(storage),
-		op.WithKeyset(op.Keyset{{KeyID: "redis-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithKeyset(keys.Keyset()),
+		op.WithCookieKey(keys.CookieKey),
 	)
 	if err != nil {
 		return fmt.Errorf("op.New: %w", err)
