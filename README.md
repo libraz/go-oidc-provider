@@ -55,7 +55,8 @@ numbering convention groups examples by topic — 0x = bootstrap,
 | [`examples/05-client-credentials`](examples/05-client-credentials/main.go) | Machine-to-machine `grant_type=client_credentials` (RFC 6749 §4.4). |
 | [`examples/06-sql-store`](examples/06-sql-store/main.go) | `op/storeadapter/sql` against SQLite for a CGO-free quickstart. |
 | [`examples/07-mysql-store`](examples/07-mysql-store/main.go) | `op/storeadapter/sql` against MySQL with production-shaped pool / DSN. |
-| [`examples/08-composite-hot-cold`](examples/08-composite-hot-cold/main.go) | `op/storeadapter/composite` hot/cold split: SQL durable + fast volatile (Redis-pluggable). |
+| [`examples/08-composite-hot-cold`](examples/08-composite-hot-cold/main.go) | `op/storeadapter/composite` hot/cold split: SQL durable + inmem volatile (stand-in for Redis). |
+| [`examples/09-redis-volatile`](examples/09-redis-volatile/main.go) | Production-shaped composite: MySQL durable + `op/storeadapter/redis` volatile (Interactions, ConsumedJTIs). |
 | [`examples/10-react-login`](examples/10-react-login/main.go) | Delegate login / consent / logout screens to a SPA via `op.WithReactUI`. |
 | [`examples/11-custom-consent-ui`](examples/11-custom-consent-ui/main.go) | Custom consent template via `op.WithConsentUI`. |
 | [`examples/12-scopes-public-private`](examples/12-scopes-public-private/main.go) | `op.PublicScope` / `op.InternalScope` — discovery vs admin-only scopes. |
@@ -97,9 +98,15 @@ Bring your own backend by implementing the small interfaces in
   dependencies stay out of the host module's `go.sum`. The contract
   harness exercises every substore against a real engine via
   testcontainers (`go test -tags=testcontainers`).
+- `op/storeadapter/redis` — Redis adapter for the volatile,
+  non-transactional substores (`InteractionStore`, `ConsumedJTIStore`).
+  Pair with the SQL adapter through `op/storeadapter/composite` for the
+  canonical hot/cold deployment shape. Refuses to start without TLS
+  (`rediss://`) and AUTH unless the explicit
+  `WithDevModeAllowPlaintext` escape hatch is supplied. Also published
+  as a sub-module.
 
-Redis and DynamoDB adapters are planned for v1.x as additional
-sub-modules.
+A DynamoDB adapter is planned for v1.x as an additional sub-module.
 
 ## Community
 

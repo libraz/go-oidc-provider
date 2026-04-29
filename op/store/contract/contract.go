@@ -82,6 +82,30 @@ func Run(t *testing.T, f Factory) {
 	}
 }
 
+// RunInteractions runs only the InteractionStore contract subgroup
+// against the supplied factory. Partial-coverage backends — for
+// example, Redis adapters that host only InteractionStore and
+// ConsumedJTIStore — call this in lieu of [Run] so the harness does
+// not exercise out-of-scope substores.
+func RunInteractions(t *testing.T, f Factory) {
+	t.Helper()
+	t.Run("InteractionStore", func(t *testing.T) {
+		t.Parallel()
+		runGroup(t, f, interactionCases)
+	})
+}
+
+// RunConsumedJTIs runs only the ConsumedJTIStore contract subgroup
+// against the supplied factory. See [RunInteractions] for the
+// partial-coverage rationale.
+func RunConsumedJTIs(t *testing.T, f Factory) {
+	t.Helper()
+	t.Run("ConsumedJTIStore", func(t *testing.T) {
+		t.Parallel()
+		runGroup(t, f, jtiCases)
+	})
+}
+
 // subtest captures one named sub-test in the contract suite.
 type subtest struct {
 	name string

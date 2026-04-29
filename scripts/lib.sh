@@ -46,6 +46,9 @@ public_modules() {
   if [ -f "$REPO_ROOT/op/storeadapter/sql/go.mod" ]; then
     printf '%s\t\n' "$REPO_ROOT/op/storeadapter/sql"
   fi
+  if [ -f "$REPO_ROOT/op/storeadapter/redis/go.mod" ]; then
+    printf '%s\t\n' "$REPO_ROOT/op/storeadapter/redis"
+  fi
   if compgen -G "$REPO_ROOT/examples/*/go.mod" >/dev/null; then
     for f in "$REPO_ROOT"/examples/*/go.mod; do
       printf '%s\t%s\n' "$(dirname "$f")" "example"

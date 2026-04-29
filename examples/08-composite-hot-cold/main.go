@@ -19,10 +19,11 @@
 //
 // The non-cluster volatile substores (Interactions, ConsumedJTIs) are
 // the right fit for a fast key/value store. This example uses
-// op/storeadapter/inmem as a stand-in until op/storeadapter/redis (K2
-// in 007 §3.2) lands. To swap inmem for Redis later, replace the
-// `volatile := inmem.New()` line with the Redis adapter constructor;
-// every composite.With(...) call below stays unchanged.
+// op/storeadapter/inmem as a deliberate stand-in so the example boots
+// without external dependencies. The live counterpart is
+// example 09-redis-volatile, which swaps inmem for the real
+// op/storeadapter/redis adapter; every composite.With(...) call below
+// stays unchanged.
 //
 // Run with:
 //
@@ -94,12 +95,13 @@ func run() error {
 	log.Printf("durable store: sqlite at %s", dbPath)
 
 	// --- Volatile backend: stand-in for Redis ------------------------
-	// When op/storeadapter/redis lands (K2 in 007 §3.2), swap this
-	// single line for the Redis adapter constructor. The composite
-	// wiring below stays identical because both backends satisfy the
-	// same store.Store interface.
+	// inmem is used here so the example boots without a Redis
+	// container. Example 09-redis-volatile shows the same wiring
+	// against op/storeadapter/redis; the composite.With(...) calls
+	// below stay identical because both backends satisfy
+	// store.Store for the substores routed to them.
 	volatile := inmem.New()
-	log.Printf("volatile store: inmem (replace with Redis adapter when K2 ships)")
+	log.Printf("volatile store: inmem (see example 09 for the live op/storeadapter/redis variant)")
 
 	// --- Static client seeding ---------------------------------------
 	// composite.Store deliberately does NOT implement
