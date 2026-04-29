@@ -316,8 +316,6 @@ func joinScope(scopes []string) string {
 // cached) because go-jose's signer holds a reference to the key plus
 // alg-specific state; sharing a signer across goroutines is allowed
 // but the per-call cost is negligible compared to the Sign step.
-// josev4.Signer is the third-party interface this thin wrapper
-// exposes; the ireturn check is intentionally suppressed.
 //
 //nolint:ireturn // wraps third-party josev4.Signer; the interface is the package's contract.
 func newSigner(key SigningKey) (josev4.Signer, error) {
