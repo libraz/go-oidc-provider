@@ -1733,6 +1733,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 		ScopesSupported:           scopes.PublicNames(),
 		ProfileAllowedAuthMethods: cfg.profileAllowedAuthMethodNames(),
 		ClaimsParameterSupported:  cfg.claimsParameterSupported(),
+		ClaimsSupported:           cfg.claimsSupported,
 	}
 }
 

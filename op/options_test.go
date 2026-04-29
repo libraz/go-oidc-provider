@@ -1504,6 +1504,45 @@ func TestWithFirstPartyClients_RejectsFAPI2Profile(t *testing.T) {
 	}
 }
 
+func TestWithClaimsSupported_AcceptsList(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithClaimsSupported("sub", "iss", "aud", "exp", "iat"),
+	)...); err != nil {
+		t.Fatalf("WithClaimsSupported rejected valid list: %v", err)
+	}
+}
+
+func TestWithClaimsSupported_AcceptsEmptyAsExplicitOptIn(t *testing.T) {
+	t.Parallel()
+
+	// An explicit empty list signals "embedder confirms no extra
+	// claims beyond defaults"; the option accepts it (the discovery
+	// builder still drops the field via omitempty so the wire shape
+	// is unchanged, but the option-was-set signal is preserved).
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithClaimsSupported(),
+	)...); err != nil {
+		t.Fatalf("WithClaimsSupported rejected empty list: %v", err)
+	}
+}
+
+func TestWithClaimsSupported_RejectsDuplicateInvocation(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithClaimsSupported("sub"),
+		op.WithClaimsSupported("email"),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for duplicate WithClaimsSupported invocation, got nil")
+	}
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("err = %v, want duplicate-invocation diagnostic", err)
+	}
+}
+
 func TestWithProfile_AutoEnablesRequiredFeatures(t *testing.T) {
 	t.Parallel()
 

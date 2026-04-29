@@ -250,6 +250,56 @@ func TestIntegration_Discovery_RegisteredScopesRespectVisibility(t *testing.T) {
 	}
 }
 
+// TestIntegration_Discovery_ClaimsSupported_OmittedByDefault confirms
+// that op.WithClaimsSupported is the only seam that surfaces the
+// claims_supported field; without it the library leaves the field off
+// the wire because the standard claim universe depends on the
+// configured user store.
+func TestIntegration_Discovery_ClaimsSupported_OmittedByDefault(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t)
+	resp := httpGet(t, base+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if v, ok := doc["claims_supported"]; ok {
+		t.Errorf("claims_supported must be absent when WithClaimsSupported is not configured, got %v", v)
+	}
+}
+
+// TestIntegration_Discovery_ClaimsSupported_AdvertisesEmbedderList
+// confirms that the embedder's enumerated list round-trips through the
+// discovery wire in order, satisfying OIDC Discovery 1.0 §3.
+func TestIntegration_Discovery_ClaimsSupported_AdvertisesEmbedderList(t *testing.T) {
+	t.Parallel()
+
+	want := []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "email", "email_verified"}
+	_, base := startProvider(t, op.WithClaimsSupported(want...))
+	resp := httpGet(t, base+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	raw, ok := doc["claims_supported"].([]any)
+	if !ok {
+		t.Fatalf("claims_supported = %v (%T), want []any", doc["claims_supported"], doc["claims_supported"])
+	}
+	if len(raw) != len(want) {
+		t.Fatalf("claims_supported len=%d want %d (%v)", len(raw), len(want), raw)
+	}
+	for i, c := range want {
+		if got, _ := raw[i].(string); got != c {
+			t.Errorf("claims_supported[%d]=%q want %q", i, got, c)
+		}
+	}
+}
+
 // TestIntegration_Discovery_DCRDisabled_OmitsRegistrationEndpoint
 // confirms that the discovery document omits "registration_endpoint"
 // (and the auth methods supported list) when WithDynamicRegistration

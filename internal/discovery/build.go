@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"slices"
 	"strings"
 )
 
@@ -55,6 +56,15 @@ type Input struct {
 	// defaults to true; embedders that prefer to ignore the parameter
 	// supply false via op.WithClaimsParameterSupported(false).
 	ClaimsParameterSupported bool
+
+	// ClaimsSupported carries the explicit claim-name enumeration the
+	// embedder supplied through op.WithClaimsSupported. Nil leaves
+	// the discovery document's claims_supported field omitted, which
+	// is the library default — the standard claim universe depends
+	// on the configured user store and the library does not guess on
+	// the embedder's behalf. A non-nil (possibly empty) slice is
+	// copied verbatim onto the wire.
+	ClaimsSupported []string
 }
 
 // EndpointPaths mirrors op.Endpoints with internal-friendly types.
@@ -230,6 +240,20 @@ func Build(in Input) Document {
 	// this to false so the field is dropped from the wire and the
 	// authorize / par parsers ignore the parameter.
 	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
+	// OIDC Discovery 1.0 §3: claims_supported is RECOMMENDED. The
+	// library does not enumerate the standard claim universe by
+	// default because what an embedder actually emits depends on the
+	// user store; op.WithClaimsSupported(...) lets the embedder
+	// publish the closed list. Nil keeps the field omitted (the
+	// json:"omitempty" tag covers both nil and empty), so a
+	// configuration that has not opted in keeps the legacy wire shape.
+	if in.ClaimsSupported != nil {
+		// Use slices.Clone so a non-nil empty slice round-trips as
+		// a non-nil empty slice (an embedder who explicitly opted in
+		// with an empty list keeps that signal); the omitempty JSON
+		// tag drops both shapes from the wire identically.
+		doc.ClaimsSupported = slices.Clone(in.ClaimsSupported)
+	}
 	return doc
 }
 

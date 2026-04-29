@@ -212,3 +212,53 @@ func TestBuild_NoProfileLeavesAuthMethodsAlone(t *testing.T) {
 			doc.TokenEndpointAuthMethodsSupported)
 	}
 }
+
+func TestBuild_ClaimsSupported_OmittedByDefault(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints:   discovery.EndpointPaths{JWKS: "/jwks", Authorize: "/auth", Token: "/token"},
+	})
+	if doc.ClaimsSupported != nil {
+		t.Errorf("claims_supported = %v, want nil when WithClaimsSupported is not configured", doc.ClaimsSupported)
+	}
+}
+
+func TestBuild_ClaimsSupported_PreservesEmbedderList(t *testing.T) {
+	t.Parallel()
+
+	want := []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "email"}
+	doc := discovery.Build(discovery.Input{
+		Issuer:          "https://idp.example.com",
+		MountPrefix:     "/oidc",
+		Endpoints:       discovery.EndpointPaths{JWKS: "/jwks", Authorize: "/auth", Token: "/token"},
+		ClaimsSupported: want,
+	})
+	if len(doc.ClaimsSupported) != len(want) {
+		t.Fatalf("claims_supported len=%d want %d (%v)", len(doc.ClaimsSupported), len(want), doc.ClaimsSupported)
+	}
+	for i, c := range want {
+		if doc.ClaimsSupported[i] != c {
+			t.Errorf("claims_supported[%d]=%q want %q", i, doc.ClaimsSupported[i], c)
+		}
+	}
+}
+
+func TestBuild_ClaimsSupported_EmptySlicePreserved(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:          "https://idp.example.com",
+		MountPrefix:     "/oidc",
+		Endpoints:       discovery.EndpointPaths{JWKS: "/jwks", Authorize: "/auth", Token: "/token"},
+		ClaimsSupported: []string{},
+	})
+	if doc.ClaimsSupported == nil {
+		t.Errorf("claims_supported = nil, want empty non-nil slice (embedder explicitly opted in with empty list)")
+	}
+	if len(doc.ClaimsSupported) != 0 {
+		t.Errorf("claims_supported = %v, want empty slice", doc.ClaimsSupported)
+	}
+}

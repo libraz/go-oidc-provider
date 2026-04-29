@@ -196,4 +196,13 @@ type Document struct {
 	// this field to false and routes incoming requests around the
 	// parser.
 	ClaimsParameterSupported bool `json:"claims_parameter_supported,omitempty"`
+
+	// ClaimsSupported lists the claim names the OP can emit on
+	// id_token / userinfo responses. OIDC Discovery 1.0 §3 lists this
+	// field as RECOMMENDED but allows the OP to omit it when the OP
+	// does not pre-enumerate its claim universe; the library leaves
+	// it unset by default because the surface depends on the
+	// configured user store. Embedders publish the closed list via
+	// op.WithClaimsSupported(...).
+	ClaimsSupported []string `json:"claims_supported,omitempty"`
 }

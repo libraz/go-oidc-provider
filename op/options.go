@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -259,6 +260,16 @@ type config struct {
 	// The boolean is the negative of the option argument so the zero
 	// value keeps the library default of "supported".
 	claimsParameterSupportedOff bool
+
+	// claimsSupported carries the explicit claim-name enumeration the
+	// embedder supplied through [WithClaimsSupported]. Nil means the
+	// option was not invoked and the discovery document omits the
+	// claims_supported field; an empty non-nil slice is preserved
+	// verbatim (an embedder who wants to advertise "no extra claims
+	// beyond the defaults" supplies an explicit empty list). The
+	// stored slice is a defensive copy so a later mutation of the
+	// caller's slice does not silently change the wire output.
+	claimsSupported []string
 
 	// acrPolicy carries the [ACRPolicy] supplied through
 	// [WithACRPolicy]. A nil value means "library default": the
@@ -1383,6 +1394,58 @@ func WithRefreshTokenTTL(ttl time.Duration) Option {
 			}
 		}
 		c.refreshTokenTTL = ttl
+		return nil
+	})
+}
+
+// WithClaimsSupported populates the discovery document's
+// claims_supported field with the supplied claim names. OIDC Discovery
+// 1.0 §3 lists claims_supported as RECOMMENDED — clients consult it to
+// decide whether a particular claim is worth requesting via scope or
+// via the §5.5 "claims" parameter — but the spec leaves the OP free to
+// omit the field when the OP cannot pre-enumerate its claim universe.
+//
+// The library default is to omit the field. The library's claims
+// projector emits OIDC Core 1.0 §5.4 standard claims when the
+// configured [op/store.UserStore] returns matching values, and the
+// list of which standard claims a particular embedder actually
+// surfaces depends entirely on what the user store fills in; rather
+// than guess, the library leaves the discovery field blank by default
+// so embedders cannot accidentally advertise claims they never emit.
+//
+// Callers supply the closed list themselves. A typical FAPI 2.0
+// deployment that exposes profile / email / phone scopes would call:
+//
+//	op.WithClaimsSupported(
+//	    "sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
+//	    "name", "given_name", "family_name", "preferred_username",
+//	    "email", "email_verified",
+//	)
+//
+// The supplied slice is copied defensively. Passing the option twice
+// fails at construction time so the operator notices the duplicate.
+// Passing a nil or empty slice records the empty list (the discovery
+// document still omits the field — the omitempty JSON tag covers
+// both cases) so the option doubles as an "explicitly no claims"
+// declaration when an embedder needs that posture.
+//
+// Stable since v0.x.
+func WithClaimsSupported(claims ...string) Option {
+	return optionFunc(func(c *config) error {
+		if c.claimsSupported != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithClaimsSupported was supplied more than once",
+			}
+		}
+		c.claimsSupported = slices.Clone(claims)
+		if c.claimsSupported == nil {
+			// slices.Clone(nil) returns nil; record an empty slice so
+			// the "option was supplied" signal is preserved without
+			// changing the wire output (claims_supported uses
+			// omitempty).
+			c.claimsSupported = []string{}
+		}
 		return nil
 	})
 }
