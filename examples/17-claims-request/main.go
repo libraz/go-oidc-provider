@@ -39,6 +39,12 @@
 //   - Voluntary requests (JSON null on the wire) layer onto the
 //     existing scope-driven release; the parser does not narrow the
 //     claim set, only widens it.
+//   - [op.WithClaimsSupported] populates the discovery document's
+//     claims_supported field so RPs can introspect the closed claim
+//     universe before issuing a §5.5 request. The library leaves the
+//     field omitted by default because what an embedder actually
+//     surfaces depends on the user store; the example publishes the
+//     standard set the inmem catalogue serves.
 //
 // PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
 // store, and a public HTTP listener. The supplied user catalogue is
@@ -78,6 +84,18 @@ func main() {
 		// authorize parser silently drop the parameter and flip the
 		// discovery bit off.
 		op.WithClaimsParameterSupported(true),
+		// Publish the closed claim universe in discovery. RPs that
+		// inspect claims_supported can decide whether a §5.5 request
+		// is worth issuing without trial-and-error against /userinfo.
+		// The list mirrors the OIDC standard claims this example's
+		// user store serves; an embedder backed by a richer profile
+		// schema enumerates additional names here.
+		op.WithClaimsSupported(
+			"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce",
+			"name", "given_name", "family_name", "preferred_username",
+			"email", "email_verified",
+			"locale",
+		),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "demo",

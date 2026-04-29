@@ -27,85 +27,40 @@
 //   - WithFeature(feature.DPoP) enables the DPoP verifier on /token
 //     and /userinfo. Without it the nonce source is a no-op.
 //   - WithDPoPNonceSource installs the issuance / validation halves.
-//     The implementation below rotates a single value every 60
-//     seconds and accepts the current and previous values, which is
-//     enough for a casual demo. Production sources stamp a signed
-//     payload that carries an embedded expiry so they survive a
-//     process restart.
+//     This example uses op.NewInMemoryDPoPNonceSource — the project's
+//     reference implementation — which rotates a 128-bit value every
+//     60 seconds and accepts the current plus the immediately
+//     preceding nonce so an in-flight RP retry that straddles a
+//     rotation is not rejected.
+//   - The constructor takes a context: when the supplied context is
+//     canceled the rotation goroutine exits cleanly. main here passes
+//     context.Background so rotation runs for the lifetime of the
+//     process; an embedder with a shutdown signal would supply a
+//     cancellable one.
 //
 // PRODUCTION CAVEATS: this example uses ephemeral keys, a
 // process-local nonce ring (forgets all values on restart), and a
-// public HTTP listener. Production embedders place the nonce source
-// behind a shared cache (Redis / memcached) so a horizontally
-// scaled OP fleet stays consistent.
+// public HTTP listener. NewInMemoryDPoPNonceSource is unsuitable for
+// horizontally scaled OPs — two replicas issue from independent rings
+// and reject each other's nonces, generating a thrash of
+// use_dpop_nonce challenges. Production multi-replica deployments
+// supply a DPoPNonceSource backed by a shared cache (Redis /
+// memcached); see the v1.x Wave L3 outlook.
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/base64"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
-
-// rotatingNonceSource is the embedder-supplied DPoPNonceSource.
-// IssueNonce returns the current value; Validate accepts the current
-// or the immediately previous value so an in-flight client retry that
-// straddles a rotation does not get rejected.
-type rotatingNonceSource struct {
-	mu       sync.RWMutex
-	current  string
-	previous string
-}
-
-func newRotatingNonceSource(rotateEvery time.Duration) *rotatingNonceSource {
-	src := &rotatingNonceSource{current: randomNonce()}
-	go func() {
-		t := time.NewTicker(rotateEvery)
-		defer t.Stop()
-		for range t.C {
-			src.rotate()
-		}
-	}()
-	return src
-}
-
-func (s *rotatingNonceSource) IssueNonce() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.current
-}
-
-func (s *rotatingNonceSource) Validate(nonce string) bool {
-	if nonce == "" {
-		return false
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return nonce == s.current || nonce == s.previous
-}
-
-func (s *rotatingNonceSource) rotate() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.previous = s.current
-	s.current = randomNonce()
-}
-
-func randomNonce() string {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		log.Fatalf("rand.Read: %v", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(buf)
-}
 
 func main() {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -117,13 +72,18 @@ func main() {
 		log.Fatalf("generate cookie key: %v", err)
 	}
 
+	nonces, err := op.NewInMemoryDPoPNonceSource(context.Background(), 60*time.Second)
+	if err != nil {
+		log.Fatalf("NewInMemoryDPoPNonceSource: %v", err)
+	}
+
 	provider, err := op.New(
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{{KeyID: "dpop-nonce-1", Signer: priv}}),
 		op.WithCookieKey(cookieKey),
 		op.WithFeature(feature.DPoP),
-		op.WithDPoPNonceSource(newRotatingNonceSource(60*time.Second)),
+		op.WithDPoPNonceSource(nonces),
 		op.WithStaticClients(
 			op.PublicClient{
 				ID:           "demo-spa",

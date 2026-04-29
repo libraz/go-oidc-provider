@@ -24,10 +24,13 @@
 //
 // Wiring details:
 //
-//   - The seed types (PublicClient / ConfidentialClient) do not
-//     surface BackchannelLogoutURI, so the example pre-populates the
-//     client through store.ClientRegistry directly. ADR 0005 covers
-//     why the typed seeds intentionally hide that field.
+//   - ConfidentialClient surfaces BackchannelLogoutURI and
+//     BackchannelLogoutSessionRequired alongside the rest of the
+//     spec-standard metadata, so the client lands through the typed
+//     WithStaticClients seam without an embedder reaching into
+//     store.ClientRegistry. PostLogoutRedirectURIs would join the
+//     same shape if the example exercised RP-Initiated Logout
+//     redirects.
 //   - WithBackchannelLogoutHTTPClient is OPTIONAL — the package
 //     default applies WithBackchannelLogoutTimeout to a fresh client
 //     and refuses 3xx redirects on the POST. Override only when the
@@ -43,7 +46,6 @@
 package main
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -53,7 +55,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -73,35 +74,20 @@ func main() {
 		log.Fatalf("generate cookie key: %v", err)
 	}
 
-	memStore := inmem.New()
-
-	// Pre-register the RP through ClientRegistry so we can set
-	// BackchannelLogoutURI directly. The typed seeds (ConfidentialClient
-	// etc.) do not surface that field.
-	hash, err := op.HashClientSecret("rotate-me-via-secret-manager")
-	if err != nil {
-		log.Fatalf("HashClientSecret: %v", err)
-	}
-	if err := memStore.RegisterClient(context.Background(), &store.Client{
-		ID:                               clientID,
-		RedirectURIs:                     []string{"http://localhost:5173/callback"},
-		Scopes:                           []string{"openid", "profile"},
-		GrantTypes:                       []string{"authorization_code", "refresh_token"},
-		ResponseTypes:                    []string{"code"},
-		TokenEndpointAuthMethod:          "client_secret_basic",
-		SecretHash:                       hash,
-		BackchannelLogoutURI:             "http://localhost" + rpAddr + "/backchannel-logout",
-		BackchannelLogoutSessionRequired: true,
-		Source:                           store.ClientSourceStatic,
-	}); err != nil {
-		log.Fatalf("RegisterClient: %v", err)
-	}
-
 	provider, err := op.New(
 		op.WithIssuer("http://localhost"+opAddr),
-		op.WithStore(memStore),
+		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{{KeyID: "bcl-1", Signer: priv}}),
 		op.WithCookieKey(cookieKey),
+		op.WithStaticClients(op.ConfidentialClient{
+			ID:                               clientID,
+			Secret:                           "rotate-me-via-secret-manager",
+			RedirectURIs:                     []string{"http://localhost:5173/callback"},
+			Scopes:                           []string{"openid", "profile"},
+			BackchannelLogoutURI:             "http://localhost" + rpAddr + "/backchannel-logout",
+			BackchannelLogoutSessionRequired: true,
+			ApplicationType:                  "web",
+		}),
 		// Override the default 5-second per-RP timeout. A short
 		// budget is the right posture for back-channel logout — the
 		// flow is best-effort and a long wait merely keeps the OP
