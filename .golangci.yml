@@ -108,6 +108,7 @@ linters:
             - "!**/internal/httpx/**"
             - "!**/op/testkit/**"
             - "!**/op/registration.go"
+            - "!**/op/dpop_inmemory.go"
             - "!**/cmd/op-demo/**"
             - "!**/examples/**"
             - "!**/*_test.go"
