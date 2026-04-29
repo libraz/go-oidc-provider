@@ -77,6 +77,39 @@ type PublicClient struct {
 	// ResponseTypes overrides the default {"code"}. Empty applies
 	// the default; non-empty replaces it entirely.
 	ResponseTypes []string
+
+	// PostLogoutRedirectURIs lists the exact-match URIs the OP
+	// accepts in OIDC RP-Initiated Logout 1.0 §2's
+	// post_logout_redirect_uri parameter. Embedders that omit this
+	// field cannot use the redirect-after-logout shape; the OP still
+	// renders the static "Signed out" page on /end_session.
+	PostLogoutRedirectURIs []string
+
+	// BackchannelLogoutURI is the absolute https:// URL the OP POSTs
+	// a Logout Token to when this client's session terminates (OIDC
+	// Back-Channel Logout 1.0). An empty value opts the client out
+	// of fan-out; the registry-side wiring already short-circuits on
+	// the empty path so the wire never sees a malformed delivery.
+	BackchannelLogoutURI string
+
+	// BackchannelLogoutSessionRequired requests a "sid" claim on the
+	// Logout Token (OIDC Back-Channel Logout 1.0 §2.4). Setting true
+	// without [BackchannelLogoutURI] is a no-op; setting it is
+	// recommended for clients that key downstream sessions on sid.
+	BackchannelLogoutSessionRequired bool
+
+	// ApplicationType mirrors OIDC Dynamic Client Registration 1.0's
+	// "application_type" metadata. Typical values are "native" and
+	// "web". The library does not enforce a specific value but
+	// surfaces it through discovery / introspection so embedders can
+	// drive their own routing on it.
+	ApplicationType string
+
+	// SubjectType requests a particular OIDC subject_type ("public"
+	// or "pairwise"). v1.0 ships with "public" only — supplying any
+	// other value is recorded but currently has no runtime effect; a
+	// future pairwise rollout will honour it.
+	SubjectType string
 }
 
 // seed projects c onto a [store.Client] with the public-client
@@ -97,14 +130,19 @@ func (c PublicClient) seed() (store.Client, error) {
 		responses = slices.Clone(responses)
 	}
 	return store.Client{
-		ID:                      c.ID,
-		RedirectURIs:            slices.Clone(c.RedirectURIs),
-		Scopes:                  slices.Clone(c.Scopes),
-		GrantTypes:              grants,
-		ResponseTypes:           responses,
-		TokenEndpointAuthMethod: AuthNone.String(),
-		PublicClient:            true,
-		Source:                  store.ClientSourceStatic,
+		ID:                               c.ID,
+		RedirectURIs:                     slices.Clone(c.RedirectURIs),
+		Scopes:                           slices.Clone(c.Scopes),
+		GrantTypes:                       grants,
+		ResponseTypes:                    responses,
+		TokenEndpointAuthMethod:          AuthNone.String(),
+		PublicClient:                     true,
+		Source:                           store.ClientSourceStatic,
+		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:             c.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
+		ApplicationType:                  c.ApplicationType,
+		SubjectType:                      c.SubjectType,
 	}, nil
 }
 
@@ -156,6 +194,22 @@ type ConfidentialClient struct {
 	// ResponseTypes overrides the default {"code"}. Empty applies
 	// the default; non-empty replaces it entirely.
 	ResponseTypes []string
+
+	// PostLogoutRedirectURIs mirrors [PublicClient.PostLogoutRedirectURIs].
+	PostLogoutRedirectURIs []string
+
+	// BackchannelLogoutURI mirrors [PublicClient.BackchannelLogoutURI].
+	BackchannelLogoutURI string
+
+	// BackchannelLogoutSessionRequired mirrors
+	// [PublicClient.BackchannelLogoutSessionRequired].
+	BackchannelLogoutSessionRequired bool
+
+	// ApplicationType mirrors [PublicClient.ApplicationType].
+	ApplicationType string
+
+	// SubjectType mirrors [PublicClient.SubjectType].
+	SubjectType string
 }
 
 // seed projects c onto a [store.Client] with the confidential-client
@@ -189,14 +243,19 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 		responses = slices.Clone(responses)
 	}
 	return store.Client{
-		ID:                      c.ID,
-		RedirectURIs:            slices.Clone(c.RedirectURIs),
-		Scopes:                  slices.Clone(c.Scopes),
-		GrantTypes:              grants,
-		ResponseTypes:           responses,
-		TokenEndpointAuthMethod: method.String(),
-		SecretHash:              hash,
-		Source:                  store.ClientSourceStatic,
+		ID:                               c.ID,
+		RedirectURIs:                     slices.Clone(c.RedirectURIs),
+		Scopes:                           slices.Clone(c.Scopes),
+		GrantTypes:                       grants,
+		ResponseTypes:                    responses,
+		TokenEndpointAuthMethod:          method.String(),
+		SecretHash:                       hash,
+		Source:                           store.ClientSourceStatic,
+		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:             c.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
+		ApplicationType:                  c.ApplicationType,
+		SubjectType:                      c.SubjectType,
 	}, nil
 }
 
@@ -243,6 +302,22 @@ type PrivateKeyJWTClient struct {
 	// ResponseTypes overrides the default {"code"}. Empty applies
 	// the default; non-empty replaces it entirely.
 	ResponseTypes []string
+
+	// PostLogoutRedirectURIs mirrors [PublicClient.PostLogoutRedirectURIs].
+	PostLogoutRedirectURIs []string
+
+	// BackchannelLogoutURI mirrors [PublicClient.BackchannelLogoutURI].
+	BackchannelLogoutURI string
+
+	// BackchannelLogoutSessionRequired mirrors
+	// [PublicClient.BackchannelLogoutSessionRequired].
+	BackchannelLogoutSessionRequired bool
+
+	// ApplicationType mirrors [PublicClient.ApplicationType].
+	ApplicationType string
+
+	// SubjectType mirrors [PublicClient.SubjectType].
+	SubjectType string
 }
 
 // seed projects c onto a [store.Client] with the private_key_jwt
@@ -263,13 +338,18 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 		responses = slices.Clone(responses)
 	}
 	return store.Client{
-		ID:                      c.ID,
-		RedirectURIs:            slices.Clone(c.RedirectURIs),
-		Scopes:                  slices.Clone(c.Scopes),
-		GrantTypes:              grants,
-		ResponseTypes:           responses,
-		TokenEndpointAuthMethod: AuthPrivateKeyJWT.String(),
-		JWKs:                    slices.Clone(c.JWKS),
-		Source:                  store.ClientSourceStatic,
+		ID:                               c.ID,
+		RedirectURIs:                     slices.Clone(c.RedirectURIs),
+		Scopes:                           slices.Clone(c.Scopes),
+		GrantTypes:                       grants,
+		ResponseTypes:                    responses,
+		TokenEndpointAuthMethod:          AuthPrivateKeyJWT.String(),
+		JWKs:                             slices.Clone(c.JWKS),
+		Source:                           store.ClientSourceStatic,
+		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:             c.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired: c.BackchannelLogoutSessionRequired,
+		ApplicationType:                  c.ApplicationType,
+		SubjectType:                      c.SubjectType,
 	}, nil
 }

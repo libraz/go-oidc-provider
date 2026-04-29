@@ -214,6 +214,128 @@ func equalStrings(a, b []string) bool {
 	return slices.Equal(a, b)
 }
 
+// TestPublicClient_SeedCopiesMetadataFields confirms the post-logout,
+// back-channel logout, and Dynamic Client Registration metadata
+// fields round-trip through seed() onto [store.Client] verbatim. The
+// test backstops the I1 expansion: dropping a field from the seed
+// type or forgetting to copy it through breaks the chain that
+// /end_session and the back-channel coordinator rely on.
+func TestPublicClient_SeedCopiesMetadataFields(t *testing.T) {
+	t.Parallel()
+
+	c := PublicClient{
+		ID:                               "demo-spa",
+		RedirectURIs:                     []string{"https://app.example.com/cb"},
+		Scopes:                           []string{"openid"},
+		PostLogoutRedirectURIs:           []string{"https://app.example.com/post-logout"},
+		BackchannelLogoutURI:             "https://app.example.com/bcl",
+		BackchannelLogoutSessionRequired: true,
+		ApplicationType:                  "web",
+		SubjectType:                      "public",
+	}
+	got, err := c.seed()
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if !equalStrings(got.PostLogoutRedirectURIs, []string{"https://app.example.com/post-logout"}) {
+		t.Errorf("PostLogoutRedirectURIs = %v", got.PostLogoutRedirectURIs)
+	}
+	if got.BackchannelLogoutURI != "https://app.example.com/bcl" {
+		t.Errorf("BackchannelLogoutURI = %q", got.BackchannelLogoutURI)
+	}
+	if !got.BackchannelLogoutSessionRequired {
+		t.Errorf("BackchannelLogoutSessionRequired = false, want true")
+	}
+	if got.ApplicationType != "web" {
+		t.Errorf("ApplicationType = %q", got.ApplicationType)
+	}
+	if got.SubjectType != "public" {
+		t.Errorf("SubjectType = %q", got.SubjectType)
+	}
+
+	// Defensive-copy invariant: mutating the caller's slice MUST NOT
+	// rewrite the seeded record (mirrors the existing RedirectURIs
+	// behaviour).
+	c.PostLogoutRedirectURIs[0] = "https://attacker.example/cb"
+	if got.PostLogoutRedirectURIs[0] != "https://app.example.com/post-logout" {
+		t.Errorf("seed() did not defensively copy PostLogoutRedirectURIs: %q", got.PostLogoutRedirectURIs[0])
+	}
+}
+
+// TestConfidentialClient_SeedCopiesMetadataFields mirrors the
+// PublicClient test for the confidential variant.
+func TestConfidentialClient_SeedCopiesMetadataFields(t *testing.T) {
+	t.Parallel()
+
+	c := ConfidentialClient{
+		ID:                               "demo-conf",
+		Secret:                           "s3cret-please-rotate",
+		RedirectURIs:                     []string{"https://app.example.com/cb"},
+		Scopes:                           []string{"openid"},
+		PostLogoutRedirectURIs:           []string{"https://app.example.com/post-logout"},
+		BackchannelLogoutURI:             "https://app.example.com/bcl",
+		BackchannelLogoutSessionRequired: true,
+		ApplicationType:                  "web",
+		SubjectType:                      "public",
+	}
+	got, err := c.seed()
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if !equalStrings(got.PostLogoutRedirectURIs, []string{"https://app.example.com/post-logout"}) {
+		t.Errorf("PostLogoutRedirectURIs = %v", got.PostLogoutRedirectURIs)
+	}
+	if got.BackchannelLogoutURI != "https://app.example.com/bcl" {
+		t.Errorf("BackchannelLogoutURI = %q", got.BackchannelLogoutURI)
+	}
+	if !got.BackchannelLogoutSessionRequired {
+		t.Errorf("BackchannelLogoutSessionRequired = false, want true")
+	}
+	if got.ApplicationType != "web" {
+		t.Errorf("ApplicationType = %q", got.ApplicationType)
+	}
+	if got.SubjectType != "public" {
+		t.Errorf("SubjectType = %q", got.SubjectType)
+	}
+}
+
+// TestPrivateKeyJWTClient_SeedCopiesMetadataFields mirrors the
+// PublicClient test for the private_key_jwt variant.
+func TestPrivateKeyJWTClient_SeedCopiesMetadataFields(t *testing.T) {
+	t.Parallel()
+
+	c := PrivateKeyJWTClient{
+		ID:                               "demo-fapi",
+		JWKS:                             []byte(`{"keys":[]}`),
+		RedirectURIs:                     []string{"https://app.example.com/cb"},
+		Scopes:                           []string{"openid"},
+		PostLogoutRedirectURIs:           []string{"https://app.example.com/post-logout"},
+		BackchannelLogoutURI:             "https://app.example.com/bcl",
+		BackchannelLogoutSessionRequired: true,
+		ApplicationType:                  "web",
+		SubjectType:                      "public",
+	}
+	got, err := c.seed()
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if !equalStrings(got.PostLogoutRedirectURIs, []string{"https://app.example.com/post-logout"}) {
+		t.Errorf("PostLogoutRedirectURIs = %v", got.PostLogoutRedirectURIs)
+	}
+	if got.BackchannelLogoutURI != "https://app.example.com/bcl" {
+		t.Errorf("BackchannelLogoutURI = %q", got.BackchannelLogoutURI)
+	}
+	if !got.BackchannelLogoutSessionRequired {
+		t.Errorf("BackchannelLogoutSessionRequired = false, want true")
+	}
+	if got.ApplicationType != "web" {
+		t.Errorf("ApplicationType = %q", got.ApplicationType)
+	}
+	if got.SubjectType != "public" {
+		t.Errorf("SubjectType = %q", got.SubjectType)
+	}
+}
+
 // _ static interface assertion: the three builders satisfy the
 // ClientSeed interface. A future refactor that drops a method from
 // any of them fails this line at compile time.
