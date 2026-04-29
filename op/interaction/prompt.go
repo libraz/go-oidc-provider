@@ -155,6 +155,56 @@ type ConsentScopePromptData struct {
 
 func (ConsentScopePromptData) isPromptData() {}
 
+// ChooserAccount is a single row in the account chooser screen.
+// The struct intentionally exposes only the fields a chooser UI
+// can render without leaking session-internal state: the SessionID
+// is opaque to the SPA and round-trips through [FormSubmission]
+// verbatim, while Subject / DisplayName / AuthTime are the
+// read-only labels the user picks among.
+type ChooserAccount struct {
+	// SessionID is the opaque identifier the SPA echoes back in
+	// the submission's "session_id" field. Treat as a write-once
+	// token: the orchestrator validates it belongs to the active
+	// chooser group before honouring the switch.
+	SessionID string
+
+	// Subject is the OP-internal subject identifier for this
+	// account row. The SPA may render it directly (e.g.,
+	// "user_017fa3...") or use it to call /userinfo for a
+	// richer display.
+	Subject string
+
+	// DisplayName is the human-friendly label the chooser screen
+	// shows. Empty when no display name is available; SPAs fall
+	// back to Subject in that case.
+	DisplayName string
+
+	// AuthTime is when the account last authenticated. SPAs
+	// typically render it as a relative timestamp ("2 hours ago").
+	AuthTime time.Time
+}
+
+// ChooserPromptData backs Prompt.Type "interaction.chooser". The
+// SPA renders one row per [ChooserAccount] and POSTs back the
+// chosen [ChooserAccount.SessionID] in the submission's
+// "session_id" form field.
+type ChooserPromptData struct {
+	// Accounts is the live chooser-group membership in
+	// orchestrator-defined display order (most-recently-used
+	// first). An empty slice indicates no live accounts; the
+	// chooser screen typically renders an "add account" CTA
+	// only.
+	Accounts []ChooserAccount
+
+	// AddAccountURL is the URL the SPA navigates to when the user
+	// clicks "Add another account". Typically the same /authorize
+	// request with prompt=login appended; populated by the
+	// orchestrator at render time.
+	AddAccountURL string
+}
+
+func (ChooserPromptData) isPromptData() {}
+
 // FieldKind enumerates the input kinds a [FieldSpec] may declare.
 // The set is intentionally small: the orchestrator validates length /
 // charset / count limits per kind, and adding a new kind is a v1.x

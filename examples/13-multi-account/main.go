@@ -1,0 +1,123 @@
+//go:build example
+
+// Example 13 demonstrates the multi-account chooser flow. The library
+// ships a built-in [op.Interaction] for prompt=select_account that
+// emits an [interaction.ChooserPromptData] envelope listing every
+// account in the active chooser group; the SPA picks one and posts
+// back the SessionID. The /authorize endpoint also routes a fresh
+// prompt=login on top of an active session through
+// [sessions.Manager.AddAccount], so signing in as a second account
+// adds it to the chooser group rather than discarding the first.
+//
+// Run with the example build tag:
+//
+//	go run -tags example ./examples/13-multi-account
+//
+// Browser walkthrough:
+//
+//  1. GET /oidc/auth?... → log in as alice (first account).
+//     The OP issues a chooser group, sets the session cookie, and
+//     redirects back to the RP with an authorization code.
+//  2. GET /oidc/auth?...&prompt=login → log in as bob (second
+//     account in the SAME browser).
+//     ensureSession sees the active session for alice, sees the
+//     subject mismatch, and routes to AddAccount instead of Issue —
+//     bob joins alice's chooser group.
+//  3. GET /oidc/auth?...&prompt=select_account → the chooser
+//     interaction enumerates both accounts. Pick alice or bob; the
+//     orchestrator binds the picked subject and rebinds the cookie
+//     via [sessions.Manager.Switch] so the chooser group stays
+//     intact.
+//
+// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
+// store, and the testkit's [SubjectAuthenticator] which trusts
+// whatever subject the SPA submits. A real deployment substitutes a
+// password / passkey / federated authenticator; the chooser wiring
+// is unaffected by that choice. The HTML chooser template is left
+// to the embedder via [op.WithChooserUI]; this example uses the
+// default JSON driver so curl / a SPA can drive the flow without
+// HTML scaffolding.
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"log"
+	"net/http"
+
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+)
+
+func main() {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		log.Fatalf("generate signing key: %v", err)
+	}
+	cookieKey := make([]byte, 32)
+	if _, err := rand.Read(cookieKey); err != nil {
+		log.Fatalf("generate cookie key: %v", err)
+	}
+
+	memStore := inmem.New()
+	// Two demo subjects; in a real deployment the user records come
+	// from the embedder's identity backend. The chooser screen reads
+	// Subject + AuthTime off the live SessionStore at render time, so
+	// the User records here only matter when the orchestrator projects
+	// claims into the id_token / userinfo response.
+	memStore.PutUser(context.Background(), &store.User{
+		Subject: "alice",
+		Claims: map[string]any{
+			"sub":   "alice",
+			"name":  "Alice Example",
+			"email": "alice@example.com",
+		},
+	})
+	memStore.PutUser(context.Background(), &store.User{
+		Subject: "bob",
+		Claims: map[string]any{
+			"sub":   "bob",
+			"name":  "Bob Example",
+			"email": "bob@example.com",
+		},
+	})
+
+	provider, err := op.New(
+		op.WithIssuer("https://op.example.com"),
+		op.WithStore(memStore),
+		op.WithKeyset(op.Keyset{{KeyID: "chooser-1", Signer: priv}}),
+		op.WithCookieKey(cookieKey),
+		// JSONDriver renders prompts (chooser, consent, factor) as JSON
+		// envelopes a SPA can consume directly. A server-rendered
+		// embedder swaps to interaction.HTMLDriver and supplies a
+		// chooser template via op.WithChooserUI; the orchestrator-side
+		// flow is identical.
+		op.WithInteraction(interaction.JSONDriver{}),
+		op.WithStaticClients(
+			op.ConfidentialClient{
+				ID:           "demo-rp",
+				Secret:       "rotate-me-via-secret-manager",
+				AuthMethod:   op.AuthClientSecretBasic,
+				RedirectURIs: []string{"http://localhost:8081/callback"},
+				Scopes:       []string{"openid", "profile", "email"},
+			},
+		),
+	)
+	if err != nil {
+		log.Fatalf("op.New: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/", provider)
+
+	log.Println("multi-account example listening on :8080 (built-in chooser via JSONDriver)")
+	log.Println("flow: log in as alice → /authorize?prompt=login as bob → /authorize?prompt=select_account")
+	log.Println("the chooser response is a Prompt{Type: \"interaction.chooser\", Data: ChooserPromptData{Accounts: [...]}}")
+	if err := http.ListenAndServe(":8080", mux); err != nil {
+		log.Fatalf("listen: %v", err)
+	}
+}

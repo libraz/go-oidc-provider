@@ -122,10 +122,18 @@ type Step struct {
 
 // Result reports a successful factor or interaction completion. For
 // [op.Interaction], Subject is the empty string because the subject
-// is already bound by the time the interaction runs.
+// is already bound by the time the interaction runs — with the
+// singular exception of the built-in account chooser, which sets
+// Subject to the picked session's subject so the orchestrator can
+// short-circuit the factor chain.
 type Result struct {
 	// Subject is the OP-internal identifier the factor authenticated.
-	// Empty for [op.Interaction] returns.
+	// Empty for [op.Interaction] returns. The built-in account
+	// chooser is the singular exception: it is allowed to populate
+	// Subject so the orchestrator can treat the picked session as
+	// authoritatively bound. User-extension Interactions MUST leave
+	// Subject empty; the orchestrator gates the "propagate Subject
+	// from Interaction" branch on the chooser's reserved name.
 	Subject string
 
 	// AuthTime is the wall-clock time at which the factor confirmed

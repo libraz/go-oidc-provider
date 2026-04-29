@@ -232,6 +232,15 @@ type config struct {
 	// consentUISet records whether [WithConsentUI] was invoked.
 	consentUISet bool
 
+	// chooserUI stores the [ChooserUI] supplied through
+	// [WithChooserUI]. Mutually exclusive with [config.reactUI];
+	// validation runs at the option site so the conflict surfaces
+	// at construction time.
+	chooserUI ChooserUI
+
+	// chooserUISet records whether [WithChooserUI] was invoked.
+	chooserUISet bool
+
 	// staticClients carries the [store.Client] records produced by
 	// every [WithStaticClients] call (in invocation order, in seed
 	// order within each call). The slice is the H1-D orchestrator's
@@ -489,6 +498,12 @@ func (c *config) emitPartialWiringWarnings() {
 		c.logger.Warn(
 			"WithConsentUI is registered but the supplied Template is not yet rendered by any handler. The option is a no-op until the consent-interaction wiring lands;05-login-and-ui-shell.md §3.5.",
 			"option", "WithConsentUI",
+		)
+	}
+	if c.chooserUISet {
+		c.logger.Warn(
+			"WithChooserUI is registered but the supplied Template is not yet rendered by any handler. The option is a no-op until the chooser-interaction HTML render wiring lands.",
+			"option", "WithChooserUI",
 		)
 	}
 }
@@ -2137,6 +2152,26 @@ type ConsentUI struct {
 	Template *template.Template
 }
 
+// ChooserUI declares the template the [Provider] uses to render the
+// account chooser screen when prompt=select_account fires for a
+// session that already has a chooser group. Mutually exclusive with
+// [WithReactUI]; supplying both fails [New] with a structured
+// configuration error. The struct field set is intentionally narrow:
+// the chooser screen has a fixed data model (Accounts, AddAccountURL,
+// CSRFToken) and the embedder supplies an [*template.Template] that
+// consumes it.
+// Experimental: the field set is being introduced in v0.x. Future
+// revisions may add a Strings field for an i18n bundle once the
+// public i18n surface stabilises.
+type ChooserUI struct {
+	// Template is the [html/template.Template] the chooser screen
+	// renders. The library passes the canonical chooser context
+	// (Accounts, AddAccountURL, CSRFToken) at render time. MUST be
+	// non-nil; the option site rejects a nil template so the
+	// misconfiguration surfaces at [New].
+	Template *template.Template
+}
+
 // WithLoginFlow registers the [LoginFlow] the orchestrator drives.
 // The option compiles the flow into an internal runtime structure at
 // [New] and routes the authenticator chain through the
@@ -2258,6 +2293,12 @@ func checkReactUIPrecondition(c *config) error {
 			Description: "WithReactUI is mutually exclusive with WithConsentUI",
 		}
 	}
+	if c.chooserUISet {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithReactUI is mutually exclusive with WithChooserUI",
+		}
+	}
 	return nil
 }
 
@@ -2352,6 +2393,47 @@ func WithConsentUI(ui ConsentUI) Option {
 		}
 		c.consentUI = ui
 		c.consentUISet = true
+		return nil
+	})
+}
+
+// WithChooserUI registers the [ChooserUI] template the HTML driver
+// uses for the account chooser screen. Mutually exclusive with
+// [WithReactUI]; supplying both fails [New] with a structured
+// configuration error.
+// Validation:
+//   - Template MUST be non-nil.
+//   - Repeated [WithChooserUI] calls are rejected.
+//
+// Experimental — no-op today: as of v0.x, [New] validates the option
+// and emits a WARN log line through the configured logger but does
+// NOT yet route the supplied Template into the chooser renderer.
+// The option is reserved so the v1.0 surface can be planned without
+// shipping a placeholder type later; embedders can register a
+// template now and have it consumed automatically once the chooser
+// HTML render path lands.
+func WithChooserUI(ui ChooserUI) Option {
+	return optionFunc(func(c *config) error {
+		if c.chooserUISet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithChooserUI may be called at most once",
+			}
+		}
+		if c.reactUISet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithChooserUI is mutually exclusive with WithReactUI",
+			}
+		}
+		if ui.Template == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithChooserUI: Template must not be nil",
+			}
+		}
+		c.chooserUI = ui
+		c.chooserUISet = true
 		return nil
 	})
 }

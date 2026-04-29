@@ -157,6 +157,37 @@ type State struct {
 	// the same surface) can read it without re-querying the request.
 	RequestedScopes []string `json:"requested_scopes,omitempty"`
 
+	// ChooserGroupID is the active session cookie's chooser-group
+	// identifier. The HTTP layer populates it from the session
+	// cookie when starting an interaction whose hint matrix routed
+	// to the chooser; the orchestrator forwards it through
+	// [BeginInput.ChooserGroupID] / [ContinueInput.ChooserGroupID]
+	// so the built-in chooser interaction can enumerate live
+	// accounts without re-reading the cookie. Empty for chains
+	// that do not include the chooser interaction.
+	ChooserGroupID string `json:"chooser_group_id,omitempty"`
+
+	// ChooserSelectedSessionID is the SessionID the user picked at
+	// the built-in account chooser screen. Populated by the
+	// orchestrator from the chooser submission's "session_id"
+	// field on a successful chooser Continue; the HTTP layer reads
+	// it at terminal-tick time to call [sessions.Manager.Switch]
+	// instead of [sessions.Manager.Issue] so the cookie rebinds
+	// within the existing chooser group rather than starting a new
+	// one. Empty for any chain that did not run the chooser.
+	ChooserSelectedSessionID string `json:"chooser_selected_session_id,omitempty"`
+
+	// ChooserBoundSubject reports whether the built-in chooser
+	// interaction's most recent Result actively bound a subject. Set
+	// only when [recordInteractionResult] observes a chooser result
+	// with a non-empty Subject; the chooser self-skip path (no
+	// active group) records a marker entry in
+	// [State.InteractionsRun] without flipping this flag. The
+	// orchestrator's PhaseBeforeAuthn dispatch reads it to decide
+	// whether to skip the factor chain — a flag that is true only
+	// after the chooser screen actually picked an account.
+	ChooserBoundSubject bool `json:"chooser_bound_subject,omitempty"`
+
 	// ApprovedScopes is the scope subset the user accepted at the
 	// consent screen, recorded from the most recent
 	// [interaction.Result.Scope] the orchestrator observed. The
@@ -499,6 +530,7 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 		Submission:      *in.Submission,
 		Scratch:         st.FactorScratch,
 		RequestedScopes: st.RequestedScopes,
+		ChooserGroupID:  st.ChooserGroupID,
 	})
 	if err != nil {
 		o.observeFailure(ctx, st, in.Now, auth.Type())
@@ -544,6 +576,7 @@ func (o *Orchestrator) handleInteractionSubmission(ctx context.Context, st State
 		AuthTime:        st.AuthTime,
 		Submission:      *in.Submission,
 		RequestedScopes: st.RequestedScopes,
+		ChooserGroupID:  st.ChooserGroupID,
 	})
 	if err != nil {
 		return st, interaction.Step{}, err
@@ -558,7 +591,17 @@ func (o *Orchestrator) handleInteractionSubmission(ctx context.Context, st State
 	if step.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
 	}
-	st = recordInteractionResult(st, *step.Result)
+	st = recordInteractionResult(st, ix.Name(), *step.Result)
+	if ix.Name() == BuiltinChooserName {
+		// Capture the picked SessionID so the HTTP layer can call
+		// sessions.Manager.Switch at terminal-tick time instead of
+		// issuing a fresh chooser group. The chooser interaction
+		// has already validated the value belongs to the active
+		// chooser group.
+		if in.Submission != nil {
+			st.ChooserSelectedSessionID = in.Submission.Values[ChooserSessionIDField]
+		}
+	}
 	st.InteractionsRun[ix.Name()] = true
 	st.ActiveInteractionName = ""
 	return st, interaction.Step{}, nil
@@ -591,7 +634,20 @@ func (o *Orchestrator) advance(ctx context.Context, st State, in Input) (State, 
 func (o *Orchestrator) advanceOnce(ctx context.Context, st State, in Input) (State, interaction.Step, bool, error) {
 	switch st.Phase {
 	case PhaseBeforeAuthn:
-		return o.advancePhaseInteractions(ctx, st, in.Now, TriggerBeforeAuthn, PhaseAuthn)
+		next, step, transition, err := o.advancePhaseInteractions(ctx, st, in.Now, TriggerBeforeAuthn, PhaseAuthn)
+		// When the built-in chooser ran during the BeforeAuthn
+		// phase and actively bound a subject, skip the factor
+		// chain entirely. The check reads [State.ChooserBoundSubject]
+		// rather than [State.InteractionsRun]: the chooser self-skip
+		// path (no active chooser group) marks the interaction as
+		// run via an empty Result so subsequent ticks do not re-emit
+		// the prompt, but it leaves ChooserBoundSubject false. The
+		// flag is the unambiguous "factor chain has been replaced"
+		// signal.
+		if transition && next.Phase == PhaseAuthn && next.ChooserBoundSubject {
+			next.Phase = PhaseAfterAuthn
+		}
+		return next, step, transition, err
 	case PhaseAuthn:
 		next, step, err := o.advanceAuthn(ctx, st, in.Now)
 		// LoginFlow path may transition to PhaseAfterAuthn without
@@ -645,6 +701,7 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 			ClientID:        st.ClientID,
 			AuthTime:        now,
 			RequestedScopes: st.RequestedScopes,
+			ChooserGroupID:  st.ChooserGroupID,
 		})
 		if err != nil {
 			return st, interaction.Step{}, false, err
@@ -659,7 +716,7 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 		if step.Result == nil {
 			return st, interaction.Step{}, false, ErrInvalidStep
 		}
-		st = recordInteractionResult(st, *step.Result)
+		st = recordInteractionResult(st, ix.Name(), *step.Result)
 		st.InteractionsRun[ix.Name()] = true
 	}
 	return st, interaction.Step{}, true, nil
@@ -702,6 +759,7 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 		ClientID:        st.ClientID,
 		AuthTime:        now,
 		RequestedScopes: st.RequestedScopes,
+		ChooserGroupID:  st.ChooserGroupID,
 	})
 	if err != nil {
 		return st, interaction.Step{}, err
@@ -837,15 +895,42 @@ func (o *Orchestrator) emitTerminal(st State) (State, interaction.Step, error) {
 // recordInteractionResult folds a non-authn [interaction.Result] into
 // [State]. The function exists so the Begin-completes-immediately path
 // (advanceInteractions) and the Continue-completes path
-// (handleInteractionSubmission) record the same fields. Today only
-// Result.Scope is folded; future per-interaction return shapes can
-// extend the helper without re-touching every call site.
-func recordInteractionResult(st State, res interaction.Result) State {
+// (handleInteractionSubmission) record the same fields.
+// Today two fields are folded: Result.Scope (consent) and
+// Result.Subject (the singular built-in chooser exception).
+// User-extension interactions MUST leave Subject empty; the
+// orchestrator gates Subject propagation on the reserved chooser
+// name to enforce this in code.
+func recordInteractionResult(st State, name string, res interaction.Result) State {
 	if len(res.Scope) > 0 {
 		st.ApprovedScopes = append([]string(nil), res.Scope...)
 	}
+	if res.Subject != "" && name == BuiltinChooserName {
+		st.Subject = res.Subject
+		st.ChooserBoundSubject = true
+	}
 	return st
 }
+
+// BuiltinChooserName is the [Interaction.Name] reserved for the
+// built-in account chooser. The orchestrator references the name
+// to gate Subject propagation in [recordInteractionResult] and to
+// short-circuit the factor chain in [Orchestrator.advanceOnce]
+// when the chooser binds a subject. The constant lives in this
+// package (rather than internal/authn/chooser) so the orchestrator
+// can reference it without an import cycle.
+const BuiltinChooserName = "chooser"
+
+// ChooserSessionIDField is the [interaction.FormSubmission] field name
+// the chooser screen submits the picked SessionID under. The orchestrator
+// reads it directly so the HTTP layer can drive a session-cookie rebind
+// at terminal-tick time without depending on the chooser package.
+const ChooserSessionIDField = "session_id"
+
+// ChooserPromptType is the [interaction.Prompt.Type] the built-in
+// chooser emits. SPA dispatchers route on it to render the chooser
+// screen.
+const ChooserPromptType = "interaction.chooser"
 
 // appendFactor is the single point where the orchestrator records a
 // successful authenticator run. It enforces the §E.6.1 invariant that

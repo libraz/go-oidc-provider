@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/chooser"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
@@ -1092,7 +1093,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 			Cause:       err,
 		}
 	}
-	orchestrator, err := buildOrchestrator(cfg)
+	orchestrator, err := buildOrchestrator(cfg, sessMgr)
 	if err != nil {
 		return nil, err
 	}
@@ -1262,7 +1263,15 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 // to consent: consent always runs first at [TriggerAfterAuthn] so the
 // authorize-code mint observes the approved scope subset before any
 // user-extension can short-circuit the chain.
-func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
+//
+// sessMgr is the chooser-group session manager. When non-nil, the
+// built-in account chooser is registered alongside consent and
+// runs at [TriggerBeforeAuthn] for /authorize requests whose hint
+// matrix routed to the chooser. A nil sessMgr (e.g., chains that
+// do not reach the authorize endpoint) suppresses the chooser
+// registration; the orchestrator continues to run consent and any
+// user-extension interactions.
+func buildOrchestrator(cfg *config, sessMgr *sessions.Manager) (*authn.Orchestrator, error) {
 	if len(cfg.authenticators) == 0 && !cfg.loginFlowSet {
 		return nil, nil //nolint:nilnil // documented "no orchestrator configured" sentinel
 	}
@@ -1303,7 +1312,7 @@ func buildOrchestrator(cfg *config) (*authn.Orchestrator, error) {
 			}
 		}
 	}
-	interactions := buildBuiltInInteractions(cfg)
+	interactions := buildBuiltInInteractions(cfg, sessMgr)
 	orch, err := authn.New(authn.Config{
 		Authenticators: cfg.authenticators,
 		Interactions:   interactions,
@@ -1630,14 +1639,19 @@ func newACRResolver(cfg *config) authorizeendpoint.ACRResolver {
 }
 
 // buildBuiltInInteractions prepends the library-built-in interactions
-// (today: consent only) to the user-supplied [WithInteractions] slice.
-// Names already taken by user extensions win — [authn.New] de-duplicates
-// by [Interaction.Name] and keeps the first occurrence — so an embedder
-// who registers a custom "consent" interaction (rare but supported)
-// silently overrides the built-in.
-func buildBuiltInInteractions(cfg *config) []Interaction {
-	out := make([]Interaction, 0, len(cfg.interactions)+1)
+// to the user-supplied [WithInteractions] slice. Today the built-ins
+// are the consent screen and (when sessMgr is non-nil) the account
+// chooser. Names already taken by user extensions win —
+// [authn.New] de-duplicates by [Interaction.Name] and keeps the first
+// occurrence — so an embedder who registers a custom "consent" or
+// "chooser" interaction (rare but supported) silently overrides the
+// built-in.
+func buildBuiltInInteractions(cfg *config, sessMgr *sessions.Manager) []Interaction {
+	out := make([]Interaction, 0, len(cfg.interactions)+2)
 	out = append(out, consent.New(consentCatalog(cfg.scopes)))
+	if sessMgr != nil {
+		out = append(out, chooser.New(sessMgr))
+	}
 	out = append(out, cfg.interactions...)
 	return out
 }

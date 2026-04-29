@@ -369,7 +369,14 @@ func terminateInteraction(
 			}
 		}
 	}
-	if err := ensureSession(w, r, deps, result.Subject, result.AuthTime, amr, acr); err != nil {
+	if err := ensureSession(w, r, deps, ensureSessionArgs{
+		Subject:                  result.Subject,
+		AuthTime:                 result.AuthTime,
+		AMR:                      amr,
+		ACR:                      acr,
+		ChooserGroupID:           authnState.ChooserGroupID,
+		ChooserSelectedSessionID: authnState.ChooserSelectedSessionID,
+	}); err != nil {
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
@@ -431,32 +438,75 @@ func terminateInteraction(
 	emitAuthorizeSuccess(w, r, deps, req, codeID)
 }
 
+// ensureSessionArgs bundles the inputs ensureSession consumes. The
+// chooser-side fields are populated only when the orchestrator ran
+// the built-in account chooser; otherwise both are empty and
+// ensureSession falls back to Issue.
+type ensureSessionArgs struct {
+	Subject                  string
+	AuthTime                 time.Time
+	AMR                      []string
+	ACR                      string
+	ChooserGroupID           string
+	ChooserSelectedSessionID string
+}
+
 // ensureSession reuses the cookie-bound session when it represents
-// the same subject, or issues a fresh one. The freshly issued cookie
-// is set on the response writer.
-func ensureSession(
-	w http.ResponseWriter,
-	r *http.Request,
-	deps resolved,
-	subject string,
-	authTime time.Time,
-	amr []string,
-	acr string,
-) error {
-	active, err := resolveSession(r, deps)
-	if err == nil && active != nil && active.Session != nil && active.Session.Subject == subject {
+// the same subject, switches within the existing chooser group when
+// the chooser picked a different account, adds a new account to the
+// existing chooser group when a fresh login lands on top of an active
+// session for a different subject, or issues a fresh session
+// otherwise. The resulting cookie is set on the response writer.
+func ensureSession(w http.ResponseWriter, r *http.Request, deps resolved, in ensureSessionArgs) error {
+	active, _ := resolveSession(r, deps)
+	if active != nil && active.Session != nil && active.Session.Subject == in.Subject {
 		return nil
 	}
-	out, err := deps.Sessions.Issue(r.Context(), sessions.Login{
-		Subject:  subject,
-		AuthTime: authTime,
-		AMR:      slices.Clone(amr),
-		ACR:      acr,
-	})
+	out, err := pickSessionOutcome(r.Context(), deps, in, active)
 	if err != nil {
-		return fmt.Errorf("authorizeendpoint: issue session: %w", err)
+		return err
 	}
-	c, err := cookie.Build(cookie.SessionProfile, out.Cookie)
+	return setSessionCookie(w, out.Cookie)
+}
+
+// pickSessionOutcome selects between the three Manager paths the
+// terminate-step needs (Switch / AddAccount / Issue). Splitting the
+// decision out of [ensureSession] keeps the caller under the gocognit
+// ceiling without losing the ordering invariant: chooser-picked switch
+// wins, then add-account-on-fresh-login, then plain Issue.
+func pickSessionOutcome(ctx context.Context, deps resolved, in ensureSessionArgs, active *sessions.Active) (sessions.Outcome, error) {
+	if in.ChooserGroupID != "" && in.ChooserSelectedSessionID != "" {
+		out, err := deps.Sessions.Switch(ctx, in.ChooserGroupID, in.ChooserSelectedSessionID)
+		if err != nil {
+			return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: switch session: %w", err)
+		}
+		return out, nil
+	}
+	login := sessions.Login{
+		Subject:  in.Subject,
+		AuthTime: in.AuthTime,
+		AMR:      slices.Clone(in.AMR),
+		ACR:      in.ACR,
+	}
+	if active != nil && active.Session != nil && active.Session.ChooserGroupID != "" {
+		out, err := deps.Sessions.AddAccount(ctx, active.Session.ChooserGroupID, login)
+		if err != nil {
+			return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: add account: %w", err)
+		}
+		return out, nil
+	}
+	out, err := deps.Sessions.Issue(ctx, login)
+	if err != nil {
+		return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: issue session: %w", err)
+	}
+	return out, nil
+}
+
+// setSessionCookie builds and writes the __Host-oidc_session cookie
+// from value. Centralised so the three paths in [pickSessionOutcome]
+// share one error string and one Set-Cookie call.
+func setSessionCookie(w http.ResponseWriter, value string) error {
+	c, err := cookie.Build(cookie.SessionProfile, value)
 	if err != nil {
 		return fmt.Errorf("authorizeendpoint: build session cookie: %w", err)
 	}

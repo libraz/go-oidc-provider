@@ -103,6 +103,15 @@ type BeginInput struct {
 	// layer has not populated [State.RequestedScopes] (legacy
 	// chains, non-authorize entry points).
 	RequestedScopes []string
+
+	// ChooserGroupID is the active session cookie's chooser-group
+	// identifier. The built-in account chooser interaction reads it
+	// to enumerate live accounts; every other factor / interaction
+	// ignores the field. Empty when the /authorize entry point did
+	// not resolve an active session (no cookie or no chooser
+	// group), in which case the chooser interaction is not
+	// registered for this attempt.
+	ChooserGroupID string
 }
 
 // ContinueInput carries the per-submission context an [Authenticator]
@@ -150,6 +159,14 @@ type ContinueInput struct {
 	// to validate that every approved scope was actually in the
 	// request set; authenticator factors usually ignore the field.
 	RequestedScopes []string
+
+	// ChooserGroupID mirrors [BeginInput.ChooserGroupID] for the
+	// matching submission. Read by the built-in account chooser
+	// so [op.Interaction.Continue] can validate the submitted
+	// session_id belongs to the active chooser group before
+	// rebinding the session cookie. Other interactions ignore
+	// the field.
+	ChooserGroupID string
 }
 
 // Authenticator is the protocol-side state machine for a single

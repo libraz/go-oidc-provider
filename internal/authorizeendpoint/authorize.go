@@ -364,15 +364,16 @@ func buildHintState(
 
 // decideHintPromptNone resolves the matrix when prompt=none is present.
 // The OIDC spec requires the OP to surface one of the *_required errors
-// rather than start an interaction.
+// rather than start an interaction. The strict prompt validator
+// (request.Validate / validatePrompt) already rejected prompt=none
+// combined with any other prompt as invalid_request, so this branch
+// only runs with prompt=none alone.
 func decideHintPromptNone(s hintState) authorizeHint {
 	switch {
 	case !s.hasSession, s.forceLogin:
 		return authorizeHint{decision: decisionLoginRequired}
 	case s.needConsent:
 		return authorizeHint{decision: decisionConsentRequired}
-	case s.selectAcct:
-		return authorizeHint{decision: decisionInteractionRequired}
 	default:
 		return authorizeHint{decision: decisionMint, grant: s.existing}
 	}
@@ -383,10 +384,19 @@ func decideHintPromptNone(s hintState) authorizeHint {
 // The existing grant is forwarded on the interact path so
 // [startInteraction] can pre-mark the consent step as already covered
 // when the cached grant subsumes the requested scope.
+//
+// prompt=select_account on a request with an active session is
+// routed to the chooser interaction. The hint records the prompt
+// as [interaction.PromptSelectAccount] so [startInteraction] knows
+// to register the chooser; consent still runs after the chooser
+// if the picked subject's grant does not cover the requested
+// scope.
 func decideHintInteractive(s hintState) authorizeHint {
 	switch {
 	case !s.hasSession, s.forceLogin:
 		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptLogin, grant: s.existing}
+	case s.selectAcct:
+		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptSelectAccount, grant: s.existing}
 	case s.needConsent:
 		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptConsent, grant: s.existing}
 	default:
@@ -424,9 +434,20 @@ func startInteraction(
 		return
 	}
 	now := deps.now().UTC()
+	willRunChooser := containsString(req.Prompt, interaction.PromptSelectAccount) && active != nil
 	interactionsRun := map[string]bool{}
-	if existing != nil && scopeIsSubset(req.Scope, existing.Scope) {
+	// When the chooser will run, the picked subject may differ
+	// from the cookie-resolved one. The grant we looked up
+	// (against the current subject) does not authoritatively cover
+	// the picked subject's scope set, so do NOT pre-mark consent
+	// as already run. Consent re-evaluates after the chooser binds
+	// the picked subject.
+	if !willRunChooser && existing != nil && scopeIsSubset(req.Scope, existing.Scope) {
 		interactionsRun[consent.Name] = true
+	}
+	chooserGroupID := ""
+	if willRunChooser && active.Session != nil {
+		chooserGroupID = active.Session.ChooserGroupID
 	}
 	authnState := authn.State{
 		InteractionUID:  uid,
@@ -439,6 +460,7 @@ func startInteraction(
 		Phase:           authn.PhaseBeforeAuthn,
 		InteractionsRun: interactionsRun,
 		RequestedScopes: append([]string(nil), req.Scope...),
+		ChooserGroupID:  chooserGroupID,
 	}
 	authnRaw, err := encodeAuthnState(authnState)
 	if err != nil {
