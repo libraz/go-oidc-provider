@@ -241,7 +241,27 @@ type InitialAccessTokenSpec struct {
 // InitialAccessTokenIssued is the result of
 // [Provider.IssueInitialAccessToken]. Value is the bearer secret to
 // hand to the operator; the OP retains only the SHA-256 hash. Callers
-// MUST treat Value as a credential — log only ID and ExpiresAt.
+// MUST treat Value as a credential — log only ID and ExpiresAt, never
+// Value. There is no second copy: the library does NOT emit Value via
+// audit events, slog hooks, or any sink besides this struct, and a
+// rotation flow that loses Value MUST mint a fresh IAT rather than
+// attempt recovery.
+//
+// Recommended handling:
+//
+//   - Pass Value directly to the operator's secret manager (Vault,
+//     AWS Secrets Manager, sealed-secret) before any error path can
+//     run, so a panic / network error after the IAT row is committed
+//     does not leave the secret stranded only in the calling
+//     goroutine's memory.
+//   - When delivering Value out of band (invitation email, RP intake
+//     form), do so with the same care a one-time refresh-token rotation
+//     gets: TLS-only transport, recipient identification, and the
+//     understanding that the IAT itself bootstraps a confidential
+//     client credential.
+//   - In demos and examples Value MAY be printed to stdout for
+//     observability, but the example MUST be labelled "demo only" and
+//     production code MUST NOT log Value.
 type InitialAccessTokenIssued struct {
 	// ID is the opaque public identifier for the IAT, suitable for
 	// audit logs and for [Provider.RevokeInitialAccessToken]. It is
@@ -250,7 +270,9 @@ type InitialAccessTokenIssued struct {
 
 	// Value is the bearer secret presented at /register. It is
 	// returned exactly once; the library cannot recover it after the
-	// call returns.
+	// call returns. See the type-level godoc for handling guidance —
+	// Value MUST NOT be logged, persisted to disk, or echoed through
+	// audit emitters in production code.
 	Value string
 
 	// ExpiresAt is the wall-clock time at which the IAT becomes
@@ -388,9 +410,30 @@ func defaultRegistrationResponseTypes() []string {
 // IssueInitialAccessToken creates and persists a new Initial Access
 // Token. Operators call this from Go code (cron, invitation flow,
 // tenant provisioning); no admin REST endpoint is exposed per ADR
-// 0005. The returned [InitialAccessTokenIssued.Value] is the only
-// chance to read the bearer secret — store it in the operator's secret
-// manager or hand it to the registering RP and discard.
+// 0005.
+//
+// The returned [InitialAccessTokenIssued.Value] is the bearer secret
+// the registering RP MUST present in its POST /register
+// "Authorization: Bearer …" header. The library hashes Value with
+// SHA-256 before writing the row, so this call is the ONLY chance to
+// read the secret — neither [Provider.RevokeInitialAccessToken] nor
+// any audit emitter can recover it after the function returns. A
+// caller that loses the value MUST mint a fresh IAT and revoke the
+// stranded one.
+//
+// Treat Value with the care due any single-use credential:
+//
+//   - Do NOT log it. The library deliberately omits Value from audit
+//     events (only ID and ExpiresAt are surfaced) so that a wired
+//     audit emitter cannot inadvertently leak it; calling code MUST
+//     uphold the same invariant.
+//   - Pass it directly to the operator's secret manager or to the
+//     out-of-band channel that delivers it to the operator (invitation
+//     email, RP intake form). Hand-off SHOULD happen before any
+//     subsequent error path can run.
+//   - In demos and examples Value MAY be printed to stdout, but the
+//     example MUST be labelled "demo only" and the same code MUST NOT
+//     ship to production.
 //
 // Returns [ErrDynamicRegistrationDisabled] when [WithDynamicRegistration]
 // was not configured. A non-nil error from the underlying store is

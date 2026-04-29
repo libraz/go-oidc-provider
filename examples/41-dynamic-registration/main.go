@@ -45,9 +45,17 @@
 // PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
 // store, and a public HTTP listener. Production embedders run this
 // behind TLS, persist the IAT / RAT / client records in a real
-// backend, hand the IAT to the registering RP through their secret
-// distribution channel (never log it), and rotate the IAT on a short
-// cadence.
+// backend, and rotate the IAT on a short cadence.
+//
+// The startup log line that prints the IAT bearer secret is DEMO-ONLY.
+// The library returns the secret exactly once (see
+// op.InitialAccessTokenIssued.Value godoc) and there is no recovery
+// path; production code MUST hand it to the operator's secret manager
+// or to the registering RP through an out-of-band channel (invitation
+// email, RP intake form) and MUST NOT log, audit-emit, or persist it
+// anywhere besides the credential store. This example logs it so the
+// reader can paste it into the curl call below; remove that log line
+// before adapting any of this to production.
 package main
 
 import (
@@ -106,7 +114,9 @@ func main() {
 
 	// Issue an IAT once at startup so the demo curl call has a
 	// credential to present. The bearer secret is only returned now;
-	// log it so the example reader can copy it.
+	// the line that logs iat.Value below is DEMO-ONLY (see the package
+	// godoc) — production code routes Value to a secret manager and
+	// never to a log.
 	iat, err := provider.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{
 		Tag: "example-41-startup",
 	})
@@ -118,7 +128,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("dcr example listening on :8080")
-	log.Printf("Initial Access Token (single-use, 1 h TTL): %s", iat.Value)
+	log.Printf("Initial Access Token (single-use, 1 h TTL) [DEMO-ONLY, do not log in production]: %s", iat.Value)
 	log.Printf("IAT id: %s  expires: %s", iat.ID, iat.ExpiresAt.Format(time.RFC3339))
 	log.Println("try: curl -sX POST http://localhost:8080/oidc/register \\")
 	log.Println("         -H \"Authorization: Bearer $IAT\" \\")

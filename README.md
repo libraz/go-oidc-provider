@@ -42,10 +42,20 @@ graceful shutdown), see [`examples/`](#examples) below.
 ## Examples
 
 All examples are built behind the `example` build tag so they are
-excluded from `go test ./...` and from production go.sum. The
-numbering convention groups examples by topic — 0x = bootstrap /
-storage, 1x = UI / scopes / SPA / locale, 2x = MFA, 3x = federation,
-4x = governance / DCR / logout, 5x = FAPI helpers / observability:
+excluded from `go test ./...` and from production go.sum. Numbers
+group examples by topic — bands without entries today are reserved
+for in-flight or v1.x work and will fill in as the corresponding
+features land:
+
+| Band  | Topic                                                          |
+|-------|----------------------------------------------------------------|
+| 00–09 | bootstrap, grant variants, storage adapters                    |
+| 10–19 | UI, scopes, SPA, locale, claims request, CORS                  |
+| 20–29 | MFA and authentication rules (TOTP / risk / captcha / step-up) |
+| 30–39 | identity federation (reserved — v1.x Wave M)                   |
+| 40–49 | governance: first-party, DCR, back-channel logout              |
+| 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce         |
+| 60–69 | compliance (reserved — v1.x late)                              |
 
 | Path | Demonstrates |
 |---|---|
