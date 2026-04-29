@@ -68,6 +68,23 @@ type Deps struct {
 	// that registered backchannel_logout_uri, or wires the
 	// coordinator manually outside the standard mount point.
 	Backchannel *backchannel.Coordinator
+
+	// Grants enumerates the active grants tied to the terminating
+	// subject. The handler walks the result and asks
+	// [Deps.AccessTokens] to revoke each grant's outstanding access
+	// tokens so the OP honours the FAPI 2.0 SP §5.3.2.2 / OIDC
+	// RP-Initiated Logout 1.0 §5 expectation that "the OP MAY
+	// revoke any active access tokens" once the user signs out.
+	// A nil value disables the cascade — the embedder either runs
+	// without ADR 0013 wiring, or accepts that access tokens
+	// outlive the session until their JWT exp is reached.
+	Grants store.GrantStore
+
+	// AccessTokens revokes the per-grant access-token shadow rows
+	// ADR 0013 introduces. A nil value disables the cascade for
+	// the same reasons listed on [Deps.Grants]; both fields
+	// propagate together through [op.New].
+	AccessTokens store.AccessTokenRegistry
 }
 
 // Handler returns the HTTP handler the OP mounts at its /end_session
@@ -261,16 +278,46 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 		// matches how /authorize treats expired sessions.
 		_ = deps.Sessions.Logout(r.Context(), sid)
 	}
-	if subject != "" && deps.Backchannel != nil {
-		// Back-channel fan-out is best-effort: per-RP failures are
-		// recorded as audit events inside the coordinator so a
-		// broken downstream cannot stall the user-visible logout.
-		_, _ = deps.Backchannel.Notify(r.Context(), backchannel.Notice{
-			Subject:   subject,
-			SessionID: sid,
-		})
+	if subject != "" {
+		revokeAccessTokens(r.Context(), deps, subject)
+		if deps.Backchannel != nil {
+			// Back-channel fan-out is best-effort: per-RP failures
+			// are recorded as audit events inside the coordinator
+			// so a broken downstream cannot stall the user-visible
+			// logout.
+			_, _ = deps.Backchannel.Notify(r.Context(), backchannel.Notice{
+				Subject:   subject,
+				SessionID: sid,
+			})
+		}
 	}
 	clearSessionCookie(w)
+}
+
+// revokeAccessTokens cascades RP-Initiated Logout to the ADR 0013
+// access-token registry: every grant the subject currently holds is
+// retired so subsequent /userinfo, /introspection, and resource-server
+// validations reject the outstanding bearer JWTs immediately rather
+// than waiting for their exp claim to elapse. A nil [Deps.Grants] or
+// [Deps.AccessTokens] short-circuits the cascade — the embedder has
+// not opted into the registry, and skipping the calls leaves access
+// tokens to expire naturally. Per-call errors are swallowed for the
+// same reason [Sessions.Logout] errors are: the user's intent is to
+// sign out, and a transient store fault must not surface as a 5xx.
+func revokeAccessTokens(ctx context.Context, deps Deps, subject string) {
+	if deps.Grants == nil || deps.AccessTokens == nil {
+		return
+	}
+	grants, err := deps.Grants.ListBySubject(ctx, subject)
+	if err != nil {
+		return
+	}
+	for _, g := range grants {
+		if g == nil || g.ID == "" {
+			continue
+		}
+		_, _ = deps.AccessTokens.RevokeByGrant(ctx, g.ID)
+	}
 }
 
 // readSessionFingerprint pulls the session id and the authenticated

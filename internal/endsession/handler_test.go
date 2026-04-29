@@ -120,11 +120,13 @@ func newHarness(t *testing.T) *harness {
 	}
 
 	deps := endsession.Deps{
-		Issuer:   "https://op.example.com",
-		Clients:  st.Clients(),
-		Sessions: mgr,
-		Keys:     keySet,
-		Clock:    clock,
+		Issuer:       "https://op.example.com",
+		Clients:      st.Clients(),
+		Sessions:     mgr,
+		Keys:         keySet,
+		Clock:        clock,
+		Grants:       st.Grants(),
+		AccessTokens: st.AccessTokens(),
 	}
 	mux := http.NewServeMux()
 	const endSessionPath = "/oidc/end_session"
@@ -596,6 +598,125 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 	}
 	if capturedSID != sessionID {
 		t.Errorf("logout-token sid=%q want %q", capturedSID, sessionID)
+	}
+}
+
+// TestHandler_RevokesAccessTokensOnLogout verifies the ADR 0013
+// cascade: when /end_session terminates the session, every
+// access-token record bound to a grant the subject still holds is
+// marked revoked. The test stops at the registry boundary; the
+// follow-on "userinfo returns 401 for a revoked record" path is
+// covered by internal/userinfo/handler_test.go's
+// enforceRevocationStatus tests, so the two layers together prove
+// the FAPI 2.0 SP §5.3.2.2 / OIDC RP-Initiated Logout 1.0 §5
+// expectation is honoured.
+func TestHandler_RevokesAccessTokensOnLogout(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, _ := h.issueSession(t)
+
+	const grantID = "g-revoke"
+	now := h.clock.now
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        grantID,
+		Subject:   "user-1",
+		ClientID:  h.clientID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Grants().Save: %v", err)
+	}
+	const jti = "jti-revoke"
+	if err := h.store.AccessTokens().Register(context.Background(), store.AccessTokenRecord{
+		JTI:       jti,
+		GrantID:   grantID,
+		Subject:   "user-1",
+		ClientID:  h.clientID,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AccessTokens().Register: %v", err)
+	}
+
+	resp := h.doGET(t, url.Values{}, cookieValue)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+
+	rec, err := h.store.AccessTokens().Find(context.Background(), jti)
+	if err != nil {
+		t.Fatalf("AccessTokens().Find: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("AccessTokens().Find returned nil record")
+	}
+	if !rec.Revoked {
+		t.Errorf("AccessTokenRecord.Revoked=false want true (ADR 0013 cascade not wired)")
+	}
+}
+
+// TestHandler_AccessTokenCascadeNoCascadeWithoutDeps confirms the
+// cascade is opt-in: when [endsession.Deps] omits Grants /
+// AccessTokens (the embedder skipped ADR 0013 wiring), logout still
+// terminates the session but leaves the registry alone.
+func TestHandler_AccessTokenCascadeNoCascadeWithoutDeps(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, _ := h.issueSession(t)
+
+	const grantID = "g-skip"
+	now := h.clock.now
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        grantID,
+		Subject:   "user-1",
+		ClientID:  h.clientID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Grants().Save: %v", err)
+	}
+	const jti = "jti-skip"
+	if err := h.store.AccessTokens().Register(context.Background(), store.AccessTokenRecord{
+		JTI:       jti,
+		GrantID:   grantID,
+		Subject:   "user-1",
+		ClientID:  h.clientID,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AccessTokens().Register: %v", err)
+	}
+
+	deps := endsession.Deps{
+		Issuer:   "https://op.example.com",
+		Clients:  h.store.Clients(),
+		Sessions: h.sessionMgr,
+		Clock:    h.clock,
+	}
+	mux := http.NewServeMux()
+	mux.Handle(h.endSessionPath, endsession.Handler(deps))
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.endSessionPath, http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+
+	rec, err := h.store.AccessTokens().Find(context.Background(), jti)
+	if err != nil {
+		t.Fatalf("AccessTokens().Find: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("AccessTokens().Find returned nil record")
+	}
+	if rec.Revoked {
+		t.Errorf("AccessTokenRecord.Revoked=true want false; cascade fired without Grants/AccessTokens deps")
 	}
 }
 

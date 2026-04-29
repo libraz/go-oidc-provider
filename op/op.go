@@ -1199,12 +1199,14 @@ func mountEndSessionEndpoint(
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.EndSession),
 		endsession.Handler(endsession.Deps{
-			Issuer:      cfg.issuer,
-			Clients:     cfg.store.Clients(),
-			Sessions:    sessMgr,
-			Keys:        keySet,
-			Clock:       cfg.clock,
-			Backchannel: bcc,
+			Issuer:       cfg.issuer,
+			Clients:      cfg.store.Clients(),
+			Sessions:     sessMgr,
+			Keys:         keySet,
+			Clock:        cfg.clock,
+			Backchannel:  bcc,
+			Grants:       cfg.store.Grants(),
+			AccessTokens: cfg.store.AccessTokens(),
 		}),
 	)
 }
