@@ -43,8 +43,9 @@ graceful shutdown), see [`examples/`](#examples) below.
 
 All examples are built behind the `example` build tag so they are
 excluded from `go test ./...` and from production go.sum. The
-numbering convention groups examples by topic — 0x = bootstrap,
-1x = UI / scopes, 2x = MFA, 4x = governance, 5x = FAPI helpers:
+numbering convention groups examples by topic — 0x = bootstrap /
+storage, 1x = UI / scopes / SPA / locale, 2x = MFA, 3x = federation,
+4x = governance / DCR / logout, 5x = FAPI helpers / observability:
 
 | Path | Demonstrates |
 |---|---|
@@ -60,12 +61,19 @@ numbering convention groups examples by topic — 0x = bootstrap,
 | [`examples/10-react-login`](examples/10-react-login/main.go) | Delegate login / consent / logout screens to a SPA via `op.WithReactUI`. |
 | [`examples/11-custom-consent-ui`](examples/11-custom-consent-ui/main.go) | Custom consent template via `op.WithConsentUI`. |
 | [`examples/12-scopes-public-private`](examples/12-scopes-public-private/main.go) | `op.PublicScope` / `op.InternalScope` — discovery vs admin-only scopes. |
+| [`examples/14-cors-spa`](examples/14-cors-spa/main.go) | `op.WithCORSOrigins` + redirect-uri-derived allowlist for an SPA. |
+| [`examples/16-i18n-locale`](examples/16-i18n-locale/main.go) | Locale negotiation via `op.WithLocale` / `op.WithDefaultLocale`. |
+| [`examples/17-claims-request`](examples/17-claims-request/main.go) | OIDC §5.5 claims request parameter via `op.WithClaimsParameterSupported`. |
 | [`examples/20-mfa-totp`](examples/20-mfa-totp/main.go) | Password + always-TOTP via `op.LoginFlow` + `op.RuleAlways`. |
 | [`examples/21-risk-based-mfa`](examples/21-risk-based-mfa/main.go) | Risk-driven step-up via `op.RuleRisk` and a custom `RiskAssessor`. |
 | [`examples/22-login-captcha`](examples/22-login-captcha/main.go) | Captcha after N failed attempts via `op.RuleAfterFailedAttempts`. |
 | [`examples/23-step-up`](examples/23-step-up/main.go) | RFC 9470 ACR step-up via `op.RuleACR`. |
 | [`examples/40-first-party-skip-consent`](examples/40-first-party-skip-consent/main.go) | Skip the consent prompt for first-party clients via `op.WithFirstPartyClients`. |
+| [`examples/41-dynamic-registration`](examples/41-dynamic-registration/main.go) | RFC 7591 / 7592 Dynamic Client Registration via `op.WithDynamicRegistration`. |
+| [`examples/42-back-channel-logout`](examples/42-back-channel-logout/main.go) | OIDC Back-Channel Logout 1.0: per-client `BackchannelLogoutURI` + RP stub. |
 | [`examples/50-fapi-tls-jwks`](examples/50-fapi-tls-jwks/main.go) | FAPI helpers: `op.FAPITLSConfig` + `op.LoadPublicJWKS`. |
+| [`examples/51-dpop-nonce`](examples/51-dpop-nonce/main.go) | RFC 9449 §8 server-supplied DPoP nonce flow via `op.WithDPoPNonceSource`. |
+| [`examples/52-prometheus-metrics`](examples/52-prometheus-metrics/main.go) | Curated counter set via `op.WithPrometheus(reg)` + embedder-mounted `/metrics`. |
 
 Run any of them with the build tag, e.g.:
 
