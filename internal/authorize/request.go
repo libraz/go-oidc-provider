@@ -282,6 +282,15 @@ type Policy struct {
 	// "either a state or a nonce" rule. Vanilla OIDC Core leaves this
 	// false because state is RECOMMENDED, not required.
 	StateOrNonceRequired bool
+
+	// OpenIDScopeOptional, when true, lifts the OIDC Core 1.0
+	// §3.1.2.1 requirement that every authorization request include
+	// the "openid" scope. The default (false) matches OIDC: a request
+	// without "openid" surfaces ErrScopeMissingOpenID. Embedders flip
+	// this through the public [op.WithOpenIDScopeOptional] surface
+	// when they intend to serve plain OAuth 2.0 authorization_code
+	// flows alongside OIDC.
+	OpenIDScopeOptional bool
 }
 
 // Validate cross-checks the parsed [Request] against the registered client
@@ -315,7 +324,7 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 	if err := req.validateState(policy.StateOrNonceRequired); err != nil {
 		return err
 	}
-	if err := req.validateScope(client, scopes); err != nil {
+	if err := req.validateScope(client, scopes, policy.OpenIDScopeOptional); err != nil {
 		return err
 	}
 	if err := req.validateNonce(policy.NonceRequired); err != nil {
@@ -393,8 +402,13 @@ func (req *Request) validateState(stateOrNonceRequired bool) error {
 // the policy that every requested scope appear in the client's registered
 // list, and the per-scope AllowedClients allowlist (op.Scope.AllowedClients
 // from the registry). A nil registry disables only the allowlist check.
-func (req *Request) validateScope(client *store.Client, scopes *scoperegistry.Registry) error {
-	if !slices.Contains(req.Scope, "openid") {
+//
+// openIDOptional, when true, lifts the "openid" requirement so the OP
+// can serve plain OAuth 2.0 authorization_code flows. The
+// client-registered-scope intersection and the allowlist still run
+// — the only relaxation is the OIDC-mandatory "openid" presence check.
+func (req *Request) validateScope(client *store.Client, scopes *scoperegistry.Registry, openIDOptional bool) error {
+	if !openIDOptional && !slices.Contains(req.Scope, "openid") {
 		return ErrScopeMissingOpenID
 	}
 	for _, s := range req.Scope {

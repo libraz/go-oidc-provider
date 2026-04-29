@@ -336,22 +336,25 @@ func issueAuthCodeResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
-	idToken, err := mintAuthCodeIDToken(deps, mintIDTokenInput{
-		Subject:     exchanged.Subject,
-		ClientID:    client.ID,
-		Nonce:       exchanged.Nonce,
-		AccessToken: accessToken,
-		Code:        code,
-		Now:         now,
-		AuthTime:    authCtx.AuthTime,
-		ACR:         authCtx.ACR,
-		AMR:         authCtx.AMR,
-		Extra:       idTokenExtra,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+	var idToken string
+	if scopeContainsOpenID(exchanged.Scope) {
+		idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
+		idToken, err = mintAuthCodeIDToken(deps, mintIDTokenInput{
+			Subject:     exchanged.Subject,
+			ClientID:    client.ID,
+			Nonce:       exchanged.Nonce,
+			AccessToken: accessToken,
+			Code:        code,
+			Now:         now,
+			AuthTime:    authCtx.AuthTime,
+			ACR:         authCtx.ACR,
+			AMR:         authCtx.AMR,
+			Extra:       idTokenExtra,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
 	}
 	refreshToken, err := maybeIssueRefreshToken(ctx, deps, client, exchanged.Subject, exchanged.GrantID, exchanged.Scope, binding)
 	if err != nil {

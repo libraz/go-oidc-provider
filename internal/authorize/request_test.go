@@ -434,6 +434,87 @@ func TestRequest_Validate_PKCEPolicyConditional(t *testing.T) {
 	})
 }
 
+// TestRequest_Validate_OpenIDScopeOptional covers the policy-
+// conditional gate for the OIDC Core 1.0 §3.1.2.1 "openid" scope
+// requirement. With Policy{OpenIDScopeOptional:false} (the default)
+// a request that drops "openid" surfaces ErrScopeMissingOpenID — the
+// shape pinned by the missing_openid_scope row in the sentinel
+// table. With Policy{OpenIDScopeOptional:true} the same request
+// MUST be accepted so the embedder can serve plain OAuth 2.0
+// authorization_code on the same /authorize endpoint. The other
+// scope checks (client.Scopes intersection, AllowedClients
+// allowlist) keep firing under either policy; the only relaxation
+// is the "openid presence" gate.
+func TestRequest_Validate_OpenIDScopeOptional(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing_openid_accepted_when_optional", func(t *testing.T) {
+		t.Parallel()
+
+		v := goodValues()
+		v.Set("scope", "profile email")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		if err := req.Validate(goodClient(), nil, authorize.Policy{
+			PKCERequired:        true,
+			OpenIDScopeOptional: true,
+		}); err != nil {
+			t.Fatalf("Validate: %v want nil (openid optional)", err)
+		}
+	})
+
+	t.Run("scope_intersection_still_enforced_when_optional", func(t *testing.T) {
+		t.Parallel()
+
+		// "admin" is not in goodClient().Scopes — even with the
+		// openid gate lifted, the client-registered intersection
+		// MUST still surface ErrScopeNotPermitted. This pins that
+		// the option lifts ONLY the OIDC openid presence check, not
+		// the broader scope authorisation surface.
+		v := goodValues()
+		v.Set("scope", "profile admin")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		gotErr := req.Validate(goodClient(), nil, authorize.Policy{
+			PKCERequired:        true,
+			OpenIDScopeOptional: true,
+		})
+		if !errors.Is(gotErr, authorize.ErrScopeNotPermitted) {
+			t.Fatalf("err=%v want ErrScopeNotPermitted", gotErr)
+		}
+	})
+
+	t.Run("allowlist_still_enforced_when_optional", func(t *testing.T) {
+		t.Parallel()
+
+		// Scope is registered on the client but the registry
+		// allowlist excludes it; ErrScopeClientNotAllowed must
+		// still fire when the openid gate is lifted.
+		clientWithBilling := goodClient()
+		clientWithBilling.Scopes = append(clientWithBilling.Scopes, "billing:write")
+		reg := scoperegistry.New([]scoperegistry.Entry{
+			{Name: "billing:write", Public: true, AllowedClients: []string{"svc-billing"}},
+		})
+		v := goodValues()
+		v.Set("scope", "billing:write")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		gotErr := req.Validate(clientWithBilling, reg, authorize.Policy{
+			PKCERequired:        true,
+			OpenIDScopeOptional: true,
+		})
+		if !errors.Is(gotErr, authorize.ErrScopeClientNotAllowed) {
+			t.Fatalf("err=%v want ErrScopeClientNotAllowed", gotErr)
+		}
+	})
+}
+
 // TestRequest_Validate_NoncePolicyConditional covers the policy-
 // conditional gate for nonce: with Policy{NonceRequired:false} a
 // request that omits nonce MUST be accepted (the OIDC Core 1.0 errata

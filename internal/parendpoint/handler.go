@@ -156,6 +156,13 @@ type Deps struct {
 	// both endpoints so a request loses either way.
 	RequireStateOrNonce bool
 
+	// OpenIDScopeOptional mirrors
+	// [authorizeendpoint.Deps.OpenIDScopeOptional]: when true, /par
+	// accepts requests whose scope does not include "openid". The
+	// flag is forwarded verbatim to [authorize.Policy.OpenIDScopeOptional]
+	// so /par and /authorize stay in lock-step.
+	OpenIDScopeOptional bool
+
 	// ClaimsParameterEnabled mirrors
 	// [authorizeendpoint.Deps.ClaimsParameterEnabled] for the /par
 	// endpoint: when false, any parsed OIDC Core 1.0 §5.5 "claims"

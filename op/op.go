@@ -734,6 +734,7 @@ func mountPAREndpoint(
 			RequireNonce:               cfg.requireNonce(),
 			RequireStateOrNonce:        cfg.requireStateOrNonce(),
 			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
+			OpenIDScopeOptional:        cfg.openIDScopeOptional,
 			ClaimsParameterEnabled:     cfg.claimsParameterSupported(),
 		}),
 	)
@@ -1124,6 +1125,7 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		RequirePAR:              cfg.requirePAR(),
 		Issuer:                  cfg.issuer,
 		AllowPrivateNetworkJAR:  cfg.allowPrivateNetworkJAR,
+		OpenIDScopeOptional:     cfg.openIDScopeOptional,
 		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
 		ACRResolver:             newACRResolver(cfg),
 	})

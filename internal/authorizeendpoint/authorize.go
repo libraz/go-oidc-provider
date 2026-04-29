@@ -66,6 +66,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		PKCERequired:         deps.RequirePKCE,
 		NonceRequired:        deps.RequireNonce,
 		StateOrNonceRequired: deps.RequireStateOrNonce,
+		OpenIDScopeOptional:  deps.OpenIDScopeOptional,
 	}); err != nil {
 		writeAuthorizeValidationError(w, r, req, deps, err)
 		return

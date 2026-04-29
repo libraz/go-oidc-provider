@@ -230,6 +230,15 @@ type Deps struct {
 	// forwarded verbatim to [authorize.Policy.StateOrNonceRequired].
 	RequireStateOrNonce bool
 
+	// OpenIDScopeOptional, when true, makes /authorize accept
+	// requests whose scope does not include "openid". The library
+	// default (false) matches OIDC Core 1.0 §3.1.2.1; embedders flip
+	// this through [op.WithOpenIDScopeOptional] when they intend to
+	// serve plain OAuth 2.0 authorization_code flows alongside (or
+	// instead of) OIDC. The flag is forwarded verbatim to
+	// [authorize.Policy.OpenIDScopeOptional].
+	OpenIDScopeOptional bool
+
 	// RequirePAR, when true, makes /authorize reject any request that
 	// did not arrive via a [RFC 9126] pushed authorization request_uri.
 	// Bare-wire-form requests (client_id + redirect_uri + response_type

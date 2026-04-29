@@ -80,6 +80,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		PKCERequired:         deps.RequirePKCE,
 		NonceRequired:        deps.RequireNonce,
 		StateOrNonceRequired: deps.RequireStateOrNonce,
+		OpenIDScopeOptional:  deps.OpenIDScopeOptional,
 	}); err != nil {
 		writeAuthorizeError(w, err)
 		return

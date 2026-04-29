@@ -1504,6 +1504,46 @@ func TestWithFirstPartyClients_RejectsFAPI2Profile(t *testing.T) {
 	}
 }
 
+// TestWithOpenIDScopeOptional_RejectsFAPI2Profile pins the construction-
+// time refusal of [op.WithOpenIDScopeOptional] under any FAPI 2.0
+// profile. Both Baseline and Message Signing presuppose OIDC
+// semantics (id_token-bound state-or-nonce, scope-driven refresh
+// gating); the option's "no openid required" relaxation is
+// fundamentally incompatible. The error must mention "FAPI 2.0" so
+// the operator sees the conflict at a glance instead of a generic
+// "configuration" diagnostic.
+func TestWithOpenIDScopeOptional_RejectsFAPI2Profile(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.DPoP),
+		op.WithOpenIDScopeOptional(),
+	)...)
+	if err == nil {
+		t.Fatal("expected error combining WithOpenIDScopeOptional with FAPI 2.0 profile, got nil")
+	}
+	if !strings.Contains(err.Error(), "FAPI 2.0") {
+		t.Errorf("err = %v, want it to mention FAPI 2.0", err)
+	}
+}
+
+// TestWithOpenIDScopeOptional_AcceptedWithoutFAPI2 confirms the
+// option constructs cleanly when no FAPI 2.0 profile is active. The
+// happy-path build is the prerequisite for the end-to-end token
+// endpoint test that drives the plain-OAuth flow; if op.New refuses
+// the option in vanilla OIDC mode the rest of the test surface is
+// untestable.
+func TestWithOpenIDScopeOptional_AcceptedWithoutFAPI2(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithOpenIDScopeOptional(),
+	)...); err != nil {
+		t.Fatalf("op.New rejected WithOpenIDScopeOptional in vanilla mode: %v", err)
+	}
+}
+
 func TestWithClaimsSupported_AcceptsList(t *testing.T) {
 	t.Parallel()
 

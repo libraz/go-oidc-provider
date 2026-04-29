@@ -270,6 +270,18 @@ type config struct {
 	// value keeps the library default of "supported".
 	claimsParameterSupportedOff bool
 
+	// openIDScopeOptional, when true, lifts the OIDC Core 1.0 §3.1.2.1
+	// requirement that every authorization request include the
+	// "openid" scope. The flag exists so an embedder running plain
+	// OAuth 2.0 authorization_code flows alongside (or instead of)
+	// OIDC can do so without forking the validator. Default is false:
+	// requests missing "openid" are rejected with the redirect-safe
+	// invalid_scope error per the OIDC default. Token issuance stays
+	// scope-driven either way — the id_token is minted only when the
+	// granted scope actually carries "openid", so flipping this bit
+	// never produces a meaningless id_token.
+	openIDScopeOptional bool
+
 	// claimsSupported carries the explicit claim-name enumeration the
 	// embedder supplied through [WithClaimsSupported]. Nil means the
 	// option was not invoked and the discovery document omits the
@@ -526,6 +538,7 @@ func (c *config) validate() error {
 		c.validateInteractions,
 		c.validateLocales,
 		c.validateFirstPartyClients,
+		c.validateOpenIDScopeOptional,
 		c.validateLoginFlow,
 	} {
 		if err := fn(); err != nil {
@@ -610,6 +623,28 @@ func (c *config) validateFirstPartyClients() error {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithFirstPartyClients: unknown client_id " + id,
+			}
+		}
+	}
+	return nil
+}
+
+// validateOpenIDScopeOptional rejects the combination of
+// [WithOpenIDScopeOptional] and any active FAPI 2.0 profile. FAPI 2.0
+// Baseline / Message Signing both presuppose OpenID Connect semantics
+// (id_token-bound state-or-nonce, scope-driven refresh gating); the
+// profile MUSTs lose meaning without "openid" in scope, so the
+// combination is a misconfiguration we surface at construction time
+// rather than letting the runtime emit subtly-wrong responses.
+func (c *config) validateOpenIDScopeOptional() error {
+	if !c.openIDScopeOptional {
+		return nil
+	}
+	for _, p := range c.profiles {
+		if isFAPI2Profile(p) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithOpenIDScopeOptional is incompatible with FAPI 2.0 profile " + p.String(),
 			}
 		}
 	}
@@ -1491,6 +1526,35 @@ func WithClaimsParameterSupported(enabled bool) Option {
 	return optionFunc(func(c *config) error {
 		c.claimsParameterSupportedSet = true
 		c.claimsParameterSupportedOff = !enabled
+		return nil
+	})
+}
+
+// WithOpenIDScopeOptional lifts the OpenID Connect Core 1.0 §3.1.2.1
+// requirement that every authorization request include the "openid"
+// scope. With the option set, the OP serves both flavours from the
+// same /authorize endpoint: requests carrying "openid" run the OIDC
+// path (id_token + userinfo); requests omitting "openid" run as plain
+// OAuth 2.0 authorization_code (access token + optional refresh token,
+// no id_token). The token endpoint's id_token issuance stays
+// scope-driven, so a downgrade to OAuth 2.0 never produces a stray
+// id_token.
+//
+// Use this only when the deployment intentionally serves non-OIDC
+// clients. The default posture (option absent) matches OIDC: a request
+// missing "openid" is rejected before the redirect with
+// invalid_scope. Discovery and userinfo are unchanged — the OP
+// remains a fully-capable OIDC OP and clients that want id_tokens
+// only need to keep "openid" in their scope list.
+//
+// The flag is incompatible with [profile.Profile] sets that mandate
+// OIDC semantics (FAPI 2.0 Baseline / Message Signing); op.New
+// rejects the combination at construction time.
+//
+// Stable since v0.x.
+func WithOpenIDScopeOptional() Option {
+	return optionFunc(func(c *config) error {
+		c.openIDScopeOptional = true
 		return nil
 	})
 }
