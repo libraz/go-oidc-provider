@@ -296,6 +296,21 @@ func (s *Store) AccessTokens() store.AccessTokenRegistry { return s.accessTokens
 
 // --- store.ClientRegistry ----------------------------------------------------
 
+// Compile-time guard: the library calls cfg.store.(store.ClientRegistry)
+// to discover registry support (op.WithStaticClients, dynamic registration
+// endpoint). The assertion fails silently at runtime if the receiver loses
+// any of the embedded ClientStore methods, so the assignment below pins
+// the satisfaction at build time.
+var _ store.ClientRegistry = (*Store)(nil)
+
+// GetClient implements [store.ClientStore]. ClientRegistry embeds
+// ClientStore, so the *Store receiver MUST expose this method directly
+// rather than via the [Clients] accessor for the type assertion in
+// op.WithStaticClients to succeed.
+func (s *Store) GetClient(ctx context.Context, id string) (*store.Client, error) {
+	return s.clientsImpl.GetClient(ctx, id)
+}
+
 // RegisterClient persists a fresh client through the dynamic
 // registration path. It MUST return [store.ErrAlreadyExists] when the
 // ID is already taken.

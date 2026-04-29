@@ -53,6 +53,9 @@ numbering convention groups examples by topic — 0x = bootstrap,
 | [`examples/03-fapi2`](examples/03-fapi2/main.go) | FAPI 2.0 Baseline profile: PAR / JAR / DPoP, `private_key_jwt` client. |
 | [`examples/04-custom-interaction`](examples/04-custom-interaction/main.go) | Swap to `interaction.JSONDriver` instead of the default HTML driver. |
 | [`examples/05-client-credentials`](examples/05-client-credentials/main.go) | Machine-to-machine `grant_type=client_credentials` (RFC 6749 §4.4). |
+| [`examples/06-sql-store`](examples/06-sql-store/main.go) | `op/storeadapter/sql` against SQLite for a CGO-free quickstart. |
+| [`examples/07-mysql-store`](examples/07-mysql-store/main.go) | `op/storeadapter/sql` against MySQL with production-shaped pool / DSN. |
+| [`examples/08-composite-hot-cold`](examples/08-composite-hot-cold/main.go) | `op/storeadapter/composite` hot/cold split: SQL durable + fast volatile (Redis-pluggable). |
 | [`examples/10-react-login`](examples/10-react-login/main.go) | Delegate login / consent / logout screens to a SPA via `op.WithReactUI`. |
 | [`examples/11-custom-consent-ui`](examples/11-custom-consent-ui/main.go) | Custom consent template via `op.WithConsentUI`. |
 | [`examples/12-scopes-public-private`](examples/12-scopes-public-private/main.go) | `op.PublicScope` / `op.InternalScope` — discovery vs admin-only scopes. |
@@ -82,10 +85,21 @@ project is pre-v1.0; the README is updated as decisions stabilise.
 ## Storage
 
 Bring your own backend by implementing the small interfaces in
-`github.com/libraz/go-oidc-provider/op/store`. v1.0 ships an in-memory reference
-implementation and a `composite` adapter for hot/cold splits. SQL, Redis, and
-DynamoDB adapters land in v1.x as separate sub-modules to keep driver
-dependencies opt-in.
+`github.com/libraz/go-oidc-provider/op/store`. The repository ships:
+
+- `op/storeadapter/inmem` — reference implementation (the test suite
+  in [`op/store/contract`](op/store/contract) runs against this).
+- `op/storeadapter/composite` — hot/cold splitter; routes durable
+  substores to one backend and volatile substores to another while
+  enforcing the transactional-cluster invariant.
+- `op/storeadapter/sql` — `database/sql` adapter for SQLite, MySQL 8.0+,
+  and PostgreSQL 14+. Published as a sub-module so the driver
+  dependencies stay out of the host module's `go.sum`. The contract
+  harness exercises every substore against a real engine via
+  testcontainers (`go test -tags=testcontainers`).
+
+Redis and DynamoDB adapters are planned for v1.x as additional
+sub-modules.
 
 ## Community
 
