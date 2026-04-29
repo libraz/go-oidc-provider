@@ -53,8 +53,8 @@ type LoginFlowStep struct {
 	Authenticator Authenticator
 
 	// IsCaptcha distinguishes the captcha [op.Step] from factor-shaped
-	// Steps. Captcha events do NOT enter [State.Factors] — see plan
-	// 005 §M.6.1 invariant.
+	// Steps. Captcha events do NOT enter [State.Factors] — captcha is
+	// out-of-band from the brute-force / amr-history feed.
 	IsCaptcha bool
 }
 
@@ -161,9 +161,9 @@ type compiledRule struct {
 // PrimaryPasskey, StepTOTP, StepEmailOTP, StepRecoveryCode,
 // StepCaptcha) without the construction-time wiring those Steps
 // require. The dependencies (TOTP encryption codec, passkey RP origin,
-// hash adapter, …) are supplied by follow-up public-API options
-// landing after H1-D; until those land, embedders adopt the LoginFlow
-// seam through [op.ExternalStep], which wraps an already-constructed
+// hash adapter, …) are supplied by follow-up public-API options;
+// until those land, embedders adopt the LoginFlow seam through
+// [op.ExternalStep], which wraps an already-constructed
 // [Authenticator].
 var ErrBuiltinStepNotWired = errors.New("authn: built-in Step requires construction-time wiring not yet exposed; wrap your Authenticator in op.ExternalStep")
 
@@ -175,8 +175,7 @@ var ErrBuiltinStepNotWired = errors.New("authn: built-in Step requires construct
 //  3. No two rules share Then.Kind (dedup unit invariant).
 //  4. Primary.Kind does not collide with any Rule.Then.Kind.
 //  5. Captcha-shaped Steps (IsCaptcha) are NOT placed at Primary
-//     (captcha is a challenge, not a primary credential — plan 005
-//     §M.6.1 invariant).
+//     (captcha is a challenge, not a primary credential).
 //
 // On success the compiler returns a *CompiledLoginFlow whose byKind
 // index maps every declared StepKind to its [compiledStep]; the

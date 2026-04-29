@@ -18,7 +18,8 @@ import (
 const IDLength = 16
 
 // IdleTTLDefault is the default idle lifetime applied to session records
-// when no override is configured (§F.1: 14d for __Host-oidc_session).
+// when no override is configured (14 days for the __Host-oidc_session
+// cookie).
 const IdleTTLDefault = 14 * 24 * time.Hour
 
 // ErrCurrentSessionExpired is returned by [Manager.Resolve] when the cookie

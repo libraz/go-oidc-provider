@@ -14,12 +14,12 @@ import (
 
 // captchaFailureThreshold is the number of consecutive
 // [AttemptFailure] outcomes that triggers an interstitial
-// [interaction.CaptchaPromptData] before the next factor begins. The constant
-// matches the §M.6.1 default; deployments that need a different
-// threshold drive the same logic through their own
+// [interaction.CaptchaPromptData] before the next factor begins. The
+// default matches the library's brute-force gate; deployments that need
+// a different threshold drive the same logic through their own
 // [LoginAttemptObserver] and bump [State.LastFailures] externally.
 // Captcha events themselves do NOT increment the counter — captcha is
-// out-of-band from the brute-force feed (see §M.6.1).
+// out-of-band from the brute-force feed.
 const captchaFailureThreshold = 3
 
 // stateRefTTL is how long an issued [interaction.Prompt.StateRef] stays valid
@@ -62,9 +62,9 @@ const (
 
 // State is the orchestrator's per-attempt state carrier. The struct is
 // pure data: every field is the orchestrator's own representation of
-// the in-flight chain. The HTTP layer (task C) persists [State] across
-// requests using whatever encoding it picks; the orchestrator does no
-// I/O of its own.
+// the in-flight chain. The HTTP layer persists [State] across requests
+// using whatever encoding it picks; the orchestrator does no I/O of
+// its own.
 // Callers that need to copy a State (e.g., to journal it) MUST treat
 // [State.Factors] and [State.InteractionsRun] as the values to deep-
 // copy; mutating them after a [Tick] returns is undefined.
@@ -83,9 +83,9 @@ type State struct {
 	// started the authorization request.
 	ClientID string
 
-	// RemoteIP is the client IP after trusted-proxy normalisation
-	// (§F.5). The orchestrator never invents a value here; it must
-	// have been written by the HTTP layer before the first [Tick].
+	// RemoteIP is the client IP after trusted-proxy normalisation.
+	// The orchestrator never invents a value here; it must have been
+	// written by the HTTP layer before the first [Tick].
 	RemoteIP netip.Addr
 
 	// UserAgent is the request's User-Agent header truncated to a
@@ -215,7 +215,8 @@ type State struct {
 	// orchestrator-cached and embedder-supplied paths.
 	// The orchestrator MUST NOT re-call [LoginFlow.Risk] once a
 	// non-zero score is cached: external risk APIs are paid, and
-	// plan 005 §3.1 makes this an explicit budget invariant.
+	// the budget invariant is that a rule predicate sees the same
+	// score for the lifetime of the attempt.
 	RiskScoreCached int `json:"risk_score_cached,omitempty"`
 
 	// ActiveStepKind is the [LoginFlowStep.Kind] of the active
@@ -286,9 +287,9 @@ var (
 
 // Config is the [Orchestrator] construction payload. It mirrors the
 // public-API options the [op.Provider] accumulates; the HTTP layer
-// (task C) wires the two together. Fields with comments marked
-// "optional" may be nil; the orchestrator handles the missing
-// dependency by skipping the corresponding phase.
+// wires the two together. Fields with comments marked "optional"
+// may be nil; the orchestrator handles the missing dependency by
+// skipping the corresponding phase.
 type Config struct {
 	// Authenticators is the registered factor list in
 	// [op.WithAuthenticators] order. The orchestrator picks the
@@ -441,9 +442,6 @@ func validateAuthenticators(auths []Authenticator) error {
 //  4. Run [PhaseAuthn]: consult risk, pick a candidate, emit Begin.
 //  5. Run the [PhaseAfterAuthn] interaction queue.
 //  6. Emit the terminal [interaction.Step] from [PhaseDone].
-//
-// 02-product-design.md §E.2 / §E.6.1 / §M.6 for the
-// invariants this method preserves.
 func (o *Orchestrator) Tick(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
 	if st.Phase == PhaseDone {
 		return st, interaction.Step{}, ErrChainComplete
@@ -494,7 +492,7 @@ func (o *Orchestrator) consumeSubmission(ctx context.Context, st State, in Input
 // Prompt is re-emitted with a fresh nonce (the StepCounter still
 // increments so the previous token cannot replay). Captcha events do
 // NOT call observers — captcha is intentionally out-of-band from the
-// brute-force feed (§M.6.1).
+// brute-force feed.
 func (o *Orchestrator) handleCaptchaSubmission(ctx context.Context, st State, in Input) (State, interaction.Step, error) {
 	if o.cfg.Captcha == nil {
 		return st, interaction.Step{}, ErrInvalidStateRef
@@ -933,11 +931,10 @@ const ChooserSessionIDField = "session_id"
 const ChooserPromptType = "interaction.chooser"
 
 // appendFactor is the single point where the orchestrator records a
-// successful authenticator run. It enforces the §E.6.1 invariant that
-// only RFC 8176-registered AMR values reach the session: an
-// unregistered return is logged and dropped (the Factor still
-// contributes through [Factor.AMRValue] which derives from
-// [FactorType]).
+// successful authenticator run. It enforces the invariant that only
+// RFC 8176-registered AMR values reach the session: an unregistered
+// return is logged and dropped (the Factor still contributes through
+// [Factor.AMRValue] which derives from [FactorType]).
 func (o *Orchestrator) appendFactor(st State, auth Authenticator, result interaction.Result) State {
 	if amr := auth.AMR(); amr != "" && !IsRegisteredAMR(amr) {
 		o.logger.Warn("authn: dropping unregistered AMR value",
@@ -1048,7 +1045,7 @@ func (o *Orchestrator) findInteractionIndex(name string) int {
 
 // observeSuccess fans out an [AttemptSuccess] event to every
 // observer. The orchestrator does not retry on observer panics; the
-// public-API contract is "non-blocking" (§M.6.3).
+// public-API contract is "non-blocking".
 func (o *Orchestrator) observeSuccess(ctx context.Context, st State, now time.Time, factor FactorType) {
 	o.fanOut(ctx, LoginAttempt{
 		Subject:   st.Subject,
@@ -1063,7 +1060,7 @@ func (o *Orchestrator) observeSuccess(ctx context.Context, st State, now time.Ti
 
 // observeFailure fans out an [AttemptFailure] event. Subject is
 // intentionally blanked on the failure path to avoid enumeration via
-// the observer feed (§M.6.3).
+// the observer feed.
 func (o *Orchestrator) observeFailure(ctx context.Context, st State, now time.Time, factor FactorType) {
 	o.fanOut(ctx, LoginAttempt{
 		ClientID:  st.ClientID,
@@ -1144,8 +1141,7 @@ const (
 	// a submission against a LoginFlow-driven step routes back to the
 	// per-step Authenticator. The kind is appended verbatim so two
 	// Steps with different kinds emit distinguishable StateRef
-	// payloads — the security invariant from plan 005 H1-D §1
-	// ("StateRef per-Step tagging").
+	// payloads — the security invariant the per-Step tagging upholds.
 	tagLoginFlowPrefix = "loginflow:"
 )
 

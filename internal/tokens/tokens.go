@@ -309,8 +309,6 @@ func encodeConfirmation(in map[string]string) map[string]string {
 // array form whenever there is more than one audience and a bare
 // string otherwise so common RP libraries (which often expect a string
 // for the single-aud case) round-trip cleanly.
-//
-//nolint:ireturn // RFC 7519 §4.1.3 demands a string-or-array union; any is the only Go-side shape.
 func encodeAudience(aud []string) any {
 	switch len(aud) {
 	case 0:
@@ -338,10 +336,10 @@ func joinScope(scopes []string) string {
 // typ selects the JOSE "typ" header: "JWT" for ID tokens (OIDC Core
 // 1.0 §2) and "at+jwt" for JWT-shaped access tokens (RFC 9068 §2.1).
 // Splitting the value at the call site keeps the cross-token
-// confusion guard structural rather than relying on a runtime check.
-//
-//nolint:ireturn // wraps third-party josev4.Signer; the interface is the package's contract.
-func newSigner(key SigningKey, typ string) (josev4.Signer, error) {
+// confusion guard structural rather than relying on a runtime check. The
+// returned interface is intentional: josev4.Signer is the third-party
+// package's contract for stateful JWS signing.
+func newSigner(key SigningKey, typ string) (josev4.Signer, error) { //nolint:ireturn // see godoc
 	sk := josev4.SigningKey{
 		Algorithm: josev4.ES256,
 		Key: josev4.JSONWebKey{

@@ -120,25 +120,25 @@ type config struct {
 	// captcha is the optional [CaptchaVerifier] the orchestrator
 	// consults to validate captcha tokens server-side. Nil means
 	// "no captcha configured"; at most one verifier may be
-	// registered (§M.6.1).
+	// registered.
 	captcha CaptchaVerifier
 
 	// risk is the optional [RiskAssessor] the orchestrator consults
 	// at each [RiskStage]. Nil means "always allow"; at most one
-	// assessor may be registered (§M.6.2).
+	// assessor may be registered.
 	risk RiskAssessor
 
 	// loginObservers carries the [LoginAttemptObserver] values
 	// registered through [WithLoginAttemptObserver]. Multiple
 	// observers stack: the orchestrator fans out every
-	// [LoginAttempt] to each in registration order (§M.6.3).
+	// [LoginAttempt] to each in registration order.
 	loginObservers []LoginAttemptObserver
 
 	// interactions carries the non-factor [Interaction] values
 	// registered through [WithInteractions]. The orchestrator inserts
 	// them per [InteractionTrigger]; intra-trigger ordering follows
 	// registration order, cross-trigger ordering is orchestrator-
-	// defined (§E.9).
+	// defined.
 	interactions []Interaction
 
 	// backchannelLogoutHTTPClient is the HTTP client the back-channel
@@ -196,13 +196,12 @@ type config struct {
 	// access for one fetcher without widening the other.
 	allowPrivateNetworkJAR bool
 
-	// Login flow / UI / static-clients (Wave H, plan 005).
+	// Login flow / UI / static-clients.
 	// loginFlow stores the [LoginFlow] supplied through
 	// [WithLoginFlow]. The zero value (Primary == nil) signals
-	// "not configured"; a non-zero value is staged for the H1-D
+	// "not configured"; a non-zero value is staged for the
 	// orchestrator wiring and rejected at [config.validate] until
-	// that wiring lands.05-login-and-ui-shell.md
-	// §3.1.
+	// that wiring lands.
 	loginFlow LoginFlow
 
 	// loginFlowSet records whether [WithLoginFlow] was invoked,
@@ -382,19 +381,18 @@ func (c *config) applyDefaults() {
 	// returns nil and the audit emitter collapses to a no-op. Setting
 	// a default here would silently route audit lines into the
 	// operational stream — which is the design rationale for keeping
-	// the two loggers structurally separate (see 002 §N.1).
+	// the two loggers structurally separate.
 	if c.mountPrefix == "" {
 		c.mountPrefix = "/oidc"
 	}
 	defaults := defaultEndpoints()
 	c.endpoints = defaults.merge(c.endpoints)
 	if c.interactionD == nil {
-		// 05-login-and-ui-shell.md §3.4: when neither a
-		// custom [interaction.Driver] nor a SPA shell is configured
-		// the OP boots into a working HTML login surface. With a
-		// SPA shell active the default falls away so the embedder's
-		// SPA owns rendering and the JSON state endpoints stay the
-		// only protocol surface.
+		// When neither a custom [interaction.Driver] nor a SPA shell
+		// is configured the OP boots into a working HTML login
+		// surface. With a SPA shell active the default falls away so
+		// the embedder's SPA owns rendering and the JSON state
+		// endpoints stay the only protocol surface.
 		if !c.reactUISet {
 			c.interactionD = interaction.HTMLDriver{}
 		}
@@ -507,7 +505,7 @@ func (c *config) emitPartialWiringWarnings() {
 	}
 	if c.consentUISet {
 		c.logger.Warn(
-			"WithConsentUI is registered but the supplied Template is not yet rendered by any handler. The option is a no-op until the consent-interaction wiring lands;05-login-and-ui-shell.md §3.5.",
+			"WithConsentUI is registered but the supplied Template is not yet rendered by any handler. The option is a no-op until the consent-interaction wiring lands.",
 			"option", "WithConsentUI",
 		)
 	}
@@ -597,10 +595,9 @@ func (c *config) validateNetwork() error {
 //   - every advertised client_id MUST appear in [config.staticClients]
 //     after every option has been applied (the option site cannot
 //     enforce this because the two options are order-independent);
-//   - no FAPI 2.0 profile MAY be active simultaneously, per
-//     05-login-and-ui-shell.md §3.10. FAPI 2.0 forbids
-//     auto-consent because the profile mandates explicit user
-//     authorization for every protected resource.
+//   - no FAPI 2.0 profile MAY be active simultaneously. FAPI 2.0
+//     forbids auto-consent because the profile mandates explicit
+//     user authorization for every protected resource.
 func (c *config) validateFirstPartyClients() error {
 	if len(c.firstPartyClients) == 0 {
 		return nil
@@ -1179,9 +1176,9 @@ func WithStore(s store.Store) Option {
 // WithKeyset registers the OP signing keys. The first entry is the active
 // signer; subsequent entries are kept in JWKS so RPs can verify tokens
 // issued under previous keys during a rotation window.
-// Every entry MUST be ECDSA on curve P-256 (the v1.0 ES256 policy from
-// 02-product-design.md §J.5 / §K.3). Supplying any other key
-// shape causes [New] to fail at construction time.
+// Every entry MUST be ECDSA on curve P-256 (the v1.0 ES256 policy).
+// Supplying any other key shape causes [New] to fail at construction
+// time.
 // Stable since v0.1.
 func WithKeyset(ks Keyset) Option {
 	return optionFunc(func(c *config) error {
@@ -1589,13 +1586,13 @@ func WithACRPolicy(p ACRPolicy) Option {
 // WithProfile activates an industry security profile. Profiles compose
 // multiplicatively: enabling FAPI2Baseline implies its underlying features
 // and policies. Repeated profiles are rejected.
-// As of plan 005 §3.6, WithProfile auto-enables every flag returned by
+// WithProfile auto-enables every flag returned by
 // [profile.RequiredFeatures] for the supplied profile. The auto-enable is
 // idempotent: a flag already present in the configured feature set is
 // silently skipped (NOT rejected as a duplicate), so an embedder may
 // layer [WithFeature] before or after [WithProfile] without surprise.
-// This is the explicit "add-only" contract from
-// 05-login-and-ui-shell.md §3.6.
+// The auto-enable is intentionally add-only: WithProfile never removes
+// a flag the embedder already set.
 // Stable since v0.1.
 func WithProfile(p profile.Profile) Option {
 	return optionFunc(func(c *config) error {
@@ -1614,12 +1611,11 @@ func WithProfile(p profile.Profile) Option {
 			}
 		}
 		c.profiles = append(c.profiles, p)
-		// 05-login-and-ui-shell.md §3.6 — auto-enable
-		// every required feature idempotently. The duplicate check
-		// in [WithFeature] is bypassed because the auto-enable
-		// contract is "silently skip", not "fail loudly": embedders
-		// must remain free to call [WithFeature] explicitly before
-		// or after [WithProfile].
+		// Auto-enable every required feature idempotently. The
+		// duplicate check in [WithFeature] is bypassed because the
+		// auto-enable contract is "silently skip", not "fail loudly":
+		// embedders must remain free to call [WithFeature] explicitly
+		// before or after [WithProfile].
 		for _, req := range profile.RequiredFeatures(p) {
 			if !req.IsValid() {
 				continue
@@ -1662,9 +1658,8 @@ func WithCookieKey(key []byte) Option {
 
 // WithCookieKeys registers the AES-256-GCM keys used for cookie encryption.
 // The first key is the active encryption key; remaining keys are accepted on
-// decryption only, supporting graceful rotation per
-// 02-product-design.md §F.2. Every key MUST be 32 bytes; an
-// empty list is rejected so the misconfiguration surfaces at startup.
+// decryption only, supporting graceful rotation. Every key MUST be 32 bytes;
+// an empty list is rejected so the misconfiguration surfaces at startup.
 // Each call replaces any keys configured by a previous WithCookieKeys/
 // [WithCookieKey] call. Pass every active and rotated key in a single call.
 // Stable since v0.1.
@@ -1784,7 +1779,7 @@ func WithTrustedProxies(cidrs ...string) Option {
 // The full allowlist is the union of these origins plus every redirect_uri
 // origin the [store.ClientStore] returns; this option only handles entries
 // that cannot be derived from a registered redirect_uri (admin SPAs,
-// management consoles, etc.) per §F.4.
+// management consoles, etc.).
 // Origins MUST be absolute URLs with non-empty scheme and host. The path,
 // query, and fragment are stripped. Each call appends to the configured
 // list; duplicates are deduplicated at allowlist build time.
@@ -1877,7 +1872,6 @@ func WithAuthenticators(a ...Authenticator) Option {
 // configuration error so duplicate registrations surface as
 // misconfigurations rather than silently overwriting the earlier
 // value.
-// 02-product-design.md §M.6.1.
 // Experimental: the verifier contract is stable but the orchestrator
 // trigger points around it may still evolve before v1.0.
 func WithCaptchaVerifier(v CaptchaVerifier) Option {
@@ -1903,7 +1897,6 @@ func WithCaptchaVerifier(v CaptchaVerifier) Option {
 // [RiskStage]. At most one assessor is permitted; a second
 // [WithRiskAssessor] call fails [New] with a structured configuration
 // error.
-// 02-product-design.md §M.6.2.
 // Experimental: the assessor contract is stable but the orchestrator
 // trigger points around it may still evolve before v1.0.
 func WithRiskAssessor(a RiskAssessor) Option {
@@ -1929,8 +1922,7 @@ func WithRiskAssessor(a RiskAssessor) Option {
 // observers stack; the orchestrator fans out every [LoginAttempt] to
 // each registered observer in registration order. This is the brute-
 // force / risk-counter feed; general audit events are emitted by the
-// library to slog (§N.2) and observers MUST NOT duplicate them here.
-// 02-product-design.md §M.6.3.
+// library to slog and observers MUST NOT duplicate them here.
 // Experimental: the observer contract is stable but the orchestrator
 // emission points around it may still evolve before v1.0.
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
@@ -1949,9 +1941,8 @@ func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 // WithInteractions registers non-factor [Interaction] values (T&C,
 // KYC, device-trust prompts...). Order is preserved within an
 // [InteractionTrigger] bucket; cross-trigger ordering is orchestrator-
-// defined per §E.9. Calling WithInteractions multiple times appends;
-// duplicates by [Interaction.Name] are rejected at [New] construction
-// time.
+// defined. Calling WithInteractions multiple times appends; duplicates
+// by [Interaction.Name] are rejected at [New] construction time.
 // The library-built-in consent screen is registered automatically by
 // the orchestrator; user extensions ship with a unique dotted
 // [Interaction.Name] (e.g., "myorg.tos.accept").
@@ -1988,8 +1979,9 @@ func WithInteractions(i ...Interaction) Option {
 // outbound transport (instrumentation, proxy resolution, custom
 // dialer, …). Embedders that override the client SHOULD preserve a
 // CheckRedirect that returns [http.ErrUseLastResponse] so the OP
-// continues to refuse redirects on a sensitive POST; the design notes
-// in 002 §H.2 explain why.
+// continues to refuse redirects on a sensitive POST (back-channel
+// logout targets cannot be redirected without forging the audience
+// the signed Logout Token commits to).
 // Stable since v0.1.
 func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 	return optionFunc(func(c *config) error {
@@ -2162,12 +2154,11 @@ func WithAllowPrivateNetworkJAR() Option {
 // the [Provider] should expose so the embedder's React (or framework-
 // neutral SPA) frontend can drive the login / consent / RP-Initiated
 // Logout flows. The struct is supplied to [WithReactUI]; the option
-// stores it on config and the H1-D orchestrator wiring later
-// translates the mount points into JSON state endpoints. The
-// scope is deliberately limited to login / consent / RP-Initiated
-// Logout: front-channel logout and session management iframes are
-// out of scope, so [ReactUI] does not carry mounts for those
-// surfaces.
+// stores it on config and the orchestrator wiring later translates
+// the mount points into JSON state endpoints. The scope is
+// deliberately limited to login / consent / RP-Initiated Logout:
+// front-channel logout and session management iframes are out of
+// scope, so [ReactUI] does not carry mounts for those surfaces.
 // Experimental: the field set is being introduced in v0.x and MAY
 // gain optional fields before v1.0. Embedders SHOULD construct
 // [ReactUI] with named field initialisation so future additions
@@ -2203,10 +2194,9 @@ type ReactUI struct {
 // consent screen when the embedder wants to keep the HTML driver but
 // override the consent body. Mutually exclusive with [WithReactUI];
 // supplying both fails [New] with a structured configuration error.
-// 05-login-and-ui-shell.md §3.5. The struct field set is
-// intentionally narrow: the consent ceremony has a fixed data model
-// (client metadata + scope list + CSRF token) and the embedder
-// supplies an [*template.Template] that consumes it.
+// The struct field set is intentionally narrow: the consent ceremony
+// has a fixed data model (client metadata + scope list + CSRF token)
+// and the embedder supplies an [*template.Template] that consumes it.
 // Experimental: the field set is being introduced in v0.x. The plan
 // reserves a Strings field for an i18n bundle once the public i18n
 // surface stabilises; the field is omitted today so embedders are
@@ -2251,7 +2241,7 @@ type ChooserUI struct {
 //     kinds are rejected so the orchestrator's completed-step
 //     deduplication has a unique discriminator per rule.
 //   - Decider MAY be nil; the orchestrator treats nil as "always
-//     defer to rules"05-login-and-ui-shell.md §3.1.
+//     defer to rules".
 //   - Repeated [WithLoginFlow] calls are rejected so the
 //     misconfiguration surfaces at [New].
 //   - WithLoginFlow is mutually exclusive with [WithAuthenticators];
@@ -2325,8 +2315,7 @@ func WithLoginFlow(flow LoginFlow) Option {
 // SPA externally (typically via an outer mux that routes the SPA
 // paths to the bundle directory and forwards everything else to the
 // Provider). Auto-mounted JSON state endpoints under the configured
-// mounts land in a follow-up release; tracking
-// 05-login-and-ui-shell.md §3.5.
+// mounts land in a follow-up release.
 func WithReactUI(ui ReactUI) Option {
 	return optionFunc(func(c *config) error {
 		if err := checkReactUIPrecondition(c); err != nil {
@@ -2437,8 +2426,7 @@ func validateReactUIStaticDir(dir string) error {
 // option is reserved so the v1.0 surface can be planned without
 // shipping a placeholder type later; embedders can register a
 // template now and have it consumed automatically once the
-// consent-interaction wiring lands. Tracking
-// 05-login-and-ui-shell.md §3.5.
+// consent-interaction wiring lands.
 func WithConsentUI(ui ConsentUI) Option {
 	return optionFunc(func(c *config) error {
 		if c.consentUISet {
@@ -2515,7 +2503,7 @@ func WithChooserUI(ui ChooserUI) Option {
 // caller can locate the offending entry.
 // Repeated calls append to the configured set so embedders MAY layer
 // builders (a base set plus a deployment-specific overlay) without
-// duplicate-rejection. The aggregate slice feeds the H1-D orchestrator
+// duplicate-rejection. The aggregate slice feeds the orchestrator
 // hookup; today the records are stored on config and consumed by the
 // orchestrator wiring that lands in a follow-up.
 // Stable since v0.1.
@@ -2553,7 +2541,8 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 // path is gated on the matching [store.Client.Source] being
 // [store.ClientSourceStatic] or [store.ClientSourceAdmin] —
 // [store.ClientSourceDynamic] (RFC 7591 self-registered) is excluded
-// 05-login-and-ui-shell.md §3.10.
+// because dynamically-registered clients cannot be vetted as
+// first-party.
 // Validation:
 //   - The id list MUST be non-empty.
 //   - Duplicate ids within a single call are rejected; repeated calls

@@ -21,10 +21,10 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Default token TTLs. These match the product design's §A.12.4 numbers and
-// the existing internal grant defaults; they are duplicated here so a
-// caller that constructs [Deps] without filling the TTL fields gets a
-// sensible response shape without having to import the grant packages.
+// Default token TTLs. These match the existing internal grant defaults
+// and are duplicated here so a caller that constructs [Deps] without
+// filling the TTL fields gets a sensible response shape without having
+// to import the grant packages.
 const (
 	defaultAccessTokenTTL  = 5 * time.Minute
 	defaultIDTokenTTL      = 10 * time.Minute

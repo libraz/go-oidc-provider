@@ -15,10 +15,9 @@ import (
 )
 
 // DefaultTimeout is the per-RP request budget the [HTTPDeliverer]
-// applies when the embedder does not supply one. The value matches
-// the design 002 §H.2 guidance: long enough for a healthy RP to ack,
-// short enough that a stalled RP does not hold the OP's logout flow
-// open beyond the user's patience.
+// applies when the embedder does not supply one. The value is long
+// enough for a healthy RP to ack, short enough that a stalled RP
+// does not hold the OP's logout flow open beyond the user's patience.
 const DefaultTimeout = 5 * time.Second
 
 // maxResponseBytes caps the response body the deliverer reads.

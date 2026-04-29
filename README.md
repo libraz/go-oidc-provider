@@ -80,7 +80,7 @@ corresponding features land:
 | 00–09 | bootstrap, grant variants, storage adapters                    |
 | 10–19 | UI, scopes, SPA, locale, claims request, CORS                  |
 | 20–29 | MFA and authentication rules (TOTP / risk / captcha / step-up) |
-| 30–39 | identity federation (reserved — v1.x Wave M)                   |
+| 30–39 | identity federation (reserved — v1.x)                          |
 | 40–49 | governance: first-party, DCR, back-channel logout              |
 | 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce         |
 | 60–69 | compliance (reserved — v1.x late)                              |

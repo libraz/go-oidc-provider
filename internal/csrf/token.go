@@ -1,6 +1,6 @@
-// Package csrf implements the CSRF defences described in
-// 02-product-design.md §F.3.1: HMAC-bound double-submit tokens
-// plus Origin / Referer allowlist checking. The package emits no HTML, sets
+// Package csrf implements the CSRF defences the OP applies to its
+// HTML-driven flows: HMAC-bound double-submit tokens plus
+// Origin / Referer allowlist checking. The package emits no HTML, sets
 // no cookies, and reads no request bodies; higher layers wire it into the
 // interaction and account handlers.
 package csrf

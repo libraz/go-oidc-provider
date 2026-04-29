@@ -11,8 +11,8 @@ import (
 // builder onto the canonical [store.Client] record the OP persists.
 // Embedders never implement this interface themselves: the library
 // ships three concrete builders ([PublicClient], [ConfidentialClient],
-// [PrivateKeyJWTClient]) that cover every static-client posture
-// 05-login-and-ui-shell.md §3.7 enumerates.
+// [PrivateKeyJWTClient]) that cover every static-client posture the
+// option layer admits today.
 // The unexported method is deliberate: it locks the surface to the
 // shipped builders so an embedder cannot accidentally bypass the
 // Source: ClientSourceStatic invariant by constructing a custom
@@ -26,8 +26,8 @@ type ClientSeed interface {
 
 // defaultGrantTypes() returns the wire-form grant_types every typed
 // builder defaults to when [PublicClient.GrantTypes] et al. are left
-// empty. The list matches 05-login-and-ui-shell.md §3.7
-// (authorization_code + refresh_token) and is returned afresh on every
+// empty. The list (authorization_code + refresh_token) matches the
+// canonical OIDC code-flow shape and is returned afresh on every
 // call so callers may freely mutate it.
 func defaultGrantTypes() []string {
 	return []string{"authorization_code", "refresh_token"}

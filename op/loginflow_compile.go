@@ -264,7 +264,7 @@ func buildStepEmailOTP(s StepEmailOTP) (authn.Authenticator, error) {
 // [recovery.Authenticator] that drives the [StepRecoveryCode] step.
 // The verifier carries no construction-time configuration today; the
 // argon2id parameters and lockout policy are pinned by
-// [internal/authn/recovery]02-product-design.md §M.6.
+// [internal/authn/recovery].
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 func buildStepRecoveryCode(s StepRecoveryCode) (authn.Authenticator, error) {

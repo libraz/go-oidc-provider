@@ -14,7 +14,6 @@ import (
 // constants are the wire form and not just symbolic names. New built-in
 // values ship with the library; embedders extend the namespace through
 // dotted user identifiers (see [FactorType.IsUserDefined]).
-// 02-product-design.md §E.2 for the full schema.
 type FactorType string
 
 // Built-in [FactorType] values. The string content is the canonical
@@ -255,9 +254,9 @@ type UserVerificationReporter interface {
 // Interactions do not contribute to amr / acr; they only inject
 // [interaction.Prompt] sequences at the chosen [InteractionTrigger]
 // point.
-// Built-in: the consent screen (§A.5) is registered automatically.
+// Built-in: the consent screen is registered automatically.
 // User extensions ship with a unique [Interaction.Name] prefixed by
-// the org identifier (e.g., "myorg.tos.accept"). See §E.9.
+// the org identifier (e.g., "myorg.tos.accept").
 // Implementations MUST be safe for concurrent use by multiple
 // goroutines.
 type Interaction interface {
@@ -291,8 +290,9 @@ type Interaction interface {
 // option.
 type InteractionTrigger int
 
-// InteractionTrigger values. See §E.9 for the orchestrator's
-// per-trigger ordering rules.
+// InteractionTrigger values. The orchestrator inserts each interaction
+// into the chain at the matching trigger point; cross-trigger ordering
+// is library-defined.
 const (
 	// TriggerBeforeAuthn fires before any factor's Begin.
 	// Suitable for region gates that do not need an identified user.

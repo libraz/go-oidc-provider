@@ -9,9 +9,7 @@ package op
 // each evaluation pass, runs the first rule whose [Rule.When] returns
 // true and whose [Rule.Then.Kind] is not in
 // [LoginContext.CompletedSteps], then re-enters the loop. When no
-// rule matches the flow grants. See
-// 05-login-and-ui-shell.md §3.1 for the full evaluation
-// pseudocode.
+// rule matches the flow grants.
 // A nil When is treated as the constant-true predicate. A nil Then is
 // rejected at construction time.
 type Rule struct {

@@ -38,8 +38,8 @@ const IDLength = 32
 
 // TTLDefault is the default lifetime of an authorization code, applied when
 // no override is configured. RFC 6749 §4.1.2 requires "short" TTLs and §10.5
-// recommends a maximum of 10 minutes; the OP picks 60 seconds to match
-// §A.12.4 of the product design.
+// recommends a maximum of 10 minutes; the OP picks 60 seconds to keep the
+// replay window narrow while spanning a typical browser redirect bounce.
 const TTLDefault = 60 * time.Second
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
@@ -49,7 +49,7 @@ const TTLDefault = 60 * time.Second
 //     depending on the layer.
 //   - ErrClientMismatch / ErrRedirectURIMismatch → invalid_grant.
 //   - ErrCodeReplayed → invalid_grant, plus the caller MUST revoke any
-//     refresh tokens that descend from this grant (§A.12.4).
+//     refresh tokens that descend from this grant (RFC 6819 §5.2.1.1).
 //   - ErrCodeExpired → invalid_grant.
 var (
 	// ErrCodeMissing indicates the supplied code does not exist (or has

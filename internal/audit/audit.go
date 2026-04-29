@@ -45,9 +45,9 @@ func (l Level) slogLevel() slog.Level {
 	}
 }
 
-// Event is the structural shape every audit record carries. The
-// fields mirror design 002 §N.3; new event-specific fields ride in
-// [Event.Extras] so the canonical layer stays stable.
+// Event is the structural shape every audit record carries. New
+// event-specific fields ride in [Event.Extras] so the canonical
+// layer stays stable.
 type Event struct {
 	// Name is the canonical event identifier (e.g. "login.success",
 	// "dcr.client.registered"). The catalogue lives on the public op/

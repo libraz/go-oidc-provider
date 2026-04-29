@@ -56,7 +56,7 @@ func (a *Allowlist) Len() int {
 }
 
 // CheckOrigin validates a state-changing request's Origin or Referer header
-// against allow. The §F.3.1 algorithm is:
+// against allow. The algorithm is:
 //
 //  1. If Origin is present and matches → accept.
 //  2. If Origin is absent and Referer matches → accept (same-origin POST

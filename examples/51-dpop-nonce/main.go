@@ -45,7 +45,8 @@
 // and reject each other's nonces, generating a thrash of
 // use_dpop_nonce challenges. Production multi-replica deployments
 // supply a DPoPNonceSource backed by a shared cache (Redis /
-// memcached); see the v1.x Wave L3 outlook.
+// memcached); a built-in distributed implementation is on the v1.x
+// roadmap.
 package main
 
 import (

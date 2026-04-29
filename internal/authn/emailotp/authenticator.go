@@ -14,7 +14,8 @@ import (
 
 // Prompt-type identifiers and form-field names. Exported so
 // embedders and SPA tests reference the canonical strings without a
-// stringly-typed copy. The values are spec-fixed (002 §E.2).
+// stringly-typed copy. The values are part of the orchestrator's
+// stable wire surface and treated as a freeze point.
 const (
 	// PromptTypeSend is [interaction.Prompt.Type] for the first
 	// screen (collect email).

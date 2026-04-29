@@ -16,7 +16,7 @@ import (
 )
 
 // PromptType is the [interaction.Prompt.Type] the adapter emits. The
-// string is fixed by 02-product-design.md §E.2 and matches
+// string is part of the orchestrator's stable wire surface and matches
 // the constant set [op.Authenticator.Prompts] returns.
 const PromptType = "auth.passkey"
 

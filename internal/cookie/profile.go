@@ -8,8 +8,8 @@ import (
 )
 
 // Profile describes a cookie's transport-level policy: name, lifetime, scope,
-// SameSite, and whether the payload is encrypted. The fields mirror the §F.1
-// table so a cookie definition lives in one place.
+// SameSite, and whether the payload is encrypted. A cookie definition lives
+// in one place so the wire shape is auditable in a single read.
 //
 // A Profile is immutable. Construct one via the package-level constants or
 // [NewProfile]; the latter validates the [__Host-] requirements at build
@@ -82,7 +82,7 @@ func (p Profile) validate() error {
 	return nil
 }
 
-// SessionProfile mirrors the __Host-oidc_session row from §F.1: a 14-day idle
+// SessionProfile defines the __Host-oidc_session cookie: a 14-day idle
 // AES-encrypted Lax cookie restricted to the OP origin via the __Host- prefix.
 //
 //nolint:gochecknoglobals // Predefined cookie profiles are configuration constants.
@@ -94,7 +94,7 @@ var SessionProfile = Profile{
 	Encrypted:  true,
 }
 
-// InteractionProfile mirrors the __Host-oidc_interaction row from §F.1: an
+// InteractionProfile defines the __Host-oidc_interaction cookie: an
 // hour-long, AES-encrypted, Lax cookie carrying the in-flight interaction id.
 //
 //nolint:gochecknoglobals // Predefined cookie profiles are configuration constants.
@@ -106,7 +106,7 @@ var InteractionProfile = Profile{
 	Encrypted:  true,
 }
 
-// CSRFProfile mirrors the __Host-oidc_csrf row from §F.1: a session-scoped,
+// CSRFProfile defines the __Host-oidc_csrf cookie: a session-scoped,
 // HMAC-only (no AEAD), Strict SameSite cookie used for double-submit.
 //
 //nolint:gochecknoglobals // Predefined cookie profiles are configuration constants.
@@ -118,7 +118,7 @@ var CSRFProfile = Profile{
 	Encrypted:  false,
 }
 
-// LocaleProfile mirrors the __Host-oidc_locale row from §F.1: a one-year,
+// LocaleProfile defines the __Host-oidc_locale cookie: a one-year,
 // plain-text Lax cookie remembering the user's chosen UI locale.
 //
 //nolint:gochecknoglobals // Predefined cookie profiles are configuration constants.

@@ -1,7 +1,8 @@
 // Package cookie implements the OP's cookie layer. It owns AES-256-GCM
 // encryption with key rotation, the [__Host-] profile policy, and the helpers
 // that translate a logical "set this cookie" into an [http.Cookie] with the
-// production-grade defaults required by 02-product-design.md §F.1.
+// production-grade defaults the library requires (Secure, HttpOnly,
+// SameSite=Lax, Path=/, no Domain attribute).
 // The package is intentionally agnostic of the cookie payload format: callers
 // supply raw bytes, the codec produces an opaque base64url string, and the
 // caller decides whether the bytes are JSON, CBOR, or anything else. Higher
@@ -37,7 +38,7 @@ var ErrDecrypt = errors.New("cookie: ciphertext failed authentication")
 
 // Codec encrypts and decrypts cookie payloads using AES-256-GCM. The first
 // key is the encryption key; subsequent keys are tried in order during
-// decryption to support graceful rotation per §F.2.
+// decryption to support graceful rotation.
 // A Codec is immutable and safe for concurrent use.
 type Codec struct {
 	current cipher.AEAD

@@ -252,10 +252,10 @@ func validatePayload(p Payload) error {
 // runtime never reads a stale ES256 default for an RSA / Ed25519 key.
 // The configuration mirrors [internal/tokens.newSigner] so both
 // endpoints emit JWTs with identical "kid" / "typ" / "alg" headers;
-// the duplication is preferred over importing the unexported helper.
-//
-//nolint:ireturn // wraps third-party josev4.Signer; the interface is the package's contract.
-func newSigner(key tokens.SigningKey, alg josev4.SignatureAlgorithm) (josev4.Signer, error) {
+// the duplication is preferred over importing the unexported helper. The
+// returned interface is intentional: josev4.Signer is the third-party
+// package's contract for stateful JWS signing.
+func newSigner(key tokens.SigningKey, alg josev4.SignatureAlgorithm) (josev4.Signer, error) { //nolint:ireturn // see godoc
 	sk := josev4.SigningKey{
 		Algorithm: alg,
 		Key: josev4.JSONWebKey{

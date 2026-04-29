@@ -301,8 +301,10 @@ func toKeyEntries(ks Keyset) []keys.Entry {
 }
 
 // buildRouter assembles the [http.ServeMux] that backs [Provider.ServeHTTP].
-// In Phase 1 it registers the discovery and JWKS endpoints; subsequent
-// phases extend it with the authorization, token, and UserInfo handlers.
+// It registers the discovery, JWKS, authorize, token, and UserInfo
+// handlers, plus the optional endpoints (PAR, introspect, revoke,
+// /register, /end_session) gated on the configured features and
+// grants.
 func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
 	doc := discovery.Build(buildDiscoveryInput(cfg, scopes))
@@ -1573,7 +1575,9 @@ type deciderAdapter struct {
 // Require{Step} decision projects the wrapped Step back through
 // projectStepToFlow so a Decider that returns an unwrapped built-in
 // Step surfaces as ErrInvalidStep at the orchestrator (the
-// dynamic-compile path is intentionally absent — see plan 005 H1-D §6).
+// dynamic-compile path is intentionally absent: a Decider that needs
+// to introduce a previously-unregistered Step must register it on the
+// LoginFlow up front).
 func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn // sealed-sum LoginFlowDecision is the contract.
 	d := a.inner.Decide(ctx, toPublicLoginContext(lc))
 	switch v := d.(type) {

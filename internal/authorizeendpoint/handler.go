@@ -54,8 +54,9 @@ type ACRResolveOutput struct {
 type ACRResolver func(ctx context.Context, in ACRResolveInput) ACRResolveOutput
 
 // Default timing budgets the handler uses when [Deps] does not override
-// them. The values match 02-product-design.md §F.1 (interaction
-// cookie lifetime) and §A.12 (authorization-code TTL).
+// them. The interaction cookie lifetime mirrors the cookie profile
+// configured in [internal/cookie]; the authorization-code TTL matches
+// the OAuth code-flow short-lived posture.
 const (
 	// DefaultAuthCodeTTL is the lifetime of an issued authorization code.
 	// 60 seconds is well below the RFC 6749 §4.1.2 ceiling and matches

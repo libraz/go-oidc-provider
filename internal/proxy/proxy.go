@@ -1,6 +1,5 @@
 // Package proxy parses [X-Forwarded-*] headers when the request arrives from a
-// trusted reverse proxy. The behaviour follows
-// 02-product-design.md §F.5: untrusted requests fall back to
+// trusted reverse proxy. Untrusted requests fall back to
 // [http.Request.RemoteAddr] so a hostile client cannot spoof its source IP or
 // scheme by injecting headers.
 // The package operates on raw values (CIDR strings, RemoteAddr strings) so it

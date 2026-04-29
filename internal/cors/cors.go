@@ -1,7 +1,7 @@
-// Package cors implements the two CORS profiles required by
-// 02-product-design.md §F.4: a strict per-origin echo for the
-// authenticated endpoints (token, userinfo, interaction, session...) and a
-// permissive wildcard for the public metadata endpoints (discovery, JWKS).
+// Package cors implements the two CORS profiles the OP applies: a strict
+// per-origin echo for the authenticated endpoints (token, userinfo,
+// interaction, session...) and a permissive wildcard for the public
+// metadata endpoints (discovery, JWKS).
 // The package emits headers only; it does not handle business logic and
 // never short-circuits a non-preflight request. Callers wrap their handlers
 // in [Strict.Handler] (or [Public.Handler]) and continue serving as normal.

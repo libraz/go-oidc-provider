@@ -21,10 +21,9 @@ type Clock interface {
 	Now() time.Time
 }
 
-// Audit event names mirror 02-product-design.md §N.2.
-// The strings here MUST agree with the public op.AuditEvent constants
-// in op/audit.go; the registrationendpoint_test package contains a
-// guard that compares both lists.
+// Audit event names. The strings here MUST agree with the public
+// op.AuditEvent constants in op/audit.go; the registrationendpoint_test
+// package contains a guard that compares both lists.
 const (
 	auditDCRIATConsumed           = "dcr.iat.consumed"
 	auditDCRIATExpired            = "dcr.iat.expired"

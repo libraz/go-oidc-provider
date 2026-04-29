@@ -8,9 +8,7 @@ package op
 // prefix from incoming requests before consulting these values, so the
 // stored value is always relative to the mount point.
 // The default values are listed in the matching field comments. They mirror
-// OpenID Connect Core 1.0 / OpenID Connect Discovery 1.0 conventions and
-// the project conventions documented02-product-design.md
-// §K.1.
+// OpenID Connect Core 1.0 / OpenID Connect Discovery 1.0 conventions.
 type Endpoints struct {
 	// Discovery overrides /.well-known/openid-configuration. It is mounted
 	// outside the configured MountPrefix because OpenID Connect

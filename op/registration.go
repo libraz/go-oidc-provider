@@ -18,8 +18,7 @@ import (
 
 // defaultIATTTL is the validity window applied to an Initial Access
 // Token when [RegistrationOption.IATTTL] is left at zero. Twenty-four
-// hours matches the value documented in plans/002-product-design.md
-// §A.6.2 and is short enough that an exfiltrated IAT cannot be replayed
+// hours is short enough that an exfiltrated IAT cannot be replayed
 // for long, while still spanning a typical onboarding window.
 const defaultIATTTL = 24 * time.Hour
 
@@ -63,8 +62,9 @@ type RegistrationOption struct {
 	// registered client may request. Empty applies the default
 	// {"authorization_code", "refresh_token"}. The "client_credentials"
 	// grant is intentionally not in the default — service-to-service
-	// clients are statically provisioned per plans/002-product-design.md
-	// §A.6.2.
+	// clients are statically provisioned by design, so allowing them
+	// to self-register would bypass the operator review the static
+	// path enforces.
 	AllowedGrantTypes []string
 
 	// AllowedResponseTypes whitelists the response_type values a
@@ -80,7 +80,7 @@ type RegistrationOption struct {
 	// client as "invalid_client_metadata" (RFC 7591 §3.2.2).
 	// Implementations SHOULD avoid leaking internal IDs or SQL into the
 	// error message; the library passes the message verbatim into
-	// "error_description" subject to the §J.4.1 sanitisation rules.
+	// "error_description" subject to the library's sanitisation rules.
 	ValidateMetadata func(ctx context.Context, m ClientMetadata) error
 
 	// IATTTL is the validity window of an IAT issued via
@@ -409,8 +409,9 @@ func defaultRegistrationResponseTypes() []string {
 
 // IssueInitialAccessToken creates and persists a new Initial Access
 // Token. Operators call this from Go code (cron, invitation flow,
-// tenant provisioning); no admin REST endpoint is exposed per ADR
-// 0005.
+// tenant provisioning); the library deliberately does not expose an
+// admin REST endpoint for IAT issuance because authentication of the
+// caller is the embedder's responsibility.
 //
 // The returned [InitialAccessTokenIssued.Value] is the bearer secret
 // the registering RP MUST present in its POST /register

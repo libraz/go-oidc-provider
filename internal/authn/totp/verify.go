@@ -11,8 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Brute-force defence thresholds. The values come straight from
-// 02-product-design.md §M.6 and are intentionally not
+// Brute-force defence thresholds. The values are intentionally not
 // exposed as configuration: tuning them per-deployment would silently
 // weaken the defence and make incident response harder to reason about.
 const (

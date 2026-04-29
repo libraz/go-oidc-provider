@@ -28,7 +28,7 @@ type SetOptions struct {
 	MaxAge int
 
 	// SameSite controls the cross-site policy. Zero substitutes
-	// [http.SameSiteLaxMode] which is the §F.1 default for
+	// [http.SameSiteLaxMode], the library's default for
 	// authentication-flow cookies.
 	SameSite http.SameSite
 }
@@ -40,7 +40,7 @@ type SetOptions struct {
 //
 // Set is the only sanctioned cookie issuance helper inside the OP. Callers
 // that bypass it (e.g. by constructing [http.Cookie] directly) skip the
-// attribute enforcement and are flagged by reviewers per the F.1 policy.
+// attribute enforcement and are flagged in code review.
 func Set(w http.ResponseWriter, name, value string, opts SetOptions) error {
 	if !strings.HasPrefix(name, HostPrefix) {
 		return ErrMissingHostPrefix

@@ -7,8 +7,7 @@ package op
 //
 // The naming convention is "<area>.<verb>" (or
 // "<area>.<verb>.<qualifier>") so dashboards can pre-aggregate by
-// area without parsing a free-form message. The catalogue mirrors
-// design 002 §N.2.
+// area without parsing a free-form message.
 //
 // When [WithPrometheus] is configured, a curated subset of these
 // events is mirrored onto Prometheus counters by the package-internal
