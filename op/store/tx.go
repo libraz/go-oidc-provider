@@ -13,11 +13,16 @@ import "context"
 // Backends that are not transactional simply do not implement this
 // interface. The composite adapter checks at construction time that every
 // transactional-cluster Kind ([AuthorizationCodes], [RefreshTokens],
-// [Grants], [Sessions], [PushedAuthRequests]) is routed to a backend that
-// implements Transactional, and rejects configurations that violate the
-// invariant (see [op/storeadapter/composite] for the construction-time
+// [Grants], [PushedAuthRequests], [AccessTokens]) is routed to a backend
+// that implements Transactional, and rejects configurations that violate
+// the invariant (see [op/storeadapter/composite] for the construction-time
 // check). This makes the "single backend per transactional cluster" rule
 // structural rather than a runtime warning.
+//
+// Note that [SessionStore] is intentionally outside the cluster: the OP
+// does not coordinate Session writes with token-endpoint transactions
+// (see ADR 0014). Embedders MAY route Sessions to a volatile cache
+// independently of the cluster anchor.
 type Transactional interface {
 	// BeginTx starts a new transaction and returns a [Tx] handle. The
 	// transaction is aborted if the caller fails to call either
@@ -32,12 +37,13 @@ type Transactional interface {
 // transaction; mutations performed through them become visible to other
 // readers only after [Tx.Commit] succeeds.
 //
-// Note that [InteractionStore] and [ConsumedJTIStore] are intentionally
-// absent from Tx. Both are designed to operate outside any transaction --
-// interactions because losing them is recoverable, JTIs because the
-// operation is idempotent and benefits from being a single round trip --
-// and exposing them here would invite buggy callers to enrol them by
-// reflex.
+// Note that [SessionStore], [InteractionStore], and [ConsumedJTIStore] are
+// intentionally absent from Tx. Sessions because the OP tolerates session
+// loss as a re-login event and does not pair Session writes with
+// token-endpoint commits (ADR 0014); interactions because losing them is
+// recoverable; JTIs because the operation is idempotent and benefits from
+// being a single round trip. Exposing them here would invite buggy
+// callers to enrol them by reflex.
 type Tx interface {
 	// AuthorizationCodes returns an [AuthorizationCodeStore] bound to
 	// this transaction.
@@ -49,9 +55,6 @@ type Tx interface {
 	// RefreshTokens returns a [RefreshTokenStore] bound to this
 	// transaction.
 	RefreshTokens() RefreshTokenStore
-
-	// Sessions returns a [SessionStore] bound to this transaction.
-	Sessions() SessionStore
 
 	// PushedAuthRequests returns a [PushedAuthRequestStore] bound to
 	// this transaction.

@@ -24,7 +24,6 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 		authCodes:    newAuthCodeStore(s, dbtx),
 		refreshes:    newRefreshStore(s, dbtx),
 		grants:       newGrantStore(s, dbtx),
-		sessions:     newSessionStore(s, dbtx),
 		pars:         newParStore(s, dbtx),
 		accessTokens: newAccessTokenStore(s, dbtx),
 	}
@@ -42,7 +41,6 @@ type sqlTx struct {
 	authCodes    *authCodeStore
 	refreshes    *refreshStore
 	grants       *grantStore
-	sessions     *sessionStore
 	pars         *parStore
 	accessTokens *accessTokenStore
 
@@ -57,9 +55,6 @@ func (t *sqlTx) Grants() store.GrantStore { return t.grants }
 
 // RefreshTokens returns the tx-bound [store.RefreshTokenStore].
 func (t *sqlTx) RefreshTokens() store.RefreshTokenStore { return t.refreshes }
-
-// Sessions returns the tx-bound [store.SessionStore].
-func (t *sqlTx) Sessions() store.SessionStore { return t.sessions }
 
 // PushedAuthRequests returns the tx-bound [store.PushedAuthRequestStore].
 func (t *sqlTx) PushedAuthRequests() store.PushedAuthRequestStore { return t.pars }

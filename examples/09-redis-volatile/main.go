@@ -3,26 +3,29 @@
 // Example 09-redis-volatile is the canonical hot/cold deployment shape:
 // MySQL (or any [op/storeadapter/sql] target) handles every durable
 // substore, while Redis hosts the high-QPS volatile substores
-// (Interactions, ConsumedJTIs). Example 08 demonstrates the same
-// composite wiring with inmem as a stand-in for Redis; this example
-// swaps the stand-in for the real adapter.
+// (Sessions, Interactions, ConsumedJTIs). Example 08 demonstrates the
+// same composite wiring with inmem as a stand-in for Redis; this
+// example swaps the stand-in for the real adapter.
 //
 // # What lives where
 //
 // SQL durable backend (oidc_users, clients, codes, refresh tokens,
-// grants, sessions, PAR, access tokens, IATs, RATs).
+// grants, PAR, access tokens, IATs, RATs).
 //
 // Redis volatile backend:
 //
+//   - Sessions — browser session records (per ADR 0014, the OP does
+//     not coordinate Session writes with token-endpoint commits, so a
+//     volatile cache is the right tier)
 //   - Interactions — short-lived UI state during login / consent
 //   - ConsumedJTIs — DPoP and private_key_jwt replay protection
 //
 // The transactional cluster substores (AuthorizationCodes,
-// RefreshTokens, Grants, Sessions, PushedAuthRequests, AccessTokens)
-// are deliberately routed to the SQL backend: the composite adapter
+// RefreshTokens, Grants, PushedAuthRequests, AccessTokens) are
+// deliberately routed to the SQL backend: the composite adapter
 // rejects splitting them across backends because doing so would
-// shatter the rotation-chain atomicity guarantee. Validation happens at
-// composite.New time.
+// shatter the rotation-chain atomicity guarantee. Validation happens
+// at composite.New time.
 //
 // # Configuration
 //
@@ -145,11 +148,13 @@ func run() error {
 
 	// --- Composite wiring -------------------------------------------
 	// Every Kind in composite.TxClusterKinds resolves to durable via
-	// WithDefault. Two volatile Kinds (Interactions, ConsumedJTIs)
-	// override to volatile via With(). composite.New rejects any
-	// configuration that would split TxClusterKinds across backends.
+	// WithDefault. Three volatile Kinds (Sessions, Interactions,
+	// ConsumedJTIs) override to volatile via With(). composite.New
+	// rejects any configuration that would split TxClusterKinds across
+	// backends; Sessions is intentionally not in that set per ADR 0014.
 	storage, err := composite.New(
 		composite.WithDefault(durable),
+		composite.With(composite.Sessions, volatile),
 		composite.With(composite.Interactions, volatile),
 		composite.With(composite.ConsumedJTIs, volatile),
 	)

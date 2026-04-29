@@ -276,12 +276,6 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			added:   make(map[string]*store.Grant),
 			deleted: make(map[string]struct{}),
 		},
-		ssStaging: &sessionStaging{
-			parent:  s.sessions,
-			added:   make(map[string]*store.Session),
-			touched: make(map[string]sessionTouch),
-			deleted: make(map[string]struct{}),
-		},
 		parStaging: &parStaging{
 			parent:  s.pars,
 			added:   make(map[string]*store.PushedAuthRequest),

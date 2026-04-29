@@ -108,3 +108,12 @@ func TestRedis_ConsumedJTIs(t *testing.T) {
 	t.Parallel()
 	contract.RunConsumedJTIs(t, newRedisFactory(t))
 }
+
+// TestRedis_Sessions runs the SessionStore contract subgroup against a
+// real Redis 7 instance. The harness validates the chooser-group
+// secondary index, lazy cleanup of stale entries after parent TTL
+// eviction, and the JSON round-trip shape against the live engine.
+func TestRedis_Sessions(t *testing.T) {
+	t.Parallel()
+	contract.RunSessions(t, newRedisFactory(t))
+}

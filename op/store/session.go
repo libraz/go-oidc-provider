@@ -62,10 +62,17 @@ type Session struct {
 	UpdatedAt time.Time
 }
 
-// SessionStore is the substore for OP sessions. It belongs to the
-// transactional cluster because session establishment and amr_history
-// updates run in the same transaction as the authorization-code or token
-// emission they accompany.
+// SessionStore is the substore for OP sessions. It is a volatile substore
+// outside the transactional cluster: session writes (Save / Touch / Delete)
+// are NOT coordinated with token-endpoint commits, and the OP tolerates
+// session loss as a normal "user re-logs-in" event rather than a
+// security incident.
+//
+// Embedders MAY route SessionStore to a fast cache (Redis, Memcached) via
+// [op/storeadapter/composite] without violating any library invariant.
+// See [ADR 0014](../../docs/adr/0014-sessions-out-of-tx-cluster.md) for
+// the rationale and the future re-entry path if a feature later requires
+// Session-in-tx semantics.
 type SessionStore interface {
 	// Save persists a new session or replaces an existing one. Save MUST
 	// return [ErrAlreadyExists] if used in insert mode and the ID is

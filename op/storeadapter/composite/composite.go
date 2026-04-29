@@ -81,8 +81,11 @@ const (
 	// cluster.
 	Grants
 
-	// Sessions routes [store.SessionStore] calls. Member of the
-	// transactional cluster.
+	// Sessions routes [store.SessionStore] calls. Outside the transactional
+	// cluster: the OP tolerates session loss as a re-login event and does
+	// not coordinate Session writes with token-endpoint commits (ADR 0014).
+	// Embedders MAY route Sessions to a volatile cache (Redis, Memcached)
+	// without violating any invariant.
 	Sessions
 
 	// PushedAuthRequests routes [store.PushedAuthRequestStore] calls.
@@ -177,12 +180,15 @@ var allKinds = []Kind{
 // one [store.Transactional] handle, so routing two of them to different
 // backends would split the atomic commit and open a replay window.
 //
+// [Sessions] is intentionally absent: the OP does not coordinate Session
+// writes with token-endpoint commits, and embedders are expected to route
+// Sessions to a volatile cache. See ADR 0014.
+//
 //nolint:gochecknoglobals // closed enumeration mirroring 002 §D.1.1.
 var TxClusterKinds = []Kind{
 	AuthorizationCodes,
 	RefreshTokens,
 	Grants,
-	Sessions,
 	PushedAuthRequests,
 	AccessTokens,
 }

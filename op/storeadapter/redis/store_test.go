@@ -95,7 +95,6 @@ func TestStore_StubAccessorsPanic(t *testing.T) {
 		{"AuthorizationCodes", func() { s.AuthorizationCodes() }},
 		{"RefreshTokens", func() { s.RefreshTokens() }},
 		{"Grants", func() { s.Grants() }},
-		{"Sessions", func() { s.Sessions() }},
 		{"PushedAuthRequests", func() { s.PushedAuthRequests() }},
 		{"Users", func() { s.Users() }},
 		{"AccessTokens", func() { s.AccessTokens() }},

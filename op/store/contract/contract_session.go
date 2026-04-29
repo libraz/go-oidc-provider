@@ -356,8 +356,7 @@ func txBeginCommit(t *testing.T, f Factory) {
 func requireSubstoresNonNil(t *testing.T, tx store.Tx) {
 	t.Helper()
 	if tx.AuthorizationCodes() == nil || tx.RefreshTokens() == nil ||
-		tx.Grants() == nil || tx.Sessions() == nil ||
-		tx.PushedAuthRequests() == nil {
+		tx.Grants() == nil || tx.PushedAuthRequests() == nil {
 		t.Fatal("Tx returned nil substore handle")
 	}
 }
@@ -420,9 +419,6 @@ func txCrossSubstore(t *testing.T, f Factory) {
 	if _, err := b.Store.AuthorizationCodes().Find(ctx, "tx-c"); err != nil {
 		t.Fatalf("Find code: %v", err)
 	}
-	if _, err := b.Store.Sessions().Find(ctx, "tx-s"); err != nil {
-		t.Fatalf("Find session: %v", err)
-	}
 }
 
 func saveCrossSubstore(ctx context.Context, tx store.Tx, now time.Time) error {
@@ -432,9 +428,5 @@ func saveCrossSubstore(ctx context.Context, tx store.Tx, now time.Time) error {
 	}
 	code := newAuthCode(now, "tx-c")
 	code.GrantID = "tx-g"
-	if err := tx.AuthorizationCodes().Save(ctx, code); err != nil {
-		return err
-	}
-	sess := newSession(now, "tx-s")
-	return tx.Sessions().Save(ctx, sess)
+	return tx.AuthorizationCodes().Save(ctx, code)
 }

@@ -148,10 +148,10 @@ func WithMaxValueBytes(n int) Option {
 	}
 }
 
-// Store is the Redis adapter. It satisfies [store.Store] but only the
-// [store.InteractionStore] and [store.ConsumedJTIStore] accessors
-// return functional implementations; every other accessor returns a
-// stub that panics on first call so misconfiguration surfaces loudly.
+// Store is the Redis adapter. It satisfies [store.Store] for the
+// volatile substores ([store.InteractionStore], [store.ConsumedJTIStore],
+// and [store.SessionStore] per ADR 0014); every other accessor returns
+// a stub that panics on first call so misconfiguration surfaces loudly.
 // The adapter is intended to be composed with
 // [github.com/libraz/go-oidc-provider/op/storeadapter/composite] so
 // that out-of-scope substores resolve to a different backend.
@@ -163,6 +163,7 @@ type Store struct {
 
 	interactionsImpl *interactionStore
 	jtisImpl         *jtiStore
+	sessionsImpl     *sessionStore
 }
 
 // New constructs a Store from the supplied options. New fails when:
@@ -200,6 +201,7 @@ func New(ctx context.Context, opts ...Option) (*Store, error) {
 	}
 	s.interactionsImpl = newInteractionStore(s)
 	s.jtisImpl = newJTIStore(s)
+	s.sessionsImpl = newSessionStore(s)
 	return s, nil
 }
 
@@ -335,10 +337,12 @@ func (s *Store) RefreshTokens() store.RefreshTokenStore { panic(unimplemented("R
 //nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
 func (s *Store) Grants() store.GrantStore { panic(unimplemented("Grants")) }
 
-// Sessions implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) Sessions() store.SessionStore { panic(unimplemented("Sessions")) }
+// Sessions returns the [store.SessionStore] handle. Sessions are an
+// in-scope substore for the Redis adapter (ADR 0014): the OP does not
+// coordinate Session writes with token-endpoint commits, so a volatile
+// cache is the appropriate backend. Embedders compose this accessor
+// with the other Kinds via op/storeadapter/composite.
+func (s *Store) Sessions() store.SessionStore { return s.sessionsImpl }
 
 // PushedAuthRequests implements [store.Store]; see accessor doc above.
 //

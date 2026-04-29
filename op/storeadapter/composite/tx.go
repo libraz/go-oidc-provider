@@ -30,12 +30,6 @@ func (t *compositeTx) Grants() store.GrantStore {
 	return t.inner.Grants()
 }
 
-// Sessions returns the transactional [store.SessionStore] bound to the
-// anchor's underlying transaction.
-func (t *compositeTx) Sessions() store.SessionStore {
-	return t.inner.Sessions()
-}
-
 // PushedAuthRequests returns the transactional
 // [store.PushedAuthRequestStore] bound to the anchor's underlying
 // transaction.

@@ -106,6 +106,20 @@ func RunConsumedJTIs(t *testing.T, f Factory) {
 	})
 }
 
+// RunSessions runs only the SessionStore contract subgroup against the
+// supplied factory. Backends that host SessionStore alongside other
+// volatile substores (Redis / Memcached) call this in lieu of [Run] so
+// the harness does not exercise out-of-scope substores. ADR 0014
+// declares Sessions as a routable-on-its-own substore so partial-coverage
+// backends are a first-class case.
+func RunSessions(t *testing.T, f Factory) {
+	t.Helper()
+	t.Run("SessionStore", func(t *testing.T) {
+		t.Parallel()
+		runGroup(t, f, sessionCases)
+	})
+}
+
 // subtest captures one named sub-test in the contract suite.
 type subtest struct {
 	name string
