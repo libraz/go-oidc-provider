@@ -86,10 +86,6 @@ type config struct {
 	// every redirect_uri origin registered via the [store.ClientStore].
 	corsOrigins []string
 
-	// crossSiteFlow is the §F.3 opt-in for SameSite=None on session
-	// cookies. Off by default per the production-grade posture.
-	crossSiteFlow bool
-
 	// scopes captures the [Scope] values registered through
 	// [WithScope] in the order they were supplied. Order is preserved
 	// so a later mutation of the slice does not silently change the
@@ -1691,22 +1687,6 @@ func WithScope(s Scope) Option {
 			}
 		}
 		c.scopes = append(c.scopes, s)
-		return nil
-	})
-}
-
-// WithCrossSiteFlow opts the [Provider] into [SameSite=None] cookies so the
-// authorization endpoint can be embedded across origins (iframe / external
-// SPA)02-product-design.md §F.3. The default is off
-// because cross-site cookies have a higher CSRF blast radius; enable only
-// when the deployment requires the embedded flow.
-// Experimental: the flag is wired through configuration but the cross-site
-// flow surface is still being designed; the option name and semantics may
-// change before v1.0.
-// [SameSite=None]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie/SameSite#none
-func WithCrossSiteFlow() Option {
-	return optionFunc(func(c *config) error {
-		c.crossSiteFlow = true
 		return nil
 	})
 }

@@ -771,14 +771,6 @@ func TestWithCORSOrigins_AppendsAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestWithCrossSiteFlow_Accepts(t *testing.T) {
-	t.Parallel()
-
-	if _, err := op.New(append(validBaseOpts(t), op.WithCrossSiteFlow())...); err != nil {
-		t.Fatalf("WithCrossSiteFlow: %v", err)
-	}
-}
-
 // TestWithScope_RejectsStandardScopeNonPublic enforces ADR-0004's
 // construction-time guard: every OIDC standard scope MUST stay in the
 // discovery document, so registering one with Public:false is a
