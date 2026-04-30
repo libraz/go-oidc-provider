@@ -1,10 +1,14 @@
-//nolint:testpackage // exercises unexported looksLikeUID / validAssetPath / safeFS
+//nolint:testpackage // exercises unexported looksLikeUID / validAssetPath / safeFS / spaTerminalWriter
 package authorizeendpoint
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -201,6 +205,182 @@ func TestSafeFS_OpenAcceptsSymlinkInsideRoot(t *testing.T) {
 		t.Fatalf("Open(/alias.js): %v", err)
 	}
 	defer f.Close()
+}
+
+// TestSPATerminalWriter_RewritesFoundToJSONEnvelope pins the contract
+// the SPA route relies on: a 302 carrying a Location header is
+// converted to a 200 application/json envelope of the form
+// {"type":"redirect","location":"<target>"} so the SPA's submit
+// handler can navigate at document level. The orchestrator's
+// http.Redirect call also writes a small HTML body; the wrapper
+// MUST suppress it so the JSON envelope is the only response body.
+func TestSPATerminalWriter_RewritesFoundToJSONEnvelope(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	tw := newSPATerminalWriter(rec)
+	target := "http://rp.example/callback?code=abc&state=xyz"
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/login/state/u", nil)
+	http.Redirect(tw, req, target, http.StatusFound)
+	tw.flush()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want application/json; charset=utf-8", got)
+	}
+	if got := rec.Header().Get("Location"); got != "" {
+		t.Fatalf("Location header leaked: %q", got)
+	}
+	var body struct {
+		Type     string `json:"type"`
+		Location string `json:"location"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v (raw=%q)", err, rec.Body.String())
+	}
+	if body.Type != "redirect" {
+		t.Errorf("type = %q, want \"redirect\"", body.Type)
+	}
+	if body.Location != target {
+		t.Errorf("location = %q, want %q", body.Location, target)
+	}
+}
+
+// TestSPATerminalWriter_PassthroughOK confirms the wrapper does not
+// rewrite a normal JSON next-prompt response. The JSONDriver writes a
+// 200 with an application/json body; the wrapper must forward both
+// the status and the body byte-for-byte so the SPA can parse and
+// render the next prompt.
+func TestSPATerminalWriter_PassthroughOK(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	tw := newSPATerminalWriter(rec)
+	tw.Header().Set("Content-Type", "application/json")
+	tw.WriteHeader(http.StatusOK)
+	if _, err := tw.Write([]byte(`{"type":"auth.password"}`)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	tw.flush()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if rec.Body.String() != `{"type":"auth.password"}` {
+		t.Fatalf("body = %q, want JSON next-prompt envelope", rec.Body.String())
+	}
+}
+
+// TestSPATerminalWriter_PassthroughClientError confirms the wrapper
+// forwards 4xx error envelopes unchanged. The JSONDriver writes a JSON
+// error body when the orchestrator rejects the submission; the SPA
+// reads it to surface a localized error to the user, so the wrapper
+// must not rewrite it.
+func TestSPATerminalWriter_PassthroughClientError(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	tw := newSPATerminalWriter(rec)
+	tw.Header().Set("Content-Type", "application/json")
+	tw.WriteHeader(http.StatusForbidden)
+	if _, err := tw.Write([]byte(`{"error":"invalid_request"}`)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	tw.flush()
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if rec.Body.String() != `{"error":"invalid_request"}` {
+		t.Fatalf("body = %q, want JSON error envelope", rec.Body.String())
+	}
+}
+
+// TestSPATerminalWriter_PassthroughNoContent confirms a 204 cancel
+// (the DELETE-without-redirect path in serveInteractionDelete)
+// reaches the inner writer with status and empty body intact.
+func TestSPATerminalWriter_PassthroughNoContent(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	tw := newSPATerminalWriter(rec)
+	tw.WriteHeader(http.StatusNoContent)
+	tw.flush()
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("body unexpectedly non-empty: %q", rec.Body.String())
+	}
+}
+
+// TestSPATerminalWriter_PassthroughFoundWithoutLocation defends against
+// a 302 that somehow lacks a Location header. The wrapper's
+// rewrite branch is gated on Location being non-empty; without it the
+// response forwards as-is so the SPA receives the original (degraded)
+// signal rather than a synthetic envelope claiming an empty target.
+func TestSPATerminalWriter_PassthroughFoundWithoutLocation(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	tw := newSPATerminalWriter(rec)
+	tw.WriteHeader(http.StatusFound)
+	tw.flush()
+
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302 passthrough when Location is absent", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got == "application/json; charset=utf-8" {
+		t.Fatal("wrapper rewrote a Location-less 302; that path is reserved for true terminal redirects")
+	}
+}
+
+// TestSPATerminalWriter_ImplicitOK confirms a Write without a prior
+// WriteHeader is treated as 200, matching net/http's standard
+// convention. The handler-side helpers occasionally rely on this so
+// the wrapper must not desynchronize with that contract.
+func TestSPATerminalWriter_ImplicitOK(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	tw := newSPATerminalWriter(rec)
+	if _, err := tw.Write([]byte("hello")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	tw.flush()
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (implicit)", rec.Code)
+	}
+	if rec.Body.String() != "hello" {
+		t.Fatalf("body = %q, want %q", rec.Body.String(), "hello")
+	}
+}
+
+// TestSPATerminalWriter_FlushIdempotent confirms a second flush call
+// is a no-op so accidental double-flush in a route helper does not
+// panic on a closed-channel-style write or duplicate the body.
+func TestSPATerminalWriter_FlushIdempotent(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	tw := newSPATerminalWriter(rec)
+	tw.WriteHeader(http.StatusOK)
+	if _, err := tw.Write([]byte("once")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	tw.flush()
+	tw.flush()
+
+	if rec.Body.String() != "once" {
+		t.Fatalf("body = %q, want %q (flush should be idempotent)", rec.Body.String(), "once")
+	}
 }
 
 // mustWrite writes content to path, creating parent directories

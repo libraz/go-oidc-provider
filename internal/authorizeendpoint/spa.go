@@ -1,6 +1,7 @@
 package authorizeendpoint
 
 import (
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"os"
@@ -259,4 +260,110 @@ func assertSymlinkWithin(root, abs string) error {
 		return fs.ErrNotExist
 	}
 	return nil
+}
+
+// spaTerminalWriter is the [http.ResponseWriter] wrapper SPA state
+// routes use to convert the orchestrator's terminal-redirect 302 into a
+// JSON envelope the SPA can navigate to via window.location. Non-302
+// responses pass through unchanged: the JSON-driver next-prompt
+// emission, the JSON error envelopes, and the 204 cancel-no-redirect
+// path are all forwarded byte-for-byte.
+//
+// The wrapper is buffered: it captures the leading WriteHeader call
+// and the first batch of body writes so the conversion can run before
+// any bytes have escaped the underlying writer. [spaTerminalWriter.flush]
+// MUST be called after the wrapped handler returns; the route handler
+// in [registerSPARoutes] does this in-line.
+type spaTerminalWriter struct {
+	inner    http.ResponseWriter
+	header   http.Header
+	status   int
+	body     []byte
+	captured bool
+	flushed  bool
+}
+
+func newSPATerminalWriter(inner http.ResponseWriter) *spaTerminalWriter {
+	return &spaTerminalWriter{
+		inner:  inner,
+		header: http.Header{},
+	}
+}
+
+// Header returns the buffered header map. Writes to it are reflected
+// onto the inner writer at flush time, except for the redirect-rewrite
+// path which discards Location and replaces Content-Type.
+func (s *spaTerminalWriter) Header() http.Header { return s.header }
+
+// WriteHeader buffers the status. Multiple calls keep the first one,
+// matching the standard library convention.
+func (s *spaTerminalWriter) WriteHeader(status int) {
+	if s.captured {
+		return
+	}
+	s.status = status
+	s.captured = true
+}
+
+// Write buffers the body bytes. The wrapper does not stream because
+// the redirect-rewrite path needs the chance to discard the http.Redirect
+// HTML body and emit JSON instead; for non-rewrite paths the buffered
+// bytes are forwarded verbatim at flush time.
+func (s *spaTerminalWriter) Write(b []byte) (int, error) {
+	if !s.captured {
+		s.status = http.StatusOK
+		s.captured = true
+	}
+	s.body = append(s.body, b...)
+	return len(b), nil
+}
+
+// flush copies the buffered response onto the inner writer. When the
+// captured status is 302 with a non-empty Location header, the writer
+// emits a 200 application/json envelope of the form
+//
+//	{"type":"redirect","location":"<Location>"}
+//
+// instead. The SPA's submit handler reads this shape and sets
+// window.location.href = location to follow the redirect at the
+// document level.
+func (s *spaTerminalWriter) flush() {
+	if s.flushed {
+		return
+	}
+	s.flushed = true
+	if !s.captured {
+		// Handler returned without writing anything; treat as 200 OK
+		// with an empty body so middleware downstream doesn't see a
+		// truncated response.
+		s.captured = true
+		s.status = http.StatusOK
+	}
+	if s.status == http.StatusFound {
+		if loc := s.header.Get("Location"); loc != "" {
+			out := s.inner.Header()
+			for k, vs := range s.header {
+				if k == "Location" || k == "Content-Length" || k == "Content-Type" {
+					continue
+				}
+				out[k] = vs
+			}
+			out.Set("Content-Type", "application/json; charset=utf-8")
+			body, _ := json.Marshal(map[string]string{
+				"type":     "redirect",
+				"location": loc,
+			})
+			s.inner.WriteHeader(http.StatusOK)
+			_, _ = s.inner.Write(body)
+			return
+		}
+	}
+	out := s.inner.Header()
+	for k, vs := range s.header {
+		out[k] = vs
+	}
+	s.inner.WriteHeader(s.status)
+	if len(s.body) > 0 {
+		_, _ = s.inner.Write(s.body)
+	}
 }

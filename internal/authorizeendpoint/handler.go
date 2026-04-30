@@ -406,7 +406,15 @@ func Handler(deps Deps) http.Handler {
 func registerSPARoutes(mux *http.ServeMux, r resolved) {
 	statePath := r.SPALoginMount + "/state/{uid}"
 	stateHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		serveInteraction(w, req, r)
+		// The SPA fetch path cannot follow the cross-origin RP-callback
+		// redirect that the orchestrator emits at chain termination
+		// (fetch with redirect:"follow" exposes the response as opaque,
+		// and redirect:"manual" hides the Location header). Wrap the
+		// writer so a 302 is rewritten as a JSON terminal envelope the
+		// SPA can consume with window.location.href = location.
+		tw := newSPATerminalWriter(w)
+		serveInteraction(tw, req, r)
+		tw.flush()
 	})
 	mux.Handle("GET "+statePath, stateHandler)
 	mux.Handle("POST "+statePath, stateHandler)
