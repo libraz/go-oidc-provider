@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=./schema.json
+feature: access_token_opaque
+prefix: ATO
+title: Opaque access-token format (ADR 0024)
+specs:
+  - RFC 6749 §4 — OAuth 2.0 grant exchanges
+  - RFC 6750 §2.1 — Bearer Token Usage (b64token wire shape)
+  - RFC 7009 §2.2 — OAuth 2.0 Token Revocation (idempotency)
+  - RFC 7662 §2.1 / §2.2 — OAuth 2.0 Token Introspection (active/inactive)
+  - RFC 7800 — Proof-of-Possession Key Semantics for JWT (cnf)
+  - RFC 8705 §3 — mTLS-bound access tokens
+  - RFC 8707 §2.2 — Resource indicator immutability across rotation
+  - RFC 9449 §6 — DPoP-bound access tokens
+  - ADR 0013 — Access-token revocation registry (sibling)
+  - ADR 0024 — Opaque access-token format opt-in
+
+description: |
+  End-to-end coverage of the opt-in opaque access-token format that
+  ADR 0024 added to the v1.0 surface. The catalog rows exercise the
+  /token issuance dispatch, the /oidc/introspect projection, the
+  /oidc/userinfo bearer path, the /oidc/revocation idempotency, the
+  refresh-rotation revocation of the prior AT, the code-replay
+  cascade through OpaqueAccessTokens.RevokeByGrant, the per-audience
+  format map, and the format-confusion defences (DPoP / mTLS / JWS
+  parsing).
+
+  The contract these rows assert against is the Go-shaped
+  [store.OpaqueAccessToken] record persisted through
+  [store.OpaqueAccessTokenStore] — NOT the panva-style
+  adapter.upsert payload contract enumerated in the deprecated TFO
+  catalog. Backends MUST hash the raw bearer id before storage; the
+  reference inmem implementation pins that contract and the rows
+  below verify the externally-observable behaviour the contract
+  produces.
+
+rows:
+  - id: ATO-001
+    severity: P0
+    spec: ADR 0024 §"Wire format" / §"Issuance plumbing"
+    behaviour: |
+      With WithAccessTokenFormat(AccessTokenFormatOpaque) configured,
+      a successful authorization_code exchange returns an access_token
+      whose value matches the RFC 6750 b64token alphabet, contains no
+      "." separator (and so cannot be parsed as a JWS Compact
+      Serialisation per RFC 7515 §3), and is exactly 43 characters
+      long (the base64url encoding of 32 random bytes). The token
+      value is also persisted as a hashed row in
+      Store.OpaqueAccessTokens(); a Find call against the raw value
+      surfaces the row with ClientID, Subject, Scope, IssuedAt, and
+      ExpiresAt populated and Revoked=false.
+    status: active
+
+  - id: ATO-002
+    severity: P0
+    spec: RFC 7662 §2.1 / ADR 0024 §"Verification plumbing"
+    behaviour: |
+      An opaque access token presented at /oidc/introspect by the
+      same client that requested it returns 200 with
+      {"active": true, "client_id": "<rp>", "sub": "<user>",
+      "scope": "...", "token_type": "Bearer"} and the issued / expiry
+      timestamps the token was minted with. Cache-Control is
+      no-store. A cnf claim is projected when the originating /token
+      request bound the AT to a DPoP key or mTLS certificate; bare
+      bearer tokens omit cnf.
+    status: active
+
+  - id: ATO-003
+    severity: P0
+    spec: RFC 6750 §2.1 / ADR 0024 §"Verification plumbing"
+    behaviour: |
+      An opaque access token presented at /oidc/userinfo through
+      Authorization: Bearer returns 200 with the user's claims
+      filtered by the AT's scope. Cache-Control is "no-store, private".
+      No JWS parse is attempted — the lookup keys on the SHA-256
+      digest of the presented bearer.
+    status: active
+
+  - id: ATO-004
+    severity: P0
+    spec: RFC 7009 §2.2 / ADR 0024 §"Refresh-rotation revocation of prior AT"
+    behaviour: |
+      A POST /oidc/revocation with token=<opaque AT> and the
+      issuing client's credentials returns 200 with an empty body.
+      A subsequent introspection of the same token returns
+      {"active": false}, a userinfo request returns 401 with
+      WWW-Authenticate: Bearer error="invalid_token", and a second
+      revocation call is idempotent (200 + empty).
+    status: active
+
+  - id: ATO-005
+    severity: P0
+    spec: ADR 0024 §S.8 / RFC 7662 §2.2
+    behaviour: |
+      Cross-client introspection of an opaque AT collapses onto
+      {"active": false}: the introspecting client authenticates
+      successfully but the row's ClientID does not match the
+      authenticated client, so the OP returns inactive without
+      leaking any metadata about the live token.
+    status: active
+
+  - id: ATO-006
+    severity: P0
+    spec: ADR 0024 §"Refresh-rotation revocation of prior AT (opaque only)"
+    behaviour: |
+      A refresh exchange that mints a fresh opaque AT atomically
+      revokes the prior opaque AT. After the rotation:
+      Store.OpaqueAccessTokens().Find(prior) reports Revoked=true,
+      Find(new) returns an active row, and the new AT is the value
+      handed back in the /token response.
+    status: active
+
+  - id: ATO-007
+    severity: P0
+    spec: RFC 6749 §4.1.2 / §10.5 / ADR 0024 §"Code-replay cascade"
+    behaviour: |
+      Replaying a consumed authorization code triggers the
+      revokeChainForCode cascade: every opaque AT whose GrantID
+      matches the code's grant is flipped to Revoked=true via
+      OpaqueAccessTokens.RevokeByGrant, in addition to the
+      AccessToken-registry and refresh-token revocations the cascade
+      already performs.
+    status: active
+
+  - id: ATO-008
+    severity: P1
+    spec: ADR 0024 §"Public API surface"
+    behaviour: |
+      With WithAccessTokenFormatPerAudience(map{
+        "https://api.opaque": AccessTokenFormatOpaque,
+        "https://api.jwt":    AccessTokenFormatJWT,
+      }) configured, a /token exchange that targets resource=
+      https://api.opaque returns a 43-char access_token with no "."
+      and Store.OpaqueAccessTokens() carries the row, while a
+      /token exchange that targets resource=https://api.jwt returns
+      a JWS-shaped access_token (3 dot-separated segments). The
+      resource indicator selects the format per request.
+    status: active
+
+  - id: ATO-009
+    severity: P1
+    spec: ADR 0024 §S.3 / RFC 9449 §5.1
+    behaviour: |
+      An opaque AT bound to a DPoP key thumbprint, presented at
+      /oidc/userinfo with a DPoP proof signed by a different key,
+      returns 401 with WWW-Authenticate: DPoP error="invalid_token"
+      so the resource server learns the binding mismatched without
+      receiving any of the row's metadata.
+    status: pending
+
+  - id: ATO-010
+    severity: P1
+    spec: ADR 0024 §S.3 / RFC 8705 §3
+    behaviour: |
+      An opaque AT bound to an mTLS certificate thumbprint, presented
+      at /oidc/userinfo over a TLS connection that did not present
+      the matching client certificate, returns 401 with
+      WWW-Authenticate: Bearer error="invalid_token". The bind check
+      runs after the Find lookup so the proof is checked against the
+      thumbprint the OP issued.
+    status: pending
+
+  - id: ATO-011
+    severity: P1
+    spec: ADR 0024 §S.9 / RFC 7515 §3
+    behaviour: |
+      An opaque AT contains 43 base64url characters with no "."
+      separator, so a resource server attempting JWS Compact
+      Serialisation parsing rejects it at the parse step rather
+      than crashing. The wire bytes themselves are the format-
+      confusion defence.
+    status: active

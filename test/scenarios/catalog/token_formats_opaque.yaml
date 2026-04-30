@@ -1,7 +1,30 @@
 # yaml-language-server: $schema=./schema.json
+# DEPRECATED: this file enumerates the panva/node-oidc-provider
+# adapter.upsert payload contract (kind=AccessToken, kind=AuthorizationCode,
+# kind=DeviceCode, kind=BackchannelAuthenticationRequest, kind=RefreshToken,
+# kind=ClientCredentials, kind=InitialAccessToken, kind=RegistrationAccessToken,
+# nested under accountId / params / extra / inFlight / expiresWithSession,
+# etc.). go-oidc-provider v1.0 does NOT adopt that payload contract:
+# ADR 0024 ("Opaque access-token format opt-in") fixes the on-the-wire
+# bytes at 43-character base64url and persists a Go-shaped
+# [store.OpaqueAccessToken] record (no kind tag, no params blob, no
+# expiresWithSession bit) through the [store.OpaqueAccessTokenStore]
+# substore. Other token kinds (authorization code, refresh token, device
+# code, CIBA request, initial / registration access tokens) live in
+# their own substores with their own Go-shaped records and are exercised
+# by the catalog files that own those features.
+#
+# These TFO-NNN rows remain in the tree as historical traceability for
+# the panva-translation effort. They are NOT activated under v1.0 and
+# the matching test/scenarios/token_formats_opaque_test.go functions
+# stay on t.Skip with a pointer to the superseding catalog.
+#
+# The v1.0 deliverable that ships ADR 0024 is exercised by the ATO-NNN
+# catalog at test/scenarios/catalog/access_token_opaque.yaml; new opaque
+# access-token coverage MUST land there.
 feature: token_formats_opaque
 prefix: TFO
-title: Opaque token persistence payload
+title: Opaque token persistence payload (DEPRECATED — superseded by ATO)
 specs:
   - RFC 6749 — OAuth 2.0
   - RFC 6750 — Bearer Token
@@ -14,6 +37,13 @@ specs:
   - RFC 9449 — `jkt` / `dpopJkt` confirmation
 
 description: |
+  DEPRECATED — panva-style adapter.upsert payload contract.
+  go-oidc-provider v1.0 adopts a different shape (the
+  [store.OpaqueAccessToken] Go struct under ADR 0024) and does not
+  exercise the rows below. See
+  test/scenarios/catalog/access_token_opaque.yaml (ATO-NNN) for the
+  v1.0 opaque-AT scenarios and ADR 0024 for the design.
+
   Per-kind contract for the payload the OP hands to adapter.upsert when
   persisting an opaque token. The body is always a 43-character
   base64url string (32 random bytes), and each token kind carries a
