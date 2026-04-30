@@ -106,11 +106,12 @@ type Features struct {
 
 // ValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4
 // shape constraints on the issuer URL: an absolute https URL with no
-// trailing slash, no query, and no fragment. Loopback hosts
-// (localhost, 127.0.0.1, [::1]) are exempted from the https
-// requirement so a development boot can use a plain-text scheme;
-// production deployments are still required to publish the issuer
-// over TLS.
+// trailing slash, no query, and no fragment. Loopback IP literals
+// (127.0.0.0/8 and [::1]) are exempted from the https requirement so
+// a development boot can use a plain-text scheme; production
+// deployments are still required to publish the issuer over TLS. The
+// textual host "localhost" is NOT in the carve-out because it can be
+// DNS-hijacked (RFC 8252 §7.3 reasoning).
 //
 // The validator is invoked by [Build] (defense in depth: op.WithIssuer
 // performs a similar check at the option site, but a future regression
@@ -148,24 +149,23 @@ func ValidateIssuer(raw string) error {
 		if isLoopbackHost(u.Hostname()) {
 			return nil
 		}
-		return fmt.Errorf("%w: http scheme is permitted only for loopback hosts (localhost / 127.0.0.1 / [::1])", ErrIssuerInvalid)
+		return fmt.Errorf("%w: http scheme is permitted only for loopback IP literals (127.0.0.0/8 / [::1])", ErrIssuerInvalid)
 	default:
 		return fmt.Errorf("%w: scheme %q is not permitted", ErrIssuerInvalid, u.Scheme)
 	}
 }
 
-// isLoopbackHost reports whether host names a loopback target.
-// Returns true for the literal "localhost" (case-insensitive), the
+// isLoopbackHost reports whether host is a loopback IP literal: the
 // canonical loopback IPv4 address 127.0.0.1, the entire 127.0.0.0/8
-// block (some test setups bind 127.0.0.2), and the IPv6 loopback ::1.
-// The check is closed: any host that does not match falls through to
-// the production-grade https-only path.
+// block (some test setups bind 127.0.0.2), or the IPv6 loopback ::1.
+// The textual host "localhost" is intentionally NOT recognized because
+// DNS resolution for "localhost" can be hijacked (RFC 8252 §7.3); a
+// development boot binding loopback uses the IP literal directly. The
+// check is closed: any host that does not match falls through to the
+// production-grade https-only path.
 func isLoopbackHost(host string) bool {
 	if host == "" {
 		return false
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
