@@ -369,6 +369,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 			AccessTokens:                   cfg.store.AccessTokens(),
+			Audit:                          cfg.effectiveAuditEmitter(),
 		}),
 	)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet)

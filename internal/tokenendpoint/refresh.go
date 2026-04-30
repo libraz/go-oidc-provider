@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -347,7 +348,7 @@ func rotateRefreshToken(
 		// and we keep that value so the chain stays bound.
 		rotatedJKT = refreshDPoPJKT(client, binding.DPoPJKT)
 	}
-	return issuer.Issue(ctx, refresh.IssueInput{
+	token, err := issuer.Issue(ctx, refresh.IssueInput{
 		ClientID:           client.ID,
 		Subject:            exchanged.Subject,
 		GrantID:            exchanged.GrantID,
@@ -356,4 +357,20 @@ func rotateRefreshToken(
 		DPoPJKT:            rotatedJKT,
 		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})
+	if err != nil {
+		return "", err
+	}
+	deps.audit().Emit(ctx, audit.Event{
+		Name:     auditTokenRefreshed,
+		Level:    audit.LevelInfo,
+		Message:  "refresh token rotated",
+		ActorID:  exchanged.Subject,
+		ClientID: client.ID,
+		Extras: map[string]any{
+			"grant_id":       exchanged.GrantID,
+			"offline_access": scopeContainsOfflineAccess(exchanged.Scope),
+			"ttl_bucket":     ttlBucketFor(deps, exchanged.Scope),
+		},
+	})
+	return token, nil
 }

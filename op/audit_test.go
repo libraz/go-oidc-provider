@@ -27,6 +27,26 @@ func TestAuditEvent_BCLMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_TokenMirror keeps the public op.AuditTokenIssued /
+// op.AuditTokenRefreshed constants aligned with the raw strings the
+// token endpoint emits. The internal handler cannot import op/, so
+// the values are duplicated as strings (auditTokenIssued /
+// auditTokenRefreshed in internal/tokenendpoint/handler.go) and this
+// test pins them together.
+func TestAuditEvent_TokenMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"token.issued":    op.AuditTokenIssued,
+		"token.refreshed": op.AuditTokenRefreshed,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_DCRMirror keeps the public op.AuditDCR* constants
 // aligned with the strings that the registration endpoint emits.
 // The internal handler cannot reference op.AuditEvent (no

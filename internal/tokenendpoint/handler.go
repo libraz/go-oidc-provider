@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -19,6 +20,25 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
+)
+
+// Audit event names mirrored from the public op.AuditEvent catalogue.
+// internal/tokenendpoint cannot import op/, so the strings are
+// duplicated and TestAuditEvent_TokenMirror in op/audit_test.go pins
+// the values together.
+const (
+	auditTokenIssued    = "token.issued"
+	auditTokenRefreshed = "token.refreshed"
+)
+
+// ttlBucketDefault / ttlBucketOffline name the two refresh-token TTL
+// buckets the issuer chooses between. The value rides on audit
+// extras so SOC tooling can distinguish a long-lived offline_access
+// chain from the conventional rotation cadence without re-reading
+// the granted scope set.
+const (
+	ttlBucketDefault = "default"
+	ttlBucketOffline = "offline"
 )
 
 // Default token TTLs. These match the existing internal grant defaults
@@ -222,6 +242,16 @@ type Deps struct {
 	// that exercise the token endpoint directly may leave it nil to
 	// preserve the legacy shape.
 	AccessTokens store.AccessTokenRegistry
+
+	// Audit is the structured audit-event sink. A nil Emitter falls
+	// back to [audit.Discard] so the handler can call the emitter
+	// unconditionally. The token endpoint emits "token.issued"
+	// (authcode-derived refresh token minted) and "token.refreshed"
+	// (refresh-token rotation) — both carry an offline_access
+	// boolean and a ttl_bucket value in Extras so SOC tooling can
+	// distinguish the long-lived OIDC Core 1.0 §11 bucket from the
+	// conventional rotation cadence.
+	Audit audit.Emitter
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.
@@ -305,6 +335,28 @@ func (d *Deps) clockFunc() func() time.Time {
 		return nil
 	}
 	return d.Clock.Now
+}
+
+// audit returns the configured audit sink, or a [audit.Discard]
+// emitter so call sites can invoke Emit unconditionally.
+func (d *Deps) audit() audit.Emitter { //nolint:ireturn // audit.Emitter is the package's audit-sink contract; returning the interface is required so the discard fallback flows through one helper.
+	if d.Audit == nil {
+		return audit.Discard()
+	}
+	return d.Audit
+}
+
+// ttlBucketFor returns the audit-extras label naming which TTL
+// bucket the refresh token will land in. Reads
+// [Deps.RefreshTokenOfflineTTL] alongside the granted scope; an
+// embedder that did not configure the offline-specific TTL falls
+// onto the default bucket regardless of scope so the audit signal
+// matches the actual lifetime applied at issuance.
+func ttlBucketFor(deps Deps, scope []string) string {
+	if deps.RefreshTokenOfflineTTL > 0 && scopeContainsOfflineAccess(scope) {
+		return ttlBucketOffline
+	}
+	return ttlBucketDefault
 }
 
 // successResponse is the §5.1 token-endpoint response body shared by

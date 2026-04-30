@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
@@ -550,7 +551,7 @@ func maybeIssueRefreshToken(
 	if err != nil {
 		return "", err
 	}
-	return issuer.Issue(ctx, refresh.IssueInput{
+	token, err := issuer.Issue(ctx, refresh.IssueInput{
 		ClientID:           client.ID,
 		Subject:            subject,
 		GrantID:            grantID,
@@ -558,6 +559,22 @@ func maybeIssueRefreshToken(
 		DPoPJKT:            refreshDPoPJKT(client, binding.DPoPJKT),
 		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})
+	if err != nil {
+		return "", err
+	}
+	deps.audit().Emit(ctx, audit.Event{
+		Name:     auditTokenIssued,
+		Level:    audit.LevelInfo,
+		Message:  "refresh token issued",
+		ActorID:  subject,
+		ClientID: client.ID,
+		Extras: map[string]any{
+			"grant_id":       grantID,
+			"offline_access": scopeContainsOfflineAccess(scope),
+			"ttl_bucket":     ttlBucketFor(deps, scope),
+		},
+	})
+	return token, nil
 }
 
 // authContext captures the fields the id_token issuance path reads

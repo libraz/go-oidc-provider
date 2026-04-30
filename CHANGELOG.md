@@ -93,6 +93,18 @@ changes.
   dashboards can distinguish expected gaps under volatile
   placement from unexpected gaps under durable placement without
   keying on the store-adapter type.
+- The token endpoint now emits the `token.issued` and
+  `token.refreshed` audit events when a refresh token is minted on
+  authcode exchange or rotated on refresh exchange. Both records
+  carry an `offline_access` boolean and a `ttl_bucket` value
+  (`"offline"` when the granted scope contains `offline_access` AND
+  `op.WithRefreshTokenOfflineTTL` is configured, `"default"`
+  otherwise) in `extras` so SOC dashboards can split stay-signed-in
+  chains from conventional rotation without re-reading the granted
+  scope set. The constants
+  `op.AuditTokenIssued`/`op.AuditTokenRefreshed` were declared
+  earlier but had no emission point until now; the wire shape rides
+  through the existing `op.WithAuditLogger` slog sink.
 - `op.RiskOutcome` gains an optional `Score op.RiskScore` field.
   When non-zero it overrides the orchestrator's Decision-derived
   default (RiskAllow→Low, RiskRequire→High) so an assessor can
