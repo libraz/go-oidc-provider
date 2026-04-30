@@ -128,11 +128,13 @@ var ErrStoreRequired = &Error{
 }
 
 // ErrIssuerInvalid is returned by [New] when [WithIssuer] receives a value
-// that is not a syntactically valid absolute https URL without a query or
-// fragment, per OpenID Connect Discovery 1.0 §3.
+// that is not a syntactically valid absolute issuer URL: the scheme MUST be
+// https (or http when the host is a loopback IP literal in 127.0.0.0/8 or
+// [::1] for development), with a non-empty authority, no trailing slash, and
+// no query or fragment, per OpenID Connect Discovery 1.0 §3 / FAPI 2.0 §5.4.
 var ErrIssuerInvalid = &Error{
 	Code:        codeConfiguration,
-	Description: "issuer must be an absolute https URL with no query or fragment",
+	Description: "issuer must be an absolute URL with no trailing slash, query, or fragment (https; http permitted only for loopback IP literals)",
 }
 
 // ErrKeysetRequired is returned by [New] when [WithKeyset] is not supplied or

@@ -274,9 +274,11 @@ func TestWithIssuer_RejectsMalformedURL(t *testing.T) {
 		want   error
 	}{
 		{"empty", "", op.ErrIssuerRequired},
-		{"http", "http://idp.example.com", op.ErrIssuerInvalid},
+		{"http-public-host", "http://idp.example.com", op.ErrIssuerInvalid},
+		{"http-localhost-textual", "http://localhost:8080", op.ErrIssuerInvalid},
 		{"with query", "https://idp.example.com?x=1", op.ErrIssuerInvalid},
 		{"with fragment", "https://idp.example.com#x", op.ErrIssuerInvalid},
+		{"trailing slash", "https://idp.example.com/", op.ErrIssuerInvalid},
 		{"relative", "/idp", op.ErrIssuerInvalid},
 		{"empty host with path", "https:///idp", op.ErrIssuerInvalid},
 		{"empty host bare", "https://", op.ErrIssuerInvalid},
@@ -288,6 +290,38 @@ func TestWithIssuer_RejectsMalformedURL(t *testing.T) {
 			_, err := op.New(op.WithIssuer(tc.issuer), op.WithStore(stubStore{}))
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("op.New(%q): want %v, got %v", tc.issuer, tc.want, err)
+			}
+		})
+	}
+}
+
+// TestWithIssuer_AcceptsLoopbackHTTP verifies the OIDC Discovery 1.0 §3 /
+// FAPI 2.0 §5.4 carve-out for plain http: it is admitted when the host is a
+// loopback IP literal (127.0.0.0/8 or [::1]) so a development boot can use
+// http://127.0.0.1:port without fronting TLS. The validator delegates to
+// [internal/discovery.ValidateIssuer], so this also pins that the option
+// site and the metadata-build pass agree.
+func TestWithIssuer_AcceptsLoopbackHTTP(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		issuer string
+	}{
+		{"http-loopback-v4", "http://127.0.0.1:8080"},
+		{"http-loopback-v4-secondary", "http://127.0.0.2:8080"},
+		{"http-loopback-v6", "http://[::1]:8080"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			provider, err := op.New(append(validBaseOpts(t), op.WithIssuer(tc.issuer))...)
+			if err != nil {
+				t.Fatalf("op.New(%q) unexpected error: %v", tc.issuer, err)
+			}
+			if provider == nil {
+				t.Fatalf("op.New(%q) returned nil provider", tc.issuer)
 			}
 		})
 	}

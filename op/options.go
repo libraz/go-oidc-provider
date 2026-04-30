@@ -17,6 +17,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/redact"
@@ -1291,21 +1292,25 @@ func validateKeyset(ks Keyset) error {
 	return nil
 }
 
-// WithIssuer sets the OP issuer URL. The value MUST be an absolute https URL
-// with a non-empty authority (host), and no query or fragment, per OpenID
-// Connect Discovery 1.0 §3. The URL is parsed eagerly; malformed values fail
-// [New] rather than the first request. The internal [discovery.ValidateIssuer]
-// pass repeats the same checks at metadata-build time as a defense-in-depth
-// seam.
+// WithIssuer sets the OP issuer URL. The value MUST be an absolute URL with a
+// non-empty authority (host), no trailing slash, and no query or fragment,
+// per OpenID Connect Discovery 1.0 §3 / FAPI 2.0 §5.4. The scheme MUST be
+// https; loopback IP literals (127.0.0.0/8 and [::1]) are exempted from the
+// https requirement so a development boot can use plain http. The textual
+// host "localhost" is intentionally NOT exempted because it can be
+// DNS-hijacked (RFC 8252 §7.3 reasoning); a development boot binding
+// loopback uses the IP literal directly.
+//
+// The validation is delegated to [discovery.ValidateIssuer] so the option
+// site and the metadata-build pass share a single rule. Malformed values
+// fail [New] rather than the first request.
 // Stable since v0.1.
 func WithIssuer(issuer string) Option {
 	return optionFunc(func(c *config) error {
 		if issuer == "" {
 			return ErrIssuerRequired
 		}
-		u, err := url.Parse(issuer)
-		if err != nil || !u.IsAbs() || u.Scheme != "https" ||
-			u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
+		if err := discovery.ValidateIssuer(issuer); err != nil {
 			return ErrIssuerInvalid
 		}
 		c.issuer = issuer

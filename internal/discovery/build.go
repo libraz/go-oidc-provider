@@ -128,6 +128,9 @@ func ValidateIssuer(raw string) error {
 	if !u.IsAbs() {
 		return fmt.Errorf("%w: must be absolute", ErrIssuerInvalid)
 	}
+	if u.Host == "" {
+		return fmt.Errorf("%w: must carry an authority (non-empty host)", ErrIssuerInvalid)
+	}
 	if u.RawQuery != "" {
 		return fmt.Errorf("%w: must not carry a query", ErrIssuerInvalid)
 	}
