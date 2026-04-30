@@ -52,15 +52,28 @@ wraps `tools/scenariotool` to enforce schema, ID uniqueness, and
 cross-reference integrity:
 
 ```sh
-scripts/scenario.sh validate         # CI-grade structural check
-scripts/scenario.sh list <feature>   # Print rows for one file
-scripts/scenario.sh lookup <id>      # Resolve a single ID across all files
-scripts/scenario.sh coverage         # Catalog ↔ Go test binding state
+scripts/scenario.sh validate              # CI-grade structural check
+scripts/scenario.sh list <feature>        # Print rows for one file
+scripts/scenario.sh lookup <id>           # Row + bound TestScenario_<id>_* + cross_ref status
+scripts/scenario.sh stats [<feature>]     # Severity x status dashboard
+scripts/scenario.sh next [-severity P0|P1|P2] [-count N] [<feature>]
+                                          # Next pending row(s) with file:line of the t.Skip stub
+scripts/scenario.sh flip <id> <status> [-reason "..."]
+                                          # Set status to active|pending|out-of-scope (in-place YAML edit)
+scripts/scenario.sh coverage [--strict|--yaml-only]
+                                          # Catalog ↔ Go test binding state
+                                          # --yaml-only skips `go test -list` (use when build is broken)
 ```
 
-`make scenario-validate` and `make scenario-coverage` are the entry
-points wired into the developer workflow. `make verify` runs the
-validator as part of the pre-merge gate.
+`make scenario-validate`, `make scenario-coverage`,
+`make scenario-coverage-yaml-only`, and `make scenario-stats` are the
+entry points wired into the developer workflow. `make verify` runs
+the validator as part of the pre-merge gate.
+
+Flag-vs-positional ordering follows Go's `flag` package: any `-flag`
+arguments must precede positional arguments
+(e.g. `scripts/scenario.sh next -severity P0 discovery`, not the
+reverse).
 
 Direct hand-edits are permitted — the validator catches drift — but
 the script gate is preferred for consistency.

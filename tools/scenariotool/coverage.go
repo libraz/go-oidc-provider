@@ -17,8 +17,11 @@ var testNameRE = regexp.MustCompile(`^Test(?:Scenario_)?([A-Z][A-Z0-9]*(?:_[A-Z]
 
 // runCoverage compares catalog row IDs with the scenario test
 // functions discovered via `go test -list`. Out-of-scope rows are
-// excluded from both directions.
-func runCoverage(dir, testsPattern, cwd string, strict bool) error {
+// excluded from both directions. When yamlOnly is true, the
+// `go test -list` step is skipped and only the YAML side of the
+// dashboard is rendered — useful when the main module currently fails
+// to build and a full coverage diff is unobtainable.
+func runCoverage(dir, testsPattern, cwd string, strict, yamlOnly bool) error {
 	cat, err := loadCatalog(dir)
 	if err != nil {
 		return err
@@ -27,6 +30,28 @@ func runCoverage(dir, testsPattern, cwd string, strict bool) error {
 	catalogIDs := map[string]string{} // id -> status
 	for _, r := range cat.AllRows() {
 		catalogIDs[r.ID] = r.EffectiveStatus()
+	}
+
+	if yamlOnly {
+		var active, pending, oos int
+		for _, status := range catalogIDs {
+			switch status {
+			case "active":
+				active++
+			case "out-of-scope":
+				oos++
+			default:
+				pending++
+			}
+		}
+		inScope := active + pending
+		pct := 0
+		if inScope > 0 {
+			pct = 100 * active / inScope
+		}
+		fmt.Printf("scenariotool (yaml-only): rows %d (active %d, pending %d, out-of-scope %d) — coverage %d%%\n",
+			active+pending+oos, active, pending, oos, pct)
+		return nil
 	}
 
 	testIDs, err := discoverTestIDs(testsPattern, cwd)

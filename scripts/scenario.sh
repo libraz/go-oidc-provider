@@ -36,11 +36,16 @@ done
 
 extra=()
 [ "$inject_dir" -eq 1 ] && extra+=( -dir "$CATALOG_DIR" )
-if [ "$cmd" = "coverage" ]; then
-  extra+=( -cwd "$REPO_ROOT" )
-  if [ "$inject_tests" -eq 1 ]; then
-    extra+=( -tests "./test/scenarios/..." )
-  fi
-fi
+case "$cmd" in
+  coverage)
+    extra+=( -cwd "$REPO_ROOT" )
+    if [ "$inject_tests" -eq 1 ]; then
+      extra+=( -tests "./test/scenarios/..." )
+    fi
+    ;;
+  lookup|next)
+    extra+=( -cwd "$REPO_ROOT" )
+    ;;
+esac
 
 exec go run . "$cmd" "${extra[@]}" "$@"

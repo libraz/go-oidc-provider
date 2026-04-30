@@ -27,8 +27,11 @@ func runList(dir, feature string) error {
 }
 
 // runLookup resolves a single ID across every catalog file and prints
-// the row in YAML-like form.
-func runLookup(dir, id string) error {
+// the row in YAML-like form. When testRoot is non-empty the bound
+// TestScenario_<ID>_* function (or its absence) is included; cross_refs
+// are annotated with the target row's effective status so reviewers
+// can see at a glance whether linked rows are also pending.
+func runLookup(dir, testRoot, id string) error {
 	cat, err := loadCatalog(dir)
 	if err != nil {
 		return err
@@ -44,8 +47,19 @@ func runLookup(dir, id string) error {
 	fmt.Printf("status:    %s\n", r.EffectiveStatus())
 	fmt.Printf("spec:      %s\n", singleLine(r.Spec))
 	fmt.Printf("behaviour: %s\n", indented(r.Behaviour))
+	if testRoot != "" {
+		loc, err := locateTest(r, testRoot)
+		switch {
+		case err != nil:
+			fmt.Printf("test_file: %s (locate error: %v)\n", loc.File, err)
+		case loc.Found:
+			fmt.Printf("test_file: %s:%d\n", loc.File, loc.Line)
+		default:
+			fmt.Printf("test_file: %s (no TestScenario_<id>_* function yet)\n", loc.File)
+		}
+	}
 	if len(r.CrossRefs) > 0 {
-		fmt.Printf("cross_refs: %s\n", strings.Join(r.CrossRefs, ", "))
+		fmt.Printf("cross_refs: %s\n", strings.Join(crossRefAnnotations(cat, r.CrossRefs), ", "))
 	}
 	if r.Notes != "" {
 		fmt.Printf("notes:     %s\n", indented(r.Notes))
