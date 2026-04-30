@@ -25,12 +25,12 @@ type opaqueAccessTokenStore struct {
 	m  map[string]*store.OpaqueAccessToken
 
 	// pepper is reserved for an HMAC pepper applied to the SHA-256
-	// digest before storage (ADR 0024 §S.2). The reference
-	// implementation does not currently apply one — pepper handling
-	// is wired into a follow-up commit so the constructor surface
-	// stays stable. The field exists today so the type signature does
-	// not break when the wiring is added.
-	pepper []byte
+	// digest before storage (ADR 0024 §S.2). The reference impl does
+	// not currently apply one; the field exists today so the type
+	// signature does not break when the wiring is added in a follow-up
+	// commit. TestOpaqueAccessToken_PepperFieldExists pins the
+	// reservation against a rename.
+	pepper []byte //nolint:unused // reserved for ADR 0024 §S.2 wiring; pinned by TestOpaqueAccessToken_PepperFieldExists.
 }
 
 func newOpaqueAccessTokenStore() *opaqueAccessTokenStore {

@@ -90,7 +90,7 @@ func atFlowAssertAuthTime(t *testing.T, opts ...func(*atFlowConfig)) {
 	const (
 		clientID     = "rp-at"
 		callback     = "https://rp.testkit.invalid/callback"
-		clientSecret = "rp-at-secret" //nolint:gosec // test fixture.
+		clientSecret = "rp-at-secret"
 	)
 	hash, err := op.HashClientSecret(clientSecret)
 	if err != nil {

@@ -1840,7 +1840,7 @@ func hasUppercaseSchemeOrHost(raw string) bool {
 	} else if j := strings.IndexAny(raw, "/?#"); j >= 0 {
 		end = j
 	}
-	for i := 0; i < end; i++ {
+	for i := range end {
 		c := raw[i]
 		if c >= 'A' && c <= 'Z' {
 			return true

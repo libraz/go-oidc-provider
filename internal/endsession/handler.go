@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -484,15 +485,12 @@ func tombstoneRetention(ttl time.Duration) time.Duration {
 // endSessionNow returns the wall-clock reading the cascade uses for
 // tombstone RevokedAt / ExpiresAt. It mirrors the boundary discipline
 // of the sibling endpoints: a configured [Deps.Clock] wins; the fall-
-// back is the system clock from internal/timex via [time.Now]. The
-// handler does not currently inject internal/timex directly because
-// importing it here would pull a dependency only this helper would
-// need; deps.Clock is the documented seam.
+// back is [timex.SystemClock] (the single sanctioned wall-clock seam).
 func endSessionNow(deps Deps) time.Time {
 	if deps.Clock != nil {
 		return deps.Clock.Now().UTC()
 	}
-	return time.Now().UTC()
+	return timex.SystemClock.Now().UTC()
 }
 
 // readSessionFingerprint pulls the session id and the authenticated

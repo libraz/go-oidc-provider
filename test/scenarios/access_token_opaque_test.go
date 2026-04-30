@@ -35,11 +35,8 @@ const (
 	opaqueCallback = "https://rp.testkit.invalid/callback"
 )
 
-// opaqueClientSecret is a test-only credential. The value is
-// suppressed for gosec because the catalogue requires deterministic
-// fixtures rather than randomised secrets.
-//
-//nolint:gosec // G101: test fixture, not a real credential.
+// opaqueClientSecret is a test-only credential. The catalogue requires
+// deterministic fixtures rather than randomised secrets.
 const opaqueClientSecret = "rp-ato-secret"
 
 // opaqueATLength pins the wire length of an opaque access token

@@ -140,42 +140,36 @@ const (
 	GrantRevocations
 )
 
+// kindNames maps each [Kind] to its unqualified name. Indexed by Kind value
+// so [Kind.String] is a constant-time lookup; the table MUST stay aligned
+// with the iota block above.
+//
+//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
+var kindNames = map[Kind]string{
+	Clients:                  "Clients",
+	AuthorizationCodes:       "AuthorizationCodes",
+	RefreshTokens:            "RefreshTokens",
+	Grants:                   "Grants",
+	Sessions:                 "Sessions",
+	PushedAuthRequests:       "PushedAuthRequests",
+	Interactions:             "Interactions",
+	ConsumedJTIs:             "ConsumedJTIs",
+	Users:                    "Users",
+	InitialAccessTokens:      "InitialAccessTokens",
+	RegistrationAccessTokens: "RegistrationAccessTokens",
+	AccessTokens:             "AccessTokens",
+	OpaqueAccessTokens:       "OpaqueAccessTokens",
+	GrantRevocations:         "GrantRevocations",
+}
+
 // String returns the unqualified name of the Kind, suitable for error
 // messages. Unknown values are formatted with their integer for diagnostic
 // purposes.
 func (k Kind) String() string {
-	switch k {
-	case Clients:
-		return "Clients"
-	case AuthorizationCodes:
-		return "AuthorizationCodes"
-	case RefreshTokens:
-		return "RefreshTokens"
-	case Grants:
-		return "Grants"
-	case Sessions:
-		return "Sessions"
-	case PushedAuthRequests:
-		return "PushedAuthRequests"
-	case Interactions:
-		return "Interactions"
-	case ConsumedJTIs:
-		return "ConsumedJTIs"
-	case Users:
-		return "Users"
-	case InitialAccessTokens:
-		return "InitialAccessTokens"
-	case RegistrationAccessTokens:
-		return "RegistrationAccessTokens"
-	case AccessTokens:
-		return "AccessTokens"
-	case OpaqueAccessTokens:
-		return "OpaqueAccessTokens"
-	case GrantRevocations:
-		return "GrantRevocations"
-	default:
-		return fmt.Sprintf("Kind(%d)", int(k))
+	if name, ok := kindNames[k]; ok {
+		return name
 	}
+	return fmt.Sprintf("Kind(%d)", int(k))
 }
 
 // allKinds enumerates every Kind in declaration order. It is the source of

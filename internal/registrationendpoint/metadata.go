@@ -183,46 +183,38 @@ func validatePolicy(
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
 	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
-	if err := validateRedirectURIs(canonical.RedirectURIs, canonical.ApplicationType, hasImplicitResponseType(canonical.ResponseTypes), allowLocalhostLoopback); err != nil {
-		return ClientMetadata{}, err
+	checks := []func() error{
+		func() error {
+			return validateRedirectURIs(canonical.RedirectURIs, canonical.ApplicationType, hasImplicitResponseType(canonical.ResponseTypes), allowLocalhostLoopback)
+		},
+		func() error { return validateGrantTypes(canonical.GrantTypes, allowedGrantTypes) },
+		func() error { return validateResponseTypes(canonical.ResponseTypes, allowedResponseTypes) },
+		func() error {
+			return validateGrantResponseTypeConsistency(canonical.GrantTypes, canonical.ResponseTypes)
+		},
+		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod) },
+		func() error { return validateSubjectType(canonical.SubjectType, pairwiseEnabled) },
+		func() error { return validateIDTokenAlg(canonical.IDTokenSignedResponseAlg) },
+		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
+		func() error { return validateMetadataURIs(canonical) },
+		func() error { return validateJWKSConfiguration(canonical) },
+		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
+		func() error { return validatePairwiseMetadata(canonical) },
+		func() error { return validateDefaultMaxAge(canonical.DefaultMaxAge) },
 	}
-	if err := validateGrantTypes(canonical.GrantTypes, allowedGrantTypes); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateResponseTypes(canonical.ResponseTypes, allowedResponseTypes); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateGrantResponseTypeConsistency(canonical.GrantTypes, canonical.ResponseTypes); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateAuthMethod(canonical.TokenEndpointAuthMethod); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateSubjectType(canonical.SubjectType, pairwiseEnabled); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateIDTokenAlg(canonical.IDTokenSignedResponseAlg); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateRequestedScopes(canonical.Scope, iatScopes, scopes); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateMetadataURIs(canonical); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateJWKSConfiguration(canonical); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg); err != nil {
-		return ClientMetadata{}, err
-	}
-	if err := validatePairwiseMetadata(canonical); err != nil {
-		return ClientMetadata{}, err
-	}
-	if canonical.DefaultMaxAge != nil && *canonical.DefaultMaxAge < 0 {
-		return ClientMetadata{}, errInvalidClientMetadata("default_max_age must be a non-negative integer")
+	for _, check := range checks {
+		if err := check(); err != nil {
+			return ClientMetadata{}, err
+		}
 	}
 	return canonical, nil
+}
+
+func validateDefaultMaxAge(v *int64) error {
+	if v != nil && *v < 0 {
+		return errInvalidClientMetadata("default_max_age must be a non-negative integer")
+	}
+	return nil
 }
 
 func cloneInt64Ptr(v *int64) *int64 {

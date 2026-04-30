@@ -78,7 +78,7 @@ func TestRefresh_RequireAuthTime_EmitsAuthTime(t *testing.T) {
 	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
 		t.Fatalf("UpdateClient: %v", err)
 	}
-	const tokenID = "rt-require-auth-time"
+	const tokenID = "rt-require-auth-time" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
 	const subject = "user-1"
 	const grantID = "grant-rt-require-auth-time"
 	authTime := f.clock.now.Add(-3 * time.Minute)
@@ -127,7 +127,7 @@ func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
 		t.Fatalf("UpdateClient: %v", err)
 	}
-	const tokenID = "rt-require-auth-time-missing"
+	const tokenID = "rt-require-auth-time-missing" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
 	const subject = "user-1"
 	const grantID = "grant-rt-require-auth-time-missing"
 
@@ -650,7 +650,7 @@ func TestRefresh_OpaqueFormat_RotationRevokesPriorAT(t *testing.T) {
 	f := opaqueRefreshFixture(t)
 	client, secret := f.confidentialClientFixture(t)
 
-	const tokenID = "rt-opaque-rotate"
+	const tokenID = "rt-opaque-rotate" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
 	const subject = "user-opaque-rotate"
 	const grantID = "grant-opaque-rotate"
 	f.seedGrant(t, &store.Grant{
@@ -733,7 +733,7 @@ func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
 	f := newFixture(t)
 	client, secret := f.confidentialClientFixture(t)
 
-	const tokenID = "rt-jwt-rotate"
+	const tokenID = "rt-jwt-rotate" //nolint:gosec // G101 false positive: refresh-token row ID, not a credential.
 	const subject = "user-jwt-rotate"
 	const grantID = "grant-jwt-rotate"
 	f.seedGrant(t, &store.Grant{

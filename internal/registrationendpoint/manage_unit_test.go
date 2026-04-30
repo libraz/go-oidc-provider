@@ -1,3 +1,4 @@
+//nolint:testpackage // exercises unexported secretMaterialForUpdate
 package registrationendpoint
 
 import (

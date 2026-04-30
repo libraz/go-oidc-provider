@@ -31,7 +31,7 @@ func TestMintOpaqueAccessToken_Alphabet(t *testing.T) {
 	t.Parallel()
 
 	const allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		got, err := tokens.MintOpaqueAccessToken()
 		if err != nil {
 			t.Fatalf("iteration %d: MintOpaqueAccessToken: %v", i, err)
@@ -53,7 +53,7 @@ func TestMintOpaqueAccessToken_NoCollisions(t *testing.T) {
 
 	const iterations = 10000
 	seen := make(map[string]struct{}, iterations)
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		got, err := tokens.MintOpaqueAccessToken()
 		if err != nil {
 			t.Fatalf("iteration %d: MintOpaqueAccessToken: %v", i, err)
@@ -74,7 +74,7 @@ func TestMintOpaqueAccessToken_NoCollisions(t *testing.T) {
 func TestMintOpaqueAccessToken_NotJWSShaped(t *testing.T) {
 	t.Parallel()
 
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		got, err := tokens.MintOpaqueAccessToken()
 		if err != nil {
 			t.Fatalf("iteration %d: MintOpaqueAccessToken: %v", i, err)

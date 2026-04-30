@@ -22,7 +22,7 @@ type stubLoginFlowDecider struct {
 	calls  atomic.Int32
 }
 
-func (d *stubLoginFlowDecider) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn // sealed-sum LoginFlowDecision is the contract.
+func (d *stubLoginFlowDecider) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn,nolintlint // sealed-sum LoginFlowDecision is the contract.
 	d.calls.Add(1)
 	return d.decide(ctx, lc)
 }

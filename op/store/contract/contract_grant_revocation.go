@@ -269,36 +269,14 @@ func grantRevGC(t *testing.T, f Factory) {
 	gr := requireGrantRevocations(t, b.Store)
 	ctx := context.Background()
 	now := b.Now()
-	live := store.GrantTombstone{
-		GrantID:   "grant-live",
-		RevokedAt: now,
-		ExpiresAt: now.Add(time.Hour),
-	}
-	expired := store.GrantTombstone{
-		GrantID:   "grant-expired",
-		RevokedAt: now.Add(-2 * time.Hour),
-		ExpiresAt: now.Add(-time.Hour),
-	}
-	for _, tomb := range []store.GrantTombstone{live, expired} {
-		if err := gr.RevokeGrant(ctx, tomb); err != nil {
-			t.Fatalf("RevokeGrant %s: %v", tomb.GrantID, err)
-		}
-	}
-	expiredJTI := store.RevokedJTI{
-		JTI:       "jti-expired",
-		GrantID:   "grant-x",
-		ExpiresAt: now.Add(-time.Hour),
-	}
-	liveJTI := store.RevokedJTI{
-		JTI:       "jti-live",
-		GrantID:   "grant-y",
-		ExpiresAt: now.Add(time.Hour),
-	}
-	for _, row := range []store.RevokedJTI{expiredJTI, liveJTI} {
-		if err := gr.RevokeJTI(ctx, row); err != nil {
-			t.Fatalf("RevokeJTI %s: %v", row.JTI, err)
-		}
-	}
+	seedGrantTombstones(t, gr, ctx,
+		store.GrantTombstone{GrantID: "grant-live", RevokedAt: now, ExpiresAt: now.Add(time.Hour)},
+		store.GrantTombstone{GrantID: "grant-expired", RevokedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour)},
+	)
+	seedRevokedJTIs(t, gr, ctx,
+		store.RevokedJTI{JTI: "jti-expired", GrantID: "grant-x", ExpiresAt: now.Add(-time.Hour)},
+		store.RevokedJTI{JTI: "jti-live", GrantID: "grant-y", ExpiresAt: now.Add(time.Hour)},
+	)
 	n, err := gr.GC(ctx, now)
 	if err != nil {
 		t.Fatalf("GC: %v", err)
@@ -306,37 +284,39 @@ func grantRevGC(t *testing.T, f Factory) {
 	if n < 2 {
 		t.Fatalf("GC count = %d, want >= 2 (one expired tombstone + one expired denylist row)", n)
 	}
-	// Live tombstone survives.
-	revoked, err := gr.IsRevoked(ctx, "grant-live", "", now.Add(-time.Second))
+	expectRevoked(t, gr, ctx, "grant-live", "", now.Add(-time.Second), true, "GC dropped a still-live tombstone")
+	expectRevoked(t, gr, ctx, "grant-y", "jti-live", now, true, "GC dropped a still-live denylist row")
+	// Expired rows are gone — the only signal they left is that
+	// IsRevoked no longer reports the grant or jti revoked.
+	expectRevoked(t, gr, ctx, "grant-expired", "", now.Add(-3*time.Hour), false, "expired tombstone survived GC")
+	expectRevoked(t, gr, ctx, "grant-x", "jti-expired", now.Add(-3*time.Hour), false, "expired denylist row survived GC")
+}
+
+func seedGrantTombstones(t *testing.T, gr store.GrantRevocationStore, ctx context.Context, rows ...store.GrantTombstone) {
+	t.Helper()
+	for _, tomb := range rows {
+		if err := gr.RevokeGrant(ctx, tomb); err != nil {
+			t.Fatalf("RevokeGrant %s: %v", tomb.GrantID, err)
+		}
+	}
+}
+
+func seedRevokedJTIs(t *testing.T, gr store.GrantRevocationStore, ctx context.Context, rows ...store.RevokedJTI) {
+	t.Helper()
+	for _, row := range rows {
+		if err := gr.RevokeJTI(ctx, row); err != nil {
+			t.Fatalf("RevokeJTI %s: %v", row.JTI, err)
+		}
+	}
+}
+
+func expectRevoked(t *testing.T, gr store.GrantRevocationStore, ctx context.Context, grantID, jti string, when time.Time, want bool, failMsg string) {
+	t.Helper()
+	got, err := gr.IsRevoked(ctx, grantID, jti, when)
 	if err != nil {
-		t.Fatalf("IsRevoked live: %v", err)
+		t.Fatalf("IsRevoked(grant=%q jti=%q): %v", grantID, jti, err)
 	}
-	if !revoked {
-		t.Fatal("GC dropped a still-live tombstone")
-	}
-	// Live denylist row survives.
-	revoked, err = gr.IsRevoked(ctx, "grant-y", "jti-live", now)
-	if err != nil {
-		t.Fatalf("IsRevoked live jti: %v", err)
-	}
-	if !revoked {
-		t.Fatal("GC dropped a still-live denylist row")
-	}
-	// Expired tombstone is gone (the only signal it left is that
-	// IsRevoked no longer reports the grant revoked).
-	revoked, err = gr.IsRevoked(ctx, "grant-expired", "", now.Add(-3*time.Hour))
-	if err != nil {
-		t.Fatalf("IsRevoked expired: %v", err)
-	}
-	if revoked {
-		t.Fatal("expired tombstone survived GC")
-	}
-	// Expired denylist row is gone.
-	revoked, err = gr.IsRevoked(ctx, "grant-x", "jti-expired", now.Add(-3*time.Hour))
-	if err != nil {
-		t.Fatalf("IsRevoked expired jti: %v", err)
-	}
-	if revoked {
-		t.Fatal("expired denylist row survived GC")
+	if got != want {
+		t.Fatal(failMsg)
 	}
 }

@@ -1,3 +1,4 @@
+//nolint:testpackage // exercises unexported validatePolicy
 package registrationendpoint
 
 import "testing"

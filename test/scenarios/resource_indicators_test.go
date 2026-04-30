@@ -278,7 +278,7 @@ func newResourceProvider(t *testing.T) (*testkit.Provider, *store.Client, string
 
 	const (
 		clientID     = "rp-ri"
-		clientSecret = "rp-ri-secret" //nolint:gosec // test fixture.
+		clientSecret = "rp-ri-secret"
 		callback     = "https://rp.testkit.invalid/callback"
 	)
 	hash, err := op.HashClientSecret(clientSecret)

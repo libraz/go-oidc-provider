@@ -155,51 +155,67 @@ func Handler(deps HandlerDeps) http.Handler {
 		Leeway: deps.Leeway,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !methodAllowed(r.Method) {
-			w.Header().Set("Allow", "GET, POST")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		raw, err := extractBearer(r)
-		if err != nil {
-			respondBearerExtractError(w, err)
-			return
-		}
-		// Opaque first: a presented bearer that is not JWS-shaped
-		// resolves through the opaque substore (ADR 0024). The JWT
-		// verifier would always reject a non-JWS shape, so taking
-		// the opaque branch ahead of it avoids a spurious "malformed
-		// JWT" diagnostic and keeps the WWW-Authenticate challenges
-		// aligned with the format the token endpoint actually issued.
-		if !looksLikeJWT(raw) && deps.OpaqueAccessTokens != nil {
-			claims, ok := resolveOpaqueAccessTokenAt(r.Context(), w, r, deps, raw)
-			if !ok {
-				return
-			}
-			out, ok := assembleClaims(r.Context(), w, deps, claims)
-			if !ok {
-				return
-			}
-			writeJSON(w, out)
-			return
-		}
-		claims, _, err := verifier.Verify(raw)
-		if err != nil {
-			respondInvalidToken(w, err)
-			return
-		}
-		if !enforceCnfBinding(w, r, deps, claims, raw) {
-			return
-		}
-		if !enforceRevocationStatus(r.Context(), w, deps, claims) {
-			return
-		}
-		out, ok := assembleClaims(r.Context(), w, deps, claims)
-		if !ok {
-			return
-		}
-		writeJSON(w, out)
+		serveUserInfo(w, r, deps, verifier)
 	})
+}
+
+// serveUserInfo runs one /userinfo request through the dispatch ladder:
+// method gate → bearer extraction → opaque-or-JWT branch → claim
+// assembly. Pulled out of [Handler] so the cognitive complexity of each
+// individual function stays under the lint budget.
+func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, verifier *tokens.AccessTokenVerifier) {
+	if !methodAllowed(r.Method) {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	raw, err := extractBearer(r)
+	if err != nil {
+		respondBearerExtractError(w, err)
+		return
+	}
+	// Opaque first: a presented bearer that is not JWS-shaped resolves
+	// through the opaque substore (ADR 0024). The JWT verifier would
+	// always reject a non-JWS shape, so taking the opaque branch ahead
+	// of it avoids a spurious "malformed JWT" diagnostic and keeps the
+	// WWW-Authenticate challenges aligned with the format the token
+	// endpoint actually issued.
+	if !looksLikeJWT(raw) && deps.OpaqueAccessTokens != nil {
+		serveUserInfoOpaque(w, r, deps, raw)
+		return
+	}
+	serveUserInfoJWT(w, r, deps, verifier, raw)
+}
+
+func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDeps, raw string) {
+	claims, ok := resolveOpaqueAccessTokenAt(r.Context(), w, r, deps, raw)
+	if !ok {
+		return
+	}
+	out, ok := assembleClaims(r.Context(), w, deps, claims)
+	if !ok {
+		return
+	}
+	writeJSON(w, out)
+}
+
+func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, verifier *tokens.AccessTokenVerifier, raw string) {
+	claims, _, err := verifier.Verify(raw)
+	if err != nil {
+		respondInvalidToken(w, err)
+		return
+	}
+	if !enforceCnfBinding(w, r, deps, claims, raw) {
+		return
+	}
+	if !enforceRevocationStatus(r.Context(), w, deps, claims) {
+		return
+	}
+	out, ok := assembleClaims(r.Context(), w, deps, claims)
+	if !ok {
+		return
+	}
+	writeJSON(w, out)
 }
 
 // resolveOpaqueAccessTokenAt handles the ADR 0024 opaque-format path

@@ -14,15 +14,9 @@ import (
 // [store.OpaqueAccessTokenStore] (ADR 0024). The substore keys rows on
 // the SHA-256 digest of the raw bearer ID, never the raw value, so a
 // database leak alone does not yield usable tokens.
-//
-// pepper is reserved for an HMAC pepper applied to the digest before
-// storage (ADR 0024 §S.2). The reference implementation does not
-// currently apply one; the field exists today so the type signature
-// does not break when the wiring is added in a follow-up commit.
 type opaqueAccessTokenStore struct {
 	parent *Store
 	tx     *databasesql.Tx
-	pepper []byte
 }
 
 func newOpaqueAccessTokenStore(s *Store, tx *databasesql.Tx) *opaqueAccessTokenStore {
@@ -31,12 +25,9 @@ func newOpaqueAccessTokenStore(s *Store, tx *databasesql.Tx) *opaqueAccessTokenS
 
 func (s *opaqueAccessTokenStore) runner() runner { return pickRunner(s.parent, s.tx) }
 
-// digest hashes the raw bearer ID. When pepper is non-nil it would
-// apply an HMAC; today the pepper is reserved (see the field
-// docstring) so the function returns a plain SHA-256 digest. Returning
-// []byte rather than a hex string lets the binary PK column store the
-// 32-byte value verbatim across MySQL VARBINARY, Postgres BYTEA, and
-// SQLite BLOB.
+// digest hashes the raw bearer ID. Returning []byte rather than a hex
+// string lets the binary PK column store the 32-byte value verbatim
+// across MySQL VARBINARY, Postgres BYTEA, and SQLite BLOB.
 func (s *opaqueAccessTokenStore) digest(rawID string) []byte {
 	sum := sha256.Sum256([]byte(rawID))
 	return sum[:]
