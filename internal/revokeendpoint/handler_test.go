@@ -573,6 +573,103 @@ func assertConsumedOrGone(tb testing.TB, f *fixture, id string) {
 	}
 }
 
+// saveOpaqueAccessToken seeds the testkit's opaque-access-token
+// substore with a live record (ADR 0024). The token's raw
+// [store.OpaqueAccessToken.ID] is the bearer string the test posts at
+// /revoke; the substore hashes it on Save and matches the digest on
+// RevokeByID.
+func (f *fixture) saveOpaqueAccessToken(tb testing.TB, rec *store.OpaqueAccessToken) {
+	tb.Helper()
+	if err := f.prov.Store.OpaqueAccessTokens().Save(context.Background(), rec); err != nil {
+		tb.Fatalf("OpaqueAccessTokens.Save: %v", err)
+	}
+}
+
+// TestHandler_OpaqueAccessToken_Revokes flips a live opaque record to
+// revoked. After the call the substore reports the record as revoked
+// (or absent) and a follow-on /introspect request would collapse
+// onto inactive.
+func TestHandler_OpaqueAccessToken_Revokes(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-opaque-revoke")
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-revoke-1",
+		ClientID:  client.ID,
+		Subject:   "user-opaque",
+		Scope:     []string{"openid"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	form := url.Values{"token": {rec.ID}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	assertEmptySuccess(t, resp)
+
+	got, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), rec.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return
+		}
+		t.Fatalf("Find after revoke: %v", err)
+	}
+	if got == nil || !got.Revoked {
+		t.Errorf("Find(%q): record still live after revoke; got=%+v", rec.ID, got)
+	}
+}
+
+// TestHandler_OpaqueAccessToken_NotFound returns HTTP 200 + empty body
+// when the presented opaque token does not match any stored record.
+// RFC 7009 §2.2 makes the call idempotent: a missing row is treated
+// as already-gone.
+func TestHandler_OpaqueAccessToken_NotFound(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-opaque-notfound")
+	form := url.Values{"token": {"never-issued-opaque"}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	assertEmptySuccess(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_DifferentClient returns HTTP 200 +
+// empty body and leaves the original record untouched when a
+// different client presents the token. Cross-client revocation is
+// silently ignored (ADR 0024 §S.8).
+func TestHandler_OpaqueAccessToken_DifferentClient(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	owner, _ := f.confidentialClient(t, "client-opaque-cross-owner")
+	caller, callerSecret := f.confidentialClient(t, "client-opaque-cross-caller")
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-cross-1",
+		ClientID:  owner.ID,
+		Subject:   "user-opaque",
+		Scope:     []string{"openid"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	form := url.Values{"token": {rec.ID}}
+	resp := f.post(t, form, caller.ID, callerSecret)
+	defer resp.Body.Close()
+	assertEmptySuccess(t, resp)
+
+	got, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), rec.ID)
+	if err != nil {
+		t.Fatalf("Find after cross-client revoke: %v", err)
+	}
+	if got == nil || got.Revoked {
+		t.Errorf("cross-client revoke mutated record: got=%+v want unrevoked", got)
+	}
+}
+
 // flipLastSegment returns tok with its signature segment perturbed.
 // The function preserves the segment boundaries so the result still
 // parses as a JWS but fails signature verification.

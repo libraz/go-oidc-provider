@@ -126,21 +126,27 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 	return true
 }
 
-// revokeOpaque looks token up as a refresh token in the configured
-// store and, when the record is owned by the authenticated client,
-// walks the rotation chain to its root and calls
-// [store.RefreshTokenStore.RevokeChain]. The bool return reports a
-// successful revocation; false means the lookup missed, the record
-// belonged to a different client, the chain root could not be
-// computed, or the store rejected the revocation. RFC 7009 §2.2
+// revokeOpaque looks token up in the opaque-format substores (opaque
+// access tokens first, refresh tokens second) and revokes the matched
+// record when the authenticated client owns it. The bool return
+// reports a handled match; false means neither store had a row that
+// matched the (token, client) pair (lookup missed, cross-client, or
+// store fault), and the caller MUST fall through. RFC 7009 §2.2
 // requires the HTTP response to be 200 in every one of these cases,
-// so the caller writes 200 unconditionally and the bool exists
-// purely to short-circuit the JWT fallthrough.
+// so the caller writes 200 unconditionally and the bool exists purely
+// to short-circuit the JWT fallthrough.
 //
-// A nil [Deps.RefreshTokens] disables the opaque path entirely:
-// revokeOpaque short-circuits to false so the JWT branch (or the
-// final no-op fallback) takes over.
+// The opaque-access-token substore is consulted first because the
+// token endpoint's most-recent issuance for an embedder that opted
+// into ADR 0024 is an opaque AT; the refresh-token branch is the
+// long-standing path. Both nil substores collapse onto the no-op
+// fallback.
 func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token string) bool {
+	if deps.OpaqueAccessTokens != nil {
+		if revokeOpaqueAccessToken(ctx, deps, authenticatedClientID, token) {
+			return true
+		}
+	}
 	if deps.RefreshTokens == nil {
 		return false
 	}
@@ -172,6 +178,39 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 		// Store fault: surface as a silent miss. The caller
 		// still writes 200 — the user-visible contract is
 		// "revocation submitted", not "revocation committed".
+		return false
+	}
+	return true
+}
+
+// revokeOpaqueAccessToken handles the ADR 0024 opaque-format branch.
+// The substore is asked to flip the row to revoked; the call is
+// idempotent so a missing row returns nil. The function returns true
+// when a live row matched the authenticated client and was flipped,
+// false otherwise (miss, cross-client, store fault). Cross-client
+// revocation attempts collapse onto false — RFC 7009 §2.2 forbids
+// leaking the failure mode through the wire response, but the bool
+// is consumed only by the dispatcher to short-circuit the JWT
+// fallthrough; the cross-client revoker still sees the same 200 a
+// legitimate revoker would.
+func revokeOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClientID, token string) bool {
+	rec, err := deps.OpaqueAccessTokens.Find(ctx, token)
+	if err != nil || rec == nil {
+		// ErrNotFound and any other store error collapse onto a
+		// silent miss so the caller can fall through to the
+		// refresh-token branch without leaking metadata.
+		return false
+	}
+	if rec.ClientID != authenticatedClientID {
+		// Same-client-only (ADR 0024 §S.8): a token issued to
+		// another client is silently ignored. The cross-client
+		// revoker sees the same 200 a legitimate revoker would.
+		return false
+	}
+	if err := deps.OpaqueAccessTokens.RevokeByID(ctx, token); err != nil {
+		// Store fault: surface as a silent miss. The caller still
+		// writes 200 — the user-visible contract is "revocation
+		// submitted", not "revocation committed".
 		return false
 	}
 	return true

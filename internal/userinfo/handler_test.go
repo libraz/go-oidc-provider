@@ -434,3 +434,217 @@ func assertNoClaimLeak(tb testing.TB, resp *http.Response) {
 // structurally compatible: a fixedClock value must satisfy both
 // without an explicit converter.
 var _ interface{ Now() time.Time } = fixedClock{}
+
+// saveOpaqueAccessToken seeds the testkit's opaque-access-token
+// substore with a live record (ADR 0024). The token's raw
+// [store.OpaqueAccessToken.ID] is the bearer string the test posts at
+// /userinfo; the substore hashes it on Save and matches the digest on
+// Find.
+func (f *userInfoFixture) saveOpaqueAccessToken(tb testing.TB, rec *store.OpaqueAccessToken) {
+	tb.Helper()
+	if err := f.prov.Store.OpaqueAccessTokens().Save(context.Background(), rec); err != nil {
+		tb.Fatalf("OpaqueAccessTokens.Save: %v", err)
+	}
+}
+
+// TestHandler_OpaqueAccessToken_HappyPath confirms /userinfo accepts
+// a non-JWS bearer when the opaque substore (ADR 0024) holds a live
+// record. The handler hashes the presented token on lookup, projects
+// the record's Subject onto a synthetic [tokens.AccessTokenClaims],
+// and runs the same claim-assembly path the JWT branch uses.
+func TestHandler_OpaqueAccessToken_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	f.putUser(t, "user-opaque", map[string]any{
+		"email":          "alice@example.com",
+		"email_verified": true,
+	})
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-userinfo-1",
+		ClientID:  "client-1",
+		Subject:   "user-opaque",
+		Scope:     []string{"openid", "email"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	resp := f.doRequest(t, f.newGet(t, rec.ID))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, dump)
+	}
+	body := decodeBody(t, resp)
+	if body["sub"] != "user-opaque" {
+		t.Errorf("sub=%v want user-opaque", body["sub"])
+	}
+	if body["email"] != "alice@example.com" {
+		t.Errorf("email=%v want alice@example.com", body["email"])
+	}
+}
+
+// TestHandler_OpaqueAccessToken_Revoked returns 401 invalid_token
+// with a "revoked" description when the substore reports the record
+// as revoked.
+func TestHandler_OpaqueAccessToken_Revoked(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	f.putUser(t, "user-opaque", map[string]any{"email": "alice@example.com"})
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-userinfo-revoked",
+		ClientID:  "client-1",
+		Subject:   "user-opaque",
+		Scope:     []string{"openid", "email"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+	if err := f.prov.Store.OpaqueAccessTokens().RevokeByID(context.Background(), rec.ID); err != nil {
+		t.Fatalf("RevokeByID: %v", err)
+	}
+
+	resp := f.doRequest(t, f.newGet(t, rec.ID))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	got := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(got, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate=%q must declare invalid_token", got)
+	}
+	if !strings.Contains(got, "revoked") {
+		t.Errorf("WWW-Authenticate=%q must distinguish the revoked case", got)
+	}
+	assertNoClaimLeak(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_Expired returns 401 invalid_token
+// with an "expired" description when the record's ExpiresAt is in
+// the past relative to the fixture clock.
+func TestHandler_OpaqueAccessToken_Expired(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	f.putUser(t, "user-opaque", map[string]any{"email": "alice@example.com"})
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-userinfo-expired",
+		ClientID:  "client-1",
+		Subject:   "user-opaque",
+		Scope:     []string{"openid", "email"},
+		IssuedAt:  f.clock.now.Add(-2 * time.Hour),
+		ExpiresAt: f.clock.now.Add(-time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	resp := f.doRequest(t, f.newGet(t, rec.ID))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	got := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(got, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate=%q must declare invalid_token", got)
+	}
+	if !strings.Contains(got, "expired") {
+		t.Errorf("WWW-Authenticate=%q must distinguish the expired case", got)
+	}
+	assertNoClaimLeak(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_NotFound returns 401 invalid_token
+// (generic description) when the presented bearer does not match any
+// stored opaque record. The challenge stays on the canonical "Bearer
+// invalid_token" code so RP libraries that key off the OAuth-Bearer
+// state machine continue to function.
+func TestHandler_OpaqueAccessToken_NotFound(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	resp := f.doRequest(t, f.newGet(t, "never-issued-opaque"))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	got := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(got, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate=%q must declare invalid_token", got)
+	}
+	if strings.Contains(got, "revoked") || strings.Contains(got, "expired") {
+		t.Errorf("WWW-Authenticate=%q must use the generic description for not-found", got)
+	}
+	assertNoClaimLeak(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_DPoPMismatch returns 401 invalid_token
+// with the DPoP scheme when the record carries a DPoPJKT but the
+// caller did not present a DPoP proof. The cnf-mismatch path mirrors
+// the JWT branch; the difference is that the bound thumbprint comes
+// from the persistent record rather than a JWT claim.
+func TestHandler_OpaqueAccessToken_DPoPMismatch(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	f.putUser(t, "user-opaque", map[string]any{"email": "alice@example.com"})
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-userinfo-dpop",
+		ClientID:  "client-1",
+		Subject:   "user-opaque",
+		Scope:     []string{"openid"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+		DPoPJKT:   "bound-thumbprint",
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	resp := f.doRequest(t, f.newGet(t, rec.ID))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	got := resp.Header.Get("WWW-Authenticate")
+	if !strings.HasPrefix(got, "DPoP ") {
+		t.Errorf("WWW-Authenticate=%q want DPoP-scheme challenge", got)
+	}
+	if !strings.Contains(got, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate=%q must declare invalid_token", got)
+	}
+	assertNoClaimLeak(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_MTLSMismatch returns 401 invalid_token
+// with the Bearer scheme when the record carries a MTLSCertThumbprint
+// but the caller did not present a client certificate. Mirrors the
+// JWT-branch enforcement on x5t#S256.
+func TestHandler_OpaqueAccessToken_MTLSMismatch(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	f.putUser(t, "user-opaque", map[string]any{"email": "alice@example.com"})
+	rec := &store.OpaqueAccessToken{
+		ID:                 "opaque-userinfo-mtls",
+		ClientID:           "client-1",
+		Subject:            "user-opaque",
+		Scope:              []string{"openid"},
+		IssuedAt:           f.clock.now,
+		ExpiresAt:          f.clock.now.Add(time.Hour),
+		MTLSCertThumbprint: "bound-x5t",
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	resp := f.doRequest(t, f.newGet(t, rec.ID))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	got := resp.Header.Get("WWW-Authenticate")
+	if !strings.HasPrefix(got, "Bearer ") {
+		t.Errorf("WWW-Authenticate=%q want Bearer-scheme challenge", got)
+	}
+	if !strings.Contains(got, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate=%q must declare invalid_token", got)
+	}
+	assertNoClaimLeak(t, resp)
+}

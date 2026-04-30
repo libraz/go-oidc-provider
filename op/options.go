@@ -348,6 +348,23 @@ type config struct {
 	// the config so the per-mount audit-emitter helper can reach it
 	// without growing a separate plumbing path.
 	metricsCollector *metrics.Collector
+
+	// accessTokenFormat selects the wire encoding the OP applies to
+	// access tokens issued by every grant type (ADR 0024). Default
+	// [AccessTokenFormatJWT] (RFC 9068); embedders flip the value via
+	// [WithAccessTokenFormat]. The opaque path requires
+	// [store.Store.OpaqueAccessTokens] to return a non-nil substore;
+	// the construction-time validator enforces that invariant.
+	accessTokenFormat store.AccessTokenFormat
+
+	// accessTokenFormatPerAudience binds an access-token format to
+	// individual RFC 8707 resource indicators. Nil means "no
+	// per-audience override"; tokens then take their format from
+	// [accessTokenFormat]. Map keys MUST be canonical resource
+	// indicators (lowercase scheme + host, no fragment, RFC 3986
+	// normal form); the option site rejects non-canonical keys at
+	// construction time.
+	accessTokenFormatPerAudience map[string]store.AccessTokenFormat
 }
 
 // claimsParameterSupported returns the effective discovery
@@ -361,6 +378,22 @@ func (c *config) claimsParameterSupported() bool {
 		return true
 	}
 	return !c.claimsParameterSupportedOff
+}
+
+// formatForAudience returns the access-token format the OP issues for
+// a request whose RFC 8707 resource indicator is resource. The lookup
+// order is per-audience map first (canonicalised key), then the
+// global [config.accessTokenFormat], then the documented default
+// [AccessTokenFormatJWT]. The empty resource string flows through to
+// the global default; the option-layer validator forbids the empty key
+// in the per-audience map specifically so that branch is unambiguous.
+func (c *config) formatForAudience(resource string) store.AccessTokenFormat {
+	if resource != "" && c.accessTokenFormatPerAudience != nil {
+		if f, ok := c.accessTokenFormatPerAudience[resource]; ok {
+			return f
+		}
+	}
+	return c.accessTokenFormat
 }
 
 // effectiveACRPolicy returns the [ACRPolicy] the wire layer consults.
@@ -577,6 +610,7 @@ func (c *config) validate() error {
 		c.validateOpenIDScopeOptional,
 		c.validateStrictOfflineAccess,
 		c.validateLoginFlow,
+		c.validateAccessTokenFormat,
 	} {
 		if err := fn(); err != nil {
 			return err
@@ -699,6 +733,41 @@ func (c *config) validateStrictOfflineAccess() error {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "WithStrictOfflineAccess is incompatible with WithOpenIDScopeOptional",
+		}
+	}
+	return nil
+}
+
+// validateAccessTokenFormat enforces the ADR 0024 fail-fast contract:
+// when the global format or any per-audience override selects
+// [AccessTokenFormatOpaque], the configured [Store] MUST expose a
+// non-nil [store.OpaqueAccessTokenStore]. Embedders who request opaque
+// tokens with no place to persist them get a build-time error rather
+// than a runtime crash on the first issuance.
+//
+// The check intentionally walks the per-audience map even when the
+// global default is [AccessTokenFormatJWT]: a single opaque entry
+// pointed at one resource is enough to require the substore. The
+// store value is read from [config.store] which [validateRequired]
+// already ensured is non-nil.
+func (c *config) validateAccessTokenFormat() error {
+	needsOpaque := c.accessTokenFormat == store.AccessTokenFormatOpaque
+	if !needsOpaque {
+		for _, f := range c.accessTokenFormatPerAudience {
+			if f == store.AccessTokenFormatOpaque {
+				needsOpaque = true
+				break
+			}
+		}
+	}
+	if !needsOpaque {
+		return nil
+	}
+	if c.store.OpaqueAccessTokens() == nil {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "op.WithAccessTokenFormat(AccessTokenFormatOpaque) " +
+				"requires Store.OpaqueAccessTokens() to be non-nil",
 		}
 	}
 	return nil
@@ -1550,6 +1619,182 @@ func WithStrictOfflineAccess() Option {
 		c.strictOfflineAccess = true
 		return nil
 	})
+}
+
+// WithAccessTokenFormat selects the global access-token format
+// (ADR 0024). Default [AccessTokenFormatJWT]; passing
+// [AccessTokenFormatOpaque] switches every issued access token onto
+// the opaque-bearer path described in [store.OpaqueAccessToken].
+//
+// When the opaque format is selected the configured [Store] MUST
+// return a non-nil [store.OpaqueAccessTokenStore] from
+// [store.Store.OpaqueAccessTokens]; [New] rejects the configuration
+// at construction time when the substore is nil so a misconfiguration
+// surfaces at startup rather than the first /token request.
+//
+// If [WithAccessTokenFormatPerAudience] is also set, this option
+// supplies the fallback for any RFC 8707 resource indicator absent
+// from the map.
+//
+// Stable since v0.x.
+func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
+	return optionFunc(func(c *config) error {
+		if !f.IsValid() {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAccessTokenFormat received an unknown AccessTokenFormat value",
+			}
+		}
+		c.accessTokenFormat = f
+		return nil
+	})
+}
+
+// WithAccessTokenFormatPerAudience binds an access-token format to
+// each RFC 8707 resource indicator (ADR 0024). Tokens minted for a
+// request whose resource value matches a key in the map use the
+// mapped format; tokens for any other resource (including the empty
+// default audience) fall back to [WithAccessTokenFormat] or, if that
+// option is also absent, [AccessTokenFormatJWT].
+//
+// Map keys MUST be canonical resource indicators per RFC 3986 §6:
+//   - absolute URI with a non-empty scheme and host;
+//   - scheme and host in lowercase form;
+//   - no fragment;
+//   - empty-string keys are rejected — the global default belongs in
+//     [WithAccessTokenFormat].
+//
+// Non-canonical keys (mixed-case scheme / host, fragment present, …)
+// fail at [New] so an embedder cannot ship a typo that silently
+// disables the policy. Map values MUST be one of the documented
+// constants ([AccessTokenFormatJWT] or [AccessTokenFormatOpaque]);
+// unknown values are rejected with the same "fail-fast at
+// construction" posture as [WithAccessTokenFormat].
+//
+// When the map contains any [AccessTokenFormatOpaque] value the
+// configured [Store] MUST return a non-nil
+// [store.OpaqueAccessTokenStore]; the construction-time validator
+// enforces the same rule that [WithAccessTokenFormat] applies.
+//
+// Calling the option more than once replaces the prior map entirely.
+// The supplied map is defensive-copied so a later mutation of the
+// caller's map cannot silently change the OP's policy at runtime.
+//
+// Stable since v0.x.
+func WithAccessTokenFormatPerAudience(m map[string]store.AccessTokenFormat) Option {
+	return optionFunc(func(c *config) error {
+		if len(m) == 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAccessTokenFormatPerAudience requires at least one entry",
+			}
+		}
+		out := make(map[string]store.AccessTokenFormat, len(m))
+		for raw, f := range m {
+			if raw == "" {
+				return &Error{
+					Code: codeConfiguration,
+					Description: "WithAccessTokenFormatPerAudience: empty key is " +
+						"reserved; use WithAccessTokenFormat for the default audience",
+				}
+			}
+			if !f.IsValid() {
+				return &Error{
+					Code: codeConfiguration,
+					Description: "WithAccessTokenFormatPerAudience[" + raw +
+						"]: unknown AccessTokenFormat value",
+				}
+			}
+			if err := validateResourceIndicator(raw); err != nil {
+				return err
+			}
+			out[raw] = f
+		}
+		c.accessTokenFormatPerAudience = out
+		return nil
+	})
+}
+
+// validateResourceIndicator enforces the canonical-form rules
+// [WithAccessTokenFormatPerAudience] applies to its map keys. The
+// check runs against the raw string (not the [url.URL] view) because
+// the issuance path keys the per-audience map directly off the
+// request's verbatim resource parameter; a key whose lowercase /
+// fragment-stripped re-rendering differs from the raw bytes would
+// silently miss every lookup.
+//
+// The helper is split out so a future option that consumes resource
+// indicators (e.g. a per-audience TTL knob) can reuse the same
+// invariants without re-deriving the parse.
+func validateResourceIndicator(raw string) error {
+	// Reject obvious non-URI / mixed-case forms before url.Parse so
+	// the diagnostic points at the actual source bytes rather than
+	// the normalised form Go produces.
+	if raw != strings.ToLower(raw) && hasUppercaseSchemeOrHost(raw) {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithAccessTokenFormatPerAudience[" + raw +
+				"]: scheme and host must be lowercase",
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithAccessTokenFormatPerAudience[" + raw +
+				"]: not a valid URI",
+			Cause: err,
+		}
+	}
+	if !u.IsAbs() || u.Scheme == "" || u.Host == "" {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithAccessTokenFormatPerAudience[" + raw +
+				"]: must be an absolute URI with scheme and host",
+		}
+	}
+	if u.Fragment != "" || u.RawFragment != "" || strings.Contains(raw, "#") {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithAccessTokenFormatPerAudience[" + raw +
+				"]: fragment is not permitted",
+		}
+	}
+	return nil
+}
+
+// hasUppercaseSchemeOrHost reports whether raw carries a non-lowercase
+// ASCII letter before the start of the path / query / fragment. The
+// function is conservative — it triggers on any uppercase byte in the
+// scheme + authority — so callers receive a clear diagnostic instead
+// of the silent-canonical surprise [url.Parse] produces (Go normalises
+// the scheme to lowercase at parse time, hiding caller mistakes from
+// a post-parse comparison).
+//
+// The scan terminates at the first '/' that starts the path component
+// (the boundary after "scheme://authority") or the first '?' / '#'
+// that starts query / fragment; URI-path bytes can be case-sensitive,
+// so they are not inspected, and a fragment-only mismatch surfaces
+// through the dedicated fragment check rather than this helper.
+func hasUppercaseSchemeOrHost(raw string) bool {
+	end := len(raw)
+	if idx := strings.Index(raw, "://"); idx >= 0 {
+		// raw = "scheme://authority[/path|?query|#fragment]"; scan
+		// stops at the first byte that ends the authority component.
+		rest := raw[idx+3:]
+		if j := strings.IndexAny(rest, "/?#"); j >= 0 {
+			end = idx + 3 + j
+		}
+	} else if j := strings.IndexAny(raw, "/?#"); j >= 0 {
+		end = j
+	}
+	for i := 0; i < end; i++ {
+		c := raw[i]
+		if c >= 'A' && c <= 'Z' {
+			return true
+		}
+	}
+	return false
 }
 
 // WithClaimsSupported populates the discovery document's

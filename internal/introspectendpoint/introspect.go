@@ -191,16 +191,29 @@ func projectAccessTokenClaims(c *tokens.AccessTokenClaims) response {
 	return out
 }
 
-// resolveOpaque looks token up as a refresh token in the configured
-// store and projects an unconsumed, unexpired record onto the
-// introspection response. The bool return reports success; false means
-// the store had no live record (not found, consumed, expired, or store
-// fault) and the caller MUST fall through.
+// resolveOpaque looks token up as either an opaque access token (ADR
+// 0024) or a refresh token in the configured stores and projects a
+// live record onto the introspection response. The bool return reports
+// success; false means neither store had a live record (not found,
+// revoked / consumed, expired, cross-client, or store fault) and the
+// caller MUST fall through.
 //
-// A nil [Deps.RefreshTokens] disables the opaque path entirely:
-// resolveOpaque short-circuits to (zero, false) so the JWT branch (or
-// the final inactive() fallback) takes over.
+// The opaque-access-token substore is consulted first. The two stores
+// have disjoint id spaces (opaque ATs descend from a [Grant] minted at
+// /token, refresh tokens are rotated via /token); a presented bearer
+// resolves to at most one of them in practice, but the AT-first order
+// keeps the wire response lined up with the format the token endpoint
+// most recently issued.
+//
+// A nil substore disables the corresponding branch. With both nil the
+// opaque path short-circuits and the caller's final inactive() fallback
+// takes over.
 func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token string) (response, bool) {
+	if deps.OpaqueAccessTokens != nil {
+		if got, ok := resolveOpaqueAccessToken(ctx, deps, authenticatedClientID, token); ok {
+			return got, true
+		}
+	}
 	if deps.RefreshTokens == nil {
 		return response{}, false
 	}
@@ -227,6 +240,93 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 		return response{}, false
 	}
 	return projectRefreshToken(rec), true
+}
+
+// resolveOpaqueAccessToken looks token up in the opaque-access-token
+// substore (ADR 0024) and projects a live record onto the introspection
+// response. The bool return reports success; false means the lookup
+// missed, the record was revoked / expired, or another client owns it,
+// and the caller MUST fall through to the refresh-token branch.
+//
+// Every miss path returns the zero response so the caller cannot
+// observe which sub-class produced the rejection — RFC 7662 §2.2
+// requires the wire shape for "inactive" to be uniform regardless of
+// the underlying cause.
+func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClientID, token string) (response, bool) {
+	rec, err := deps.OpaqueAccessTokens.Find(ctx, token)
+	if err != nil {
+		// ErrNotFound and any other store error collapse onto inactive.
+		return response{}, false
+	}
+	if rec == nil {
+		return response{}, false
+	}
+	if rec.Revoked {
+		return response{}, false
+	}
+	now := deps.now().UTC()
+	if !rec.ExpiresAt.After(now) {
+		return response{}, false
+	}
+	if rec.ClientID != authenticatedClientID {
+		// Same-client-only (ADR 0024 §S.8): a token issued to another
+		// client is inactive from this client's point of view.
+		return response{}, false
+	}
+	return projectOpaqueAccessToken(rec), true
+}
+
+// projectOpaqueAccessToken builds an active introspection response
+// from a live opaque-access-token record. Fields the record does not
+// carry stay zero-valued and are dropped by omitempty on the wire.
+func projectOpaqueAccessToken(rec *store.OpaqueAccessToken) response {
+	out := response{
+		Active:    true,
+		ClientID:  rec.ClientID,
+		TokenType: tokenTypeBearer,
+		Sub:       rec.Subject,
+		ACR:       rec.ACR,
+	}
+	if !rec.IssuedAt.IsZero() {
+		out.Iat = rec.IssuedAt.Unix()
+	}
+	if !rec.ExpiresAt.IsZero() {
+		out.Exp = rec.ExpiresAt.Unix()
+	}
+	if !rec.AuthTime.IsZero() {
+		out.AuthTime = rec.AuthTime.Unix()
+	}
+	if len(rec.Scope) > 0 {
+		out.Scope = strings.Join(rec.Scope, " ")
+	}
+	if rec.Audience != "" {
+		out.Aud = []string{rec.Audience}
+	}
+	if len(rec.AMR) > 0 {
+		out.AMR = append([]string(nil), rec.AMR...)
+	}
+	if cnf := opaqueAccessTokenCnf(rec); cnf != nil {
+		out.Cnf = cnf
+	}
+	return out
+}
+
+// opaqueAccessTokenCnf returns the cnf map for an opaque-access-token
+// record, or nil when the token is bearer (neither DPoP nor mTLS
+// bound). Mirrors [refreshTokenCnf]; the wire format treats the two
+// fields as independent (RFC 9449 §6.1, RFC 8705 §3.1).
+func opaqueAccessTokenCnf(rec *store.OpaqueAccessToken) map[string]string {
+	if rec.DPoPJKT == "" && rec.MTLSCertThumbprint == "" {
+		return nil
+	}
+	cnf := make(map[string]string, 2)
+	if rec.DPoPJKT != "" {
+		cnf["jkt"] = rec.DPoPJKT
+	}
+	if rec.MTLSCertThumbprint != "" {
+		cnf["x5t#S256"] = rec.MTLSCertThumbprint
+	}
+	return cnf
 }
 
 // projectRefreshToken builds an active introspection response from a

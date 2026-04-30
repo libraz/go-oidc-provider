@@ -340,16 +340,17 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.UserInfo),
 		strictCORS.Handler(userinfo.Handler(userinfo.HandlerDeps{
-			Keys:         keySet,
-			Issuer:       cfg.issuer,
-			UserStore:    cfg.store.Users(),
-			Grants:       cfg.store.Grants(),
-			Clock:        cfg.clock,
-			Leeway:       defaultUserInfoLeeway,
-			DPoP:         dpopVerifier,
-			DPoPNonces:   cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
-			MTLS:         mtlsVerifier,
-			AccessTokens: cfg.store.AccessTokens(),
+			Keys:               keySet,
+			Issuer:             cfg.issuer,
+			UserStore:          cfg.store.Users(),
+			Grants:             cfg.store.Grants(),
+			Clock:              cfg.clock,
+			Leeway:             defaultUserInfoLeeway,
+			DPoP:               dpopVerifier,
+			DPoPNonces:         cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			MTLS:               mtlsVerifier,
+			AccessTokens:       cfg.store.AccessTokens(),
+			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
 		})),
 	)
 	mux.Handle(
@@ -376,6 +377,8 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 			AccessTokens:                   cfg.store.AccessTokens(),
+			OpaqueAccessTokens:             cfg.store.OpaqueAccessTokens(),
+			AccessTokenFormatFor:           cfg.formatForAudience,
 			Audit:                          cfg.effectiveAuditEmitter(),
 		})),
 	)
@@ -837,6 +840,7 @@ func mountIntrospectionEndpoint(
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
 			RequireSignedIntrospection: cfg.requireSignedIntrospection(),
 			AccessTokens:               cfg.store.AccessTokens(),
+			OpaqueAccessTokens:         cfg.store.OpaqueAccessTokens(),
 		})),
 	)
 }
@@ -873,6 +877,7 @@ func mountRevocationEndpoint(
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			AccessTokens:             cfg.store.AccessTokens(),
+			OpaqueAccessTokens:       cfg.store.OpaqueAccessTokens(),
 		})),
 	)
 }

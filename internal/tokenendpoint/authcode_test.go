@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // authCodeForm builds the canonical authorization_code form body.
@@ -744,6 +747,172 @@ func TestAuthCode_MissingVerifier(t *testing.T) {
 	}
 	if body := decodeJSON(t, resp); body["error"] != "invalid_grant" {
 		t.Errorf("error=%v want invalid_grant", body["error"])
+	}
+}
+
+// opaqueFormatFixture builds a fixture whose op.Provider is configured
+// with [op.WithAccessTokenFormat] selecting opaque tokens (ADR 0024).
+// The clock is the same anchor used by [newFixture] so tests that
+// inherit time-sensitive assertions stay aligned.
+func opaqueFormatFixture(tb testing.TB) *fixture {
+	tb.Helper()
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(tb,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithAccessTokenFormat(op.AccessTokenFormatOpaque)),
+	)
+	return &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		signer:   tokens.SigningKey{KeyID: prov.SigningKey.KeyID, Signer: prov.SigningKey.Signer},
+		clock:    clock,
+	}
+}
+
+// TestAuthCode_OpaqueFormat_HappyPath pins the ADR 0024 issuance plumbing:
+// when the OP is configured for opaque access tokens the wire response
+// carries a 43-character base64url string with no '.' separator, the
+// shadow row in [store.OpaqueAccessTokenStore] mirrors the issuance
+// metadata, and the same DPoP / mTLS bindings the JWT path would have
+// recorded land on the row's cnf-thumbprint columns.
+func TestAuthCode_OpaqueFormat_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	f := opaqueFormatFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-opaque-happy"
+	const grantID = "grant-opaque-happy"
+	const subject = "user-opaque"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "email"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "email"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-opaque",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	// Opaque tokens are 43-char base64url-no-pad. RFC 7515 §3 forbids a
+	// JWS Compact Serialisation that lacks two '.' separators; the
+	// inverse — the opaque token MUST NOT contain any '.' — is the
+	// invariant the introspection-side dispatch relies on.
+	if len(at) != 43 {
+		t.Errorf("len(access_token)=%d want 43 (opaque format)", len(at))
+	}
+	if strings.Contains(at, ".") {
+		t.Errorf("opaque access_token must not contain '.', got %q", at)
+	}
+
+	// The opaque store SHOULD carry exactly one live row for this grant.
+	rec, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), at)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find: %v", err)
+	}
+	if rec.GrantID != grantID {
+		t.Errorf("rec.GrantID=%q want %q", rec.GrantID, grantID)
+	}
+	if rec.Subject != subject {
+		t.Errorf("rec.Subject=%q want %q", rec.Subject, subject)
+	}
+	if rec.ClientID != client.ID {
+		t.Errorf("rec.ClientID=%q want %q", rec.ClientID, client.ID)
+	}
+	if rec.Revoked {
+		t.Errorf("rec.Revoked=true want false on freshly-issued opaque AT")
+	}
+	if rec.DPoPJKT != "" || rec.MTLSCertThumbprint != "" {
+		t.Errorf("rec binding=(%q,%q) want bearer (no DPoP/mTLS in this test)",
+			rec.DPoPJKT, rec.MTLSCertThumbprint)
+	}
+}
+
+// TestAuthCode_OpaqueFormat_DPoPBindingPersisted verifies that when the
+// /token request carries a DPoP proof the opaque substore row records
+// the matching JKT (ADR 0024 §S.3). Without this, a stolen opaque
+// token would not be checkable against the proof at userinfo /
+// introspection time.
+func TestAuthCode_OpaqueFormat_DPoPBindingPersisted(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithFeature(feature.DPoP),
+			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+		),
+	)
+	f := &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		signer:   tokens.SigningKey{KeyID: prov.SigningKey.KeyID, Signer: prov.SigningKey.Signer},
+		clock:    clock,
+	}
+
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-opaque-dpop"
+	const grantID = "grant-opaque-dpop"
+	const subject = "user-opaque-dpop"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	key := newDPoPKey(t)
+	form := authCodeForm(codeID, redirect, verifier)
+	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-ac-opaque-dpop", "")
+	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["token_type"]; got != "DPoP" {
+		t.Errorf("token_type=%v want DPoP", got)
+	}
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	rec, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), at)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find: %v", err)
+	}
+	if rec.DPoPJKT != key.jkt {
+		t.Errorf("rec.DPoPJKT=%q want %q", rec.DPoPJKT, key.jkt)
 	}
 }
 

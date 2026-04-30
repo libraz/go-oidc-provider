@@ -230,6 +230,18 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
 	}
+	// Opaque-format chains revoke the prior access token atomically
+	// with the new mint (ADR 0024 §"Refresh-rotation revocation of
+	// prior AT"). Resource servers calling /oidc/introspect on every
+	// request observe the revocation immediately, so the
+	// stolen-but-still-valid window collapses to clock-skew. The JWT
+	// path deliberately leaves prior tokens alive: doing otherwise
+	// would force every JWT verification through introspection,
+	// defeating the JWT optimisation that motivated the registry
+	// design (ADR 0013). Revocation runs BEFORE the new mint so a
+	// colliding hash on Save (impossible-by-construction with 256-bit
+	// entropy) cannot leave the chain in a half-revoked state.
+	revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID)
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
@@ -389,4 +401,40 @@ func rotateRefreshToken(
 		},
 	})
 	return token, nil
+}
+
+// revokePriorOpaqueAT revokes every opaque access token tied to
+// grantID when the rotation issues an opaque-format token (ADR 0024
+// §"Refresh-rotation revocation of prior AT"). The function is a
+// no-op when:
+//
+//   - The deployment runs JWT-only (no OpaqueAccessTokens substore
+//     wired). The JWT path leaves prior tokens alive on rotation by
+//     design — see [issueRefreshResponse].
+//   - The active per-audience policy returns
+//     [store.AccessTokenFormatJWT] for this resource. A mixed-format
+//     deployment may choose JWT for one audience and opaque for
+//     another; only the opaque branch revokes.
+//   - GrantID is empty. Refresh rotation always carries the parent
+//     grant id; an empty value indicates a programmer error in the
+//     exchanger. Treat the cascade as a silent no-op so a future
+//     refactor that surfaces empty grants does not crash the path.
+//
+// Errors from RevokeByGrant are swallowed: the caller has not yet
+// minted the new access token, so a partial revocation does not leave
+// a credential in a contradictory state. The next token-endpoint
+// request hits the same revocation path again because the substore
+// keeps the row until GC; idempotency ensures a retry recovers.
+func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID string) {
+	if deps.OpaqueAccessTokens == nil || grantID == "" {
+		return
+	}
+	format := store.AccessTokenFormatJWT
+	if deps.AccessTokenFormatFor != nil {
+		format = deps.AccessTokenFormatFor(resource)
+	}
+	if format != store.AccessTokenFormatOpaque {
+		return
+	}
+	_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
 }

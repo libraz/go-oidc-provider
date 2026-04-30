@@ -123,6 +123,16 @@ type Deps struct {
 	// wire response stays 200 but the token continues
 	// to verify until exp.
 	AccessTokens store.AccessTokenRegistry
+
+	// OpaqueAccessTokens is the [store.OpaqueAccessTokenStore] the
+	// opaque-format revocation branch consults (ADR 0024). When the
+	// presented bearer is not JWS-shaped the handler hashes it and
+	// calls RevokeByID; the call is idempotent so a missing row
+	// preserves the RFC 7009 §2.2 "always 200" posture. A nil value
+	// disables the opaque branch; non-JWS tokens then silently
+	// resolve to 200 without state change, mirroring the JWT-only
+	// legacy posture.
+	OpaqueAccessTokens store.OpaqueAccessTokenStore
 }
 
 // Handler returns the HTTP handler the OP mounts at its revocation

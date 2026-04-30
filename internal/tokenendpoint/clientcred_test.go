@@ -1,13 +1,17 @@
 package tokenendpoint_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -380,4 +384,76 @@ func clientCredsMTLSClient(tb testing.TB, prov *testkit.Provider) (*store.Client
 		Scopes:                  []string{"read", "write"},
 	})
 	return client, secret
+}
+
+// TestClientCredentials_OpaqueFormat_PersistsRow exercises the
+// client_credentials path under the opaque-format option (ADR 0024).
+// The wire response carries a 43-character base64url string with no
+// '.' separator, the [store.OpaqueAccessTokenStore] holds a matching
+// row, and the row's GrantID column carries the empty grant id the
+// client_credentials grant synthesises (RFC 6749 §4.4 has no
+// authorize-side grant). The wire token_type stays "Bearer" because
+// no DPoP / mTLS proof is presented in this test.
+func TestClientCredentials_OpaqueFormat_PersistsRow(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithAccessTokenFormat(op.AccessTokenFormatOpaque)),
+	)
+	f := &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		clock:    clock,
+	}
+
+	client, secret := clientCredsClient(t, f.prov, []string{"read", "write"})
+
+	resp := f.post(t, clientCredsForm("read"), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	if len(at) != 43 {
+		t.Errorf("len(access_token)=%d want 43 (opaque format)", len(at))
+	}
+	if strings.Contains(at, ".") {
+		t.Errorf("opaque access_token must not contain '.', got %q", at)
+	}
+	if got := body["token_type"]; got != "Bearer" {
+		t.Errorf("token_type=%v want Bearer", got)
+	}
+
+	rec, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), at)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find: %v", err)
+	}
+	// client_credentials synthesises no authorize-side grant; the
+	// substore stores the empty string verbatim. RevokeByGrant("") is
+	// a no-op so the cascade behaviour is unchanged from the JWT path
+	// (ADR 0013 §"Code-replay cascade").
+	if rec.GrantID != "" {
+		t.Errorf("rec.GrantID=%q want empty (client_credentials synthesises no grant)", rec.GrantID)
+	}
+	if rec.ClientID != client.ID {
+		t.Errorf("rec.ClientID=%q want %q", rec.ClientID, client.ID)
+	}
+	if rec.Subject != client.ID {
+		// RFC 9068 §2.2 / FAPI 2.0 baseline: client_credentials puts
+		// client_id in the sub claim. The opaque path mirrors the
+		// posture so introspection projects the same subject.
+		t.Errorf("rec.Subject=%q want %q (subject must equal client_id)", rec.Subject, client.ID)
+	}
+	if !rec.AuthTime.IsZero() {
+		t.Errorf("rec.AuthTime=%v want zero (client_credentials has no end-user auth_time)", rec.AuthTime)
+	}
+	if rec.Revoked {
+		t.Errorf("rec.Revoked=true want false on freshly-issued opaque AT")
+	}
 }

@@ -344,6 +344,17 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	if deps.AccessTokens != nil {
 		_, _ = deps.AccessTokens.RevokeByGrant(ctx, rec.GrantID)
 	}
+	// Mirror the cascade onto the opaque-AT substore (ADR 0024
+	// §"Code-replay cascade"). The substore is nil for embedders who
+	// stay on the JWT-only default; calling RevokeByGrant on a nil
+	// substore would panic, so guard the call. The order is
+	// JWT registry → opaque store → refresh chain; each substore is
+	// idempotent so the cascade is order-independent, but we keep the
+	// symmetric ordering so log lines / tx audit trails stay
+	// predictable.
+	if deps.OpaqueAccessTokens != nil {
+		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, rec.GrantID)
+	}
 	// RevokeByGrant walks the refresh-token store by GrantID and stamps
 	// every matching record. Implementations are expected to be silent
 	// when no record matches (a freshly-replayed code may not have
@@ -453,7 +464,46 @@ type mintIDTokenInput struct {
 	Extra map[string]any
 }
 
-// mintAccessToken signs the JWT-shaped access token (RFC 9068) and,
+// mintAccessToken issues an access token in the wire format the
+// configured policy (ADR 0024) selects for the request's RFC 8707
+// resource indicator. The function is a thin format-dispatch shim:
+// [store.AccessTokenFormatJWT] routes through [mintJWTAccessToken]
+// (RFC 9068) and [store.AccessTokenFormatOpaque] routes through
+// [mintOpaqueAccessToken] (32-byte random + hashed shadow row). The
+// caller threads the same binding / TTL / scope / audience metadata
+// regardless of format so refresh-token rotations and the
+// /token-success response stay format-agnostic.
+//
+// grantID is empty for grants without an authorize-side record
+// (client_credentials synthesises one upstream so the cascade still
+// works); the JWT registry stores the empty string verbatim and
+// RevokeByGrant treats the empty grant as a no-op. The opaque path
+// stores the same empty string on the row's GrantID column.
+func mintAccessToken(
+	ctx context.Context,
+	deps Deps,
+	subject, clientID, grantID string,
+	scope []string,
+	resource string,
+	now time.Time,
+	authTime int64,
+	binding tokenBinding,
+) (string, error) {
+	format := store.AccessTokenFormatJWT
+	if deps.AccessTokenFormatFor != nil {
+		format = deps.AccessTokenFormatFor(resource)
+	}
+	switch format {
+	case store.AccessTokenFormatOpaque:
+		return mintOpaqueAccessToken(ctx, deps, subject, clientID, grantID, scope, resource, now, authTime, binding)
+	case store.AccessTokenFormatJWT:
+		fallthrough
+	default:
+		return mintJWTAccessToken(ctx, deps, subject, clientID, grantID, scope, resource, now, authTime, binding)
+	}
+}
+
+// mintJWTAccessToken signs the JWT-shaped access token (RFC 9068) and,
 // when the configured registry is non-nil, registers a matching shadow
 // row so the userinfo / introspection / revocation paths can reject
 // the token after a future revocation (RFC 6749 §4.1.2).
@@ -462,12 +512,7 @@ type mintIDTokenInput struct {
 // "cnf" claim carries the corresponding member ("jkt" or "x5t#S256")
 // and the resource server is expected to verify a matching proof on
 // every use of the token.
-//
-// grantID is empty for grants without an authorize-side record
-// (client_credentials synthesises one upstream so the cascade still
-// works); the registry stores the empty string verbatim and
-// RevokeByGrant treats the empty grant as a no-op.
-func mintAccessToken(
+func mintJWTAccessToken(
 	ctx context.Context,
 	deps Deps,
 	subject, clientID, grantID string,
@@ -516,6 +561,75 @@ func mintAccessToken(
 		}
 	}
 	return signed, nil
+}
+
+// mintOpaqueAccessToken mints a 32-byte random opaque access token
+// (ADR 0024) and persists a matching shadow row so verification at the
+// boundaries the OP serves (userinfo, introspection, revocation) has
+// the metadata it needs to project. The wire bytes carry no claims;
+// the row carries every field the JWT path encodes so introspection
+// can return RFC 7662 §2.2 metadata and the cnf thumbprint stays
+// re-verifiable on every use.
+//
+// authTime == 0 (e.g. client_credentials, which has no end-user
+// authentication) maps to the row's zero-valued AuthTime so the
+// introspection / userinfo paths can omit auth_time uniformly.
+func mintOpaqueAccessToken(
+	ctx context.Context,
+	deps Deps,
+	subject, clientID, grantID string,
+	scope []string,
+	resource string,
+	now time.Time,
+	authTime int64,
+	binding tokenBinding,
+) (string, error) {
+	if deps.OpaqueAccessTokens == nil {
+		// The op.New validator rejects this configuration at
+		// construction time, so reaching it here means a manual
+		// Deps was misconfigured. Fail the request with server_error
+		// rather than minting a credential we cannot persist.
+		return "", errors.New("tokenendpoint: opaque format requested but OpaqueAccessTokens substore is nil")
+	}
+	raw, err := tokens.MintOpaqueAccessToken()
+	if err != nil {
+		return "", err
+	}
+	expiresAt := tokens.ExpiresIn(now, deps.AccessTokenTTL)
+	audience := deps.Issuer
+	if resource != "" {
+		audience = resource
+	}
+	rec := &store.OpaqueAccessToken{
+		ID:                 raw,
+		GrantID:            grantID,
+		Subject:            subject,
+		ClientID:           clientID,
+		Scope:              append([]string(nil), scope...),
+		Audience:           audience,
+		AuthTime:           opaqueAuthTime(authTime),
+		DPoPJKT:            binding.DPoPJKT,
+		MTLSCertThumbprint: binding.MTLSThumbprint,
+		IssuedAt:           now,
+		ExpiresAt:          time.Unix(expiresAt, 0).UTC(),
+	}
+	if err := deps.OpaqueAccessTokens.Save(ctx, rec); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
+// opaqueAuthTime projects the int64 Unix-second auth_time the issuance
+// helpers thread through onto the [time.Time]-shaped column the
+// [store.OpaqueAccessToken] schema carries. Zero (no end-user
+// authentication, e.g. client_credentials) maps to the zero time so
+// downstream verifiers can detect "absent" with a single
+// [time.Time.IsZero] check.
+func opaqueAuthTime(authTime int64) time.Time {
+	if authTime == 0 {
+		return time.Time{}
+	}
+	return time.Unix(authTime, 0).UTC()
 }
 
 // mintAuthCodeIDToken signs the OIDC id_token issued in response to an

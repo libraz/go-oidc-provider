@@ -618,6 +618,166 @@ func TestRefresh_HonoursClaimsRequest_IDToken(t *testing.T) {
 	}
 }
 
+// opaqueRefreshFixture builds a refresh-token fixture wired with the
+// opaque access-token format option (ADR 0024). Tests use it to verify
+// that rotation revokes the prior opaque AT atomically with the new
+// mint, and to pin that the JWT-path regression test below sees no
+// such revocation.
+func opaqueRefreshFixture(tb testing.TB) *fixture {
+	tb.Helper()
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(tb,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithAccessTokenFormat(op.AccessTokenFormatOpaque)),
+	)
+	return &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		clock:    clock,
+	}
+}
+
+// TestRefresh_OpaqueFormat_RotationRevokesPriorAT pins the ADR 0024
+// §"Refresh-rotation revocation of prior AT" contract: when the chain
+// is opaque-format, rotation revokes every opaque AT bound to the
+// originating GrantID atomically with the new mint, so the
+// stolen-but-still-valid window collapses to clock-skew. The JWT path
+// is covered by the regression test below to confirm the new
+// behaviour does not bleed across formats.
+func TestRefresh_OpaqueFormat_RotationRevokesPriorAT(t *testing.T) {
+	t.Parallel()
+
+	f := opaqueRefreshFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+
+	const tokenID = "rt-opaque-rotate"
+	const subject = "user-opaque-rotate"
+	const grantID = "grant-opaque-rotate"
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid"},
+	})
+
+	// Pre-seed an opaque AT row tied to the same grant so the rotation
+	// has a "prior AT" to revoke. In production the seed lands during
+	// the originating /authorize → /token exchange; the test pre-seeds
+	// to keep the assertion focused on the rotation step alone.
+	const priorAT = "prior-opaque-token-prior-opaque-token-12345"
+	if err := f.prov.Store.OpaqueAccessTokens().Save(context.Background(), &store.OpaqueAccessToken{
+		ID:        priorAT,
+		GrantID:   grantID,
+		Subject:   subject,
+		ClientID:  client.ID,
+		Scope:     []string{"openid"},
+		Audience:  f.prov.Issuer,
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("OpaqueAccessTokens.Save: %v", err)
+	}
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	newAT, _ := body["access_token"].(string)
+	if newAT == "" {
+		t.Fatal("access_token missing")
+	}
+	if newAT == priorAT {
+		t.Fatal("rotation must mint a fresh access token")
+	}
+
+	// Prior AT row MUST now be revoked.
+	prior, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), priorAT)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find(prior): %v", err)
+	}
+	if !prior.Revoked {
+		t.Errorf("prior opaque AT must be revoked after rotation (Revoked=%v)", prior.Revoked)
+	}
+
+	// New AT row MUST be active.
+	fresh, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), newAT)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find(new): %v", err)
+	}
+	if fresh.Revoked {
+		t.Errorf("freshly-minted opaque AT must be active (Revoked=%v)", fresh.Revoked)
+	}
+	if fresh.GrantID != grantID {
+		t.Errorf("fresh.GrantID=%q want %q", fresh.GrantID, grantID)
+	}
+}
+
+// TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT is the regression
+// pin: ADR 0024 §"Refresh-rotation revocation of prior AT" deliberately
+// keeps the JWT path's "prior AT alive on rotation" behaviour because
+// revoking it would force resource servers to call introspection on
+// every JWT — defeating the registry-driven JWT optimisation that
+// motivated ADR 0013. The test seeds a registry row, runs a refresh
+// rotation under the JWT default, and asserts the prior row's
+// Revoked flag stayed false.
+func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+
+	const tokenID = "rt-jwt-rotate"
+	const subject = "user-jwt-rotate"
+	const grantID = "grant-jwt-rotate"
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid"},
+	})
+
+	const priorJTI = "prior-jti-jwt-rotation-test"
+	if err := f.prov.Store.AccessTokens().Register(context.Background(), store.AccessTokenRecord{
+		JTI:       priorJTI,
+		GrantID:   grantID,
+		Subject:   subject,
+		ClientID:  client.ID,
+		Scopes:    []string{"openid"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AccessTokens.Register: %v", err)
+	}
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+
+	// JWT path: prior registry row stays active. Verify by finding the
+	// row and checking the Revoked flag.
+	prior, err := f.prov.Store.AccessTokens().Find(context.Background(), priorJTI)
+	if err != nil {
+		t.Fatalf("AccessTokens.Find: %v", err)
+	}
+	if prior.Revoked {
+		t.Errorf("prior JWT registry row must NOT be revoked on JWT-path rotation (Revoked=%v)", prior.Revoked)
+	}
+}
+
 // TestRefresh_MissingToken yields invalid_request when the body omits
 // refresh_token.
 func TestRefresh_MissingToken(t *testing.T) {

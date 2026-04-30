@@ -141,6 +141,16 @@ type Deps struct {
 	// verifies and is still inside its exp window, mirroring the
 	// legacy behaviour.
 	AccessTokens store.AccessTokenRegistry
+
+	// OpaqueAccessTokens is the [store.OpaqueAccessTokenStore] the
+	// opaque-format introspection branch consults (ADR 0024). When
+	// the presented bearer is not JWS-shaped the handler hashes it,
+	// looks the digest up here, and projects the resulting record
+	// onto the RFC 7662 §2.2 wire shape (revoked / expired /
+	// cross-client → {"active": false}). A nil value disables the
+	// opaque branch; opaque tokens then always project onto
+	// inactive, mirroring the JWT-only legacy posture.
+	OpaqueAccessTokens store.OpaqueAccessTokenStore
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection

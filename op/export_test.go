@@ -2,6 +2,7 @@ package op
 
 import (
 	"io"
+	"testing"
 
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -36,4 +37,21 @@ func ValidateProfileFeatureSetForTest(p profile.Profile, features []feature.Flag
 		enabled[f] = struct{}{}
 	}
 	return c.validateProfile(p, enabled)
+}
+
+// FormatForAudienceForTest applies the supplied [Option] values to a
+// fresh [config] and returns the access-token format the OP would
+// pick for the given RFC 8707 resource indicator. The helper exists
+// so external (op_test) tests can pin the
+// [WithAccessTokenFormat] / [WithAccessTokenFormatPerAudience]
+// resolution without exposing the unexported lookup. Failures during
+// option application surface as t.Fatalf so the test reads as a
+// straight assertion on the resolved format.
+func FormatForAudienceForTest(tb testing.TB, opts []Option, resource string) AccessTokenFormat {
+	tb.Helper()
+	c, err := newConfig(opts)
+	if err != nil {
+		tb.Fatalf("FormatForAudienceForTest: newConfig: %v", err)
+	}
+	return c.formatForAudience(resource)
 }

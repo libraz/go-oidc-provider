@@ -600,6 +600,172 @@ func assertInactive(tb testing.TB, resp *http.Response) {
 	}
 }
 
+// saveOpaqueAccessToken seeds the testkit's opaque-access-token
+// substore with a live record. The caller passes a pre-populated
+// record; saveOpaqueAccessToken performs only the persistence call.
+// The token's raw [store.OpaqueAccessToken.ID] is the bearer string
+// the test posts at /introspect; the substore hashes it on Save and
+// matches the digest on Find.
+func (f *fixture) saveOpaqueAccessToken(tb testing.TB, rec *store.OpaqueAccessToken) {
+	tb.Helper()
+	if err := f.prov.Store.OpaqueAccessTokens().Save(context.Background(), rec); err != nil {
+		tb.Fatalf("OpaqueAccessTokens.Save: %v", err)
+	}
+}
+
+// TestHandler_OpaqueAccessToken_Active returns active=true with the
+// projected claims for a live opaque-format access token (ADR 0024).
+// The test pins the cnf, scope, audience, and ACR / AMR projections
+// so a future refactor that drops a field surfaces here.
+func TestHandler_OpaqueAccessToken_Active(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-opaque-active")
+	rec := &store.OpaqueAccessToken{
+		ID:                 "opaque-active-1",
+		ClientID:           client.ID,
+		Subject:            "user-opaque",
+		Scope:              []string{"openid", "profile"},
+		Audience:           "https://api.example.com",
+		ACR:                "urn:mace:incommon:iap:silver",
+		AMR:                []string{"pwd", "mfa"},
+		AuthTime:           f.clock.now.Add(-5 * time.Minute),
+		IssuedAt:           f.clock.now,
+		ExpiresAt:          f.clock.now.Add(time.Hour),
+		DPoPJKT:            "test-jkt",
+		MTLSCertThumbprint: "test-x5t",
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	form := url.Values{"token": {rec.ID}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, dump)
+	}
+	body := decodeJSON(t, resp)
+	if active, _ := body["active"].(bool); !active {
+		t.Fatalf("active=%v want true; body=%v", body["active"], body)
+	}
+	if body["client_id"] != client.ID {
+		t.Errorf("client_id=%v want %q", body["client_id"], client.ID)
+	}
+	if body["sub"] != "user-opaque" {
+		t.Errorf("sub=%v want user-opaque", body["sub"])
+	}
+	if body["scope"] != "openid profile" {
+		t.Errorf("scope=%v want \"openid profile\"", body["scope"])
+	}
+	if body["token_type"] != "Bearer" {
+		t.Errorf("token_type=%v want Bearer", body["token_type"])
+	}
+	aud, ok := body["aud"].([]any)
+	if !ok || len(aud) != 1 || aud[0] != "https://api.example.com" {
+		t.Errorf("aud=%v want [https://api.example.com]", body["aud"])
+	}
+	if body["acr"] != "urn:mace:incommon:iap:silver" {
+		t.Errorf("acr=%v", body["acr"])
+	}
+	cnf, ok := body["cnf"].(map[string]any)
+	if !ok {
+		t.Fatalf("cnf=%v not a map; body=%v", body["cnf"], body)
+	}
+	if cnf["jkt"] != "test-jkt" {
+		t.Errorf("cnf.jkt=%v want test-jkt", cnf["jkt"])
+	}
+	if cnf["x5t#S256"] != "test-x5t" {
+		t.Errorf("cnf.x5t#S256=%v want test-x5t", cnf["x5t#S256"])
+	}
+	assertCacheControl(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_Revoked returns inactive when the
+// stored opaque record has been flipped to revoked.
+func TestHandler_OpaqueAccessToken_Revoked(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-opaque-revoked")
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-revoked-1",
+		ClientID:  client.ID,
+		Subject:   "user-opaque",
+		Scope:     []string{"openid"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+	if err := f.prov.Store.OpaqueAccessTokens().RevokeByID(context.Background(), rec.ID); err != nil {
+		t.Fatalf("RevokeByID: %v", err)
+	}
+	form := url.Values{"token": {rec.ID}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	assertInactive(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_Expired returns inactive when the
+// stored opaque record's ExpiresAt is in the past relative to the
+// fixture clock.
+func TestHandler_OpaqueAccessToken_Expired(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-opaque-expired")
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-expired-1",
+		ClientID:  client.ID,
+		Subject:   "user-opaque",
+		Scope:     []string{"openid"},
+		IssuedAt:  f.clock.now.Add(-2 * time.Hour),
+		ExpiresAt: f.clock.now.Add(-time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+	form := url.Values{"token": {rec.ID}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	assertInactive(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_DifferentClient returns inactive when
+// the authenticated client_id does not match the record's ClientID.
+// Same-client-only is the v1.0 authorization posture (ADR 0024 §S.8).
+func TestHandler_OpaqueAccessToken_DifferentClient(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	owner, _ := f.confidentialClient(t, "client-opaque-owner")
+	caller, callerSecret := f.confidentialClient(t, "client-opaque-caller")
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-cross-1",
+		ClientID:  owner.ID,
+		Subject:   "user-opaque",
+		Scope:     []string{"openid"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+	form := url.Values{"token": {rec.ID}}
+	resp := f.post(t, form, caller.ID, callerSecret)
+	defer resp.Body.Close()
+	assertInactive(t, resp)
+}
+
+// TestHandler_OpaqueAccessToken_NotFound returns inactive when the
+// presented token does not match any stored record.
+func TestHandler_OpaqueAccessToken_NotFound(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-opaque-notfound")
+	form := url.Values{"token": {"never-issued-opaque"}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	assertInactive(t, resp)
+}
+
 // flipLastSegment returns tok with its signature segment perturbed.
 // The function preserves the segment boundaries so the result still
 // parses as a JWS but fails signature verification.
