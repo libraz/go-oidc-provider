@@ -23,6 +23,11 @@
 // The example boots the OP on :8080 with one statically-provisioned client.
 // A production embedder applies the schema through their own migration
 // tooling (Atlas, Goose, Flyway, …) rather than calling Migrate at startup.
+//
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: MySQL via op/storeadapter/sql; DSN is env-var driven, production loads it from a secret manager and applies migrations through dedicated tooling.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
 package main
 
 import (
@@ -37,6 +42,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
@@ -103,12 +109,7 @@ func run() error {
 	mux.Handle("/", provider)
 
 	log.Println("OP backed by MySQL listening on :8080 (issuer https://op.example.com)")
-	srv := &http.Server{
-		Addr:              ":8080",
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil

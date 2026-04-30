@@ -17,12 +17,11 @@
 // TOTP. Real assessors look at IP geolocation, device fingerprint,
 // velocity counters, and similar signals.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. The User-Agent heuristic is illustrative — never
-// gate authentication on a single header in production. Real risk
-// assessors call out to fraud-detection services (Cloudflare Bot
-// Management, Castle, Sift, Stripe Radar) and aggregate multiple
-// signals.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Risk assessor: User-Agent heuristic is illustrative — never gate authentication on a single header. Real assessors call fraud-detection services (Cloudflare Bot Management, Castle, Sift, Stripe Radar) and aggregate multiple signals.
 package main
 
 import (
@@ -32,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -88,7 +88,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("risk-based example listening on :8080 (TOTP fires on UserAgent containing curl/python/go-http-client)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

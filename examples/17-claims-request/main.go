@@ -19,11 +19,15 @@
 // email as essential and locale as voluntary:
 //
 //	CLAIMS='{"id_token":{"email":{"essential":true}},"userinfo":{"locale":null}}'
-//	open "http://localhost:8080/oidc/authorize?\
+//	# RFC 7636 §4.1 mandates a verifier of 43..128 chars; §4.2 derives
+//	# the challenge as base64url(SHA256(verifier)) without padding.
+//	VERIFIER='dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'
+//	CHALLENGE=$(printf %s "$VERIFIER" | openssl dgst -sha256 -binary | basenc --base64url -w0 | tr -d '=')
+//	open "http://localhost:8080/oidc/auth?\
 //	client_id=demo&response_type=code&\
 //	redirect_uri=http://localhost:5173/callback&\
 //	scope=openid&state=s&\
-//	code_challenge=$(echo -n verifier-32-bytes-or-more | shasum -a 256 | cut -d' ' -f1)&\
+//	code_challenge=${CHALLENGE}&\
 //	code_challenge_method=S256&\
 //	claims=$(printf %s \"$CLAIMS\" | jq -sRr @uri)"
 //
@@ -45,10 +49,11 @@
 //     surfaces depends on the user store; the example publishes the
 //     standard set the inmem catalogue serves.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and a public HTTP listener. The supplied user catalogue is
-// hard-coded; production embedders resolve claims through their
-// identity database via [store.UserStore.FindBySubject].
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - User catalogue: hard-coded for the demo; resolve claims through the embedder's identity database via [store.UserStore.FindBySubject].
 package main
 
 import (
@@ -56,6 +61,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -103,7 +109,7 @@ func main() {
 
 	log.Println("claims-request example listening on :8080")
 	log.Println("verify discovery: curl -s http://localhost:8080/.well-known/openid-configuration | jq .claims_parameter_supported")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

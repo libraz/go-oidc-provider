@@ -16,6 +16,11 @@
 // :8080 with one statically-provisioned client. A production embedder
 // runs the schema through their own migration tooling and persists
 // the database where it belongs.
+//
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: SQLite via op/storeadapter/sql; production runs schema migrations through the embedder's tooling and persists the database where it belongs.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
 package main
 
 import (
@@ -26,11 +31,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
@@ -80,12 +85,7 @@ func run() error {
 	mux.Handle("/", provider)
 
 	log.Println("OP backed by SQLite listening on :8080 (issuer https://op.example.com)")
-	srv := &http.Server{
-		Addr:              ":8080",
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil

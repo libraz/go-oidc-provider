@@ -12,6 +12,11 @@
 // startup so it can run without configuration. A production embedder
 // reads the key material from a vault / KMS, persists records in a
 // real backend, and registers at least one [op.Authenticator].
+//
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
 package main
 
 import (
@@ -19,6 +24,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -42,8 +48,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Println("minimal OP listening on :8080 (issuer https://op.example.com)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	serve.Demo("minimal OP", ":8080", "https://op.example.com")
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

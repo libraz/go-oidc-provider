@@ -51,6 +51,11 @@
 // Pre-flight: a MySQL 8.0+ instance and a Redis 7+ instance must be
 // reachable from the host. The example does not boot containers; that
 // responsibility belongs to your local docker-compose or the operator.
+//
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: composite (MySQL durable + Redis volatile); MYSQL_DSN / REDIS_DSN are env-var driven, production loads credentials from a secret manager and applies SQL migrations through dedicated tooling.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
 package main
 
 import (
@@ -66,6 +71,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/composite"
@@ -167,12 +173,7 @@ func run() error {
 	mux.Handle("/", provider)
 
 	log.Println("OP backed by composite (mysql + redis) listening on :8080 (issuer https://op.example.com)")
-	srv := &http.Server{
-		Addr:              ":8080",
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil

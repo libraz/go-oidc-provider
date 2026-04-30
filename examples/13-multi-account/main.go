@@ -29,14 +29,11 @@
 //     via [sessions.Manager.Switch] so the chooser group stays
 //     intact.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and the testkit's [SubjectAuthenticator] which trusts
-// whatever subject the SPA submits. A real deployment substitutes a
-// password / passkey / federated authenticator; the chooser wiring
-// is unaffected by that choice. The HTML chooser template is left
-// to the embedder via [op.WithChooserUI]; this example uses the
-// default JSON driver so curl / a SPA can drive the flow without
-// HTML scaffolding.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Authenticator: testkit's [SubjectAuthenticator] trusts whatever subject the SPA submits — substitute a password / passkey / federated authenticator (the chooser wiring is unaffected).
 package main
 
 import (
@@ -45,6 +42,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -91,7 +89,7 @@ func main() {
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:           "demo-rp",
-				Secret:       "rotate-me-via-secret-manager",
+				Secret:       "chooser-demo-secret-rotate-me",
 				AuthMethod:   op.AuthClientSecretBasic,
 				RedirectURIs: []string{"http://localhost:8081/callback"},
 				Scopes:       []string{"openid", "profile", "email"},
@@ -108,7 +106,7 @@ func main() {
 	log.Println("multi-account example listening on :8080 (built-in chooser via JSONDriver)")
 	log.Println("flow: log in as alice → /authorize?prompt=login as bob → /authorize?prompt=select_account")
 	log.Println("the chooser response is a Prompt{Type: \"interaction.chooser\", Data: ChooserPromptData{Accounts: [...]}}")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

@@ -11,7 +11,7 @@
 //
 // Then exchange the credential for an access token:
 //
-//	curl -u backend-service:rotate-me-via-secret-manager \
+//	curl -u backend-service:cc-demo-secret-rotate-me \
 //	     -d 'grant_type=client_credentials&scope=api:read' \
 //	     http://localhost:8080/oidc/token | jq
 //
@@ -20,10 +20,11 @@
 // scope catalogue therefore registers a custom resource scope
 // ("api:read") for the access-token claims to carry.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and a hardcoded client secret. Production embedders read
-// keys from a vault / KMS, persist client records in a real backend,
-// and rotate confidential secrets through their secret manager.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Client secret: hardcoded for the demo; rotate confidential secrets through the embedder's secret manager.
 package main
 
 import (
@@ -31,6 +32,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -51,7 +53,7 @@ func main() {
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:         "backend-service",
-				Secret:     "rotate-me-via-secret-manager",
+				Secret:     "cc-demo-secret-rotate-me",
 				AuthMethod: op.AuthClientSecretBasic,
 				// client_credentials clients do not visit /authorize;
 				// RedirectURIs may be empty. The grant set is overridden
@@ -71,10 +73,10 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("client-credentials example listening on :8080")
-	log.Println("try: curl -u backend-service:rotate-me-via-secret-manager \\")
+	log.Println("try: curl -u backend-service:cc-demo-secret-rotate-me \\")
 	log.Println("         -d 'grant_type=client_credentials&scope=api:read' \\")
 	log.Println("         http://localhost:8080/oidc/token | jq")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

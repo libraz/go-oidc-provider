@@ -49,4 +49,6 @@ done < <(public_modules)
 
 "$SCRIPT_DIR/test.sh" --race
 
+"$SCRIPT_DIR/verify_examples.sh"
+
 log "verify OK"

@@ -13,16 +13,18 @@
 //
 // The example expects a JWKS file at ./client.jwks.json (any
 // well-formed RFC 7517 set will do — the loader strips "d" if
-// present). The OP listens on TLS 1.2 only; CHACHA20_POLY1305 and
-// TLS 1.3 are rejected by design to match the OFCS
-// DisallowInsecureCipher condition.
+// present). The OP listens on TLS 1.2 only because Go's TLS 1.3
+// cipher list is not configurable from crypto/tls — pinning to
+// TLS 1.2 is what lets [op.FAPITLSConfig] pass through the FAPI 1.0
+// Read-Write cipher allowlist. CHACHA20_POLY1305 is excluded from
+// the allowlist for the same reason. This is a Go-runtime constraint,
+// not a FAPI rejection of TLS 1.3 — operators wanting TLS 1.3 build
+// their own *tls.Config and forfeit the cipher pinning.
 //
-// PRODUCTION CAVEATS: this example uses an ephemeral signing key and
-// a self-signed TLS cert generated at startup. Production FAPI 2.0
-// deployments terminate TLS at the OP itself or behind a trusted
-// proxy whose Forwarded handling is configured via
-// [op.WithTrustedProxies]; the cert chain comes from a CA the RP's
-// truststore knows.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: TLS 1.2 with self-signed cert generated at startup; production replaces the cert chain with a CA the RPs trust.
 package main
 
 import (
@@ -81,6 +83,7 @@ func main() {
 		return
 	}
 	log.Println("FAPI TLS example listening on :8443 (TLS 1.2 only, RSA-keyed AEAD allowlist)")
+	// TLS listener; serve.Listen does not handle TLS termination.
 	if err := srv.ListenAndServeTLS(cert, key); err != nil {
 		log.Fatalf("listen: %v", err)
 	}

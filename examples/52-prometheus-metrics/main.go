@@ -34,10 +34,11 @@
 // promhttp.InstrumentHandlerCounter or otelhttp's middleware; the
 // library deliberately does not do that itself.
 //
-// PRODUCTION CAVEATS: this example mounts /metrics on the same listener
-// as the OP for brevity; production deployments expose /metrics on a
-// management interface (separate listener, internal-only ingress)
-// and front the OP behind TLS-terminating ingress.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - /metrics surface: mounted on the same listener as the OP for brevity; production deployments expose /metrics on a management interface (separate listener, internal-only ingress).
 package main
 
 import (
@@ -48,6 +49,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -88,7 +90,7 @@ func main() {
 
 	log.Println("prometheus-metrics example listening on :8080 (OP) and :8080/metrics")
 	log.Println("after at least one /token round-trip, curl -s :8080/metrics | grep oidc_")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

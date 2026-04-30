@@ -16,11 +16,11 @@
 // StaticDir at a non-existent path causes [op.New] to fail at
 // construction so a misconfigured deployment surfaces immediately.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. WithReactUI is an experimental option — the
-// JSON state surface is still stabilising, so a SPA written
-// today may need adjustments when the orchestrator's prompt API
-// hardens.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - WithReactUI: experimental — the JSON state surface is still stabilising, so a SPA written today may need adjustments when the orchestrator's prompt API hardens.
 package main
 
 import (
@@ -29,6 +29,7 @@ import (
 	"os"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -61,7 +62,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("react-login example listening on :8080 (SPA at /login, /consent, /logout)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

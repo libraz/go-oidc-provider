@@ -24,10 +24,10 @@
 // Drive the OAuth-only path end-to-end:
 //
 //	# 1) start the example, then visit
-//	open 'http://localhost:8080/oidc/authorize?client_id=oauth-cli&response_type=code&redirect_uri=http://localhost:5173/cb&scope=api:read&state=xyz&code_challenge=E9Melhoa2OoLrgRBe5dh8nlEpV-vH4qlHWAHfsmrCzs&code_challenge_method=S256'
+//	open 'http://localhost:8080/oidc/auth?client_id=oauth-cli&response_type=code&redirect_uri=http://localhost:5173/cb&scope=api:read&state=xyz&code_challenge=E9Melhoa2OoLrgRBe5dh8nlEpV-vH4qlHWAHfsmrCzs&code_challenge_method=S256'
 //
 //	# 2) after the consent screen, exchange the returned code:
-//	curl -u oauth-cli:rotate-me-via-secret-manager \
+//	curl -u oauth-cli:oauth2-only-demo-secret-rotate-me \
 //	     -d 'grant_type=authorization_code&code=<CODE>&redirect_uri=http://localhost:5173/cb&code_verifier=<VERIFIER>' \
 //	     http://localhost:8080/oidc/token | jq
 //
@@ -46,10 +46,11 @@
 // presupposes OIDC semantics); op.New rejects the combination at
 // construction time.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and hardcoded client secrets. Production embedders read
-// keys from a vault / KMS, persist client records in a real backend,
-// and rotate confidential secrets through their secret manager.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Client secrets: hardcoded for the demo; rotate confidential secrets through the embedder's secret manager.
 package main
 
 import (
@@ -57,6 +58,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -82,7 +84,7 @@ func main() {
 			// emits an id_token. Same OP, same option set.
 			op.ConfidentialClient{
 				ID:           "oidc-rp",
-				Secret:       "rotate-me-via-secret-manager",
+				Secret:       "oauth2-only-demo-secret-rotate-me",
 				AuthMethod:   op.AuthClientSecretBasic,
 				RedirectURIs: []string{"http://localhost:5173/cb"},
 				GrantTypes:   []string{"authorization_code", "refresh_token"},
@@ -93,7 +95,7 @@ func main() {
 			// pass; the /token response omits id_token.
 			op.ConfidentialClient{
 				ID:           "oauth-cli",
-				Secret:       "rotate-me-via-secret-manager",
+				Secret:       "oauth2-only-demo-secret-rotate-me",
 				AuthMethod:   op.AuthClientSecretBasic,
 				RedirectURIs: []string{"http://localhost:5173/cb"},
 				GrantTypes:   []string{"authorization_code"},
@@ -111,7 +113,7 @@ func main() {
 	log.Println("oauth2-only example listening on :8080 (issuer https://op.example.com)")
 	log.Println("OIDC client:   oidc-rp   (scope=openid profile email → id_token issued)")
 	log.Println("OAuth client:  oauth-cli (scope=api:read              → no id_token)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

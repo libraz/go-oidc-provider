@@ -21,10 +21,11 @@
 //
 //	go run -tags example ./examples/04-custom-interaction
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. The choice of Driver does not relax any of the
-// orchestrator's CSRF / state-ref guarantees — those run before
-// Render / ParseSubmission and protect every Driver equally.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Driver choice: does not relax orchestrator CSRF / state-ref guarantees — those run before Render / ParseSubmission and protect every Driver equally.
 package main
 
 import (
@@ -32,6 +33,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -55,7 +57,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("custom-interaction example listening on :8080 (JSONDriver)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

@@ -19,17 +19,18 @@
 //
 //	# Honour ui_locales=ja on the authorize URL — picks Japanese
 //	# even when Accept-Language says es.
-//	open 'http://localhost:8080/oidc/authorize?client_id=demo&response_type=code&redirect_uri=http://localhost:5173/callback&scope=openid&state=s&code_challenge=...&code_challenge_method=S256&ui_locales=ja'
+//	open 'http://localhost:8080/oidc/auth?client_id=demo&response_type=code&redirect_uri=http://localhost:5173/callback&scope=openid&state=s&code_challenge=...&code_challenge_method=S256&ui_locales=ja'
 //
 // The OP ships seed bundles for English (en) and Japanese (ja); this
 // example registers a French bundle on top and switches the default
 // to French. To override an existing message, register a bundle for
 // the same locale — the later registration wins.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and a public HTTP listener. Real deployments load bundles
-// from a versioned message catalogue (JSON / TOML / Fluent) at
-// startup so translators can ship without recompiling the OP binary.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Locale bundles: load from a versioned message catalogue (JSON / TOML / Fluent) at startup so translators can ship without recompiling the OP binary.
 package main
 
 import (
@@ -37,6 +38,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -91,7 +93,7 @@ func main() {
 	log.Println("i18n example listening on :8080")
 	log.Println("registered locales: en, ja (seed) + fr (custom); default = fr")
 	log.Println("hit /.well-known/openid-configuration and read ui_locales_supported to verify")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

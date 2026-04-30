@@ -59,6 +59,47 @@ changes.
   fragment; loopback hosts exempted from https) as a defense-in-depth
   seam over `op.WithIssuer`. (M-PROTO-6)
 
+### docs (examples)
+
+- New `examples/internal/serve` package: every example now mounts its
+  HTTP listener through `serve.Listen(addr, handler)`, which carries
+  a `ReadHeaderTimeout: 10s` / `IdleTimeout: 60s` Slowloris baseline
+  and graceful shutdown on SIGINT / SIGTERM. The 22 examples that
+  previously passed `mux` directly to `http.ListenAndServe` (no
+  timeout) and the 5 that hand-rolled `&http.Server{...}` blocks
+  collapse onto the single helper.
+- Examples 15 / 16 / 17 corrected the documented authorize URL from
+  `/oidc/authorize` to `/oidc/auth` (the actual default endpoint).
+  Example 17's PKCE shell snippet rewritten to derive
+  `code_challenge` as `base64url(SHA256(verifier))` per RFC 7636 §4.2
+  with a 43-char verifier per §4.1; the previous `shasum | cut`
+  pipeline produced hex and rejected at /token.
+- Example 41's startup log line corrected to `"Initial Access Token
+  (1 h TTL, 5 uses)"` so it agrees with the `IATUses: 5` config.
+- Spec citations rewritten across 03 / 40 / 42 / 50 to align with
+  the actual normative texts (FAPI 2.0 Baseline §5.3 sender-
+  constraint as DPoP-or-mTLS, OIDC Core 1.0 §3.1.2.4 consent prompt
+  semantics, OIDC Back-Channel Logout 1.0 §2.2 https requirement,
+  TLS 1.2 pinning as a Go-runtime cipher-list constraint).
+- Every example's PRODUCTION CAVEATS block converted to a fixed-
+  order bulleted schema (Keys / Store / Listener / example-specific)
+  so a future audit can grep one shape instead of paragraph text.
+- Each example that registers a confidential client now uses a
+  unique `<example>-demo-secret-rotate-me` literal so an embedder
+  copy-pasting from multiple examples cannot leave a single shared
+  string in place.
+- Example 03 (FAPI 2.0 Baseline) switched from a raw
+  `*store.Client` + `RegisterClient` call to
+  `op.WithStaticClients(op.PrivateKeyJWTClient{...})` — the typed
+  seam the library documents elsewhere.
+- New `make verify-examples` target chains
+  `go build -tags example`, `go vet -tags example`, and three CI
+  gates (`scripts/check_example_endpoints.sh`,
+  `check_example_pkce.sh`, `check_example_secrets.sh`) so the next
+  documented `/oidc/<wrong>` path, hex-derived `code_challenge`, or
+  cross-example secret collision fails before merge.
+  `make verify` now invokes `verify-examples` at the tail.
+
 ### Security (protocol audit fixes)
 
 - `/end_session` no longer emits an unparseable

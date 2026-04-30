@@ -26,10 +26,11 @@
 // example only registers the scopes that need a custom title or that
 // are not part of the standard set.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, a public HTTP
-// listener, and an in-memory store. Production embedders read keys
-// from a vault / KMS and persist scope catalogues alongside their
-// other configuration.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Scope catalogue: persist alongside the embedder's other configuration rather than reseeding from source on every boot.
 package main
 
 import (
@@ -37,6 +38,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -66,7 +68,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("scopes example listening on :8080")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

@@ -33,6 +33,11 @@
 // directory so it boots without external dependencies. Production
 // embedders point op/storeadapter/sql at MySQL or Postgres (see
 // 07-mysql-store) and persist the database where it belongs.
+//
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: composite (SQLite durable + inmem volatile); production points op/storeadapter/sql at MySQL or Postgres and swaps the volatile half for op/storeadapter/redis (see 09-redis-volatile).
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
 package main
 
 import (
@@ -44,11 +49,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/composite"
@@ -148,12 +153,7 @@ func run() error {
 	mux.Handle("/", provider)
 
 	log.Println("OP backed by composite (sqlite + inmem) listening on :8080 (issuer https://op.example.com)")
-	srv := &http.Server{
-		Addr:              ":8080",
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	return nil

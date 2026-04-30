@@ -15,10 +15,11 @@
 // auto-enable. The default shape matches a typical "OIDC Core OP
 // for the embedder's own apps" deployment.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. Production embedders read keys from a vault /
-// KMS, persist records in a real backend, and configure the
-// trusted-proxy list against their actual edge.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Trusted proxies: configure WithTrustedProxies against the deployment's actual edge.
 package main
 
 import (
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -76,7 +78,7 @@ func main() {
 			},
 			op.ConfidentialClient{
 				ID:           "backend-service",
-				Secret:       "rotate-me-via-secret-manager",
+				Secret:       "bundle-demo-secret-rotate-me",
 				AuthMethod:   op.AuthClientSecretBasic,
 				RedirectURIs: []string{"https://backend.example.com/callback"},
 				Scopes:       []string{"openid", "profile"},
@@ -108,7 +110,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("bundle example listening on :8080 (LoginFlow + clients + scopes + first-party)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

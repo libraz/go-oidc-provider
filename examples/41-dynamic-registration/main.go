@@ -42,20 +42,11 @@
 // own data layer (the v1.0 store interfaces do not publish "by client"
 // enumeration in-tree).
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and a public HTTP listener. Production embedders run this
-// behind TLS, persist the IAT / RAT / client records in a real
-// backend, and rotate the IAT on a short cadence.
-//
-// The startup log line that prints the IAT bearer secret is DEMO-ONLY.
-// The library returns the secret exactly once (see
-// op.InitialAccessTokenIssued.Value godoc) and there is no recovery
-// path; production code MUST hand it to the operator's secret manager
-// or to the registering RP through an out-of-band channel (invitation
-// email, RP intake form) and MUST NOT log, audit-emit, or persist it
-// anywhere besides the credential store. This example logs it so the
-// reader can paste it into the curl call below; remove that log line
-// before adapting any of this to production.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - IAT bearer secret: returned by IssueInitialAccessToken exactly once (see op.InitialAccessTokenIssued.Value godoc) with no recovery path. Production code MUST hand it to the operator's secret manager or to the registering RP through an out-of-band channel (invitation email, RP intake form) and MUST NOT log, audit-emit, or persist it anywhere besides the credential store. The example's startup log of iat.Value is DEMO-ONLY — remove it before adapting to production.
 package main
 
 import (
@@ -65,6 +56,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -84,9 +76,10 @@ func main() {
 			// registration; production deployments leave it false.
 			Open: false,
 
-			// IAT lifecycle. The defaults (24 h TTL, single-use)
-			// match the production-grade baseline; tighten or loosen
-			// for the embedder's flow.
+			// IAT lifecycle. The library defaults are 24 h TTL,
+			// single-use; this example shortens the TTL and
+			// authorises five uses so an operator can drive the
+			// curl probes below without re-issuing on every call.
 			IATTTL:  1 * time.Hour,
 			IATUses: 5,
 
@@ -119,13 +112,13 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("dcr example listening on :8080")
-	log.Printf("Initial Access Token (single-use, 1 h TTL) [DEMO-ONLY, do not log in production]: %s", iat.Value)
+	log.Printf("Initial Access Token (1 h TTL, 5 uses) [DEMO-ONLY, do not log in production]: %s", iat.Value)
 	log.Printf("IAT id: %s  expires: %s", iat.ID, iat.ExpiresAt.Format(time.RFC3339))
 	log.Println("try: curl -sX POST http://localhost:8080/oidc/register \\")
 	log.Println("         -H \"Authorization: Bearer $IAT\" \\")
 	log.Println("         -H 'Content-Type: application/json' \\")
 	log.Println("         -d '{\"client_name\":\"demo-rp\",\"redirect_uris\":[\"http://localhost:5173/callback\"]}'")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

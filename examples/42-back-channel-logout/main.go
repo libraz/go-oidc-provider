@@ -38,11 +38,10 @@
 //   - WithBackchannelLogoutTimeout caps the per-RP wait; a slow RP
 //     does not delay deliveries to its peers.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and plain HTTP for both the OP and the RP. RFC 7592 / OIDC
-// BCL 1.0 require https:// for backchannel_logout_uri in production
-// (the validator enforces it on registration); the relaxed posture
-// here is so a developer can run the demo without TLS scaffolding.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; OIDC Back-Channel Logout 1.0 §2.2 requires https for backchannel_logout_uri in production.
 package main
 
 import (
@@ -52,6 +51,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -72,7 +72,7 @@ func main() {
 		op.WithCookieKey(keys.CookieKey),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                               clientID,
-			Secret:                           "rotate-me-via-secret-manager",
+			Secret:                           "bcl-demo-secret-rotate-me",
 			RedirectURIs:                     []string{"http://localhost:5173/callback"},
 			Scopes:                           []string{"openid", "profile"},
 			BackchannelLogoutURI:             "http://localhost" + rpAddr + "/backchannel-logout",
@@ -108,7 +108,7 @@ func main() {
 	})
 	go func() {
 		log.Printf("RP stub listening on %s/backchannel-logout", rpAddr)
-		if err := http.ListenAndServe(rpAddr, rpMux); err != nil {
+		if err := serve.Listen(rpAddr, rpMux); err != nil {
 			log.Fatalf("RP listen: %v", err)
 		}
 	}()
@@ -119,7 +119,7 @@ func main() {
 	log.Printf("OP listening on %s — client %q registered with backchannel_logout_uri=http://localhost%s/backchannel-logout",
 		opAddr, clientID, rpAddr)
 	log.Println("drive /authorize → /token to seed a session, then call /oidc/end_session with the id_token_hint to fire delivery")
-	if err := http.ListenAndServe(opAddr, mux); err != nil {
+	if err := serve.Listen(opAddr, mux); err != nil {
 		log.Fatalf("OP listen: %v", err)
 	}
 }

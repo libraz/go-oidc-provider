@@ -15,11 +15,11 @@
 // TOTP challenge on top of the password chain. RPs that do not
 // request the ACR receive the password-only flow.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. The ACR string is opaque to the library — the
-// embedder picks the value and is responsible for the meaning.
-// Common conventions are urn:mace:incommon:iap:silver / iap:bronze
-// (InCommon Federation), or AAL1 / AAL2 / AAL3 (NIST SP 800-63B).
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - ACR string: opaque to the library — the embedder picks the value and is responsible for the meaning. Common conventions are urn:mace:incommon:iap:silver / iap:bronze (InCommon Federation) or AAL1 / AAL2 / AAL3 (NIST SP 800-63B).
 package main
 
 import (
@@ -27,6 +27,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -63,7 +64,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("step-up example listening on :8080 (TOTP gated on acr_values=urn:mace:incommon:iap:silver)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

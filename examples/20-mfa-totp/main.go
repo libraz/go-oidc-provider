@@ -15,11 +15,11 @@
 // demo user; the example focuses on the orchestrator wiring shape
 // and treats enrolment as out-of-band.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. The 32-byte TOTP encryption key (AES-256-GCM
-// at rest for stored secrets) is generated at startup; production
-// embedders supply it from a vault / KMS so secrets survive
-// process restart.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - TOTP encryption key: 32 bytes (AES-256-GCM at rest for stored secrets) generated at startup; supply it from a vault / KMS so secrets survive process restart.
 package main
 
 import (
@@ -27,6 +27,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -61,7 +62,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("mfa-totp example listening on :8080 (password + TOTP)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

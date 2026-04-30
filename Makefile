@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := verify
 
-.PHONY: tools fmt lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify clean \
+.PHONY: tools fmt lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
         conformance-certs conformance-up conformance-down \
         conformance-ofcs-up conformance-ofcs-down conformance-ofcs-status \
         conformance-op-up conformance-op-down conformance-op-status \
@@ -43,6 +43,9 @@ licenses:
 
 verify:
 	@scripts/verify.sh
+
+verify-examples:
+	@scripts/verify_examples.sh
 
 clean:
 	go clean -testcache

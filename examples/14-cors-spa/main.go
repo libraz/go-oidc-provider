@@ -33,10 +33,10 @@
 // AuthNone — confidential credentials are not transmitted from the
 // browser.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, an in-memory
-// store, and a public HTTP listener. Production embedders front the
-// OP with TLS-terminating ingress, persist the client catalogue, and
-// load signing keys from a vault / KMS.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
 package main
 
 import (
@@ -44,6 +44,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -82,7 +83,7 @@ func main() {
 	log.Println("try: curl -sS -i -X OPTIONS http://localhost:8080/oidc/token \\")
 	log.Println("         -H 'Origin: https://spa.example.com' \\")
 	log.Println("         -H 'Access-Control-Request-Method: POST'")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

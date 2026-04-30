@@ -10,10 +10,11 @@
 //
 //	go run -tags example ./examples/11-custom-consent-ui
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. The inline template here is intentionally
-// minimal; a production embedder uses a real template directory
-// with parsed-once startup, CSP-friendly nonces, and external CSS.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Consent template: inline and minimal; a production embedder uses a real template directory with parsed-once startup, CSP-friendly nonces, and external CSS.
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -68,7 +70,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("custom-consent-ui example listening on :8080")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

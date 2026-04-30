@@ -1,9 +1,10 @@
 //go:build example
 
 // Example 40 demonstrates the first-party-client consent-skip path.
-// The OAuth 2.1 / OIDC consent screen is required for third-party
-// clients but typically disabled for the embedder's own apps (the
-// "first-party" relationship). Listing client_ids in
+// OIDC Core 1.0 §3.1.2.4 expects an explicit consent prompt for
+// third-party clients so the end-user authorises the release of their
+// claims; that prompt is typically disabled for the embedder's own
+// apps (the "first-party" relationship). Listing client_ids in
 // [op.WithFirstPartyClients] tells the orchestrator to bypass the
 // consent prompt for those IDs and emit the authorization code
 // immediately after the login chain succeeds.
@@ -17,11 +18,11 @@
 // the SPA without rendering a consent prompt. A third-party client
 // (not listed here) would still see the consent screen.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, a public HTTP
-// listener, and an in-memory store. The first-party-skip behaviour
-// is a deliberate trust extension; a production embedder MUST gate
-// it on a registry of clients owned by the embedder's organisation
-// (typically a column on the client table consulted at boot).
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - First-party skip: a deliberate trust extension — production embedders MUST gate it on a registry of clients owned by the embedder's organisation (typically a column on the client table consulted at boot).
 package main
 
 import (
@@ -29,6 +30,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -65,7 +67,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("first-party example listening on :8080")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

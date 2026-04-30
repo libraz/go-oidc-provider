@@ -38,15 +38,11 @@
 //     process; an embedder with a shutdown signal would supply a
 //     cancellable one.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, a
-// process-local nonce ring (forgets all values on restart), and a
-// public HTTP listener. NewInMemoryDPoPNonceSource is unsuitable for
-// horizontally scaled OPs — two replicas issue from independent rings
-// and reject each other's nonces, generating a thrash of
-// use_dpop_nonce challenges. Production multi-replica deployments
-// supply a DPoPNonceSource backed by a shared cache (Redis /
-// memcached); a built-in distributed implementation is on the v1.x
-// roadmap.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - DPoPNonceSource: process-local in-memory ring (forgets all values on restart) — unsuitable for horizontally scaled OPs because two replicas issue from independent rings and reject each other's nonces. Production multi-replica deployments supply a source backed by a shared cache (Redis / memcached); a built-in distributed implementation is on the v1.x roadmap.
 package main
 
 import (
@@ -56,6 +52,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -94,7 +91,7 @@ func main() {
 	log.Println("dpop-nonce example listening on :8080")
 	log.Println("DPoP feature enabled; nonces rotate every 60s")
 	log.Println("a DPoP proof without a 'nonce' claim now triggers RFC 9449 use_dpop_nonce")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

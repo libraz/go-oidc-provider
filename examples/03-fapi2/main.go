@@ -32,32 +32,30 @@
 //
 // And POSTing to /oidc/token without a DPoP proof returns 400
 // invalid_request, even with a perfectly-formed private_key_jwt
-// assertion — that is the FAPI 2.0 §3.1.4 sender-constrained
-// access-token rule the OP enforces unconditionally when the profile
-// is active.
+// assertion. FAPI 2.0 Baseline §5.3 requires sender-constrained
+// access tokens via DPoP **or** mTLS; this example enables only DPoP,
+// so DPoP is the OP-side choice that satisfies the rule. An embedder
+// who prefers mTLS leaves the DPoP wiring out and configures
+// [op.WithMTLSCertHeader] / [op.WithTrustedProxies] instead.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys, a public HTTP
-// listener, an in-memory store, and prints the client's private key
-// to stdout. None of those are appropriate for production. The
-// example exists to illustrate library wiring, not deployment
-// topology. A production FAPI 2.0 OP terminates TLS at the OP
-// itself or behind a trusted proxy whose XFF / Forwarded handling
-// is configured via [op.WithTrustedProxies].
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - Private-key emission to stdout: replace with an out-of-band delivery channel (operator paste, secret manager) before adapting to production.
 package main
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/profile"
-	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -80,29 +78,29 @@ func main() {
 	if err != nil {
 		log.Fatalf("encode client JWKs: %v", err)
 	}
-	st := inmem.New()
-	if err := st.RegisterClient(context.Background(), &store.Client{
-		ID:                      demoClientID,
-		RedirectURIs:            []string{demoRedirectURI},
-		GrantTypes:              []string{"authorization_code", "refresh_token"},
-		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email"},
-		TokenEndpointAuthMethod: "private_key_jwt",
-		JWKs:                    clientJWKs,
-		Source:                  store.ClientSourceStatic,
-	}); err != nil {
-		log.Fatalf("register client: %v", err)
-	}
 
 	provider, err := op.New(
 		op.WithIssuer(demoIssuer),
-		op.WithStore(st),
+		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKey(keys.CookieKey),
 		// WithProfile(FAPI2Baseline) auto-enables PAR / JAR / DPoP per
 		// the spec's required feature set; embedders do NOT need to
 		// call WithFeature(...) for them. A profile is one option.
 		op.WithProfile(profile.FAPI2Baseline),
+		// PrivateKeyJWTClient is the typed seam for FAPI 2.0 clients:
+		// it pins TokenEndpointAuthMethod to private_key_jwt and
+		// embeds the inline JWKS the OP uses to verify assertions.
+		// Bypassing the seam (a raw store.Client + store.RegisterClient)
+		// works but loses the compile-time guarantees the type carries.
+		op.WithStaticClients(op.PrivateKeyJWTClient{
+			ID:            demoClientID,
+			JWKS:          clientJWKs,
+			RedirectURIs:  []string{demoRedirectURI},
+			Scopes:        []string{"openid", "profile", "email"},
+			GrantTypes:    []string{"authorization_code", "refresh_token"},
+			ResponseTypes: []string{"code"},
+		}),
 	)
 	if err != nil {
 		log.Fatalf("op.New: %v", err)
@@ -124,12 +122,7 @@ func main() {
 	log.Print("\n" + string(clientPrivPEM))
 	log.Println("try: curl http://localhost" + demoListen + "/.well-known/openid-configuration | jq")
 
-	srv := &http.Server{
-		Addr:              demoListen,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := serve.Listen(demoListen, mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }

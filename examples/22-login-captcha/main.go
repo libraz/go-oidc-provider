@@ -20,12 +20,11 @@
 // Google reCAPTCHA, hCaptcha, or whatever provider their security
 // posture requires.
 //
-// PRODUCTION CAVEATS: this example uses ephemeral keys and an
-// in-memory store. The "always succeed" CaptchaVerifier is
-// deliberately vacuous — never ship that. The real verifier MUST
-// (a) call the upstream provider with the embedder's secret and
-// (b) collapse all upstream rejection codes onto one generic error
-// so the SPA cannot enumerate provider-side rejection reasons.
+// PRODUCTION CAVEATS:
+//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Listener: plain HTTP; front behind TLS-terminating ingress.
+//   - CaptchaVerifier: the "always succeed" verifier is deliberately vacuous — never ship that. A real verifier MUST (a) call the upstream provider with the embedder's secret and (b) collapse upstream rejection codes onto one generic error so the SPA cannot enumerate provider-side rejection reasons.
 package main
 
 import (
@@ -34,6 +33,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -76,7 +76,7 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("login-captcha example listening on :8080 (captcha after 3 failed attempts)")
-	if err := http.ListenAndServe(":8080", mux); err != nil {
+	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }
