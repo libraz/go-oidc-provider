@@ -85,6 +85,18 @@ const (
 	AuditLogoutRPInitiated          = AuditEvent("logout.rp_initiated")
 	AuditLogoutBackChannelDelivered = AuditEvent("logout.back_channel.delivered")
 	AuditLogoutBackChannelFailed    = AuditEvent("logout.back_channel.failed")
+
+	// AuditBCLNoSessionsForSubject fires when /end_session or
+	// Provider.Logout names a session_id-bearing subject but the
+	// back-channel coordinator finds zero RPs to notify. Under a
+	// volatile SessionStore (Redis without persistence, Memcached,
+	// or any in-memory tier under maxmemory eviction) this is the
+	// signal that a session was evicted between establishment and
+	// logout, narrowing OIDC Back-Channel Logout 1.0 §2.7's
+	// best-effort delivery floor to zero. INFO-level: under volatile
+	// placement the gap is expected; SOC tooling alerts on elevated
+	// rates rather than per-event.
+	AuditBCLNoSessionsForSubject = AuditEvent("bcl.no_sessions_for_subject")
 )
 
 // Defensive events. Fire from request-validation paths that detect

@@ -74,6 +74,25 @@ changes.
   operationally observable difference (longer lifetime for
   stay-signed-in flows) while conventional refresh keeps the
   shorter rotation cadence.
+- `op.AuditBCLNoSessionsForSubject` audit event surfaces the
+  back-channel logout delivery-integrity gap: under a volatile
+  `op/store.SessionStore` (Redis without persistence, Memcached,
+  in-memory under maxmemory eviction) a session evicted between
+  establishment and `/end_session` silently removes the rows the
+  back-channel coordinator would walk. The event fires when the
+  caller named a session (`/end_session` with `id_token_hint`, or
+  `Provider.Logout` against a session-bearing subject) but the
+  fan-out resolved zero RPs. INFO-level: under volatile placement
+  the gap is OIDC Back-Channel Logout 1.0 §2.7's best-effort
+  floor; SOC tooling alerts on elevated rates.
+- `op.WithSessionDurabilityPosture(SessionDurabilityVolatile|
+  SessionDurabilityDurable)` records the embedder's declaration
+  of `SessionStore` durability. Default volatile (matches the
+  recommended hot/cold deployment shape). The value is propagated
+  into the `bcl.no_sessions_for_subject` event extras so SOC
+  dashboards can distinguish expected gaps under volatile
+  placement from unexpected gaps under durable placement without
+  keying on the store-adapter type.
 
 ### docs (examples)
 

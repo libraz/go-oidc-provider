@@ -23,9 +23,53 @@ const DefaultTokenTTL = 2 * time.Minute
 // (op depends on internal, not the reverse). The op package guards
 // the values with a mirror test (op/audit_test.go).
 const (
-	eventDelivered = "logout.back_channel.delivered"
-	eventFailed    = "logout.back_channel.failed"
+	eventDelivered         = "logout.back_channel.delivered"
+	eventFailed            = "logout.back_channel.failed"
+	eventNoSessionsForSubj = "bcl.no_sessions_for_subject"
 )
+
+// SessionDurabilityPosture is the embedder's declaration of how
+// SessionStore writes flow through their persistence tier. The
+// coordinator does not act on the value at runtime — it propagates
+// the posture into the audit event extras so SOC tooling can
+// distinguish "expected gap under volatile placement" from
+// "unexpected gap under durable placement" without keying on the
+// store-adapter type. The op package mirrors the type as
+// [op.SessionDurabilityPosture] and threads the embedder's
+// [op.WithSessionDurabilityPosture] choice through the wiring.
+type SessionDurabilityPosture int
+
+const (
+	// PostureVolatile is the default. SessionStore writes are
+	// best-effort; eviction / failover may remove rows the
+	// back-channel coordinator would walk. OIDC Back-Channel Logout
+	// 1.0 §2.7 explicitly classifies delivery as best-effort, so
+	// the volatile floor is spec-conformant — but the audit signal
+	// makes the gap observable when it fires.
+	PostureVolatile SessionDurabilityPosture = iota
+
+	// PostureDurable declares that SessionStore writes survive
+	// process restarts and tier failover. Embedders flipping the
+	// declaration MUST route SessionStore to a durable backend
+	// (the SQL adapter, an embedder-supplied store with WAL
+	// semantics, etc.). The coordinator does not enforce the
+	// declaration; embedders who lie about durability will see
+	// the audit event fire under conditions the dashboard's
+	// "durable" filter does not expect.
+	PostureDurable
+)
+
+// String returns the lower-case attribute value the audit event
+// emits ("volatile" or "durable") so dashboards can filter by
+// string equality without needing to import the constant.
+func (p SessionDurabilityPosture) String() string {
+	switch p {
+	case PostureDurable:
+		return "durable"
+	default:
+		return "volatile"
+	}
+}
 
 // Coordinator orchestrates back-channel logout fan-out. The
 // embedder constructs one at startup (the op package wires it into
@@ -48,6 +92,7 @@ type Coordinator struct {
 	emitter   audit.Emitter
 	clock     timex.Clock
 	tokenTTL  time.Duration
+	posture   SessionDurabilityPosture
 }
 
 // Config carries the construction-time dependencies for [NewCoordinator].
@@ -87,6 +132,15 @@ type Config struct {
 	// TokenTTL overrides the lifetime stamped onto exp. A zero value
 	// substitutes [DefaultTokenTTL].
 	TokenTTL time.Duration
+
+	// SessionDurabilityPosture carries the embedder's declaration of
+	// how SessionStore writes flow through their persistence tier.
+	// The coordinator stamps the value into the
+	// [eventNoSessionsForSubj] audit event's extras so dashboards can
+	// distinguish expected gaps under volatile placement from
+	// unexpected gaps under durable placement. Default
+	// [PostureVolatile].
+	SessionDurabilityPosture SessionDurabilityPosture
 }
 
 // NewCoordinator validates cfg and returns a ready-to-use
@@ -130,6 +184,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		emitter:   emitter,
 		clock:     clock,
 		tokenTTL:  ttl,
+		posture:   cfg.SessionDurabilityPosture,
 	}, nil
 }
 
@@ -178,6 +233,7 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 	}
 	targets := c.resolveTargets(ctx, grants, notice.SessionID)
 	if len(targets) == 0 {
+		c.emitNoSessionsForSubject(ctx, notice)
 		return 0, nil
 	}
 	now := c.clock.Now().UTC()
@@ -266,6 +322,33 @@ func (c *Coordinator) dispatchOne(
 	}
 	c.emit(ctx, eventDelivered, notice, target, audit.LevelInfo,
 		"logout token delivered", nil)
+}
+
+// emitNoSessionsForSubject fires the
+// [eventNoSessionsForSubj] audit signal when the coordinator's
+// session walk returned zero RPs to notify. The event is gated on
+// notice.SessionID being non-empty: a logout call that does not
+// name a session has no expectation of a fan-out, and emitting
+// then would generate noise on every Provider.Logout call against
+// a stale subject. INFO-level because under volatile session
+// placement the gap is the spec-conformant best-effort floor;
+// dashboards alert on elevated rates rather than on individual
+// occurrences.
+func (c *Coordinator) emitNoSessionsForSubject(ctx context.Context, notice Notice) {
+	if notice.SessionID == "" {
+		return
+	}
+	c.emitter.Emit(ctx, audit.Event{
+		Name:      eventNoSessionsForSubj,
+		Level:     audit.LevelInfo,
+		Message:   "back-channel logout: no RPs to notify for subject",
+		ActorID:   notice.Subject,
+		SessionID: notice.SessionID,
+		RequestID: notice.RequestID,
+		Extras: map[string]any{
+			"session_durability_posture": c.posture.String(),
+		},
+	})
 }
 
 // emit assembles the audit record. The helper centralises the field

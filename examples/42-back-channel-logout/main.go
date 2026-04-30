@@ -42,6 +42,7 @@
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; OIDC Back-Channel Logout 1.0 §2.2 requires https for backchannel_logout_uri in production.
+//   - Delivery integrity: this example uses inmem (durable for the process lifetime). Swapping SessionStore to Redis without persistence narrows OIDC Back-Channel Logout 1.0 §2.7's best-effort floor — a session evicted before /end_session leaves the coordinator with no RPs to notify. Declare the posture via op.WithSessionDurabilityPosture and watch op.AuditBCLNoSessionsForSubject in the audit stream.
 package main
 
 import (

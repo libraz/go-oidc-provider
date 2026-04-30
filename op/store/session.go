@@ -70,6 +70,22 @@ type Session struct {
 //
 // Embedders MAY route SessionStore to a fast cache (Redis, Memcached) via
 // [op/storeadapter/composite] without violating any library invariant.
+//
+// # Back-channel logout delivery integrity
+//
+// Embedders who require OIDC Back-Channel Logout 1.0 delivery
+// integrity for every initiated logout MUST route SessionStore to a
+// durable backend; volatile placement (the recommended hot/cold
+// default) delivers BCL on a best-effort basis bounded by the
+// volatile tier's eviction / failover behaviour. A session evicted
+// between establishment and /end_session silently removes the rows
+// the back-channel coordinator would walk, narrowing OIDC
+// Back-Channel Logout 1.0 §2.7's best-effort floor to zero. The
+// [github.com/libraz/go-oidc-provider/op.AuditBCLNoSessionsForSubject]
+// audit event surfaces the gap when it actually fires; declare
+// the chosen posture through
+// [github.com/libraz/go-oidc-provider/op.WithSessionDurabilityPosture]
+// so the audit signal carries the embedder's intent.
 type SessionStore interface {
 	// Save persists a new session or replaces an existing one. Save MUST
 	// return [ErrAlreadyExists] if used in insert mode and the ID is

@@ -8,6 +8,25 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 )
 
+// TestAuditEvent_BCLMirror keeps the public op.AuditBCLNoSessionsForSubject
+// constant aligned with the raw string that
+// internal/backchannel/coordinator.go emits. Same drift-guard pattern
+// as TestAuditEvent_DCRMirror: the internal package cannot import op
+// (one-way import graph), so the value is duplicated as a string and
+// this test pins them together.
+func TestAuditEvent_BCLMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"bcl.no_sessions_for_subject": op.AuditBCLNoSessionsForSubject,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_DCRMirror keeps the public op.AuditDCR* constants
 // aligned with the strings that the registration endpoint emits.
 // The internal handler cannot reference op.AuditEvent (no

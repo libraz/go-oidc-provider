@@ -507,6 +507,35 @@ func TestWithStrictOfflineAccess_AcceptedAlone(t *testing.T) {
 	}
 }
 
+// TestWithSessionDurabilityPosture_AcceptsVolatile exercises the
+// happy path for the default declaration. Embedders who do not call
+// the option get [op.SessionDurabilityVolatile]; calling the option
+// with the same value is an explicit no-op that constructs cleanly.
+func TestWithSessionDurabilityPosture_AcceptsVolatile(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithSessionDurabilityPosture(op.SessionDurabilityVolatile),
+	)...); err != nil {
+		t.Fatalf("op.New rejected the volatile declaration: %v", err)
+	}
+}
+
+// TestWithSessionDurabilityPosture_AcceptsDurable exercises the
+// embedder-facing branch. The option records the declaration; it
+// does not enforce that the configured SessionStore is actually
+// durable, so op.New must accept the flag regardless of the store
+// adapter the embedder wired.
+func TestWithSessionDurabilityPosture_AcceptsDurable(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithSessionDurabilityPosture(op.SessionDurabilityDurable),
+	)...); err != nil {
+		t.Fatalf("op.New rejected the durable declaration: %v", err)
+	}
+}
+
 // TestWithStrictOfflineAccess_RejectsOpenIDScopeOptional pins the
 // construction-time refusal of the conflicting pair. The strict
 // reading of OIDC Core 1.0 §11 has no meaning when "openid" is

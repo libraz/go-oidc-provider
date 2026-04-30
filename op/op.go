@@ -1239,13 +1239,14 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		deliverer.Client = cfg.backchannelLogoutHTTPClient
 	}
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
-		Issuer:    cfg.issuer,
-		Signing:   backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
-		Clients:   cfg.store.Clients(),
-		Grants:    cfg.store.Grants(),
-		Deliverer: deliverer,
-		Emitter:   cfg.effectiveAuditEmitter(),
-		Clock:     cfg.clock,
+		Issuer:                   cfg.issuer,
+		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
+		Clients:                  cfg.store.Clients(),
+		Grants:                   cfg.store.Grants(),
+		Deliverer:                deliverer,
+		Emitter:                  cfg.effectiveAuditEmitter(),
+		Clock:                    cfg.clock,
+		SessionDurabilityPosture: backchannelPostureFor(cfg.sessionDurabilityPosture),
 	})
 	if err != nil {
 		return nil, &Error{
@@ -1255,6 +1256,19 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		}
 	}
 	return coord, nil
+}
+
+// backchannelPostureFor projects the public
+// [SessionDurabilityPosture] enum onto the internal
+// [backchannel.SessionDurabilityPosture] enum. The two carry the
+// same semantics; the type duplication exists only because the
+// internal package cannot import op (one-way import graph) and the
+// public type must live alongside the option that records it.
+func backchannelPostureFor(p SessionDurabilityPosture) backchannel.SessionDurabilityPosture {
+	if p == SessionDurabilityDurable {
+		return backchannel.PostureDurable
+	}
+	return backchannel.PostureVolatile
 }
 
 // buildOrchestrator constructs the [authn.Orchestrator] the

@@ -369,6 +369,118 @@ func TestCoordinator_NoTargetsReturnsZero(t *testing.T) {
 	}
 }
 
+// TestCoordinator_EmitsNoSessionsForSubjectWhenSidProvided pins the
+// gated audit signal: when the caller's notice carries a SessionID
+// (i.e. /end_session arrived with id_token_hint, or
+// Provider.Logout was called against a session-naming subject) and
+// the coordinator's session walk returns zero RPs, the
+// `bcl.no_sessions_for_subject` event fires once. The event extras
+// must carry the durability posture so SOC dashboards can filter
+// expected gaps under volatile placement from unexpected gaps under
+// durable placement.
+func TestCoordinator_EmitsNoSessionsForSubjectWhenSidProvided(t *testing.T) {
+	t.Parallel()
+	_, sk := mustKey(t)
+	st := inmem.New()
+	rec := &recordingEmitter{}
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:                   "https://op.example.com",
+		Signing:                  sk,
+		Clients:                  st.Clients(),
+		Grants:                   st.Grants(),
+		Deliverer:                backchannel.DelivererFunc(func(context.Context, backchannel.Target, string) error { return nil }),
+		Emitter:                  rec,
+		Clock:                    fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
+		SessionDurabilityPosture: backchannel.PostureVolatile,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	n, err := coord.Notify(context.Background(), backchannel.Notice{
+		Subject:   "evicted-user",
+		SessionID: "sid-evicted",
+		RequestID: "req-1",
+	})
+	if err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("Notify dispatched %d, want 0", n)
+	}
+	events := rec.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	ev := events[0]
+	if ev.Name != "bcl.no_sessions_for_subject" {
+		t.Errorf("event name = %q, want bcl.no_sessions_for_subject", ev.Name)
+	}
+	if ev.ActorID != "evicted-user" {
+		t.Errorf("actor_id = %q, want evicted-user", ev.ActorID)
+	}
+	if ev.SessionID != "sid-evicted" {
+		t.Errorf("session_id = %q, want sid-evicted", ev.SessionID)
+	}
+	if got, _ := ev.Extras["session_durability_posture"].(string); got != "volatile" {
+		t.Errorf("extras.session_durability_posture = %q, want volatile", got)
+	}
+}
+
+// TestCoordinator_OmitsNoSessionsEventWhenSidEmpty is the negative
+// companion: a Provider.Logout call against a subject the OP never
+// saw (no id_token_hint, no SessionID) is not surprising and stays
+// silent. The audit event is single-purpose — flag the volatility
+// gap, not the every-call no-op.
+func TestCoordinator_OmitsNoSessionsEventWhenSidEmpty(t *testing.T) {
+	t.Parallel()
+	coord, _, rec := newCoordinatorFixture(t, backchannel.DelivererFunc(
+		func(context.Context, backchannel.Target, string) error { return nil }))
+	if _, err := coord.Notify(context.Background(), backchannel.Notice{Subject: "absent"}); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if got := rec.snapshot(); len(got) != 0 {
+		t.Fatalf("expected no audit events on sid-less Notify, got %d", len(got))
+	}
+}
+
+// TestCoordinator_NoSessionsEventCarriesDurablePosture pins the
+// posture-projection rule. An embedder that flipped
+// op.WithSessionDurabilityPosture(SessionDurabilityDurable) sees
+// the same `bcl.no_sessions_for_subject` event but with the extras
+// flagged so SOC dashboards know the gap is unexpected.
+func TestCoordinator_NoSessionsEventCarriesDurablePosture(t *testing.T) {
+	t.Parallel()
+	_, sk := mustKey(t)
+	st := inmem.New()
+	rec := &recordingEmitter{}
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:                   "https://op.example.com",
+		Signing:                  sk,
+		Clients:                  st.Clients(),
+		Grants:                   st.Grants(),
+		Deliverer:                backchannel.DelivererFunc(func(context.Context, backchannel.Target, string) error { return nil }),
+		Emitter:                  rec,
+		Clock:                    fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
+		SessionDurabilityPosture: backchannel.PostureDurable,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	if _, err := coord.Notify(context.Background(), backchannel.Notice{
+		Subject:   "u",
+		SessionID: "sid-1",
+	}); err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	events := rec.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	if got, _ := events[0].Extras["session_durability_posture"].(string); got != "durable" {
+		t.Errorf("extras.session_durability_posture = %q, want durable", got)
+	}
+}
+
 func TestCoordinator_RejectsEmptySubject(t *testing.T) {
 	t.Parallel()
 	coord, _, _ := newCoordinatorFixture(t, backchannel.DelivererFunc(

@@ -152,6 +152,17 @@ type config struct {
 	// substitutes [backchannel.DefaultTimeout].
 	backchannelLogoutTimeout time.Duration
 
+	// sessionDurabilityPosture carries the embedder's declaration of
+	// how SessionStore writes flow through their persistence tier.
+	// Default zero value is [SessionDurabilityVolatile]; embedders
+	// who route SessionStore to a durable backend declare the choice
+	// via [WithSessionDurabilityPosture]. The flag does not change
+	// runtime gates; it threads into the back-channel coordinator's
+	// `bcl.no_sessions_for_subject` audit event so SOC tooling can
+	// distinguish expected gaps under volatile placement from
+	// unexpected gaps under durable placement.
+	sessionDurabilityPosture SessionDurabilityPosture
+
 	// accessTokenTTL is the lifetime of issued access tokens. Zero
 	// before [config.applyDefaults] runs; the defaults pass populates
 	// it with [DefaultAccessTokenTTL] so [config.validate] can compare
@@ -2109,10 +2120,77 @@ func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 // (5 seconds). Embedders SHOULD keep the value low — back-channel
 // logout is best-effort, and a long timeout merely keeps the OP
 // holding state on a likely-broken RP.
+//
+// # Delivery integrity
+//
+// Back-channel logout fan-out walks the active grants the OP
+// remembers for the terminating subject. The walk's coverage is
+// bounded by the durability of the [op/store.SessionStore] and the
+// [op/store.GrantStore] backing the OP: under volatile placement
+// (Redis without persistence, Memcached, in-memory under maxmemory
+// eviction) a session evicted between establishment and logout
+// silently removes the rows the coordinator would walk, narrowing
+// OIDC Back-Channel Logout 1.0 §2.7's best-effort floor to zero.
+// Embedders who require at-least-once delivery for every initiated
+// logout MUST route SessionStore to a durable backend; the
+// `bcl.no_sessions_for_subject` audit event ([AuditBCLNoSessionsForSubject])
+// surfaces the gap when it actually fires. Declare the chosen
+// posture through [WithSessionDurabilityPosture] so the audit
+// signal carries the embedder's intent.
 // Stable since v0.1.
 func WithBackchannelLogoutTimeout(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		c.backchannelLogoutTimeout = d
+		return nil
+	})
+}
+
+// SessionDurabilityPosture is the embedder's declaration of how
+// [op/store.SessionStore] writes flow through their persistence
+// tier. The choice is plumbed into the back-channel logout
+// coordinator's `bcl.no_sessions_for_subject` audit event so SOC
+// tooling can distinguish "expected gap under volatile placement"
+// from "unexpected gap under durable placement" without keying on
+// the store-adapter type. The library does not enforce the
+// declaration; embedders who route SessionStore to a volatile
+// backend while declaring [SessionDurabilityDurable] will see the
+// audit event fire under conditions their dashboard's "durable"
+// filter does not expect.
+type SessionDurabilityPosture int
+
+const (
+	// SessionDurabilityVolatile is the default. SessionStore writes
+	// are best-effort; eviction / failover may remove rows the
+	// back-channel coordinator would walk. OIDC Back-Channel Logout
+	// 1.0 §2.7 explicitly classifies delivery as best-effort, so
+	// the volatile floor is spec-conformant — but the audit signal
+	// makes the gap observable when it fires.
+	SessionDurabilityVolatile SessionDurabilityPosture = iota
+
+	// SessionDurabilityDurable declares that SessionStore writes
+	// survive process restarts and tier failover. Embedders who
+	// flip the declaration MUST route SessionStore to a durable
+	// backend (the SQL adapter, an embedder-supplied store with
+	// WAL semantics, etc.).
+	SessionDurabilityDurable
+)
+
+// WithSessionDurabilityPosture records the embedder's declaration
+// of [op/store.SessionStore] durability so the back-channel logout
+// coordinator can stamp the value into the
+// `bcl.no_sessions_for_subject` audit event ([AuditBCLNoSessionsForSubject]).
+// The flag does not change runtime gates; it is a typed declaration
+// that lets SOC dashboards filter expected gaps under volatile
+// placement from unexpected gaps under durable placement.
+//
+// Default [SessionDurabilityVolatile]. Embedders who route
+// SessionStore to a durable backend (the SQL adapter, an
+// embedder-supplied store with WAL semantics) flip the declaration
+// to [SessionDurabilityDurable].
+// Stable since v0.x.
+func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
+	return optionFunc(func(c *config) error {
+		c.sessionDurabilityPosture = p
 		return nil
 	})
 }
