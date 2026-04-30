@@ -200,7 +200,7 @@ func (d *Deps) logger() *slog.Logger {
 // audit returns the audit sink the handler uses. A nil [Deps.Audit]
 // collapses to [audit.Discard()] so handler code can call
 // deps.audit().Emit unconditionally without a nil-check.
-func (d *Deps) audit() audit.Emitter { //nolint:ireturn // audit.Emitter is the package's audit-sink contract; returning the interface is required so the discard fallback can flow through one helper.
+func (d *Deps) audit() audit.Emitter {
 	if d.Audit == nil {
 		return audit.Discard()
 	}

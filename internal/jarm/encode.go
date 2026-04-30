@@ -255,7 +255,7 @@ func validatePayload(p Payload) error {
 // the duplication is preferred over importing the unexported helper. The
 // returned interface is intentional: josev4.Signer is the third-party
 // package's contract for stateful JWS signing.
-func newSigner(key tokens.SigningKey, alg josev4.SignatureAlgorithm) (josev4.Signer, error) { //nolint:ireturn // see godoc
+func newSigner(key tokens.SigningKey, alg josev4.SignatureAlgorithm) (josev4.Signer, error) {
 	sk := josev4.SigningKey{
 		Algorithm: alg,
 		Key: josev4.JSONWebKey{

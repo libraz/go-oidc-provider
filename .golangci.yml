@@ -149,6 +149,8 @@ linters:
         - github.com/libraz/go-oidc-provider/op/profile\..*
         - github.com/libraz/go-oidc-provider/internal/log\.Logger
         - github.com/libraz/go-oidc-provider/internal/timex\.Clock
+        - github.com/libraz/go-oidc-provider/internal/audit\.Emitter
+        - github.com/go-jose/go-jose/v4\.Signer
         - github.com/libraz/go-oidc-provider/op/storeadapter/sql\.runner
     nakedret:
       max-func-lines: 30

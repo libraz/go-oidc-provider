@@ -339,7 +339,7 @@ func (d *Deps) clockFunc() func() time.Time {
 
 // audit returns the configured audit sink, or a [audit.Discard]
 // emitter so call sites can invoke Emit unconditionally.
-func (d *Deps) audit() audit.Emitter { //nolint:ireturn // audit.Emitter is the package's audit-sink contract; returning the interface is required so the discard fallback flows through one helper.
+func (d *Deps) audit() audit.Emitter {
 	if d.Audit == nil {
 		return audit.Discard()
 	}

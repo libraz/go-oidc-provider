@@ -339,7 +339,7 @@ func joinScope(scopes []string) string {
 // confusion guard structural rather than relying on a runtime check. The
 // returned interface is intentional: josev4.Signer is the third-party
 // package's contract for stateful JWS signing.
-func newSigner(key SigningKey, typ string) (josev4.Signer, error) { //nolint:ireturn // see godoc
+func newSigner(key SigningKey, typ string) (josev4.Signer, error) {
 	sk := josev4.SigningKey{
 		Algorithm: josev4.ES256,
 		Key: josev4.JSONWebKey{

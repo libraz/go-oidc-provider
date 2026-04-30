@@ -1278,8 +1278,6 @@ func (c *config) effectiveAuditLogger() *slog.Logger {
 // [config.effectiveAuditLogger]; when [WithPrometheus] is configured
 // the result is wrapped with a [metrics.Bridge] so a single emission
 // fires both the slog audit line and the matching counter.
-//
-//nolint:ireturn // audit.Emitter is the package contract; the bridged variant is private so callers must obtain it through this helper.
 func (c *config) effectiveAuditEmitter() audit.Emitter {
 	base := audit.Slog(c.effectiveAuditLogger())
 	if c.metricsCollector == nil {

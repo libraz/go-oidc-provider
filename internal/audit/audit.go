@@ -117,8 +117,6 @@ type Emitter interface {
 // Discard returns an [Emitter] that drops every record. It is the
 // default when the embedder did not call op.WithAuditLogger, and the
 // right choice in unit tests that do not assert on audit output.
-//
-//nolint:ireturn // Emitter is the package contract; the discard impl is private so callers must obtain it through this constructor.
 func Discard() Emitter { return discardEmitter{} }
 
 type discardEmitter struct{}
@@ -134,8 +132,6 @@ func (discardEmitter) Emit(_ context.Context, _ Event) {}
 // can route audit lines to a dedicated retention bucket without
 // parsing the event name. The remaining canonical fields ride as
 // top-level attributes; [Event.Extras] is grouped under "extras".
-//
-//nolint:ireturn // Emitter is the package contract; the slog impl is private so callers must obtain it through this constructor.
 func Slog(logger *slog.Logger) Emitter {
 	if logger == nil {
 		return Discard()
