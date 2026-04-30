@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=./schema.json
+feature: grant_tombstone
+prefix: GTM
+title: JWT access-token revocation via grant-tombstone (ADR 0025)
+specs:
+  - RFC 6749 §4.1.2 — Authorization Code Grant, code-replay revocation
+  - RFC 6819 §5.2.1.1 — Threat: authorization code re-use
+  - RFC 7009 §2.2 — OAuth 2.0 Token Revocation (idempotency)
+  - RFC 7519 §4.3 — Private Claim Names
+  - RFC 7662 §2.2 — OAuth 2.0 Token Introspection
+  - RFC 9068 §2.2.3 — JWT AT extension claims
+  - FAPI 2.0 SP §5.3.2.2 — code-replay revocation requirement
+  - ADR 0013 — JTI registry (legacy strategy, preserved as opt-in)
+  - ADR 0025 — JWT access-token revocation via grant-tombstone
+
+description: |
+  End-to-end coverage of the grant-tombstone JWT access-token
+  revocation strategy that ADR 0025 made the default for v1.0. The
+  catalog rows pin the externally-observable contract:
+
+    - At issuance the OP writes ZERO rows under the default strategy
+      (the user's primary concern); the gid private claim on the
+      JWT carries the GrantID instead.
+    - Cascade paths (code-replay, /end_session, /revocation) write
+      one tombstone or denylist row.
+    - Verifier dispatch (/userinfo, /introspection) consults the
+      tombstone keyed by gid.
+    - The FAPI gate rejects RevocationStrategyNone at op.New so
+      conformance is not silently undermined.
+    - The JTIRegistry strategy preserves the ADR 0013 wire shape and
+      storage cost as an explicit opt-in.
+
+rows:
+  - id: GTM-001
+    severity: P0
+    spec: ADR 0025 §"Wire-through points / Issue (every grant type)"
+    behaviour: |
+      With the default RevocationStrategyGrantTombstone configured,
+      a successful authorization_code exchange writes ZERO rows to
+      Store.AccessTokens() — the per-AT shadow registry stays empty.
+      This is the user-visible reduction in management data the ADR
+      ships: the issuance path is a pure compute path under the
+      default strategy.
+    status: active
+
+  - id: GTM-002
+    severity: P0
+    spec: ADR 0025 §"Wire change / gid private claim"
+    behaviour: |
+      Every JWT access token issued under the default strategy
+      carries a "gid" private claim equal to the GrantID the token
+      descends from. The claim is omitempty: tokens minted under a
+      synthesised empty grant identifier (legacy / mis-wired
+      embedders) emit no gid key. Resource servers MUST ignore the
+      claim per RFC 7519 §4.3 — it is meaningful only to the
+      issuing OP.
+    status: active
+
+  - id: GTM-003
+    severity: P0
+    spec: ADR 0025 §"Wire-through points / Revoke by grant (cascade)"
+    behaviour: |
+      A POST /oidc/end_session that terminates the session writes
+      one Store.GrantTombstone row per active grant under the
+      logging-out subject. A subsequent /oidc/userinfo call carrying
+      a JWT AT minted before the logout returns 401 with
+      WWW-Authenticate: Bearer error="invalid_token" — the verifier
+      consults GrantRevocations.IsRevoked, sees the tombstone with
+      RevokedAt >= AT.iat, and rejects the bearer.
+    status: active
+
+  - id: GTM-004
+    severity: P0
+    spec: ADR 0025 §"Wire-through points / Mint refusal under tombstoned grant"
+    behaviour: |
+      Replaying a consumed authorization code triggers
+      revokeChainForCode, which writes a Store.GrantTombstone with
+      Reason="code_replay" and RevokedAt=now. A subsequent refresh
+      exchange against any refresh token under the same grant
+      returns invalid_grant per RFC 6749 §5.2 — the pre-mint
+      IsRevoked check refuses to mint a fresh AT under a tombstoned
+      grant, closing the ADR 0013 race window.
+    status: active
+
+  - id: GTM-005
+    severity: P0
+    spec: ADR 0025 §"Revoke by JTI (RFC 7009 single AT)"
+    behaviour: |
+      A POST /oidc/revocation with token=<JWT AT> and the issuing
+      client's credentials returns 200 with an empty body. The OP
+      writes a Store.RevokedJTI denylist row keyed by the AT's jti
+      claim. A subsequent userinfo / introspection of the same AT
+      reports invalid_token / {"active": false}. ADR 0025
+      explicitly does NOT coalesce single-AT revoke into a grant
+      tombstone — other ATs under the same grant remain active.
+    status: active
+
+  - id: GTM-006
+    severity: P0
+    spec: ADR 0025 §"Profile interaction (FAPI gate)"
+    behaviour: |
+      Constructing a Provider with op.WithProfile(profile.FAPI2Baseline)
+      AND op.WithAccessTokenRevocationStrategy(RevocationStrategyNone)
+      fails at op.New with a typed configuration error: FAPI 2.0
+      Security Profile §5.3.2.2 mandates code-replay revocation, and
+      the None strategy disables the cascade entirely. Non-FAPI
+      profiles still accept None.
+    status: active
+
+  - id: GTM-007
+    severity: P1
+    spec: ADR 0025 §"AccessTokenRevocationStrategy / RevocationStrategyJTIRegistry"
+    behaviour: |
+      With op.WithAccessTokenRevocationStrategy(RevocationStrategyJTIRegistry)
+      configured, every issued JWT AT writes one row to
+      Store.AccessTokens() (ADR 0013 behaviour preserved) and the
+      tombstone substore stays empty. Embedders who need per-AT
+      audit trails opt into this strategy explicitly.
+    status: active
