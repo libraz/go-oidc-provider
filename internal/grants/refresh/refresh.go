@@ -52,13 +52,12 @@ const TTLDefault = 30 * 24 * time.Hour
 // GraceTTLDefault is the default RFC 9700 §2.2.2 grace window during
 // which a just-rotated refresh token is still accepted ("the previous
 // refresh token MAY be invalidated but MUST remain valid until the new
-// refresh token is delivered to the client successfully"). 30 seconds
-// is long enough to absorb a typical retry burst (HTTP timeout plus a
-// single re-issue) without leaving a stolen previous token usable for
-// an extended period. Pass a negative [ExchangerConfig.GraceTTL] to
-// disable the window and revert to strict single-use semantics; the
-// FAPI 2.0 profile already forces grace=0 when active.
-const GraceTTLDefault = 30 * time.Second
+// refresh token is delivered to the client successfully"). 60 seconds
+// covers OFCS's 30-second probe between rotation and replay plus a
+// margin for HTTP timeouts and slow retries; deployments that prefer
+// stricter single-use semantics pass a negative
+// [ExchangerConfig.GraceTTL] to disable the window entirely.
+const GraceTTLDefault = 60 * time.Second
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //

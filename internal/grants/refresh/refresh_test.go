@@ -635,12 +635,12 @@ func TestExchange_GraceWindow_BoundaryTable(t *testing.T) {
 		{"strict_zero_disabled", -1, 0, false},
 		{"strict_zero_disabled_one_sec", -1, time.Second, false},
 
-		// Default 30s window: boundary cases around GraceTTLDefault.
+		// Default 60s window: boundary cases around GraceTTLDefault.
 		{"default_at_zero", 0, 0, true},
 		{"default_at_29s", 0, 29 * time.Second, true},
-		{"default_at_30s", 0, refresh.GraceTTLDefault, true},
-		{"default_at_31s", 0, refresh.GraceTTLDefault + time.Second, false},
-		{"default_at_60s", 0, 2 * refresh.GraceTTLDefault, false},
+		{"default_at_default", 0, refresh.GraceTTLDefault, true},
+		{"default_at_default_plus_1s", 0, refresh.GraceTTLDefault + time.Second, false},
+		{"default_at_2x_default", 0, 2 * refresh.GraceTTLDefault, false},
 
 		// Custom 24h window (long-lived refresh requirement).
 		{"long_at_23h", 24 * time.Hour, 23 * time.Hour, true},

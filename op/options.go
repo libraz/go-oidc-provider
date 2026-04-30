@@ -897,14 +897,6 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 				"; got " + c.accessTokenTTL.String(),
 		}
 	}
-	if profileForcesZeroRefreshGrace(p) && c.refreshGracePeriodSet && !c.refreshGracePeriodIsZero {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithProfile " + p.String() +
-				" requires WithRefreshGracePeriod(0); got " +
-				c.refreshGracePeriod.String(),
-		}
-	}
 	if profileForcesDPoPNonce(p) && hasDPoPFeature(enabled) && c.dpopNonces == nil {
 		return &Error{
 			Code: codeConfiguration,
@@ -935,20 +927,6 @@ func profileForcesDPoPNonce(p profile.Profile) bool {
 func hasDPoPFeature(have map[feature.Flag]struct{}) bool {
 	_, ok := have[feature.DPoP]
 	return ok
-}
-
-// profileForcesZeroRefreshGrace reports whether p mandates a strict
-// no-grace refresh window per FAPI 2.0 §J.7.2 §3.1.7. The list is the
-// same set the runtime gate in [effectiveRefreshGrace] consults so a
-// validation error and the runtime override never disagree.
-func profileForcesZeroRefreshGrace(p profile.Profile) bool {
-	switch p {
-	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
-		return true
-	case profile.FAPICIBA, profile.IGovHigh:
-		return false
-	}
-	return false
 }
 
 // anyEnabled reports whether any flag in want is present in have. The
@@ -2270,13 +2248,10 @@ func WithRefreshGracePeriod(d time.Duration) Option {
 // effectiveRefreshGrace returns the refresh-token grace window the
 // token endpoint should apply. The function honours [WithRefreshGracePeriod]
 // when called, else returns 0 so the internal exchanger falls back
-// to its [refresh.GraceTTLDefault]. A FAPI 2.0 profile forces a
-// strict zero so the constraint is uniform across grants without the
-// embedder having to opt in.
+// to its [refresh.GraceTTLDefault]. The grace window is profile-
+// agnostic: FAPI 2.0 OFCS conformance treats a brief replay window
+// as legitimate retry handling, so no profile forces a strict zero.
 func (c *config) effectiveRefreshGrace() time.Duration {
-	if c.requireZeroRefreshGrace() {
-		return -1
-	}
 	if !c.refreshGracePeriodSet {
 		return 0
 	}
@@ -2286,22 +2261,6 @@ func (c *config) effectiveRefreshGrace() time.Duration {
 		return -1
 	}
 	return c.refreshGracePeriod
-}
-
-// requireZeroRefreshGrace reports whether an active profile mandates
-// a zero grace window per FAPI 2.0 §J.7.2 §3.1.7. Both FAPI2Baseline
-// and FAPI2MessageSigning impose the rule; the future CIBA / iGov
-// profiles inherit the same posture but are placeholders today.
-func (c *config) requireZeroRefreshGrace() bool {
-	for _, p := range c.profiles {
-		switch p {
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
-			return true
-		case profile.FAPICIBA, profile.IGovHigh:
-			// v1.x / v2+; placeholder only today.
-		}
-	}
-	return false
 }
 
 // WithAllowPrivateNetworkJWKS suppresses the SSRF deny-list the
