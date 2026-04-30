@@ -309,6 +309,16 @@ type Exchanged struct {
 	// clock, so the audit trail reflects the persistence layer.
 	ConsumedAt time.Time
 
+	// IssuedAt is the wall-clock time at which the consumed refresh
+	// token was first persisted (its [store.RefreshToken.CreatedAt]).
+	// The token endpoint reads it under
+	// [store.RevocationStrategyGrantTombstone] to enforce the ADR 0025
+	// "iat <= RevokedAt" mint-refusal rule before signing the rotated
+	// access token: a tombstoned grant whose tombstone post-dates the
+	// chain's first issuance MUST refuse a fresh AT, closing the ADR
+	// 0013 race window described in [docs/adr/0025-grant-tombstone-revocation-default.md].
+	IssuedAt time.Time
+
 	// DPoPJKT is the RFC 7638 thumbprint the chain was bound to at
 	// issuance, copied verbatim from the consumed record. Empty means
 	// the chain is bearer; non-empty means the rotation handler MUST
@@ -376,6 +386,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		Scope:              resolvedScope,
 		Resource:           rec.Resource,
 		ConsumedAt:         *rec.ConsumedAt,
+		IssuedAt:           rec.CreatedAt,
 		DPoPJKT:            rec.DPoPJKT,
 		MTLSCertThumbprint: rec.MTLSCertThumbprint,
 	}, nil
@@ -466,6 +477,7 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 		GrantID:            rec.GrantID,
 		Scope:              resolvedScope,
 		ConsumedAt:         *rec.ConsumedAt,
+		IssuedAt:           rec.CreatedAt,
 		DPoPJKT:            rec.DPoPJKT,
 		MTLSCertThumbprint: rec.MTLSCertThumbprint,
 		InGrace:            true,

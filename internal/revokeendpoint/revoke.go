@@ -2,8 +2,10 @@ package revokeendpoint
 
 import (
 	"context"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // revokeToken dispatches to the JWT-acknowledgement or refresh-token
@@ -114,14 +116,38 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 		// dispatcher uniform).
 		return false
 	}
-	// Flip the registry row so a subsequent userinfo /
-	// introspection call against the same JTI returns invalid_token
-	// / {"active": false}. RevokeByJTI is idempotent — a missing row
-	// returns nil — so the endpoint stays on the RFC 7009 §2.2
-	// "always 200" path even when the registry was wired but the
-	// token was issued before Register was active.
-	if deps.AccessTokens != nil {
-		_ = deps.AccessTokens.RevokeByJTI(ctx, claims.JTI)
+	// Persist the revocation so a subsequent userinfo / introspection
+	// call against the same token returns invalid_token /
+	// {"active": false}. The shape depends on the configured ADR 0025
+	// strategy; every branch is idempotent (missing row → nil) and
+	// keeps the endpoint on the RFC 7009 §2.2 "always 200" path.
+	switch deps.RevocationStrategy {
+	case store.RevocationStrategyNone:
+		// Stateless mode: the OP knowingly opted out of AT
+		// revocation. RFC 7009 §2.2 still requires HTTP 200; the
+		// caller writes the status. Nothing to persist.
+	case store.RevocationStrategyJTIRegistry:
+		if deps.AccessTokens != nil {
+			_ = deps.AccessTokens.RevokeByJTI(ctx, claims.JTI)
+		}
+	default:
+		// GrantTombstone (default): write a per-JTI denylist row.
+		// ADR 0025 §Alternatives explicitly rejects coalescing a
+		// single-AT revoke into a grant tombstone — the rest of the
+		// grant stays alive. The denylist row's expiry is the AT's
+		// own exp plus a 5-minute grace so it outlives any cache.
+		if deps.GrantRevocations != nil {
+			_ = deps.GrantRevocations.RevokeJTI(ctx, store.RevokedJTI{
+				JTI:       claims.JTI,
+				GrantID:   claims.GrantID,
+				ExpiresAt: time.Unix(claims.ExpiresAt, 0).Add(5 * time.Minute).UTC(),
+			})
+		} else if deps.AccessTokens != nil {
+			// Legacy fallback: GrantRevocations is unwired but the
+			// JTI registry is. Use it so the cascade still works for
+			// embedders mid-migration.
+			_ = deps.AccessTokens.RevokeByJTI(ctx, claims.JTI)
+		}
 	}
 	return true
 }

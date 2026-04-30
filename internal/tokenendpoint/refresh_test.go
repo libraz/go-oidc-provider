@@ -778,6 +778,162 @@ func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
 	}
 }
 
+// TestRefresh_GrantTombstoned_MintRefused pins the ADR 0025 mint-
+// refusal contract: under [op.RevocationStrategyGrantTombstone]
+// (the default) a refresh request whose underlying grant has been
+// tombstoned MUST fail with invalid_grant BEFORE a fresh access
+// token is signed. This closes the ADR 0013 race window where a
+// refresh racing a code-replay or end-session cascade could slip a
+// fresh AT through ahead of the tombstone's observable effect on
+// resource-server lookups.
+//
+// The test seeds a refresh token whose CreatedAt anchors the chain's
+// IssuedAt, writes a tombstone whose RevokedAt is at-or-after that
+// anchor, and verifies the next /token call returns invalid_grant.
+// The exchanger consumes the refresh token before the mint-refusal
+// check fires, so the response code is invalid_grant per RFC 6749
+// §5.2 (the grant was legitimately revoked, not a request-shape
+// fault).
+func TestRefresh_GrantTombstoned_MintRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-tombstoned"
+	const grantID = "grant-tombstoned-mint-refused"
+	const subject = "user-tombstoned"
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "offline_access"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:        tokenID,
+		ClientID:  client.ID,
+		Subject:   subject,
+		GrantID:   grantID,
+		Scope:     []string{"openid", "offline_access"},
+		CreatedAt: f.clock.now.Add(-time.Minute),
+	})
+
+	// Pre-tombstone the grant. RevokedAt is the same instant the test
+	// clock reads, which is at-or-after the refresh token's CreatedAt
+	// (one minute earlier), so the verifier's "iat <= RevokedAt" rule
+	// trips on the consumed chain.
+	if err := f.prov.Store.GrantRevocations().RevokeGrant(context.Background(), store.GrantTombstone{
+		GrantID:   grantID,
+		RevokedAt: f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+		Reason:    "operator",
+	}); err != nil {
+		t.Fatalf("GrantRevocations.RevokeGrant: %v", err)
+	}
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "invalid_grant" {
+		t.Errorf("error=%v want invalid_grant", got)
+	}
+	// The response MUST NOT carry an access_token: the mint-refusal
+	// check fires before signing.
+	if _, has := body["access_token"]; has {
+		t.Errorf("access_token must not be present after mint-refusal: %v", body)
+	}
+}
+
+// TestRefresh_GrantNotTombstoned_MintAllowed is the negative
+// counterpart to TestRefresh_GrantTombstoned_MintRefused: a refresh
+// whose underlying grant has NO tombstone proceeds normally under
+// the default [op.RevocationStrategyGrantTombstone]. The check
+// returns false from IsRevoked and the issuance path runs to
+// completion.
+func TestRefresh_GrantNotTombstoned_MintAllowed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-not-tombstoned"
+	const grantID = "grant-not-tombstoned"
+	const subject = "user-not-tombstoned"
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if at, _ := body["access_token"].(string); at == "" {
+		t.Errorf("access_token missing on un-tombstoned refresh: %v", body)
+	}
+}
+
+// TestRefresh_GidClaim_PresentOnRotatedAT pins the ADR 0025 wire
+// invariant on the refresh path: the rotated access token carries
+// the originating GrantID in its "gid" private claim, identically
+// to the authorization_code-derived AT (see
+// TestAuthCode_GidClaim_PresentOnIssuedAT). The claim survives
+// rotation because the strategy controls Register / cascade behaviour
+// only, not the claim, and the originating GrantID is preserved on
+// the refresh-token record across rotations.
+func TestRefresh_GidClaim_PresentOnRotatedAT(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-gid"
+	const grantID = "grant-rt-gid"
+	const subject = "user-rt-gid"
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+	if claims.GrantID != grantID {
+		t.Errorf("gid claim=%q want %q", claims.GrantID, grantID)
+	}
+}
+
 // TestRefresh_MissingToken yields invalid_request when the body omits
 // refresh_token.
 func TestRefresh_MissingToken(t *testing.T) {

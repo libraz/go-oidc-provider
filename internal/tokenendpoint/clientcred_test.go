@@ -386,6 +386,43 @@ func clientCredsMTLSClient(tb testing.TB, prov *testkit.Provider) (*store.Client
 	return client, secret
 }
 
+// TestClientCredentials_GidClaim_AbsentForSyntheticGrant pins the
+// ADR 0025 / RFC 7519 §4.3 wire invariant on the client_credentials
+// path: the issuance call site passes an empty GrantID (RFC 6749
+// §4.4 has no authorize-side grant, so the library does not allocate
+// one). The wire-form encoder applies omitempty to the "gid" claim,
+// so the issued AT MUST NOT carry a "gid" key when the grant id is
+// empty. This keeps the wire bytes unchanged for client_credentials
+// callers under all three strategies and avoids advertising a
+// synthetic grant to resource servers that have no use for it.
+func TestClientCredentials_GidClaim_AbsentForSyntheticGrant(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := clientCredsClient(t, f.prov, []string{"read"})
+
+	resp := f.post(t, clientCredsForm("read"), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+	if claims.GrantID != "" {
+		t.Errorf("gid claim=%q want empty (client_credentials synthesises no grant id)", claims.GrantID)
+	}
+}
+
 // TestClientCredentials_OpaqueFormat_PersistsRow exercises the
 // client_credentials path under the opaque-format option (ADR 0024).
 // The wire response carries a 43-character base64url string with no

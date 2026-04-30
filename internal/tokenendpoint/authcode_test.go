@@ -937,6 +937,385 @@ func decodeIDTokenClaims(tb testing.TB, jws string) map[string]any {
 	return out
 }
 
+// jtiRegistryFixture builds a fixture whose op.Provider is pinned to
+// [op.RevocationStrategyJTIRegistry] (ADR 0013 model). The mintAccessToken
+// path is expected to call AccessTokens.Register on every issuance under
+// this strategy; the GrantTombstone default does not.
+func jtiRegistryFixture(tb testing.TB) *fixture {
+	tb.Helper()
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(tb,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry)),
+	)
+	return &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		signer:   tokens.SigningKey{KeyID: prov.SigningKey.KeyID, Signer: prov.SigningKey.Signer},
+		clock:    clock,
+	}
+}
+
+// TestAuthCode_GrantTombstone_NoRegisterAtIssuance pins the ADR 0025
+// hot-path contract: under [op.RevocationStrategyGrantTombstone]
+// (the default) the issuance path writes ZERO access-token shadow
+// rows. The substore is consulted only on revocation cascades, so a
+// freshly-issued AT MUST NOT have a row in
+// [store.AccessTokenRegistry].
+//
+// The test runs the canonical authorization_code happy path and then
+// looks the issued JTI up in the registry. The reference inmem
+// implementation returns (nil, nil) for an absent record (the
+// sentinel-free contract documented on
+// [store.AccessTokenRegistry.Find]); observing a non-nil row would
+// mean Register fired on the hot path, which is exactly what
+// ADR 0025 removes. The companion test
+// TestAuthCode_JTIRegistry_RegisterAtIssuance pins the opposite
+// direction.
+func TestAuthCode_GrantTombstone_NoRegisterAtIssuance(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-tombstone-no-register"
+	const grantID = "grant-tombstone-no-register"
+	const subject = "user-tombstone-no-register"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier2 := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier2.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+	if claims.JTI == "" {
+		t.Fatalf("issued AT missing jti claim")
+	}
+	rec, err := f.prov.Store.AccessTokens().Find(context.Background(), claims.JTI)
+	if err == nil && rec != nil {
+		t.Fatalf("AccessTokens.Register MUST NOT fire under RevocationStrategyGrantTombstone; found shadow row jti=%q", claims.JTI)
+	}
+}
+
+// TestAuthCode_JTIRegistry_RegisterAtIssuance is the positive
+// counterpart to TestAuthCode_GrantTombstone_NoRegisterAtIssuance:
+// when the embedder pins [op.RevocationStrategyJTIRegistry] the
+// issuance path MUST write a shadow row per AT (ADR 0013 model). The
+// row's JTI / GrantID / Subject / ClientID columns mirror the encoded
+// claims so a future RevokeByGrant cascade can flip exactly the
+// matching record.
+func TestAuthCode_JTIRegistry_RegisterAtIssuance(t *testing.T) {
+	t.Parallel()
+
+	f := jtiRegistryFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-jti-register"
+	const grantID = "grant-jti-register"
+	const subject = "user-jti-register"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier2 := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier2.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+	rec, err := f.prov.Store.AccessTokens().Find(context.Background(), claims.JTI)
+	if err != nil {
+		t.Fatalf("AccessTokens.Find: %v", err)
+	}
+	if rec == nil {
+		t.Fatalf("AccessTokens.Register MUST fire under RevocationStrategyJTIRegistry; no row for jti=%q", claims.JTI)
+	}
+	if rec.GrantID != grantID {
+		t.Errorf("rec.GrantID=%q want %q", rec.GrantID, grantID)
+	}
+	if rec.Subject != subject {
+		t.Errorf("rec.Subject=%q want %q", rec.Subject, subject)
+	}
+	if rec.ClientID != client.ID {
+		t.Errorf("rec.ClientID=%q want %q", rec.ClientID, client.ID)
+	}
+	if rec.Revoked {
+		t.Errorf("rec.Revoked=true want false on freshly-issued AT")
+	}
+}
+
+// TestAuthCode_GidClaim_PresentOnIssuedAT pins the ADR 0025 wire
+// invariant: every issued JWT access token under the default
+// strategy carries the originating GrantID in its "gid" private
+// claim (RFC 7519 §4.3). The verifier-side decoder maps the wire
+// "gid" claim onto [tokens.AccessTokenClaims.GrantID]; asserting on
+// the decoded value is equivalent to asserting on the encoded JSON.
+//
+// The claim is populated unconditionally (the strategy controls
+// Register / cascade behaviour, not the claim) so the same assertion
+// holds under [op.RevocationStrategyJTIRegistry]; a companion
+// assertion in TestAuthCode_JTIRegistry_RegisterAtIssuance confirms
+// the strategy independence.
+func TestAuthCode_GidClaim_PresentOnIssuedAT(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-gid"
+	const grantID = "grant-gid"
+	const subject = "user-gid"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier2 := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier2.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+	if claims.GrantID != grantID {
+		t.Errorf("gid claim=%q want %q", claims.GrantID, grantID)
+	}
+}
+
+// TestAuthCode_Replay_GrantTombstone_WritesTombstone pins the ADR
+// 0025 cascade contract: under
+// [op.RevocationStrategyGrantTombstone] a code-replay revocation
+// MUST write a single [store.GrantTombstone] keyed on the originating
+// grant id, NOT one shadow-row update per AT. The tombstone's
+// RevokedAt MUST be set so the verifier's "iat <= RevokedAt" rule
+// rejects every AT issued before the cascade; ExpiresAt MUST outlive
+// the longest possible JWT AT under the grant.
+//
+// The companion authcode-replay test
+// (TestAuthCode_Replay_RevokesIssuedRefreshToken) covers the
+// refresh-token cascade — that branch runs identically under both
+// strategies and is independent of this one.
+func TestAuthCode_Replay_GrantTombstone_WritesTombstone(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-tombstone-replay"
+	const grantID = "grant-tombstone-replay"
+	const subject = "user-tombstone-replay"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "offline_access"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "offline_access"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	// 1. First exchange succeeds — establishes the chain.
+	first := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first exchange status=%d want 200", first.StatusCode)
+	}
+	first.Body.Close()
+
+	// Sanity: no tombstone yet.
+	beforeRevoked, beforeErr := f.prov.Store.GrantRevocations().IsRevoked(
+		context.Background(), grantID, "", f.clock.now,
+	)
+	if beforeErr != nil {
+		t.Fatalf("IsRevoked(pre-replay): %v", beforeErr)
+	}
+	if beforeRevoked {
+		t.Fatalf("grant tombstone unexpectedly present before replay")
+	}
+
+	// 2. Replay triggers the cascade.
+	second := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	if second.StatusCode != http.StatusBadRequest {
+		t.Fatalf("replay status=%d want 400", second.StatusCode)
+	}
+	second.Body.Close()
+
+	// 3. Tombstone MUST now exist for grantID. Probe with iat = clock.now
+	//    (which equals the cascade's RevokedAt under the deterministic
+	//    fixedClock fixture) so the "iat <= RevokedAt" rule trips.
+	revoked, err := f.prov.Store.GrantRevocations().IsRevoked(
+		context.Background(), grantID, "", f.clock.now,
+	)
+	if err != nil {
+		t.Fatalf("IsRevoked(post-replay): %v", err)
+	}
+	if !revoked {
+		t.Fatalf("expected GrantTombstone for grantID=%q after code replay; IsRevoked returned false", grantID)
+	}
+
+	// 4. An iat strictly after the tombstone's RevokedAt MUST NOT trip
+	//    the rule — defence-in-depth pin against an "always revoked"
+	//    bug in the verifier.
+	stillRevoked, err := f.prov.Store.GrantRevocations().IsRevoked(
+		context.Background(), grantID, "", f.clock.now.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("IsRevoked(post-tombstone iat-future): %v", err)
+	}
+	if stillRevoked {
+		t.Errorf("IsRevoked must return false for iat strictly after RevokedAt")
+	}
+}
+
+// TestAuthCode_Replay_GrantTombstone_NoPerATFlips pins the storage-
+// shape contract of ADR 0025: the GrantTombstone cascade replaces
+// the per-AT row updates of ADR 0013. Under
+// [op.RevocationStrategyGrantTombstone] the AccessTokens registry
+// MUST NOT see any row writes from the cascade — the issued AT was
+// never registered (no Register on issuance under the default
+// strategy) and the cascade does not retroactively register it.
+func TestAuthCode_Replay_GrantTombstone_NoPerATFlips(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-tombstone-no-flips"
+	const grantID = "grant-tombstone-no-flips"
+	const subject = "user-tombstone-no-flips"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	first := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first exchange status=%d want 200", first.StatusCode)
+	}
+	body := decodeJSON(t, first)
+	first.Body.Close()
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier2 := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier2.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+
+	// Trigger the cascade.
+	second := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	if second.StatusCode != http.StatusBadRequest {
+		t.Fatalf("replay status=%d want 400", second.StatusCode)
+	}
+	second.Body.Close()
+
+	// The AccessTokens registry MUST NOT carry a row for this JTI: it
+	// was never written at issuance (RevocationStrategyGrantTombstone
+	// is the default) and the cascade does not retroactively create
+	// one. The row's absence is the load-bearing signal that the
+	// tombstone cascade replaced — not augmented — the per-AT
+	// bookkeeping.
+	rec, err := f.prov.Store.AccessTokens().Find(context.Background(), claims.JTI)
+	if err == nil && rec != nil {
+		t.Fatalf("AccessTokens row unexpectedly present for jti=%q under tombstone cascade", claims.JTI)
+	}
+}
+
 // Compile-time guard against the unused-import lint when this file is
 // the only test in the package.
 var _ time.Time

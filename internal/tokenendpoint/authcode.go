@@ -324,6 +324,27 @@ func writeAuthCodeExchangeError(
 // tokens previously issued based on that authorization code"; this is
 // the implementation of that MUST.
 //
+// The JWT-AT half of the cascade dispatches on
+// [Deps.RevocationStrategy] (ADR 0025):
+//
+//   - [store.RevocationStrategyJTIRegistry] flips Revoked on every per-AT
+//     shadow row keyed by GrantID (the ADR 0013 model: O(N) writes per
+//     cascade where N is the number of live ATs under the grant).
+//   - [store.RevocationStrategyGrantTombstone] writes a single
+//     [store.GrantTombstone] keyed on GrantID. Verifiers consult the
+//     tombstone via the AT's "gid" private claim and reject the token
+//     when "iat <= RevokedAt"; the cascade therefore covers every live
+//     AT under the grant in O(1) writes.
+//   - [store.RevocationStrategyNone] skips the JWT-AT cascade entirely.
+//     JWT ATs minted before the cascade live until exp; the embedder
+//     opted out of server-side JWT revocation by selecting this
+//     strategy.
+//
+// The opaque-AT cascade and the refresh-token cascade run in all three
+// branches: the opaque-AT path is intrinsically per-token and the
+// refresh-token cascade is always required to satisfy RFC 6749
+// §4.1.2.
+//
 // The walk is best-effort: if the consumed authorization-code record
 // is no longer findable (e.g. the store garbage-collected it) the
 // function returns silently. The caller still emits invalid_grant.
@@ -338,12 +359,12 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	// Revoke access tokens first so the userinfo / introspection paths
 	// reject any AT a sibling refresh might mint racing the cascade.
 	// AT first, RT second: a refresh-grant racing the revocation can
-	// still mint an AT, but that AT also passes through Register which
-	// is a fresh row, leaving the next refresh attempt blocked once
-	// the RT half of the cascade lands.
-	if deps.AccessTokens != nil {
-		_, _ = deps.AccessTokens.RevokeByGrant(ctx, rec.GrantID)
-	}
+	// still mint an AT, but the mint-refusal check on the refresh path
+	// (under RevocationStrategyGrantTombstone) closes that window, and
+	// under RevocationStrategyJTIRegistry the AT also passes through
+	// Register which is a fresh row, leaving the next refresh attempt
+	// blocked once the RT half of the cascade lands.
+	revokeJWTAccessTokensForGrant(ctx, deps, rec.GrantID)
 	// Mirror the cascade onto the opaque-AT substore (ADR 0024
 	// §"Code-replay cascade"). The substore is nil for embedders who
 	// stay on the JWT-only default; calling RevokeByGrant on a nil
@@ -360,6 +381,62 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	// when no record matches (a freshly-replayed code may not have
 	// produced a refresh token at all).
 	_ = deps.RefreshTokens.RevokeByGrant(ctx, rec.GrantID)
+}
+
+// revokeJWTAccessTokensForGrant runs the JWT-AT half of the
+// code-replay cascade against the configured
+// [Deps.RevocationStrategy]. The function is a strategy dispatcher:
+//
+//   - [store.RevocationStrategyJTIRegistry] preserves the ADR 0013
+//     behaviour and flips Revoked on every per-AT shadow row.
+//   - [store.RevocationStrategyGrantTombstone] writes a single
+//     [store.GrantTombstone] (ADR 0025). The tombstone's RevokedAt is
+//     stamped at the wall-clock instant the cascade runs and the
+//     ExpiresAt outlives the longest possible JWT AT under the grant
+//     (now + AccessTokenTTL + 5m grace) so a verifier consulting
+//     IsRevoked rejects every AT issued before the cascade until the
+//     tombstone is GC'd.
+//   - [store.RevocationStrategyNone] is a no-op; JWT ATs live until exp.
+//
+// All branches swallow store errors: the caller still emits
+// invalid_grant on the replay path, and the next /token request hits
+// the same cascade so a transient store fault recovers. Logging the
+// failure is the OP's responsibility; the tokenendpoint package does
+// not own a slog logger today, so we leave the failure observable
+// only through the audit emitter (handled by the caller).
+func revokeJWTAccessTokensForGrant(ctx context.Context, deps Deps, grantID string) {
+	switch deps.RevocationStrategy {
+	case store.RevocationStrategyJTIRegistry:
+		if deps.AccessTokens != nil {
+			_, _ = deps.AccessTokens.RevokeByGrant(ctx, grantID)
+		}
+	case store.RevocationStrategyGrantTombstone:
+		if deps.GrantRevocations == nil || grantID == "" {
+			return
+		}
+		now := deps.now().UTC()
+		_ = deps.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
+			GrantID:   grantID,
+			RevokedAt: now,
+			// Tombstone retention: max_AT_TTL + 5m grace. Any AT issued
+			// before the cascade is guaranteed to have expired (or to
+			// be rejected) before the tombstone disappears
+			// (ADR 0025 §GC).
+			ExpiresAt: now.Add(deps.AccessTokenTTL + 5*time.Minute),
+			Reason:    "code_replay",
+		})
+	case store.RevocationStrategyNone:
+		// Embedder opted out of server-side JWT revocation. The
+		// refresh-token cascade still runs; outstanding JWT ATs live
+		// until exp.
+	default:
+		// Unknown strategy. The op-level [store.AccessTokenRevocationStrategy.IsValid]
+		// gate at op.New rejects unknown values, so reaching here means
+		// a manual Deps was misconfigured. Fall back to the
+		// most-permissive default (no-op) rather than panic — the
+		// failure mode is observable through the missing tombstone if
+		// the embedder later inspects the substore.
+	}
 }
 
 // issueAuthCodeResponse mints the access token, optionally a refresh
@@ -504,9 +581,28 @@ func mintAccessToken(
 }
 
 // mintJWTAccessToken signs the JWT-shaped access token (RFC 9068) and,
-// when the configured registry is non-nil, registers a matching shadow
-// row so the userinfo / introspection / revocation paths can reject
-// the token after a future revocation (RFC 6749 §4.1.2).
+// when the configured strategy is [store.RevocationStrategyJTIRegistry]
+// and the registry is non-nil, registers a matching shadow row so the
+// userinfo / introspection / revocation paths can reject the token
+// after a future revocation (RFC 6749 §4.1.2).
+//
+// Under the default [store.RevocationStrategyGrantTombstone] (ADR
+// 0025) the issuance path is purely compute-bound: the access token
+// carries the originating GrantID in its "gid" private claim and the
+// verifier consults the per-grant tombstone substore at use, so no
+// shadow row is written here.
+//
+// Under [store.RevocationStrategyNone] no shadow row is written and
+// the verifier skips the revocation check entirely; JWT access tokens
+// live until exp.
+//
+// The "gid" claim is populated unconditionally (RFC 7519 §4.3 private
+// claim) so a future strategy switch -- or an embedder whose verifier
+// runs ahead of the OP it talks to -- can rely on the claim being
+// present. The wire form uses omitempty, so empty grantID values
+// (synthetic client_credentials grants that elect not to allocate one)
+// remain absent on the wire.
+//
 // When the binding carries a DPoP JKT (RFC 9449 §6) or an mTLS
 // thumbprint (RFC 8705 §3.1) the token is sender-constrained: the
 // "cnf" claim carries the corresponding member ("jkt" or "x5t#S256")
@@ -542,12 +638,13 @@ func mintJWTAccessToken(
 		Scope:        append([]string(nil), scope...),
 		AuthTime:     authTime,
 		Confirmation: binding.confirmation(),
+		GrantID:      grantID,
 	}
 	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
 	if err != nil {
 		return "", err
 	}
-	if deps.AccessTokens != nil {
+	if deps.RevocationStrategy == store.RevocationStrategyJTIRegistry && deps.AccessTokens != nil {
 		if err := deps.AccessTokens.Register(ctx, store.AccessTokenRecord{
 			JTI:       jti,
 			GrantID:   grantID,
