@@ -3,7 +3,7 @@
 // Example 10 demonstrates [op.WithSPAUI]: the OP delegates the
 // login screens to a SPA at the configured mount paths while still
 // driving the OAuth + OIDC protocol surface. The SPA bundle in
-// ./web/dist is hand-rolled vanilla HTML/CSS/JS with no build step
+// ./web/static is hand-rolled vanilla HTML/CSS/JS with no build step
 // so the demo runs out of the box.
 //
 // Run with the example build tag:
@@ -14,7 +14,7 @@
 //
 //   - :8080 — the OP, with one seeded password user, one
 //     statically-registered public client, and the SPA bundle
-//     served from ./web/dist at /login.
+//     served from ./web/static at /login.
 //   - :9090 — the RP, built from examples/internal/rpkit. It
 //     exposes /, /login, /callback, /me.
 //
@@ -72,7 +72,7 @@ const (
 	demoPassword = "demo"
 	demoSubject  = "demo-user"
 
-	staticDir = "./web/dist"
+	staticDir = "./web/static"
 )
 
 func main() {
@@ -83,7 +83,7 @@ func main() {
 
 func run() error {
 	if _, err := os.Stat(staticDir); err != nil {
-		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/dist resolves")
+		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/static resolves")
 	}
 
 	keys := devkeys.MustEphemeral("react-1")
