@@ -15,6 +15,12 @@ const (
 	errInvalidScope         = "invalid_scope"
 	errServerError          = "server_error"
 	errInvalidRequestObject = "invalid_request_object"
+	// errUseDPoPNonce is the RFC 9449 §8 nonce challenge code. PAR
+	// emits it identically to /token (the OFCS PAR-2.3 / FAPI 2.0
+	// Message Signing flow expects every endpoint that processes
+	// DPoP proofs to issue this challenge on a missing or invalid
+	// nonce, paired with a fresh "DPoP-Nonce" response header).
+	errUseDPoPNonce = "use_dpop_nonce"
 )
 
 // writeError emits the RFC 6749 §5.2 envelope with the supplied status,

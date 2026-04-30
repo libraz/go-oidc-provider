@@ -124,6 +124,20 @@ type Deps struct {
 	// "dpop_jkt" still flows through to the snapshot unchanged.
 	DPoP *dpop.Verifier
 
+	// DPoPNonces is the RFC 9449 §8 nonce issuer consulted on the
+	// `use_dpop_nonce` challenge response when [Deps.DPoP] rejects a
+	// proof for a missing or invalid nonce claim. A nil value omits
+	// the "DPoP-Nonce" response header on the challenge but the JSON
+	// envelope still carries error="use_dpop_nonce" so a debugger can
+	// see the gate triggered. The expected wiring is one struct that
+	// satisfies both [dpop.NonceVerifier] (consumed by [Deps.DPoP])
+	// and [dpop.NonceIssuer] (this field) so issuance and validation
+	// share a rotation pipeline. The token endpoint uses the same
+	// pairing — RFC 9449 §8 covers any AS endpoint that processes
+	// DPoP proofs, so /par and /token symmetrically issue nonces
+	// from the same pool.
+	DPoPNonces dpop.NonceIssuer
+
 	// RequireSignedRequestObject, when true, makes /par reject any
 	// request that omits the "request" parameter. FAPI 2.0 Message
 	// Signing §5.6 mandates "signed_non_repudiation": every

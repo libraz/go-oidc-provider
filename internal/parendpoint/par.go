@@ -47,6 +47,20 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
+	// DPoP proof verification runs ahead of client authentication so
+	// the `use_dpop_nonce` challenge fires before any client_assertion
+	// is consumed. RFC 9449 §8 contemplates a verbatim retry of the
+	// client-side request body with only the proof refreshed; OFCS
+	// (and other RP libraries) rebuild only the DPoP header, reusing
+	// the original client_assertion verbatim, so consuming the
+	// assertion's jti on the first attempt would surface as
+	// invalid_client / ErrAssertionReplayed on the retry. Reordering
+	// is safe because [verifyDPoPProof] does not depend on the
+	// resolved client identity.
+	dpopJKT, ok := verifyDPoPProof(r, w, deps)
+	if !ok {
+		return
+	}
 	client, _, ok := authenticate(r.Context(), w, r, deps)
 	if !ok {
 		return
@@ -67,7 +81,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	values, ok = bindDPoPProof(r, w, deps, values)
+	values, ok = applyDPoPJKT(w, values, dpopJKT)
 	if !ok {
 		return
 	}
@@ -190,45 +204,61 @@ func jarDescriptionFor(err error) string {
 	}
 }
 
-// bindDPoPProof verifies the optional DPoP header on the /par request
-// and reconciles the proof's thumbprint with any "dpop_jkt" already
-// present in values (form parameter or merged JAR claim). The contract
-// implements RFC 9449 §10:
-//
-//   - No DPoP header, no dpop_jkt: no-op (the request remains unbound).
-//   - No DPoP header, with dpop_jkt: the value flows through unchanged
-//     so the eventual /token endpoint can still enforce the binding.
-//   - With DPoP header, no dpop_jkt: the proof's thumbprint is stamped
-//     onto values["dpop_jkt"] so the /authorize → /token chain inherits
-//     the binding without the client having to commit twice.
-//   - With DPoP header AND dpop_jkt: the two MUST match — a divergence
-//     means the client signed a different key than it just committed
-//     to, and §10 mandates rejection.
+// verifyDPoPProof verifies the optional DPoP header on the /par
+// request and returns the proof's RFC 7638 thumbprint when one was
+// presented. The function runs ahead of client authentication and
+// JAR consumption so the §8 nonce challenge can fire before any
+// jti-bearing credential is consumed; the §10 commitment check
+// against the request's "dpop_jkt" parameter (form or merged JAR
+// claim) lives in [applyDPoPJKT], which runs after JAR merging so
+// the comparison sees the post-merge value.
 //
 // A nil [Deps.DPoP] disables verification; a missing DPoP header is
-// always tolerated because RFC 9449 §10.1 makes the header optional at
-// /par. Errors emit the response body and the function returns
+// always tolerated because RFC 9449 §10.1 makes the header optional
+// at /par. Errors emit the response body and the function returns
 // ok=false so the caller stops.
-func bindDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps, values url.Values) (url.Values, bool) {
+func verifyDPoPProof(r *http.Request, w http.ResponseWriter, deps Deps) (string, bool) {
 	if deps.DPoP == nil {
-		return values, true
+		return "", true
 	}
 	if r.Header.Get("DPoP") == "" {
-		return values, true
+		return "", true
 	}
 	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
 	if err != nil {
-		writeDPoPError(w, err)
-		return nil, false
+		writeDPoPError(w, deps, err)
+		return "", false
+	}
+	return res.JKT, true
+}
+
+// applyDPoPJKT reconciles the proof's thumbprint (from
+// [verifyDPoPProof]) with any "dpop_jkt" already present in values
+// (form parameter or merged JAR claim) and stamps the verified value
+// onto the snapshot. The split keeps the §8 nonce challenge ahead of
+// authentication while still applying RFC 9449 §10:
+//
+//   - jkt empty (no DPoP header / DPoP off): no-op.
+//   - jkt set, values has no dpop_jkt: stamp it so /authorize → /token
+//     inherits the binding without the client committing twice.
+//   - jkt set, values has dpop_jkt: the two MUST match — a divergence
+//     means the client signed a different key than it just committed
+//     to, and §10 mandates rejection.
+//
+// The returned bool is false when the function wrote the response;
+// the caller then stops processing.
+func applyDPoPJKT(w http.ResponseWriter, values url.Values, jkt string) (url.Values, bool) {
+	if jkt == "" {
+		return values, true
 	}
 	committed := values.Get("dpop_jkt")
-	if committed != "" && committed != res.JKT {
+	if committed != "" && committed != jkt {
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"DPoP proof key does not match the dpop_jkt commitment")
 		return nil, false
 	}
 	out := cloneValues(values)
-	out.Set("dpop_jkt", res.JKT)
+	out.Set("dpop_jkt", jkt)
 	return out, true
 }
 
@@ -246,11 +276,15 @@ func cloneValues(in url.Values) url.Values {
 // RFC 9449 §7 prescribes "invalid_dpop_proof" but the PAR endpoint
 // reuses the existing "invalid_request" envelope for parity with the
 // token endpoint and for OFCS expectations under PAR-2.3. The nonce
-// challenge is handled separately because RFC 9449 §8 mandates the
-// dedicated "use_dpop_nonce" code plus a fresh nonce header — the
-// PAR handler does not yet wire a nonce issuer, so the proof simply
-// does not exercise that path.
-func writeDPoPError(w http.ResponseWriter, err error) {
+// sentinels ([dpop.ErrProofNonceMissing] / [dpop.ErrProofNonceInvalid])
+// take a separate code: §8 defines "use_dpop_nonce" specifically so
+// the client knows to retry with the fresh value carried in the
+// companion "DPoP-Nonce" response header.
+func writeDPoPError(w http.ResponseWriter, deps Deps, err error) {
+	if dpop.IsNonceError(err) {
+		writeUseDPoPNonce(w, deps)
+		return
+	}
 	switch {
 	case errors.Is(err, dpop.ErrProofMalformed),
 		errors.Is(err, dpop.ErrProofMissingJTI):
@@ -267,6 +301,26 @@ func writeDPoPError(w http.ResponseWriter, err error) {
 	default:
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof verification failed")
 	}
+}
+
+// writeUseDPoPNonce emits the RFC 9449 §8 nonce challenge: a 400
+// JSON envelope with error="use_dpop_nonce" plus a "DPoP-Nonce"
+// response header carrying a fresh value the client should embed in
+// the next proof's "nonce" claim. A nil [Deps.DPoPNonces] omits the
+// header (the issuer is offline) but still emits the JSON body so a
+// debugger can see the gate fired; the client then has no nonce to
+// retry with, which is the most truthful signal the server can give
+// in that misconfiguration. Mirrors the token-endpoint helper so /par
+// and /token issue nonces interchangeably from the same rotation
+// pipeline.
+func writeUseDPoPNonce(w http.ResponseWriter, deps Deps) {
+	if deps.DPoPNonces != nil {
+		if nonce := deps.DPoPNonces.IssueNonce(); nonce != "" {
+			w.Header().Set("DPoP-Nonce", nonce)
+		}
+	}
+	writeError(w, http.StatusBadRequest, errUseDPoPNonce,
+		"DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header")
 }
 
 // stripAuthFields returns a copy of in with the credential-bearing keys
