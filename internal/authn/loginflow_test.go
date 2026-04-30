@@ -421,6 +421,102 @@ func TestLoginFlowRiskCalledOnce(t *testing.T) {
 	}
 }
 
+// TestLoginFlowRiskExplicitScoreReachesMedium pins the
+// [RiskOutcome.Score] override path: an assessor that returns
+// `Decision: RiskRequire, Score: RiskScoreMedium` causes the
+// orchestrator to cache Medium, so a Medium-threshold rule fires
+// while a High-threshold rule (declared first to win on High) stays
+// silent. This is the case the Decision-only fallback cannot reach.
+func TestLoginFlowRiskExplicitScoreReachesMedium(t *testing.T) {
+	t.Parallel()
+
+	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+	totp := successAuth(op.FactorTOTP, op.AAL2, "otp", "user-1")
+	emailOTP := successAuth(op.FactorEmailOTP, op.AAL1, "email", "user-1")
+	risk := &stubRisk{
+		assess: func(_ context.Context, _ op.RiskInput) (op.RiskOutcome, error) {
+			return op.RiskOutcome{
+				Decision: op.RiskRequire,
+				Score:    op.RiskScoreMedium,
+				Reason:   "anomaly.test",
+			}, nil
+		},
+	}
+	flow, _ := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{
+				When: func(lc authn.LoginFlowContext) bool { return lc.RiskScore >= op.RiskScoreHigh },
+				Then: authn.LoginFlowStep{Kind: "myorg.totp", Authenticator: totp},
+			},
+			{
+				When: func(lc authn.LoginFlowContext) bool { return lc.RiskScore >= op.RiskScoreMedium },
+				Then: authn.LoginFlowStep{Kind: "myorg.email_otp", Authenticator: emailOTP},
+			},
+		},
+		Risk: risk,
+	})
+	o, _ := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("primary begin: %v", err)
+	}
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "x"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("primary continue: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.email_otp.send" {
+		t.Fatalf("expected auth.email_otp.send prompt (Medium-threshold rule), got %+v", step)
+	}
+}
+
+// TestLoginFlowRiskScoreFallsBackToHighOnRequire pins the
+// Decision-only fallback: an assessor that leaves [RiskOutcome.Score]
+// at zero and returns `Decision: RiskRequire` still produces
+// [RiskScoreHigh] in the cache, so the existing two-line assessor in
+// embedder code keeps working unchanged.
+func TestLoginFlowRiskScoreFallsBackToHighOnRequire(t *testing.T) {
+	t.Parallel()
+
+	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+	totp := successAuth(op.FactorTOTP, op.AAL2, "otp", "user-1")
+	risk := &stubRisk{
+		assess: func(_ context.Context, _ op.RiskInput) (op.RiskOutcome, error) {
+			return op.RiskOutcome{Decision: op.RiskRequire}, nil
+		},
+	}
+	flow, _ := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{
+				When: func(lc authn.LoginFlowContext) bool { return lc.RiskScore >= op.RiskScoreHigh },
+				Then: authn.LoginFlowStep{Kind: "myorg.totp", Authenticator: totp},
+			},
+		},
+		Risk: risk,
+	})
+	o, _ := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("primary begin: %v", err)
+	}
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "x"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("primary continue: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
+		t.Fatalf("expected auth.totp prompt (High-threshold rule via fallback), got %+v", step)
+	}
+}
+
 // 10. CompletedStepKinds dedup: a rule whose Then.Kind is already
 // present is skipped on the next pass even if its predicate still
 // returns true.

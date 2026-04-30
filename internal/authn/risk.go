@@ -99,6 +99,38 @@ const (
 	RiskDeny
 )
 
+// RiskScore is the typed enum that rule predicates threshold against
+// and that the orchestrator caches once per chain. Higher numeric
+// values denote higher risk; comparison operators rely on the
+// ordering RiskScoreNone < RiskScoreLow < RiskScoreMedium <
+// RiskScoreHigh.
+//
+// The op package re-exports this type as [op.RiskScore] so embedders
+// write `op.RiskScoreMedium` etc.
+type RiskScore int
+
+// RiskScore values. The ordering is significant.
+const (
+	// RiskScoreNone is the default zero value: no signal available or
+	// the assessor was never invoked. Reserved for short-circuiting
+	// rule predicates on missing-signal — never reached on the
+	// orchestrator's cached path once an assessor has run.
+	RiskScoreNone RiskScore = iota
+
+	// RiskScoreLow is the baseline non-zero level: nothing actionable
+	// detected, but at least one signal was observed.
+	RiskScoreLow
+
+	// RiskScoreMedium is the threshold at which embedders typically
+	// add a non-blocking step (captcha, e-mail OTP).
+	RiskScoreMedium
+
+	// RiskScoreHigh is the top of the scale: the assessor recommends
+	// blocking strong factors (TOTP, passkey, recovery code) or
+	// denying outright.
+	RiskScoreHigh
+)
+
 // RiskOutcome is the shape a [RiskAssessor] returns to the
 // orchestrator. Output is a *factor specification*, not an AAL bump:
 // returning RequiredFactors=["sms_otp"] tells the orchestrator to
@@ -129,6 +161,15 @@ type RiskOutcome struct {
 	// ("anomaly.<class>", "policy.<rule>"). Reason MUST NOT leak to
 	// the SPA.
 	Reason string
+
+	// Score is the optional explicit risk grade. When non-zero, it
+	// overrides the orchestrator's Decision-derived default
+	// (Allow→Low, Require→High) so an assessor can emit any of the
+	// four levels — most importantly [RiskScoreMedium], which is not
+	// reachable through Decision alone. Leave Score zero to keep the
+	// simple-case path; rule predicates `score >= threshold` then
+	// see the Decision-derived value.
+	Score RiskScore
 }
 
 // RiskAssessor is the engine the orchestrator consults at each

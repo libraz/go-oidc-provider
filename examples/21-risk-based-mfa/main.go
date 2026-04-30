@@ -9,12 +9,20 @@
 //
 //	go run -tags example ./examples/21-risk-based-mfa
 //
-// The example wires a deliberately silly assessor that returns
-// [op.RiskScoreHigh] when the request's UserAgent looks scripted
-// (curl / Go / Python) and [op.RiskScoreLow] otherwise. RuleRisk
-// fires StepTOTP when the score is High, so a human in a browser
-// signs in with password alone but a curl invocation is asked for
-// TOTP. Real assessors look at IP geolocation, device fingerprint,
+// The example wires a deliberately silly assessor that grades on the
+// User-Agent header:
+//
+//   - "curl" / "python" / "go-http-client" → [op.RiskScoreHigh]
+//     (TOTP fires)
+//   - "headless" (anomalous browser) → [op.RiskScoreMedium]
+//     (captcha fires; not a hard block)
+//   - everything else → [op.RiskScoreLow] (password-only happy path)
+//
+// The Medium path is the case [op.RiskOutcome.Score] exists for: the
+// Decision-only fallback can only reach Low or High. Returning
+// `Decision: RiskRequire, Score: RiskScoreMedium` lets a captcha
+// rule fire while a TOTP rule gated on High stays silent.
+// Real assessors look at IP geolocation, device fingerprint,
 // velocity counters, and similar signals.
 //
 // PRODUCTION CAVEATS:
@@ -26,6 +34,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -36,24 +45,49 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// uaRiskAssessor flags scripted user-agents as high risk. The
-// orchestrator maps RiskRequire → RiskScoreHigh internally so
-// [op.RuleRisk(op.RiskScoreHigh, ...)] fires; benign requests
-// return RiskAllow which maps to RiskScoreLow.
+// uaRiskAssessor grades on the User-Agent header. Scripted UAs are
+// surfaced as RiskScoreHigh through the Decision-only fallback;
+// "headless" UAs are surfaced as RiskScoreMedium through the
+// explicit Score field. Benign UAs return RiskAllow → RiskScoreLow.
 type uaRiskAssessor struct{}
 
 func (uaRiskAssessor) Assess(_ context.Context, in op.RiskInput) (op.RiskOutcome, error) {
 	ua := strings.ToLower(in.UserAgent)
-	suspicious := strings.Contains(ua, "curl") ||
-		strings.Contains(ua, "python") ||
-		strings.Contains(ua, "go-http-client")
-	if suspicious {
+	switch {
+	case strings.Contains(ua, "curl"),
+		strings.Contains(ua, "python"),
+		strings.Contains(ua, "go-http-client"):
+		// Scripted user-agents: hard step-up. The Decision-only path
+		// is enough — the orchestrator caches RiskScoreHigh.
 		return op.RiskOutcome{
 			Decision: op.RiskRequire,
 			Reason:   "anomaly.scripted-user-agent",
 		}, nil
+	case strings.Contains(ua, "headless"):
+		// Anomalous-but-not-blocking signal: ask for a captcha but
+		// not a strong factor. Score is the seam that makes Medium
+		// reachable; without it, RiskRequire would be cached as
+		// RiskScoreHigh and the captcha rule below would never fire
+		// in isolation from the TOTP rule.
+		return op.RiskOutcome{
+			Decision: op.RiskRequire,
+			Score:    op.RiskScoreMedium,
+			Reason:   "anomaly.headless-browser",
+		}, nil
+	default:
+		return op.RiskOutcome{Decision: op.RiskAllow}, nil
 	}
-	return op.RiskOutcome{Decision: op.RiskAllow}, nil
+}
+
+// stubCaptchaVerifier accepts any non-empty token. A real deployment
+// wires Cloudflare Turnstile / hCaptcha / reCAPTCHA here.
+type stubCaptchaVerifier struct{}
+
+func (stubCaptchaVerifier) Verify(_ context.Context, in op.CaptchaInput) error {
+	if in.Token == "" {
+		return errors.New("captcha token missing")
+	}
+	return nil
 }
 
 func main() {
@@ -65,10 +99,17 @@ func main() {
 		Risk:    uaRiskAssessor{},
 		Rules: []op.Rule{
 			// TOTP fires only when the assessor scores the
-			// request RiskScoreHigh or above.
+			// request RiskScoreHigh or above (scripted UAs).
 			op.RuleRisk(op.RiskScoreHigh, op.StepTOTP{
 				Store:         st.TOTPs(),
 				EncryptionKey: keys.TOTPKey,
+			}),
+			// Captcha fires from RiskScoreMedium upward, so
+			// "headless" requests are challenged but not
+			// hard-blocked. Rule order matters: TOTP wins on High
+			// because it appears first.
+			op.RuleRisk(op.RiskScoreMedium, op.StepCaptcha{
+				Verifier: stubCaptchaVerifier{},
 			}),
 		},
 	}
@@ -87,7 +128,10 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Println("risk-based example listening on :8080 (TOTP fires on UserAgent containing curl/python/go-http-client)")
+	log.Println("risk-based example listening on :8080")
+	log.Println("  UA contains curl/python/go-http-client → RiskScoreHigh → TOTP")
+	log.Println("  UA contains 'headless'                 → RiskScoreMedium → captcha")
+	log.Println("  otherwise                              → RiskScoreLow → password only")
 	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}

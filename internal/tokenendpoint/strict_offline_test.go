@@ -104,7 +104,7 @@ func TestStrictOfflineAccess_RefreshExchangeAcceptsOfflineToken(t *testing.T) {
 
 	f := strictFixture(t)
 	client, secret := strictConfidentialClient(t, f)
-	const tokenID = "rt-offline" //nolint:gosec // opaque test fixture id, not a credential.
+	const tokenID = "rt-offline"
 	f.seedGrant(t, &store.Grant{
 		ID: "grant-offline", Subject: "user-1", ClientID: client.ID,
 		Scope: []string{"openid", "offline_access"},
@@ -142,7 +142,7 @@ func TestLaxOfflineAccess_RefreshExchangeAcceptsNonOfflineToken(t *testing.T) {
 
 	f := newFixture(t) // lax mode by default.
 	client, secret := f.confidentialClientFixture(t)
-	const tokenID = "rt-lax" //nolint:gosec // opaque test fixture id, not a credential.
+	const tokenID = "rt-lax"
 	f.seedGrant(t, &store.Grant{
 		ID: "grant-lax", Subject: "user-1", ClientID: client.ID,
 		Scope: []string{"openid", "email"},

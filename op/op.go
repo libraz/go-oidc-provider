@@ -1545,9 +1545,9 @@ func projectStepError(where string, err error) error {
 }
 
 // toPublicLoginContext projects the internal [authn.LoginFlowContext]
-// onto the public [LoginContext] surface rule predicates consume. The
-// numeric RiskScore field maps verbatim because the public
-// [op.RiskScore] constants share the internal numeric ordering.
+// onto the public [LoginContext] surface rule predicates consume.
+// [op.RiskScore] is a type alias for [authn.RiskScore], so the field
+// flows through without a conversion.
 func toPublicLoginContext(lc authn.LoginFlowContext) LoginContext {
 	scopes := make(ScopeSet, len(lc.RequestedScopes))
 	for _, s := range lc.RequestedScopes {
@@ -1562,7 +1562,7 @@ func toPublicLoginContext(lc authn.LoginFlowContext) LoginContext {
 		ClientID:        lc.ClientID,
 		RequestedScopes: scopes,
 		FailedAttempts:  lc.FailedAttempts,
-		RiskScore:       RiskScore(lc.RiskScore),
+		RiskScore:       lc.RiskScore,
 		NewDevice:       lc.NewDevice,
 		CompletedSteps:  completed,
 		ACRValues:       lc.ACRValues,

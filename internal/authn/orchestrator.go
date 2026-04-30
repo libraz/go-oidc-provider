@@ -207,17 +207,16 @@ type State struct {
 	CompletedStepKinds []string `json:"completed_step_kinds,omitempty"`
 
 	// RiskScoreCached is the orchestrator's one-shot evaluation of
-	// [Config.LoginFlow.Risk] at chain start. Zero means "no signal
-	// available or no LoginFlow / no Risk configured"; the cached
-	// value mirrors the numeric ordering of the public op.RiskScore
-	// constants (None=0, Low=1, Medium=2, High=3) so a rule
-	// predicate `score >= threshold` works uniformly across the
+	// [Config.LoginFlow.Risk] at chain start. [RiskScoreNone] means
+	// "no signal available or no LoginFlow / no Risk configured".
+	// The cached value is the typed [RiskScore] so a rule predicate
+	// `score >= threshold` works uniformly across the
 	// orchestrator-cached and embedder-supplied paths.
 	// The orchestrator MUST NOT re-call [LoginFlow.Risk] once a
 	// non-zero score is cached: external risk APIs are paid, and
 	// the budget invariant is that a rule predicate sees the same
 	// score for the lifetime of the attempt.
-	RiskScoreCached int `json:"risk_score_cached,omitempty"`
+	RiskScoreCached RiskScore `json:"risk_score_cached,omitempty"`
 
 	// ActiveStepKind is the [LoginFlowStep.Kind] of the active
 	// LoginFlow step, or "" when no LoginFlow step is mid-ceremony.

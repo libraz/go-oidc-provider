@@ -1,5 +1,7 @@
 package op
 
+import "github.com/libraz/go-oidc-provider/internal/authn"
+
 // LoginFlow is the high-level seam embedders use to compose an OIDC
 // login. The struct describes the primary credential, a list of
 // conditional [Rule] entries, an optional imperative [Decider], and an
@@ -50,29 +52,19 @@ type LoginFlow struct {
 // with `score >= threshold`.
 // The mapping from a [RiskAssessor]'s probabilistic output to one of
 // the four levels is the embedder's responsibility; the library does
-// not prescribe a numeric cut-off.
-type RiskScore int
+// not prescribe a numeric cut-off. An assessor that wants to emit
+// [RiskScoreMedium] populates [RiskOutcome.Score] explicitly; the
+// Decision-only path can only reach Low or High.
+type RiskScore = authn.RiskScore
 
-// RiskScore values. The ordering is significant: comparison operators
-// rely on RiskScoreNone < RiskScoreLow < RiskScoreMedium <
-// RiskScoreHigh.
+// RiskScore values re-exported from the authn package. The ordering
+// is significant: comparison operators rely on RiskScoreNone <
+// RiskScoreLow < RiskScoreMedium < RiskScoreHigh.
 const (
-	// RiskScoreNone is the default zero value: no signal available or
-	// the assessor was never invoked.
-	RiskScoreNone RiskScore = iota
-
-	// RiskScoreLow is the baseline non-zero level: nothing actionable
-	// detected, but at least one signal was observed.
-	RiskScoreLow
-
-	// RiskScoreMedium is the threshold at which embedders typically
-	// add a non-blocking step (captcha, e-mail OTP).
-	RiskScoreMedium
-
-	// RiskScoreHigh is the top of the scale: the assessor recommends
-	// blocking strong factors (TOTP, passkey, recovery code) or
-	// denying outright.
-	RiskScoreHigh
+	RiskScoreNone   = authn.RiskScoreNone
+	RiskScoreLow    = authn.RiskScoreLow
+	RiskScoreMedium = authn.RiskScoreMedium
+	RiskScoreHigh   = authn.RiskScoreHigh
 )
 
 // LoginContext is the read-only view a [Rule.When] predicate or a

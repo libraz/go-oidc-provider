@@ -93,6 +93,19 @@ changes.
   dashboards can distinguish expected gaps under volatile
   placement from unexpected gaps under durable placement without
   keying on the store-adapter type.
+- `op.RiskOutcome` gains an optional `Score op.RiskScore` field.
+  When non-zero it overrides the orchestrator's Decision-derived
+  default (RiskAllow→Low, RiskRequire→High) so an assessor can
+  surface `op.RiskScoreMedium` — previously unreachable through
+  the public API. The Decision-only fallback path is unchanged,
+  so two-line assessors continue to work. Embedders integrating
+  real-world risk providers (Cloudflare Bot Management, Castle,
+  Sift) can now map their continuous score onto the four-level
+  enum directly. `RiskScore` and its constants moved to
+  `internal/authn`; `op.RiskScore` is now a type alias and the
+  numeric ordering is unchanged. Source-compatible for embedders
+  who construct `op.RiskOutcome` with named fields (the
+  documented idiom).
 
 ### docs (examples)
 

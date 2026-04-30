@@ -116,7 +116,7 @@ type LoginFlowContext struct {
 	ClientID        string
 	RequestedScopes []string
 	FailedAttempts  int
-	RiskScore       int // mirrors op.RiskScore numeric ordering (None < Low < Medium < High)
+	RiskScore       RiskScore
 	NewDevice       bool
 	CompletedKinds  []string
 	ACRValues       []string
@@ -302,24 +302,25 @@ func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 // are no-ops; this is the §3.1 budget invariant ("Risk.Assess at most
 // once per chain").
 //
-// The mapping from [RiskOutcome.Decision] / [RiskOutcome.RequiredFactors]
-// onto a numeric RiskScoreCached is deliberately simple:
+// The mapping from [RiskOutcome] onto [State.RiskScoreCached]:
 //
-//   - RiskAllow → 1 (Low — a signal was observed but nothing
-//     actionable; matches op.RiskScoreLow)
-//   - RiskRequire → 3 (High — the assessor recommends a stronger
-//     factor; matches op.RiskScoreHigh)
-//   - RiskDeny → handled separately; the orchestrator returns
-//     [ErrRiskDenied]
+//   - [RiskOutcome.Score] non-zero — used verbatim. This is the path
+//     an assessor takes to surface [RiskScoreMedium], which the
+//     Decision-only fallback cannot reach.
+//   - Score zero, Decision = [RiskAllow] — cached as [RiskScoreLow]
+//     (a signal was observed but nothing actionable).
+//   - Score zero, Decision = [RiskRequire] — cached as
+//     [RiskScoreHigh] (the assessor recommends a stronger factor).
+//   - Decision = [RiskDeny] — handled separately; the orchestrator
+//     returns [ErrRiskDenied] without caching.
 //
-// The numeric values mirror the public op.RiskScore constants so a
-// rule predicate using `op.RuleRisk(op.RiskScoreHigh, ...)` continues
-// to fire correctly when the assessor returns Require.
+// Rule predicates `score >= threshold` see the cached value
+// uniformly regardless of which path produced it.
 func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, flow *CompiledLoginFlow) (State, bool, error) {
 	if flow.risk == nil {
 		return st, false, nil
 	}
-	if st.RiskScoreCached != 0 {
+	if st.RiskScoreCached != RiskScoreNone {
 		return st, false, nil
 	}
 	out, err := flow.risk.Assess(ctx, RiskInput{
@@ -338,9 +339,17 @@ func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, fl
 	case RiskDeny:
 		return st, true, nil
 	case RiskRequire:
-		st.RiskScoreCached = 3 // RiskScoreHigh equivalent
+		if out.Score != RiskScoreNone {
+			st.RiskScoreCached = out.Score
+		} else {
+			st.RiskScoreCached = RiskScoreHigh
+		}
 	case RiskAllow:
-		st.RiskScoreCached = 1 // RiskScoreLow equivalent
+		if out.Score != RiskScoreNone {
+			st.RiskScoreCached = out.Score
+		} else {
+			st.RiskScoreCached = RiskScoreLow
+		}
 	}
 	return st, false, nil
 }
