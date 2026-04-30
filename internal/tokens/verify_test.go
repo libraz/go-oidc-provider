@@ -428,6 +428,76 @@ func TestVerify_LeewayAcceptsSlightlyExpired(t *testing.T) {
 	}
 }
 
+// TestVerify_RoundTripGrantID pins ADR 0025's decode side: a token
+// minted with a non-empty GrantID survives encode → decode and the
+// "gid" private claim re-projects onto AccessTokenClaims.GrantID.
+func TestVerify_RoundTripGrantID(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-gid")
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jws := signed(t, entry, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-gid-roundtrip",
+		GrantID:   "g123",
+	})
+
+	v := &tokens.AccessTokenVerifier{
+		Keys:   set,
+		Issuer: "https://op.example.com",
+		Clock:  fakeClock{now: now},
+	}
+	got, _, err := v.Verify(jws)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.GrantID != "g123" {
+		t.Errorf("GrantID=%q want %q (ADR 0025 round trip)", got.GrantID, "g123")
+	}
+}
+
+// TestVerify_LegacyTokenWithoutGidDecodesEmpty pins the verifier's
+// non-enforcement contract: a token with no "gid" claim still verifies
+// cleanly and surfaces an empty GrantID. The consumer (userinfo /
+// introspection) decides what to do with the empty value — that is
+// Wave 5's concern, not the verifier's.
+func TestVerify_LegacyTokenWithoutGidDecodesEmpty(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-legacy")
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	// GrantID intentionally left zero-value: the SignAccessToken merge
+	// drops "gid" from the wire under omitempty equivalence, so the
+	// resulting JWT models a legacy / pre-ADR-0025 access token.
+	jws := signed(t, entry, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-legacy",
+	})
+
+	v := &tokens.AccessTokenVerifier{
+		Keys:   set,
+		Issuer: "https://op.example.com",
+		Clock:  fakeClock{now: now},
+	}
+	got, _, err := v.Verify(jws)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.GrantID != "" {
+		t.Errorf("GrantID=%q want empty (legacy AT without gid)", got.GrantID)
+	}
+}
+
 func TestVerify_NilClockUsesSystemClock(t *testing.T) {
 	t.Parallel()
 

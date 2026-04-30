@@ -151,6 +151,29 @@ type Deps struct {
 	// opaque branch; opaque tokens then always project onto
 	// inactive, mirroring the JWT-only legacy posture.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
+
+	// GrantRevocations is the [store.GrantRevocationStore] consulted
+	// by the grant-tombstone JWT access-token revocation strategy
+	// (ADR 0025). The introspection handler uses it to collapse a
+	// tombstoned access token onto the RFC 7662 §2.2
+	// {"active": false} wire shape; the lookup is keyed by the AT's
+	// "gid" private claim. A nil value disables the lookup and the
+	// handler falls back to whichever legacy behaviour
+	// [RevocationStrategy] selects.
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	GrantRevocations store.GrantRevocationStore
+
+	// RevocationStrategy selects the JWT access-token revocation
+	// shape (ADR 0025). The zero value is
+	// [store.RevocationStrategyGrantTombstone], which is the
+	// documented default; the library wires this from
+	// [op.WithAccessTokenRevocationStrategy].
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	RevocationStrategy store.AccessTokenRevocationStrategy
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection

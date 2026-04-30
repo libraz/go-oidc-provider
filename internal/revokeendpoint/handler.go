@@ -133,6 +133,28 @@ type Deps struct {
 	// resolve to 200 without state change, mirroring the JWT-only
 	// legacy posture.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
+
+	// GrantRevocations is the [store.GrantRevocationStore] consulted
+	// by the grant-tombstone JWT access-token revocation strategy
+	// (ADR 0025). The /revoke handler writes a JTI denylist row when
+	// an access token is revoked by jti per RFC 7009; cascades that
+	// flow through this endpoint write a per-grant tombstone instead.
+	// A nil value disables the substore and the handler falls back to
+	// whichever legacy behaviour [RevocationStrategy] selects.
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	GrantRevocations store.GrantRevocationStore
+
+	// RevocationStrategy selects the JWT access-token revocation
+	// shape (ADR 0025). The zero value is
+	// [store.RevocationStrategyGrantTombstone], which is the
+	// documented default; the library wires this from
+	// [op.WithAccessTokenRevocationStrategy].
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	RevocationStrategy store.AccessTokenRevocationStrategy
 }
 
 // Handler returns the HTTP handler the OP mounts at its revocation

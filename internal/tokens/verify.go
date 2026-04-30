@@ -184,6 +184,7 @@ type accessTokenWire struct {
 	ACR          string            `json:"acr"`
 	AMR          []string          `json:"amr"`
 	Confirmation map[string]string `json:"cnf"`
+	Gid          string            `json:"gid,omitempty"`
 }
 
 // decodeAccessTokenClaims parses payload into an [AccessTokenClaims].
@@ -216,6 +217,7 @@ func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 		ACR:          w.ACR,
 		AMR:          w.AMR,
 		Confirmation: w.Confirmation,
+		GrantID:      w.Gid,
 	}
 	return out, nil
 }

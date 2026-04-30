@@ -106,6 +106,18 @@ type AccessTokenClaims struct {
 	// v1.0 default. The map shape keeps the wire format forward-
 	// compatible with both binding methods landing in the same claim.
 	Confirmation map[string]string `json:"-"`
+
+	// GrantID is the "gid" private claim (RFC 7519 §4.3 Private Claim
+	// Names) that ADR 0025 introduces to wire grant-tombstone
+	// revocation through the JWT itself. The claim is meaningful only
+	// to the issuing OP — resource servers MUST ignore it per
+	// RFC 7519 §4.3 — so the wire form uses the short, unallocated
+	// name "gid" rather than a URI-form private claim. The field is
+	// indirected through [mergeAccessTokenClaims] (the same pattern
+	// as Scope and Confirmation) and the merge applies omitempty
+	// semantics so legacy strategies that never populate GrantID
+	// emit unchanged wire bytes.
+	GrantID string `json:"-"`
 }
 
 // ErrSignerInvalid is returned when SignIDToken / SignAccessToken is
@@ -279,6 +291,9 @@ func mergeAccessTokenClaims(c AccessTokenClaims) map[string]any {
 	}
 	if cnf := encodeConfirmation(c.Confirmation); cnf != nil {
 		out["cnf"] = cnf
+	}
+	if c.GrantID != "" {
+		out["gid"] = c.GrantID
 	}
 	return out
 }

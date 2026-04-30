@@ -1,0 +1,240 @@
+package op_test
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/profile"
+)
+
+func TestAccessTokenRevocationStrategy_StringIsStable(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		s    op.AccessTokenRevocationStrategy
+		want string
+	}{
+		{op.RevocationStrategyGrantTombstone, "GrantTombstone"},
+		{op.RevocationStrategyJTIRegistry, "JTIRegistry"},
+		{op.RevocationStrategyNone, "None"},
+	}
+	for _, tc := range cases {
+		if got := tc.s.String(); got != tc.want {
+			t.Errorf("AccessTokenRevocationStrategy(%d).String() = %q, want %q", int(tc.s), got, tc.want)
+		}
+	}
+
+	// Unknown values stringify with their numeric form so a regression
+	// in the option-layer validator surfaces in audit / log lines
+	// without crashing.
+	bogus := op.AccessTokenRevocationStrategy(99)
+	if got := bogus.String(); !strings.Contains(got, "99") {
+		t.Errorf("AccessTokenRevocationStrategy(99).String() = %q, want it to mention 99", got)
+	}
+}
+
+func TestAccessTokenRevocationStrategy_IsValid(t *testing.T) {
+	t.Parallel()
+
+	if !op.RevocationStrategyGrantTombstone.IsValid() {
+		t.Error("RevocationStrategyGrantTombstone must be valid")
+	}
+	if !op.RevocationStrategyJTIRegistry.IsValid() {
+		t.Error("RevocationStrategyJTIRegistry must be valid")
+	}
+	if !op.RevocationStrategyNone.IsValid() {
+		t.Error("RevocationStrategyNone must be valid")
+	}
+	if op.AccessTokenRevocationStrategy(99).IsValid() {
+		t.Error("AccessTokenRevocationStrategy(99) must not be valid")
+	}
+}
+
+func TestRevocationStrategyGrantTombstoneIsZero(t *testing.T) {
+	t.Parallel()
+
+	// The default strategy MUST be RevocationStrategyGrantTombstone
+	// (the zero value) so embedders that never call
+	// WithAccessTokenRevocationStrategy receive the documented
+	// default behaviour.
+	if op.RevocationStrategyGrantTombstone != op.AccessTokenRevocationStrategy(0) {
+		t.Fatalf("RevocationStrategyGrantTombstone = %d, want 0 (zero value)", int(op.RevocationStrategyGrantTombstone))
+	}
+}
+
+func TestWithAccessTokenRevocationStrategy_RoundTripAllStrategies(t *testing.T) {
+	t.Parallel()
+
+	cases := []op.AccessTokenRevocationStrategy{
+		op.RevocationStrategyGrantTombstone,
+		op.RevocationStrategyJTIRegistry,
+		op.RevocationStrategyNone,
+	}
+	for _, s := range cases {
+		t.Run(s.String(), func(t *testing.T) {
+			t.Parallel()
+			provider, err := op.New(append(validBaseOpts(t),
+				op.WithAccessTokenRevocationStrategy(s),
+			)...)
+			if err != nil {
+				t.Fatalf("op.New(WithAccessTokenRevocationStrategy(%v)): %v", s, err)
+			}
+			if provider == nil {
+				t.Fatal("expected non-nil provider")
+			}
+		})
+	}
+}
+
+func TestWithAccessTokenRevocationStrategy_DefaultIsGrantTombstone(t *testing.T) {
+	t.Parallel()
+
+	// When no option is passed the resolved strategy is the zero
+	// value, which by enum design equals RevocationStrategyGrantTombstone.
+	provider, err := op.New(validBaseOpts(t)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestWithAccessTokenRevocationStrategy_RejectsUnknownValue(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithAccessTokenRevocationStrategy(op.AccessTokenRevocationStrategy(99)),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for unknown AccessTokenRevocationStrategy, got nil")
+	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want *op.Error", err)
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("unknown strategy must be a server-side configuration error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "unknown AccessTokenRevocationStrategy") {
+		t.Errorf("err = %v, want it to mention unknown AccessTokenRevocationStrategy", err)
+	}
+}
+
+// TestWithAccessTokenRevocationStrategy_FAPIRejectsNone pins the
+// ADR 0025 §Profile interaction gate: under any FAPI profile
+// [op.RevocationStrategyNone] is rejected at [op.New] time because
+// FAPI 2.0 SP §5.3.2.2 mandates server-side access-token revocation.
+// The test exercises FAPI 2.0 Baseline, but the gate covers every
+// [profile.RequiresAccessTokenRevocation] true variant.
+func TestWithAccessTokenRevocationStrategy_FAPIRejectsNone(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyNone),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when FAPI profile is paired with RevocationStrategyNone, got nil")
+	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want *op.Error", err)
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("FAPI + None must be a server-side configuration error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "RevocationStrategyNone") {
+		t.Errorf("err = %v, want it to mention RevocationStrategyNone", err)
+	}
+}
+
+// TestWithAccessTokenRevocationStrategy_NoProfileAcceptsNone confirms
+// that without a FAPI profile, [op.RevocationStrategyNone] is a
+// permitted opt-out: the embedder accepts the RFC 6749 §4.1.2 wiggle
+// and the OP serves stateless JWT access tokens with no revocation
+// surface.
+func TestWithAccessTokenRevocationStrategy_NoProfileAcceptsNone(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOpts(t),
+		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyNone),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New(no profile + RevocationStrategyNone): %v", err)
+	}
+	if provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+// TestWithAccessTokenRevocationStrategy_FAPIAcceptsGrantTombstone
+// confirms the FAPI default path: every FAPI profile accepts the
+// default strategy (GrantTombstone). This is the path embedders who
+// never call WithAccessTokenRevocationStrategy travel.
+func TestWithAccessTokenRevocationStrategy_FAPIAcceptsGrantTombstone(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyGrantTombstone),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New(FAPI + GrantTombstone): %v", err)
+	}
+	if provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+// TestWithAccessTokenRevocationStrategy_FAPIAcceptsJTIRegistry confirms
+// the second FAPI-conformant strategy is admitted: JTIRegistry preserves
+// the ADR 0013 per-AT shadow row model, which also satisfies FAPI 2.0
+// SP §5.3.2.2.
+func TestWithAccessTokenRevocationStrategy_FAPIAcceptsJTIRegistry(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New(FAPI + JTIRegistry): %v", err)
+	}
+	if provider == nil {
+		t.Fatal("expected non-nil provider")
+	}
+}
+
+// TestProfile_RequiresAccessTokenRevocation pins the FAPI / non-FAPI
+// classification consumed by the validator. Adding a FAPI variant to
+// the profile package without updating this predicate would surface
+// here as a missing FAPI entry. FAPICIBA / IGovHigh are placeholders
+// today (no constraint table) so the predicate returns false; both
+// will graduate in a future release.
+func TestProfile_RequiresAccessTokenRevocation(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		p    profile.Profile
+		want bool
+	}{
+		{profile.FAPI2Baseline, true},
+		{profile.FAPI2MessageSigning, true},
+		{profile.FAPICIBA, false},
+		{profile.IGovHigh, false},
+		{profile.Profile(0), false},
+		{profile.Profile(99), false},
+	}
+	for _, tc := range cases {
+		if got := profile.RequiresAccessTokenRevocation(tc.p); got != tc.want {
+			t.Errorf("RequiresAccessTokenRevocation(%v) = %v, want %v", tc.p, got, tc.want)
+		}
+	}
+}

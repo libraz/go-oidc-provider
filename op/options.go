@@ -365,6 +365,16 @@ type config struct {
 	// normal form); the option site rejects non-canonical keys at
 	// construction time.
 	accessTokenFormatPerAudience map[string]store.AccessTokenFormat
+
+	// atRevocation selects the JWT access-token revocation strategy
+	// the OP applies (ADR 0025). The zero value is
+	// [store.RevocationStrategyGrantTombstone], which is the documented
+	// default; embedders flip the value via
+	// [WithAccessTokenRevocationStrategy]. The opaque AT path
+	// (ADR 0024) is unaffected because opaque tokens are intrinsically
+	// per-token in storage. Out-of-range values and FAPI-incompatible
+	// combinations are rejected at construction time.
+	atRevocation store.AccessTokenRevocationStrategy
 }
 
 // claimsParameterSupported returns the effective discovery
@@ -611,6 +621,7 @@ func (c *config) validate() error {
 		c.validateStrictOfflineAccess,
 		c.validateLoginFlow,
 		c.validateAccessTokenFormat,
+		c.validateAccessTokenRevocation,
 	} {
 		if err := fn(); err != nil {
 			return err
@@ -768,6 +779,47 @@ func (c *config) validateAccessTokenFormat() error {
 			Code: codeConfiguration,
 			Description: "op.WithAccessTokenFormat(AccessTokenFormatOpaque) " +
 				"requires Store.OpaqueAccessTokens() to be non-nil",
+		}
+	}
+	return nil
+}
+
+// validateAccessTokenRevocation enforces the ADR 0025 fail-fast
+// contract on the JWT access-token revocation strategy:
+//
+//   - Out-of-range enum values are rejected at construction time so
+//     a regression in the option-layer validator surfaces at startup.
+//   - Under any FAPI profile, [store.RevocationStrategyNone] is
+//     rejected because FAPI 2.0 Security Profile §5.3.2.2 mandates
+//     server-side access-token revocation. Embedders pin
+//     [store.RevocationStrategyGrantTombstone] (default) or
+//     [store.RevocationStrategyJTIRegistry] under those profiles.
+//
+// The default value (zero) is [store.RevocationStrategyGrantTombstone],
+// which is FAPI-compliant; embedders that never call
+// [WithAccessTokenRevocationStrategy] therefore pass this check on
+// every profile.
+func (c *config) validateAccessTokenRevocation() error {
+	if !c.atRevocation.IsValid() {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithAccessTokenRevocationStrategy received an " +
+				"unknown AccessTokenRevocationStrategy value",
+		}
+	}
+	if c.atRevocation != store.RevocationStrategyNone {
+		return nil
+	}
+	for _, p := range c.profiles {
+		if profile.RequiresAccessTokenRevocation(p) {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "FAPI 2.0 Security Profile §5.3.2.2 requires " +
+					"access-token revocation; RevocationStrategyNone is " +
+					"rejected under profile " + p.String() +
+					" — use RevocationStrategyGrantTombstone (default) or " +
+					"RevocationStrategyJTIRegistry",
+			}
 		}
 	}
 	return nil

@@ -262,6 +262,65 @@ func TestSignAccessToken_ScopeJoinAndJTI(t *testing.T) {
 	}
 }
 
+// TestSignAccessToken_GrantIDEmbedsGidClaim pins ADR 0025's wire
+// contract: when AccessTokenClaims.GrantID is non-empty the encoded
+// payload carries the "gid" private claim verbatim. The claim is
+// meaningful only to the issuing OP (RFC 7519 §4.3); resource servers
+// MUST ignore it.
+func TestSignAccessToken_GrantIDEmbedsGidClaim(t *testing.T) {
+	t.Parallel()
+
+	key := newTestSigner(t)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jws, err := tokens.SignAccessToken(key, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-gid",
+		Scope:     []string{"openid"},
+		GrantID:   "g123",
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	payload := decodePayload(t, jws)
+	if payload["gid"] != "g123" {
+		t.Errorf("gid=%v want \"g123\" (ADR 0025 wire contract)", payload["gid"])
+	}
+}
+
+// TestSignAccessToken_GrantIDOmitemptyWhenEmpty pins the omitempty
+// equivalent for the map-based merge: a zero-value GrantID MUST NOT
+// appear on the wire so legacy / RevocationStrategyJTIRegistry
+// deployments emit unchanged bytes (ADR 0025 §Wire change).
+func TestSignAccessToken_GrantIDOmitemptyWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	key := newTestSigner(t)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jws, err := tokens.SignAccessToken(key, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-no-gid",
+		Scope:     []string{"openid"},
+		// GrantID intentionally left zero-value.
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	payload := decodePayload(t, jws)
+	if v, ok := payload["gid"]; ok {
+		t.Errorf("gid present with zero-value GrantID: %v (omitempty equivalent broken)", v)
+	}
+}
+
 func TestSignIDToken_NilSignerReturnsSentinel(t *testing.T) {
 	t.Parallel()
 	_, err := tokens.SignIDToken(tokens.SigningKey{KeyID: "k1"}, tokens.IDTokenClaims{})

@@ -351,6 +351,8 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			MTLS:               mtlsVerifier,
 			AccessTokens:       cfg.store.AccessTokens(),
 			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
+			GrantRevocations:   cfg.store.GrantRevocations(),
+			RevocationStrategy: cfg.atRevocation,
 		})),
 	)
 	mux.Handle(
@@ -379,6 +381,8 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			AccessTokens:                   cfg.store.AccessTokens(),
 			OpaqueAccessTokens:             cfg.store.OpaqueAccessTokens(),
 			AccessTokenFormatFor:           cfg.formatForAudience,
+			GrantRevocations:               cfg.store.GrantRevocations(),
+			RevocationStrategy:             cfg.atRevocation,
 			Audit:                          cfg.effectiveAuditEmitter(),
 		})),
 	)
@@ -841,6 +845,8 @@ func mountIntrospectionEndpoint(
 			RequireSignedIntrospection: cfg.requireSignedIntrospection(),
 			AccessTokens:               cfg.store.AccessTokens(),
 			OpaqueAccessTokens:         cfg.store.OpaqueAccessTokens(),
+			GrantRevocations:           cfg.store.GrantRevocations(),
+			RevocationStrategy:         cfg.atRevocation,
 		})),
 	)
 }
@@ -878,6 +884,8 @@ func mountRevocationEndpoint(
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			AccessTokens:             cfg.store.AccessTokens(),
 			OpaqueAccessTokens:       cfg.store.OpaqueAccessTokens(),
+			GrantRevocations:         cfg.store.GrantRevocations(),
+			RevocationStrategy:       cfg.atRevocation,
 		})),
 	)
 }
@@ -1270,14 +1278,18 @@ func mountEndSessionEndpoint(
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.EndSession),
 		strictCORS.Handler(endsession.Handler(endsession.Deps{
-			Issuer:       cfg.issuer,
-			Clients:      cfg.store.Clients(),
-			Sessions:     sessMgr,
-			Keys:         keySet,
-			Clock:        cfg.clock,
-			Backchannel:  bcc,
-			Grants:       cfg.store.Grants(),
-			AccessTokens: cfg.store.AccessTokens(),
+			Issuer:             cfg.issuer,
+			Clients:            cfg.store.Clients(),
+			Sessions:           sessMgr,
+			Keys:               keySet,
+			Clock:              cfg.clock,
+			Backchannel:        bcc,
+			Grants:             cfg.store.Grants(),
+			AccessTokens:       cfg.store.AccessTokens(),
+			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
+			AccessTokenTTL:     cfg.accessTokenTTL,
+			GrantRevocations:   cfg.store.GrantRevocations(),
+			RevocationStrategy: cfg.atRevocation,
 		})),
 	)
 }

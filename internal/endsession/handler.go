@@ -86,6 +86,46 @@ type Deps struct {
 	// on [Deps.Grants]; both fields propagate together through
 	// [op.New].
 	AccessTokens store.AccessTokenRegistry
+
+	// OpaqueAccessTokens cascades the per-grant opaque-format access
+	// tokens (ADR 0024) alongside the JWT cascade. The two cascades
+	// run independently because they belong to different substores;
+	// failures on either are swallowed (best-effort, mirrors the
+	// other store calls in this handler). A nil value disables the
+	// opaque cascade — the embedder either has no opaque-AT
+	// deployments or has not wired the substore.
+	OpaqueAccessTokens store.OpaqueAccessTokenStore
+
+	// AccessTokenTTL is the issuance TTL the OP applied to JWT access
+	// tokens; the handler uses it to compute the tombstone's
+	// ExpiresAt under [store.RevocationStrategyGrantTombstone] so
+	// every AT issued before the tombstone has either expired or
+	// been rejected by the time the row is GC'd. A zero value falls
+	// back to a conservative 1-hour ceiling (matches the project's
+	// default AccessTokenTTL).
+	AccessTokenTTL time.Duration
+
+	// GrantRevocations is the [store.GrantRevocationStore] consulted
+	// by the grant-tombstone JWT access-token revocation strategy
+	// (ADR 0025). The /end_session handler writes a per-grant
+	// tombstone here for each affected grant so the cascade is one
+	// row per grant rather than one row per AT under that grant. A
+	// nil value disables the substore and the handler falls back to
+	// whichever legacy behaviour [RevocationStrategy] selects.
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	GrantRevocations store.GrantRevocationStore
+
+	// RevocationStrategy selects the JWT access-token revocation
+	// shape (ADR 0025). The zero value is
+	// [store.RevocationStrategyGrantTombstone], which is the
+	// documented default; the library wires this from
+	// [op.WithAccessTokenRevocationStrategy].
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	RevocationStrategy store.AccessTokenRevocationStrategy
 }
 
 // Handler returns the HTTP handler the OP mounts at its /end_session
@@ -345,30 +385,114 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 	clearSessionCookie(w)
 }
 
-// revokeAccessTokens cascades RP-Initiated Logout to the
-// access-token registry: every grant the subject currently holds is
-// retired so subsequent /userinfo, /introspection, and resource-server
-// validations reject the outstanding bearer JWTs immediately rather
-// than waiting for their exp claim to elapse. A nil [Deps.Grants] or
-// [Deps.AccessTokens] short-circuits the cascade — the embedder has
-// not opted into the registry, and skipping the calls leaves access
-// tokens to expire naturally. Per-call errors are swallowed for the
-// same reason [Sessions.Logout] errors are: the user's intent is to
-// sign out, and a transient store fault must not surface as a 5xx.
+// revokeAccessTokens cascades RP-Initiated Logout to the access-token
+// substores: every grant the subject currently holds is retired so
+// subsequent /userinfo, /introspection, and resource-server validations
+// reject the outstanding bearer tokens immediately rather than waiting
+// for their exp claim to elapse.
+//
+// The JWT branch dispatches on [Deps.RevocationStrategy] (ADR 0025):
+//
+//   - [store.RevocationStrategyGrantTombstone] (default): write a
+//     [store.GrantTombstone] row per grant. Tokens issued before
+//     `RevokedAt` are rejected on next verify; future issuances under
+//     the same grant are refused at the token endpoint.
+//   - [store.RevocationStrategyJTIRegistry]: flip every shadow row
+//     under the grant via [store.AccessTokenRegistry.RevokeByGrant]
+//     (the ADR 0013 path).
+//   - [store.RevocationStrategyNone]: skip the JWT cascade; the
+//     embedder accepted the RFC 6749 §4.1.2 wiggle.
+//
+// The opaque branch ([Deps.OpaqueAccessTokens]) runs independently for
+// every strategy when the substore is wired (ADR 0024) — opaque tokens
+// have their own per-token state and the JWT-strategy switch does not
+// apply to them.
+//
+// A nil [Deps.Grants] short-circuits both branches — the embedder
+// has not opted into the registry surface. Per-call errors are
+// swallowed: the user's intent is to sign out, and a transient store
+// fault must not surface as a 5xx.
 func revokeAccessTokens(ctx context.Context, deps Deps, subject string) {
-	if deps.Grants == nil || deps.AccessTokens == nil {
+	if deps.Grants == nil {
 		return
 	}
 	grants, err := deps.Grants.ListBySubject(ctx, subject)
 	if err != nil {
 		return
 	}
+	now := endSessionNow(deps)
 	for _, g := range grants {
 		if g == nil || g.ID == "" {
 			continue
 		}
-		_, _ = deps.AccessTokens.RevokeByGrant(ctx, g.ID)
+		revokeJWTAccessTokensForGrant(ctx, deps, g.ID, now)
+		if deps.OpaqueAccessTokens != nil {
+			_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, g.ID)
+		}
 	}
+}
+
+// revokeJWTAccessTokensForGrant applies the JWT cascade for one grant
+// per the configured strategy. The function is the per-grant body of
+// [revokeAccessTokens]; it is split out so the strategy switch is
+// readable next to the cascade order.
+func revokeJWTAccessTokensForGrant(
+	ctx context.Context,
+	deps Deps,
+	grantID string,
+	now time.Time,
+) {
+	switch deps.RevocationStrategy {
+	case store.RevocationStrategyNone:
+		return
+	case store.RevocationStrategyJTIRegistry:
+		if deps.AccessTokens == nil {
+			return
+		}
+		_, _ = deps.AccessTokens.RevokeByGrant(ctx, grantID)
+	default:
+		if deps.GrantRevocations == nil {
+			// Legacy fallback: GrantRevocations unwired but the JTI
+			// registry is. Use it so the cascade still works for
+			// embedders mid-migration.
+			if deps.AccessTokens != nil {
+				_, _ = deps.AccessTokens.RevokeByGrant(ctx, grantID)
+			}
+			return
+		}
+		_ = deps.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
+			GrantID:   grantID,
+			RevokedAt: now,
+			ExpiresAt: now.Add(tombstoneRetention(deps.AccessTokenTTL)),
+			Reason:    "logout",
+		})
+	}
+}
+
+// tombstoneRetention returns the period a grant tombstone must live
+// after [store.RevocationStrategyGrantTombstone] writes it. The window
+// is "AT TTL + 5-minute clock-skew grace" per ADR 0025 §GC; a zero
+// AccessTokenTTL falls back to one hour, which is the project's
+// default AT TTL ceiling.
+func tombstoneRetention(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	return ttl + 5*time.Minute
+}
+
+// endSessionNow returns the wall-clock reading the cascade uses for
+// tombstone RevokedAt / ExpiresAt. It mirrors the boundary discipline
+// of the sibling endpoints: a configured [Deps.Clock] wins; the fall-
+// back is the system clock from internal/timex via [time.Now]. The
+// handler does not currently inject internal/timex directly because
+// importing it here would pull a dependency only this helper would
+// need; deps.Clock is the documented seam.
+func endSessionNow(deps Deps) time.Time {
+	if deps.Clock != nil {
+		return deps.Clock.Now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 // readSessionFingerprint pulls the session id and the authenticated

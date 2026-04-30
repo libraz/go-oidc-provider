@@ -60,3 +60,28 @@ func (p Profile) IsValid() bool {
 		return false
 	}
 }
+
+// RequiresAccessTokenRevocation reports whether p mandates server-side
+// JWT access-token revocation (ADR 0025). FAPI 2.0 Security Profile
+// §5.3.2.2 imposes the requirement on the FAPI 2.0 family (Baseline,
+// Message Signing); the future FAPI CIBA / iGov profiles inherit the
+// posture once their constraint tables graduate from placeholder.
+// Non-FAPI profiles return false so embedders deploying plain
+// OAuth 2.0 / OIDC can opt into [op.RevocationStrategyNone] without
+// tripping the gate.
+//
+// The op.New validator consults this predicate to reject the
+// combination of a FAPI profile with [op.RevocationStrategyNone]: the
+// misconfiguration is caught at construction time so an operator never
+// serves a single token before the gate fires.
+func RequiresAccessTokenRevocation(p Profile) bool {
+	switch p {
+	case FAPI2Baseline, FAPI2MessageSigning:
+		return true
+	case FAPICIBA, IGovHigh, profileUnspecified:
+		// FAPICIBA / IGovHigh are placeholders today; they will land
+		// here when their constraint tables graduate.
+		return false
+	}
+	return false
+}

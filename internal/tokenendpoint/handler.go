@@ -267,6 +267,33 @@ type Deps struct {
 	// dependency.
 	AccessTokenFormatFor func(resource string) store.AccessTokenFormat
 
+	// GrantRevocations is the [store.GrantRevocationStore] consulted
+	// by the grant-tombstone JWT access-token revocation strategy
+	// (ADR 0025). Cascades write a per-grant tombstone here rather
+	// than one shadow row per AT under that grant; the issuance path
+	// also consults the substore to refuse minting under a
+	// tombstoned grant. A nil value disables the substore entirely;
+	// the strategy then falls back to whichever legacy behaviour
+	// [RevocationStrategy] selects. The library wires a non-nil
+	// substore from the configured [op.Store] when the embedder pins
+	// [op.RevocationStrategyGrantTombstone] (default).
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	GrantRevocations store.GrantRevocationStore
+
+	// RevocationStrategy selects the JWT access-token revocation
+	// shape (ADR 0025). The zero value is
+	// [store.RevocationStrategyGrantTombstone], which is the
+	// documented default; the library wires this from
+	// [op.WithAccessTokenRevocationStrategy]. The opaque path
+	// (ADR 0024) is unaffected because opaque tokens are
+	// intrinsically per-token in storage.
+	//
+	// Wave 2 plumbs this field; the handler logic that consumes it
+	// lands in subsequent waves.
+	RevocationStrategy store.AccessTokenRevocationStrategy
+
 	// Audit is the structured audit-event sink. A nil Emitter falls
 	// back to [audit.Discard] so the handler can call the emitter
 	// unconditionally. The token endpoint emits "token.issued"
