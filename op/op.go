@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/cors"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -328,11 +329,17 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	if err != nil {
 		return nil, err
 	}
-	mux.Handle(cfg.endpoints.Discovery, discHandler)
-	mux.Handle(joinPath(cfg.mountPrefix, cfg.endpoints.JWKS), jwks.Handler(keySet))
+	originAllow, err := buildOriginAllowlist(cfg)
+	if err != nil {
+		return nil, err
+	}
+	publicCORS := cors.NewPublic()
+	strictCORS := cors.NewStrict(originAllow)
+	mux.Handle(cfg.endpoints.Discovery, publicCORS.Handler(discHandler))
+	mux.Handle(joinPath(cfg.mountPrefix, cfg.endpoints.JWKS), publicCORS.Handler(jwks.Handler(keySet)))
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.UserInfo),
-		userinfo.Handler(userinfo.HandlerDeps{
+		strictCORS.Handler(userinfo.Handler(userinfo.HandlerDeps{
 			Keys:         keySet,
 			Issuer:       cfg.issuer,
 			UserStore:    cfg.store.Users(),
@@ -343,11 +350,11 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			DPoPNonces:   cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
 			MTLS:         mtlsVerifier,
 			AccessTokens: cfg.store.AccessTokens(),
-		}),
+		})),
 	)
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Token),
-		tokenendpoint.Handler(tokenendpoint.Deps{
+		strictCORS.Handler(tokenendpoint.Handler(tokenendpoint.Deps{
 			Issuer:                         cfg.issuer,
 			Clients:                        cfg.store.Clients(),
 			Codes:                          cfg.store.AuthorizationCodes(),
@@ -370,24 +377,52 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 			AccessTokens:                   cfg.store.AccessTokens(),
 			Audit:                          cfg.effectiveAuditEmitter(),
-		}),
+		})),
 	)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet)
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, originAllow, strictCORS)
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes, assertionVerifier, dpopVerifier); err != nil {
+	if err := mountPAREndpoint(mux, cfg, scopes, assertionVerifier, dpopVerifier, strictCORS); err != nil {
 		return nil, err
 	}
-	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, assertionVerifier)
-	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifier)
-	mountRegistrationEndpoint(mux, cfg, scopes)
+	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, assertionVerifier, strictCORS)
+	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifier, strictCORS)
+	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS)
 	bcc, err := buildBackchannelCoordinator(cfg, keySet)
 	if err != nil {
 		return nil, err
 	}
-	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc)
+	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, strictCORS)
 	return mux, nil
+}
+
+// buildOriginAllowlist composes the cross-origin allowlist consumed by both
+// the strict CORS layer and the /authorize CSRF Origin gate. The list is the
+// union of:
+//
+//   - explicit entries from [WithCORSOrigins] (cfg.corsOrigins);
+//   - the OP's own canonical origin derived from cfg.issuer, so same-origin
+//     fetches from the OP's hosted login UI never need to be enumerated.
+//
+// The helper is idempotent: it tolerates a nil/empty list (= "deny all
+// cross-origin", the safe default) and silently skips an issuer that fails
+// canonicalisation (a malformed issuer is rejected earlier by config.validate,
+// so the skip path is defensive only).
+func buildOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
+	allowOrigins := append([]string(nil), cfg.corsOrigins...)
+	if origin, oerr := csrf.CanonicalOrigin(cfg.issuer); oerr == nil {
+		allowOrigins = append(allowOrigins, origin)
+	}
+	allow, err := csrf.NewAllowlist(allowOrigins)
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "csrf allowlist construction failed",
+			Cause:       err,
+		}
+	}
+	return allow, nil
 }
 
 // buildDPoPVerifier constructs the RFC 9449 verifier when the [feature.DPoP]
@@ -486,12 +521,21 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 		resolverOpts = append(resolverOpts, jar.AllowPrivateNetwork())
 	}
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:      cfg.issuer,
-		Resolver:    jar.NewDefaultResolver(cfg.clock, resolverOpts...),
-		Clock:       cfg.clock,
-		RequireNbf:  requireNbf,
-		JTIs:        cfg.store.ConsumedJTIs(),
-		MaxLifetime: maxLifetime,
+		Issuer:     cfg.issuer,
+		Resolver:   jar.NewDefaultResolver(cfg.clock, resolverOpts...),
+		Clock:      cfg.clock,
+		RequireNbf: requireNbf,
+		JTIs:       cfg.store.ConsumedJTIs(),
+		// RFC 9101 §6.1 marks "jti" as OPTIONAL; rejecting JARs that
+		// omit it would refuse spec-conformant request objects (e.g.
+		// the ones the OpenID Foundation Conformance Suite emits) on
+		// a contract that the spec does not anchor. The replay-defence
+		// gate at §10.8 still fires when jti is present (the JTIs
+		// store consumes every value it sees), so dropping the
+		// missing-jti reject preserves that floor while restoring
+		// spec-correct admission.
+		AllowMissingJTI: true,
+		MaxLifetime:     maxLifetime,
 	})
 	if err != nil {
 		return nil, &Error{
@@ -621,7 +665,7 @@ func buildJARMSigner(cfg *config, keySet *keys.Set) (*jarm.Signer, error) {
 // Without the option the routes are absent — discovery already gates
 // the advertisement on the same condition, so the OP cannot tell
 // clients the endpoint exists while quietly serving 404.
-func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry) {
+func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, strictCORS *cors.Strict) {
 	if cfg.dcr == nil {
 		return
 	}
@@ -652,7 +696,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		Audit:                    cfg.effectiveAuditEmitter(),
 		OnClientDeleted:          cfg.dcr.OnClientDeleted,
 	}
-	handler := registrationendpoint.Handler(deps)
+	handler := strictCORS.Handler(registrationendpoint.Handler(deps))
 	registerPath := joinPath(cfg.mountPrefix, cfg.endpoints.Register)
 	mux.Handle(registerPath, handler)
 	mux.Handle(registerPath+"/{client_id}", handler)
@@ -717,6 +761,7 @@ func mountPAREndpoint(
 	scopes *scoperegistry.Registry,
 	assertionVerifier clientauth.AssertionVerifier,
 	dpopVerifier *dpop.Verifier,
+	strictCORS *cors.Strict,
 ) error {
 	if !featureEnabled(cfg.features, feature.PAR) {
 		return nil
@@ -727,7 +772,7 @@ func mountPAREndpoint(
 	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
-		parendpoint.Handler(parendpoint.Deps{
+		strictCORS.Handler(parendpoint.Handler(parendpoint.Deps{
 			Issuer:                     cfg.issuer,
 			Clients:                    cfg.store.Clients(),
 			PARs:                       cfg.store.PushedAuthRequests(),
@@ -735,6 +780,7 @@ func mountPAREndpoint(
 			Clock:                      cfg.clock,
 			JAR:                        jarVerifier,
 			DPoP:                       dpopVerifier,
+			DPoPNonces:                 cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
 			AssertionVerifier:          assertionVerifier,
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
 			RequirePKCE:                cfg.requirePKCE(),
@@ -743,7 +789,7 @@ func mountPAREndpoint(
 			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
 			OpenIDScopeOptional:        cfg.openIDScopeOptional,
 			ClaimsParameterEnabled:     cfg.claimsParameterSupported(),
-		}),
+		})),
 	)
 	return nil
 }
@@ -764,13 +810,14 @@ func mountIntrospectionEndpoint(
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
 	assertionVerifier clientauth.AssertionVerifier,
+	strictCORS *cors.Strict,
 ) {
 	if !featureEnabled(cfg.features, feature.Introspect) {
 		return
 	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Introspect),
-		introspectendpoint.Handler(introspectendpoint.Deps{
+		strictCORS.Handler(introspectendpoint.Handler(introspectendpoint.Deps{
 			Issuer:                     cfg.issuer,
 			Clients:                    cfg.store.Clients(),
 			RefreshTokens:              cfg.store.RefreshTokens(),
@@ -782,7 +829,7 @@ func mountIntrospectionEndpoint(
 			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
 			RequireSignedIntrospection: cfg.requireSignedIntrospection(),
 			AccessTokens:               cfg.store.AccessTokens(),
-		}),
+		})),
 	)
 }
 
@@ -802,13 +849,14 @@ func mountRevocationEndpoint(
 	cfg *config,
 	keySet *keys.Set,
 	assertionVerifier clientauth.AssertionVerifier,
+	strictCORS *cors.Strict,
 ) {
 	if !featureEnabled(cfg.features, feature.Revoke) {
 		return
 	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.Revoke),
-		revokeendpoint.Handler(revokeendpoint.Deps{
+		strictCORS.Handler(revokeendpoint.Handler(revokeendpoint.Deps{
 			Issuer:                   cfg.issuer,
 			Clients:                  cfg.store.Clients(),
 			RefreshTokens:            cfg.store.RefreshTokens(),
@@ -817,7 +865,7 @@ func mountRevocationEndpoint(
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
 			AccessTokens:             cfg.store.AccessTokens(),
-		}),
+		})),
 	)
 }
 
@@ -1065,7 +1113,14 @@ func (c *config) allowedClientAuthMethods() []clientauth.Method {
 // surfaces operate on the same chooser-group state. A nil manager is
 // returned when no grant requires the authorize endpoint — the
 // /end_session helper short-circuits in that case.
-func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegistry.Registry, keySet *keys.Set) (*sessions.Manager, error) {
+func mountAuthorizeHandlers(
+	mux *http.ServeMux,
+	cfg *config,
+	scopes *scoperegistry.Registry,
+	keySet *keys.Set,
+	allow *csrf.Allowlist,
+	strictCORS *cors.Strict,
+) (*sessions.Manager, error) {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
 	}
@@ -1086,18 +1141,6 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "csrf signer construction failed",
-			Cause:       err,
-		}
-	}
-	allowOrigins := append([]string(nil), cfg.corsOrigins...)
-	if origin, oerr := csrf.CanonicalOrigin(cfg.issuer); oerr == nil {
-		allowOrigins = append(allowOrigins, origin)
-	}
-	allow, err := csrf.NewAllowlist(allowOrigins)
-	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "csrf allowlist construction failed",
 			Cause:       err,
 		}
 	}
@@ -1136,8 +1179,12 @@ func mountAuthorizeHandlers(mux *http.ServeMux, cfg *config, scopes *scoperegist
 		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
 		ACRResolver:             newACRResolver(cfg),
 	})
+	// /authorize is a top-level redirect navigation and never receives
+	// a cross-origin fetch, so the CORS layer is intentionally omitted.
+	// /interaction/{uid} is reached by the embedder's SPA via fetch, so
+	// it carries the strict per-origin echo per plan 002 §F.4.
 	mux.Handle(authorizePath, handler)
-	mux.Handle(interactionPath+"/{uid}", handler)
+	mux.Handle(interactionPath+"/{uid}", strictCORS.Handler(handler))
 	return sessMgr, nil
 }
 
@@ -1202,13 +1249,14 @@ func mountEndSessionEndpoint(
 	keySet *keys.Set,
 	sessMgr *sessions.Manager,
 	bcc *backchannel.Coordinator,
+	strictCORS *cors.Strict,
 ) {
 	if sessMgr == nil {
 		return
 	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.EndSession),
-		endsession.Handler(endsession.Deps{
+		strictCORS.Handler(endsession.Handler(endsession.Deps{
 			Issuer:       cfg.issuer,
 			Clients:      cfg.store.Clients(),
 			Sessions:     sessMgr,
@@ -1217,7 +1265,7 @@ func mountEndSessionEndpoint(
 			Backchannel:  bcc,
 			Grants:       cfg.store.Grants(),
 			AccessTokens: cfg.store.AccessTokens(),
-		}),
+		})),
 	)
 }
 

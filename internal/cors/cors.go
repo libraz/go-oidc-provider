@@ -180,6 +180,11 @@ func NewPublic() *Public { return &Public{} }
 // metadata endpoints (discovery / JWKS).
 func (*Public) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Vary: Origin even when the response is the static "*",
+		// because shared caches (CDN, browser) MUST treat differently
+		// when an Origin-aware policy is later swapped in. Cheap
+		// insurance against future-policy regressions.
+		appendVary(w.Header(), "Origin")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		// No Allow-Credentials: incompatible with "*" per the CORS spec.
 		if isPreflight(r) {
