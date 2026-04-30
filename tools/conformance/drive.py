@@ -92,7 +92,16 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
             sys.stdout.write(f"[drive pre] visit#{n}={status}\n")
 
     sys.stdout.write(f"[drive 1/3] GET {auth_url}\n")
-    _, final_url, body = ofcs.get_with_redirects(auth_url, cookies=cookies)
+    # Mirror what a real browser sends so the OP picks the HTML
+    # error path on pre-redirect-trust failures (invalid_request_uri,
+    # invalid client_id). Without an Accept header the OP falls back
+    # to the JSON envelope, which OFCS reviewers cannot meaningfully
+    # render as a screenshot.
+    _, final_url, body = ofcs.get_with_redirects(
+        auth_url,
+        cookies=cookies,
+        headers={"Accept": "text/html,application/xhtml+xml"},
+    )
 
     if opts.runner_id:
         _save_render_html(opts.runner_id, "login", body)
@@ -106,8 +115,12 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         _forward_implicit_bridge(final_url, body)
         return
 
-    if b'"error":' in body:
-        sys.stdout.write("[drive 1/3] /authorize returned a JSON error envelope; OFCS will rule via REVIEW\n")
+    if b'"error":' in body or b'id="op-error"' in body:
+        # Either the JSON envelope or the HTMLDriver's data-attribute
+        # error page. Both signal "OP refused before redirect" — leave
+        # the rendered HTML in place so review.resolve uploads it as
+        # the OFCS REVIEW screenshot, then return.
+        sys.stdout.write("[drive 1/3] /authorize returned a pre-redirect error; OFCS will rule via REVIEW\n")
         return
 
     state_ref = _extract_field(body, "state_ref")

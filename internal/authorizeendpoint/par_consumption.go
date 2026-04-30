@@ -71,6 +71,7 @@ var errPARRequired = &authorize.Error{
 func resolvePARIfNeeded(
 	ctx context.Context,
 	w http.ResponseWriter,
+	r *http.Request,
 	deps resolved,
 	queryClientID string,
 	values url.Values,
@@ -87,31 +88,31 @@ func resolvePARIfNeeded(
 		return nil, false
 	}
 	if deps.PARs == nil {
-		renderAuthorizeError(w, errPARDisabled)
+		renderAuthorizeError(w, r, deps, errPARDisabled)
 		return nil, true
 	}
 	rec, err := deps.PARs.Find(ctx, uri)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			renderAuthorizeError(w, authorize.ErrInvalidRequestURI)
+			renderAuthorizeError(w, r, deps, authorize.ErrInvalidRequestURI)
 			return nil, true
 		}
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "PAR backend unavailable")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "PAR backend unavailable", "")
 		return nil, true
 	}
 	if rec.ConsumedAt != nil {
 		// A request_uri that has already issued an authorization code
 		// is single-use per RFC 9126 §2.2; reject the replay.
-		renderAuthorizeError(w, authorize.ErrInvalidRequestURI)
+		renderAuthorizeError(w, r, deps, authorize.ErrInvalidRequestURI)
 		return nil, true
 	}
 	if queryClientID != "" && rec.ClientID != queryClientID {
-		renderAuthorizeError(w, errPARClientMismatch)
+		renderAuthorizeError(w, r, deps, errPARClientMismatch)
 		return nil, true
 	}
 	var snap authorize.RequestSnapshot
 	if err := json.Unmarshal(rec.RawParams, &snap); err != nil {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "PAR record could not be decoded")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "PAR record could not be decoded", "")
 		return nil, true
 	}
 	out := snap.ToRequest()
@@ -136,10 +137,10 @@ func consumePARIfNeeded(ctx context.Context, deps resolved, req *authorize.Reque
 	return err
 }
 
-// renderAuthorizeError writes the JSON envelope shape the authorize
-// endpoint owes pre-redirect-trust failures. It exists so the PAR
-// consumption helper does not need to discriminate redirect-safety: every
-// PAR-resolution failure is by definition pre-redirect-trust.
-func renderAuthorizeError(w http.ResponseWriter, ae *authorize.Error) {
-	renderJSONError(w, http.StatusBadRequest, ae.Code, ae.Description)
+// renderAuthorizeError writes the pre-redirect-trust failure envelope
+// for the PAR consumption helper. Every PAR-resolution failure is by
+// definition pre-redirect-trust, so the helper picks HTML or JSON via
+// renderBrowserError rather than hard-coding the shape.
+func renderAuthorizeError(w http.ResponseWriter, r *http.Request, deps resolved, ae *authorize.Error) {
+	renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, ae.Code, ae.Description, "")
 }

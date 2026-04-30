@@ -34,20 +34,20 @@ const maxAuthorizeFormBytes = 64 * 1024
 func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 	if !methodAllowed(r.Method) {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
-		renderJSONError(w, http.StatusMethodNotAllowed, errInvalidRequest, "method not allowed")
+		renderBrowserError(w, r, deps.Driver, http.StatusMethodNotAllowed, errInvalidRequest, "method not allowed", "")
 		return
 	}
 	if r.Method == http.MethodPost {
 		if !isFormContent(r.Header.Get("Content-Type")) {
-			renderJSONError(w, http.StatusBadRequest, errInvalidRequest,
-				"content-type must be application/x-www-form-urlencoded")
+			renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest,
+				"content-type must be application/x-www-form-urlencoded", "")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxAuthorizeFormBytes)
 	}
 	values, err := extractAuthorizeValues(r)
 	if err != nil {
-		writeAuthorizeParseError(w, r, err)
+		writeAuthorizeParseError(w, r, deps, err)
 		return
 	}
 	req, ok := resolveAuthorizeRequest(w, r, deps, values)
@@ -58,8 +58,9 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 	if err != nil {
 		// Treat a missing or unknown client as an unrecoverable
 		// invalid_request: redirect_uri is not yet trusted, so the
-		// response MUST be a JSON envelope rather than a redirect.
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "client_id is not registered")
+		// response MUST stay pre-redirect (HTML for a browser, JSON
+		// for an API caller).
+		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "client_id is not registered", req.State)
 		return
 	}
 	if err := req.Validate(client, deps.Scopes, authorize.Policy{
@@ -133,7 +134,7 @@ func resolveAuthorizeRequest(
 	values url.Values,
 ) (*authorize.Request, bool) {
 	queryClientID := values.Get("client_id")
-	if parReq, handled := resolvePARIfNeeded(r.Context(), w, deps, queryClientID, values); handled {
+	if parReq, handled := resolvePARIfNeeded(r.Context(), w, r, deps, queryClientID, values); handled {
 		return nil, false
 	} else if parReq != nil {
 		return parReq, true
@@ -144,7 +145,7 @@ func resolveAuthorizeRequest(
 		// JAR / bare-form processing — under FAPI 2.0 §5.3.1 a request
 		// that omits the request_uri is invalid_request regardless of
 		// whether it carries a JAR request_object.
-		renderAuthorizeError(w, errPARRequired)
+		renderAuthorizeError(w, r, deps, errPARRequired)
 		return nil, false
 	}
 	merged, jarHandled, jarStop := resolveJARRequestIfNeeded(r.Context(), w, deps, queryClientID, values)
@@ -156,7 +157,7 @@ func resolveAuthorizeRequest(
 	}
 	req, err := authorize.ParseValues(values)
 	if err != nil {
-		writeAuthorizeParseError(w, r, err)
+		writeAuthorizeParseError(w, r, deps, err)
 		return nil, false
 	}
 	if !deps.ClaimsParameterEnabled {
@@ -192,28 +193,29 @@ func isFormContent(ct string) bool {
 
 // writeAuthorizeParseError handles errors emitted by [authorize.ParseRequest].
 // Every error at this stage is pre-redirect-URI: there is no trusted
-// redirect target, so the response MUST be a JSON envelope.
-func writeAuthorizeParseError(w http.ResponseWriter, _ *http.Request, err error) {
+// redirect target, so the response stays pre-redirect (HTML for a
+// browser, JSON for an API caller).
+func writeAuthorizeParseError(w http.ResponseWriter, r *http.Request, deps resolved, err error) {
 	var ae *authorize.Error
 	if errors.As(err, &ae) {
-		renderJSONError(w, http.StatusBadRequest, ae.Code, ae.Description)
+		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, ae.Code, ae.Description, "")
 		return
 	}
-	renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "request could not be parsed")
+	renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "request could not be parsed", "")
 }
 
 // writeAuthorizeValidationError translates a [authorize.Validate] failure
-// into either a redirect or a JSON envelope, depending on whether the
-// redirect target has been trusted yet. JARM-mode requests get the
-// signed-JWT envelope automatically via [emitAuthorizeError].
+// into either a redirect or a pre-redirect envelope, depending on
+// whether the redirect target has been trusted yet. JARM-mode requests
+// get the signed-JWT envelope automatically via [emitAuthorizeError].
 func writeAuthorizeValidationError(w http.ResponseWriter, r *http.Request, req *authorize.Request, deps resolved, err error) {
 	var ae *authorize.Error
 	if !errors.As(err, &ae) {
-		renderJSONError(w, http.StatusInternalServerError, errServerError, "")
+		renderBrowserError(w, r, deps.Driver, http.StatusInternalServerError, errServerError, "", req.State)
 		return
 	}
 	if !authorize.IsRedirectSafe(err) {
-		renderJSONError(w, http.StatusBadRequest, ae.Code, ae.Description)
+		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, ae.Code, ae.Description, req.State)
 		return
 	}
 	emitAuthorizeError(w, r, deps, req, ae.Code, ae.Description)

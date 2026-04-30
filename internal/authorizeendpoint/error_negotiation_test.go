@@ -1,0 +1,135 @@
+package authorizeendpoint
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/libraz/go-oidc-provider/op/interaction"
+)
+
+// TestRenderBrowserError_FallsBackToJSON_WhenAcceptIsAbsent confirms
+// that XHR / cURL / fetch() callers (which usually omit Accept or send
+// "*/*") keep their existing JSON envelope even after the negotiating
+// helper landed.
+func TestRenderBrowserError_FallsBackToJSON_WhenAcceptIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request", "no Accept", "")
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type=%q want application/json (no Accept must default to JSON)", got)
+	}
+	if got := rec.Code; got != http.StatusBadRequest {
+		t.Errorf("status=%d want 400", got)
+	}
+}
+
+// TestRenderBrowserError_PrefersHTML_WhenBrowserNavigates covers the
+// canonical browser case: Accept advertises text/html with priority
+// over application/json. The helper picks the HTML path so OFCS-style
+// reviewers see an actual error page rather than a JSON envelope.
+func TestRenderBrowserError_PrefersHTML_WhenBrowserNavigates(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request_uri", "expired", "abc")
+
+	ct := rec.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type=%q want text/html", ct)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `data-code="invalid_request_uri"`) {
+		t.Errorf("HTML body missing data-code attribute\n%s", body)
+	}
+}
+
+// TestRenderBrowserError_StaysJSON_WhenJSONHasHigherQ verifies the
+// q-value tiebreak: a client that explicitly asks for JSON over HTML
+// (Accept: application/json;q=1, text/html;q=0.5) keeps the JSON
+// envelope, which matches what an SPA's fetch() typically requests.
+func TestRenderBrowserError_StaysJSON_WhenJSONHasHigherQ(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req.Header.Set("Accept", "application/json,text/html;q=0.5")
+	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request", "param missing", "")
+
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type=%q want application/json", got)
+	}
+}
+
+// TestRenderBrowserError_FallsBackToJSON_WhenDriverLacksErrorRenderer
+// confirms the additive-interface contract: an embedder Driver that
+// satisfies only the legacy Driver interface (no RenderError) does not
+// crash and does not gain HTML — the response is the canonical JSON
+// envelope, identical to the pre-feature behaviour.
+func TestRenderBrowserError_FallsBackToJSON_WhenDriverLacksErrorRenderer(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req.Header.Set("Accept", "text/html")
+
+	renderBrowserError(rec, req, legacyDriverNoErrorRenderer{}, http.StatusBadRequest, "invalid_request", "no", "")
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type=%q want application/json (legacy driver has no RenderError)", got)
+	}
+}
+
+// legacyDriverNoErrorRenderer satisfies Driver but not ErrorRenderer.
+// It models an embedder that wrote a Driver before the ErrorRenderer
+// contract existed; the negotiation helper must fall back to JSON
+// rather than panic or attempt a method that doesn't exist.
+type legacyDriverNoErrorRenderer struct{}
+
+func (legacyDriverNoErrorRenderer) Render(w http.ResponseWriter, _ *http.Request, _ interaction.Prompt) error {
+	return nil
+}
+
+func (legacyDriverNoErrorRenderer) ParseSubmission(_ *http.Request) (interaction.FormSubmission, error) {
+	return interaction.FormSubmission{}, nil
+}
+
+// TestAcceptQuality covers the parser corner cases: q-value parsing,
+// case-insensitive media type, multiple entries.
+func TestAcceptQuality(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		header string
+		target string
+		wantQ  float64
+		wantOk bool
+	}{
+		{"absent", "application/json", "text/html", 0, false},
+		{"plain", "text/html", "text/html", 1.0, true},
+		{"with q", "text/html;q=0.5", "text/html", 0.5, true},
+		{"case insensitive", "TEXT/HTML", "text/html", 1.0, true},
+		{"multi-entry first", "application/json,text/html;q=0.5", "application/json", 1.0, true},
+		{"multi-entry second", "application/json,text/html;q=0.5", "text/html", 0.5, true},
+		{"wildcard ignored", "*/*", "text/html", 0, false},
+		{"text-wildcard ignored", "text/*", "text/html", 0, false},
+		{"malformed q ignored", "text/html;q=foo", "text/html", 1.0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotQ, gotOk := acceptQuality(tc.header, tc.target)
+			if gotOk != tc.wantOk {
+				t.Errorf("ok=%v want %v", gotOk, tc.wantOk)
+			}
+			if gotQ != tc.wantQ {
+				t.Errorf("q=%v want %v", gotQ, tc.wantQ)
+			}
+		})
+	}
+}
