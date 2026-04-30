@@ -177,7 +177,7 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 	if err := seedDemoUser(st); err != nil {
 		return fmt.Errorf("seed demo user: %w", err)
 	}
-	opts, err := buildOptions(cfg, st, priv, cookieKey, logger)
+	opts, err := buildOptions(ctx, cfg, st, priv, cookieKey, logger)
 	if err != nil {
 		return err
 	}
@@ -240,7 +240,7 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 // The helper exists so [run] stays under the gocognit budget; the
 // branch points (profile selection, FAPI-only DPoP enable, optional
 // confidential client seeding) live here, not inline.
-func buildOptions(cfg runConfig, st *inmem.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger) ([]op.Option, error) {
+func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger) ([]op.Option, error) {
 	seeds, err := buildClientSeeds(cfg)
 	if err != nil {
 		return nil, err
@@ -298,6 +298,18 @@ func buildOptions(cfg runConfig, st *inmem.Store, priv *ecdsa.PrivateKey, cookie
 		// auto-enable DPoP because mTLS satisfies the same
 		// requirement and which one to choose is a deployment call.
 		opts = append(opts, op.WithFeature(feature.DPoP))
+	}
+	if cfg.profile == "fapi2-message-signing" {
+		// FAPI 2.0 Message Signing §5.3.4 requires the AS to issue a
+		// server-supplied DPoP nonce (RFC 9449 §8/§9). The option
+		// layer rejects op.New without a source under this profile,
+		// so wire the in-memory rotator that ships with the library.
+		nonces, err := op.NewInMemoryDPoPNonceSource(ctx, time.Minute,
+			op.WithInMemoryDPoPNonceLogger(logger))
+		if err != nil {
+			return nil, fmt.Errorf("dpop nonce source: %w", err)
+		}
+		opts = append(opts, op.WithDPoPNonceSource(nonces))
 	}
 	return opts, nil
 }
