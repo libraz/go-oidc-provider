@@ -1,6 +1,8 @@
+//nolint:testpackage // white-box: renderBrowserError and acceptQuality are unexported.
 package authorizeendpoint
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,7 +19,7 @@ func TestRenderBrowserError_FallsBackToJSON_WhenAcceptIsAbsent(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request", "no Accept", "")
 	if got := rec.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type=%q want application/json (no Accept must default to JSON)", got)
@@ -35,7 +37,7 @@ func TestRenderBrowserError_PrefersHTML_WhenBrowserNavigates(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request_uri", "expired", "abc")
 
@@ -57,7 +59,7 @@ func TestRenderBrowserError_StaysJSON_WhenJSONHasHigherQ(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 	req.Header.Set("Accept", "application/json,text/html;q=0.5")
 	renderBrowserError(rec, req, interaction.HTMLDriver{}, http.StatusBadRequest, "invalid_request", "param missing", "")
 
@@ -75,7 +77,7 @@ func TestRenderBrowserError_FallsBackToJSON_WhenDriverLacksErrorRenderer(t *test
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 	req.Header.Set("Accept", "text/html")
 
 	renderBrowserError(rec, req, legacyDriverNoErrorRenderer{}, http.StatusBadRequest, "invalid_request", "no", "")
@@ -90,7 +92,7 @@ func TestRenderBrowserError_FallsBackToJSON_WhenDriverLacksErrorRenderer(t *test
 // rather than panic or attempt a method that doesn't exist.
 type legacyDriverNoErrorRenderer struct{}
 
-func (legacyDriverNoErrorRenderer) Render(w http.ResponseWriter, _ *http.Request, _ interaction.Prompt) error {
+func (legacyDriverNoErrorRenderer) Render(_ http.ResponseWriter, _ *http.Request, _ interaction.Prompt) error {
 	return nil
 }
 

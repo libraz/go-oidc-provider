@@ -1,6 +1,7 @@
 package interaction_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +19,7 @@ func TestJSONDriver_RenderErrorEnvelope(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 
 	if err := (interaction.JSONDriver{}).RenderError(rec, req, interaction.ErrorPrompt{
 		Code:        "invalid_request_uri",
@@ -58,7 +59,7 @@ func TestJSONDriver_RenderErrorDefaultStatus(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	if err := (interaction.JSONDriver{}).RenderError(rec, req, interaction.ErrorPrompt{
 		Code: "invalid_request",
 	}); err != nil {
@@ -77,7 +78,7 @@ func TestHTMLDriver_RenderErrorEmitsDataAttributes(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 	if err := (interaction.HTMLDriver{}).RenderError(rec, req, interaction.ErrorPrompt{
 		Code:        "invalid_request_uri",
 		Description: "request_uri has expired",
@@ -119,7 +120,7 @@ func TestHTMLDriver_RenderErrorEscapesHostileInput(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/oidc/auth", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/oidc/auth", nil)
 	if err := (interaction.HTMLDriver{}).RenderError(rec, req, interaction.ErrorPrompt{
 		Code:        `<script>alert(1)</script>`,
 		Description: `"><img src=x onerror=alert(1)>`,
@@ -180,7 +181,7 @@ func TestHTMLDriver_RenderErrorCSPCompliance(t *testing.T) {
 
 	for _, prompt := range cases {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 		if err := (interaction.HTMLDriver{}).RenderError(rec, req, prompt); err != nil {
 			t.Fatalf("RenderError(%q): %v", prompt.Code, err)
 		}
@@ -201,7 +202,7 @@ func TestHTMLDriver_RenderErrorSkipsEmptyDataAttrs(t *testing.T) {
 	t.Parallel()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
 	if err := (interaction.HTMLDriver{}).RenderError(rec, req, interaction.ErrorPrompt{
 		Code: "invalid_request",
 	}); err != nil {
