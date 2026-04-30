@@ -34,16 +34,26 @@ changes.
   OP whose `kid` happens to match an OP key is no longer admitted.
   (M-PROTO-2)
 - Dynamic Client Registration rejects `redirect_uris` whose scheme is
-  `http` unless the host is a loopback literal (`127.0.0.1`, `[::1]`,
-  or `localhost`). The previous behaviour admitted any non-loopback
-  http target, violating RFC 8252 §7.3. Embedders who registered such
-  URIs MUST switch to https or use a loopback literal. (M-PROTO-9)
+  `http` unless the host is the loopback IP literal `127.0.0.1` or
+  `[::1]`. The textual host `localhost` is rejected by default to
+  close the RFC 8252 §8.3 DNS-rebinding window; embedders whose
+  native-app SDKs bind to `localhost` opt in via the new
+  `op.WithAllowLocalhostLoopback()`. The previous behaviour admitted
+  any non-loopback http target, violating RFC 8252 §7.3. Embedders
+  who registered non-loopback http URIs MUST switch to https or to
+  an admitted loopback host. (M-PROTO-9)
 
 ### Added (protocol audit fixes)
 
 - `op.WithBackchannelAllowPrivateNetwork(bool)` (new in
   `op/options_protocol.go`) toggles the SSRF deny-list described
   above. Default `false`.
+- `op.WithAllowLocalhostLoopback()` widens the DCR redirect_uri
+  loopback carve-out to admit the textual `localhost` host alongside
+  the `127.0.0.1` / `[::1]` IP literals. Default off; the option is
+  the explicit opt-in for native-app SDKs that bind to `localhost`
+  rather than to an IP literal. The DNS-rebinding posture from
+  RFC 8252 §8.3 motivates the safe-by-default IP-only stance.
 - `discovery.ValidateIssuer` enforces the OIDC Discovery 1.0 §3 /
   FAPI 2.0 §5.4 issuer shape (https, no trailing slash, no query /
   fragment; loopback hosts exempted from https) as a defense-in-depth

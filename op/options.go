@@ -196,6 +196,16 @@ type config struct {
 	// access for one fetcher without widening the other.
 	allowPrivateNetworkJAR bool
 
+	// allowLocalhostLoopback widens the RFC 8252 §7.3 loopback
+	// redirect_uri carve-out to admit the textual "localhost" host
+	// in addition to the IP literals 127.0.0.1 and [::1]. The
+	// default false keeps the IP-only posture so a DNS-rebinding
+	// adversary cannot pivot a registered http://localhost URI onto
+	// an attacker-controlled address (RFC 8252 §8.3). Embedders that
+	// rely on the textual host (most native-app SDKs default to
+	// http://localhost) opt in via [WithAllowLocalhostLoopback].
+	allowLocalhostLoopback bool
+
 	// Login flow / UI / static-clients.
 	// loginFlow stores the [LoginFlow] supplied through
 	// [WithLoginFlow]. The zero value (Primary == nil) signals
@@ -2146,6 +2156,23 @@ func WithAllowPrivateNetworkJWKS() Option {
 func WithAllowPrivateNetworkJAR() Option {
 	return optionFunc(func(c *config) error {
 		c.allowPrivateNetworkJAR = true
+		return nil
+	})
+}
+
+// WithAllowLocalhostLoopback widens the RFC 8252 §7.3 native-app
+// loopback redirect_uri carve-out to admit the textual "localhost"
+// host. The default posture only admits the IP literals 127.0.0.1 and
+// [::1] over plain http; localhost is rejected so a DNS-rebinding
+// attacker (RFC 8252 §8.3) cannot point a registered
+// http://localhost:* URI at a host they control after the client
+// resolved it once. Native-app SDKs that bind their loopback listener
+// to the textual "localhost" hostname (the most common default) opt
+// in via this option.
+// Stable since v0.x.
+func WithAllowLocalhostLoopback() Option {
+	return optionFunc(func(c *config) error {
+		c.allowLocalhostLoopback = true
 		return nil
 	})
 }

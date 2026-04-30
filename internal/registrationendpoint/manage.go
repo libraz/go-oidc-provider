@@ -71,6 +71,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		nil, // PUT path does not re-check IAT scopes (the IAT was consumed at creation).
 		deps.Scopes,
 		deps.PairwiseEnabled,
+		deps.AllowLocalhostLoopback,
 	)
 	if err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, clientID)

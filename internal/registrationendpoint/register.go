@@ -80,6 +80,7 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 		iatScopes,
 		deps.Scopes,
 		deps.PairwiseEnabled,
+		deps.AllowLocalhostLoopback,
 	)
 	if err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, "")

@@ -643,6 +643,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		AllowedGrantTypes:        append([]string(nil), cfg.dcr.AllowedGrantTypes...),
 		AllowedResponseTypes:     append([]string(nil), cfg.dcr.AllowedResponseTypes...),
 		PairwiseEnabled:          false, // WithPairwiseSubject not yet implemented; v1.0 placeholder.
+		AllowLocalhostLoopback:   cfg.allowLocalhostLoopback,
 		ValidateMetadata:         wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                   cfg.logger,
 		Audit:                    cfg.effectiveAuditEmitter(),

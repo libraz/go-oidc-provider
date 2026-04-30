@@ -159,8 +159,9 @@ func validatePolicy(
 	iatScopes []string,
 	scopes *scoperegistry.Registry,
 	pairwiseEnabled bool,
+	allowLocalhostLoopback bool,
 ) (ClientMetadata, error) {
-	if err := validateRedirectURIs(m.RedirectURIs); err != nil {
+	if err := validateRedirectURIs(m.RedirectURIs, allowLocalhostLoopback); err != nil {
 		return ClientMetadata{}, err
 	}
 	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
@@ -214,17 +215,19 @@ func applyMetadataDefaults(m ClientMetadata, allowedGrantTypes, allowedResponseT
 // validateRedirectURIs enforces the RFC 6749 §3.1.2 baseline plus the
 // RFC 8252 §7.3 native-app loopback carve-out: every URL MUST be
 // absolute, parseable, fragment-free, and either an https URL or a
-// plain http URL whose host is a loopback literal (127.0.0.1, [::1],
-// or localhost). Any other http URL — public hosts, private hosts,
-// arbitrary domain names — is rejected so a hostile DCR cannot
+// plain http URL whose host is a loopback literal. The default IP-only
+// posture (127.0.0.1 and [::1]) reflects the §8.3 DNS-rebinding
+// concern; allowLocalhostLoopback widens the gate to also admit the
+// textual "localhost" host. Any other http URL — public hosts, private
+// hosts, arbitrary domain names — is rejected so a hostile DCR cannot
 // register a non-TLS redirect target on the open internet. The
 // caller's [ValidateMetadata] hook may tighten further.
-func validateRedirectURIs(uris []string) error {
+func validateRedirectURIs(uris []string, allowLocalhostLoopback bool) error {
 	if len(uris) == 0 {
 		return errInvalidRedirectURI("redirect_uris is required")
 	}
 	for _, raw := range uris {
-		if err := validateRedirectURI(raw); err != nil {
+		if err := validateRedirectURI(raw, allowLocalhostLoopback); err != nil {
 			return err
 		}
 	}
@@ -236,7 +239,7 @@ func validateRedirectURIs(uris []string) error {
 // project's gocognit / cyclop caps and so the error messages stay
 // per-URI rather than masking the offending entry behind a generic
 // loop diagnostic.
-func validateRedirectURI(raw string) error {
+func validateRedirectURI(raw string, allowLocalhostLoopback bool) error {
 	if raw == "" {
 		return errInvalidRedirectURI("redirect_uri must not be empty")
 	}
@@ -254,8 +257,11 @@ func validateRedirectURI(raw string) error {
 	case "https":
 		return nil
 	case "http":
-		if !isLoopbackRedirectHost(u.Hostname()) {
-			return errInvalidRedirectURI("redirect_uri http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
+			if allowLocalhostLoopback {
+				return errInvalidRedirectURI("redirect_uri http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+			}
+			return errInvalidRedirectURI("redirect_uri http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]) per RFC 8252 §7.3 + §8.3; pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
 		}
 		return nil
 	default:
@@ -268,22 +274,19 @@ func validateRedirectURI(raw string) error {
 
 // isLoopbackRedirectHost reports whether host is a loopback literal
 // the RFC 8252 §7.3 native-app carve-out admits over plain http. The
-// match is case-insensitive on the textual "localhost" token and
-// numeric on the IP literals; any other value (private IPs, public
-// names, "::") falls through to the rejection path.
-func isLoopbackRedirectHost(host string) bool {
+// IP literals 127.0.0.1 and [::1] are always admitted; the textual
+// "localhost" token is admitted only when allowLocalhostLoopback is
+// true. Hostname() strips the bracket from "[::1]"; we only accept
+// the exact loopback addresses (not the 127.0.0.0/8 block) because a
+// DCR-supplied redirect_uri names the URI the client expects to
+// receive on — there is no operational reason to register 127.0.0.2.
+func isLoopbackRedirectHost(host string, allowLocalhostLoopback bool) bool {
 	if host == "" {
 		return false
 	}
-	if strings.EqualFold(host, "localhost") {
+	if allowLocalhostLoopback && strings.EqualFold(host, "localhost") {
 		return true
 	}
-	// Hostname() strips the bracket from "[::1]"; net.ParseIP
-	// accepts both "127.0.0.1" and "::1" verbatim. We only admit
-	// the exact loopback addresses, not the entire 127.0.0.0/8
-	// block, because a DCR-supplied redirect_uri carries the URI
-	// the client is expected to receive on — there is no operational
-	// reason to accept 127.0.0.2.
 	switch host {
 	case "127.0.0.1", "::1":
 		return true

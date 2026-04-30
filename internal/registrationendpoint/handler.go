@@ -103,6 +103,16 @@ type Deps struct {
 	// rejected.
 	PairwiseEnabled bool
 
+	// AllowLocalhostLoopback widens the RFC 8252 §7.3 loopback
+	// carve-out applied to redirect_uri values to admit the textual
+	// "localhost" host in addition to the 127.0.0.1 and [::1] IP
+	// literals. The default false rejects the textual host so a
+	// DNS-rebinding adversary (RFC 8252 §8.3) cannot pivot a
+	// registered http://localhost:* URI onto a host they control.
+	// Embedders flip the bit by passing
+	// [op.WithAllowLocalhostLoopback] at construction.
+	AllowLocalhostLoopback bool
+
 	// ValidateMetadata is the embedder hook invoked after structural
 	// validation passes and before the client is persisted. A non-nil
 	// error rejects the registration with invalid_client_metadata;
