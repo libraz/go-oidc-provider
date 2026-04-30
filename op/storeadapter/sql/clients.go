@@ -28,6 +28,7 @@ func (s *clientStore) runner() runner { return pickRunner(s.parent, s.tx) }
 //nolint:gochecknoglobals // immutable column manifest.
 var clientColumns = []string{
 	"id",
+	"client_id_issued_at",
 	"redirect_uris",
 	"post_logout_redirect_uris",
 	"backchannel_logout_uri",
@@ -74,6 +75,7 @@ func clientArgs(c *store.Client) []any {
 	}
 	return []any{
 		c.ID,
+		c.ClientIDIssuedAt,
 		encodeStrings(c.RedirectURIs),
 		encodeStrings(c.PostLogoutRedirectURIs),
 		c.BackchannelLogoutURI,
@@ -121,6 +123,7 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 	)
 	err := scan(
 		&c.ID,
+		&c.ClientIDIssuedAt,
 		&redirectURIs,
 		&postLogout,
 		&c.BackchannelLogoutURI,

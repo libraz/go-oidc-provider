@@ -53,6 +53,7 @@ func (p *Provider) RegisterClient(tb testing.TB, fix ClientFixture) *store.Clien
 func buildClient(fix ClientFixture) *store.Client {
 	out := &store.Client{
 		ID:                      coalesce(fix.ID, "client-test"),
+		ClientIDIssuedAt:        0,
 		RedirectURIs:            slices.Clone(fix.RedirectURIs),
 		PostLogoutRedirectURIs:  slices.Clone(fix.PostLogoutRedirectURIs),
 		GrantTypes:              slices.Clone(fix.GrantTypes),

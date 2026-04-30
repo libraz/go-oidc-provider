@@ -17,6 +17,7 @@
 
 CREATE TABLE IF NOT EXISTS oidc_clients (
     id VARCHAR(255) NOT NULL PRIMARY KEY,
+    client_id_issued_at BIGINT NOT NULL DEFAULT 0,
     redirect_uris JSON NOT NULL,
     post_logout_redirect_uris JSON NOT NULL,
     backchannel_logout_uri TEXT NOT NULL,

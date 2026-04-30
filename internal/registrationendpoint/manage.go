@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -29,7 +30,7 @@ func handleRead(w http.ResponseWriter, r *http.Request, deps Deps, clientID stri
 		Message:  "client metadata read via RFC 7592",
 		ClientID: clientID,
 	})
-	writeRegistrationResponse(w, http.StatusOK, clientToResponse(client, deps, "" /* no rotated RAT */))
+	writeRegistrationResponse(w, http.StatusOK, clientToResponse(client, deps, "" /* no rotated RAT */, "" /* no secret */))
 }
 
 // handleUpdate implements PUT /register/{client_id} (RFC 7592 §2.2).
@@ -59,9 +60,8 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 			"software_statement is not supported in v1.0")
 		return
 	}
-	if extras.ClientID != "" && extras.ClientID != clientID {
-		writeRegistrationError(w, http.StatusBadRequest, codeInvalidClientMetadata,
-			"client_id is immutable")
+	if err := validateManageUpdateRequest(existing, clientID, extras); err != nil {
+		writeRegistrationError(w, http.StatusBadRequest, codeInvalidRequest, err.Error())
 		return
 	}
 	canonical, err := validatePolicy(
@@ -74,6 +74,10 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		deps.AllowLocalhostLoopback,
 	)
 	if err != nil {
+		writeMetadataValidationError(ctx, w, deps, err, clientID)
+		return
+	}
+	if err := validateSectorIdentifierURI(ctx, deps, canonical); err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, clientID)
 		return
 	}
@@ -93,7 +97,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		Message:  "client metadata updated via RFC 7592",
 		ClientID: clientID,
 	})
-	writeRegistrationResponse(w, http.StatusOK, clientToResponse(rotated.client, deps, rotated.rawRAT))
+	writeRegistrationResponse(w, http.StatusOK, clientToResponse(rotated.client, deps, rotated.rawRAT, rotated.rawSecret))
 }
 
 // rotateAndUpdate is the shared persistence path for PUT
@@ -102,8 +106,9 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 // updated client plus the raw RAT so the caller can include it in the
 // response body.
 type rotatedRegistration struct {
-	client *store.Client
-	rawRAT string
+	client    *store.Client
+	rawRAT    string
+	rawSecret string
 }
 
 func rotateAndUpdate(
@@ -120,8 +125,15 @@ func rotateAndUpdate(
 		return rotatedRegistration{}, false
 	}
 	confidential := isConfidentialAuthMethod(m.TokenEndpointAuthMethod)
+	rawSecret, secretHash, err := secretMaterialForUpdate(existing, confidential)
+	if err != nil {
+		deps.logger().Error("dcr.client_secret.generate_failed", "err", err, "client_id", existing.ID)
+		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		return rotatedRegistration{}, false
+	}
 	updated := &store.Client{
 		ID:                      existing.ID,
+		ClientIDIssuedAt:        existing.ClientIDIssuedAt,
 		RedirectURIs:            slices.Clone(m.RedirectURIs),
 		GrantTypes:              slices.Clone(m.GrantTypes),
 		ResponseTypes:           slices.Clone(m.ResponseTypes),
@@ -134,7 +146,7 @@ func rotateAndUpdate(
 		// have to roll over after every metadata edit. A genuine
 		// secret rotation is a separate operator-initiated action
 		// (out of scope for v1.0).
-		SecretHash:               secretHashForUpdate(existing, confidential),
+		SecretHash:               secretHash,
 		PublicClient:             !confidential,
 		Source:                   store.ClientSourceDynamic,
 		ApplicationType:          m.ApplicationType,
@@ -180,21 +192,71 @@ func rotateAndUpdate(
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return rotatedRegistration{}, false
 	}
-	return rotatedRegistration{client: updated, rawRAT: rawRAT}, true
+	return rotatedRegistration{client: updated, rawRAT: rawRAT, rawSecret: rawSecret}, true
 }
 
-// secretHashForUpdate decides which secret hash the updated client
-// record should carry. Switching from confidential to public clears
-// the hash; switching from public to confidential without minting a
-// fresh secret is a configuration error, but the library still
-// accepts the update — the next /token request will simply fail to
-// authenticate, which is a clearer signal to the operator than a 400
-// at update time.
-func secretHashForUpdate(existing *store.Client, confidential bool) string {
-	if !confidential {
-		return ""
+func validateManageUpdateRequest(existing *store.Client, clientID string, extras metadataExtras) error {
+	switch {
+	case len(extras.RegAccessToken) != 0:
+		return errors.New("request MUST NOT include the registration_access_token field")
+	case len(extras.RegClientURI) != 0:
+		return errors.New("request MUST NOT include the registration_client_uri field")
+	case len(extras.ClientSecretExp) != 0:
+		return errors.New("request MUST NOT include the client_secret_expires_at field")
+	case len(extras.ClientIDIssuedAt) != 0:
+		return errors.New("request MUST NOT include the client_id_issued_at field")
 	}
-	return existing.SecretHash
+	if extras.ClientID != "" && extras.ClientID != clientID {
+		return errors.New("client_id is immutable")
+	}
+	if len(extras.ClientSecret) != 0 {
+		if err := validateManageClientSecret(existing, extras.ClientSecret); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateManageClientSecret(existing *store.Client, raw json.RawMessage) error {
+	const mismatch = "provided client_secret does not match the authenticated client's one"
+	if string(raw) == "null" {
+		return errors.New(mismatch)
+	}
+	var presented string
+	if err := json.Unmarshal(raw, &presented); err != nil {
+		return errors.New(mismatch)
+	}
+	if existing == nil || existing.SecretHash == "" {
+		return errors.New(mismatch)
+	}
+	if err := (&clientauth.Argon2id{}).Verify(presented, existing.SecretHash); err != nil {
+		return errors.New(mismatch)
+	}
+	return nil
+}
+
+// secretMaterialForUpdate decides which secret material the updated
+// client record should carry. Switching from confidential to public
+// clears the hash. Switching from public to confidential mints a
+// fresh client_secret and returns both the raw value (for the RFC
+// 7592 response body) and its hash (for persistence). Confidential
+// to confidential updates preserve the existing hash so metadata
+// edits do not silently rotate credentials.
+func secretMaterialForUpdate(existing *store.Client, confidential bool) (raw, hash string, err error) {
+	if !confidential {
+		return "", "", nil
+	}
+	if existing == nil {
+		return "", "", errors.New("registrationendpoint: existing client is required for secret update")
+	}
+	if existing.SecretHash == "" {
+		raw, hash, err := newClientSecret()
+		if err != nil {
+			return "", "", err
+		}
+		return raw, hash, nil
+	}
+	return "", existing.SecretHash, nil
 }
 
 // handleDelete implements DELETE /register/{client_id} (RFC 7592 §2.3).
@@ -246,10 +308,11 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 // path and "" for reads. Every metadata field the persistent record
 // carries is echoed so an RFC 7592 round-trip preserves the values
 // the client originally registered.
-func clientToResponse(c *store.Client, deps Deps, rotatedRAT string) registrationResponse {
+func clientToResponse(c *store.Client, deps Deps, rotatedRAT, rawSecret string) registrationResponse {
 	return registrationResponse{
 		ClientID:                c.ID,
-		ClientIDIssuedAt:        0,
+		ClientIDIssuedAt:        c.ClientIDIssuedAt,
+		ClientSecret:            rawSecret,
 		ClientSecretExpiresAt:   0,
 		RegistrationAccessToken: rotatedRAT,
 		RegistrationClientURI:   registrationClientURI(deps.Issuer, deps.MountPrefix, deps.RegisterPath, c.ID),

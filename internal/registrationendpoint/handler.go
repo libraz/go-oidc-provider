@@ -113,6 +113,15 @@ type Deps struct {
 	// [op.WithAllowLocalhostLoopback] at construction.
 	AllowLocalhostLoopback bool
 
+	// SectorIdentifierClient is an optional HTTP client used to fetch
+	// sector_identifier_uri documents during registration validation
+	// (OIDC Core §8.1). A nil value applies a package-default client
+	// with a 5 s timeout and standard TLS verification. The field is
+	// not part of the public op.RegistrationOption surface in v1.0;
+	// it exists so internal tests can substitute a TLS client trusting
+	// the httptest test root.
+	SectorIdentifierClient *http.Client
+
 	// ValidateMetadata is the embedder hook invoked after structural
 	// validation passes and before the client is persisted. A non-nil
 	// error rejects the registration with invalid_client_metadata;

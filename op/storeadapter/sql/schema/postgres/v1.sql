@@ -18,6 +18,7 @@
 
 CREATE TABLE IF NOT EXISTS oidc_clients (
     id TEXT PRIMARY KEY,
+    client_id_issued_at BIGINT NOT NULL DEFAULT 0,
     redirect_uris JSONB NOT NULL DEFAULT '[]'::jsonb,
     post_logout_redirect_uris JSONB NOT NULL DEFAULT '[]'::jsonb,
     backchannel_logout_uri TEXT NOT NULL DEFAULT '',

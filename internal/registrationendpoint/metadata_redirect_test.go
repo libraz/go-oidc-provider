@@ -44,7 +44,7 @@ func TestValidateRedirectURIs_DefaultIPOnly(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateRedirectURIs([]string{tc.uri}, false)
+			err := validateRedirectURIs([]string{tc.uri}, "web", false, false)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("validateRedirectURIs(%q, false) = nil, want error", tc.uri)
@@ -91,7 +91,7 @@ func TestValidateRedirectURIs_OptInLocalhost(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateRedirectURIs([]string{tc.uri}, true)
+			err := validateRedirectURIs([]string{tc.uri}, "web", false, true)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("validateRedirectURIs(%q, true) = nil, want error", tc.uri)
@@ -112,7 +112,7 @@ func TestValidateRedirectURIs_OptInLocalhost(t *testing.T) {
 func TestValidateRedirectURIs_DefaultRejectsLocalhostMessageHints(t *testing.T) {
 	t.Parallel()
 
-	err := validateRedirectURIs([]string{"http://localhost:8080/cb"}, false)
+	err := validateRedirectURIs([]string{"http://localhost:8080/cb"}, "web", false, false)
 	if err == nil {
 		t.Fatal("expected error in default mode")
 	}
@@ -127,11 +127,89 @@ func TestValidateRedirectURIs_DefaultRejectsLocalhostMessageHints(t *testing.T) 
 func TestValidateRedirectURIs_ErrorMessageMentionsLoopback(t *testing.T) {
 	t.Parallel()
 
-	err := validateRedirectURIs([]string{"http://rp.example.com/cb"}, false)
+	err := validateRedirectURIs([]string{"http://rp.example.com/cb"}, "web", false, false)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(err.Error(), "loopback") {
 		t.Errorf("error message %q should mention loopback for operator clarity", err.Error())
+	}
+}
+
+// TestValidateRedirectURIs_NativeApplicationType covers the
+// application_type=native carve-outs introduced by ADR-0026 §4: the
+// loopback "localhost" textual host is admitted unconditionally
+// (no AllowLocalhostLoopback gate, per OIDC Registration §2), https
+// targets are accepted (RFC 8252 §7.2 claimed https), reverse-DNS
+// custom URI schemes are accepted (RFC 8252 §7.1), and non-reverse-DNS
+// or web-reserved schemes are rejected with a remediation hint.
+func TestValidateRedirectURIs_NativeApplicationType(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		uri     string
+		wantErr bool
+	}{
+		{"https", "https://app.example.com/cb", false},
+		{"http-loopback-v4", "http://127.0.0.1:53682/cb", false},
+		{"http-loopback-v6", "http://[::1]:53682/cb", false},
+		{"http-localhost-no-flag", "http://localhost:53682/cb", false},
+		{"http-public", "http://rp.example.com/cb", true},
+		{"custom-reverse-dns", "com.example.app:/cb", false},
+		{"custom-reverse-dns-with-host", "com.example.app://callback/cb", false},
+		{"custom-no-dot", "myapp:/cb", true},
+		{"web-reserved-ftp", "ftp://example.com/cb", true},
+		{"with-fragment", "https://app.example.com/cb#x", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateRedirectURIs([]string{tc.uri}, "native", false, false)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateRedirectURIs(%q, native) = nil, want error", tc.uri)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateRedirectURIs(%q, native) unexpected error: %v", tc.uri, err)
+			}
+		})
+	}
+}
+
+// TestValidateRedirectURIs_WebImplicitForbidsLoopbackHost covers OIDC
+// Registration §2: web clients using the implicit grant must not
+// register a loopback host as redirect_uri. The check is independent
+// of the AllowLocalhostLoopback gate because the spec text is about
+// the implicit-flow risk surface, not the http-vs-https surface.
+func TestValidateRedirectURIs_WebImplicitForbidsLoopbackHost(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		uri     string
+		wantErr bool
+	}{
+		{"https-public-implicit", "https://app.example.com/cb", false},
+		{"https-127-loopback-implicit", "https://127.0.0.1/cb", true},
+		{"https-localhost-implicit", "https://localhost/cb", true},
+		{"https-ipv6-loopback-implicit", "https://[::1]/cb", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateRedirectURIs([]string{tc.uri}, "web", true, false)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateRedirectURIs(%q, web, implicit) = nil, want error", tc.uri)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateRedirectURIs(%q, web, implicit) unexpected error: %v", tc.uri, err)
+			}
+		})
 	}
 }

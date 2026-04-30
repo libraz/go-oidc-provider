@@ -213,6 +213,9 @@ func TestRegister_HappyPath_MintsConfidentialClient(t *testing.T) {
 	if clientID == "" {
 		t.Fatal("client_id missing from response")
 	}
+	if issued, _ := body["client_id_issued_at"].(float64); int64(issued) <= 0 {
+		t.Errorf("client_id_issued_at=%v want positive unix timestamp", body["client_id_issued_at"])
+	}
 	if secret, _ := body["client_secret"].(string); secret == "" {
 		t.Error("client_secret must be present for confidential client")
 	}
@@ -244,6 +247,9 @@ func TestRegister_HappyPath_MintsConfidentialClient(t *testing.T) {
 	}
 	if got.Source != store.ClientSourceDynamic {
 		t.Errorf("client.Source=%q want %q", got.Source, store.ClientSourceDynamic)
+	}
+	if got.ClientIDIssuedAt <= 0 {
+		t.Errorf("client.ClientIDIssuedAt=%d want positive unix timestamp", got.ClientIDIssuedAt)
 	}
 	if got.PublicClient {
 		t.Error("client.PublicClient must be false for client_secret_basic")
@@ -599,6 +605,51 @@ func TestRegister_MetadataValidation_4xx(t *testing.T) {
 			name: "id_token alg other than ES256",
 			mutate: func(b map[string]any) {
 				b["id_token_signed_response_alg"] = "RS256"
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
+			name: "jwks and jwks_uri mutually exclusive",
+			mutate: func(b map[string]any) {
+				b["jwks"] = map[string]any{"keys": []any{}}
+				b["jwks_uri"] = "https://rp.test.invalid/jwks.json"
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
+			name: "client_uri must use https",
+			mutate: func(b map[string]any) {
+				b["client_uri"] = "http://rp.test.invalid"
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
+			name: "request_uri must be absolute https",
+			mutate: func(b map[string]any) {
+				b["request_uris"] = []string{"/jar/request.jwt"}
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
+			name: "request_object_signing_alg must be supported",
+			mutate: func(b map[string]any) {
+				b["request_object_signing_alg"] = "HS256"
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
+			name: "code response_type requires authorization_code grant",
+			mutate: func(b map[string]any) {
+				b["grant_types"] = []string{"implicit"}
+				b["response_types"] = []string{"code"}
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
+			name: "implicit response_type requires implicit grant",
+			mutate: func(b map[string]any) {
+				b["grant_types"] = []string{"authorization_code"}
+				b["response_types"] = []string{"id_token"}
 			},
 			wantError: "invalid_client_metadata",
 		},

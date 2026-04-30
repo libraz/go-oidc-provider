@@ -89,6 +89,14 @@ type metadataWire struct {
 	// caller tried to mutate the immutable identifier (RFC 7592 §2.2);
 	// the value is otherwise ignored.
 	ClientID string `json:"client_id,omitempty"`
+
+	// RFC 7592 reserved response fields. The PUT path MUST reject
+	// requests that try to write these values back.
+	ClientSecret            json.RawMessage `json:"client_secret,omitempty"`
+	ClientSecretExpiresAt   json.RawMessage `json:"client_secret_expires_at,omitempty"`
+	ClientIDIssuedAt        json.RawMessage `json:"client_id_issued_at,omitempty"`
+	RegistrationAccessToken json.RawMessage `json:"registration_access_token,omitempty"`
+	RegistrationClientURI   json.RawMessage `json:"registration_client_uri,omitempty"`
 }
 
 // metadataExtras carries the wire fields that are not part of the
@@ -100,6 +108,11 @@ type metadataWire struct {
 type metadataExtras struct {
 	SoftwareStatement string
 	ClientID          string
+	ClientSecret      json.RawMessage
+	ClientSecretExp   json.RawMessage
+	ClientIDIssuedAt  json.RawMessage
+	RegAccessToken    json.RawMessage
+	RegClientURI      json.RawMessage
 }
 
 // parseClientMetadataWithExtras is the variant the handler uses; it
@@ -141,6 +154,11 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 	extras := metadataExtras{
 		SoftwareStatement: w.SoftwareStatement,
 		ClientID:          w.ClientID,
+		ClientSecret:      append(json.RawMessage(nil), w.ClientSecret...),
+		ClientSecretExp:   append(json.RawMessage(nil), w.ClientSecretExpiresAt...),
+		ClientIDIssuedAt:  append(json.RawMessage(nil), w.ClientIDIssuedAt...),
+		RegAccessToken:    append(json.RawMessage(nil), w.RegistrationAccessToken...),
+		RegClientURI:      append(json.RawMessage(nil), w.RegistrationClientURI...),
 	}
 	return m, extras, nil
 }
@@ -161,14 +179,20 @@ func validatePolicy(
 	pairwiseEnabled bool,
 	allowLocalhostLoopback bool,
 ) (ClientMetadata, error) {
-	if err := validateRedirectURIs(m.RedirectURIs, allowLocalhostLoopback); err != nil {
-		return ClientMetadata{}, err
+	if len(m.RedirectURIs) == 0 {
+		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
 	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
+	if err := validateRedirectURIs(canonical.RedirectURIs, canonical.ApplicationType, hasImplicitResponseType(canonical.ResponseTypes), allowLocalhostLoopback); err != nil {
+		return ClientMetadata{}, err
+	}
 	if err := validateGrantTypes(canonical.GrantTypes, allowedGrantTypes); err != nil {
 		return ClientMetadata{}, err
 	}
 	if err := validateResponseTypes(canonical.ResponseTypes, allowedResponseTypes); err != nil {
+		return ClientMetadata{}, err
+	}
+	if err := validateGrantResponseTypeConsistency(canonical.GrantTypes, canonical.ResponseTypes); err != nil {
 		return ClientMetadata{}, err
 	}
 	if err := validateAuthMethod(canonical.TokenEndpointAuthMethod); err != nil {
@@ -181,6 +205,18 @@ func validatePolicy(
 		return ClientMetadata{}, err
 	}
 	if err := validateRequestedScopes(canonical.Scope, iatScopes, scopes); err != nil {
+		return ClientMetadata{}, err
+	}
+	if err := validateMetadataURIs(canonical); err != nil {
+		return ClientMetadata{}, err
+	}
+	if err := validateJWKSConfiguration(canonical); err != nil {
+		return ClientMetadata{}, err
+	}
+	if err := validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg); err != nil {
+		return ClientMetadata{}, err
+	}
+	if err := validatePairwiseMetadata(canonical); err != nil {
 		return ClientMetadata{}, err
 	}
 	if canonical.DefaultMaxAge != nil && *canonical.DefaultMaxAge < 0 {
@@ -224,21 +260,21 @@ func applyMetadataDefaults(m ClientMetadata, allowedGrantTypes, allowedResponseT
 }
 
 // validateRedirectURIs enforces the RFC 6749 §3.1.2 baseline plus the
-// RFC 8252 §7.3 native-app loopback carve-out: every URL MUST be
-// absolute, parseable, fragment-free, and either an https URL or a
-// plain http URL whose host is a loopback literal. The default IP-only
-// posture (127.0.0.1 and [::1]) reflects the §8.3 DNS-rebinding
-// concern; allowLocalhostLoopback widens the gate to also admit the
-// textual "localhost" host. Any other http URL — public hosts, private
-// hosts, arbitrary domain names — is rejected so a hostile DCR cannot
-// register a non-TLS redirect target on the open internet. The
-// caller's [ValidateMetadata] hook may tighten further.
-func validateRedirectURIs(uris []string, allowLocalhostLoopback bool) error {
+// RFC 8252 §7.3 native-app loopback carve-out and OIDC Registration §2
+// rules: every URL MUST be absolute, parseable, fragment-free, and
+// match the scheme/host shape allowed for its application_type. Web
+// clients require https (with a loopback-http carve-out gated by
+// allowLocalhostLoopback for backward compatibility); native clients
+// additionally accept loopback http unconditionally and custom URI
+// schemes per RFC 8252 §7.1. The default IP-only loopback posture
+// reflects the §8.3 DNS-rebinding concern. The caller's
+// [ValidateMetadata] hook may tighten further.
+func validateRedirectURIs(uris []string, applicationType string, hasImplicit, allowLocalhostLoopback bool) error {
 	if len(uris) == 0 {
 		return errInvalidRedirectURI("redirect_uris is required")
 	}
 	for _, raw := range uris {
-		if err := validateRedirectURI(raw, allowLocalhostLoopback); err != nil {
+		if err := validateRedirectURI(raw, applicationType, hasImplicit, allowLocalhostLoopback); err != nil {
 			return err
 		}
 	}
@@ -250,7 +286,7 @@ func validateRedirectURIs(uris []string, allowLocalhostLoopback bool) error {
 // project's gocognit / cyclop caps and so the error messages stay
 // per-URI rather than masking the offending entry behind a generic
 // loop diagnostic.
-func validateRedirectURI(raw string, allowLocalhostLoopback bool) error {
+func validateRedirectURI(raw, applicationType string, hasImplicit, allowLocalhostLoopback bool) error {
 	if raw == "" {
 		return errInvalidRedirectURI("redirect_uri must not be empty")
 	}
@@ -264,8 +300,62 @@ func validateRedirectURI(raw string, allowLocalhostLoopback bool) error {
 	if u.Fragment != "" {
 		return errInvalidRedirectURI("redirect_uri must not contain a fragment")
 	}
+	if applicationType == applicationTypeNative {
+		return validateNativeRedirectURIScheme(u)
+	}
+	return validateWebRedirectURIScheme(u, hasImplicit, allowLocalhostLoopback)
+}
+
+// validateNativeRedirectURIScheme implements OIDC Registration §2 +
+// RFC 8252 §7.1/§7.2/§7.3 for native clients: https (claimed), loopback
+// http, or a custom URI scheme. Loopback http accepts the textual
+// "localhost" host unconditionally for native clients per OIDC Reg §2;
+// the AllowLocalhostLoopback gate is for the web-client carve-out only.
+func validateNativeRedirectURIScheme(u *url.URL) error {
 	switch u.Scheme {
 	case "https":
+		return nil
+	case "http":
+		if !isLoopbackRedirectHost(u.Hostname(), true) {
+			return errInvalidRedirectURI("native client redirect_uri http scheme requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+		}
+		return nil
+	default:
+		return validateNativeCustomScheme(u.Scheme)
+	}
+}
+
+// validateNativeCustomScheme implements RFC 8252 §7.1 private-use URI
+// scheme handling: schemes are accepted, but a non-reverse-DNS shape
+// (no "." in the scheme, e.g. "myapp" instead of "com.example.myapp")
+// is rejected because non-reverse-DNS schemes have a higher collision
+// risk across applications. Schemes that collide with well-known web
+// schemes are rejected outright.
+func validateNativeCustomScheme(scheme string) error {
+	if scheme == "" {
+		return errInvalidRedirectURI("redirect_uri scheme must not be empty")
+	}
+	switch scheme {
+	case "ftp", "file", "data", "javascript", "ws", "wss":
+		return errInvalidRedirectURI("redirect_uri scheme " + scheme + " is not permitted for native clients")
+	}
+	if !strings.Contains(scheme, ".") {
+		return errInvalidRedirectURI("native client custom URI scheme " + scheme + " SHOULD use reverse-DNS form (e.g. com.example.app); register a scheme containing a dot per RFC 8252 §7.1")
+	}
+	return nil
+}
+
+// validateWebRedirectURIScheme implements OIDC Registration §2 for web
+// clients: https only, with the historical AllowLocalhostLoopback gate
+// still admitting loopback-http for embedders that opted in before the
+// native-app split. Implicit grant additionally forbids localhost host
+// shapes per OIDC Reg §2.
+func validateWebRedirectURIScheme(u *url.URL, hasImplicit, allowLocalhostLoopback bool) error {
+	switch u.Scheme {
+	case "https":
+		if hasImplicit && isLoopbackRedirectHost(u.Hostname(), true) {
+			return errInvalidRedirectURI("web client with implicit response_types must not use a loopback host as redirect_uri per OIDC Registration §2")
+		}
 		return nil
 	case "http":
 		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
@@ -276,11 +366,23 @@ func validateRedirectURI(raw string, allowLocalhostLoopback bool) error {
 		}
 		return nil
 	default:
-		// Custom schemes (myapp:// for native-app rDNS) are rejected
-		// at this layer; the [ValidateMetadata] embedder hook is the
-		// seam for embedders that admit them under their own policy.
-		return errInvalidRedirectURI("redirect_uri scheme must be https (http is restricted to loopback)")
+		return errInvalidRedirectURI("web client redirect_uri scheme must be https; custom URI schemes require application_type=native")
 	}
+}
+
+// hasImplicitResponseType reports whether any response_type entry
+// contains an implicit-flow token (id_token or token without code).
+func hasImplicitResponseType(responseTypes []string) bool {
+	for _, rt := range responseTypes {
+		toks := strings.Fields(rt)
+		hasCode := slices.Contains(toks, "code")
+		hasToken := slices.Contains(toks, "token")
+		hasIDToken := slices.Contains(toks, "id_token")
+		if !hasCode && (hasToken || hasIDToken) {
+			return true
+		}
+	}
+	return false
 }
 
 // isLoopbackRedirectHost reports whether host is a loopback literal
@@ -323,6 +425,31 @@ func validateResponseTypes(requested, allowed []string) error {
 	for _, rt := range requested {
 		if !slices.Contains(allowed, rt) {
 			return errInvalidClientMetadata("response_type " + rt + " is not allowed")
+		}
+	}
+	return nil
+}
+
+// validateGrantResponseTypeConsistency enforces the OIDC Core coupling
+// between response_type and grant_type. The checks operate on the
+// semantic token set of each response_type so "id_token code" and
+// "code id_token" are treated identically.
+func validateGrantResponseTypeConsistency(grantTypes, responseTypes []string) error {
+	hasGrant := func(want string) bool { return slices.Contains(grantTypes, want) }
+	for _, rt := range responseTypes {
+		toks := strings.Fields(rt)
+		hasCode := slices.Contains(toks, "code")
+		hasToken := slices.Contains(toks, "token")
+		hasIDToken := slices.Contains(toks, "id_token")
+
+		if hasCode && !hasGrant("authorization_code") {
+			return errInvalidClientMetadata("response_type " + rt + " requires grant_type authorization_code")
+		}
+		if (hasToken || hasIDToken) && !hasCode && !hasGrant("implicit") {
+			return errInvalidClientMetadata("response_type " + rt + " requires grant_type implicit")
+		}
+		if hasCode && (hasToken || hasIDToken) && !hasGrant("implicit") {
+			return errInvalidClientMetadata("response_type " + rt + " requires grant_type implicit")
 		}
 	}
 	return nil
@@ -389,6 +516,94 @@ func validateRequestedScopes(scope string, iatAllowed []string, scopes *scopereg
 	return nil
 }
 
+func validateMetadataURIs(m ClientMetadata) error {
+	for _, field := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "client_uri", raw: m.ClientURI},
+		{name: "logo_uri", raw: m.LogoURI},
+		{name: "policy_uri", raw: m.PolicyURI},
+		{name: "tos_uri", raw: m.TosURI},
+		{name: "jwks_uri", raw: m.JWKsURI},
+		{name: "sector_identifier_uri", raw: m.SectorIdentifierURI},
+		{name: "initiate_login_uri", raw: m.InitiateLoginURI},
+	} {
+		if err := validateHTTPSAbsoluteURI(field.name, field.raw); err != nil {
+			return err
+		}
+	}
+	for _, raw := range m.RequestURIs {
+		if err := validateHTTPSAbsoluteURI("request_uris", raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateHTTPSAbsoluteURI(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errInvalidClientMetadata(field + " is not a valid URL")
+	}
+	if !u.IsAbs() {
+		return errInvalidClientMetadata(field + " must be absolute")
+	}
+	if u.Scheme != "https" {
+		return errInvalidClientMetadata(field + " must use https")
+	}
+	if u.Fragment != "" {
+		return errInvalidClientMetadata(field + " must not contain a fragment")
+	}
+	if u.Host == "" {
+		return errInvalidClientMetadata(field + " must include a host")
+	}
+	return nil
+}
+
+func validateJWKSConfiguration(m ClientMetadata) error {
+	if len(m.JWKs) > 0 && m.JWKsURI != "" {
+		return errInvalidClientMetadata("jwks and jwks_uri are mutually exclusive")
+	}
+	return nil
+}
+
+func validateRequestObjectSigningAlg(alg string) error {
+	if alg == "" {
+		return nil
+	}
+	switch alg {
+	case "RS256", "PS256", "ES256", "EdDSA":
+		return nil
+	default:
+		return errInvalidClientMetadata("request_object_signing_alg " + alg + " is not supported")
+	}
+}
+
+func validatePairwiseMetadata(m ClientMetadata) error {
+	if m.SubjectType != "pairwise" || m.SectorIdentifierURI != "" {
+		return nil
+	}
+	host := ""
+	for _, raw := range m.RedirectURIs {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return errInvalidRedirectURI("redirect_uri is not a valid URL")
+		}
+		if host == "" {
+			host = u.Hostname()
+			continue
+		}
+		if u.Hostname() != host {
+			return errInvalidClientMetadata("subject_type pairwise requires sector_identifier_uri when redirect_uris span multiple hosts")
+		}
+	}
+	return nil
+}
+
 // validationError is the structural-validator's error sentinel. It
 // carries the wire code and description the HTTP layer copies into the
 // RFC 7591 §3.2.2 envelope.
@@ -446,4 +661,5 @@ const (
 	defaultSubjectType     = "public"
 	defaultIDTokenAlg      = "ES256"
 	defaultApplicationType = "web"
+	applicationTypeNative  = "native"
 )

@@ -86,6 +86,10 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeMetadataValidationError(ctx, w, deps, err, "")
 		return
 	}
+	if err := validateSectorIdentifierURI(ctx, deps, canonical); err != nil {
+		writeMetadataValidationError(ctx, w, deps, err, "")
+		return
+	}
 	if deps.ValidateMetadata != nil {
 		if hookErr := deps.ValidateMetadata(ctx, canonical); hookErr != nil {
 			writeMetadataValidationError(ctx, w, deps, hookErr, "")
@@ -128,6 +132,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	now := deps.now().UTC()
 	client := &store.Client{
 		ID:                       clientID,
+		ClientIDIssuedAt:         now.Unix(),
 		RedirectURIs:             slices.Clone(m.RedirectURIs),
 		GrantTypes:               slices.Clone(m.GrantTypes),
 		ResponseTypes:            slices.Clone(m.ResponseTypes),
@@ -185,7 +190,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	})
 	writeRegistrationResponse(w, http.StatusCreated, registrationResponse{
 		ClientID:                clientID,
-		ClientIDIssuedAt:        now.Unix(),
+		ClientIDIssuedAt:        client.ClientIDIssuedAt,
 		ClientSecret:            rawSecret,
 		ClientSecretExpiresAt:   0,
 		RegistrationAccessToken: rat,

@@ -18,6 +18,7 @@ import (
 // every time.
 type dcrCreated struct {
 	clientID                string
+	clientIDIssuedAt        int64
 	registrationAccessToken string
 	registrationClientURI   string
 }
@@ -46,6 +47,9 @@ func (f *dcrFixture) register(tb testing.TB, body any) dcrCreated {
 	got := decodeBody(tb, resp)
 	out := dcrCreated{}
 	out.clientID, _ = got["client_id"].(string)
+	if issued, ok := got["client_id_issued_at"].(float64); ok {
+		out.clientIDIssuedAt = int64(issued)
+	}
 	out.registrationAccessToken, _ = got["registration_access_token"].(string)
 	advertised, _ := got["registration_client_uri"].(string)
 	if out.clientID == "" || out.registrationAccessToken == "" || advertised == "" {
@@ -107,6 +111,9 @@ func TestManage_Read_HappyPath(t *testing.T) {
 	body := decodeBody(t, resp)
 	if got, _ := body["client_id"].(string); got != created.clientID {
 		t.Errorf("client_id=%v want %q", body["client_id"], created.clientID)
+	}
+	if got, _ := body["client_id_issued_at"].(float64); int64(got) != created.clientIDIssuedAt {
+		t.Errorf("client_id_issued_at=%v want %d", body["client_id_issued_at"], created.clientIDIssuedAt)
 	}
 	// Per RFC 7592 §2.1 the GET response MUST NOT echo a fresh RAT.
 	if rat, ok := body["registration_access_token"].(string); ok && rat != "" {
@@ -250,8 +257,114 @@ func TestManage_Update_HappyPath_RotatesRAT(t *testing.T) {
 	}
 }
 
+func TestManage_Update_PublicToConfidential_MintsClientSecret(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, map[string]any{
+		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+		"token_endpoint_auth_method": "none",
+	})
+
+	update := map[string]any{
+		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+		"token_endpoint_auth_method": "client_secret_basic",
+	}
+	resp := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, update)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body := decodeBody(t, resp)
+	secret, _ := body["client_secret"].(string)
+	if secret == "" {
+		t.Fatal("PUT response must include a newly minted client_secret")
+	}
+	if got, _ := body["client_id_issued_at"].(float64); int64(got) != created.clientIDIssuedAt {
+		t.Fatalf("client_id_issued_at=%v want %d", body["client_id_issued_at"], created.clientIDIssuedAt)
+	}
+	client, err := f.prov.Store.GetClient(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if client.PublicClient {
+		t.Fatal("updated client must be confidential")
+	}
+	if client.SecretHash == "" {
+		t.Fatal("updated client must persist a secret hash")
+	}
+	if client.ClientIDIssuedAt != created.clientIDIssuedAt {
+		t.Fatalf("persisted client_id_issued_at=%d want %d", client.ClientIDIssuedAt, created.clientIDIssuedAt)
+	}
+}
+
+func TestManage_Update_AllowsOptionalPropertiesToBeDeleted(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+		"client_name":   "example client",
+	})
+
+	resp := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+		"client_name":   nil,
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body := decodeBody(t, resp)
+	if _, ok := body["client_name"]; ok {
+		t.Fatalf("client_name should be deleted, got %v", body["client_name"])
+	}
+	client, err := f.prov.Store.GetClient(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if client.ClientName != "" {
+		t.Fatalf("persisted client_name=%q want empty", client.ClientName)
+	}
+}
+
+func TestManage_Update_AllowsOptionalPropertiesToBeDeletedByOmission(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+		"client_name":   "example client",
+	})
+
+	resp := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	})
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body := decodeBody(t, resp)
+	if _, ok := body["client_name"]; ok {
+		t.Fatalf("client_name should be deleted by omission, got %v", body["client_name"])
+	}
+	client, err := f.prov.Store.GetClient(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if client.ClientName != "" {
+		t.Fatalf("persisted client_name=%q want empty", client.ClientName)
+	}
+}
+
 // TestManage_Update_RejectsClientIDOverride confirms attempting to
-// change client_id via the body is a 400 invalid_client_metadata.
+// change client_id via the body is a 400 invalid_request.
 func TestManage_Update_RejectsClientIDOverride(t *testing.T) {
 	t.Parallel()
 
@@ -266,8 +379,100 @@ func TestManage_Update_RejectsClientIDOverride(t *testing.T) {
 		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
 	}
 	got := decodeBody(t, resp)
-	if got["error"] != "invalid_client_metadata" {
-		t.Errorf("error=%v want invalid_client_metadata", got["error"])
+	if got["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", got["error"])
+	}
+}
+
+func TestManage_Update_RejectsReservedFieldsAndMismatchedClientSecret(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		initial     map[string]any
+		mutate      func(map[string]any)
+		wantMessage string
+	}{
+		{
+			name: "registration_access_token",
+			mutate: func(b map[string]any) {
+				b["registration_access_token"] = "rat"
+			},
+			wantMessage: "request MUST NOT include the registration_access_token field",
+		},
+		{
+			name: "registration_client_uri",
+			mutate: func(b map[string]any) {
+				b["registration_client_uri"] = "https://op.example/register/client"
+			},
+			wantMessage: "request MUST NOT include the registration_client_uri field",
+		},
+		{
+			name: "client_secret_expires_at",
+			mutate: func(b map[string]any) {
+				b["client_secret_expires_at"] = 0
+			},
+			wantMessage: "request MUST NOT include the client_secret_expires_at field",
+		},
+		{
+			name: "client_id_issued_at",
+			mutate: func(b map[string]any) {
+				b["client_id_issued_at"] = 123
+			},
+			wantMessage: "request MUST NOT include the client_id_issued_at field",
+		},
+		{
+			name: "mismatched client_secret",
+			initial: map[string]any{
+				"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+				"token_endpoint_auth_method": "client_secret_basic",
+			},
+			mutate: func(b map[string]any) {
+				b["client_secret"] = "wrong-secret"
+			},
+			wantMessage: "provided client_secret does not match the authenticated client's one",
+		},
+		{
+			name: "null client_secret",
+			initial: map[string]any{
+				"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+				"token_endpoint_auth_method": "client_secret_basic",
+			},
+			mutate: func(b map[string]any) {
+				b["client_secret"] = nil
+			},
+			wantMessage: "provided client_secret does not match the authenticated client's one",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, op.RegistrationOption{})
+			initial := tc.initial
+			if initial == nil {
+				initial = minimalMetadata()
+			}
+			created := f.register(t, initial)
+			body := minimalMetadata()
+			if tc.initial != nil {
+				body["token_endpoint_auth_method"] = tc.initial["token_endpoint_auth_method"]
+			}
+			tc.mutate(body)
+			resp := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, body)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+			}
+			got := decodeBody(t, resp)
+			if got["error"] != "invalid_request" {
+				t.Fatalf("error=%v want invalid_request", got["error"])
+			}
+			if got["error_description"] != tc.wantMessage {
+				t.Fatalf("error_description=%v want %q", got["error_description"], tc.wantMessage)
+			}
+		})
 	}
 }
 
@@ -308,6 +513,22 @@ func TestManage_Update_MetadataValidationErrors(t *testing.T) {
 				b["software_statement"] = "ey.fake.jwt"
 			},
 			wantError: "invalid_software_statement",
+		},
+		{
+			name: "jwks and jwks_uri mutually exclusive",
+			mutate: func(b map[string]any) {
+				b["jwks"] = map[string]any{"keys": []any{}}
+				b["jwks_uri"] = "https://rp.test.invalid/jwks.json"
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
+			name: "code response_type requires authorization_code grant",
+			mutate: func(b map[string]any) {
+				b["grant_types"] = []string{"implicit"}
+				b["response_types"] = []string{"code"}
+			},
+			wantError: "invalid_client_metadata",
 		},
 	}
 	for _, tc := range cases {

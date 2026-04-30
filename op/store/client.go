@@ -52,6 +52,13 @@ type Client struct {
 	// re-registration.
 	ID string
 
+	// ClientIDIssuedAt is the Unix timestamp (seconds) when the OP
+	// issued ID. Dynamic registration stores it so RFC 7591 / RFC 7592
+	// responses can round-trip the original issuance time. Static
+	// clients typically leave it zero because no registration response
+	// was involved.
+	ClientIDIssuedAt int64
+
 	// RedirectURIs lists the exact-match redirect_uri values the client may
 	// present at the authorization endpoint. Wildcards and prefix matches
 	// are forbidden: the validator compares strings byte-for-byte.
