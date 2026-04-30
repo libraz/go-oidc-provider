@@ -14,8 +14,12 @@ package scenarios_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,7 +28,9 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -343,10 +349,46 @@ func TestScenario_GTM_005_RevocationDenylistsSingleAT(t *testing.T) {
 	}
 }
 
-// GTM-006 (FAPI + RevocationStrategyNone rejection) is exercised
-// directly in op/access_token_revocation_test.go where the test can
-// import the project's internal keyset helpers without crossing the
-// _test boundary. The scenario catalog still lists it for completeness.
+// TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone pins the ADR
+// 0025 §"Profile interaction (FAPI gate)" rule: under any FAPI profile
+// op.New rejects op.RevocationStrategyNone because FAPI 2.0 SP §5.3.2.2
+// mandates server-side access-token revocation. Non-FAPI profiles still
+// accept None — that path is bound by op-package unit tests.
+func TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+	cookieKey := make([]byte, 32)
+	if _, err := rand.Read(cookieKey); err != nil {
+		t.Fatalf("generate cookie key: %v", err)
+	}
+
+	_, err = op.New(
+		op.WithIssuer("https://idp.testkit.invalid"),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(op.Keyset{{KeyID: "gtm-sig-1", Signer: priv}}),
+		op.WithCookieKey(cookieKey),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithFeature(feature.DPoP),
+		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyNone),
+	)
+	if err == nil {
+		t.Fatal("expected error when FAPI profile is paired with RevocationStrategyNone, got nil")
+	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want *op.Error", err)
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("FAPI + None must be a server-side configuration error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "RevocationStrategyNone") {
+		t.Errorf("err = %v, want it to mention RevocationStrategyNone", err)
+	}
+}
 
 // TestScenario_GTM_007_JTIRegistryStrategyPreservesADR0013 pins the
 // opt-in audit path: under RevocationStrategyJTIRegistry every issued

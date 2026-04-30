@@ -4,7 +4,7 @@ prefix: GTM
 title: JWT access-token revocation via grant-tombstone (ADR 0025)
 specs:
   - RFC 6749 §4.1.2 — Authorization Code Grant, code-replay revocation
-  - RFC 6819 §5.2.1.1 — Threat: authorization code re-use
+  - "RFC 6819 §5.2.1.1 — Threat: authorization code re-use"
   - RFC 7009 §2.2 — OAuth 2.0 Token Revocation (idempotency)
   - RFC 7519 §4.3 — Private Claim Names
   - RFC 7662 §2.2 — OAuth 2.0 Token Introspection
