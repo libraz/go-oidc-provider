@@ -249,20 +249,20 @@ type config struct {
 	// without forcing the orchestrator to re-inspect the zero value.
 	loginFlowSet bool
 
-	// reactUI stores the [ReactUI] supplied through [WithReactUI].
+	// spaUI stores the [SPAUI] supplied through [WithSPAUI].
 	// The zero value signals "no SPA shell"; a non-zero value
 	// causes the default-driver fallback in [config.applyDefaults]
 	// to short-circuit so the embedder's SPA owns rendering.
-	reactUI ReactUI
+	spaUI SPAUI
 
-	// reactUISet records whether [WithReactUI] was invoked.
-	// Distinct from a populated reactUI value because future
-	// revisions may permit a partially-populated [ReactUI] zero
+	// spaUISet records whether [WithSPAUI] was invoked.
+	// Distinct from a populated spaUI value because future
+	// revisions may permit a partially-populated [SPAUI] zero
 	// value (e.g., LoginMount only).
-	reactUISet bool
+	spaUISet bool
 
 	// consentUI stores the [ConsentUI] supplied through
-	// [WithConsentUI]. Mutually exclusive with [config.reactUI];
+	// [WithConsentUI]. Mutually exclusive with [config.spaUI];
 	// validation runs at the option site so the conflict surfaces
 	// at construction time.
 	consentUI ConsentUI
@@ -271,7 +271,7 @@ type config struct {
 	consentUISet bool
 
 	// chooserUI stores the [ChooserUI] supplied through
-	// [WithChooserUI]. Mutually exclusive with [config.reactUI];
+	// [WithChooserUI]. Mutually exclusive with [config.spaUI];
 	// validation runs at the option site so the conflict surfaces
 	// at construction time.
 	chooserUI ChooserUI
@@ -475,7 +475,7 @@ func (c *config) applyDefaults() {
 		// surface. With a SPA shell active the default falls away so
 		// the embedder's SPA owns rendering and the JSON state
 		// endpoints stay the only protocol surface.
-		if !c.reactUISet {
+		if !c.spaUISet {
 			c.interactionD = interaction.HTMLDriver{}
 		}
 	}
@@ -579,10 +579,10 @@ func (c *config) emitPartialWiringWarnings() {
 	if c.logger == nil {
 		return
 	}
-	if c.reactUISet {
+	if c.spaUISet {
 		c.logger.Warn(
-			"WithReactUI is partially wired: the Provider suppresses the default HTML driver, but the configured LoginMount/ConsentMount/LogoutMount and StaticDir are not yet served by op.New. Embedders must mount their SPA externally; JSON state endpoints under the configured mounts land in a follow-up release.",
-			"option", "WithReactUI",
+			"WithSPAUI is partially wired: the Provider suppresses the default HTML driver, but the configured LoginMount/ConsentMount/LogoutMount and StaticDir are not yet served by op.New. Embedders must mount their SPA externally; JSON state endpoints under the configured mounts land in a follow-up release.",
+			"option", "WithSPAUI",
 		)
 	}
 	if c.consentUISet {
@@ -2610,23 +2610,23 @@ func WithAllowLocalhostLoopback() Option {
 	})
 }
 
-// ReactUI declares the SPA-shell mount points and optional asset root
+// SPAUI declares the SPA-shell mount points and optional asset root
 // the [Provider] should expose so the embedder's React (or framework-
 // neutral SPA) frontend can drive the login / consent / RP-Initiated
-// Logout flows. The struct is supplied to [WithReactUI]; the option
+// Logout flows. The struct is supplied to [WithSPAUI]; the option
 // stores it on config and the orchestrator wiring later translates
 // the mount points into JSON state endpoints. The scope is
 // deliberately limited to login / consent / RP-Initiated Logout:
 // front-channel logout and session management iframes are out of
-// scope, so [ReactUI] does not carry mounts for those surfaces.
+// scope, so [SPAUI] does not carry mounts for those surfaces.
 // Experimental: the field set is being introduced in v0.x and MAY
 // gain optional fields before v1.0. Embedders SHOULD construct
-// [ReactUI] with named field initialisation so future additions
+// [SPAUI] with named field initialisation so future additions
 // remain source-compatible.
-type ReactUI struct {
+type SPAUI struct {
 	// LoginMount is the URL path the SPA's login entry HTML lives
 	// under (typically "/login"). MUST be non-empty and MUST start
-	// with "/"; an empty value rejects [WithReactUI] at the option
+	// with "/"; an empty value rejects [WithSPAUI] at the option
 	// site so the misconfiguration surfaces at construction time.
 	LoginMount string
 
@@ -2652,7 +2652,7 @@ type ReactUI struct {
 
 // ConsentUI declares the template the [Provider] uses to render the
 // consent screen when the embedder wants to keep the HTML driver but
-// override the consent body. Mutually exclusive with [WithReactUI];
+// override the consent body. Mutually exclusive with [WithSPAUI];
 // supplying both fails [New] with a structured configuration error.
 // The struct field set is intentionally narrow: the consent ceremony
 // has a fixed data model (client metadata + scope list + CSRF token)
@@ -2673,7 +2673,7 @@ type ConsentUI struct {
 // ChooserUI declares the template the [Provider] uses to render the
 // account chooser screen when prompt=select_account fires for a
 // session that already has a chooser group. Mutually exclusive with
-// [WithReactUI]; supplying both fails [New] with a structured
+// [WithSPAUI]; supplying both fails [New] with a structured
 // configuration error. The struct field set is intentionally narrow:
 // the chooser screen has a fixed data model (Accounts, AddAccountURL,
 // CSRFToken) and the embedder supplies an [*template.Template] that
@@ -2753,7 +2753,7 @@ func WithLoginFlow(flow LoginFlow) Option {
 	})
 }
 
-// WithReactUI registers the [ReactUI] mount points the SPA frontend
+// WithSPAUI registers the [SPAUI] mount points the SPA frontend
 // hosts. With a SPA shell active the default-driver fallback in
 // [config.applyDefaults] short-circuits so the embedder's SPA owns
 // rendering; the OP falls back to [interaction.JSONDriver] for the
@@ -2776,58 +2776,58 @@ func WithLoginFlow(flow LoginFlow) Option {
 // paths to the bundle directory and forwards everything else to the
 // Provider). Auto-mounted JSON state endpoints under the configured
 // mounts land in a follow-up release.
-func WithReactUI(ui ReactUI) Option {
+func WithSPAUI(ui SPAUI) Option {
 	return optionFunc(func(c *config) error {
-		if err := checkReactUIPrecondition(c); err != nil {
+		if err := checkSPAUIPrecondition(c); err != nil {
 			return err
 		}
-		if err := validateReactUIMounts(ui); err != nil {
+		if err := validateSPAUIMounts(ui); err != nil {
 			return err
 		}
-		if err := validateReactUIStaticDir(ui.StaticDir); err != nil {
+		if err := validateSPAUIStaticDir(ui.StaticDir); err != nil {
 			return err
 		}
-		c.reactUI = ui
-		c.reactUISet = true
+		c.spaUI = ui
+		c.spaUISet = true
 		return nil
 	})
 }
 
-// checkReactUIPrecondition rejects repeated [WithReactUI] calls and the
-// [WithConsentUI] mutual-exclusion case. Split out so [WithReactUI]
+// checkSPAUIPrecondition rejects repeated [WithSPAUI] calls and the
+// [WithConsentUI] mutual-exclusion case. Split out so [WithSPAUI]
 // stays under the gocognit ceiling now that mount / StaticDir checks
 // also live in helpers.
-func checkReactUIPrecondition(c *config) error {
-	if c.reactUISet {
+func checkSPAUIPrecondition(c *config) error {
+	if c.spaUISet {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "WithReactUI may be called at most once",
+			Description: "WithSPAUI may be called at most once",
 		}
 	}
 	if c.consentUISet {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "WithReactUI is mutually exclusive with WithConsentUI",
+			Description: "WithSPAUI is mutually exclusive with WithConsentUI",
 		}
 	}
 	if c.chooserUISet {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "WithReactUI is mutually exclusive with WithChooserUI",
+			Description: "WithSPAUI is mutually exclusive with WithChooserUI",
 		}
 	}
 	return nil
 }
 
-// validateReactUIMounts enforces the LoginMount-required and
+// validateSPAUIMounts enforces the LoginMount-required and
 // "every mount path begins with /" rules. The error message names the
 // offending field so an embedder fixes the right line in their boot
 // sequence.
-func validateReactUIMounts(ui ReactUI) error {
+func validateSPAUIMounts(ui SPAUI) error {
 	if ui.LoginMount == "" {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "WithReactUI: LoginMount must not be empty",
+			Description: "WithSPAUI: LoginMount must not be empty",
 		}
 	}
 	for _, m := range []struct{ name, value string }{
@@ -2841,18 +2841,18 @@ func validateReactUIMounts(ui ReactUI) error {
 		if !strings.HasPrefix(m.value, "/") {
 			return &Error{
 				Code:        codeConfiguration,
-				Description: "WithReactUI: " + m.name + " must start with \"/\"",
+				Description: "WithSPAUI: " + m.name + " must start with \"/\"",
 			}
 		}
 	}
 	return nil
 }
 
-// validateReactUIStaticDir checks that a non-empty StaticDir refers to
+// validateSPAUIStaticDir checks that a non-empty StaticDir refers to
 // an accessible directory at construction time. An empty value means
 // "let the embedder serve the SPA bundle through their own reverse
 // proxy" and is allowed.
-func validateReactUIStaticDir(dir string) error {
+func validateSPAUIStaticDir(dir string) error {
 	if dir == "" {
 		return nil
 	}
@@ -2860,21 +2860,21 @@ func validateReactUIStaticDir(dir string) error {
 	if err != nil {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "WithReactUI: StaticDir " + dir + " not accessible",
+			Description: "WithSPAUI: StaticDir " + dir + " not accessible",
 			Cause:       err,
 		}
 	}
 	if !info.IsDir() {
 		return &Error{
 			Code:        codeConfiguration,
-			Description: "WithReactUI: StaticDir " + dir + " is not a directory",
+			Description: "WithSPAUI: StaticDir " + dir + " is not a directory",
 		}
 	}
 	return nil
 }
 
 // WithConsentUI registers the [ConsentUI] template the HTML driver
-// uses for the consent screen. Mutually exclusive with [WithReactUI];
+// uses for the consent screen. Mutually exclusive with [WithSPAUI];
 // supplying both fails [New] with a structured configuration error.
 // Validation:
 //   - Template MUST be non-nil.
@@ -2895,10 +2895,10 @@ func WithConsentUI(ui ConsentUI) Option {
 				Description: "WithConsentUI may be called at most once",
 			}
 		}
-		if c.reactUISet {
+		if c.spaUISet {
 			return &Error{
 				Code:        codeConfiguration,
-				Description: "WithConsentUI is mutually exclusive with WithReactUI",
+				Description: "WithConsentUI is mutually exclusive with WithSPAUI",
 			}
 		}
 		if ui.Template == nil {
@@ -2915,7 +2915,7 @@ func WithConsentUI(ui ConsentUI) Option {
 
 // WithChooserUI registers the [ChooserUI] template the HTML driver
 // uses for the account chooser screen. Mutually exclusive with
-// [WithReactUI]; supplying both fails [New] with a structured
+// [WithSPAUI]; supplying both fails [New] with a structured
 // configuration error.
 // Validation:
 //   - Template MUST be non-nil.
@@ -2936,10 +2936,10 @@ func WithChooserUI(ui ChooserUI) Option {
 				Description: "WithChooserUI may be called at most once",
 			}
 		}
-		if c.reactUISet {
+		if c.spaUISet {
 			return &Error{
 				Code:        codeConfiguration,
-				Description: "WithChooserUI is mutually exclusive with WithReactUI",
+				Description: "WithChooserUI is mutually exclusive with WithSPAUI",
 			}
 		}
 		if ui.Template == nil {

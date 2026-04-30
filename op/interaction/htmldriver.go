@@ -237,7 +237,7 @@ func writeConsentScopeList(b *strings.Builder, data ConsentScopePromptData) {
 // separated list of every requested scope name, in the order the
 // orchestrator surfaced them. Deselection requires JS, which the
 // driver intentionally omits; embedders who need partial consent ship
-// a custom Driver or a SPA via [op.WithReactUI].
+// a custom Driver or a SPA via [op.WithSPAUI].
 func writeConsentApprovedField(b *strings.Builder, data ConsentScopePromptData) {
 	names := make([]string, 0, len(data.Scopes))
 	for _, s := range data.Scopes {

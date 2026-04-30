@@ -177,8 +177,42 @@ type Deps struct {
 
 	// InteractionPath is the mount-prefix-aware path of the /interaction
 	// prefix; the handler appends "/{uid}". The value MUST NOT carry a
-	// trailing slash.
+	// trailing slash. When [Deps.SPALoginMount] is set this value is
+	// only used as the redirect target fallback for legacy callers that
+	// have not opted into the SPA wiring; the JSON state surface moves
+	// under [Deps.SPALoginMount].
 	InteractionPath string
+
+	// SPALoginMount, when non-empty, replaces the legacy
+	// /interaction/{uid} surface with a SPA-friendly mount tree:
+	//
+	//   GET    SPALoginMount/{uid}             — SPA shell (index.html)
+	//   GET    SPALoginMount/{uid}/state       — prompt JSON
+	//   POST   SPALoginMount/{uid}/state       — submission
+	//   DELETE SPALoginMount/{uid}/state       — cancel
+	//   GET    SPALoginMount/assets/{path...}  — static asset fan-out
+	//
+	// The shell + asset routes are mounted only when [Deps.SPAStaticDir]
+	// is also set; an empty StaticDir leaves shell + assets unmounted
+	// (the embedder serves the SPA externally) but the redirect target
+	// and the /state JSON surface still move under SPALoginMount.
+	// MUST NOT carry a trailing slash. MUST NOT collide with
+	// [Deps.AuthorizePath] or any other OP-mounted route — the wiring
+	// layer enforces the disjointness check before constructing Deps.
+	SPALoginMount string
+
+	// SPAStaticDir, when non-empty, is the on-disk directory the
+	// handler serves the SPA bundle from. The handler reads it
+	// through a hardened [http.FileSystem] wrapper that:
+	//
+	//   - rejects basename entries beginning with "." (dotfiles)
+	//   - returns "not found" for directory targets without an
+	//     index.html sibling (no auto-listing)
+	//   - rejects symlinks whose target lies outside the root
+	//
+	// An empty value disables shell + asset serving; only the
+	// /state JSON routes are mounted.
+	SPAStaticDir string
 
 	// Clock supplies the current wall-clock reading. A nil value falls
 	// back to [internal/timex.SystemClock].
@@ -308,6 +342,25 @@ func resolveDeps(d Deps) resolved {
 	return resolved{Deps: d}
 }
 
+// spaActive reports whether the handler is wired for the SPA mount
+// tree. Callers branch on this to choose between the legacy
+// /interaction/{uid} surface and the SPA-friendly shell + state +
+// asset layout.
+func (r resolved) spaActive() bool {
+	return r.SPALoginMount != ""
+}
+
+// authorizeRedirectBase returns the path prefix /authorize emits a
+// 302 against; the handler appends "/" + uid. The SPA wiring takes
+// precedence when active; otherwise the legacy /interaction prefix
+// stands.
+func (r resolved) authorizeRedirectBase() string {
+	if r.spaActive() {
+		return r.SPALoginMount
+	}
+	return r.InteractionPath
+}
+
 // now returns the wall-clock reading for this request, falling back to the
 // system clock when [Deps.Clock] is nil.
 func (r resolved) now() time.Time {
@@ -329,10 +382,42 @@ func Handler(deps Deps) http.Handler {
 	mux.Handle(r.AuthorizePath, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		serveAuthorize(w, req, r)
 	}))
-	mux.Handle(r.InteractionPath+"/{uid}", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		serveInteraction(w, req, r)
-	}))
+	if r.spaActive() {
+		registerSPARoutes(mux, r)
+	} else {
+		mux.Handle(r.InteractionPath+"/{uid}", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			serveInteraction(w, req, r)
+		}))
+	}
 	return mux
+}
+
+// registerSPARoutes installs the SPA-friendly route tree under
+// [Deps.SPALoginMount]. The state-endpoint patterns put the literal
+// "state" at the first path segment (LoginMount/state/{uid}) so the
+// route shapes are pairwise disjoint with the shell pattern
+// (LoginMount/{uid}) and the asset pattern
+// (LoginMount/assets/{path...}); a state path under
+// LoginMount/{uid}/state would collide with assets at the
+// "/{uid}=assets, /state=path" overlap and panic at mux
+// registration. When [Deps.SPAStaticDir] is empty the shell + asset
+// registrations are suppressed; the embedder is then responsible
+// for rendering the SPA at SPALoginMount/{uid}.
+func registerSPARoutes(mux *http.ServeMux, r resolved) {
+	statePath := r.SPALoginMount + "/state/{uid}"
+	stateHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		serveInteraction(w, req, r)
+	})
+	mux.Handle("GET "+statePath, stateHandler)
+	mux.Handle("POST "+statePath, stateHandler)
+	mux.Handle("DELETE "+statePath, stateHandler)
+	if r.SPAStaticDir == "" {
+		return
+	}
+	shell := newSPAShellHandler(r)
+	assets := newSPAAssetHandler(r)
+	mux.Handle("GET "+r.SPALoginMount+"/{uid}", shell)
+	mux.Handle("GET "+r.SPALoginMount+"/assets/{path...}", assets)
 }
 
 // containsString reports whether haystack contains needle. The helper is a

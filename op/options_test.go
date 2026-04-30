@@ -1247,21 +1247,21 @@ func TestWithLoginFlow_AbsentLeavesNoError(t *testing.T) {
 	}
 }
 
-func TestWithReactUI_AcceptsValid(t *testing.T) {
+func TestWithSPAUI_AcceptsValid(t *testing.T) {
 	t.Parallel()
 
 	if _, err := op.New(append(validBaseOpts(t),
-		op.WithReactUI(op.ReactUI{LoginMount: "/login"}),
+		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
 	)...); err != nil {
-		t.Fatalf("WithReactUI rejected valid mount: %v", err)
+		t.Fatalf("WithSPAUI rejected valid mount: %v", err)
 	}
 }
 
-func TestWithReactUI_RejectsEmptyLoginMount(t *testing.T) {
+func TestWithSPAUI_RejectsEmptyLoginMount(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithReactUI(op.ReactUI{}),
+		op.WithSPAUI(op.SPAUI{}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for empty LoginMount, got nil")
@@ -1271,11 +1271,11 @@ func TestWithReactUI_RejectsEmptyLoginMount(t *testing.T) {
 	}
 }
 
-func TestWithReactUI_RejectsNonSlashLoginMount(t *testing.T) {
+func TestWithSPAUI_RejectsNonSlashLoginMount(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithReactUI(op.ReactUI{LoginMount: "login"}),
+		op.WithSPAUI(op.SPAUI{LoginMount: "login"}),
 	)...)
 	if err == nil {
 		t.Fatal("expected error for LoginMount missing leading slash, got nil")
@@ -1285,11 +1285,11 @@ func TestWithReactUI_RejectsNonSlashLoginMount(t *testing.T) {
 	}
 }
 
-func TestWithReactUI_RejectsMissingStaticDir(t *testing.T) {
+func TestWithSPAUI_RejectsMissingStaticDir(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithReactUI(op.ReactUI{
+		op.WithSPAUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  "/this/path/does/not/exist/h1e-test",
 		}),
@@ -1302,27 +1302,27 @@ func TestWithReactUI_RejectsMissingStaticDir(t *testing.T) {
 	}
 }
 
-func TestWithReactUI_AcceptsExistingStaticDir(t *testing.T) {
+func TestWithSPAUI_AcceptsExistingStaticDir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	if _, err := op.New(append(validBaseOpts(t),
-		op.WithReactUI(op.ReactUI{LoginMount: "/login", StaticDir: dir}),
+		op.WithSPAUI(op.SPAUI{LoginMount: "/login", StaticDir: dir}),
 	)...); err != nil {
-		t.Fatalf("WithReactUI rejected existing StaticDir: %v", err)
+		t.Fatalf("WithSPAUI rejected existing StaticDir: %v", err)
 	}
 }
 
-func TestWithReactUI_RejectsConsentUICombination(t *testing.T) {
+func TestWithSPAUI_RejectsConsentUICombination(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("c").Parse("ok"))
 	_, err := op.New(append(validBaseOpts(t),
-		op.WithReactUI(op.ReactUI{LoginMount: "/login"}),
+		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
 		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
 	)...)
 	if err == nil {
-		t.Fatal("expected error for WithReactUI + WithConsentUI, got nil")
+		t.Fatal("expected error for WithSPAUI + WithConsentUI, got nil")
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("err = %v, want mutually-exclusive diagnostic", err)
@@ -1354,16 +1354,16 @@ func TestWithConsentUI_AcceptsValid(t *testing.T) {
 	}
 }
 
-func TestWithConsentUI_RejectsReactUICombination(t *testing.T) {
+func TestWithConsentUI_RejectsSPAUICombination(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("c").Parse("ok"))
 	_, err := op.New(append(validBaseOpts(t),
 		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
-		op.WithReactUI(op.ReactUI{LoginMount: "/login"}),
+		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
 	)...)
 	if err == nil {
-		t.Fatal("expected error for WithConsentUI + WithReactUI, got nil")
+		t.Fatal("expected error for WithConsentUI + WithSPAUI, got nil")
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("err = %v, want mutually-exclusive diagnostic", err)
@@ -1767,7 +1767,7 @@ func TestWithProfile_AutoEnableSilentlySkipsExisting(t *testing.T) {
 func TestNew_DefaultsToHTMLDriverWithoutInteraction(t *testing.T) {
 	t.Parallel()
 
-	// With neither WithInteraction nor WithReactUI the OP must boot
+	// With neither WithInteraction nor WithSPAUI the OP must boot
 	// into a working HTML login surface. The test reaches the
 	// driver via the authorize-flow handler indirectly: instead of
 	// asserting on the unexported config field, we verify
@@ -1807,17 +1807,17 @@ func TestNew_WithInteractionWinsOverDefault(t *testing.T) {
 	// the assertion.
 }
 
-func TestNew_WithReactUISuppressesDefaultDriver(t *testing.T) {
+func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {
 	t.Parallel()
 
-	// With WithReactUI active the default-driver fallback in
+	// With WithSPAUI active the default-driver fallback in
 	// applyDefaults short-circuits; the embedder's SPA owns rendering
 	// and the OP only serves JSON state endpoints. op.New must still
 	// succeed because no interaction.Driver is required when a SPA
 	// shell is configured.
 	if _, err := op.New(append(validBaseOpts(t),
-		op.WithReactUI(op.ReactUI{LoginMount: "/login"}),
+		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
 	)...); err != nil {
-		t.Fatalf("op.New with WithReactUI: %v", err)
+		t.Fatalf("op.New with WithSPAUI: %v", err)
 	}
 }

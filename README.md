@@ -68,7 +68,8 @@ options conflict. See
 - **BYO user model and storage**: small `store.*` substore interfaces; the
   library never touches your `users` table directly.
 - **Headless interaction driver**: drive login / consent / logout from a SPA
-  via `op.WithReactUI`, or supply your own templates with `op.WithConsentUI`.
+  (React, Vue, Svelte, Angular, …) via `op.WithSPAUI`, or supply your own
+  templates with `op.WithConsentUI`.
 - **Audit-first observability**: business events go through `audit.Emitter`
   and `op.WithPrometheus(reg)` registers a curated counter set on your
   registry. The library does **not** mount `/metrics`, install request-duration

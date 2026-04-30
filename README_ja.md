@@ -68,9 +68,9 @@ op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
   フィックスでマウント可能。
 - **ユーザモデルとストレージは持ち込み**: 小さな `store.*` substore
   インターフェースを介すのみで、`users` テーブルを直接参照しない。
-- **ヘッドレスな interaction driver**: `op.WithReactUI` で SPA に
-  login / consent / logout を委譲、`op.WithConsentUI` で独自テンプレートを
-  差し替え可能。
+- **ヘッドレスな interaction driver**: `op.WithSPAUI` で SPA（React /
+  Vue / Svelte / Angular など、フレームワーク不問）に login / consent /
+  logout を委譲、`op.WithConsentUI` で独自テンプレートを差し替え可能。
 - **audit-first な観測性**: 業務イベントは `audit.Emitter` 経由で集約され、
   `op.WithPrometheus(reg)` は curated counter set を利用者の registry に
   登録する。`/metrics` のマウント、request-duration ミドルウェア、

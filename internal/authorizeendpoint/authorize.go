@@ -510,7 +510,7 @@ func startInteraction(
 		return
 	}
 	stampNoStore(w)
-	target := deps.InteractionPath + "/" + uid
+	target := deps.authorizeRedirectBase() + "/" + uid
 	http.Redirect(w, r, target, http.StatusFound)
 }
 

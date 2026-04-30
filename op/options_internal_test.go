@@ -16,7 +16,7 @@ import (
 )
 
 // TestApplyDefaults_HTMLDriverDefault confirms the plan 005 §3.4
-// promise: with neither [WithInteraction] nor [WithReactUI] supplied
+// promise: with neither [WithInteraction] nor [WithSPAUI] supplied
 // the OP boots with [interaction.HTMLDriver] as its default driver,
 // so an embedder who calls only the four required options
 // (WithIssuer / WithStore / WithKeyset / WithCookieKey) still gets a
@@ -46,19 +46,19 @@ func TestApplyDefaults_HonoursWithInteraction(t *testing.T) {
 	}
 }
 
-// TestApplyDefaults_ReactUISuppressesDefaultDriver pins the §3.4
-// boundary: when [WithReactUI] is configured the default-driver
+// TestApplyDefaults_SPAUISuppressesDefaultDriver pins the §3.4
+// boundary: when [WithSPAUI] is configured the default-driver
 // fallback short-circuits because the embedder's SPA owns rendering
 // and the OP only needs to serve JSON state endpoints. The handler's
 // own nil-driver fallback (in internal/authorizeendpoint) takes over
 // at request time.
-func TestApplyDefaults_ReactUISuppressesDefaultDriver(t *testing.T) {
+func TestApplyDefaults_SPAUISuppressesDefaultDriver(t *testing.T) {
 	t.Parallel()
 
-	c := &config{reactUISet: true}
+	c := &config{spaUISet: true}
 	c.applyDefaults()
 	if c.interactionD != nil {
-		t.Fatalf("with WithReactUI active, default driver was set to %T; want nil", c.interactionD)
+		t.Fatalf("with WithSPAUI active, default driver was set to %T; want nil", c.interactionD)
 	}
 }
 

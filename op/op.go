@@ -1171,6 +1171,7 @@ func mountAuthorizeHandlers(
 	}
 	authorizePath := joinPath(cfg.mountPrefix, cfg.endpoints.Authorize)
 	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
+	spaLoginMount, spaStaticDir := spaWiringFor(cfg)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
 		Clients:                 cfg.store.Clients(),
 		Codes:                   cfg.store.AuthorizationCodes(),
@@ -1188,6 +1189,8 @@ func mountAuthorizeHandlers(
 		Scopes:                  scopes,
 		AuthorizePath:           authorizePath,
 		InteractionPath:         interactionPath,
+		SPALoginMount:           spaLoginMount,
+		SPAStaticDir:            spaStaticDir,
 		Clock:                   cfg.clock,
 		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
 		RequirePKCE:             cfg.requirePKCE(),
@@ -1202,11 +1205,35 @@ func mountAuthorizeHandlers(
 	})
 	// /authorize is a top-level redirect navigation and never receives
 	// a cross-origin fetch, so the CORS layer is intentionally omitted.
-	// /interaction/{uid} is reached by the embedder's SPA via fetch, so
-	// it carries the strict per-origin echo per plan 002 §F.4.
+	// The interaction state surface is reached by the embedder's SPA
+	// via fetch, so it carries the strict per-origin echo per plan
+	// 002 §F.4. Under WithSPAUI the same handler also serves the
+	// shell HTML and static assets at SPALoginMount; those are
+	// same-origin navigations / sub-resource loads and skip CORS.
 	mux.Handle(authorizePath, handler)
-	mux.Handle(interactionPath+"/{uid}", strictCORS.Handler(handler))
+	if spaLoginMount == "" {
+		mux.Handle(interactionPath+"/{uid}", strictCORS.Handler(handler))
+	} else {
+		// State path is LoginMount/state/{uid} (literal first) so the
+		// pattern is pairwise disjoint with the shell and asset
+		// patterns; see registerSPARoutes for the rationale.
+		mux.Handle(spaLoginMount+"/state/{uid}", strictCORS.Handler(handler))
+		mux.Handle(spaLoginMount+"/{uid}", handler)
+		if spaStaticDir != "" {
+			mux.Handle(spaLoginMount+"/assets/{path...}", handler)
+		}
+	}
 	return sessMgr, nil
+}
+
+// spaWiringFor projects the [config.spaUI] state onto the
+// authorizeendpoint deps fields. An unset SPAUI returns the empty
+// pair; the consumer treats it as "legacy /interaction wiring".
+func spaWiringFor(cfg *config) (loginMount, staticDir string) {
+	if !cfg.spaUISet {
+		return "", ""
+	}
+	return cfg.spaUI.LoginMount, cfg.spaUI.StaticDir
 }
 
 // buildSessionMachinery constructs the cookie codec and chooser-group

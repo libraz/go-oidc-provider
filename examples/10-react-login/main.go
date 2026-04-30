@@ -1,26 +1,56 @@
 //go:build example
 
-// Example 10 demonstrates [op.WithReactUI]: the OP delegates the
+// Example 10 demonstrates [op.WithSPAUI]: the OP delegates the
 // login / consent / logout screens to a SPA at the configured mount
-// paths. The library still serves the OAuth + OIDC endpoints, but
-// the interactive screens become the embedder's responsibility —
-// the SPA reads the prompt state via the orchestrator's JSON API
-// and POSTs submissions back through it.
+// paths. The seam is framework-neutral — the example wires up a
+// React build, but Vue, Svelte, Angular, and any other SPA stack
+// drop in the same way. The library serves the OAuth + OIDC
+// endpoints AND the SPA shell + JSON state surface; embedders only
+// supply the bundled assets.
 //
 // Run with the example build tag:
 //
 //	go run -tags example ./examples/10-react-login
 //
-// The example expects a SPA build at ./web/dist (any HTML file
-// works; the example only checks the directory exists). Pointing
+// The example expects a SPA build at ./web/dist. Pointing
 // StaticDir at a non-existent path causes [op.New] to fail at
 // construction so a misconfigured deployment surfaces immediately.
+//
+// SPA bundle requirements (Vite shown; other bundlers follow the
+// same pattern):
+//
+//   - Build with `base: '/login/'` so HTML asset references resolve
+//     under LoginMount.
+//   - Place hashed assets under ./web/dist/assets/ — the OP serves
+//     this subtree at LoginMount/assets/{path...}.
+//   - Read the interaction UID from `location.pathname.split('/').pop()`
+//     on shell load.
+//   - Fetch prompt state from `/login/state/{uid}` (GET) and POST
+//     submissions to the same path; the OP enforces CSRF via a
+//     cookie + X-CSRF-Token header pair.
+//
+// Routes the OP mounts under [op.SPAUI.LoginMount] (here "/login"):
+//
+//	GET    /login/{uid}             → SPA shell (./web/dist/index.html)
+//	GET    /login/{uid}/...         → 404 (only the literal {uid} path)
+//	GET    /login/state/{uid}       → prompt JSON
+//	POST   /login/state/{uid}       → submission
+//	DELETE /login/state/{uid}       → cancel
+//	GET    /login/assets/{path...}  → ./web/dist/assets/{path...}
+//
+// Static asset hardening: the OP refuses dotfiles (.env, .git/...),
+// directory listings, and symlinks pointing outside StaticDir, so a
+// committed secret or workspace symlink in ./web/dist cannot reach
+// the wire.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
-//   - WithReactUI: experimental — the JSON state surface is still stabilising, so a SPA written today may need adjustments when the orchestrator's prompt API hardens.
+//   - WithSPAUI: ConsentMount and LogoutMount are accepted at
+//     validation time but their dedicated bundle routes are still
+//     in flight; today the LoginMount bundle drives consent and
+//     RP-Initiated Logout confirmation alongside the login screen.
 package main
 
 import (
@@ -47,7 +77,7 @@ func main() {
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKey(keys.CookieKey),
-		op.WithReactUI(op.ReactUI{
+		op.WithSPAUI(op.SPAUI{
 			LoginMount:   "/login",
 			ConsentMount: "/consent",
 			LogoutMount:  "/logout",
