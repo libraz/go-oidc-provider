@@ -26,6 +26,21 @@ var mergeIgnoredClaims = map[string]struct{}{
 	"request_uri": {},
 }
 
+// mergeJSONClaims is the set of authorization parameters whose canonical
+// wire form is a JSON document. When carried inside a request object
+// they arrive as decoded structures (map / slice); the merge step
+// re-encodes them so the downstream form-level parser receives the same
+// bytes it would have seen on the unsigned wire.
+//
+//   - "claims" — OIDC Core 1.0 §5.5, JSON object.
+//   - "authorization_details" — RFC 9396 §2, JSON array of objects.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var mergeJSONClaims = map[string]struct{}{
+	"claims":                {},
+	"authorization_details": {},
+}
+
 // Merge folds the verified [Object]'s claims onto the wire-level form
 // values, returning a fresh [url.Values] suitable for the existing
 // authorize parser. Per RFC 9101 §6.1:
@@ -62,6 +77,19 @@ func Merge(wire url.Values, obj *Object) (url.Values, error) {
 	out.Del("request_uri")
 	for name, raw := range obj.Claims {
 		if _, ignored := mergeIgnoredClaims[name]; ignored {
+			continue
+		}
+		if _, isJSON := mergeJSONClaims[name]; isJSON {
+			// "claims" / "authorization_details" arrive inside the
+			// request object as decoded JSON shapes (map / slice); the
+			// downstream form-level parser expects the canonical JSON
+			// document, so re-encode rather than passing the structure
+			// through stringifyClaim (which only flattens primitives).
+			encoded, err := json.Marshal(raw)
+			if err != nil {
+				return nil, fmt.Errorf("%w: claim %q is not JSON-encodable: %w", ErrParse, name, err)
+			}
+			out.Set(name, string(encoded))
 			continue
 		}
 		s, ok := stringifyClaim(raw)

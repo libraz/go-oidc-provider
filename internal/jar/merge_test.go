@@ -1,6 +1,7 @@
 package jar_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"testing"
@@ -191,5 +192,67 @@ func TestMerge_LowersStringArray(t *testing.T) {
 	}
 	if got := out.Get("acr_values"); got != "urn:1 urn:2" {
 		t.Errorf("acr_values=%q want space-joined", got)
+	}
+}
+
+// TestMerge_LowersClaimsObject covers the OIDC Core 1.0 §5.5 path:
+// when a request object carries a "claims" parameter, the merge step
+// must JSON-encode the structured value so the downstream form parser
+// (ParseClaimsRequest) sees the canonical wire bytes.
+func TestMerge_LowersClaimsObject(t *testing.T) {
+	t.Parallel()
+	wire := url.Values{"client_id": {"abc"}}
+	obj := objectWithClaims(map[string]any{
+		"claims": map[string]any{
+			"id_token": map[string]any{
+				"sub":  nil,
+				"name": map[string]any{"essential": true},
+			},
+		},
+	})
+	out, err := jar.Merge(wire, obj)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	got := out.Get("claims")
+	if got == "" {
+		t.Fatalf("claims param missing from merged form")
+	}
+	var roundTrip map[string]any
+	if err := json.Unmarshal([]byte(got), &roundTrip); err != nil {
+		t.Fatalf("claims param is not valid JSON: %v (raw=%q)", err, got)
+	}
+	idTok, ok := roundTrip["id_token"].(map[string]any)
+	if !ok {
+		t.Fatalf("id_token not preserved: %v", roundTrip)
+	}
+	if _, ok := idTok["sub"]; !ok {
+		t.Errorf("sub key missing after merge")
+	}
+}
+
+// TestMerge_LowersAuthorizationDetailsArray covers the RFC 9396 path:
+// "authorization_details" is a JSON array of objects, the only other
+// authorization parameter where the canonical wire form is structured
+// JSON.
+func TestMerge_LowersAuthorizationDetailsArray(t *testing.T) {
+	t.Parallel()
+	wire := url.Values{"client_id": {"abc"}}
+	obj := objectWithClaims(map[string]any{
+		"authorization_details": []any{
+			map[string]any{"type": "payment_initiation", "amount": "10.00"},
+		},
+	})
+	out, err := jar.Merge(wire, obj)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	got := out.Get("authorization_details")
+	var arr []any
+	if err := json.Unmarshal([]byte(got), &arr); err != nil {
+		t.Fatalf("authorization_details is not valid JSON: %v (raw=%q)", err, got)
+	}
+	if len(arr) != 1 {
+		t.Fatalf("authorization_details len=%d want 1", len(arr))
 	}
 }

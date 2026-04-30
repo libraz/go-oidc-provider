@@ -272,6 +272,22 @@ func buildOptions(cfg runConfig, st *inmem.Store, priv *ecdsa.PrivateKey, cookie
 		// auto-enables JAR for FAPI 2.0; calling WithFeature here is
 		// idempotent under the auto-enable contract.
 		op.WithFeature(feature.JAR),
+		// Advertise the standard OIDC Core 1.0 §5 claims that
+		// seedDemoUser fills in. OFCS's claims-parameter test skips
+		// when claims_supported lists no standard claims, so listing
+		// them here keeps the test runnable. The set mirrors the user
+		// store seed; if a deployment serves a smaller set, this list
+		// must shrink to match — the option is not a stand-in for
+		// what the projector actually emits.
+		op.WithClaimsSupported(
+			"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "acr", "amr",
+			"name", "given_name", "family_name", "middle_name", "nickname",
+			"preferred_username", "profile", "picture", "website", "gender",
+			"birthdate", "zoneinfo", "locale", "updated_at",
+			"email", "email_verified",
+			"address",
+			"phone_number", "phone_number_verified",
+		),
 	}
 	if prof != 0 {
 		opts = append(opts, op.WithProfile(prof))
