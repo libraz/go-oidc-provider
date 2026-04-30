@@ -49,6 +49,11 @@ secrets/
 .golangci-cache/
 .cache/
 
+# Python bytecode (conformance harness is Python; pytest / runtime
+# generates these next to the source files).
+__pycache__/
+*.pyc
+
 # Generated docs
 docs/godoc/
 
