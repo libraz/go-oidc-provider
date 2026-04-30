@@ -23,11 +23,13 @@ rows:
     spec: RFC 6749 §4.1.3, §5.1 / OIDC Core §3.1.3.3
     behaviour: |
       A client registered with multiple redirect_uris exchanges a fresh
-      code with a matching redirect_uri. The token endpoint returns 200
-      with access_token, id_token, expires_in, token_type, and scope;
+      code with a matching redirect_uri. Under WithStrictOfflineAccess
+      (the OIDC Core §11 reading), the token endpoint returns 200 with
+      access_token, id_token, expires_in, token_type, and scope;
       refresh_token is absent because offline_access was not requested.
-      A single grant.success audit event is emitted.
-    status: pending
+      The state value the RP supplied at /authorize is echoed verbatim
+      on the callback.
+    status: active
 
   - id: AC-002
     severity: P2

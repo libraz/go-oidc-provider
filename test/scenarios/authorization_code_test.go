@@ -9,11 +9,81 @@ package scenarios_test
 //   - RFC 8414 / RFC 6750 — Bearer Token Usage
 //   - RFC 7636 — PKCE (cross-reference for redirect_uri reuse semantics)
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
+)
 
 func TestScenario_AC_001_MultiURISuccessReturnsTokens(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-001")
+
+	const (
+		clientID    = "rp-ac-001"
+		callback    = "https://rp.testkit.invalid/callback"
+		altCallback = "https://rp.testkit.invalid/alt"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ac-001-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStrictOfflineAccess()))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback, altCallback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	if flow.State != scenariokit.DefaultState {
+		t.Errorf("state=%q want %q", flow.State, scenariokit.DefaultState)
+	}
+
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	if tok.AccessToken == "" {
+		t.Error("access_token missing")
+	}
+	if tok.IDToken == "" {
+		t.Error("id_token missing")
+	}
+	if tok.ExpiresIn <= 0 {
+		t.Errorf("expires_in=%d, want > 0", tok.ExpiresIn)
+	}
+	if tok.TokenType == "" {
+		t.Error("token_type missing")
+	}
+	if tok.Scope == "" {
+		t.Error("scope missing")
+	}
+	if tok.RefreshToken != "" {
+		t.Errorf("refresh_token unexpectedly present (offline_access not requested): %q", tok.RefreshToken)
+	}
 }
 
 func TestScenario_AC_002_NoOfflineAccessEntitiesResolved(t *testing.T) {
