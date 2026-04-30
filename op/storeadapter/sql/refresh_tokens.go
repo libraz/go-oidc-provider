@@ -22,7 +22,7 @@ func (s *refreshStore) runner() runner { return pickRunner(s.parent, s.tx) }
 func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.refreshSave,
 		t.ID, t.ClientID, t.GrantID, nullableString(t.ParentID), t.Subject,
-		encodeStrings(t.Scope),
+		encodeStrings(t.Scope), t.Resource,
 		t.DPoPJKT, t.MTLSCertThumbprint, boolToInt64(t.Revoked),
 		timeToInt64(t.ExpiresAt), timePtrToInt64Ptr(t.ConsumedAt), timeToInt64(t.CreatedAt))
 	if err != nil {
@@ -57,7 +57,7 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshFind, id).Scan(
 		&t.ID, &t.ClientID, &t.Subject, &t.GrantID,
-		&scope, &parent, &consumed, &expires, &created,
+		&scope, &t.Resource, &parent, &consumed, &expires, &created,
 		&t.DPoPJKT, &t.MTLSCertThumbprint, &revoked)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound

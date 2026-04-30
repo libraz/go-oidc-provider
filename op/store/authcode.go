@@ -40,6 +40,12 @@ type AuthorizationCode struct {
 	// Scope lists the scopes the user consented to for this code.
 	Scope []string
 
+	// Resource is the RFC 8707 resource indicator the client requested
+	// at the authorization endpoint. Empty means the request omitted the
+	// parameter and the eventual token issuance should use the OP's
+	// default audience path.
+	Resource string
+
 	// CodeChallenge is the PKCE challenge sent at the authorization
 	// endpoint (RFC 7636 §4.2). Empty if PKCE was not used.
 	CodeChallenge string

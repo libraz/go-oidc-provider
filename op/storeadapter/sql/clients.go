@@ -35,6 +35,7 @@ var clientColumns = []string{
 	"grant_types",
 	"response_types",
 	"scopes",
+	"resources",
 	"token_endpoint_auth_method",
 	"secret_hash",
 	"public_client",
@@ -80,6 +81,7 @@ func clientArgs(c *store.Client) []any {
 		encodeStrings(c.GrantTypes),
 		encodeStrings(c.ResponseTypes),
 		encodeStrings(c.Scopes),
+		encodeStrings(c.Resources),
 		c.TokenEndpointAuthMethod,
 		c.SecretHash,
 		boolToInt64(c.PublicClient),
@@ -110,12 +112,12 @@ func clientArgs(c *store.Client) []any {
 // by clientColumns and reconstructs a [store.Client].
 func scanClient(scan func(...any) error) (*store.Client, error) {
 	var (
-		c                                                                                              store.Client
-		redirectURIs, postLogout, grantTypes, responseTypes, scopes, contacts, defaultACR, requestURIs []byte
-		jwks                                                                                           []byte
-		sessionRequired, publicClient, requireAuthTime                                                 int64
-		defaultMaxAge                                                                                  databasesql.NullInt64
-		source                                                                                         string
+		c                                                                                                         store.Client
+		redirectURIs, postLogout, grantTypes, responseTypes, scopes, resources, contacts, defaultACR, requestURIs []byte
+		jwks                                                                                                      []byte
+		sessionRequired, publicClient, requireAuthTime                                                            int64
+		defaultMaxAge                                                                                             databasesql.NullInt64
+		source                                                                                                    string
 	)
 	err := scan(
 		&c.ID,
@@ -126,6 +128,7 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		&grantTypes,
 		&responseTypes,
 		&scopes,
+		&resources,
 		&c.TokenEndpointAuthMethod,
 		&c.SecretHash,
 		&publicClient,
@@ -177,6 +180,9 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		return nil, err
 	}
 	if c.Scopes, err = decodeStrings(scopes); err != nil {
+		return nil, err
+	}
+	if c.Resources, err = decodeStrings(resources); err != nil {
 		return nil, err
 	}
 	if c.Contacts, err = decodeStrings(contacts); err != nil {

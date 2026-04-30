@@ -145,7 +145,7 @@ func issueClientCredsResponse(
 	// is a no-op, which is the correct shape — there is no chain to
 	// cascade because the wire token is already the only artefact tied
 	// to this issuance.
-	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, "", scope, now, 0, binding)
+	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, "", scope, "", now, 0, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return

@@ -34,6 +34,12 @@ type RefreshToken struct {
 	// MAY narrow this list but MUST NOT widen it.
 	Scope []string
 
+	// Resource is the RFC 8707 resource indicator this refresh-token
+	// chain is bound to. Empty means the originating grant omitted the
+	// parameter and rotated access tokens should continue using the OP's
+	// default audience path.
+	Resource string
+
 	// ParentID is the ID of the refresh token that this token replaces, or
 	// nil if the token is the root of a rotation chain. Backends use the
 	// parent pointer to walk the chain when [RefreshTokenStore.RevokeChain]

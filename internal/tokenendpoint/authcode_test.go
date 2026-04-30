@@ -140,6 +140,68 @@ func TestAuthCode_NoOfflineAccess_DoesNotIssueRefreshToken(t *testing.T) {
 	}
 }
 
+func TestAuthCode_ResourceBindsAudienceAndRefreshToken(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-resource"
+	const grantID = "grant-resource"
+	const subject = "user-1"
+	const resource = "https://api.example.com"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "email", "offline_access"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "email", "offline_access"},
+		Resource:            resource,
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-resource",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier2 := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier2.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != resource {
+		t.Fatalf("aud=%v want [%q]", claims.Audience, resource)
+	}
+	rt, _ := body["refresh_token"].(string)
+	if rt == "" {
+		t.Fatal("refresh_token missing")
+	}
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find: %v", err)
+	}
+	if rec.Resource != resource {
+		t.Fatalf("refresh resource=%q want %q", rec.Resource, resource)
+	}
+}
+
 func TestAuthCode_RequireAuthTime_EmitsAuthTime(t *testing.T) {
 	t.Parallel()
 

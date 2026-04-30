@@ -190,6 +190,24 @@ func TestValidate_SentinelTable(t *testing.T) {
 			want:           authorize.ErrMaxAgeInvalid,
 			wantRedirectOK: true,
 		},
+		{
+			name:           "resource_not_absolute",
+			mutate:         func(v url.Values) { v.Set("resource", "api") },
+			want:           authorize.ErrResourceInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "resource_has_fragment",
+			mutate:         func(v url.Values) { v.Set("resource", "https://api.example.com#frag") },
+			want:           authorize.ErrResourceInvalid,
+			wantRedirectOK: true,
+		},
+		{
+			name:           "resource_not_allowed",
+			mutate:         func(v url.Values) { v.Set("resource", "https://api.example.com") },
+			want:           authorize.ErrResourceNotAllowed,
+			wantRedirectOK: true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -277,6 +295,23 @@ func TestRequest_Validate_RejectsImplicitAndHybridResponseTypes(t *testing.T) {
 				t.Fatalf("response_type=%q: err=%v want ErrResponseTypeUnsupported", rt, gotErr)
 			}
 		})
+	}
+}
+
+func TestRequest_Validate_AllowsRegisteredResource(t *testing.T) {
+	t.Parallel()
+
+	values := goodValues()
+	values.Set("resource", "https://api.example.com")
+	client := goodClient()
+	client.Resources = []string{"https://api.example.com"}
+
+	req, err := authorize.ParseValues(values)
+	if err != nil {
+		t.Fatalf("ParseValues: %v", err)
+	}
+	if err := req.Validate(client, nil, authorize.Policy{PKCERequired: true}); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 }
 

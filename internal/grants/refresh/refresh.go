@@ -146,6 +146,7 @@ type IssueInput struct {
 	Subject  string
 	GrantID  string
 	Scope    []string
+	Resource string
 	ParentID *string
 
 	// DPoPJKT is the RFC 7638 thumbprint of the DPoP key the
@@ -185,6 +186,7 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 		Subject:            in.Subject,
 		GrantID:            in.GrantID,
 		Scope:              slices.Clone(in.Scope),
+		Resource:           in.Resource,
 		ParentID:           cloneStringPtr(in.ParentID),
 		ExpiresAt:          now.Add(i.ttl),
 		CreatedAt:          now,
@@ -298,6 +300,10 @@ type Exchanged struct {
 	// it narrowed the token, otherwise the token's bound scope.
 	Scope []string
 
+	// Resource is the RFC 8707 resource indicator the chain is bound to.
+	// Empty means the originating grant omitted the parameter.
+	Resource string
+
 	// ConsumedAt is the wall-clock time at which the store committed
 	// the consumption. It is populated by the store, not the exchanger's
 	// clock, so the audit trail reflects the persistence layer.
@@ -368,6 +374,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		Subject:            rec.Subject,
 		GrantID:            rec.GrantID,
 		Scope:              resolvedScope,
+		Resource:           rec.Resource,
 		ConsumedAt:         *rec.ConsumedAt,
 		DPoPJKT:            rec.DPoPJKT,
 		MTLSCertThumbprint: rec.MTLSCertThumbprint,

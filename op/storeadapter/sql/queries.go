@@ -132,10 +132,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// authorization codes
 		authCodeSave: d.rebind(
 			"INSERT INTO " + n.authCodes +
-				" (id, client_id, grant_id, subject, redirect_uri, scope, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" (id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		authCodeFind: d.rebind(
-			"SELECT id, client_id, grant_id, subject, redirect_uri, scope, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at" +
+			"SELECT id, client_id, grant_id, subject, redirect_uri, scope, resource, code_challenge, code_challenge_method, nonce, state, dpop_jkt, expires_at, consumed_at, created_at" +
 				" FROM " + n.authCodes + " WHERE id = ?"),
 		authCodeConsume: d.rebind(
 			"UPDATE " + n.authCodes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),
@@ -143,10 +143,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// refresh tokens
 		refreshSave: d.rebind(
 			"INSERT INTO " + n.refreshes +
-				" (id, client_id, grant_id, parent_id, subject, scope, dpop_jkt, mtls_cert_thumbprint, revoked, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" (id, client_id, grant_id, parent_id, subject, scope, resource, dpop_jkt, mtls_cert_thumbprint, revoked, expires_at, consumed_at, created_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		refreshFind: d.rebind(
-			"SELECT id, client_id, subject, grant_id, scope, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, revoked" +
+			"SELECT id, client_id, subject, grant_id, scope, resource, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, revoked" +
 				" FROM " + n.refreshes + " WHERE id = ?"),
 		refreshConsume: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),

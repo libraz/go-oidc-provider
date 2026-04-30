@@ -69,6 +69,12 @@ type PublicClient struct {
 	// scope catalogue at runtime.
 	Scopes []string
 
+	// Resources lists the RFC 8707 resource indicators the client is
+	// allowed to request. Empty means resource-indicator requests are
+	// rejected for this client, while requests omitting the parameter
+	// remain valid.
+	Resources []string
+
 	// GrantTypes overrides the default
 	// {"authorization_code", "refresh_token"}. Empty applies the
 	// default; non-empty replaces it entirely.
@@ -133,6 +139,7 @@ func (c PublicClient) seed() (store.Client, error) {
 		ID:                               c.ID,
 		RedirectURIs:                     slices.Clone(c.RedirectURIs),
 		Scopes:                           slices.Clone(c.Scopes),
+		Resources:                        slices.Clone(c.Resources),
 		GrantTypes:                       grants,
 		ResponseTypes:                    responses,
 		TokenEndpointAuthMethod:          AuthNone.String(),
@@ -185,6 +192,9 @@ type ConfidentialClient struct {
 
 	// Scopes lists the scopes the client is registered to request.
 	Scopes []string
+
+	// Resources mirrors [PublicClient.Resources].
+	Resources []string
 
 	// GrantTypes overrides the default
 	// {"authorization_code", "refresh_token"}. Empty applies the
@@ -246,6 +256,7 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 		ID:                               c.ID,
 		RedirectURIs:                     slices.Clone(c.RedirectURIs),
 		Scopes:                           slices.Clone(c.Scopes),
+		Resources:                        slices.Clone(c.Resources),
 		GrantTypes:                       grants,
 		ResponseTypes:                    responses,
 		TokenEndpointAuthMethod:          method.String(),
@@ -294,6 +305,9 @@ type PrivateKeyJWTClient struct {
 	// Scopes lists the scopes the client is registered to request.
 	Scopes []string
 
+	// Resources mirrors [PublicClient.Resources].
+	Resources []string
+
 	// GrantTypes overrides the default
 	// {"authorization_code", "refresh_token"}. Empty applies the
 	// default; non-empty replaces it entirely.
@@ -341,6 +355,7 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 		ID:                               c.ID,
 		RedirectURIs:                     slices.Clone(c.RedirectURIs),
 		Scopes:                           slices.Clone(c.Scopes),
+		Resources:                        slices.Clone(c.Resources),
 		GrantTypes:                       grants,
 		ResponseTypes:                    responses,
 		TokenEndpointAuthMethod:          AuthPrivateKeyJWT.String(),

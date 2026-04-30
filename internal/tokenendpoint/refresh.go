@@ -230,7 +230,18 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
 	}
-	accessToken, err := mintAccessToken(ctx, deps, exchanged.Subject, client.ID, exchanged.GrantID, exchanged.Scope, now, authCtx.AuthTime, binding)
+	accessToken, err := mintAccessToken(
+		ctx,
+		deps,
+		exchanged.Subject,
+		client.ID,
+		exchanged.GrantID,
+		exchanged.Scope,
+		exchanged.Resource,
+		now,
+		authCtx.AuthTime,
+		binding,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -357,6 +368,7 @@ func rotateRefreshToken(
 		Subject:            exchanged.Subject,
 		GrantID:            exchanged.GrantID,
 		Scope:              append([]string(nil), exchanged.Scope...),
+		Resource:           exchanged.Resource,
 		ParentID:           &parent,
 		DPoPJKT:            rotatedJKT,
 		MTLSCertThumbprint: binding.MTLSThumbprint,

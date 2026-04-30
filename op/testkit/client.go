@@ -28,6 +28,7 @@ type ClientFixture struct {
 	GrantTypes              []string
 	ResponseTypes           []string
 	Scopes                  []string
+	Resources               []string
 	TokenEndpointAuthMethod string
 	SecretHash              string
 	PublicClient            bool
@@ -57,6 +58,7 @@ func buildClient(fix ClientFixture) *store.Client {
 		GrantTypes:              slices.Clone(fix.GrantTypes),
 		ResponseTypes:           slices.Clone(fix.ResponseTypes),
 		Scopes:                  slices.Clone(fix.Scopes),
+		Resources:               slices.Clone(fix.Resources),
 		TokenEndpointAuthMethod: fix.TokenEndpointAuthMethod,
 		SecretHash:              fix.SecretHash,
 		PublicClient:            fix.PublicClient,
@@ -101,5 +103,6 @@ func cloneClient(c *store.Client) *store.Client {
 	cp.GrantTypes = slices.Clone(c.GrantTypes)
 	cp.ResponseTypes = slices.Clone(c.ResponseTypes)
 	cp.Scopes = slices.Clone(c.Scopes)
+	cp.Resources = slices.Clone(c.Resources)
 	return &cp
 }

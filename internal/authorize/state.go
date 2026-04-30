@@ -42,6 +42,9 @@ type RequestSnapshot struct {
 	// Scope mirrors [Request.Scope].
 	Scope []string `json:"scope,omitempty"`
 
+	// Resource mirrors [Request.Resource].
+	Resource string `json:"resource,omitempty"`
+
 	// Prompt mirrors [Request.Prompt].
 	Prompt []string `json:"prompt,omitempty"`
 
@@ -112,6 +115,7 @@ func SnapshotFrom(req *Request, now time.Time) RequestSnapshot {
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
 		Scope:               slices.Clone(req.Scope),
+		Resource:            req.Resource,
 		Prompt:              slices.Clone(req.Prompt),
 		ACRValues:           slices.Clone(req.ACRValues),
 		UILocales:           slices.Clone(req.UILocales),
@@ -143,6 +147,7 @@ func (s RequestSnapshot) ToRequest() *Request {
 		CodeChallenge:       s.CodeChallenge,
 		CodeChallengeMethod: s.CodeChallengeMethod,
 		Scope:               slices.Clone(s.Scope),
+		Resource:            s.Resource,
 		Prompt:              slices.Clone(s.Prompt),
 		ACRValues:           slices.Clone(s.ACRValues),
 		UILocales:           slices.Clone(s.UILocales),

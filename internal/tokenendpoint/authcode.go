@@ -378,6 +378,7 @@ func issueAuthCodeResponse(
 		client.ID,
 		exchanged.GrantID,
 		exchanged.Scope,
+		exchanged.Resource,
 		now,
 		authCtx.AuthTime,
 		binding,
@@ -406,7 +407,16 @@ func issueAuthCodeResponse(
 			return
 		}
 	}
-	refreshToken, err := maybeIssueRefreshToken(ctx, deps, client, exchanged.Subject, exchanged.GrantID, exchanged.Scope, binding)
+	refreshToken, err := maybeIssueRefreshToken(
+		ctx,
+		deps,
+		client,
+		exchanged.Subject,
+		exchanged.GrantID,
+		exchanged.Scope,
+		exchanged.Resource,
+		binding,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -462,6 +472,7 @@ func mintAccessToken(
 	deps Deps,
 	subject, clientID, grantID string,
 	scope []string,
+	resource string,
 	now time.Time,
 	authTime int64,
 	binding tokenBinding,
@@ -471,23 +482,14 @@ func mintAccessToken(
 		return "", err
 	}
 	expiresAt := tokens.ExpiresIn(now, deps.AccessTokenTTL)
-	// TODO(v1.x): RFC 8707 (Resource Indicators for OAuth 2.0)
-	// support. Today the access token's "aud" defaults to the OP
-	// issuer URL, which makes every token usable at every resource
-	// server that trusts the OP. RFC 8707 lets a client supply the
-	// "resource" parameter at /authorize and /token to scope the
-	// audience to a specific RS, and lets the OP advertise
-	// resource_indicators_supported in discovery. The full
-	// implementation requires: (a) an authorize-side parser, (b) a
-	// validate-time allowlist check (per-client / per-scope), (c)
-	// an "aud"-narrowing path here, and (d) a discovery flag. The
-	// current single-issuer audience is correct for v1.0 because
-	// the library still ships before any RFC-8707-aware RS in the
-	// example tree.
+	audience := deps.Issuer
+	if resource != "" {
+		audience = resource
+	}
 	claims := tokens.AccessTokenClaims{
 		Issuer:       deps.Issuer,
 		Subject:      subject,
-		Audience:     []string{deps.Issuer},
+		Audience:     []string{audience},
 		ClientID:     clientID,
 		IssuedAt:     now.Unix(),
 		ExpiresAt:    expiresAt,
@@ -551,6 +553,7 @@ func maybeIssueRefreshToken(
 	client *store.Client,
 	subject, grantID string,
 	scope []string,
+	resource string,
 	binding tokenBinding,
 ) (string, error) {
 	if !clientPermitsRefresh(client, scope) {
@@ -569,6 +572,7 @@ func maybeIssueRefreshToken(
 		Subject:            subject,
 		GrantID:            grantID,
 		Scope:              append([]string(nil), scope...),
+		Resource:           resource,
 		DPoPJKT:            refreshDPoPJKT(client, binding.DPoPJKT),
 		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})

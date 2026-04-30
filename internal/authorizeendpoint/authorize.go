@@ -591,6 +591,7 @@ func mintAndRedirect(
 		GrantID:             existing.ID,
 		RedirectURI:         req.RedirectURI,
 		Scope:               append([]string(nil), req.Scope...),
+		Resource:            req.Resource,
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
 		Nonce:               req.Nonce,

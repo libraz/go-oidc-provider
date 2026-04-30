@@ -181,6 +181,17 @@ var (
 	// parser only fires AFTER redirect_uri validation passed (see
 	// [Request.Validate] ordering). Maps to invalid_request.
 	ErrClaimsRequestInvalid = newErr("invalid_request", "claims parameter is not valid JSON")
+
+	// ErrResourceInvalid indicates the RFC 8707 resource indicator is
+	// malformed: either more than one value was supplied, the URI is not
+	// absolute, or it contains a fragment component. Maps to
+	// invalid_target.
+	ErrResourceInvalid = newErr("invalid_target", "resource indicator is malformed")
+
+	// ErrResourceNotAllowed indicates the client supplied a syntactically
+	// valid resource indicator that is not on the client's registered
+	// allowlist. Maps to invalid_target.
+	ErrResourceNotAllowed = newErr("invalid_target", "resource indicator is missing, or unknown")
 )
 
 // IsRedirectSafe reports whether err arose AFTER redirect_uri validation

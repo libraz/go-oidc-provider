@@ -42,6 +42,10 @@ type Request struct {
 	// deduplicated with first-occurrence order preserved.
 	Scope []string
 
+	// Resource is the RFC 8707 resource indicator. Empty means the
+	// request omitted the parameter.
+	Resource string
+
 	// State is the OAuth state parameter, verbatim.
 	State string
 
@@ -166,6 +170,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		ResponseType:        singles["response_type"],
 		RedirectURI:         singles["redirect_uri"],
 		Scope:               dedupePreserve(strings.Fields(multis["scope"])),
+		Resource:            singles["resource"],
 		State:               singles["state"],
 		Nonce:               singles["nonce"],
 		CodeChallenge:       singles["code_challenge"],
@@ -202,6 +207,7 @@ var singleParseFields = []string{
 	"request_uri",
 	"dpop_jkt",
 	"claims",
+	"resource",
 }
 
 // parseSingleValues extracts every single-valued parameter from v,
@@ -326,6 +332,9 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 		return err
 	}
 	if err := req.validateScope(client, scopes, policy.OpenIDScopeOptional); err != nil {
+		return err
+	}
+	if err := req.validateResource(client); err != nil {
 		return err
 	}
 	if err := req.validateNonce(policy.NonceRequired); err != nil {
@@ -466,6 +475,23 @@ func (req *Request) validateScope(client *store.Client, scopes *scoperegistry.Re
 		if !scopes.Allows(s, client.ID) {
 			return ErrScopeClientNotAllowed
 		}
+	}
+	return nil
+}
+
+func (req *Request) validateResource(client *store.Client) error {
+	if req.Resource == "" {
+		return nil
+	}
+	resourceURI, err := url.Parse(req.Resource)
+	if err != nil || resourceURI == nil || !resourceURI.IsAbs() {
+		return ErrResourceInvalid
+	}
+	if resourceURI.Fragment != "" {
+		return ErrResourceInvalid
+	}
+	if client == nil || !slices.Contains(client.Resources, req.Resource) {
+		return ErrResourceNotAllowed
 	}
 	return nil
 }

@@ -123,6 +123,7 @@ type IssueInput struct {
 	GrantID             string
 	RedirectURI         string
 	Scope               []string
+	Resource            string
 	CodeChallenge       string
 	CodeChallengeMethod string
 	Nonce               string
@@ -164,6 +165,7 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 		GrantID:             in.GrantID,
 		RedirectURI:         in.RedirectURI,
 		Scope:               append([]string(nil), in.Scope...),
+		Resource:            in.Resource,
 		CodeChallenge:       in.CodeChallenge,
 		CodeChallengeMethod: in.CodeChallengeMethod,
 		Nonce:               in.Nonce,
@@ -256,6 +258,10 @@ type Exchanged struct {
 	// Scope is the list of scopes the user consented to for this code.
 	Scope []string
 
+	// Resource is the RFC 8707 resource indicator the code was bound to.
+	// Empty means the authorization request omitted the parameter.
+	Resource string
+
 	// Nonce is the nonce parameter the client supplied at the
 	// authorization endpoint, copied into the issued ID Token.
 	Nonce string
@@ -339,6 +345,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		Subject:          rec.Subject,
 		GrantID:          rec.GrantID,
 		Scope:            append([]string(nil), rec.Scope...),
+		Resource:         rec.Resource,
 		Nonce:            rec.Nonce,
 		DPoPJKT:          rec.DPoPJKT,
 		HadCodeChallenge: rec.CodeChallenge != "",

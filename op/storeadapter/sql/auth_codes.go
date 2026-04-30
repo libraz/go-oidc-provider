@@ -22,7 +22,7 @@ func (s *authCodeStore) runner() runner { return pickRunner(s.parent, s.tx) }
 func (s *authCodeStore) Save(ctx context.Context, code *store.AuthorizationCode) error {
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.authCodeSave,
 		code.ID, code.ClientID, code.GrantID, code.Subject, code.RedirectURI,
-		encodeStrings(code.Scope), code.CodeChallenge, code.CodeChallengeMethod,
+		encodeStrings(code.Scope), code.Resource, code.CodeChallenge, code.CodeChallengeMethod,
 		code.Nonce, code.State, code.DPoPJKT,
 		timeToInt64(code.ExpiresAt), timePtrToInt64Ptr(code.ConsumedAt), timeToInt64(code.CreatedAt))
 	if err != nil {
@@ -59,7 +59,7 @@ func (s *authCodeStore) find(ctx context.Context, id string) (*store.Authorizati
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.authCodeFind, id).Scan(
 		&c.ID, &c.ClientID, &c.GrantID, &c.Subject, &c.RedirectURI,
-		&scope, &c.CodeChallenge, &c.CodeChallengeMethod,
+		&scope, &c.Resource, &c.CodeChallenge, &c.CodeChallengeMethod,
 		&c.Nonce, &c.State, &c.DPoPJKT,
 		&expires, &consumed, &created)
 	if errors.Is(err, databasesql.ErrNoRows) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -181,6 +182,62 @@ func TestRefresh_HappyPath_NonOIDC(t *testing.T) {
 	body := decodeJSON(t, resp)
 	if _, hasID := body["id_token"]; hasID {
 		t.Errorf("id_token must NOT be issued without openid scope")
+	}
+}
+
+func TestRefresh_ResourcePreservesAudienceAndRotation(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-resource"
+	const subject = "user-1"
+	const grantID = "grant-rt-resource"
+	const resource = "https://api.example.com"
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "email", "offline_access"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid", "email", "offline_access"},
+		Resource: resource,
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	verifier := &tokens.AccessTokenVerifier{
+		Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+	}
+	claims, _, err := verifier.Verify(at)
+	if err != nil {
+		t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != resource {
+		t.Fatalf("aud=%v want [%q]", claims.Audience, resource)
+	}
+	rotated, _ := body["refresh_token"].(string)
+	if rotated == "" {
+		t.Fatal("refresh_token missing")
+	}
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), rotated)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find: %v", err)
+	}
+	if rec.Resource != resource {
+		t.Fatalf("refresh resource=%q want %q", rec.Resource, resource)
 	}
 }
 

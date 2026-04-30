@@ -99,6 +99,13 @@ type Client struct {
 	// server's policy when issuing tokens.
 	Scopes []string
 
+	// Resources lists the RFC 8707 resource indicator values this
+	// client is allowed to request. Empty means the client has no
+	// resource-indicator allowlist and requests carrying "resource"
+	// are rejected. Omitting the parameter entirely remains valid and
+	// leaves access-token audience selection on the OP default path.
+	Resources []string
+
 	// TokenEndpointAuthMethod is the client authentication method used at
 	// the token endpoint, encoded with the values defined in OpenID
 	// Connect Core 1.0 §9 (for example "client_secret_basic",

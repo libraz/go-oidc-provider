@@ -379,6 +379,7 @@ func cloneClient(c *store.Client) *store.Client {
 	out.GrantTypes = slices.Clone(c.GrantTypes)
 	out.ResponseTypes = slices.Clone(c.ResponseTypes)
 	out.Scopes = slices.Clone(c.Scopes)
+	out.Resources = slices.Clone(c.Resources)
 	out.Contacts = slices.Clone(c.Contacts)
 	out.DefaultACRValues = slices.Clone(c.DefaultACRValues)
 	out.RequestURIs = slices.Clone(c.RequestURIs)
@@ -477,6 +478,7 @@ func cloneAuthCode(c *store.AuthorizationCode) *store.AuthorizationCode {
 	}
 	out := *c
 	out.Scope = slices.Clone(c.Scope)
+	out.Resource = c.Resource
 	if c.ConsumedAt != nil {
 		t := *c.ConsumedAt
 		out.ConsumedAt = &t
@@ -655,6 +657,7 @@ func cloneRefresh(t *store.RefreshToken) *store.RefreshToken {
 	}
 	out := *t
 	out.Scope = slices.Clone(t.Scope)
+	out.Resource = t.Resource
 	if t.ParentID != nil {
 		p := *t.ParentID
 		out.ParentID = &p

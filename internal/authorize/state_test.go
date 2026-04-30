@@ -37,6 +37,7 @@ func TestSnapshotFrom_FullRoundTrip(t *testing.T) {
 		CodeChallenge:       "ccc",
 		CodeChallengeMethod: "S256",
 		Scope:               []string{"openid", "profile"},
+		Resource:            "https://api.example.com",
 		Prompt:              []string{"consent"},
 		ACRValues:           []string{"urn:1"},
 		UILocales:           []string{"en-US"},
@@ -57,6 +58,9 @@ func TestSnapshotFrom_FullRoundTrip(t *testing.T) {
 	}
 	if got.MaxAge == nil || *got.MaxAge != maxAge {
 		t.Errorf("MaxAge=%v want %d", got.MaxAge, maxAge)
+	}
+	if got.Resource != req.Resource {
+		t.Errorf("Resource=%q want %q", got.Resource, req.Resource)
 	}
 	// Mutating the recovered request must not affect the snapshot.
 	got.Scope[0] = "mutated"

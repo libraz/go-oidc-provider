@@ -420,6 +420,7 @@ func terminateInteraction(
 		GrantID:             grant.ID,
 		RedirectURI:         req.RedirectURI,
 		Scope:               append([]string(nil), grantScope...),
+		Resource:            req.Resource,
 		CodeChallenge:       req.CodeChallenge,
 		CodeChallengeMethod: req.CodeChallengeMethod,
 		Nonce:               req.Nonce,

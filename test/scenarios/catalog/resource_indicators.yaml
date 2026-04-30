@@ -45,7 +45,7 @@ rows:
       A resource value MUST be an absolute URI; bare strings yield
       400 invalid_target with the description "resource indicator
       must be an absolute URI".
-    status: pending
+    status: active
 
   - id: RI-011
     severity: P0
@@ -55,7 +55,7 @@ rows:
       example "urn:wl:foo/bar#" yields 400 invalid_target with the
       description "resource indicator must not contain a fragment
       component".
-    status: pending
+    status: active
 
   - id: RI-012
     severity: P1
@@ -126,7 +126,7 @@ rows:
       Token exchange via grant_type=authorization_code MUST propagate
       code.resource to the issued access token's aud and to the
       issued refresh token's resource.
-    status: pending
+    status: active
 
   - id: RI-033
     severity: P0
@@ -134,7 +134,7 @@ rows:
     behaviour: |
       Refreshing such a refresh token MUST yield a new access token
       with the same aud and a new refresh token preserving resource.
-    status: pending
+    status: active
 
   - id: RI-034
     severity: P1
