@@ -40,6 +40,12 @@ const (
 	// [internal/userinfo].
 	scopeOpenID = "openid"
 
+	// scopeOfflineAccess is the OIDC Core 1.0 §11 token that gates
+	// strict-mode refresh-token issuance and selects the offline TTL
+	// bucket under the lax-mode default. Duplicated as a literal here
+	// for the same dependency-isolation reason as scopeOpenID.
+	scopeOfflineAccess = "offline_access"
+
 	// maxFormBytes caps the size of a token-endpoint request body. The
 	// endpoint accepts only the form-encoded shape RFC 6749 §3.2
 	// describes; a 64 KiB ceiling is far above any legitimate request
@@ -108,12 +114,27 @@ type Deps struct {
 	// negative falls back to [defaultRefreshTokenTTL].
 	RefreshTokenTTL time.Duration
 
+	// RefreshTokenOfflineTTL is the lifetime applied to refresh tokens
+	// issued under the OIDC Core 1.0 §11 "offline_access" scope. Zero
+	// defers to [RefreshTokenTTL] so embedders that do not distinguish
+	// offline use never see the second knob. The handler picks the
+	// offline TTL whenever the granted scope contains "offline_access".
+	RefreshTokenOfflineTTL time.Duration
+
 	// RefreshTokenGraceTTL bounds the RFC 9700 §2.2.2 grace window
 	// during which a just-rotated refresh token is still accepted.
 	// Zero or negative falls back to [refresh.GraceTTLDefault]
 	// (currently 30s). The token endpoint forwards this verbatim to
 	// [refresh.ExchangerConfig.GraceTTL].
 	RefreshTokenGraceTTL time.Duration
+
+	// StrictOfflineAccess flips the refresh-token issuance gate to the
+	// strict reading of OIDC Core 1.0 §11. When true, refresh tokens
+	// are issued (on authcode exchange) and accepted (on refresh
+	// rotation) only when the granted scope contains "offline_access";
+	// the gate runs in addition to the existing "openid" + per-client
+	// `refresh_token` grant requirement.
+	StrictOfflineAccess bool
 
 	// SecretVerifier verifies confidential-client secrets. A nil value
 	// installs the library default ([clientauth.Argon2id]) so deployments
@@ -418,14 +439,19 @@ func scopeContainsOpenID(scopes []string) bool {
 	return false
 }
 
-// clientPermitsRefresh reports whether the registered client may receive
-// refresh tokens. The library's posture is conservative: a refresh token
-// is only issued when "refresh_token" is in the client's GrantTypes AND
-// the granted scope includes "openid". The §A.12.4 design wires refresh
-// to the OIDC profile so non-OIDC clients do not silently accumulate
-// long-lived credentials.
-func clientPermitsRefresh(c *store.Client, scope []string) bool {
+// clientPermitsRefresh reports whether the registered client may
+// receive refresh tokens. The library's posture is conservative: a
+// refresh token is only issued when "refresh_token" is in the
+// client's GrantTypes AND the granted scope includes "openid". When
+// strictOfflineAccess is true the gate additionally requires
+// "offline_access" in scope, matching the strict reading of OIDC
+// Core 1.0 §11; the lax reading (false) is the historical library
+// default and matches Auth0 / Okta / Keycloak.
+func clientPermitsRefresh(c *store.Client, scope []string, strictOfflineAccess bool) bool {
 	if !scopeContainsOpenID(scope) {
+		return false
+	}
+	if strictOfflineAccess && !scopeContainsOfflineAccess(scope) {
 		return false
 	}
 	for _, g := range c.GrantTypes {
@@ -434,6 +460,32 @@ func clientPermitsRefresh(c *store.Client, scope []string) bool {
 		}
 	}
 	return false
+}
+
+// scopeContainsOfflineAccess reports whether scope contains the
+// OIDC Core 1.0 §11 "offline_access" token. The match is byte-equal
+// per OIDC Core 1.0 §3.1.2.1: scope tokens are case-sensitive and
+// the server does not normalise.
+func scopeContainsOfflineAccess(scopes []string) bool {
+	for _, s := range scopes {
+		if s == scopeOfflineAccess {
+			return true
+		}
+	}
+	return false
+}
+
+// pickRefreshTokenTTL returns the TTL the handler uses for a refresh
+// token issued or rotated under the supplied scope. The offline TTL
+// applies when the granted scope contains "offline_access" AND the
+// embedder configured a non-zero RefreshTokenOfflineTTL. Otherwise
+// the handler falls back to RefreshTokenTTL (which itself falls back
+// to defaultRefreshTokenTTL via resolveDeps).
+func pickRefreshTokenTTL(deps Deps, scope []string) time.Duration {
+	if deps.RefreshTokenOfflineTTL > 0 && scopeContainsOfflineAccess(scope) {
+		return deps.RefreshTokenOfflineTTL
+	}
+	return deps.RefreshTokenTTL
 }
 
 // activeSigningKey returns the package-local signing key the handler

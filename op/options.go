@@ -165,6 +165,24 @@ type config struct {
 	// at the option site.
 	refreshTokenTTL time.Duration
 
+	// refreshTokenOfflineTTL overrides the TTL applied to refresh
+	// tokens issued under the OIDC Core 1.0 §11 "offline_access" scope.
+	// Zero falls back to refreshTokenTTL so an embedder that does not
+	// distinguish offline use never sees the second knob. The library
+	// uses this bucket only when the granted scope contains
+	// "offline_access"; conventional online refresh continues to use
+	// refreshTokenTTL. See [WithRefreshTokenOfflineTTL].
+	refreshTokenOfflineTTL time.Duration
+
+	// strictOfflineAccess flips the refresh-token issuance gate to the
+	// OIDC Core 1.0 §11 strict reading: refresh tokens are issued only
+	// when the granted scope contains "offline_access" (in addition to
+	// the existing "openid" + GrantTypes contains refresh_token
+	// requirement). Default false reflects the lax reading that the
+	// library has shipped since v0.1, matching Auth0 / Okta / Keycloak.
+	// See [WithStrictOfflineAccess].
+	strictOfflineAccess bool
+
 	// refreshGracePeriod stores the [WithRefreshGracePeriod] override.
 	// Zero signals "use library default" (a 60-second window matching
 	// RFC 9700 §2.2.2). Negative signals "set explicitly to zero" so a
@@ -546,6 +564,7 @@ func (c *config) validate() error {
 		c.validateLocales,
 		c.validateFirstPartyClients,
 		c.validateOpenIDScopeOptional,
+		c.validateStrictOfflineAccess,
 		c.validateLoginFlow,
 	} {
 		if err := fn(); err != nil {
@@ -652,6 +671,23 @@ func (c *config) validateOpenIDScopeOptional() error {
 				Code:        codeConfiguration,
 				Description: "WithOpenIDScopeOptional is incompatible with FAPI 2.0 profile " + p.String(),
 			}
+		}
+	}
+	return nil
+}
+
+// validateStrictOfflineAccess rejects the combination of
+// [WithStrictOfflineAccess] and [WithOpenIDScopeOptional]. The strict
+// reading of OIDC Core 1.0 §11 only has meaning for OIDC requests;
+// admitting it on a deployment that also accepts plain OAuth 2.0
+// /authorize requests would silently disable refresh token issuance
+// for every non-OIDC client. Surface the misconfiguration at startup
+// rather than letting it manifest as missing refresh tokens at /token.
+func (c *config) validateStrictOfflineAccess() error {
+	if c.strictOfflineAccess && c.openIDScopeOptional {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithStrictOfflineAccess is incompatible with WithOpenIDScopeOptional",
 		}
 	}
 	return nil
@@ -1443,13 +1479,16 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 // negative value is rejected at the option site so the
 // misconfiguration surfaces at startup rather than silently issuing
 // tokens with the wrong cadence.
+//
 // Refresh tokens are issued only when the granted scope contains
 // "openid" AND the client's GrantTypes includes "refresh_token"; the
-// "offline_access" scope is advertised in discovery for OIDC
-// compatibility but does not gate issuance (see
-// [ScopeNameOfflineAccess]). To disable refresh tokens entirely,
-// remove "refresh_token" from the per-client GrantTypes or from the
-// global [WithGrants] set.
+// library defaults to the lax reading of OIDC Core 1.0 §11 in which
+// the "offline_access" scope governs consent UX and the TTL bucket
+// (see [WithRefreshTokenOfflineTTL]) but does not gate issuance.
+// Embedders who want the strict §11 reading — refresh issued only
+// when "offline_access" is granted — pass [WithStrictOfflineAccess].
+// To disable refresh tokens entirely, remove "refresh_token" from
+// the per-client GrantTypes or from the global [WithGrants] set.
 // Stable since v0.2.
 func WithRefreshTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
@@ -1460,6 +1499,68 @@ func WithRefreshTokenTTL(ttl time.Duration) Option {
 			}
 		}
 		c.refreshTokenTTL = ttl
+		return nil
+	})
+}
+
+// WithRefreshTokenOfflineTTL overrides the lifetime applied to
+// refresh tokens issued under the OIDC Core 1.0 §11 "offline_access"
+// scope. The default zero value defers to [WithRefreshTokenTTL] so
+// embedders that do not distinguish offline use see no behaviour
+// change. When set to a non-zero value, refresh tokens issued
+// alongside an `offline_access`-bearing grant get the offline TTL
+// while conventional online refresh continues to use the refresh-
+// token TTL.
+//
+// The split makes the discovery-advertised "offline_access" scope
+// operationally observable: under the lax reading it lengthens the
+// refresh-token lifetime; under [WithStrictOfflineAccess] it is the
+// only path that issues a refresh token at all.
+// Stable since v0.x.
+func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if ttl < 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithRefreshTokenOfflineTTL requires a non-negative duration",
+			}
+		}
+		c.refreshTokenOfflineTTL = ttl
+		return nil
+	})
+}
+
+// WithStrictOfflineAccess flips the refresh-token issuance gate to
+// the strict reading of OIDC Core 1.0 §11: refresh tokens are issued
+// only when the granted scope contains "offline_access" (in addition
+// to the existing "openid" + per-client `refresh_token` grant
+// requirement). Authorization-code exchanges that satisfy the other
+// conditions but lack `offline_access` succeed with an `access_token`
+// + `id_token` and no `refresh_token` field — mirroring today's
+// "client lacks refresh_token grant" path.
+//
+// At /token (grant_type=refresh_token), a refresh request whose
+// originating grant did not carry `offline_access` fails with
+// `invalid_grant` ("refresh disabled by current policy"). The check
+// runs after the underlying refresh-token exchange, so the presented
+// token is consumed exactly once even when the policy rejects it —
+// embedders flipping this flag mid-deployment must accept that
+// pre-flag refresh tokens are invalidated on first use.
+//
+// The flag is incompatible with [WithOpenIDScopeOptional]: §11 has
+// no meaning for non-OIDC requests, so combining the two would
+// silently disable every refresh issuance. [op.New] returns
+// `op.Error{Code: codeConfiguration}` on the conflict.
+//
+// Default false. The lax reading (refresh issued whenever
+// `refresh_token` grant is registered and scope contains "openid")
+// is the historical library posture and matches Auth0 / Okta /
+// Keycloak; the strict reading matches panva/node-oidc-provider and
+// ory/hydra defaults.
+// Stable since v0.x.
+func WithStrictOfflineAccess() Option {
+	return optionFunc(func(c *config) error {
+		c.strictOfflineAccess = true
 		return nil
 	})
 }

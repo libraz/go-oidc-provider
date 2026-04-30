@@ -457,6 +457,79 @@ func TestWithRefreshTokenTTL_AcceptsCustomValue(t *testing.T) {
 	}
 }
 
+// TestWithRefreshTokenOfflineTTL_RejectsNegative pins the option-site
+// argument validation. A negative duration is a misconfiguration the
+// embedder must see at startup rather than at /token, where it would
+// silently issue refresh tokens with a back-dated expiry.
+func TestWithRefreshTokenOfflineTTL_RejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithRefreshTokenOfflineTTL(-1*time.Second))...)
+	if err == nil {
+		t.Fatal("expected error for negative TTL, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-negative") {
+		t.Errorf("err = %v, want it to mention non-negative", err)
+	}
+}
+
+// TestWithRefreshTokenOfflineTTL_AcceptsZero confirms the explicit
+// zero defers to [op.WithRefreshTokenTTL]. An embedder who does not
+// distinguish offline use must be able to leave the option absent
+// without seeing a build-time error.
+func TestWithRefreshTokenOfflineTTL_AcceptsZero(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t), op.WithRefreshTokenOfflineTTL(0))...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestWithRefreshTokenOfflineTTL_AcceptsCustomValue exercises the
+// happy path: a 90-day offline bucket alongside the 30-day default
+// is the canonical "stay-signed-in" cadence.
+func TestWithRefreshTokenOfflineTTL_AcceptsCustomValue(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t), op.WithRefreshTokenOfflineTTL(90*24*time.Hour))...); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestWithStrictOfflineAccess_AcceptedAlone exercises the happy
+// path. Without [op.WithOpenIDScopeOptional] the strict-mode flag
+// is profile-orthogonal and constructs cleanly.
+func TestWithStrictOfflineAccess_AcceptedAlone(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t), op.WithStrictOfflineAccess())...); err != nil {
+		t.Fatalf("op.New rejected WithStrictOfflineAccess in vanilla mode: %v", err)
+	}
+}
+
+// TestWithStrictOfflineAccess_RejectsOpenIDScopeOptional pins the
+// construction-time refusal of the conflicting pair. The strict
+// reading of OIDC Core 1.0 §11 has no meaning when "openid" is
+// optional, so combining the two would silently disable refresh
+// issuance for every non-OIDC client. The error must name both
+// option identifiers so an operator reading the message sees which
+// pair conflicts.
+func TestWithStrictOfflineAccess_RejectsOpenIDScopeOptional(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithOpenIDScopeOptional(),
+		op.WithStrictOfflineAccess(),
+	)...)
+	if err == nil {
+		t.Fatal("expected error combining WithStrictOfflineAccess + WithOpenIDScopeOptional, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithStrictOfflineAccess") ||
+		!strings.Contains(err.Error(), "WithOpenIDScopeOptional") {
+		t.Errorf("err = %v, want it to name both options", err)
+	}
+}
+
 func TestWithAccessTokenTTL_FAPI2BaselineAcceptsStricter(t *testing.T) {
 	t.Parallel()
 

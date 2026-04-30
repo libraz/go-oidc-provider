@@ -58,6 +58,22 @@ changes.
   FAPI 2.0 §5.4 issuer shape (https, no trailing slash, no query /
   fragment; loopback hosts exempted from https) as a defense-in-depth
   seam over `op.WithIssuer`. (M-PROTO-6)
+- `op.WithStrictOfflineAccess()` flips the refresh-token issuance
+  gate to the strict reading of OIDC Core 1.0 §11: refresh tokens
+  are issued (on authcode exchange) and accepted (on /token
+  refresh_token rotation) only when the granted scope contains
+  `offline_access`. Default off — the historical lax reading
+  (refresh issued whenever `refresh_token` grant + `openid` scope)
+  matches Auth0 / Okta / Keycloak. The option is rejected at
+  `op.New` when combined with `op.WithOpenIDScopeOptional` because
+  §11 has no meaning for non-OIDC requests.
+- `op.WithRefreshTokenOfflineTTL(time.Duration)` sets the lifetime
+  applied to refresh tokens issued under the `offline_access`
+  scope, defaulting to the existing `op.WithRefreshTokenTTL`
+  value. Splitting the bucket lets `offline_access` carry an
+  operationally observable difference (longer lifetime for
+  stay-signed-in flows) while conventional refresh keeps the
+  shorter rotation cadence.
 
 ### docs (examples)
 

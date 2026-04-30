@@ -44,6 +44,9 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
+	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope) {
+		return
+	}
 	dpopOut, ok := requireDPoPMatch(w, r, deps, exchanged.DPoPJKT)
 	if !ok {
 		return
@@ -158,6 +161,26 @@ func exchangeRefresh(
 		return nil, false
 	}
 	return exchanged, true
+}
+
+// enforceStrictOfflineAccess rejects a refresh exchange when the
+// strict-mode flag is set and the consumed token's bound scope does
+// not contain "offline_access". The check runs after the exchanger
+// has already consumed the token, so the rejection is single-shot:
+// embedders flipping [op.WithStrictOfflineAccess] on a live
+// deployment must accept that pre-flag refresh tokens are
+// invalidated on first use, which matches the ADR's "rejected on
+// first use" stance. Returns true when the request may proceed.
+func enforceStrictOfflineAccess(w http.ResponseWriter, deps Deps, scope []string) bool {
+	if !deps.StrictOfflineAccess {
+		return true
+	}
+	if scopeContainsOfflineAccess(scope) {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errInvalidGrant,
+		"refresh issued without offline_access; refresh disabled by current policy")
+	return false
 }
 
 // writeRefreshExchangeError maps the refresh-package sentinels onto wire
@@ -309,7 +332,7 @@ func rotateRefreshToken(
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
 		Clock: deps.clockFunc(),
-		TTL:   deps.RefreshTokenTTL,
+		TTL:   pickRefreshTokenTTL(deps, exchanged.Scope),
 	})
 	if err != nil {
 		return "", err
