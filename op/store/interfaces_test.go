@@ -241,7 +241,29 @@ func (fakeStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 
 func (fakeStore) AccessTokens() store.AccessTokenRegistry { return fakeAccessTokenRegistry{} }
 
+func (fakeStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return fakeOpaqueAccessTokenStore{}
+}
+
 var _ store.Store = (*fakeStore)(nil)
+
+type fakeOpaqueAccessTokenStore struct{}
+
+func (fakeOpaqueAccessTokenStore) Save(context.Context, *store.OpaqueAccessToken) error { return nil }
+
+func (fakeOpaqueAccessTokenStore) Find(context.Context, string) (*store.OpaqueAccessToken, error) {
+	return nil, store.ErrNotFound
+}
+
+func (fakeOpaqueAccessTokenStore) RevokeByID(context.Context, string) error { return nil }
+
+func (fakeOpaqueAccessTokenStore) RevokeByGrant(context.Context, string) (int, error) {
+	return 0, nil
+}
+
+func (fakeOpaqueAccessTokenStore) GC(context.Context, time.Time) (int, error) { return 0, nil }
+
+var _ store.OpaqueAccessTokenStore = (*fakeOpaqueAccessTokenStore)(nil)
 
 type fakeAccessTokenRegistry struct{}
 

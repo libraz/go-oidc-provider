@@ -126,6 +126,9 @@ func TestStore_NilStubsForRegistration(t *testing.T) {
 	if s.RegistrationAccessTokens() != nil {
 		t.Fatalf("RegistrationAccessTokens: want nil, got non-nil")
 	}
+	if s.OpaqueAccessTokens() != nil {
+		t.Fatalf("OpaqueAccessTokens: want nil (composite-only routing), got non-nil")
+	}
 }
 
 func TestJTIKey_DeterministicAndPrefixed(t *testing.T) {

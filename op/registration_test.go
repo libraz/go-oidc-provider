@@ -73,6 +73,10 @@ func (s nonRegistryStore) AccessTokens() store.AccessTokenRegistry {
 	return s.inner.AccessTokens()
 }
 
+func (s nonRegistryStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return s.inner.OpaqueAccessTokens()
+}
+
 // dcrBaseOpts returns the option slice that satisfies op.New for a
 // DCR-enabled provider when paired with WithDynamicRegistration. The
 // helper centralises the deterministic clock so tests that observe

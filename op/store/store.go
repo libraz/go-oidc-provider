@@ -74,4 +74,13 @@ type Store interface {
 	// Register call accompanies a grant write so a partially-committed
 	// token issuance cannot leave a wire token unaccounted for.
 	AccessTokens() AccessTokenRegistry
+
+	// OpaqueAccessTokens returns the [OpaqueAccessTokenStore] for this
+	// backend. Backends that never enable op.WithAccessTokenFormat
+	// (.../Opaque) MAY return nil; the library detects nil at op.New
+	// construction time and rejects opaque-format options that have no
+	// place to persist (fail-fast). Part of the transactional cluster:
+	// a Save call accompanies the grant write so a partially-committed
+	// token issuance cannot leave a wire token unaccounted for.
+	OpaqueAccessTokens() OpaqueAccessTokenStore
 }

@@ -51,6 +51,13 @@ type queries struct {
 	accessTokenRevokeByGrant string
 	accessTokenGC            string
 
+	// opaque access tokens
+	opaqueAccessTokenSave          string
+	opaqueAccessTokenFind          string
+	opaqueAccessTokenRevokeByID    string
+	opaqueAccessTokenRevokeByGrant string
+	opaqueAccessTokenGC            string
+
 	// grants
 	grantSave                string
 	grantFind                string
@@ -171,6 +178,23 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
 		accessTokenGC: d.rebind(
 			"DELETE FROM " + n.accessTokens + " WHERE expires_at < ?"),
+
+		// opaque access tokens (ADR 0024). The PK is the SHA-256 digest
+		// of the raw bearer ID; callers hash before binding so the raw
+		// secret never touches the wire to the database.
+		opaqueAccessTokenSave: d.rebind(
+			"INSERT INTO " + n.opaqueAccessTokens +
+				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+		opaqueAccessTokenFind: d.rebind(
+			"SELECT token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked" +
+				" FROM " + n.opaqueAccessTokens + " WHERE token_hash = ?"),
+		opaqueAccessTokenRevokeByID: d.rebind(
+			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE token_hash = ?"),
+		opaqueAccessTokenRevokeByGrant: d.rebind(
+			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
+		opaqueAccessTokenGC: d.rebind(
+			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at < ?"),
 
 		// grants (upsert keyed on id)
 		grantSave: d.rebind(

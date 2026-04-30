@@ -114,22 +114,23 @@ type Store struct {
 	// [store.Tx] and released by Commit or Rollback.
 	txMu sync.Mutex
 
-	clients      *clientStore
-	authCodes    *authCodeStore
-	refreshes    *refreshStore
-	grants       *grantStore
-	sessions     *sessionStore
-	pars         *parStore
-	interactions *interactionStore
-	jtis         *jtiStore
-	users        *userStore
-	iats         *iatStore
-	rats         *ratStore
-	totps        *totpStore
-	recoveries   *recoveryStore
-	passkeys     *passkeyStore
-	emailotps    *emailOTPStore
-	accessTokens *accessTokenStore
+	clients            *clientStore
+	authCodes          *authCodeStore
+	refreshes          *refreshStore
+	grants             *grantStore
+	sessions           *sessionStore
+	pars               *parStore
+	interactions       *interactionStore
+	jtis               *jtiStore
+	users              *userStore
+	iats               *iatStore
+	rats               *ratStore
+	totps              *totpStore
+	recoveries         *recoveryStore
+	passkeys           *passkeyStore
+	emailotps          *emailOTPStore
+	accessTokens       *accessTokenStore
+	opaqueAccessTokens *opaqueAccessTokenStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -158,6 +159,7 @@ func New(opts ...Option) *Store {
 	s.passkeys = newPasskeyStore()
 	s.emailotps = newEmailOTPStore(s.clock)
 	s.accessTokens = newAccessTokenStore()
+	s.opaqueAccessTokens = newOpaqueAccessTokenStore()
 	return s
 }
 
@@ -199,6 +201,13 @@ func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore { 
 // rather than deleting them so the token endpoint can distinguish
 // "expired and dropped" from "revoked but still inside its TTL".
 func (s *Store) AccessTokens() store.AccessTokenRegistry { return s.accessTokens }
+
+// OpaqueAccessTokens implements [store.Store]. The reference
+// implementation keys rows by the SHA-256 digest of the raw bearer id
+// (ADR 0024 §S.2) so a heap dump cannot reconstruct an issued
+// credential. Revocation flips a flag rather than deleting the row so
+// audit metadata remains recoverable.
+func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return s.opaqueAccessTokens }
 
 // TOTPs returns the [store.TOTPStore] backed by this Store. The
 // substore is not part of the aggregate [store.Store] interface (the

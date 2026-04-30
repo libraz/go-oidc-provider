@@ -19,13 +19,14 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 		return nil, fmt.Errorf("oidcsql: begin transaction: %w", err)
 	}
 	tx := &sqlTx{
-		store:        s,
-		tx:           dbtx,
-		authCodes:    newAuthCodeStore(s, dbtx),
-		refreshes:    newRefreshStore(s, dbtx),
-		grants:       newGrantStore(s, dbtx),
-		pars:         newParStore(s, dbtx),
-		accessTokens: newAccessTokenStore(s, dbtx),
+		store:              s,
+		tx:                 dbtx,
+		authCodes:          newAuthCodeStore(s, dbtx),
+		refreshes:          newRefreshStore(s, dbtx),
+		grants:             newGrantStore(s, dbtx),
+		pars:               newParStore(s, dbtx),
+		accessTokens:       newAccessTokenStore(s, dbtx),
+		opaqueAccessTokens: newOpaqueAccessTokenStore(s, dbtx),
 	}
 	return tx, nil
 }
@@ -38,11 +39,12 @@ type sqlTx struct {
 	store *Store
 	tx    *databasesql.Tx
 
-	authCodes    *authCodeStore
-	refreshes    *refreshStore
-	grants       *grantStore
-	pars         *parStore
-	accessTokens *accessTokenStore
+	authCodes          *authCodeStore
+	refreshes          *refreshStore
+	grants             *grantStore
+	pars               *parStore
+	accessTokens       *accessTokenStore
+	opaqueAccessTokens *opaqueAccessTokenStore
 
 	done bool
 }
@@ -69,6 +71,15 @@ func (t *sqlTx) PushedAuthRequests() store.PushedAuthRequestStore { return t.par
 // transaction (the wiring layer in op/ already does this through the
 // AccessTokenRegistry interface).
 func (t *sqlTx) AccessTokens() store.AccessTokenRegistry { return t.accessTokens }
+
+// OpaqueAccessTokens returns the tx-bound opaque-AT substore (ADR 0024).
+// As with [sqlTx.AccessTokens], [store.Tx] does not expose this method
+// directly; the library reaches it through a runtime type assertion so
+// opaque-AT save / revoke commits coordinate with grant writes inside
+// the same atomic transaction.
+func (t *sqlTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return t.opaqueAccessTokens
+}
 
 // Commit finalises the transaction. After Commit returns the handle
 // MUST NOT be used; further calls return [store.ErrTxRequired].

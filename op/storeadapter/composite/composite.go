@@ -120,6 +120,14 @@ const (
 	// register-on-issue path commits alongside the matching grant
 	// write.
 	AccessTokens
+
+	// OpaqueAccessTokens routes [store.OpaqueAccessTokenStore] calls
+	// (ADR 0024). Used by the userinfo, introspection, revocation
+	// endpoints, and by the code-replay cascade when opt-in opaque
+	// access tokens are enabled. Part of the transactional cluster:
+	// the save-on-issue path commits alongside the matching grant
+	// write.
+	OpaqueAccessTokens
 )
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -151,6 +159,8 @@ func (k Kind) String() string {
 		return "RegistrationAccessTokens"
 	case AccessTokens:
 		return "AccessTokens"
+	case OpaqueAccessTokens:
+		return "OpaqueAccessTokens"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -173,6 +183,7 @@ var allKinds = []Kind{
 	InitialAccessTokens,
 	RegistrationAccessTokens,
 	AccessTokens,
+	OpaqueAccessTokens,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -191,6 +202,7 @@ var TxClusterKinds = []Kind{
 	Grants,
 	PushedAuthRequests,
 	AccessTokens,
+	OpaqueAccessTokens,
 }
 
 // Sentinel errors. Each one is wrapped with [fmt.Errorf] %w by the helpers in
@@ -443,6 +455,20 @@ func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 // [TxClusterKinds].
 func (s *Store) AccessTokens() store.AccessTokenRegistry {
 	return s.routes[AccessTokens].AccessTokens()
+}
+
+// OpaqueAccessTokens implements [store.Store] (ADR 0024) by routing the
+// call through the transactional-cluster anchor. The substore belongs
+// to the same atomic-commit cluster as [AccessTokens] for the same
+// reason: rotating an opaque AT inside a refresh-rotation tx must
+// commit alongside the new AT and grant updates so a stolen-but-still-
+// valid token cannot outlive its issuing chain. The routed backend MAY
+// return nil from its own [store.Store.OpaqueAccessTokens] accessor
+// when opaque format is not enabled; the library checks the resulting
+// nil at op.New time and rejects opaque-format options that have no
+// place to persist.
+func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return s.routes[OpaqueAccessTokens].OpaqueAccessTokens()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

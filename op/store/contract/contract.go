@@ -71,6 +71,7 @@ func Run(t *testing.T, f Factory) {
 		{"ConsumedJTIStore", jtiCases},
 		{"InitialAccessTokenStore", iatCases},
 		{"RegistrationAccessTokenStore", ratCases},
+		{"OpaqueAccessTokenStore", opaqueAccessTokenCases},
 		{"Transactional", transactionalCases},
 	}
 

@@ -50,6 +50,12 @@ func (stubStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 
 func (stubStore) AccessTokens() store.AccessTokenRegistry { return stubAccessTokenRegistry{} }
 
+// OpaqueAccessTokens returns nil; construction tests do not exercise
+// op.WithAccessTokenFormat(AccessTokenFormatOpaque), so the library's
+// fail-fast path that requires a non-nil substore for the opaque
+// branch never fires.
+func (stubStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }

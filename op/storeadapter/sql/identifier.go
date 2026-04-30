@@ -52,18 +52,19 @@ func validateIdentifier(name string) error {
 // table names through this struct without rebuilding the resolution
 // logic in every query.
 type nameMap struct {
-	clients      string
-	authCodes    string
-	refreshes    string
-	accessTokens string
-	grants       string
-	sessions     string
-	pars         string
-	interactions string
-	jtis         string
-	users        string
-	iats         string
-	rats         string
+	clients            string
+	authCodes          string
+	refreshes          string
+	accessTokens       string
+	opaqueAccessTokens string
+	grants             string
+	sessions           string
+	pars               string
+	interactions       string
+	jtis               string
+	users              string
+	iats               string
+	rats               string
 }
 
 // defaultNames returns the canonical table names. Embedders that
@@ -73,18 +74,19 @@ type nameMap struct {
 //nolint:gosec // G101 false positive: the values are SQL table names, not credentials.
 func defaultNames() nameMap {
 	return nameMap{
-		clients:      "oidc_clients",
-		authCodes:    "oidc_authorization_codes",
-		refreshes:    "oidc_refresh_tokens",
-		accessTokens: "oidc_access_tokens",
-		grants:       "oidc_grants",
-		sessions:     "oidc_sessions",
-		pars:         "oidc_par_records",
-		interactions: "oidc_interactions",
-		jtis:         "oidc_consumed_jtis",
-		users:        "oidc_users",
-		iats:         "oidc_initial_access_tokens",
-		rats:         "oidc_registration_access_tokens",
+		clients:            "oidc_clients",
+		authCodes:          "oidc_authorization_codes",
+		refreshes:          "oidc_refresh_tokens",
+		accessTokens:       "oidc_access_tokens",
+		opaqueAccessTokens: "oidc_opaque_access_tokens",
+		grants:             "oidc_grants",
+		sessions:           "oidc_sessions",
+		pars:               "oidc_par_records",
+		interactions:       "oidc_interactions",
+		jtis:               "oidc_consumed_jtis",
+		users:              "oidc_users",
+		iats:               "oidc_initial_access_tokens",
+		rats:               "oidc_registration_access_tokens",
 	}
 }
 
@@ -107,6 +109,8 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.refreshes = physical
 		case "access_tokens":
 			n.accessTokens = physical
+		case "opaque_access_tokens":
+			n.opaqueAccessTokens = physical
 		case "grants":
 			n.grants = physical
 		case "sessions":
@@ -141,6 +145,7 @@ func (n nameMap) all() []string {
 		n.authCodes,
 		n.refreshes,
 		n.accessTokens,
+		n.opaqueAccessTokens,
 		n.grants,
 		n.sessions,
 		n.pars,
@@ -172,6 +177,7 @@ var knownNamingKeys = []string{
 	"authorization_codes",
 	"refresh_tokens",
 	"access_tokens",
+	"opaque_access_tokens",
 	"grants",
 	"sessions",
 	"par_records",
@@ -197,6 +203,7 @@ func rewriteSchema(raw []byte, n nameMap) string {
 		{defaults.authCodes, n.authCodes},
 		{defaults.refreshes, n.refreshes},
 		{defaults.accessTokens, n.accessTokens},
+		{defaults.opaqueAccessTokens, n.opaqueAccessTokens},
 		{defaults.grants, n.grants},
 		{defaults.sessions, n.sessions},
 		{defaults.pars, n.pars},

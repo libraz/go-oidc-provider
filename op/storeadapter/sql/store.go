@@ -80,18 +80,19 @@ type Store struct {
 	names   nameMap
 	queries queries
 
-	clientsImpl      *clientStore
-	authCodesImpl    *authCodeStore
-	refreshesImpl    *refreshStore
-	accessTokensImpl *accessTokenStore
-	grantsImpl       *grantStore
-	sessionsImpl     *sessionStore
-	parsImpl         *parStore
-	interactionsImpl *interactionStore
-	jtisImpl         *jtiStore
-	usersImpl        *userStore
-	iatsImpl         *iatStore
-	ratsImpl         *ratStore
+	clientsImpl            *clientStore
+	authCodesImpl          *authCodeStore
+	refreshesImpl          *refreshStore
+	accessTokensImpl       *accessTokenStore
+	opaqueAccessTokensImpl *opaqueAccessTokenStore
+	grantsImpl             *grantStore
+	sessionsImpl           *sessionStore
+	parsImpl               *parStore
+	interactionsImpl       *interactionStore
+	jtisImpl               *jtiStore
+	usersImpl              *userStore
+	iatsImpl               *iatStore
+	ratsImpl               *ratStore
 }
 
 // New constructs a Store backed by the supplied *sql.DB. The caller is
@@ -143,6 +144,7 @@ func (s *Store) attachSubstores() {
 	s.authCodesImpl = newAuthCodeStore(s, nil)
 	s.refreshesImpl = newRefreshStore(s, nil)
 	s.accessTokensImpl = newAccessTokenStore(s, nil)
+	s.opaqueAccessTokensImpl = newOpaqueAccessTokenStore(s, nil)
 	s.grantsImpl = newGrantStore(s, nil)
 	s.sessionsImpl = newSessionStore(s, nil)
 	s.parsImpl = newParStore(s, nil)
@@ -293,6 +295,14 @@ func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore { 
 
 // AccessTokens returns the [store.AccessTokenRegistry] handle.
 func (s *Store) AccessTokens() store.AccessTokenRegistry { return s.accessTokensImpl }
+
+// OpaqueAccessTokens returns the [store.OpaqueAccessTokenStore] handle
+// (ADR 0024). The handle is non-nil regardless of whether opaque-format
+// issuance is enabled; the library's nil-check at op.New consults the
+// returned interface for nil, which a non-nil concrete pointer always
+// satisfies. Embedders that never enable opaque tokens incur no cost
+// beyond the unused table.
+func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return s.opaqueAccessTokensImpl }
 
 // --- store.ClientRegistry ----------------------------------------------------
 

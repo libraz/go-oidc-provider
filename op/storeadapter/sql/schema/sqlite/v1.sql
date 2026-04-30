@@ -100,6 +100,25 @@ CREATE TABLE IF NOT EXISTS oidc_access_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_access_tokens_grant ON oidc_access_tokens(grant_id);
 
+CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
+    token_hash BLOB PRIMARY KEY,
+    grant_id TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    client_id TEXT NOT NULL,
+    audience TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT '[]',
+    acr TEXT NOT NULL DEFAULT '',
+    amr TEXT NOT NULL DEFAULT '[]',
+    auth_time INTEGER NOT NULL DEFAULT 0,
+    dpop_jkt TEXT NOT NULL DEFAULT '',
+    mtls_cert_thumb TEXT NOT NULL DEFAULT '',
+    issued_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_grant ON oidc_opaque_access_tokens(grant_id);
+CREATE INDEX IF NOT EXISTS idx_oidc_opaque_access_tokens_expires ON oidc_opaque_access_tokens(expires_at);
+
 CREATE TABLE IF NOT EXISTS oidc_grants (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
