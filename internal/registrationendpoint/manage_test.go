@@ -488,6 +488,41 @@ func TestManage_RoundTrip_PreservesOIDCProfile(t *testing.T) {
 	checkProfileFields(t, "final GET", decodeBody(t, finalResp), updated)
 }
 
+func TestManage_RoundTrip_PreservesExplicitZeroDefaultMaxAge(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+
+	body := map[string]any{
+		"redirect_uris":   []string{"https://rp.test.invalid/cb"},
+		"default_max_age": float64(0),
+	}
+	resp := f.post(t, body, iat)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST status=%d want 201 body=%s", resp.StatusCode, raw)
+	}
+	created := decodeBody(t, resp)
+	if got, ok := created["default_max_age"]; !ok || got != float64(0) {
+		t.Fatalf("POST default_max_age=%v present=%t want 0", got, ok)
+	}
+	clientID, _ := created["client_id"].(string)
+	rat, _ := created["registration_access_token"].(string)
+
+	getResp := f.manage(t, http.MethodGet, f.endpoint+"/"+clientID, rat, nil)
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(getResp.Body)
+		t.Fatalf("GET status=%d want 200 body=%s", getResp.StatusCode, raw)
+	}
+	got := decodeBody(t, getResp)
+	if v, ok := got["default_max_age"]; !ok || v != float64(0) {
+		t.Fatalf("GET default_max_age=%v present=%t want 0", v, ok)
+	}
+}
+
 // checkProfileFields asserts every key in want is present and equal in
 // got. The helper uses reflect-style equality via JSON's any-typed
 // values; numbers come back as float64 and slices as []any, so the

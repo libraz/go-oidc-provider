@@ -492,18 +492,15 @@ func scopeContainsOpenID(scopes []string) bool {
 }
 
 // clientPermitsRefresh reports whether the registered client may
-// receive refresh tokens. The library's posture is conservative: a
-// refresh token is only issued when "refresh_token" is in the
-// client's GrantTypes AND the granted scope includes "openid". When
-// strictOfflineAccess is true the gate additionally requires
-// "offline_access" in scope, matching the strict reading of OIDC
-// Core 1.0 §11; the lax reading (false) is the historical library
-// default and matches Auth0 / Okta / Keycloak.
-func clientPermitsRefresh(c *store.Client, scope []string, strictOfflineAccess bool) bool {
+// receive refresh tokens. The library issues them only when
+// "refresh_token" is in the client's GrantTypes and the granted scope
+// carries both "openid" and "offline_access", matching OIDC Core 1.0
+// §11 and the project design docs.
+func clientPermitsRefresh(c *store.Client, scope []string) bool {
 	if !scopeContainsOpenID(scope) {
 		return false
 	}
-	if strictOfflineAccess && !scopeContainsOfflineAccess(scope) {
+	if !scopeContainsOfflineAccess(scope) {
 		return false
 	}
 	for _, g := range c.GrantTypes {

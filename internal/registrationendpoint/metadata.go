@@ -43,7 +43,7 @@ type ClientMetadata struct {
 	JWKsURI                  string
 	JWKs                     json.RawMessage
 	Contacts                 []string
-	DefaultMaxAge            int64
+	DefaultMaxAge            *int64
 	RequireAuthTime          bool
 	DefaultACRValues         []string
 	InitiateLoginURI         string
@@ -73,7 +73,7 @@ type metadataWire struct {
 	JWKsURI                  string          `json:"jwks_uri,omitempty"`
 	JWKs                     json.RawMessage `json:"jwks,omitempty"`
 	Contacts                 []string        `json:"contacts,omitempty"`
-	DefaultMaxAge            int64           `json:"default_max_age,omitempty"`
+	DefaultMaxAge            *int64          `json:"default_max_age,omitempty"`
 	RequireAuthTime          bool            `json:"require_auth_time,omitempty"`
 	DefaultACRValues         []string        `json:"default_acr_values,omitempty"`
 	InitiateLoginURI         string          `json:"initiate_login_uri,omitempty"`
@@ -131,7 +131,7 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		JWKsURI:                  w.JWKsURI,
 		JWKs:                     append(json.RawMessage(nil), w.JWKs...),
 		Contacts:                 cloneStrings(w.Contacts),
-		DefaultMaxAge:            w.DefaultMaxAge,
+		DefaultMaxAge:            cloneInt64Ptr(w.DefaultMaxAge),
 		RequireAuthTime:          w.RequireAuthTime,
 		DefaultACRValues:         cloneStrings(w.DefaultACRValues),
 		InitiateLoginURI:         w.InitiateLoginURI,
@@ -183,7 +183,18 @@ func validatePolicy(
 	if err := validateRequestedScopes(canonical.Scope, iatScopes, scopes); err != nil {
 		return ClientMetadata{}, err
 	}
+	if canonical.DefaultMaxAge != nil && *canonical.DefaultMaxAge < 0 {
+		return ClientMetadata{}, errInvalidClientMetadata("default_max_age must be a non-negative integer")
+	}
 	return canonical, nil
+}
+
+func cloneInt64Ptr(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
 }
 
 // applyMetadataDefaults populates fields the client left blank with

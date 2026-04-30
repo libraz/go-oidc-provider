@@ -187,8 +187,8 @@ type ClientMetadata struct {
 	Contacts []string
 
 	// DefaultMaxAge is the default max_age (seconds) the client wants
-	// applied to authorize requests.
-	DefaultMaxAge int64
+	// applied to authorize requests. Nil means the metadata was absent.
+	DefaultMaxAge *int64
 
 	// RequireAuthTime is true when the client requires the
 	// "auth_time" claim in issued ID tokens.

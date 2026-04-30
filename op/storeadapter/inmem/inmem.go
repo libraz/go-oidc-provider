@@ -382,6 +382,10 @@ func cloneClient(c *store.Client) *store.Client {
 	out.Contacts = slices.Clone(c.Contacts)
 	out.DefaultACRValues = slices.Clone(c.DefaultACRValues)
 	out.RequestURIs = slices.Clone(c.RequestURIs)
+	if c.DefaultMaxAge != nil {
+		v := *c.DefaultMaxAge
+		out.DefaultMaxAge = &v
+	}
 	if len(c.JWKs) > 0 {
 		out.JWKs = append([]byte(nil), c.JWKs...)
 	}

@@ -250,6 +250,27 @@ func TestRegister_HappyPath_MintsConfidentialClient(t *testing.T) {
 	}
 }
 
+func TestRegister_RejectsNegativeDefaultMaxAge(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+
+	body := minimalMetadata()
+	body["default_max_age"] = -1
+	resp := f.post(t, body, iat)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	got := decodeBody(t, resp)
+	if got["error"] != "invalid_client_metadata" {
+		t.Fatalf("error=%v want invalid_client_metadata", got["error"])
+	}
+}
+
 // TestRegister_HappyPath_PublicClient_OmitsSecret confirms the response
 // envelope omits client_secret when token_endpoint_auth_method is
 // "none".

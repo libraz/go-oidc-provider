@@ -197,8 +197,10 @@ type Client struct {
 
 	// DefaultMaxAge requests the OP enforce a maximum authentication
 	// age (in seconds) for this client, even when the request omits
-	// max_age (OIDC Dynamic Client Registration 1.0 §2).
-	DefaultMaxAge int64
+	// max_age (OIDC Dynamic Client Registration 1.0 §2). Nil means
+	// the client did not register the metadata; a non-nil pointer to
+	// zero preserves the spec's "force fresh authentication" meaning.
+	DefaultMaxAge *int64
 
 	// RequireAuthTime requests the OP include the auth_time claim in
 	// every ID token issued to this client (OIDC Dynamic Client

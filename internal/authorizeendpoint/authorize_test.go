@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -429,6 +430,39 @@ func TestAuthorize_MaxAgeViolationForcesInteraction(t *testing.T) {
 	loc := mustParseLocation(t, resp)
 	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
 		t.Errorf("Location=%s want interaction redirect", loc.String())
+	}
+}
+
+func TestAuthorize_ClientDefaultsPopulateInteractionState(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	maxAge := int64(0)
+	client, err := h.store.Clients().GetClient(context.Background(), "client-1")
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	client.DefaultMaxAge = &maxAge
+	client.DefaultACRValues = []string{"urn:test:acr:loa2"}
+	if err := h.store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+
+	start := startInteractionFlow(t, h)
+	rec, err := h.store.Interactions().Find(context.Background(), start.uid)
+	if err != nil {
+		t.Fatalf("Find interaction: %v", err)
+	}
+	state, err := authorize.UnmarshalState(rec.RawState)
+	if err != nil {
+		t.Fatalf("UnmarshalState: %v", err)
+	}
+	got := state.Library.ToRequest()
+	if got.MaxAge == nil || *got.MaxAge != 0 {
+		t.Fatalf("MaxAge=%v want pointer to 0", got.MaxAge)
+	}
+	if len(got.ACRValues) != 1 || got.ACRValues[0] != "urn:test:acr:loa2" {
+		t.Fatalf("ACRValues=%v want [urn:test:acr:loa2]", got.ACRValues)
 	}
 }
 

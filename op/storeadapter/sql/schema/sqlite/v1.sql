@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     jwks_uri TEXT NOT NULL DEFAULT '',
     jwks BLOB,
     contacts TEXT NOT NULL DEFAULT '[]',
-    default_max_age INTEGER NOT NULL DEFAULT 0,
+    default_max_age INTEGER,
     require_auth_time INTEGER NOT NULL DEFAULT 0,
     default_acr_values TEXT NOT NULL DEFAULT '[]',
     initiate_login_uri TEXT NOT NULL DEFAULT '',

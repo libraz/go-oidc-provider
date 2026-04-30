@@ -24,7 +24,7 @@ rows:
       predicates MUST return false for redirect URI strings that are
       not parseable URLs (for example "http:", "http://127.0.0.",
       "http://127.0.0.1::"); malformed URIs MUST NOT be approved.
-    status: pending
+    status: active
 
   - id: NA-002
     severity: P0
@@ -35,7 +35,7 @@ rows:
       return true for any port variant on the same host and path: no
       port, port 80, port 443, the originally registered port, and
       any other port (e.g. 8888).
-    status: pending
+    status: active
 
   - id: NA-003
     severity: P0
@@ -44,7 +44,7 @@ rows:
       For a native client registered with http://localhost/op/callback
       (no port), redirectUriAllowed MUST return true for any port
       variant (none, 80, 443, 2355, 8888) on the same host and path.
-    status: pending
+    status: active
 
   - id: NA-004
     severity: P0
@@ -54,7 +54,7 @@ rows:
       http://127.0.0.1:2355/op/callback, redirectUriAllowed MUST
       return true for any port variant on 127.0.0.1 with the same
       path.
-    status: pending
+    status: active
 
   - id: NA-005
     severity: P0
@@ -63,7 +63,7 @@ rows:
       For a native client registered with http://127.0.0.1/op/callback
       (no port), redirectUriAllowed MUST return true for any port
       variant on 127.0.0.1 with the same path.
-    status: pending
+    status: active
 
   - id: NA-006
     severity: P0

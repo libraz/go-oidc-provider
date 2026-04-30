@@ -367,6 +367,10 @@ func issueAuthCodeResponse(
 ) {
 	now := deps.now().UTC()
 	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
+	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		return
+	}
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
@@ -549,7 +553,7 @@ func maybeIssueRefreshToken(
 	scope []string,
 	binding tokenBinding,
 ) (string, error) {
-	if !clientPermitsRefresh(client, scope, deps.StrictOfflineAccess) {
+	if !clientPermitsRefresh(client, scope) {
 		return "", nil
 	}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
@@ -584,6 +588,16 @@ func maybeIssueRefreshToken(
 		},
 	})
 	return token, nil
+}
+
+func requireAuthTimeForIDToken(client *store.Client, scope []string, authTime int64) error {
+	if client == nil || !client.RequireAuthTime || !scopeContainsOpenID(scope) {
+		return nil
+	}
+	if authTime != 0 {
+		return nil
+	}
+	return errors.New("tokenendpoint: require_auth_time cannot be satisfied")
 }
 
 // authContext captures the fields the id_token issuance path reads

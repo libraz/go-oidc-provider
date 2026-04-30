@@ -299,12 +299,6 @@ func TestRequest_Validate_RejectsImplicitAndHybridResponseTypes(t *testing.T) {
 //     port only — exact-string match here is even stricter).
 //   - RFC 6749 §3.1.2.3 / RFC 9700 §4.1 which mandate "complete client
 //     redirection URI matching" for non-loopback URIs.
-//
-// The library does NOT special-case the loopback "any port" rule of
-// RFC 8252 §7.3 at this layer; embedders that want loopback flexibility
-// register every port they accept as a separate URI. That is a deliberate
-// posture pin — registering "http://127.0.0.1:0/cb" and getting "any port"
-// behaviour at runtime would be a regression.
 func TestRequest_Validate_RedirectURIAttackVariants(t *testing.T) {
 	t.Parallel()
 
@@ -372,6 +366,71 @@ func TestRequest_Validate_RedirectURIAttackVariants(t *testing.T) {
 			}
 			if authorize.IsRedirectSafe(gotErr) {
 				t.Fatalf("redirect_uri=%q: IsRedirectSafe true; attacker URI MUST NOT be honoured", tc.uri)
+			}
+		})
+	}
+}
+
+func TestRequest_Validate_LoopbackRedirectAllowsAnyPort(t *testing.T) {
+	t.Parallel()
+
+	client := goodClient()
+	client.RedirectURIs = []string{"http://127.0.0.1/cb", "http://[::1]/cb"}
+
+	cases := []string{
+		"http://127.0.0.1:49152/cb",
+		"http://[::1]:4242/cb",
+	}
+	for _, uri := range cases {
+		t.Run(uri, func(t *testing.T) {
+			t.Parallel()
+			values := goodValues()
+			values.Set("redirect_uri", uri)
+			req, err := authorize.ParseValues(values)
+			if err != nil {
+				t.Fatalf("ParseValues: %v", err)
+			}
+			if err := req.Validate(client, nil, authorize.Policy{
+				PKCERequired:         true,
+				NonceRequired:        true,
+				StateOrNonceRequired: true,
+			}); err != nil {
+				t.Fatalf("Validate(%q): %v", uri, err)
+			}
+		})
+	}
+}
+
+func TestRequest_Validate_LoopbackRedirectWildcardDoesNotCoverLocalhostOrPathVariants(t *testing.T) {
+	t.Parallel()
+
+	client := goodClient()
+	client.RedirectURIs = []string{"http://127.0.0.1/cb", "http://[::1]/cb"}
+
+	cases := []string{
+		"http://localhost:49152/cb",
+		"http://127.0.0.1:49152/cb/extra",
+		"http://127.0.0.1:49152/other",
+		"http://127.0.0.1:49152/cb?x=1",
+		"http://127.0.0.2:49152/cb",
+		"http://[::1]:49152/cb/extra",
+	}
+	for _, uri := range cases {
+		t.Run(uri, func(t *testing.T) {
+			t.Parallel()
+			values := goodValues()
+			values.Set("redirect_uri", uri)
+			req, err := authorize.ParseValues(values)
+			if err != nil {
+				t.Fatalf("ParseValues: %v", err)
+			}
+			err = req.Validate(client, nil, authorize.Policy{
+				PKCERequired:         true,
+				NonceRequired:        true,
+				StateOrNonceRequired: true,
+			})
+			if !errors.Is(err, authorize.ErrRedirectURIInvalid) {
+				t.Fatalf("Validate(%q) err=%v want ErrRedirectURIInvalid", uri, err)
 			}
 		})
 	}

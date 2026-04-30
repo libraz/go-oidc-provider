@@ -742,13 +742,21 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 		JWKsURI:                  m.JWKsURI,
 		JWKs:                     m.JWKs,
 		Contacts:                 m.Contacts,
-		DefaultMaxAge:            m.DefaultMaxAge,
+		DefaultMaxAge:            cloneInt64Ptr(m.DefaultMaxAge),
 		RequireAuthTime:          m.RequireAuthTime,
 		DefaultACRValues:         m.DefaultACRValues,
 		InitiateLoginURI:         m.InitiateLoginURI,
 		RequestURIs:              m.RequestURIs,
 		RequestObjectSigningAlg:  m.RequestObjectSigningAlg,
 	}
+}
+
+func cloneInt64Ptr(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
 }
 
 // mountPAREndpoint registers the /par handler when the [feature.PAR] flag

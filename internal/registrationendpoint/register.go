@@ -36,7 +36,7 @@ type registrationResponse struct {
 	TosURI                  string   `json:"tos_uri,omitempty"`
 	JWKsURI                 string   `json:"jwks_uri,omitempty"`
 	Contacts                []string `json:"contacts,omitempty"`
-	DefaultMaxAge           int64    `json:"default_max_age,omitempty"`
+	DefaultMaxAge           *int64   `json:"default_max_age,omitempty"`
 	RequireAuthTime         bool     `json:"require_auth_time,omitempty"`
 	DefaultACRValues        []string `json:"default_acr_values,omitempty"`
 	InitiateLoginURI        string   `json:"initiate_login_uri,omitempty"`
@@ -148,7 +148,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		JWKsURI:                  m.JWKsURI,
 		JWKs:                     append(json.RawMessage(nil), m.JWKs...),
 		Contacts:                 slices.Clone(m.Contacts),
-		DefaultMaxAge:            m.DefaultMaxAge,
+		DefaultMaxAge:            cloneInt64Ptr(m.DefaultMaxAge),
 		RequireAuthTime:          m.RequireAuthTime,
 		DefaultACRValues:         slices.Clone(m.DefaultACRValues),
 		InitiateLoginURI:         m.InitiateLoginURI,
@@ -205,7 +205,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		TosURI:                  m.TosURI,
 		JWKsURI:                 m.JWKsURI,
 		Contacts:                m.Contacts,
-		DefaultMaxAge:           m.DefaultMaxAge,
+		DefaultMaxAge:           cloneInt64Ptr(m.DefaultMaxAge),
 		RequireAuthTime:         m.RequireAuthTime,
 		DefaultACRValues:        m.DefaultACRValues,
 		InitiateLoginURI:        m.InitiateLoginURI,

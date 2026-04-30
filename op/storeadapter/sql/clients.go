@@ -67,6 +67,10 @@ func clientArgs(c *store.Client) []any {
 	if len(c.JWKs) > 0 {
 		jwks = []byte(c.JWKs)
 	}
+	var defaultMaxAge any
+	if c.DefaultMaxAge != nil {
+		defaultMaxAge = *c.DefaultMaxAge
+	}
 	return []any{
 		c.ID,
 		encodeStrings(c.RedirectURIs),
@@ -93,7 +97,7 @@ func clientArgs(c *store.Client) []any {
 		c.JWKsURI,
 		jwks,
 		encodeStrings(c.Contacts),
-		c.DefaultMaxAge,
+		defaultMaxAge,
 		boolToInt64(c.RequireAuthTime),
 		encodeStrings(c.DefaultACRValues),
 		c.InitiateLoginURI,
@@ -110,6 +114,7 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		redirectURIs, postLogout, grantTypes, responseTypes, scopes, contacts, defaultACR, requestURIs []byte
 		jwks                                                                                           []byte
 		sessionRequired, publicClient, requireAuthTime                                                 int64
+		defaultMaxAge                                                                                  databasesql.NullInt64
 		source                                                                                         string
 	)
 	err := scan(
@@ -138,7 +143,7 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		&c.JWKsURI,
 		&jwks,
 		&contacts,
-		&c.DefaultMaxAge,
+		&defaultMaxAge,
 		&requireAuthTime,
 		&defaultACR,
 		&c.InitiateLoginURI,
@@ -152,6 +157,10 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 	c.PublicClient = int64ToBool(publicClient)
 	c.RequireAuthTime = int64ToBool(requireAuthTime)
 	c.Source = store.ClientSource(source)
+	if defaultMaxAge.Valid {
+		v := defaultMaxAge.Int64
+		c.DefaultMaxAge = &v
+	}
 	if len(jwks) > 0 {
 		c.JWKs = json.RawMessage(append([]byte(nil), jwks...))
 	}

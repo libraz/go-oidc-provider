@@ -68,6 +68,95 @@ func TestRefresh_HappyPath_OIDC(t *testing.T) {
 	}
 }
 
+func TestRefresh_RequireAuthTime_EmitsAuthTime(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	client.RequireAuthTime = true
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	const tokenID = "rt-require-auth-time"
+	const subject = "user-1"
+	const grantID = "grant-rt-require-auth-time"
+	authTime := f.clock.now.Add(-3 * time.Minute)
+
+	if err := f.prov.Store.Grants().Save(context.Background(), &store.Grant{
+		ID:        grantID,
+		Subject:   subject,
+		ClientID:  client.ID,
+		Scope:     []string{"openid", "offline_access"},
+		AuthTime:  authTime,
+		CreatedAt: f.clock.now,
+		UpdatedAt: f.clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid", "offline_access"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	idt, _ := body["id_token"].(string)
+	if idt == "" {
+		t.Fatal("id_token missing")
+	}
+	idClaims := decodeIDTokenClaims(t, idt)
+	if got := idClaims["auth_time"]; got != float64(authTime.Unix()) {
+		t.Fatalf("auth_time=%v want %d", got, authTime.Unix())
+	}
+}
+
+func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	client.RequireAuthTime = true
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	const tokenID = "rt-require-auth-time-missing"
+	const subject = "user-1"
+	const grantID = "grant-rt-require-auth-time-missing"
+
+	if err := f.prov.Store.Grants().Save(context.Background(), &store.Grant{
+		ID:       grantID,
+		Subject:  subject,
+		ClientID: client.ID,
+		Scope:    []string{"openid", "offline_access"},
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid", "offline_access"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "server_error" {
+		t.Fatalf("error=%v want server_error", got)
+	}
+}
+
 // TestRefresh_HappyPath_NonOIDC verifies that a refresh whose original
 // grant did not carry "openid" produces no id_token.
 func TestRefresh_HappyPath_NonOIDC(t *testing.T) {

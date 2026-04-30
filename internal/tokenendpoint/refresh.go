@@ -226,6 +226,10 @@ func issueRefreshResponse(
 ) {
 	now := deps.now().UTC()
 	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
+	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		return
+	}
 	accessToken, err := mintAccessToken(ctx, deps, exchanged.Subject, client.ID, exchanged.GrantID, exchanged.Scope, now, authCtx.AuthTime, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")

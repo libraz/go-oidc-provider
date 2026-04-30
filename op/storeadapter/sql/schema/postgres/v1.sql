@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     jwks_uri TEXT NOT NULL DEFAULT '',
     jwks BYTEA,
     contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
-    default_max_age BIGINT NOT NULL DEFAULT 0,
+    default_max_age BIGINT,
     require_auth_time SMALLINT NOT NULL DEFAULT 0,
     default_acr_values JSONB NOT NULL DEFAULT '[]'::jsonb,
     initiate_login_uri TEXT NOT NULL DEFAULT '',

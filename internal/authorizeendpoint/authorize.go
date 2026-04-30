@@ -63,6 +63,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		renderBrowserError(w, r, deps.Driver, http.StatusBadRequest, errInvalidRequest, "client_id is not registered", req.State)
 		return
 	}
+	applyClientAuthorizeDefaults(req, client)
 	if err := req.Validate(client, deps.Scopes, authorize.Policy{
 		PKCERequired:         deps.RequirePKCE,
 		NonceRequired:        deps.RequireNonce,
@@ -95,6 +96,19 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		return
 	}
 	dispatchAuthorize(w, r, deps, req, client)
+}
+
+func applyClientAuthorizeDefaults(req *authorize.Request, client *store.Client) {
+	if req == nil || client == nil {
+		return
+	}
+	if req.MaxAge == nil && client.DefaultMaxAge != nil {
+		v := *client.DefaultMaxAge
+		req.MaxAge = &v
+	}
+	if len(req.ACRValues) == 0 && len(client.DefaultACRValues) > 0 {
+		req.ACRValues = append([]string(nil), client.DefaultACRValues...)
+	}
 }
 
 // extractAuthorizeValues returns the [url.Values] the request carries,

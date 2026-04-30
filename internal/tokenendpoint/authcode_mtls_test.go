@@ -137,7 +137,7 @@ func TestAuthCode_MTLS_BindsX5T(t *testing.T) {
 
 	f.seedGrant(t, &store.Grant{
 		ID: grantID, Subject: subject, ClientID: client.ID,
-		Scope: []string{"openid", "email"},
+		Scope: []string{"openid", "email", "offline_access"},
 	})
 	f.seedAuthCode(t, &store.AuthorizationCode{
 		ID:                  codeID,
@@ -145,7 +145,7 @@ func TestAuthCode_MTLS_BindsX5T(t *testing.T) {
 		Subject:             subject,
 		GrantID:             grantID,
 		RedirectURI:         redirect,
-		Scope:               []string{"openid", "email"},
+		Scope:               []string{"openid", "email", "offline_access"},
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
 		Nonce:               "nonce-mtls",

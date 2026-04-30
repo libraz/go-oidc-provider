@@ -1,6 +1,7 @@
 package tokenendpoint_test
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -37,7 +38,7 @@ func TestAuthCode_HappyPath(t *testing.T) {
 
 	f.seedGrant(t, &store.Grant{
 		ID: grantID, Subject: subject, ClientID: client.ID,
-		Scope: []string{"openid", "email"},
+		Scope: []string{"openid", "email", "offline_access"},
 	})
 	f.seedAuthCode(t, &store.AuthorizationCode{
 		ID:                  codeID,
@@ -45,7 +46,7 @@ func TestAuthCode_HappyPath(t *testing.T) {
 		Subject:             subject,
 		GrantID:             grantID,
 		RedirectURI:         redirect,
-		Scope:               []string{"openid", "email"},
+		Scope:               []string{"openid", "email", "offline_access"},
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
 		Nonce:               "nonce-happy",
@@ -62,8 +63,8 @@ func TestAuthCode_HappyPath(t *testing.T) {
 	if body["token_type"] != "Bearer" {
 		t.Errorf("token_type=%v want Bearer", body["token_type"])
 	}
-	if got := body["scope"]; got != "openid email" {
-		t.Errorf("scope=%v want openid email", got)
+	if got := body["scope"]; got != "openid email offline_access" {
+		t.Errorf("scope=%v want openid email offline_access", got)
 	}
 	at, _ := body["access_token"].(string)
 	if at == "" {
@@ -71,7 +72,7 @@ func TestAuthCode_HappyPath(t *testing.T) {
 	}
 	rt, _ := body["refresh_token"].(string)
 	if rt == "" {
-		t.Errorf("refresh_token missing — confidential client with refresh_token grant should rotate")
+		t.Errorf("refresh_token missing — offline_access-bearing grant should rotate")
 	}
 	idt, _ := body["id_token"].(string)
 	if idt == "" {
@@ -97,6 +98,146 @@ func TestAuthCode_HappyPath(t *testing.T) {
 	}
 	if idClaims["nonce"] != "nonce-happy" {
 		t.Errorf("nonce=%v want nonce-happy", idClaims["nonce"])
+	}
+}
+
+func TestAuthCode_NoOfflineAccess_DoesNotIssueRefreshToken(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-no-offline"
+	const grantID = "grant-no-offline"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "email"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "email"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-no-offline",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if _, ok := body["refresh_token"]; ok {
+		t.Fatalf("refresh_token must be absent without offline_access: %v", body)
+	}
+}
+
+func TestAuthCode_RequireAuthTime_EmitsAuthTime(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	client.RequireAuthTime = true
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	verifier, challenge := pkcePair()
+	const codeID = "code-require-auth-time"
+	const grantID = "grant-require-auth-time"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+	authTime := f.clock.now.Add(-2 * time.Minute)
+
+	if err := f.prov.Store.Grants().Save(context.Background(), &store.Grant{
+		ID:        grantID,
+		Subject:   subject,
+		ClientID:  client.ID,
+		Scope:     []string{"openid", "offline_access"},
+		AuthTime:  authTime,
+		CreatedAt: f.clock.now,
+		UpdatedAt: f.clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "offline_access"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-require-auth-time",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	idt, _ := body["id_token"].(string)
+	if idt == "" {
+		t.Fatal("id_token missing")
+	}
+	idClaims := decodeIDTokenClaims(t, idt)
+	if got := idClaims["auth_time"]; got != float64(authTime.Unix()) {
+		t.Fatalf("auth_time=%v want %d", got, authTime.Unix())
+	}
+}
+
+func TestAuthCode_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	client.RequireAuthTime = true
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	verifier, challenge := pkcePair()
+	const codeID = "code-require-auth-time-missing"
+	const grantID = "grant-require-auth-time-missing"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	if err := f.prov.Store.Grants().Save(context.Background(), &store.Grant{
+		ID:       grantID,
+		Subject:  subject,
+		ClientID: client.ID,
+		Scope:    []string{"openid", "offline_access"},
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "offline_access"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-require-auth-time-missing",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "server_error" {
+		t.Fatalf("error=%v want server_error", got)
 	}
 }
 
@@ -328,7 +469,7 @@ func TestAuthCode_Replay_RevokesIssuedRefreshToken(t *testing.T) {
 
 	f.seedGrant(t, &store.Grant{
 		ID: grantID, Subject: subject, ClientID: client.ID,
-		Scope: []string{"openid", "email"},
+		Scope: []string{"openid", "email", "offline_access"},
 	})
 	f.seedAuthCode(t, &store.AuthorizationCode{
 		ID:                  codeID,
@@ -336,7 +477,7 @@ func TestAuthCode_Replay_RevokesIssuedRefreshToken(t *testing.T) {
 		Subject:             subject,
 		GrantID:             grantID,
 		RedirectURI:         redirect,
-		Scope:               []string{"openid", "email"},
+		Scope:               []string{"openid", "email", "offline_access"},
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
 	})

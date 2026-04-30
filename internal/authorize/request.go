@@ -3,6 +3,7 @@ package authorize
 import (
 	"errors"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -349,10 +350,57 @@ func (req *Request) validateRedirectTarget(client *store.Client) error {
 	if req.RedirectURI == "" {
 		return ErrRedirectURIRequired
 	}
-	if client == nil || !slices.Contains(client.RedirectURIs, req.RedirectURI) {
+	if client == nil || !redirectURIMatches(client.RedirectURIs, req.RedirectURI) {
 		return ErrRedirectURIInvalid
 	}
 	return nil
+}
+
+func redirectURIMatches(registered []string, requested string) bool {
+	for _, candidate := range registered {
+		if candidate == requested || loopbackRedirectMatchesAnyPort(candidate, requested) {
+			return true
+		}
+	}
+	return false
+}
+
+func loopbackRedirectMatchesAnyPort(registered, requested string) bool {
+	regURL, err := url.Parse(registered)
+	if err != nil {
+		return false
+	}
+	reqURL, err := url.Parse(requested)
+	if err != nil {
+		return false
+	}
+	if regURL.Scheme != "http" || reqURL.Scheme != "http" {
+		return false
+	}
+	if regURL.User.String() != reqURL.User.String() {
+		return false
+	}
+	if regURL.Hostname() != reqURL.Hostname() {
+		return false
+	}
+	if !isWildcardLoopbackHost(regURL.Hostname()) {
+		return false
+	}
+	if regURL.Path != reqURL.Path ||
+		regURL.RawPath != reqURL.RawPath ||
+		regURL.RawQuery != reqURL.RawQuery ||
+		regURL.Fragment != reqURL.Fragment {
+		return false
+	}
+	return true
+}
+
+func isWildcardLoopbackHost(host string) bool {
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	return addr == netip.MustParseAddr("127.0.0.1") || addr == netip.MustParseAddr("::1")
 }
 
 // validateResponseType rejects every value other than the literal "code".

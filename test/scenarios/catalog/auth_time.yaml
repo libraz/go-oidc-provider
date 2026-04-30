@@ -23,7 +23,7 @@ rows:
       `max_age=999`) with `response_type=id_token` and scope `openid`
       MUST result in an ID Token whose payload includes `auth_time`
       as numeric epoch seconds.
-    status: pending
+    status: active
 
   - id: AT-002
     severity: P0
@@ -32,7 +32,7 @@ rows:
       An authorization request that supplies `prompt=login` forces
       re-authentication, so the issued ID Token MUST include
       `auth_time`.
-    status: pending
+    status: active
 
   - id: AT-003
     severity: P0
@@ -41,7 +41,7 @@ rows:
       An authorization request that supplies `max_age=0` is treated as
       "always re-authenticate"; the issued ID Token MUST include
       `auth_time` exactly as for any other `max_age`.
-    status: pending
+    status: active
 
   - id: AT-004
     severity: P1
@@ -50,7 +50,7 @@ rows:
       When the client's `default_max_age` is `0` and the request omits
       `max_age`, the metadata default applies as if it were a request
       `max_age` and the issued ID Token MUST include `auth_time`.
-    status: pending
+    status: active
 
   - id: AT-005
     severity: P0
@@ -59,7 +59,7 @@ rows:
       When the client's `require_auth_time` is `true`, the issued ID
       Token MUST include `auth_time` regardless of `max_age` or
       `prompt` on the request.
-    status: pending
+    status: active
 
   - id: AT-006
     severity: P1
@@ -68,4 +68,4 @@ rows:
       When the client's `default_max_age` is a positive integer and the
       request omits `max_age`, the issued ID Token MUST include
       `auth_time`.
-    status: pending
+    status: active

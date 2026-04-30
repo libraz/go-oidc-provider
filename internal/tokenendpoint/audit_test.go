@@ -112,14 +112,11 @@ func auditRefreshClient(tb testing.TB, f *fixture) (*store.Client, string) {
 	return client, secret
 }
 
-// TestAudit_TokenIssued_OnAuthCodeExchange pins the
-// "audit.token.issued" emission (canonical name "token.issued") that
-// the token endpoint produces when an authcode exchange yields a
-// refresh token. The event MUST carry actor_id (subject), client_id,
-// and the offline_access / ttl_bucket extras the SOC dashboards key
-// on. The grant in this test does not request offline_access so the
-// flag rides as false and the bucket lands on "default".
-func TestAudit_TokenIssued_OnAuthCodeExchange(t *testing.T) {
+// TestAudit_TokenIssued_NoOfflineAccessNoRefreshEvent pins the new
+// issuance gate: an authcode exchange without offline_access still
+// succeeds, but it does not issue a refresh token and therefore MUST
+// NOT emit the refresh-token "token.issued" audit event.
+func TestAudit_TokenIssued_NoOfflineAccessNoRefreshEvent(t *testing.T) {
 	t.Parallel()
 
 	f, capture := auditFixture(t)
@@ -151,28 +148,8 @@ func TestAudit_TokenIssued_OnAuthCodeExchange(t *testing.T) {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
 
-	rec := capture.findEvent(t, "token.issued")
-	if rec == nil {
-		t.Fatalf("token.issued not emitted; capture=%s", capture.buf.String())
-	}
-	if rec["actor_id"] != subject {
-		t.Errorf("actor_id=%v want %s", rec["actor_id"], subject)
-	}
-	if rec["client_id"] != client.ID {
-		t.Errorf("client_id=%v want %s", rec["client_id"], client.ID)
-	}
-	extras, _ := rec["extras"].(map[string]any)
-	if extras == nil {
-		t.Fatalf("extras missing on token.issued: %v", rec)
-	}
-	if got := extras["offline_access"]; got != false {
-		t.Errorf("extras.offline_access=%v want false", got)
-	}
-	if got := extras["ttl_bucket"]; got != "default" {
-		t.Errorf("extras.ttl_bucket=%v want default", got)
-	}
-	if got := extras["grant_id"]; got != grantID {
-		t.Errorf("extras.grant_id=%v want %s", got, grantID)
+	if rec := capture.findEvent(t, "token.issued"); rec != nil {
+		t.Fatalf("token.issued must not be emitted without offline_access; got=%v", rec)
 	}
 }
 
