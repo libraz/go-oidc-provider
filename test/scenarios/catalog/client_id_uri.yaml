@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=./schema.json
+feature: client_id_uri
+prefix: CIDU
+title: Client ID as URI
+specs:
+  - RFC 7591 §3 — Client Information Response (registration_client_uri)
+  - RFC 7592 — Dynamic Client Registration Management Protocol
+  - RFC 3986 §2.1 — Percent-Encoding
+  - RFC 6749 §2.2 — client_id character set
+
+description: |
+  URL construction and path-encoding rules for the registration
+  management endpoint when the DCR-issued client_id contains
+  characters that are not URL-safe (`:`, `/`, `?`, etc.). Covers URL
+  encoding, lifecycle round-trips, and character-set policy.
+
+rows:
+  - id: CIDU-01
+    severity: P0
+    spec: RFC 3986 §2.1 / RFC 7592 §1.2
+    behaviour: |
+      The terminal segment of registration_client_uri is constructed
+      with encodeURIComponent semantics so that ":", "/", "?", "#",
+      "%", "&", "=", and "+" are all percent-encoded.
+    status: pending
+
+  - id: CIDU-02
+    severity: P0
+    spec: RFC 7592 §3
+    behaviour: |
+      The constructed URL MUST NOT carry a query string; everything
+      after "?" is empty.
+    status: pending
+
+  - id: CIDU-03
+    severity: P0
+    spec: RFC 7592 §3
+    behaviour: |
+      GET /reg/<encoded> is accepted; the OP decodes the path segment
+      internally before looking up the client.
+    status: pending
+
+  - id: CIDU-04
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      PUT /reg/<encoded> is accepted on the same encoding contract;
+      the request body's client_id MUST equal the decoded path value.
+    status: pending
+
+  - id: CIDU-05
+    severity: P0
+    spec: RFC 7592 §2.3
+    behaviour: |
+      DELETE /reg/<encoded> is accepted on the same encoding contract.
+    status: pending
+
+  - id: CIDU-LC-01
+    severity: P0
+    spec: RFC 7591 §3 / RFC 7592 §2
+    behaviour: |
+      The URL produced in the DCR response carries the client_id, and
+      the subsequent GET / PUT / DELETE round-trip against it
+      succeeds end-to-end.
+    status: pending
+
+  - id: CIDU-LC-02
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      The registration_client_uri regenerated on PUT obeys the same
+      encoding rules.
+    status: pending
+
+  - id: CIDU-LC-03
+    severity: P1
+    spec: draft CIMD §4
+    behaviour: |
+      When the OP issues client_id values in URL form, it MUST be
+      possible to distinguish them from CIMD URLs (CIMD points at an
+      external URL, while CIDU stays under the OP's own base path);
+      use a flag or a dedicated base path prefix.
+    status: pending
+
+  - id: CIDU-CHR-01
+    severity: P0
+    spec: RFC 6749 Appendix A.1
+    behaviour: |
+      client_id values are restricted to VSCHAR (%x20-%x7E); control
+      characters and non-ASCII code points are forbidden.
+    status: pending
+
+  - id: CIDU-CHR-02
+    severity: P1
+    spec: OP configuration
+    behaviour: |
+      Only when URL-form client_id values are accepted MAY ":" and
+      "/" appear in client_id; the OP setting clientIdValidation
+      otherwise constrains the character set.
+    status: pending
+
+  - id: CIDU-CHR-03
+    severity: P1
+    spec: RFC 7231 §7.1.2
+    behaviour: |
+      When a percent-encoded path is written back into a Location
+      header, the same encoding rules apply.
+    status: pending

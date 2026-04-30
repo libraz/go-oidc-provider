@@ -1,0 +1,401 @@
+# yaml-language-server: $schema=./schema.json
+feature: ciba
+prefix: CIBA
+title: Client-Initiated Backchannel Authentication
+specs:
+  - OpenID Connect Client-Initiated Backchannel Authentication Flow — Core 1.0
+  - OpenID Connect Discovery 1.0 §3 (CIBA metadata)
+  - RFC 9126 — Pushed Authorization Requests (interaction with CIBA)
+  - RFC 9101 — JWT-Secured Authorization Request (signed CIBA requests)
+  - FAPI-CIBA Profile (signed Request Object claims, alg restrictions)
+  - RFC 6749 §5.2 (invalid_client, invalid_request)
+  - RFC 7519 §4.1 (registered JWT claims)
+
+description: |
+  CIBA endpoint (POST /backchannel) plus the
+  urn:openid:params:grant-type:ciba token grant. Token delivery modes
+  covered are poll and ping (push delivery omitted in upstream tests).
+  auth_req_id corresponds to the JTI of the persisted
+  BackchannelAuthenticationRequest. Discovery, provider-API guards,
+  parameter validation, signed Request Object handling, and
+  delivery-integrity assertions are all in scope.
+
+rows:
+  - id: CIBA-001
+    severity: P1
+    spec: CIBA Core §4
+    behaviour: |
+      With CIBA enabled and signed Request Objects disabled, discovery
+      advertises backchannel_authentication_endpoint,
+      backchannel_token_delivery_modes_supported=[poll, ping], and
+      backchannel_user_code_parameter_supported=true; it MUST NOT
+      include backchannel_authentication_request_signing_alg_values_supported.
+    status: pending
+
+  - id: CIBA-002
+    severity: P1
+    spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2
+    behaviour: |
+      With CIBA and signed Request Objects both enabled, discovery
+      additionally advertises
+      backchannel_authentication_request_signing_alg_values_supported,
+      and that list MUST exclude symmetric algorithms such as HS256
+      per FAPI-CIBA.
+    status: pending
+
+  - id: CIBA-003
+    severity: P1
+    spec: CIBA Core §10
+    behaviour: |
+      The provider's backchannelResult API resolves an existing
+      persisted JTI to the BackchannelAuthenticationRequest; an
+      unknown JTI MUST be rejected with
+      "BackchannelAuthenticationRequest not found".
+    status: pending
+
+  - id: CIBA-004
+    severity: P2
+    spec: CIBA Core §10
+    behaviour: |
+      The backchannelResult API also accepts a typed
+      BackchannelAuthenticationRequest instance directly.
+    status: pending
+
+  - id: CIBA-005
+    severity: P2
+    spec: CIBA Core §10
+    behaviour: |
+      Calling backchannelResult with an invalid request type (object,
+      array, primitive, Set, Error) MUST raise a TypeError with the
+      message 'invalid "request" argument'.
+    status: pending
+
+  - id: CIBA-006
+    severity: P1
+    spec: CIBA Core §10
+    behaviour: |
+      The backchannelResult API resolves a Grant JTI string to the
+      Grant entity; unknown JTI MUST be rejected with
+      "Grant not found".
+    status: pending
+
+  - id: CIBA-007
+    severity: P2
+    spec: CIBA Core §10
+    behaviour: |
+      Passing an invalid result type to backchannelResult MUST raise
+      a TypeError with the message 'invalid "result" argument'.
+    status: pending
+
+  - id: CIBA-008
+    severity: P1
+    spec: CIBA Core §10
+    behaviour: |
+      backchannelResult MUST reject a request whose clientId does not
+      resolve to a known client with "Client not found".
+    status: pending
+
+  - id: CIBA-009
+    severity: P0
+    spec: CIBA Core §10
+    behaviour: |
+      backchannelResult MUST reject when the request's clientId
+      differs from the Grant's clientId with "client mismatch";
+      cross-client grant binding is forbidden.
+    status: pending
+
+  - id: CIBA-010
+    severity: P0
+    spec: CIBA Core §10
+    behaviour: |
+      backchannelResult MUST reject when the request's accountId
+      differs from the Grant's accountId with "accountId mismatch".
+    status: pending
+
+  - id: CIBA-011
+    severity: P2
+    spec: CIBA Core §10
+    behaviour: |
+      Calling backchannelResult on an unsaved request MUST persist
+      the request and assign it a JTI.
+    status: pending
+
+  - id: CIBA-012
+    severity: P0
+    spec: CIBA Core §10.2
+    behaviour: |
+      For ping-mode clients, a backend that returns 204 No Content to
+      the notification callback MUST be treated as successful
+      delivery.
+    status: pending
+
+  - id: CIBA-013
+    severity: P1
+    spec: CIBA Core §10.2
+    behaviour: |
+      For ping-mode clients, a backend that returns 200 OK to the
+      notification callback MUST also be treated as successful
+      delivery.
+    status: pending
+
+  - id: CIBA-014
+    severity: P0
+    spec: CIBA Core §10.2
+    behaviour: |
+      When the ping endpoint returns 400, the provider MUST raise a
+      delivery-integrity error referencing the 4xx response.
+    status: pending
+
+  - id: CIBA-015
+    severity: P0
+    spec: CIBA Core §7.1, §7.3
+    behaviour: |
+      A POST /backchannel with login_hint and scope=openid returns
+      200 application/json containing expires_in (≤ 600) and
+      auth_req_id; the OP invokes triggerAuthenticationDevice,
+      processLoginHint, validateBindingMessage / context, and
+      verifyUserCode hooks; the persisted request carries scope and a
+      params object with defaults merged.
+    status: pending
+
+  - id: CIBA-016
+    severity: P1
+    spec: CIBA Core §7.1; RFC 9126 §2
+    behaviour: |
+      A client with require_pushed_authorization_requests=true that
+      calls /backchannel directly MUST receive 200 OK; CIBA bypasses
+      the PAR requirement because it is a separate request channel.
+    status: pending
+
+  - id: CIBA-017
+    severity: P1
+    spec: CIBA Core §7.1
+    behaviour: |
+      When the request supplies requested_expiry=300, the response's
+      expires_in MUST be at most 300 seconds.
+    status: pending
+
+  - id: CIBA-018
+    severity: P0
+    spec: CIBA Core §7.1
+    behaviour: |
+      A POST /backchannel with login_hint_token and scope=openid
+      returns 200 OK; the processLoginHintToken hook is invoked and
+      the persisted request reflects the supplied params.
+    status: pending
+
+  - id: CIBA-019
+    severity: P0
+    spec: CIBA Core §7.1
+    behaviour: |
+      A POST /backchannel with id_token_hint (an id_token from a
+      prior CIBA cycle) returns 200 OK; the subsequent token exchange
+      via urn:openid:params:grant-type:ciba mints an id_token and the
+      downstream id_token_hint flow validates the persisted hint.
+    status: pending
+
+  - id: CIBA-020
+    severity: P0
+    spec: CIBA Core §4
+    behaviour: |
+      A client whose registered grant_types do not include
+      urn:openid:params:grant-type:ciba MUST be rejected with 400
+      invalid_request and the description
+      "urn:openid:params:grant-type:ciba is not allowed for this client".
+    status: pending
+
+  - id: CIBA-021
+    severity: P0
+    spec: RFC 6749 §5.2; CIBA Core §7.1
+    behaviour: |
+      An unknown client_id at /backchannel MUST be rejected with 401
+      invalid_client and the description "client authentication failed".
+    status: pending
+
+  - id: CIBA-022
+    severity: P1
+    spec: CIBA Core §7; RFC 6749 §3.2
+    behaviour: |
+      /backchannel MUST reject any body whose Content-Type is not
+      application/x-www-form-urlencoded with 400 invalid_request and
+      the description "only application/x-www-form-urlencoded
+      content-type bodies are supported on POST /backchannel".
+    status: pending
+
+  - id: CIBA-023
+    severity: P1
+    spec: CIBA Core §7.1.1
+    behaviour: |
+      /backchannel MUST reject a request parameter when signed
+      Request Objects are disabled with 400 request_not_supported.
+    status: pending
+
+  - id: CIBA-024
+    severity: P1
+    spec: CIBA Core §7.1
+    behaviour: |
+      /backchannel MUST reject a request_uri parameter with 400
+      request_uri_not_supported; CIBA never supports request_uri.
+    status: pending
+
+  - id: CIBA-025
+    severity: P1
+    spec: OIDC Core §7.2.1
+    behaviour: |
+      /backchannel MUST reject a registration parameter with 400
+      registration_not_supported.
+    status: pending
+
+  - id: CIBA-026
+    severity: P0
+    spec: CIBA Core §7.1, §13
+    behaviour: |
+      When login_hint cannot resolve to an account, /backchannel MUST
+      return 400 unknown_user_id with the description "could not
+      identify end-user".
+    status: pending
+
+  - id: CIBA-027
+    severity: P0
+    spec: CIBA Core §7.1.1
+    behaviour: |
+      When login_hint_token cannot resolve to an account identifier,
+      /backchannel MUST return 400 unknown_user_id with the
+      description "could not identify end-user".
+    status: pending
+
+  - id: CIBA-028
+    severity: P0
+    spec: CIBA Core §7.1
+    behaviour: |
+      A /backchannel request missing scope MUST be rejected with 400
+      invalid_request and the description "missing required parameter
+      'scope'".
+    status: pending
+
+  - id: CIBA-029
+    severity: P0
+    spec: CIBA Core §7.1.1
+    behaviour: |
+      A ping-mode client that omits client_notification_token MUST be
+      rejected with 400 invalid_request and the description "missing
+      required parameter 'client_notification_token'".
+    status: pending
+
+  - id: CIBA-030
+    severity: P0
+    spec: CIBA Core §7.1
+    behaviour: |
+      A scope value that lacks openid MUST be rejected with 400
+      invalid_request and the description "openid scope must be
+      requested for this request".
+    status: pending
+
+  - id: CIBA-031
+    severity: P1
+    spec: CIBA Core §7.1
+    behaviour: |
+      requested_expiry=0 (or any otherwise invalid value) MUST be
+      rejected with 400 invalid_request and the description
+      "invalid requested_expiry parameter value".
+    status: pending
+
+  - id: CIBA-032
+    severity: P0
+    spec: CIBA Core §7.1
+    behaviour: |
+      A request with none of login_hint_token, id_token_hint, or
+      login_hint MUST be rejected with 400 invalid_request and the
+      description "missing one of required parameters
+      login_hint_token, id_token_hint, or login_hint".
+    status: pending
+
+  - id: CIBA-033
+    severity: P0
+    spec: CIBA Core §7.1
+    behaviour: |
+      A request that supplies more than one hint parameter MUST be
+      rejected with 400 invalid_request and the description "only one
+      of required parameters login_hint_token, id_token_hint, or
+      login_hint must be provided".
+    status: pending
+
+  - id: CIBA-034
+    severity: P1
+    spec: CIBA Core §7.1.1
+    behaviour: |
+      With JAR disabled, a /backchannel request carrying request MUST
+      be rejected with 400 request_not_supported.
+    status: pending
+
+  - id: CIBA-035
+    severity: P1
+    spec: CIBA Core §7.1.1
+    behaviour: |
+      Even with signed Request Object support enabled, /backchannel
+      MUST still reject request_uri with 400
+      request_uri_not_supported.
+    status: pending
+
+  - id: CIBA-036
+    severity: P1
+    spec: OIDC Core §7.2.1
+    behaviour: |
+      Even with JAR enabled, /backchannel MUST reject a registration
+      parameter with 400 registration_not_supported.
+    status: pending
+
+  - id: CIBA-037
+    severity: P0
+    spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2
+    behaviour: |
+      A client that requires a signed Request Object MUST be rejected
+      with 400 invalid_request "Request Object must be used by this
+      client" when the request omits it; retrying with a valid signed
+      Request Object yields 200 OK.
+    status: pending
+
+  - id: CIBA-038
+    severity: P0
+    spec: CIBA Core §7.1.1; RFC 9101 §10.8
+    behaviour: |
+      A signed Request Object missing the exp claim MUST be rejected
+      with 400 invalid_request and the description "Request Object is
+      missing the 'exp' claim".
+    status: pending
+
+  - id: CIBA-039
+    severity: P0
+    spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2
+    behaviour: |
+      A signed Request Object missing the nbf claim MUST be rejected
+      with 400 invalid_request and the description "Request Object is
+      missing the 'nbf' claim".
+    status: pending
+
+  - id: CIBA-040
+    severity: P0
+    spec: CIBA Core §7.1.1; RFC 7519 §4.1.7
+    behaviour: |
+      A signed Request Object missing the jti claim MUST be rejected
+      with 400 invalid_request and the description "Request Object is
+      missing the 'jti' claim".
+    status: pending
+
+  - id: CIBA-041
+    severity: P0
+    spec: CIBA Core §7.1.1; RFC 7519 §4.1.6
+    behaviour: |
+      A signed Request Object missing the iat claim MUST be rejected
+      with 400 invalid_request and the description "Request Object is
+      missing the 'iat' claim".
+    status: pending
+
+  - id: CIBA-042
+    severity: P1
+    spec: CIBA Core §7.1.1
+    behaviour: |
+      A JWE-formed request parameter MUST be rejected with 400
+      invalid_request and the description "Encrypted Request Objects
+      are not supported by CIBA".
+    status: pending

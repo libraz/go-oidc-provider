@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=./schema.json
+feature: userinfo
+prefix: UI
+title: UserInfo endpoint
+specs:
+  - OIDC Core 1.0 §5.3 (UserInfo Endpoint)
+  - OIDC Core 1.0 §5.3.1 (HTTP method), §5.3.2 (Successful response), §5.3.3 (Error response)
+  - OIDC Core 1.0 §5.4 (Requesting Claims using Scope Values)
+  - RFC 6750 §2 (Authenticated Bearer Token), §3 (Bearer error responses)
+  - RFC 6749 §5.2 (Error responses), §10.4
+  - RFC 7235 §2.1 (Authorization header syntax)
+  - RFC 9449 §7 (DPoP error responses)
+  - OIDC Discovery 1.0 (userinfo_endpoint, userinfo_signing_alg_values_supported)
+
+description: |
+  /me endpoint contract: configuration interlocks, GET / POST claim
+  filtering, bearer-token presentation rules (Authorization header,
+  query, body), and the family of 401 / 403 / 400 / 404 error shapes
+  that protect the endpoint from misuse.
+
+rows:
+  - id: UI-001
+    severity: P1
+    spec: OIDC Core §5.3.2 (signed/encrypted userinfo presupposes the endpoint)
+    behaviour: |
+      Building the OP with jwt-userinfo enabled while the userinfo
+      endpoint is disabled MUST fail at construction with a
+      configuration error stating that jwt-userinfo requires the
+      userinfo endpoint; there is no silent fallback.
+
+  - id: UI-002
+    severity: P1
+    spec: OIDC Core §5.3.2; §5.4
+    behaviour: |
+      A GET /me with a Bearer access_token whose scope includes
+      openid email returns 200 with sub and email present in the JSON
+      body; a rejected email_verified claim is omitted from the
+      response.
+
+  - id: UI-003
+    severity: P1
+    spec: OIDC Core §5.3.1 (POST allowed)
+    behaviour: |
+      A POST /me carrying the same access_token as UI-002 returns
+      200 with the same body composition.
+
+  - id: UI-004
+    severity: P2
+    spec: OIDC Core §5.3 (operational observability)
+    behaviour: |
+      A successful userinfo call exposes Client, Grant, AccessToken,
+      and Account on the request context for hooks and audit
+      consumers.
+
+  - id: UI-005
+    severity: P0
+    spec: RFC 6750 §3.1; OIDC Core §5.3.3
+    behaviour: |
+      A GET /me with a syntactically opaque access_token that the OP
+      cannot resolve returns 401 with error=invalid_token and the
+      description "invalid token provided".
+
+  - id: UI-006
+    severity: P0
+    spec: RFC 6750 §3.1
+    behaviour: |
+      A GET /me without an Authorization header and without any
+      other token carrier returns 401 with error=invalid_token and
+      the description "no access token provided".
+
+  - id: UI-007
+    severity: P0
+    spec: OIDC Core §5.3.1; RFC 6750 §3.1
+    behaviour: |
+      An access_token that resolves but lacks the openid scope yields
+      403 with error=insufficient_scope, scope=openid, and the
+      description "access token missing openid scope".
+
+  - id: UI-008
+    severity: P0
+    spec: RFC 6749 §10.4; RFC 6750 §3.1
+    behaviour: |
+      When the access_token is otherwise valid but its bound client
+      can no longer be loaded, the endpoint returns 401 with
+      error=invalid_token and the description "invalid token
+      provided".
+
+  - id: UI-009
+    severity: P0
+    spec: OIDC Core §5.3.2 (sub MUST be issued for an existing account); RFC 6750 §3.1
+    behaviour: |
+      When the access_token is otherwise valid but the bound account
+      no longer resolves, the endpoint returns 401 with
+      error=invalid_token and the description "invalid token
+      provided".
+
+  - id: UI-010
+    severity: P1
+    spec: OIDC Core §5.4 (request can narrow the response)
+    behaviour: |
+      A GET /me?scope=openid against a token issued with
+      scope=openid email returns 200 with only sub (the request
+      narrows the response).
+
+  - id: UI-011
+    severity: P0
+    spec: OIDC Core §5.4; RFC 6750 §3.1
+    behaviour: |
+      A GET /me?scope=openid profile against a token issued with
+      scope=openid email yields 403 with error=insufficient_scope,
+      scope=profile, and the description "access token missing
+      requested scope" (request must not widen the token).
+
+  - id: UI-012
+    severity: P0
+    spec: RFC 6750 §3; RFC 9449 §7 (DPoP challenge)
+    behaviour: |
+      A GET /me with no Authorization header, query, or body yields
+      401 error=invalid_token "no access token provided"; the
+      WWW-Authenticate response MUST cover both Bearer and DPoP
+      schemes.
+
+  - id: UI-013
+    severity: P0
+    spec: RFC 6750 §2 (clients MUST NOT use more than one method to transmit the token)
+    behaviour: |
+      A GET /me that carries the access_token both via Authorization
+      header AND via ?access_token= returns 400 with
+      error=invalid_request and the description "access token must
+      only be provided using one mechanism".
+
+  - id: UI-014
+    severity: P0
+    spec: RFC 6750 §2.1; RFC 7235 §2.1
+    behaviour: |
+      An Authorization header literally equal to "Bearer" with no
+      token component returns 400 with error=invalid_request and the
+      description "invalid authorization header value format".
+
+  - id: UI-015
+    severity: P0
+    spec: RFC 6750 §2.1; RFC 7235 §2.1
+    behaviour: |
+      An Authorization header containing more than scheme + token
+      (e.g. "Bearer some three") returns 400 with
+      error=invalid_request and the description "invalid
+      authorization header value format".
+
+  - id: UI-016
+    severity: P0
+    spec: RFC 6750 §2.1
+    behaviour: |
+      An Authorization header whose scheme is neither Bearer nor
+      DPoP (e.g. Basic) returns 400 with error=invalid_request and
+      the description "authorization header scheme must be
+      `Bearer`".
+
+  - id: UI-017
+    severity: P0
+    spec: RFC 6750 §2.3, §3
+    behaviour: |
+      A GET /me?access_token= with an empty value returns 401 with
+      error=invalid_token "no access token provided"; the
+      WWW-Authenticate challenges include both Bearer and DPoP.
+
+  - id: UI-018
+    severity: P0
+    spec: RFC 6750 §2.2, §3
+    behaviour: |
+      A POST /me with an empty access_token= body field returns 401
+      with error=invalid_token "no access token provided"; the
+      WWW-Authenticate challenges include both Bearer and DPoP.
+
+  - id: UI-019
+    severity: P0
+    spec: RFC 6750 §3
+    behaviour: |
+      A POST /me with no Authorization header and an empty body
+      returns 401 with error=invalid_token "no access token
+      provided"; the WWW-Authenticate challenges include both Bearer
+      and DPoP.

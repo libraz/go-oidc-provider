@@ -1,0 +1,501 @@
+# yaml-language-server: $schema=./schema.json
+feature: dynamic_registration
+prefix: DCR
+title: Dynamic Client Registration
+specs:
+  - RFC 7591 — OAuth 2.0 Dynamic Client Registration Protocol
+  - OpenID Connect Dynamic Client Registration 1.0
+  - RFC 6749 §2 — Client Types
+  - RFC 8414 §2 — Authorization Server Metadata (registration_endpoint)
+
+description: |
+  Client metadata registration lifecycle exposed via POST /reg. Covers
+  endpoint behaviour, default values, client_secret issuance rules,
+  Initial Access Token (IAT) handling, Registration Access Token (RAT)
+  issuance, ctx.oidc.entities population, coexistence with static
+  clients, GET /reg/:id retrieval, metadata validation, and error
+  shape.
+
+rows:
+  - id: DCR-EP-01
+    severity: P0
+    spec: RFC 7591 §3.2
+    behaviour: |
+      A successful POST /reg returns 201 Created with the registered
+      client metadata as a JSON body and Cache-Control: no-store.
+    status: pending
+
+  - id: DCR-EP-02
+    severity: P0
+    spec: RFC 7591 §2
+    behaviour: |
+      Only application/json is accepted as the request Content-Type.
+      Other media types (e.g. application/x-www-form-urlencoded) are
+      rejected with 400 invalid_request.
+    status: pending
+
+  - id: DCR-EP-03
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      A request missing redirect_uris is rejected with 400
+      invalid_redirect_uri ("redirect_uris is mandatory property"),
+      because OIDC requires it.
+    status: pending
+
+  - id: DCR-EP-04
+    severity: P0
+    spec: RFC 7591 §3.2.2
+    behaviour: |
+      Invalid enum values (e.g. an unknown grant_type) are rejected
+      with 400 invalid_client_metadata and a description naming the
+      offending field.
+    status: pending
+
+  - id: DCR-EP-05
+    severity: P1
+    spec: RFC 7591
+    behaviour: |
+      Valid input causes the OP to call Adapter.upsert("Client", id,
+      payload) exactly once. Duplicate upserts are detectable in tests.
+    status: pending
+
+  - id: DCR-EP-06
+    severity: P1
+    spec: OP audit
+    behaviour: |
+      A registration_create.success audit event is emitted exactly
+      once per successful registration.
+    status: pending
+
+  - id: DCR-DEF-01
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      When application_type is omitted, the OP defaults it to "web".
+    status: pending
+
+  - id: DCR-DEF-02
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      When id_token_signed_response_alg is omitted, the OP defaults it
+      to "RS256".
+    status: pending
+
+  - id: DCR-DEF-03
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      When token_endpoint_auth_method is omitted, the OP defaults it
+      to "client_secret_basic".
+    status: pending
+
+  - id: DCR-DEF-04
+    severity: P1
+    spec: OIDC DCR §2
+    behaviour: |
+      When require_auth_time is omitted, the OP defaults it to false.
+    status: pending
+
+  - id: DCR-DEF-05
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      When grant_types is omitted, the OP defaults it to
+      ["authorization_code"].
+    status: pending
+
+  - id: DCR-DEF-06
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      When response_types is omitted, the OP defaults it to ["code"].
+    status: pending
+
+  - id: DCR-DEF-07
+    severity: P0
+    spec: RFC 7591 §3
+    behaviour: |
+      The OP generates client_id; the value MUST be unique and MUST
+      NOT collide with any existing client.
+    status: pending
+
+  - id: DCR-DEF-08
+    severity: P0
+    spec: RFC 7591 §3.2.1
+    behaviour: |
+      A response containing client_secret_expires_at: 0 means the
+      secret never expires.
+    status: pending
+
+  - id: DCR-DEF-09
+    severity: P1
+    spec: RFC 7591 §3.2.1
+    behaviour: |
+      client_id_issued_at carries the Unix epoch timestamp of
+      registration.
+    status: pending
+
+  - id: DCR-SEC-01
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      When token_endpoint_auth_method=none and the client does not
+      request any HMAC alg, no client_secret is issued and the field
+      itself is omitted from the response.
+    status: pending
+
+  - id: DCR-SEC-02
+    severity: P0
+    spec: RFC 7591 §2
+    behaviour: |
+      In the DCR-SEC-01 case, even if the request body carries
+      client_secret or client_secret_expires_at the OP MUST ignore
+      them and never persist them to the store.
+    status: pending
+
+  - id: DCR-SEC-03
+    severity: P0
+    spec: OIDC Core §16.19
+    behaviour: |
+      When id_token_signed_response_alg requests an HS* algorithm, the
+      OP issues a client_secret because an HMAC key is required.
+    status: pending
+
+  - id: DCR-SEC-04
+    severity: P0
+    spec: OIDC Core §16.19
+    behaviour: |
+      When userinfo_signed_response_alg or request_object_signing_alg
+      requests an HS* algorithm, the OP issues a client_secret on the
+      same grounds as DCR-SEC-03.
+    status: pending
+
+  - id: DCR-SEC-05
+    severity: P0
+    spec: OIDC DCR §2
+    behaviour: |
+      When token_endpoint_auth_method is client_secret_basic,
+      client_secret_post, or client_secret_jwt, the OP issues a
+      client_secret.
+    status: pending
+
+  - id: DCR-SEC-06
+    severity: P0
+    spec: NIST SP 800-63B / OWASP
+    behaviour: |
+      Generated client_secret values MUST carry at least 256 bits of
+      entropy and MUST be drawn from crypto/rand only; math/rand is
+      forbidden.
+    status: pending
+
+  - id: DCR-SEC-07
+    severity: P1
+    spec: OWASP ASVS V8
+    behaviour: |
+      A client_secret MUST NOT appear in plaintext in OP caches or
+      logs; the value is masked through its String() method.
+    status: pending
+
+  - id: DCR-IAT-01
+    severity: P0
+    spec: RFC 7591 §3
+    behaviour: |
+      With OP setting initialAccessToken set to a fixed string, the
+      client MUST present it via Authorization: Bearer <token>; an
+      access_token field in the request body is not honoured.
+    status: pending
+
+  - id: DCR-IAT-02
+    severity: P0
+    spec: RFC 7591 §3
+    behaviour: |
+      With OP setting initialAccessToken set to true, the OP requires
+      adapter-managed Initial Access Token entities (model
+      InitialAccessToken).
+    status: pending
+
+  - id: DCR-IAT-03
+    severity: P1
+    spec: RFC 7591 §3
+    behaviour: |
+      The OP exposes an API to mint IAT entities
+      (new InitialAccessToken({expiresIn?, policies?}).save()); when
+      expiresIn is absent the IAT never expires.
+    status: pending
+
+  - id: DCR-IAT-04
+    severity: P0
+    spec: RFC 6750 §3.1 / RFC 7591 §3
+    behaviour: |
+      A missing or invalid IAT yields 401 invalid_token with
+      description "no access token provided" or "invalid token
+      provided".
+    status: pending
+
+  - id: DCR-IAT-05
+    severity: P1
+    spec: RFC 7591 §3
+    behaviour: |
+      When IAT validation succeeds, the OP attaches the IAT entity to
+      ctx.oidc.entities.InitialAccessToken so downstream policies can
+      reference it.
+    status: pending
+
+  - id: DCR-IAT-06
+    severity: P1
+    spec: OWASP / RFC 7591 §5.2
+    behaviour: |
+      Public DCR (initialAccessToken undefined) is a supported mode
+      but discouraged in production deployments.
+    status: pending
+
+  - id: DCR-IAT-07
+    severity: P0
+    spec: RFC 6750 §3.1
+    behaviour: |
+      A manipulated IAT (e.g. truncated tail) yields 401
+      invalid_token.
+    status: pending
+
+  - id: DCR-RAT-01
+    severity: P0
+    spec: RFC 7592 §3
+    behaviour: |
+      By default, the OP issues a Registration Access Token and
+      returns registration_access_token together with
+      registration_client_uri in the response.
+    status: pending
+
+  - id: DCR-RAT-02
+    severity: P1
+    spec: RFC 7592 §3
+    behaviour: |
+      OP setting issueRegistrationAccessToken=false (or a function
+      returning false) suppresses RAT issuance; the response omits
+      both registration_access_token and registration_client_uri.
+    status: pending
+
+  - id: DCR-RAT-03
+    severity: P1
+    spec: OP configuration
+    behaviour: |
+      OP setting issueRegistrationAccessToken=true (or a function
+      returning true) issues a RAT, equivalent to DCR-RAT-01.
+    status: pending
+
+  - id: DCR-RAT-04
+    severity: P0
+    spec: RFC 7592 §2
+    behaviour: |
+      A RAT is bound to its issuing client_id; using it under another
+      client_id yields 401 (covered in detail by the registration
+      management catalog).
+    status: pending
+
+  - id: DCR-CTX-01
+    severity: P1
+    spec: OP design
+    behaviour: |
+      On success, ctx.oidc.entities contains Client and (when issued)
+      RegistrationAccessToken.
+    status: pending
+
+  - id: DCR-CTX-02
+    severity: P1
+    spec: OP design
+    behaviour: |
+      When IAT is in use, ctx.oidc.entities also includes
+      InitialAccessToken.
+    status: pending
+
+  - id: DCR-CTX-03
+    severity: P2
+    spec: OP design
+    behaviour: |
+      When RAT issuance is suppressed, ctx.oidc.entities does not
+      include RegistrationAccessToken.
+    status: pending
+
+  - id: DCR-STATIC-01
+    severity: P0
+    spec: OP design
+    behaviour: |
+      Adapter.find("Client", id) returns static and DCR-issued records
+      indistinguishably; the only difference between them is their
+      metadata.
+    status: pending
+
+  - id: DCR-STATIC-02
+    severity: P0
+    spec: RFC 7592 §2
+    behaviour: |
+      Static clients never receive a RAT; read, update, and delete
+      against them is rejected (see RM-01-FORBID in the registration
+      management catalog).
+    status: pending
+
+  - id: DCR-GET-01
+    severity: P0
+    spec: RFC 7592 §2.1
+    behaviour: |
+      GET /reg/:id requires the RAT to be presented via Authorization:
+      Bearer; passing access_token in the query string is not
+      accepted.
+    status: pending
+
+  - id: DCR-GET-02
+    severity: P0
+    spec: RFC 7592 §2.1
+    behaviour: |
+      The 200 response carries every non-secret metadata field;
+      client_secret is included only when the registered authentication
+      method requires it.
+    status: pending
+
+  - id: DCR-GET-03
+    severity: P1
+    spec: RFC 7592 §2.1
+    behaviour: |
+      The response sets Cache-Control: no-store.
+    status: pending
+
+  - id: DCR-GET-04
+    severity: P0
+    spec: RFC 7592 §2 / security hardening
+    behaviour: |
+      Presenting a RAT bound to a different client_id yields 401, the
+      mis-used RAT is destroyed automatically, and the OP emits a
+      registration_access_token.destroyed event.
+    status: pending
+
+  - id: DCR-GET-05
+    severity: P0
+    spec: RFC 6750 §3.1
+    behaviour: |
+      A manipulated RAT yields 401 invalid_token.
+    status: pending
+
+  - id: DCR-GET-06
+    severity: P0
+    spec: RFC 7592 §2.1
+    behaviour: |
+      Accessing a static client's record (even with an adapter-minted
+      RAT) yields 403 invalid_request with description "client does
+      not have permission to read its record".
+    status: pending
+
+  - id: DCR-VAL-01
+    severity: P0
+    spec: RFC 6749 §3.1.2 / OIDC DCR §2
+    behaviour: |
+      redirect_uris MUST be an array with at least one entry; each
+      value MUST be a registrable URI (no fragment, etc.).
+    status: pending
+
+  - id: DCR-VAL-02
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      For application_type=web, every redirect_uri MUST use https.
+      For application_type=native, only loopback http and custom URI
+      schemes are allowed.
+    status: pending
+
+  - id: DCR-VAL-03
+    severity: P0
+    spec: RFC 7591 §2 / RFC 7592 §2
+    behaviour: |
+      grant_types values MUST be members of the OP's supported set;
+      unsupported values are rejected with 400 invalid_client_metadata.
+    status: pending
+
+  - id: DCR-VAL-04
+    severity: P0
+    spec: OIDC Core §3
+    behaviour: |
+      response_types MUST be consistent with grant_types
+      (authorization_code <-> code, implicit <-> id_token / token,
+      hybrid <-> code id_token, etc.).
+    status: pending
+
+  - id: DCR-VAL-05
+    severity: P0
+    spec: OIDC Core §16.5
+    behaviour: |
+      jwks and jwks_uri MUST NOT be supplied simultaneously.
+    status: pending
+
+  - id: DCR-VAL-06
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      sector_identifier_uri MUST use https, MUST return a JSON array,
+      and the array MUST contain every entry from redirect_uris.
+    status: pending
+
+  - id: DCR-VAL-07
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      For subject_type=pairwise without sector_identifier_uri, all
+      redirect_uris MUST share the same host.
+    status: pending
+
+  - id: DCR-VAL-08
+    severity: P0
+    spec: RFC 8705 §2.1.2
+    behaviour: |
+      tls_client_auth_* fields are only meaningful with
+      token_endpoint_auth_method=tls_client_auth, and exactly one of
+      them MUST be supplied.
+    status: pending
+
+  - id: DCR-VAL-09
+    severity: P0
+    spec: OIDC Core §16
+    behaviour: |
+      Encryption-related alg fields (e.g.
+      id_token_encrypted_response_alg) MUST be members of the OP's
+      enabledJWA set.
+    status: pending
+
+  - id: DCR-VAL-10
+    severity: P1
+    spec: OIDC Core §2
+    behaviour: |
+      default_max_age MUST be a non-negative integer.
+    status: pending
+
+  - id: DCR-VAL-11
+    severity: P1
+    spec: OIDC Core §6
+    behaviour: |
+      request_object_signing_alg=none is rejected when the OP does
+      not support it.
+    status: pending
+
+  - id: DCR-ERR-01
+    severity: P0
+    spec: RFC 7591 §3.2.2
+    behaviour: |
+      Error codes are limited to invalid_redirect_uri,
+      invalid_client_metadata, invalid_request, and invalid_token; no
+      other code is emitted.
+    status: pending
+
+  - id: DCR-ERR-02
+    severity: P1
+    spec: RFC 6749 §5.2 / RFC 6750 §3
+    behaviour: |
+      Error responses do not carry WWW-Authenticate, except for the
+      Bearer-scheme variant emitted on IAT/RAT validation failure.
+    status: pending
+
+  - id: DCR-ERR-03
+    severity: P1
+    spec: OWASP ASVS V8
+    behaviour: |
+      Error responses do not leak OP-internal detail.
+    status: pending

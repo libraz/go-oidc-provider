@@ -1,0 +1,339 @@
+# yaml-language-server: $schema=./schema.json
+feature: id_token_claims
+prefix: IDT
+title: ID Token claim composition
+specs:
+  - OIDC Core 1.0 §2 (Claims)
+  - OIDC Core 1.0 §3.1.3.6 (at_hash, c_hash), §3.1.3.7 (ID Token Validation)
+  - OIDC Core 1.0 §3.2.2.10 (at_hash), §3.3.2.10 (c_hash)
+  - OIDC Core 1.0 §5.3 (UserInfo), §5.4 (scope-derived claims), §5.5 (claims parameter)
+  - OIDC Core 1.0 §10 (id_token signing), §16.11 (claim binding)
+  - OIDC Front-Channel Logout 1.0 §2.2, OIDC Back-Channel Logout 1.0 §2.4 (sid)
+  - JARM §4.2 (s_hash)
+  - RFC 9068 — JWT access token profile (typ=at+jwt)
+  - FAPI 2.0 baseline (aud / azp)
+
+description: |
+  Coverage of what goes into the id_token and what stays out. Combines
+  claims-parameter selections with scope-derived claims under the
+  conformIdTokenClaims switch (the "id_token excludes scope claims"
+  vs "id_token includes scope claims" modes), and pins the presence
+  rules for the standard hash claims (at_hash, c_hash, s_hash).
+
+rows:
+  - id: IDT-01
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      Every id_token carries iss, sub, aud, exp, and iat
+      unconditionally.
+
+  - id: IDT-02
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      The aud claim contains at least one client_id, regardless of
+      pairwise/public subject type.
+
+  - id: IDT-03
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      When aud has multiple values, or whenever azp is required, azp
+      is set to the current client_id.
+
+  - id: IDT-04
+    severity: P1
+    spec: OIDC Core §2
+    behaviour: |
+      The nonce from the authorization request is mirrored into the
+      id_token verbatim when present and omitted otherwise.
+
+  - id: IDT-05
+    severity: P1
+    spec: OIDC Core §2
+    behaviour: |
+      auth_time is included when claims.id_token.auth_time has
+      essential=true or when max_age was supplied on the request.
+
+  - id: IDT-06
+    severity: P1
+    spec: OIDC Core §2
+    behaviour: |
+      acr is emitted when requested via the claims parameter or when
+      the client carries default_acr_values; it is voluntary
+      otherwise.
+
+  - id: IDT-07
+    severity: P2
+    spec: OIDC Core §2
+    behaviour: |
+      amr is voluntary; it is emitted when the authentication method
+      can supply a meaningful value.
+
+  - id: IDT-08
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      The iss claim is the OP's absolute issuer URL and matches the
+      discovery document.
+
+  - id: IDT-10
+    severity: P0
+    spec: OIDC Core §5.4
+    behaviour: |
+      In conform=true mode (default), flows that also issue an
+      access_token (e.g. response_type=code) MUST NOT carry
+      scope-derived claims in the id_token; clients fetch them from
+      /userinfo instead.
+
+  - id: IDT-11
+    severity: P0
+    spec: OIDC Core §5.4
+    behaviour: |
+      In conform=true mode with response_type=id_token alone
+      (no access_token), scope-derived claims ARE emitted in the
+      id_token because there is no userinfo channel.
+
+  - id: IDT-12
+    severity: P0
+    spec: OIDC Core §5.4
+    behaviour: |
+      In conform=false (legacy) mode, scope-derived claims are
+      embedded in the id_token even when an access_token is also
+      issued.
+
+  - id: IDT-13
+    severity: P0
+    spec: OIDC Core §5.4
+    behaviour: |
+      In conform=true mode with hybrid response_type=code id_token,
+      the authorize-endpoint id_token does NOT carry scope-derived
+      claims; the access_token is used to retrieve them via
+      /userinfo.
+
+  - id: IDT-14
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      Claims requested explicitly via claims.id_token are always
+      embedded in the id_token regardless of the conform mode.
+
+  - id: IDT-15
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      An id_token re-issued through the refresh token grant uses the
+      same composition mode as the original.
+
+  - id: IDT-16
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      An id_token issued at the token endpoint uses the same
+      composition mode as the original.
+
+  - id: IDT-17
+    severity: P1
+    spec: OIDC Core §5.4
+    behaviour: |
+      Scope-derived claims that consent rejected (the rejectedClaims
+      concept) are excluded from both id_token and userinfo
+      projections.
+
+  - id: IDT-20
+    severity: P0
+    spec: OIDC Core §3.2.2.10
+    behaviour: |
+      at_hash is required when an id_token and an access_token are
+      issued together at the authorize endpoint
+      (response_type=token id_token or code id_token token).
+
+  - id: IDT-21
+    severity: P0
+    spec: OIDC Core §3.2.2.10
+    behaviour: |
+      at_hash is computed by hashing the access_token with the
+      id_token's signing-alg hash (e.g. RS256 -> SHA-256), taking the
+      left-most half, and base64url-encoding the result.
+
+  - id: IDT-22
+    severity: P0
+    spec: OIDC Core §3.3.2.10
+    behaviour: |
+      c_hash is required when an id_token and a code are issued
+      together (response_type=code id_token or code id_token token).
+
+  - id: IDT-23
+    severity: P0
+    spec: OIDC Core §3.3.2.10
+    behaviour: |
+      c_hash is computed by the same procedure as at_hash, with the
+      authorization code as the input instead of the access_token.
+
+  - id: IDT-24
+    severity: P1
+    spec: JARM §4.2
+    behaviour: |
+      Implementations MAY include s_hash (computed identically over
+      state) in the id_token under JARM (response_mode=jwt) to
+      protect the state parameter.
+
+  - id: IDT-25
+    severity: P0
+    spec: OIDC Core §3.1.3.6
+    behaviour: |
+      An id_token issued at the token endpoint via the
+      authorization_code grant alone does NOT carry at_hash or
+      c_hash; they are optional in that path and not required.
+
+  - id: IDT-26
+    severity: P0
+    spec: OIDC Core §16.11
+    behaviour: |
+      When the hash-input alg differs from the id_token signing alg,
+      the hash function is selected from the signing alg (signing
+      alg is the source of truth).
+
+  - id: IDT-27
+    severity: P1
+    spec: OIDC Core §3.2.2.10
+    behaviour: |
+      When the id_token signing alg is none, hash claims are omitted
+      because there is no underlying hash to compute.
+
+  - id: IDT-30
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      aud is either a string or an array of strings; in either form
+      it MUST contain the client_id.
+
+  - id: IDT-31
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      When aud has a single value, azp MAY be omitted.
+
+  - id: IDT-32
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      When aud has multiple values or when the OP adds additional
+      audiences, azp MUST be set to the current client_id.
+
+  - id: IDT-33
+    severity: P1
+    spec: OIDC Front-Channel §2.2 / Back-Channel §2.4
+    behaviour: |
+      When a session is bound to the id_token for logout coordination,
+      the OP carries a sid claim for front-channel and back-channel
+      logout consumers.
+
+  - id: IDT-34
+    severity: P1
+    spec: OIDC Core §2
+    behaviour: |
+      External resource audiences (i.e. access_token target
+      audiences) MUST NOT be added to id_token's aud; the id_token
+      aud is reserved for client-authentication audiences.
+
+  - id: IDT-40
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      The lifetime exp - iat follows the client metadata
+      id_token_lifetime (or the OP default when unset).
+
+  - id: IDT-41
+    severity: P0
+    spec: OIDC Core §10.1
+    behaviour: |
+      The id_token is signed with the client's
+      id_token_signed_response_alg; RS256 is the default.
+
+  - id: IDT-42
+    severity: P1
+    spec: OIDC Core §10.2
+    behaviour: |
+      When id_token_encrypted_response_alg is configured, the OP
+      signs first and then encrypts (nested JWE).
+
+  - id: IDT-43
+    severity: P0
+    spec: OIDC Core §10.1
+    behaviour: |
+      Symmetric algorithms such as HS256 sign with a key derived
+      from client_secret.
+
+  - id: IDT-44
+    severity: P1
+    spec: RFC 9068
+    behaviour: |
+      id_token and JWT access tokens carry distinct typ values
+      (id_token uses JWT, access tokens use at+jwt) so the two are
+      not confused.
+
+  - id: IDT-50
+    severity: P0
+    spec: OIDC Core §5.3
+    behaviour: |
+      /userinfo always returns scope-derived claims bound to the
+      access_token's consent.
+
+  - id: IDT-51
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      claims.userinfo entries are released by /userinfo regardless
+      of scope.
+
+  - id: IDT-52
+    severity: P0
+    spec: OIDC Core §5.3
+    behaviour: |
+      When userinfo_signed_response_alg is configured, /userinfo
+      returns a signed JWT with content-type application/jwt instead
+      of JSON.
+
+  - id: IDT-53
+    severity: P1
+    spec: OIDC Core §5.3
+    behaviour: |
+      When userinfo_encrypted_response_alg is configured, the signed
+      JWT is encrypted before delivery.
+
+  - id: IDT-54
+    severity: P0
+    spec: OIDC Core §5.3.2
+    behaviour: |
+      The /userinfo response always includes sub.
+
+  - id: IDT-55
+    severity: P0
+    spec: OIDC Core §16.11
+    behaviour: |
+      The /userinfo response's sub MUST match the access_token's
+      issued subject exactly to prevent subject swap.
+
+  - id: IDT-60
+    severity: P0
+    spec: OIDC Core §16
+    behaviour: |
+      The OP never embeds passwords, secrets, or unsolicited
+      high-PII material in the id_token; the claim set is
+      deterministic and gated by request and scope.
+
+  - id: IDT-61
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      iat is read from the OP's internal clock (internal/timex) so
+      wall-clock skew is centrally controlled.
+
+  - id: IDT-62
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      iss never deviates from the issuer advertised in the discovery
+      document.

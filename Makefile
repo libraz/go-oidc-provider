@@ -3,6 +3,7 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := verify
 
 .PHONY: tools fmt lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
+        scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
         conformance-certs conformance-up conformance-down \
         conformance-ofcs-up conformance-ofcs-down conformance-ofcs-status \
         conformance-op-up conformance-op-down conformance-op-status \
@@ -46,6 +47,21 @@ verify:
 
 verify-examples:
 	@scripts/verify_examples.sh
+
+# Spec Scenario Suite — catalog validation and coverage.
+# Catalog source of truth: test/scenarios/catalog/<feature>.yaml.
+# See test/scenarios/catalog/README.md for the schema.
+scenario-validate:
+	@scripts/scenario.sh validate
+
+scenario-validate-lenient:
+	@scripts/scenario.sh validate --lenient
+
+scenario-coverage:
+	@scripts/scenario.sh coverage
+
+scenario-coverage-strict:
+	@scripts/scenario.sh coverage --strict
 
 clean:
 	go clean -testcache

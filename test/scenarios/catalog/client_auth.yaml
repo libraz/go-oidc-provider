@@ -1,0 +1,795 @@
+# yaml-language-server: $schema=./schema.json
+feature: client_auth
+prefix: CA
+title: Client Authentication
+specs:
+  - RFC 6749 §2.3 — Client Authentication (client_secret_basic / client_secret_post / none)
+  - RFC 6749 Appendix B — application/x-www-form-urlencoded encoding for client credentials
+  - RFC 7521 — Assertion Framework (client_assertion / client_assertion_type)
+  - RFC 7523 — JWT Profile for Client Authentication and Authorization Grants
+  - RFC 8705 §2 — OAuth 2.0 Mutual-TLS Client Authentication (PKI and self-signed)
+  - RFC 7591 — Dynamic Client Registration (auth method metadata)
+  - OIDC Core 1.0 §9 — Client Authentication
+  - draft-ietf-oauth-attestation-based-client-auth — attest_jwt_client_auth
+  - IANA OAuth Token Endpoint Authentication Methods registry
+
+description: |
+  Client authentication behaviours accepted by the OP at token-bearing
+  endpoints (/token, /token/introspection, /token/revocation, /par,
+  /ciba, /device_authorization, /reg). The catalog cites only RFC and
+  OIDC normative text; implementation-specific behaviours are not
+  asserted here.
+
+rows:
+  - id: CA-COMMON-01
+    severity: P0
+    spec: RFC 6749 §2.3
+    behaviour: |
+      When no client authentication mechanism is provided at all, the
+      token endpoint returns 400 invalid_request with an
+      error_description equivalent to "no client authentication
+      mechanism provided".
+
+  - id: CA-COMMON-02
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When the supplied client_id is unknown, the OP returns
+      401 invalid_client.
+
+  - id: CA-COMMON-03
+    severity: P0
+    spec: RFC 6749 §2.3
+    behaviour: |
+      Presenting two authentication mechanisms simultaneously
+      (Basic + body credentials, Basic + assertion, or body + assertion)
+      MUST return 400 invalid_request with an "only one mechanism"
+      style description.
+
+  - id: CA-COMMON-04
+    severity: P0
+    spec: RFC 6749 §2.3 / OIDC Core §9
+    behaviour: |
+      Authenticating with a method that differs from the client's
+      registered token_endpoint_auth_method MUST return
+      401 invalid_client with error_detail = "method mismatch".
+
+  - id: CA-COMMON-05
+    severity: P0
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      When the body's client_id disagrees with the client_id derived
+      from the Authorization header or from the assertion's iss/sub,
+      the OP returns 400 invalid_request with description
+      "client_id mismatch".
+
+  - id: CA-COMMON-06
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      On authentication failure, the WWW-Authenticate header is
+      attached only when the request used HTTP Basic; for any other
+      mechanism the OP MUST NOT emit a Basic challenge.
+
+  - id: CA-COMMON-07
+    severity: P2
+    spec: OIDC Core §3.1.3.4
+    behaviour: |
+      Error responses preserve the no-store family of cache-control
+      headers required for token-bearing responses.
+
+  - id: CA-NONE-01
+    severity: P0
+    spec: RFC 6749 §2.3
+    behaviour: |
+      A client registered with token_endpoint_auth_method=none
+      authenticates successfully by sending only client_id in the
+      request body.
+
+  - id: CA-NONE-02
+    severity: P0
+    spec: RFC 6749 §2.3
+    behaviour: |
+      A none-registered client that also sends client_secret MUST be
+      rejected with 401 invalid_client and error_detail
+      "method mismatch".
+
+  - id: CA-NONE-03
+    severity: P1
+    spec: RFC 6749 §2.1
+    behaviour: |
+      none clients MUST NOT be permitted to use grant flows reserved
+      for confidential clients; none is a public-client-only
+      authentication.
+
+  - id: CA-BASIC-01
+    severity: P0
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      The OP accepts a well-formed
+      Authorization: Basic <base64(client_id:secret)> header.
+
+  - id: CA-BASIC-02
+    severity: P1
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      When client_id is also sent in the body alongside the Basic
+      header, the request is accepted iff the two values match.
+
+  - id: CA-BASIC-03
+    severity: P2
+    spec: RFC 6749 §2.3
+    behaviour: |
+      A client registered with token_endpoint_auth_method=
+      client_secret_post MAY be accepted via Basic only when the OP is
+      configured in cross-method compatibility mode; the default is to
+      require the registered method.
+
+  - id: CA-BASIC-04
+    severity: P0
+    spec: RFC 6749 Appendix B
+    behaviour: |
+      Per RFC 6749 Appendix B, client_id and client_secret MUST be
+      application/x-www-form-urlencoded before being joined with ":"
+      and base64-encoded. Credentials containing %, &, +, and space
+      MUST authenticate successfully under that encoding.
+
+  - id: CA-BASIC-05
+    severity: P0
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      When the body's client_id differs from the client_id in the
+      Basic header, the OP returns 400 invalid_request with description
+      "client_id mismatch".
+
+  - id: CA-BASIC-06
+    severity: P0
+    spec: RFC 6749 §2.3.1 / Appendix B
+    behaviour: |
+      A header that fails base64 decoding, lacks the ":" separator, or
+      violates the URL-encoding rule MUST be rejected with
+      400 invalid_request and description "improperly encoded".
+
+  - id: CA-BASIC-07
+    severity: P0
+    spec: RFC 6749 §2.3.1 / RFC 7235
+    behaviour: |
+      A non-Basic scheme (e.g. Bearer) or a Basic scheme with an empty
+      value MUST return 400 invalid_request with description
+      "invalid authorization header value format".
+
+  - id: CA-BASIC-08
+    severity: P0
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      When the Basic header carries an empty client_secret, the OP
+      returns 400 invalid_request with description
+      "client_secret must be provided in the Authorization header".
+
+  - id: CA-BASIC-09
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A mismatching client_secret (compared in length-constant time)
+      yields 401 invalid_client with event detail "invalid secret".
+
+  - id: CA-BASIC-10
+    severity: P0
+    spec: RFC 7591 §2 / OIDC Core §9
+    behaviour: |
+      When the client's client_secret_expires_at is in the past, the
+      OP returns 400 invalid_client with description
+      "secret is expired".
+
+  - id: CA-POST-01
+    severity: P0
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      The OP accepts an application/x-www-form-urlencoded body that
+      carries both client_id and client_secret as parameters.
+
+  - id: CA-POST-02
+    severity: P1
+    spec: RFC 7230
+    behaviour: |
+      Bodies sent with Transfer-Encoding: chunked MUST be accepted;
+      the OP MUST NOT require Content-Length.
+
+  - id: CA-POST-03
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A mismatching client_secret yields 401 invalid_client with event
+      detail "invalid secret".
+
+  - id: CA-POST-04
+    severity: P0
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      An empty client_secret in the body MUST yield 401 invalid_client
+      with description "method mismatch".
+
+  - id: CA-POST-05
+    severity: P0
+    spec: RFC 7591 §2
+    behaviour: |
+      When client_secret_expires_at is in the past, the OP returns
+      400 invalid_client with description "secret is expired".
+
+  - id: CA-POST-06
+    severity: P2
+    spec: RFC 6749 §2.3
+    behaviour: |
+      A client registered with
+      token_endpoint_auth_method=client_secret_basic that submits
+      credentials in the body MUST be rejected by the strict default;
+      compatibility mode MAY accept either form when explicitly
+      enabled.
+
+  - id: CA-CSJWT-01
+    severity: P0
+    spec: RFC 7521 §4.2
+    behaviour: |
+      client_assertion_type is required and MUST equal
+      urn:ietf:params:oauth:client-assertion-type:jwt-bearer; missing
+      values are rejected with 400 invalid_request.
+
+  - id: CA-CSJWT-02
+    severity: P0
+    spec: RFC 7521 §4.2
+    behaviour: |
+      A client_assertion_type value other than the JWT bearer URN MUST
+      be rejected with 400 invalid_request.
+
+  - id: CA-CSJWT-03
+    severity: P0
+    spec: RFC 7521 §4.2
+    behaviour: |
+      A missing client_assertion or one that is not a syntactically
+      valid JWT MUST be rejected with 400 invalid_request and
+      description "invalid client_assertion format".
+
+  - id: CA-CSJWT-04
+    severity: P0
+    spec: RFC 7523 §2.2 / OIDC Core §9
+    behaviour: |
+      The assertion MUST be signed with HS256, HS384, or HS512; the
+      HMAC key is derived from the client's client_secret.
+
+  - id: CA-CSJWT-05
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      The assertion's required claims are iss, sub, aud, jti, and exp.
+      Each missing claim MUST yield 401 invalid_client with a distinct
+      error_detail recorded per claim.
+
+  - id: CA-CSJWT-06
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      iss MUST equal client_id; mismatch yields 401 invalid_client
+      with detail "iss must be the client_id".
+
+  - id: CA-CSJWT-07
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      sub MUST equal client_id; mismatch yields 401 invalid_client.
+
+  - id: CA-CSJWT-08
+    severity: P0
+    spec: RFC 7523 §3 / OIDC Core §9
+    behaviour: |
+      aud MUST be one of: the issuer URL, an array containing the
+      issuer URL, the absolute URL of the targeted endpoint, or an
+      array of absolute endpoint URLs. The same assertion form may be
+      reused by the same client at any of those endpoints.
+
+  - id: CA-CSJWT-09
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      jti is single-use; presenting the same jti a second time MUST
+      yield 401 invalid_client with description
+      "client assertion tokens must only be used once". The OP retains
+      jti at least until the assertion's exp.
+    notes: |
+      Replay defence. Multi-node deployments require a shared jti
+      store, otherwise replay across nodes is undetectable.
+
+  - id: CA-CSJWT-10
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      An exp in the past (including a negative expiresIn) yields
+      401 invalid_client with description "jwt expired".
+
+  - id: CA-CSJWT-11
+    severity: P0
+    spec: RFC 7523 §3 / RFC 7519 §4.1
+    behaviour: |
+      A clockTolerance MAY be configured by the OP to absorb clock
+      skew on iat/nbf/exp; values within the configured tolerance are
+      accepted, values outside are rejected. The default tolerance
+      MUST be zero so the OP never accepts skew unless an embedder
+      explicitly opts in.
+    notes: |
+      Default-zero clockTolerance with an enforced upper bound (e.g.
+      60s) is required to prevent a misconfiguration from silently
+      widening the acceptance window.
+
+  - id: CA-CSJWT-12
+    severity: P0
+    spec: RFC 7521 §4.2
+    behaviour: |
+      A mismatch between the body's client_id and the assertion's
+      iss/sub yields 400 invalid_request with description
+      "client_id mismatch".
+
+  - id: CA-CSJWT-13
+    severity: P0
+    spec: RFC 7521 §4.2
+    behaviour: |
+      Submitting an Authorization: Basic header alongside a
+      client_assertion yields 400 invalid_request with description
+      "only one mechanism".
+
+  - id: CA-CSJWT-14
+    severity: P0
+    spec: OIDC Core §9 / RFC 7523 §3
+    behaviour: |
+      When the client has registered token_endpoint_auth_signing_alg,
+      an assertion using a different alg MUST be rejected with
+      401 invalid_client and detail "alg mismatch".
+
+  - id: CA-CSJWT-15
+    severity: P0
+    spec: OIDC Discovery §3
+    behaviour: |
+      When the client has not registered a signing alg, only algs
+      published in the OP's
+      token_endpoint_auth_signing_alg_values_supported are accepted;
+      none is never accepted.
+
+  - id: CA-CSJWT-16
+    severity: P0
+    spec: RFC 7591 §2
+    behaviour: |
+      An expired client_secret_expires_at yields 400 invalid_client
+      with description "secret used for the client_assertion is
+      expired".
+
+  - id: CA-CSJWT-17
+    severity: P0
+    spec: RFC 6749 §2.3
+    behaviour: |
+      A client whose registered method is none MUST NOT authenticate
+      via client_assertion; the request yields 401 invalid_client with
+      description "method mismatch", even when the assertion is
+      otherwise valid (matching jti, etc.).
+
+  - id: CA-CSJWT-18
+    severity: P1
+    spec: OIDC Core §16.19
+    behaviour: |
+      A client that registers id_token_signed_response_alg=HS* or
+      userinfo_signed_response_alg=HS* MUST possess a client_secret;
+      registration without one is rejected.
+
+  - id: CA-PKJWT-01
+    severity: P0
+    spec: RFC 7523 §3 / OIDC Core §9
+    behaviour: |
+      Assertions signed with RS*, PS*, ES*, or EdDSA are accepted;
+      HS* algorithms MUST be rejected for private_key_jwt.
+
+  - id: CA-PKJWT-02
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      Required claims aud, iss, sub, jti, and exp follow the same
+      semantics as CA-CSJWT-05.
+
+  - id: CA-PKJWT-03
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      iss == sub == client_id; any other combination yields
+      401 invalid_client.
+
+  - id: CA-PKJWT-04
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      aud acceptance follows CA-CSJWT-08 (issuer URL, issuer URL
+      array, endpoint URL, or endpoint URL array).
+
+  - id: CA-PKJWT-05
+    severity: P0
+    spec: OIDC Core §10 / RFC 7517
+    behaviour: |
+      The client's verification key is sourced from its registered
+      jwks or jwks_uri. When jwks_uri is used and the cached document
+      is past its TTL, the OP refetches before failing. A key
+      mismatch yields 401 invalid_client.
+
+  - id: CA-PKJWT-06
+    severity: P0
+    spec: RFC 7515 §4.1.4
+    behaviour: |
+      When the JWS kid header has no match in the client's jwks, or
+      multiple candidate keys exist and kid is absent, the OP returns
+      401 invalid_client with description "no matching key".
+
+  - id: CA-PKJWT-07
+    severity: P0
+    spec: RFC 7523 §3
+    behaviour: |
+      jti is single-use through the assertion's exp; replay yields
+      401 invalid_client. This is the primary replay defence and
+      requires OP-side storage.
+    notes: |
+      Multi-node OPs MUST share the jti store, otherwise replay
+      across nodes is undetectable.
+
+  - id: CA-PKJWT-08
+    severity: P0
+    spec: RFC 7523 §3 / RFC 7519 §4.1.4
+    behaviour: |
+      iat marginally in the future is accepted only within the
+      configured clockTolerance. The default tolerance is zero;
+      embedders widen it only via an explicit option.
+    notes: |
+      Default-zero clockTolerance MUST be enforced to avoid silently
+      accepting skewed assertions.
+
+  - id: CA-PKJWT-09
+    severity: P0
+    spec: OIDC Core §9
+    behaviour: |
+      When the client has registered token_endpoint_auth_signing_alg,
+      only that alg is accepted.
+
+  - id: CA-PKJWT-10
+    severity: P0
+    spec: OIDC Discovery §3
+    behaviour: |
+      An alg outside the OP's published
+      token_endpoint_auth_signing_alg_values_supported is rejected.
+
+  - id: CA-PKJWT-11
+    severity: P0
+    spec: RFC 7518 §6.4
+    behaviour: |
+      Symmetric (kty=oct) keys MUST NEVER be honoured for
+      private_key_jwt verification.
+
+  - id: CA-MTLS-PKI-01
+    severity: P0
+    spec: RFC 8705 §2.1
+    behaviour: |
+      The OP retrieves the proxy-supplied client certificate and
+      treats CA validation success (equivalent to certificateAuthorized
+      returning true) as a precondition for authentication.
+
+  - id: CA-MTLS-PKI-02
+    severity: P0
+    spec: RFC 8705 §2.1.2
+    behaviour: |
+      A client may register exactly one of tls_client_auth_subject_dn,
+      tls_client_auth_san_dns, tls_client_auth_san_uri,
+      tls_client_auth_san_ip, or tls_client_auth_san_email; declaring
+      more than one yields invalid_client_metadata.
+
+  - id: CA-MTLS-PKI-03
+    severity: P0
+    spec: RFC 8705 §2.1
+    behaviour: |
+      The registered metadata value MUST exactly match the
+      corresponding SAN/Subject DN field in the presented certificate;
+      mismatch yields 401 invalid_client.
+
+  - id: CA-MTLS-PKI-04
+    severity: P0
+    spec: RFC 8705 §2.1
+    behaviour: |
+      When no client certificate is forwarded by the proxy, the OP
+      returns 401 invalid_client.
+
+  - id: CA-MTLS-PKI-05
+    severity: P0
+    spec: RFC 8705 §2.1
+    behaviour: |
+      When proxy-side TLS validation failed (e.g. the
+      x-ssl-client-verify header is not SUCCESS), the OP returns
+      401 invalid_client.
+
+  - id: CA-MTLS-PKI-06
+    severity: P0
+    spec: RFC 8705 §2.1.2 / RFC 4514 / RFC 5280 §4.1.2.4
+    behaviour: |
+      tls_client_auth_subject_dn comparison normalises both values to
+      RFC 4514 LDAP DN canonical form before comparing; OpenSSL-style
+      ("/CN=...") and RFC 4514 forms ("CN=...,O=..."), attribute
+      order, quoting, escaping, and case-insensitive OID aliases
+      (e.g. E vs EmailAddress) MUST resolve to equal canonical forms.
+      Implementations decode ASN.1 DER and re-encode canonically
+      before byte comparison.
+    notes: |
+      Naive byte comparison is unsafe; canonicalisation is mandatory.
+
+  - id: CA-MTLS-PKI-07
+    severity: P0
+    spec: RFC 8705 §2.1.2 / RFC 5280 §4.2.1.6
+    behaviour: |
+      tls_client_auth_san_dns comparison distinguishes IDN A-labels
+      from U-labels and matches ASCII case-insensitively per DNS
+      rules.
+
+  - id: CA-MTLS-PKI-08
+    severity: P0
+    spec: RFC 8705 §2.1.2
+    behaviour: |
+      tls_client_auth_san_uri MUST be exact-match including path,
+      query, and fragment.
+
+  - id: CA-MTLS-PKI-09
+    severity: P1
+    spec: RFC 8705 §2.1.2 / RFC 5952
+    behaviour: |
+      tls_client_auth_san_ip comparison normalises IPv4 / IPv6
+      strings (e.g. RFC 5952 IPv6 compression) before comparing.
+
+  - id: CA-MTLS-PKI-10
+    severity: P1
+    spec: RFC 5280 §4.2.1.6 / RFC 5321 §2.4
+    behaviour: |
+      tls_client_auth_san_email follows rfc822Name case rules:
+      local-part is case-sensitive, domain is case-insensitive.
+
+  - id: CA-MTLS-PKI-11
+    severity: P1
+    spec: RFC 8705 §2
+    behaviour: |
+      The OP exposes embedder hooks getCertificate(ctx) and
+      certificateAuthorized(ctx) so certificate retrieval and trust
+      anchoring stay framework-agnostic.
+
+  - id: CA-MTLS-PKI-12
+    severity: P1
+    spec: RFC 8705 §5
+    behaviour: |
+      When mTLS is enabled, discovery advertises
+      mtls_endpoint_aliases.
+
+  - id: CA-MTLS-SS-01
+    severity: P0
+    spec: RFC 8705 §2.2
+    behaviour: |
+      Authentication succeeds when the SHA-256 thumbprint of the
+      presented client certificate matches a registered JWK's
+      x5t#S256 (or the thumbprint computed from that JWK's public
+      key) in the client's jwks or jwks_uri.
+
+  - id: CA-MTLS-SS-02
+    severity: P0
+    spec: OIDC Core §10.1.1
+    behaviour: |
+      When the cached jwks_uri document is stale, the OP refetches
+      and re-verifies before failing.
+
+  - id: CA-MTLS-SS-03
+    severity: P0
+    spec: RFC 8705 §2.2
+    behaviour: |
+      Certificates carrying RSA, EC (P-256, P-384, P-521), or Ed25519
+      keys MUST be accepted.
+
+  - id: CA-MTLS-SS-04
+    severity: P0
+    spec: RFC 8705 §2.2
+    behaviour: |
+      When no key in the registered jwks matches the certificate
+      thumbprint, the OP returns 401 invalid_client.
+
+  - id: CA-MTLS-SS-05
+    severity: P0
+    spec: RFC 8705 §2.2
+    behaviour: |
+      When the certificate cannot be obtained from the proxy, the OP
+      returns 401 invalid_client.
+
+  - id: CA-MTLS-SS-06
+    severity: P1
+    spec: RFC 8705 §2.2
+    behaviour: |
+      tls_client_auth_* metadata fields MUST NOT be combined with
+      self_signed_tls_client_auth registration; mixed registration
+      yields invalid_client_metadata.
+
+  - id: CA-ATT-01
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §4
+    behaviour: |
+      The request MUST carry both the OAuth-Client-Attestation header
+      (the attestation JWT) and the OAuth-Client-Attestation-PoP
+      header (the PoP JWT).
+
+  - id: CA-ATT-02
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §4
+    behaviour: |
+      The attestation JWT MUST carry typ=oauth-client-attestation+jwt
+      and the PoP MUST carry typ=oauth-client-attestation-pop+jwt;
+      mismatched typ values yield 401 invalid_client.
+
+  - id: CA-ATT-03
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §4.1
+    behaviour: |
+      The attestation requires iss (attester), sub (client_id), exp,
+      and cnf.jwk (PoP verification key); any missing claim leads to
+      rejection.
+
+  - id: CA-ATT-04
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §4.2
+    behaviour: |
+      The PoP requires iss (client_id), aud (issuer), jti, and
+      challenge (a value previously issued by the OP). exp is
+      RECOMMENDED.
+
+  - id: CA-ATT-05
+    severity: P1
+    spec: draft-ietf-oauth-attestation-based-client-auth §4.2
+    behaviour: |
+      When PoP aud is an array it MUST contain exactly one element,
+      and the value MUST equal the OP's issuer.
+
+  - id: CA-ATT-06
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §5
+    behaviour: |
+      The OP exposes a /challenge endpoint that returns
+      attestation_challenge and the OAuth-Client-Attestation-Challenge
+      response header carrying the same value. The challenge is an
+      HMAC-SHA256 token the OP can verify and has a TTL.
+
+  - id: CA-ATT-07
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §5
+    behaviour: |
+      A missing or invalid challenge yields
+      400 use_attestation_challenge with a fresh challenge embedded
+      in the OAuth-Client-Attestation-Challenge response header.
+
+  - id: CA-ATT-08
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §4.2
+    behaviour: |
+      The PoP's jti is single-use; replay yields 401 invalid_client.
+    notes: |
+      jti retention runs alongside challenge TTL; both are required
+      to prevent attestation replay.
+
+  - id: CA-ATT-09
+    severity: P1
+    spec: draft-ietf-oauth-attestation-based-client-auth §6
+    behaviour: |
+      The OP exposes a hook
+      getAttestationSignaturePublicKey(ctx, iss, header, client) so
+      the embedder can supply the attester's signing key.
+
+  - id: CA-ATT-10
+    severity: P1
+    spec: draft-ietf-oauth-attestation-based-client-auth §6
+    behaviour: |
+      The OP exposes
+      assertAttestationJwtAndPop(ctx, attestation, pop, client) so the
+      embedder can enforce business policy (e.g. attester
+      allowlisting).
+
+  - id: CA-ATT-11
+    severity: P0
+    spec: draft-ietf-oauth-attestation-based-client-auth §4.1
+    behaviour: |
+      The attestation's cnf.jwk is the verification key used for the
+      PoP; the two MUST be consistent and a missing cnf yields
+      rejection.
+
+  - id: CA-DISC-01
+    severity: P0
+    spec: OIDC Discovery §3
+    behaviour: |
+      Only authentication methods that are actually enabled are
+      published in token_endpoint_auth_methods_supported.
+
+  - id: CA-DISC-02
+    severity: P0
+    spec: OIDC Discovery §3
+    behaviour: |
+      token_endpoint_auth_signing_alg_values_supported is published
+      iff at least one of client_secret_jwt or private_key_jwt is
+      enabled.
+
+  - id: CA-DISC-03
+    severity: P0
+    spec: OIDC Core §9
+    behaviour: |
+      When client_secret_jwt is enabled, only HMAC algs (HS256,
+      HS384, HS512) appear in
+      token_endpoint_auth_signing_alg_values_supported. When HMAC is
+      excluded from enabledJWA, client_secret_jwt itself is disabled.
+
+  - id: CA-DISC-04
+    severity: P0
+    spec: OIDC Core §9
+    behaviour: |
+      When private_key_jwt is enabled, only asymmetric algs (RS, PS,
+      ES, EdDSA, ML-DSA-* if supported) are published; if no
+      asymmetric alg is enabled, private_key_jwt is disabled.
+
+  - id: CA-DISC-05
+    severity: P1
+    spec: OIDC Discovery §3
+    behaviour: |
+      When both client_secret_jwt and private_key_jwt are enabled,
+      the union of HMAC and asymmetric algs is published.
+
+  - id: CA-DISC-06
+    severity: P1
+    spec: RFC 7009 §4.1 / RFC 7662 §2
+    behaviour: |
+      revocation_endpoint_auth_methods_supported and
+      introspection_endpoint_auth_methods_supported are published in
+      parity with the token endpoint.
+
+  - id: CA-DISC-07
+    severity: P1
+    spec: RFC 8705 §5
+    behaviour: |
+      mtls_endpoint_aliases is published only when mTLS is enabled,
+      so the cert-binding endpoint family is advertised separately.
+
+  - id: CA-ERR-01
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      Client authentication failure returns error=invalid_client with
+      HTTP 401. WWW-Authenticate=Basic is emitted only when the
+      failed mechanism was Basic; form-based authentication failures
+      return 401 without a WWW-Authenticate header.
+
+  - id: CA-ERR-02
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      error_description MUST be a short message that does not leak
+      internal state; OP-internal detail stays in the error_detail
+      log surface.
+
+  - id: CA-ERR-03
+    severity: P0
+    spec: RFC 6749 §10.4
+    behaviour: |
+      Response timing for invalid secrets and unknown clients MUST be
+      equalised (length-constant compare and a shared error path) to
+      prevent timing oracles.
+
+  - id: CA-ERR-04
+    severity: P1
+    spec: OWASP ASVS V2
+    behaviour: |
+      Authentication-flow rate limiting (per-IP / per-client_id
+      consecutive failure throttling) belongs to the OP; general HTTP
+      rate limiting is delegated to the embedder's reverse proxy or
+      gateway.
+
+  - id: CA-ERR-05
+    severity: P1
+    spec: RFC 8417
+    behaviour: |
+      An audit event client_authn.failure is emitted on every
+      failure (carrying method, reason, and client_id only when the
+      client_id is known).

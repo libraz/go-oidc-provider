@@ -1,0 +1,165 @@
+# yaml-language-server: $schema=./schema.json
+feature: cors
+prefix: COR
+title: CORS for OP endpoints
+specs:
+  - W3C Fetch / CORS
+  - OIDC Discovery 1.0 §5
+  - OIDC Core 1.0 §10 (jwks_uri)
+  - OIDC Core 1.0 §5.3 (UserInfo)
+  - RFC 6749 §3.2 (token endpoint)
+  - RFC 7009 (revocation)
+  - RFC 7662 (introspection)
+  - RFC 8628 (device authorization)
+
+description: |
+  Cross-Origin Resource Sharing for OP endpoints. Public endpoints
+  (discovery, JWKS) ship a "any origin" profile. Credentialed
+  endpoints (token, userinfo, introspection, revocation, device
+  authorization) ship the per-client allowlisted profile gated by the
+  embedder's clientBasedCORS hook.
+
+rows:
+  - id: COR-001
+    severity: P0
+    spec: OIDC Discovery §5
+    behaviour: |
+      GET /.well-known/openid-configuration sets
+      Access-Control-Allow-Origin to the requesting Origin (or "*")
+      unconditionally, with Vary: Origin.
+    status: active
+
+  - id: COR-002
+    severity: P0
+    spec: OIDC Discovery §5
+    behaviour: |
+      Preflight (OPTIONS) on /.well-known/openid-configuration returns
+      204 with Access-Control-Allow-Methods including GET.
+    status: active
+
+  - id: COR-003
+    severity: P0
+    spec: OIDC Core §10 / OIDC Discovery
+    behaviour: |
+      /jwks GET and OPTIONS are CORS-open for any origin.
+    status: active
+
+  - id: COR-010
+    severity: P0
+    spec: OIDC Core §5.3
+    behaviour: |
+      UserInfo (/me): the actual response carries
+      Access-Control-Allow-Origin only when the embedder's
+      clientBasedCORS(ctx, client) returns true; the preflight is
+      always open with GET, POST.
+    status: pending
+
+  - id: COR-011
+    severity: P0
+    spec: RFC 6749 §3.2
+    behaviour: |
+      /token: actual response carries Access-Control-Allow-Origin
+      iff clientBasedCORS returns true; preflight always open with
+      POST.
+    status: pending
+
+  - id: COR-012
+    severity: P0
+    spec: RFC 6749 §3.2 (error path)
+    behaviour: |
+      /token errors that fire before client identification MUST still
+      emit CORS headers so the browser can read the error body. Once
+      the client is identified and clientBasedCORS=false, late errors
+      do NOT emit Access-Control-Allow-Origin.
+    status: pending
+
+  - id: COR-013
+    severity: P0
+    spec: RFC 7009
+    behaviour: |
+      /token/revocation behaves identically to /token (gated actual,
+      always-open preflight).
+    status: pending
+
+  - id: COR-014
+    severity: P0
+    spec: RFC 7662
+    behaviour: |
+      /token/introspection behaves identically to /token (gated actual,
+      always-open preflight).
+    status: pending
+
+  - id: COR-015
+    severity: P0
+    spec: RFC 8628 §3.1
+    behaviour: |
+      /device/auth behaves identically to /token (gated actual,
+      always-open preflight).
+    status: pending
+    notes: device flow not implemented yet.
+
+  - id: COR-020
+    severity: P0
+    spec: W3C CORS preflight
+    behaviour: |
+      Preflights for client-gated endpoints MUST always succeed (204)
+      with Access-Control-Max-Age, the original
+      Access-Control-Request-Method echoed in
+      Access-Control-Allow-Methods, and any
+      Access-Control-Request-Headers mirrored in
+      Access-Control-Allow-Headers.
+    status: pending
+
+  - id: COR-030
+    severity: P0
+    spec: implementation contract
+    behaviour: |
+      If clientBasedCORS returns a non-boolean value, the request fails
+      with 500 server_error WITH CORS headers
+      (Access-Control-Allow-Origin, Access-Control-Expose-Headers:
+      WWW-Authenticate) so the browser can read the error.
+    status: pending
+
+  - id: COR-040
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      When the embedder mounts its own CORS middleware ahead of the OP
+      handler, the OP MUST NOT layer its own
+      Access-Control-Max-Age / origin defaults on top — the embedder's
+      policy wins for all paths (including discovery).
+    status: pending
+
+  - id: COR-050
+    severity: P0
+    spec: plan 002 §F.4 / W3C CORS preflight
+    behaviour: |
+      Strict-CORS preflight on a credentialed endpoint (/token,
+      /userinfo, /interaction/*, /revoke, /end_session, ...) from an
+      Origin in the configured allowlist returns 204 with
+      Access-Control-Allow-Origin echoing the Origin verbatim,
+      Access-Control-Allow-Credentials: true, the OP's static
+      Access-Control-Allow-Methods, an Access-Control-Allow-Headers
+      derived from the request's Access-Control-Request-Headers, and
+      Vary: Origin.
+    status: active
+
+  - id: COR-051
+    severity: P0
+    spec: plan 002 §F.4
+    behaviour: |
+      Strict-CORS preflight on a credentialed endpoint from an Origin
+      NOT in the allowlist is rejected with 403 and no CORS response
+      headers (no information leak about which origins would be
+      accepted).
+    status: active
+
+  - id: COR-052
+    severity: P0
+    spec: plan 002 §F.4
+    behaviour: |
+      Actual (non-preflight) cross-origin request on a credentialed
+      endpoint stamps Access-Control-Allow-Origin only when the Origin
+      is in the allowlist, but always sets Vary: Origin so a shared
+      cache cannot serve a no-CORS response to a later allowed origin.
+    status: active

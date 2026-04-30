@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=./schema.json
+feature: issuer_identification
+prefix: ISS
+title: Authorization Server Issuer Identification (RFC 9207)
+specs:
+  - RFC 9207 — OAuth 2.0 Authorization Server Issuer Identification
+  - RFC 8414 §2 — issuer metadata field
+  - OpenID Connect Core 1.0 §3.1.2.5
+  - OpenID Connect Core 1.0 §3.1.2.6
+  - OpenID Connect Core 1.0 §3.3 (hybrid)
+  - JARM §4.1
+
+description: |
+  RFC 9207 iss parameter coverage across the discovery surface, every
+  response_type success path, and every authorization-endpoint error
+  path. The OP MUST source iss from the configured Issuer Identifier
+  and emit it on every validated client redirect target.
+
+rows:
+  - id: ISS-001
+    severity: P0
+    spec: RFC 9207 §3
+    behaviour: |
+      When this feature is enabled,
+      /.well-known/openid-configuration sets
+      authorization_response_iss_parameter_supported: true.
+    status: pending
+
+  - id: ISS-010
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A successful response_type=code redirect carries code, state,
+      and iss as query parameters.
+    status: pending
+
+  - id: ISS-011
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A successful response_type="code token" redirect carries code,
+      state, access_token, and iss in the fragment.
+    status: pending
+
+  - id: ISS-012
+    severity: P0
+    spec: RFC 9207 §2 + OIDC Core §3.3.2.5
+    behaviour: |
+      A successful response_type="code id_token" redirect carries
+      code, state, and id_token in the fragment; the iss claim is
+      embedded inside the id_token (RFC 9207 implies a redirect-
+      level iss as well).
+    status: pending
+
+  - id: ISS-013
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A successful response_type="code id_token token" redirect
+      carries code, state, id_token, access_token, token_type,
+      expires_in, and scope in the fragment.
+    status: pending
+
+  - id: ISS-014
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A successful response_type="id_token token" redirect carries
+      state, id_token, access_token, token_type, expires_in, and
+      scope in the fragment.
+    status: pending
+
+  - id: ISS-015
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A successful response_type=id_token redirect carries state and
+      id_token in the fragment.
+    status: pending
+
+  - id: ISS-016
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A successful response_type=none redirect carries state and iss
+      as query parameters.
+    status: pending
+
+  - id: ISS-017
+    severity: P0
+    spec: RFC 9207 §2 + JARM §4.1
+    behaviour: |
+      With response_mode=jwt (any response_type), the redirect query
+      carries the response JWT; the iss claim is embedded inside the
+      JWT payload.
+    status: pending
+
+  - id: ISS-020
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A regular response_modes error (e.g. invalid scope "openid
+      profile") redirects back with error, error_description,
+      state, and iss as query parameters.
+    status: pending
+
+  - id: ISS-021
+    severity: P0
+    spec: RFC 9207 §2
+    behaviour: |
+      A response_type=none error redirects back with error, iss, and
+      state as query parameters.
+    status: pending
+
+  - id: ISS-022
+    severity: P0
+    spec: RFC 9207 §2 + JARM §4.1
+    behaviour: |
+      A response_mode=jwt error redirects back with the response
+      JWT (which carries iss) as a query parameter.
+    status: pending
+
+  - id: ISS-023
+    severity: P0
+    spec: RFC 9207 §2 + OIDC Core §3.3.2.5
+    behaviour: |
+      A response_mode=jwt + response_type="code id_token" error
+      redirects back with the response JWT (which carries iss) in
+      the fragment.
+    status: pending

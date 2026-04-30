@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=./schema.json
+feature: base_token
+prefix: BT
+title: BaseToken lifecycle and TTL
+specs:
+  - RFC 6749 §6 — Refresh tokens
+  - RFC 6749 §10.5 — Token storage / TTL
+  - OIDC Core 1.0 §3.1 — Authorization code
+  - RFC 8628 — Device Authorization Grant (findByUserCode)
+  - RFC 9068 — Contrast with structured JWT access tokens
+
+description: |
+  Generic lifecycle invariants for the OP's token abstraction: legacy
+  structured-token rejection, expiry handling, defensive input
+  robustness, consumed-flag round-trip, TTL determination across save /
+  resave, save-return identity stability, and exception propagation
+  through session and device-code lookups.
+
+rows:
+  - id: BT-001
+    severity: P1
+    spec: implementation compatibility
+    behaviour: |
+      A legacy structured token whose adapter record carries a stray
+      jwt property is treated as unresolvable; find returns nothing
+      rather than attempting to interpret the legacy envelope.
+    status: pending
+
+  - id: BT-002
+    severity: P0
+    spec: RFC 6749 §10.5
+    behaviour: |
+      A refresh token whose adapter record reports exp=0 is treated
+      as expired; RefreshToken.find returns nothing.
+    status: pending
+
+  - id: BT-003
+    severity: P0
+    spec: defensive implementation
+    behaviour: |
+      Passing non-string inputs (true, Boolean, 1, Infinity, {}, [],
+      a Set) to find returns nothing for every variant without
+      panicking or raising a type error.
+    status: pending
+
+  - id: BT-004
+    severity: P0
+    spec: RFC 6749 §6
+    behaviour: |
+      When the adapter record carries consumed=true, the value
+      survives the round-trip and find returns a token whose consumed
+      property is true.
+    status: pending
+
+  - id: BT-005
+    severity: P1
+    spec: RFC 6749 §10.5
+    behaviour: |
+      Saving a refresh token without an explicit expiresIn causes
+      adapter.upsert to receive the global default TTL of 14 days.
+    status: pending
+
+  - id: BT-006
+    severity: P1
+    spec: RFC 6749 §10.5
+    behaviour: |
+      Saving a refresh token with expiresIn=60 causes adapter.upsert
+      to receive a TTL of 60 seconds.
+    status: pending
+
+  - id: BT-007
+    severity: P0
+    spec: RFC 6749 §10.5
+    behaviour: |
+      After save, advancing the clock 60 seconds, find, and resave,
+      the second adapter.upsert receives a TTL of approximately
+      14 days minus 60 seconds (within one second of tolerance).
+    status: pending
+
+  - id: BT-008
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      Across save / find / mutate / save / find / mutate / save, the
+      jti returned by save remains the same value for the same token
+      instance.
+    status: pending
+
+  - id: BT-009
+    severity: P0
+    spec: implementation observability
+    behaviour: |
+      For a token with expiresWithSession=true, when Session.findByUid
+      throws, RefreshToken.find rejects with the same underlying
+      error.
+    status: pending
+
+  - id: BT-010
+    severity: P1
+    spec: OIDC Core §3.1
+    behaviour: |
+      Saving an authorization code with consumed=true and reading it
+      back via find returns a code whose consumed property is true.
+    status: pending
+
+  - id: BT-011
+    severity: P0
+    spec: RFC 8628 §3.5
+    behaviour: |
+      When adapter.findByUserCode throws, DeviceCode.findByUserCode
+      rejects with the same underlying error.
+    status: pending

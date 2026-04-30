@@ -1,0 +1,226 @@
+# yaml-language-server: $schema=./schema.json
+feature: revocation
+prefix: REV
+title: Token revocation endpoint
+specs:
+  - RFC 7009 — OAuth 2.0 Token Revocation
+  - RFC 6749 §2.3 — Client Authentication
+  - RFC 8414 §2 — `revocation_endpoint` discovery metadata
+  - RFC 9068 §6 — Structured JWT access tokens are not revocable
+  - OIDC Core 1.0 §1 — Grant cascade extension
+
+description: |
+  Behaviour of the OAuth 2.0 token revocation endpoint. Covers
+  discovery metadata, revocation of access / refresh / client
+  credentials tokens, token_type_hint handling, optional grant cascade,
+  failure modes (missing token, structured JWT, invalid input, adapter
+  exception), cross-client semantics (confidential expose vs. public
+  silent), and audit observability.
+
+rows:
+  - id: REV-001
+    severity: P2
+    spec: RFC 8414 §2
+    behaviour: |
+      The discovery document advertises revocation_endpoint with a
+      concrete URL and does not emit the legacy
+      token_revocation_endpoint name.
+    status: pending
+
+  - id: REV-002
+    severity: P0
+    spec: RFC 7009 §2
+    behaviour: |
+      A confidential client revoking its own access token without a
+      hint receives 200 with an empty body, the access token is
+      destroyed, and the underlying grant is preserved when the
+      revokeGrantPolicy is off.
+    status: pending
+
+  - id: REV-003
+    severity: P0
+    spec: RFC 7009 §2
+    behaviour: |
+      With revokeGrantPolicy=true, revoking an access token returns
+      200 and destroys both the access token and its grant.
+    status: pending
+
+  - id: REV-004
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      Revoking an access token with token_type_hint=access_token
+      returns 200 with an empty body and destroys the access token.
+    status: pending
+
+  - id: REV-005
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      Revoking an access token with token_type_hint=refresh_token
+      ignores the wrong hint, resolves the token as an access token,
+      destroys it, and returns 200 with an empty body.
+    status: pending
+
+  - id: REV-006
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      An unrecognised hint such as foobar is ignored; the access
+      token is destroyed and the endpoint returns 200.
+    status: pending
+
+  - id: REV-007
+    severity: P0
+    spec: RFC 7009 §2.2.1
+    behaviour: |
+      If adapter.find throws while resolving the token, the request
+      fails with 500 server_error.
+    status: pending
+
+  - id: REV-008
+    severity: P0
+    spec: RFC 7009 §2
+    behaviour: |
+      A confidential client revoking its own refresh token without a
+      hint returns 200 with an empty body and destroys both the
+      refresh token and the underlying grant.
+    status: pending
+
+  - id: REV-009
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      Revoking a refresh token with token_type_hint=refresh_token
+      returns 200 with an empty body and destroys the refresh token.
+    status: pending
+
+  - id: REV-010
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      Revoking a refresh token with token_type_hint=access_token
+      ignores the wrong hint, destroys the refresh token, and returns
+      200.
+    status: pending
+
+  - id: REV-011
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      An unrecognised hint when revoking a refresh token is ignored;
+      the refresh token is destroyed and the endpoint returns 200.
+    status: pending
+
+  - id: REV-012
+    severity: P0
+    spec: RFC 7009 §2
+    behaviour: |
+      A confidential client revoking its own client_credentials
+      access token without a hint destroys the token and returns 200
+      with an empty body.
+    status: pending
+
+  - id: REV-013
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      Revoking a client_credentials access token with
+      token_type_hint=access_token destroys the token and returns 200.
+    status: pending
+
+  - id: REV-014
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      An unrecognised hint when revoking a client_credentials access
+      token is ignored; the token is destroyed and the endpoint
+      returns 200.
+    status: pending
+
+  - id: REV-015
+    severity: P1
+    spec: RFC 7009 §2.1
+    behaviour: |
+      Posting to the revocation endpoint without a token parameter
+      returns 400 invalid_request "missing required parameter
+      'token'".
+    status: pending
+
+  - id: REV-016
+    severity: P0
+    spec: RFC 7009 §2.2
+    behaviour: |
+      Submitting an arbitrary nonsense string as token returns 200
+      with an empty body, never disclosing whether the value
+      corresponded to any token.
+    status: pending
+
+  - id: REV-017
+    severity: P0
+    spec: RFC 9068 §6 / RFC 7009 §2.2.1
+    behaviour: |
+      Submitting a structured JWT access token to the revocation
+      endpoint is rejected with 400 unsupported_token_type
+      "Structured JWT Tokens cannot be revoked via the
+      revocation_endpoint".
+    status: pending
+
+  - id: REV-018
+    severity: P0
+    spec: RFC 7009 §2.1
+    behaviour: |
+      A confidential client attempting to revoke another client's
+      token receives 400 invalid_request "client is not authorized to
+      revoke the presented token"; the token is not destroyed.
+    status: pending
+
+  - id: REV-019
+    severity: P0
+    spec: RFC 7009 §2.1
+    behaviour: |
+      A public client attempting to revoke another client's token
+      silently receives 200 with an empty body; the token is not
+      destroyed and no information about ownership leaks.
+    status: pending
+
+  - id: REV-020
+    severity: P0
+    spec: RFC 6749 §2.3 / RFC 7009
+    behaviour: |
+      A client presenting an incorrect basic-auth secret receives 401
+      and a revocation.error audit event is emitted.
+    status: pending
+
+  - id: REV-021
+    severity: P0
+    spec: RFC 7009 §2.2
+    behaviour: |
+      If the adapter returns an authorization-code record for the
+      revocation lookup, the endpoint silently returns 200 without
+      invoking destroy on the unrevocable kind.
+    status: pending
+
+  - id: REV-022
+    severity: P2
+    spec: implementation observability
+    behaviour: |
+      A successful access-token revocation registers both Client and
+      AccessToken entities on the observability context.
+    status: pending
+
+  - id: REV-023
+    severity: P2
+    spec: implementation observability
+    behaviour: |
+      A successful refresh-token revocation registers Client and
+      RefreshToken entities on the observability context.
+    status: pending
+
+  - id: REV-024
+    severity: P2
+    spec: implementation observability
+    behaviour: |
+      A successful client_credentials revocation registers Client and
+      ClientCredentials entities on the observability context.
+    status: pending

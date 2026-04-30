@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=./schema.json
+feature: dynamic_token_ttl
+prefix: DTT
+title: Dynamic per-token TTL
+specs:
+  - RFC 6749 §4.4 — Client Credentials
+  - RFC 6749 §5.1 — expires_in
+  - RFC 6749 §6 — Refresh Token
+  - RFC 8628 — Device Authorization Grant
+  - OIDC Core 1.0 §3.1 — Authorization Code Flow
+  - OIDC Core 1.0 §2 — ID Token exp/iat
+
+description: |
+  Per-token-kind dynamic TTL configuration: the OP invokes
+  (ctx, token, client) and adopts the returned seconds value. Coverage
+  spans every grant flow that mints tokens (authorization code, hybrid,
+  device, refresh, client credentials) and asserts both response shape
+  (expires_in) and ID Token exp/iat consistency.
+
+rows:
+  - id: DTT-001
+    severity: P1
+    spec: RFC 6749 §5.1
+    behaviour: |
+      With ttl.ClientCredentials configured to return 123 and a grant
+      execution of grant_type=client_credentials, the response body
+      carries expires_in=123. The TTL function is invoked exactly once
+      with the ClientCredentials token instance and the issuing Client.
+    status: pending
+
+  - id: DTT-002
+    severity: P1
+    spec: RFC 8628 §3.2
+    behaviour: |
+      With ttl.DeviceCode configured to return 123 and a request to
+      /device/auth, the response body carries expires_in=123 and the
+      TTL function is invoked once with the DeviceCode token instance
+      and the issuing Client.
+    status: pending
+
+  - id: DTT-003
+    severity: P1
+    spec: RFC 8628 §3.5 / OIDC Core
+    behaviour: |
+      A device code exchange via
+      grant_type=urn:ietf:params:oauth:grant-type:device_code MUST
+      invoke the TTL functions for IdToken, AccessToken and
+      RefreshToken exactly once each, with the corresponding token
+      instance and the issuing Client.
+    status: pending
+
+  - id: DTT-004
+    severity: P1
+    spec: OIDC Core §3.3
+    behaviour: |
+      For response_type=code id_token token under hybrid flow, the
+      TTL functions for AccessToken, IdToken and AuthorizationCode are
+      each invoked once. The redirect URL carries expires_in matching
+      the AccessToken TTL, the id_token payload satisfies exp - iat
+      equal to the IdToken TTL, and the AuthorizationCode TTL is
+      consumed when the code is issued.
+    status: pending
+
+  - id: DTT-005
+    severity: P1
+    spec: OIDC Core §3.1
+    behaviour: |
+      An authorization_code grant exchange (code plus code_verifier at
+      /token) MUST invoke the TTL functions for IdToken, AccessToken
+      and RefreshToken exactly once each, each with the correct token
+      instance.
+    status: pending
+
+  - id: DTT-006
+    severity: P1
+    spec: RFC 6749 §6 / OIDC Core §12
+    behaviour: |
+      A refresh_token grant exchange MUST invoke the TTL functions
+      for IdToken, AccessToken and RefreshToken anew (once each) so
+      the refreshed lifetimes can differ from the original issuance.
+    status: pending

@@ -1,0 +1,339 @@
+# yaml-language-server: $schema=./schema.json
+feature: resource_indicators
+prefix: RI
+title: Resource Indicators (RFC 8707)
+specs:
+  - RFC 8707 — Resource Indicators for OAuth 2.0
+  - RFC 6749 §4.1 (authorization code), §4.4 (client credentials), §6 (refresh)
+  - RFC 8628 — OAuth 2.0 Device Authorization Grant
+  - RFC 9126 — OAuth 2.0 Pushed Authorization Requests
+  - OpenID Connect CIBA Core 1.0 (urn:openid:params:grant-type:ciba)
+  - OIDC Core 1.0 §5.3 (UserInfo)
+
+description: |
+  RFC 8707 resource parameter handling at /authorize, /token,
+  /device/auth, and /backchannel. Covers the defaultResource and
+  getResourceServerInfo policy hooks, URI shape validation, audience
+  binding on issued access tokens, refresh-token resource preservation,
+  multi-grant interactions (code, device, CIBA, client credentials),
+  and UserInfo audience constraints.
+
+rows:
+  - id: RI-001
+    severity: P1
+    spec: RFC 8707 §2
+    behaviour: |
+      The OP MUST expose a defaultResource(ctx, client, oneOf) hook.
+      The default implementation returns undefined; when the caller
+      passes a fallback list, the hook returns that list verbatim.
+    status: pending
+
+  - id: RI-002
+    severity: P0
+    spec: RFC 8707 §2.2
+    behaviour: |
+      The OP MUST expose a getResourceServerInfo(ctx, resource,
+      client) hook that fails closed: the default rejects with
+      invalid_target ("resource indicator is missing, or unknown") so
+      unconfigured resources are denied.
+    status: pending
+
+  - id: RI-010
+    severity: P0
+    spec: RFC 8707 §2
+    behaviour: |
+      A resource value MUST be an absolute URI; bare strings yield
+      400 invalid_target with the description "resource indicator
+      must be an absolute URI".
+    status: pending
+
+  - id: RI-011
+    severity: P0
+    spec: RFC 8707 §2
+    behaviour: |
+      A resource value MUST NOT contain a fragment component; for
+      example "urn:wl:foo/bar#" yields 400 invalid_target with the
+      description "resource indicator must not contain a fragment
+      component".
+    status: pending
+
+  - id: RI-012
+    severity: P1
+    spec: RFC 8707 §2
+    behaviour: |
+      When multiple resource values are supplied (for example via
+      duplicate resource params), each value MUST be validated
+      individually.
+    status: pending
+
+  - id: RI-020
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      An unknown resource at /authorize for a token-issuing
+      response_type yields a fragment redirect carrying
+      error=invalid_target,
+      error_description="resource indicator is missing, or unknown",
+      and the supplied state is preserved.
+    status: pending
+
+  - id: RI-021
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      For an allowed resource, the issued access token's aud claim
+      MUST equal the resource value.
+    status: pending
+
+  - id: RI-022
+    severity: P1
+    spec: RFC 8707 §2
+    behaviour: |
+      When the client omits resource at /authorize and the
+      defaultResource hook returns a value, the issued access token's
+      aud MUST reflect that default.
+    status: pending
+
+  - id: RI-023
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      Resource validation MUST behave identically between
+      GET /authorize and POST /authorize.
+    status: pending
+
+  - id: RI-030
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      An unknown resource at /authorize?response_type=code yields a
+      query-parameter redirect carrying invalid_target (no fragment
+      because the code flow does not use fragments).
+    status: pending
+
+  - id: RI-031
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      An allowed resource MUST be persisted on the authorization code
+      as code.resource.
+    status: pending
+
+  - id: RI-032
+    severity: P0
+    spec: RFC 8707 §3 / RFC 6749 §4.1.3
+    behaviour: |
+      Token exchange via grant_type=authorization_code MUST propagate
+      code.resource to the issued access token's aud and to the
+      issued refresh token's resource.
+    status: pending
+
+  - id: RI-033
+    severity: P0
+    spec: RFC 6749 §6 + RFC 8707 §3
+    behaviour: |
+      Refreshing such a refresh token MUST yield a new access token
+      with the same aud and a new refresh token preserving resource.
+    status: pending
+
+  - id: RI-034
+    severity: P1
+    spec: RFC 8707 §2
+    behaviour: |
+      When the client omits resource at /authorize and
+      defaultResource returns a value, the code, access token, and
+      refresh token MUST all carry that default.
+    status: pending
+
+  - id: RI-035
+    severity: P1
+    spec: implementation policy
+    behaviour: |
+      A useGrantedResource hook MAY narrow or pin the resource at
+      token-exchange time even when the request omits the resource
+      parameter; the behaviour is driven by a per-call flag.
+    status: pending
+
+  - id: RI-036
+    severity: P1
+    spec: RFC 8707 §2
+    behaviour: |
+      Token exchange MAY include an explicit resource parameter; the
+      resulting access token's aud MUST match it, subject to that
+      resource having been included on the underlying grant.
+    status: pending
+
+  - id: RI-040
+    severity: P0
+    spec: RFC 8628 §3.1 + RFC 8707 §3
+    behaviour: |
+      POST /device/auth with an unknown resource yields 400
+      invalid_target with the description "resource indicator is
+      missing, or unknown".
+    status: pending
+
+  - id: RI-041
+    severity: P0
+    spec: RFC 8628 §3.4 + RFC 8707 §3
+    behaviour: |
+      After user approval, a token call with grant_type=
+      urn:ietf:params:oauth:grant-type:device_code MUST emit an
+      access token whose aud and a refresh token whose resource
+      reflect the resource supplied at /device/auth.
+    status: pending
+
+  - id: RI-042
+    severity: P1
+    spec: RFC 8628 + RFC 8707 §3
+    behaviour: |
+      The default-resource path applies to the device flow as well,
+      and refresh MUST preserve the resource.
+    status: pending
+
+  - id: RI-043
+    severity: P1
+    spec: implementation policy
+    behaviour: |
+      useGrantedResource semantics MUST also apply to the device
+      flow.
+    status: pending
+
+  - id: RI-044
+    severity: P1
+    spec: RFC 8707 §3
+    behaviour: |
+      An explicit resource parameter at token exchange MUST be
+      allowed and granted on the device flow.
+    status: pending
+
+  - id: RI-050
+    severity: P0
+    spec: OIDC CIBA §7.1 + RFC 8707 §3
+    behaviour: |
+      POST /backchannel with an unknown resource yields 400
+      invalid_target.
+    status: pending
+
+  - id: RI-051
+    severity: P0
+    spec: OIDC CIBA + RFC 8707 §3
+    behaviour: |
+      An allowed resource MUST produce an auth_req_id; the
+      subsequent grant_type=urn:openid:params:grant-type:ciba token
+      call MUST yield an access token whose aud equals the resource
+      and a refresh token whose resource equals the resource.
+    status: pending
+
+  - id: RI-052
+    severity: P1
+    spec: OIDC CIBA + RFC 8707 §3
+    behaviour: |
+      Refreshing the CIBA-issued refresh token MUST preserve the
+      resource.
+    status: pending
+
+  - id: RI-053
+    severity: P1
+    spec: RFC 8707 §3 (default + useGrantedResource=true)
+    behaviour: |
+      The default resource flows through CIBA; with
+      useGrantedResource=true, the issued tokens MUST carry the
+      default resource.
+    status: pending
+
+  - id: RI-054
+    severity: P0
+    spec: RFC 8707 §3 (useGrantedResource=false)
+    behaviour: |
+      When useGrantedResource returns false, a token call without an
+      explicit resource MUST yield an access token with aud
+      undefined (UserInfo-eligible) while the refresh token retains
+      resource for refresh exchanges.
+    status: pending
+
+  - id: RI-060
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      grant_type=client_credentials with an explicit resource MUST
+      yield an access token whose aud equals that resource.
+    status: pending
+
+  - id: RI-061
+    severity: P1
+    spec: RFC 6749 §3.3
+    behaviour: |
+      Unsupported scopes are silently dropped from the issued token's
+      scope; the supported subset is honoured.
+    status: pending
+
+  - id: RI-062
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      An unrecognised resource at the client_credentials grant MUST
+      yield 400 invalid_target.
+    status: pending
+
+  - id: RI-063
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      Multiple resource parameters on a client_credentials request
+      MUST yield 400 invalid_target with the description "only a
+      single resource indicator value is supported".
+    status: pending
+
+  - id: RI-064
+    severity: P0
+    spec: RFC 8707 §3
+    behaviour: |
+      Each resource value MUST be validated for URI shape
+      individually; one valid value combined with one malformed value
+      MUST still be rejected.
+    status: pending
+
+  - id: RI-065
+    severity: P1
+    spec: RFC 8707 §3
+    behaviour: |
+      The defaultResource hook applies to client_credentials when the
+      client omits resource.
+    status: pending
+
+  - id: RI-066
+    severity: P1
+    spec: implementation
+    behaviour: |
+      The OP MAY support both opaque and JWT access token formats per
+      resource (e.g. via a resource-scoped policy decision); both
+      paths MUST accept a single resource parameter.
+    status: pending
+
+  - id: RI-070
+    severity: P1
+    spec: OIDC Core §5.3
+    behaviour: |
+      Audience-less access tokens (aud=undefined) MUST be accepted at
+      /userinfo.
+    status: pending
+
+  - id: RI-071
+    severity: P0
+    spec: OIDC Core §5.3 + RFC 8707 §3
+    behaviour: |
+      An access token whose aud is set to a resource URI (rather than
+      the OP's UserInfo URL) MUST be rejected at /userinfo with 401
+      invalid_token, the description "invalid token provided", and an
+      error_detail of "token audience prevents accessing the userinfo
+      endpoint".
+    status: pending
+
+  - id: RI-072
+    severity: P0
+    spec: input validation
+    behaviour: |
+      Non-string aud values (object, false, number) MUST also fail at
+      /userinfo with the same error envelope; this defends against
+      storage tampering.
+    status: pending

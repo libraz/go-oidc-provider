@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=./schema.json
+feature: session_bound_tokens
+prefix: SBT
+title: Session-bound access and refresh tokens
+specs:
+  - OIDC Core 1.0 §11 (Offline Access)
+  - OIDC Core 1.0 §3 (Authorization Endpoint, response types)
+  - OIDC Core 1.0 §3.2 (Implicit Flow)
+  - RFC 6749 §1.5, §6 (Refresh Token semantics)
+  - RFC 6749 §10.4 (Refresh Token revocation when authorization is revoked)
+  - RFC 6750 §3 (Bearer error responses on revoked tokens)
+  - OIDC Session Management 1.0
+
+description: |
+  Tokens issued without `offline_access` MUST inherit the lifetime of
+  the authentication session: destroying the session invalidates the
+  access token and any "online" refresh token. Tokens issued with
+  `offline_access` MUST survive session destruction.
+
+rows:
+  - id: SBT-001
+    severity: P0
+    spec: OIDC Core §11 / RFC 6750 §3
+    behaviour: |
+      For `response_type=code` with scope `openid` (no
+      `offline_access`), the authorization code is marked
+      session-bound (`expiresWithSession=true`) and the resulting
+      access token inherits the binding. UserInfo with the access
+      token MUST return 200 while the session is alive and 401 with
+      `invalid_token` once the session is destroyed.
+    status: pending
+
+  - id: SBT-002
+    severity: P0
+    spec: RFC 6749 §1.5, §10.4 / OIDC Core §11
+    behaviour: |
+      For `response_type=code` with scope `openid` against a client
+      that issues refresh tokens without `offline_access`, the code,
+      access token, and refresh token are all session-bound. A refresh
+      exchange before session destruction succeeds and the new tokens
+      remain session-bound; after the session is destroyed the access
+      token MUST be rejected (401) and the refresh exchange MUST fail
+      (400 with an OAuth error).
+    status: pending
+
+  - id: SBT-003
+    severity: P0
+    spec: OIDC Core §11
+    behaviour: |
+      For `response_type=code` with scope `openid offline_access` and
+      `prompt=consent`, the code, access token, and refresh token MUST
+      NOT carry the `expiresWithSession` flag. UserInfo and refresh
+      exchange continue to succeed after the session is destroyed, and
+      refreshed tokens also remain non-session-bound.
+    status: pending
+
+  - id: SBT-004
+    severity: P0
+    spec: OIDC Core §3.2 / RFC 6750 §3
+    behaviour: |
+      For `response_type=id_token token` with scope `openid`, the
+      issued access token is session-bound. UserInfo succeeds while
+      the session is alive and MUST return 401 `invalid_token` after
+      the session is destroyed.
+    status: pending

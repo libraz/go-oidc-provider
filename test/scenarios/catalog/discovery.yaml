@@ -1,0 +1,212 @@
+# yaml-language-server: $schema=./schema.json
+feature: discovery
+prefix: DIS
+title: Discovery endpoints
+specs:
+  - OpenID Connect Discovery 1.0 §3, §4
+  - RFC 8414 — OAuth 2.0 Authorization Server Metadata
+  - RFC 8615 — Well-Known URIs
+  - RFC 9207 — Authorization Server Issuer Identification
+
+description: |
+  /.well-known/openid-configuration (OIDC Discovery 1.0) and
+  /.well-known/oauth-authorization-server (RFC 8414). RFC framing only.
+
+rows:
+  - id: DIS-001
+    severity: P0
+    spec: OIDC Discovery §4 / RFC 8414 §3
+    behaviour: |
+      GET /.well-known/openid-configuration and
+      GET /.well-known/oauth-authorization-server return 200 with
+      Content-Type: application/json.
+    status: active
+
+  - id: DIS-002
+    severity: P0
+    spec: OIDC Discovery §4
+    behaviour: |
+      Successful response MUST NOT bind any client/session/token
+      entity (the handler is unauthenticated and stateless).
+    status: pending
+
+  - id: DIS-003
+    severity: P0
+    spec: OIDC Discovery §4 / RFC 8414 §3
+    behaviour: |
+      The OP MUST allow embedder-injected extra discovery properties
+      (service_documentation, custom *_supported fields) to merge
+      into the response.
+    status: pending
+
+  - id: DIS-004
+    severity: P0
+    spec: RFC 8414 §3
+    behaviour: |
+      Embedder MUST NOT be able to override OP-controlled fields
+      (e.g. authorization_endpoint); OP value wins.
+    status: pending
+
+  - id: DIS-010
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When discovery construction throws a known OAuth error
+      (e.g. invalid_request from pathFor) the handler returns
+      400 application/json with the error envelope.
+    status: pending
+
+  - id: DIS-011
+    severity: P0
+    spec: implementation observability
+    behaviour: |
+      The OP emits a discovery.error audit event on known error paths.
+    status: pending
+
+  - id: DIS-012
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When discovery construction throws an unknown exception the
+      handler returns 500 application/json
+      {"error":"server_error","error_description":"oops! something went wrong"}.
+    status: pending
+
+  - id: DIS-013
+    severity: P0
+    spec: implementation observability
+    behaviour: |
+      The OP emits a server_error audit event on uncaught exceptions.
+    status: pending
+
+  - id: DIS-020
+    severity: P0
+    spec: OIDC Discovery §3
+    behaviour: |
+      Mandatory fields MUST be present: issuer, authorization_endpoint,
+      token_endpoint, jwks_uri, response_types_supported,
+      subject_types_supported, id_token_signing_alg_values_supported.
+    status: active
+
+  - id: DIS-021
+    severity: P0
+    spec: RFC 8414 §2
+    behaviour: |
+      RFC 8414 metadata fields MUST be present:
+      response_modes_supported, grant_types_supported,
+      token_endpoint_auth_methods_supported, service_documentation,
+      ui_locales_supported, op_policy_uri, op_tos_uri.
+    status: pending
+
+  - id: DIS-022
+    severity: P0
+    spec: |
+      OIDC RP-initiated logout / RFC 7662 / RFC 7009 / RFC 8628 /
+      RFC 9126 / RFC 8693
+    behaviour: |
+      Endpoint URLs MUST be advertised when the corresponding feature
+      is enabled (introspection_endpoint, revocation_endpoint,
+      device_authorization_endpoint, pushed_authorization_request_endpoint,
+      end_session_endpoint, backchannel_authentication_endpoint, etc.).
+    status: active
+    notes: |
+      end_session_endpoint is always advertised because the OP enables
+      RP-Initiated Logout by default; backchannel_authentication_endpoint
+      will activate once the CIBA feature lands.
+
+  - id: DIS-030
+    severity: P0
+    spec: RFC 9207
+    behaviour: |
+      When the iss feature is ON, discovery sets
+      authorization_response_iss_parameter_supported: true.
+    status: pending
+    cross_refs:
+      - issuer_identification#ISS-001
+
+  - id: DIS-031
+    severity: P0
+    spec: OIDC Core §10 / Encryption feature
+    behaviour: |
+      When encryption is ON, discovery advertises
+      id_token_encryption_alg_values_supported,
+      id_token_encryption_enc_values_supported,
+      request_object_encryption_alg_values_supported,
+      request_object_encryption_enc_values_supported,
+      userinfo_encryption_alg_values_supported,
+      userinfo_encryption_enc_values_supported,
+      introspection_encryption_alg_values_supported,
+      introspection_encryption_enc_values_supported.
+    status: pending
+    cross_refs:
+      - encryption#ENC-010
+
+  - id: DIS-032
+    severity: P0
+    spec: JARM
+    behaviour: |
+      When JARM is ON, discovery advertises
+      authorization_signing_alg_values_supported,
+      authorization_encryption_alg_values_supported,
+      authorization_encryption_enc_values_supported, and
+      response_modes_supported includes jwt, query.jwt, fragment.jwt,
+      form_post.jwt, optionally web_message.jwt.
+    status: pending
+    cross_refs:
+      - jarm#JARM-001
+
+  - id: DIS-033
+    severity: P1
+    spec: Web Message Response Mode
+    behaviour: |
+      When web_message is ON, response_modes_supported includes
+      web_message.
+    status: pending
+    cross_refs:
+      - response_modes#RMO-020
+
+  - id: DIS-034
+    severity: P1
+    spec: RFC 8628
+    behaviour: |
+      When device flow is ON, discovery advertises
+      device_authorization_endpoint.
+    status: pending
+
+  - id: DIS-035
+    severity: P1
+    spec: RFC 9126
+    behaviour: |
+      When PAR is ON, discovery advertises
+      pushed_authorization_request_endpoint and
+      require_pushed_authorization_requests (boolean, default false).
+    status: pending
+
+  - id: DIS-036
+    severity: P0
+    spec: OIDC Core §16.2
+    behaviour: |
+      require_signed_request_object, request_parameter_supported,
+      request_uri_parameter_supported, require_request_uri_registration
+      MUST be advertised consistently with feature enablement.
+    status: pending
+
+  - id: DIS-040
+    severity: P0
+    spec: Fetch CORS / OIDC Discovery §5
+    behaviour: |
+      Both well-known endpoints MUST be CORS-open for any origin.
+    status: pending
+    cross_refs:
+      - cors#COR-001
+      - cors#COR-002
+
+  - id: DIS-041
+    severity: P1
+    spec: RFC 8414 §3.1
+    behaviour: |
+      Both well-known URLs MUST resolve under the issuer host.
+      /.well-known/oauth-authorization-server is the OAuth-only mirror
+      of /.well-known/openid-configuration and SHOULD return the same
+      payload (modulo OAuth-only vs OIDC-only fields).
+    status: pending

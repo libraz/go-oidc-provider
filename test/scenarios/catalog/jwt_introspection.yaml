@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=./schema.json
+feature: jwt_introspection
+prefix: JINT
+title: JWT response for token introspection
+specs:
+  - RFC 9701 — JWT Response for OAuth 2.0 Token Introspection
+  - RFC 7662 — OAuth 2.0 Token Introspection (prerequisite)
+  - RFC 7515 / 7516 / 7518 — JWS / JWE / JWA
+  - RFC 8414 §2 — `introspection_signing_alg_values_supported`
+  - OIDC Core 1.0 §10 — client-registered signing / encryption keys
+
+description: |
+  RFC 9701 layered on top of the standard introspection endpoint:
+  discovery metadata, content-type negotiation, signed (JWS) and
+  encrypted (JWE / nested) responses, HMAC client-secret expiry, and
+  the active=false JWT shape.
+
+rows:
+  - id: JINT-001
+    severity: P2
+    spec: RFC 8414 §2
+    behaviour: |
+      With JWT introspection enabled, the discovery document
+      advertises introspection_signing_alg_values_supported.
+    status: pending
+
+  - id: JINT-002
+    severity: P1
+    spec: RFC 9701 §1
+    behaviour: |
+      Enabling jwtIntrospection without the base introspection feature
+      fails provider construction with "jwtIntrospection is only
+      available in conjuction with introspection".
+    status: pending
+
+  - id: JINT-003
+    severity: P1
+    spec: RFC 7662 §2.2
+    behaviour: |
+      A client registered for JWT introspection that issues an
+      introspection request without an Accept header still receives
+      a normal application/json; charset=utf-8 response.
+    status: pending
+
+  - id: JINT-004
+    severity: P0
+    spec: RFC 9701 §4
+    behaviour: |
+      The same client repeating the request with
+      Accept: application/token-introspection+jwt receives a JWT body
+      with content-type application/token-introspection+jwt;
+      charset=utf-8.
+    status: pending
+
+  - id: JINT-005
+    severity: P0
+    spec: RFC 9701 §5
+    behaviour: |
+      The signed JWT response carries iss=provider issuer,
+      aud=client_id, iat, and a token_introspection claim that nests
+      the original introspection JSON document.
+    status: pending
+
+  - id: JINT-006
+    severity: P0
+    spec: RFC 9701 §5
+    behaviour: |
+      The signed JWT response sets header typ=token-introspection+jwt.
+    status: pending
+
+  - id: JINT-007
+    severity: P1
+    spec: RFC 9701 §5
+    behaviour: |
+      Repeating the introspection after time advances produces a JWT
+      whose iat claim has progressed by the elapsed seconds relative
+      to the earlier JSON response.
+    status: pending
+
+  - id: JINT-008
+    severity: P0
+    spec: RFC 9701 §5
+    behaviour: |
+      Submitting an invalid token with Accept:
+      application/token-introspection+jwt still returns 200 plus a
+      JWT whose token_introspection claim is {"active": false} and
+      whose iss, aud, and iat envelope claims are populated.
+    status: pending
+
+  - id: JINT-009
+    severity: P0
+    spec: RFC 9701 §6 / OIDC Core §10
+    behaviour: |
+      A client pinned to an HMAC signing alg whose client_secret has
+      expired receives 400 invalid_client "client secret is expired -
+      cannot respond with HS256 JWT Introspection response" delivered
+      as JSON.
+    status: pending
+
+  - id: JINT-010
+    severity: P0
+    spec: RFC 9701 §4
+    behaviour: |
+      A client that mandates encrypted introspection responses but
+      requests without the JWT Accept header receives 400
+      invalid_request "introspection must be requested with Accept:
+      application/token-introspection+jwt for this client".
+    status: pending
+
+  - id: JINT-011
+    severity: P0
+    spec: RFC 9701 §6 / RFC 7516
+    behaviour: |
+      A client configured for encrypted introspection responses
+      receives a JWE with header alg=A128KW and enc=A128CBC-HS256.
+    status: pending

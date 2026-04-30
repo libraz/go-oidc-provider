@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=./schema.json
+feature: response_modes
+prefix: RMO
+title: Non-JWT response modes
+specs:
+  - OAuth 2.0 Multiple Response Type Encoding Practices §2 (response_mode)
+  - OAuth 2.0 Form Post Response Mode (Final)
+  - OAuth 2.0 Web Message Response Mode (draft, deprecated)
+  - OIDC Core 1.0 §3.1.2 (response_mode default selection)
+  - RFC 9207 — Authorization Server Issuer Identification
+
+description: |
+  Non-JWT (form_post, web_message, custom) response modes plus default
+  selection rules. JWT-secured response modes (JARM) are catalogued in
+  jarm.yaml. Web Message is informational only and SHOULD NOT be
+  enabled by default.
+
+rows:
+  - id: RMO-001
+    severity: P0
+    spec: OAuth Form Post §2
+    behaviour: |
+      A successful authorization with response_type=code id_token token
+      and response_mode=form_post returns 200 OK with an HTML page
+      carrying a self-submitting <form method="post" action="{redirect_uri}">
+      whose hidden inputs include code, state, and the response_type
+      specific fields.
+    status: pending
+
+  - id: RMO-002
+    severity: P0
+    spec: OAuth Form Post §2 / OWASP HTML escaping
+    behaviour: |
+      The OP MUST HTML-escape redirect_uri when interpolating it into
+      the form action attribute. An XSS payload such as
+      https://client.example.com/cb"><script>...</script><x=" MUST be
+      rendered as escaped text only and never executed.
+    status: pending
+
+  - id: RMO-003
+    severity: P0
+    spec: OAuth Form Post §2
+    behaviour: |
+      An error path (for example prompt=none yielding login_required)
+      returns a 400 HTML form posting error=login_required and state to
+      redirect_uri, and emits an authorization.error audit event.
+    status: pending
+
+  - id: RMO-004
+    severity: P1
+    spec: OAuth Form Post §2
+    behaviour: |
+      GET and POST authorization endpoints MUST behave identically when
+      response_mode=form_post is selected.
+    status: pending
+
+  - id: RMO-010
+    severity: P1
+    spec: Web Message draft §2
+    behaviour: |
+      A successful web_message response renders 200 OK HTML with
+      Cache-Control: no-store and Content-Type: text/html; charset=utf-8,
+      embedding a JSON literal of the form
+      var data = {redirect_uri, response: {...}};.
+    status: pending
+    notes: web_message is deprecated; do not enable by default.
+
+  - id: RMO-011
+    severity: P1
+    spec: Web Message draft §2
+    behaviour: |
+      The web_message response data MUST include every standard
+      authorization response field appropriate for the response_type
+      (code, state, id_token, access_token, expires_in, token_type,
+      scope as applicable).
+    status: pending
+
+  - id: RMO-012
+    severity: P0
+    spec: Web Message draft (relay variant)
+    behaviour: |
+      Relay Mode (the web_message_uri parameter) MUST be rejected with
+      a rendered error stating that Web Message Response Mode Relay
+      Mode is not supported. The OP MUST NOT honour relay because of
+      its known abuse surface.
+    status: pending
+
+  - id: RMO-013
+    severity: P0
+    spec: OWASP CSP / X-Frame-Options
+    behaviour: |
+      The OP MUST strip embedder-supplied x-frame-options and any
+      frame-ancestors CSP directive on web_message responses. The
+      response is itself the messaging surface, so the OP controls
+      framing per its own policy.
+    status: pending
+
+  - id: RMO-014
+    severity: P1
+    spec: Web Message draft §3
+    behaviour: |
+      An error web_message response (for example prompt=none yielding
+      login_required) renders the same HTML envelope but populates
+      response.error, response.state, and iss instead of the success
+      fields.
+    status: pending
+
+  - id: RMO-020
+    severity: P1
+    spec: OIDC Discovery
+    behaviour: |
+      When the web_message feature is enabled, the discovery document
+      response_modes_supported array MUST include web_message.
+    status: pending
+
+  - id: RMO-030
+    severity: P1
+    spec: extension API
+    behaviour: |
+      The OP exposes a registerResponseMode(name, fn) hook so embedders
+      can add new transports without the registration call panicking
+      or returning an error for valid input.
+    status: pending
+
+  - id: RMO-031
+    severity: P1
+    spec: extension API
+    behaviour: |
+      A registered custom response mode is invoked for SUCCESS results
+      as fn(ctx, redirectUri, payload), where payload includes code,
+      state, and iss (per RFC 9207) for response_type=code.
+    status: pending
+
+  - id: RMO-032
+    severity: P1
+    spec: extension API
+    behaviour: |
+      A registered custom response mode is invoked for ERROR results
+      with payload populated with error, error_description, state, and
+      iss.
+    status: pending
+
+  - id: RMO-033
+    severity: P0
+    spec: OAuth Multiple Response Type §2
+    behaviour: |
+      An unknown response_mode value (neither built-in nor registered)
+      MUST trigger a redirect with error=unsupported_response_mode and
+      error_description="unsupported response_mode requested".
+    status: pending
+
+  - id: RMO-040
+    severity: P0
+    spec: OIDC Core §3.1.2
+    behaviour: |
+      Default response_mode selection: response_type=code defaults to
+      query, while implicit response types (id_token token) default to
+      fragment.
+    status: pending

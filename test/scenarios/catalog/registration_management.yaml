@@ -1,0 +1,282 @@
+# yaml-language-server: $schema=./schema.json
+feature: registration_management
+prefix: RM
+title: Registration Management Protocol
+specs:
+  - RFC 7592 — OAuth 2.0 Dynamic Client Registration Management Protocol
+  - RFC 7591 — Dynamic Client Registration (metadata)
+  - RFC 6750 — Bearer Token Usage
+  - OpenID Connect Core 1.0 §16 — Client Metadata handling
+
+description: |
+  Read, update, and delete operations against
+  registration_client_uri for clients minted by Dynamic Client
+  Registration. Covers feature-flag coupling with DCR, PUT /reg/:id
+  semantics, DELETE /reg/:id semantics, ctx.oidc.entities population,
+  audit events, and Registration Access Token (RAT) lifecycle.
+
+rows:
+  - id: RM-FF-01
+    severity: P0
+    spec: RFC 7592 §1
+    behaviour: |
+      Enabling registration management requires DCR to be enabled.
+      Otherwise OP construction fails with "registrationManagement is
+      only available in conjuction with registration".
+    status: pending
+
+  - id: RM-FF-02
+    severity: P1
+    spec: RFC 7592 §3
+    behaviour: |
+      When the feature is OFF the OP MUST NOT expose PUT or DELETE
+      routes on /reg/:id; requests return 404.
+    status: pending
+
+  - id: RM-PUT-01
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      PUT /reg/:id requires Authorization: Bearer <RAT>. A missing
+      header yields 401 invalid_token with description "no access
+      token provided".
+    status: pending
+
+  - id: RM-PUT-02
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      An invalid RAT yields 401 invalid_token with description
+      "invalid token provided".
+    status: pending
+
+  - id: RM-PUT-03
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      A successful PUT returns 200 OK with Cache-Control: no-store and
+      Content-Type: application/json.
+    status: pending
+
+  - id: RM-PUT-04
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      The response includes client_id, client_secret (when required),
+      client_secret_expires_at, client_id_issued_at,
+      registration_client_uri, and registration_access_token; the RAT
+      value depends on the rotation setting.
+    status: pending
+
+  - id: RM-PUT-05
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      A request body containing registration_access_token is rejected
+      with 400 invalid_request and description "request MUST NOT
+      include the registration_access_token field".
+    status: pending
+
+  - id: RM-PUT-06
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      A request body containing registration_client_uri is rejected
+      with 400 invalid_request.
+    status: pending
+
+  - id: RM-PUT-07
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      A request body containing client_secret_expires_at is rejected
+      with 400 invalid_request.
+    status: pending
+
+  - id: RM-PUT-08
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      A request body containing client_id_issued_at is rejected with
+      400 invalid_request.
+    status: pending
+
+  - id: RM-PUT-09
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      Omitting an existing property is equivalent to deleting it
+      (sending null is also accepted), except that client_secret MUST
+      NOT be deleted; attempts to do so return 400.
+    status: pending
+
+  - id: RM-PUT-10
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      Sending client_secret as null or as a different value yields 400
+      invalid_request with description "provided client_secret does
+      not match the authenticated client's one".
+    status: pending
+
+  - id: RM-PUT-11
+    severity: P0
+    spec: RFC 7592 §2.2 / OIDC Core §16
+    behaviour: |
+      Switching token_endpoint_auth_method from none to a
+      secret-based method causes the OP to mint a new client_secret
+      and include it in the response.
+    status: pending
+
+  - id: RM-PUT-12
+    severity: P0
+    spec: RFC 7592 §3
+    behaviour: |
+      The same RAT remains usable across PUTs. With OP setting
+      rotateRegistrationAccessToken=true (or a function returning
+      true) each PUT issues a fresh RAT, destroys the old one, and
+      emits registration_access_token.destroyed.
+    status: pending
+
+  - id: RM-PUT-13
+    severity: P1
+    spec: OP design
+    behaviour: |
+      During rotation, ctx.oidc.entities carries both the new
+      RegistrationAccessToken and the previous
+      RotatedRegistrationAccessToken so audit consumers can observe
+      the swap.
+    status: pending
+
+  - id: RM-PUT-14
+    severity: P1
+    spec: OP audit
+    behaviour: |
+      A registration_update.success event is emitted on every
+      successful PUT.
+    status: pending
+
+  - id: RM-PUT-15
+    severity: P0
+    spec: RFC 7592 §2
+    behaviour: |
+      PUT against a static client (even with an adapter-minted RAT)
+      yields 403 invalid_request with description "client does not
+      have permission to update its record".
+    status: pending
+
+  - id: RM-PUT-16
+    severity: P0
+    spec: RFC 7591 §3.2.2
+    behaviour: |
+      Validation failures (invalid enums, etc.) are mapped to 400
+      invalid_client_metadata, matching DCR semantics.
+    status: pending
+
+  - id: RM-PUT-17
+    severity: P0
+    spec: RFC 7592 §2.2
+    behaviour: |
+      A request that tries to mutate client_id (path id and body id
+      disagree) is rejected with 400 invalid_request.
+    status: pending
+
+  - id: RM-DEL-01
+    severity: P0
+    spec: RFC 7592 §2.3
+    behaviour: |
+      DELETE /reg/:id requires the RAT; missing or invalid yields 401
+      invalid_token.
+    status: pending
+
+  - id: RM-DEL-02
+    severity: P0
+    spec: RFC 7592 §2.3
+    behaviour: |
+      A successful DELETE returns 204 No Content with an empty body
+      and Cache-Control: no-store.
+    status: pending
+
+  - id: RM-DEL-03
+    severity: P0
+    spec: RFC 7592 §2.3
+    behaviour: |
+      The RAT is destroyed on success and is not reusable.
+    status: pending
+
+  - id: RM-DEL-04
+    severity: P0
+    spec: RFC 7592 §2.3 / OIDC Core §16.21
+    behaviour: |
+      The client record is destroyed and any associated tokens
+      (access tokens, refresh tokens, grants) are invalidated per the
+      OP's client-deletion contract.
+    status: pending
+
+  - id: RM-DEL-05
+    severity: P0
+    spec: RFC 7592 §2
+    behaviour: |
+      DELETE against a static client yields 403 invalid_request with
+      description "client does not have permission to delete its
+      record".
+    status: pending
+
+  - id: RM-DEL-06
+    severity: P1
+    spec: OP audit
+    behaviour: |
+      A registration_delete.success event is emitted on every
+      successful DELETE.
+    status: pending
+
+  - id: RM-CTX-01
+    severity: P1
+    spec: OP design
+    behaviour: |
+      Every handler populates ctx.oidc.entities with Client and
+      RegistrationAccessToken.
+    status: pending
+
+  - id: RM-EVT-01
+    severity: P1
+    spec: OP audit
+    behaviour: |
+      registration_access_token.saved and
+      registration_access_token.destroyed events are emitted in order
+      whenever the RAT is rotated.
+    status: pending
+
+  - id: RM-RAT-01
+    severity: P0
+    spec: RFC 7592 §2 + security hardening
+    behaviour: |
+      A RAT is scoped to its issuing client_id. Use against a
+      different client's URL yields 401, and the misused RAT is
+      destroyed automatically.
+    status: pending
+
+  - id: RM-RAT-02
+    severity: P0
+    spec: RFC 7592 §2
+    behaviour: |
+      The OP persists the RAT through the adapter and the entry
+      carries a unique jti.
+    status: pending
+
+  - id: RM-RAT-03
+    severity: P1
+    spec: RFC 6750 §2.1
+    behaviour: |
+      The RAT value is an opaque OP-internal token (not an
+      irreversible hash).
+    status: pending
+
+  - id: RM-RAT-04
+    severity: P1
+    spec: OP design
+    behaviour: |
+      During rotation the new RAT inherits
+      RegistrationAccessToken.policies from its predecessor (see the
+      registration policies catalog).
+    status: pending

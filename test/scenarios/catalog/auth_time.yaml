@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=./schema.json
+feature: auth_time
+prefix: AT
+title: auth_time claim and max_age handling
+specs:
+  - OIDC Core 1.0 §2 (ID Token, `auth_time` claim)
+  - OIDC Core 1.0 §3.1.2.1 (`max_age`, `prompt` request parameters)
+  - OIDC Core 1.0 §5.5.1.1 (`auth_time` essential claim)
+  - OIDC Registration 1.0 §2 (`require_auth_time`, `default_max_age`)
+
+description: |
+  Conditions under which the issued ID Token MUST carry the `auth_time`
+  claim. Triggers come from request parameters (`max_age`,
+  `prompt=login`) and from client metadata (`default_max_age`,
+  `require_auth_time`).
+
+rows:
+  - id: AT-001
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      An authorization request that supplies a positive `max_age` (e.g.
+      `max_age=999`) with `response_type=id_token` and scope `openid`
+      MUST result in an ID Token whose payload includes `auth_time`
+      as numeric epoch seconds.
+    status: pending
+
+  - id: AT-002
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      An authorization request that supplies `prompt=login` forces
+      re-authentication, so the issued ID Token MUST include
+      `auth_time`.
+    status: pending
+
+  - id: AT-003
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      An authorization request that supplies `max_age=0` is treated as
+      "always re-authenticate"; the issued ID Token MUST include
+      `auth_time` exactly as for any other `max_age`.
+    status: pending
+
+  - id: AT-004
+    severity: P1
+    spec: OIDC Registration §2
+    behaviour: |
+      When the client's `default_max_age` is `0` and the request omits
+      `max_age`, the metadata default applies as if it were a request
+      `max_age` and the issued ID Token MUST include `auth_time`.
+    status: pending
+
+  - id: AT-005
+    severity: P0
+    spec: OIDC Registration §2
+    behaviour: |
+      When the client's `require_auth_time` is `true`, the issued ID
+      Token MUST include `auth_time` regardless of `max_age` or
+      `prompt` on the request.
+    status: pending
+
+  - id: AT-006
+    severity: P1
+    spec: OIDC Registration §2 / OIDC Core §3.1.2.1
+    behaviour: |
+      When the client's `default_max_age` is a positive integer and the
+      request omits `max_age`, the issued ID Token MUST include
+      `auth_time`.
+    status: pending

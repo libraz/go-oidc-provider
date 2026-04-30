@@ -1,0 +1,241 @@
+# yaml-language-server: $schema=./schema.json
+feature: mtls_certificate_binding
+prefix: MTLS
+title: mTLS Certificate-Bound Access Tokens
+specs:
+  - RFC 8705 — OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens
+  - RFC 7662 — OAuth 2.0 Token Introspection
+  - RFC 6749 — OAuth 2.0 Authorization Framework
+  - RFC 8628 — Device Authorization Grant
+  - OpenID CIBA Core 1.0
+
+description: |
+  Sender-constrained access tokens bound to the TLS client
+  certificate (x5t#S256). Covers discovery surface, dual-binding
+  rejection, resource-server presentation, x5t#S256 thumbprint
+  derivation, introspection cnf surfacing, and binding semantics
+  across the authorization-code, refresh, device, CIBA and
+  client-credentials grants for both confidential and public clients.
+
+rows:
+  - id: MTLS-001
+    severity: P1
+    spec: RFC 8705 §3.3
+    behaviour: |
+      When the feature is enabled, /.well-known/openid-configuration
+      includes tls_client_certificate_bound_access_tokens=true.
+    status: pending
+
+  - id: MTLS-002
+    severity: P0
+    spec: RFC 8705 §3 / RFC 9449 §6
+    behaviour: |
+      An access token cannot carry two proof-of-possession bindings
+      at once; setting both x5t#S256 and jkt thumbprints on a single
+      AT MUST fail with a construction error.
+    status: pending
+
+  - id: MTLS-003
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A cert-bound access token presented as Bearer at /userinfo with
+      no TLS client cert header is rejected with 401 invalid_token
+      (cannot validate x5t#S256).
+    status: pending
+
+  - id: MTLS-004
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A cert-bound access token presented with a malformed TLS client
+      cert header (e.g. non-PEM/garbage in x-ssl-client-cert) is
+      rejected with 401 invalid_token.
+    status: pending
+
+  - id: MTLS-005
+    severity: P0
+    spec: RFC 8705 §3.1
+    behaviour: |
+      A cert-bound access token presented at /userinfo with the same
+      TLS client certificate that bound it is accepted (200) and
+      resource access is permitted.
+    status: pending
+
+  - id: MTLS-006
+    severity: P1
+    spec: RFC 8705 §3.2 / RFC 7662
+    behaviour: |
+      Introspection of a cert-bound access token surfaces cnf.x5t#S256
+      and token_type=Bearer in the response.
+    status: pending
+
+  - id: MTLS-007
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      The x5t#S256 thumbprint MUST equal base64url(SHA-256(DER(cert))).
+    status: pending
+
+  - id: MTLS-008
+    severity: P0
+    spec: RFC 8705 §3 / RFC 8628
+    behaviour: |
+      A confidential client redeeming a device_code at /token with a
+      TLS client cert receives an access token bound by x5t#S256;
+      the refresh token is NOT sender-constrained.
+    status: pending
+
+  - id: MTLS-009
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A device_code redemption for a cert-binding-required client
+      with no TLS client cert is rejected with 400 invalid_grant
+      "mutual TLS client certificate not provided".
+    status: pending
+
+  - id: MTLS-010
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A public client (auth method none) redeeming a device_code
+      with a TLS client cert receives both an access token and a
+      refresh token bound by x5t#S256 (RTs MUST be sender-constrained
+      for public clients).
+    status: pending
+
+  - id: MTLS-011
+    severity: P0
+    spec: RFC 8705 §3 / OIDC CIBA Core
+    behaviour: |
+      A confidential client redeeming a CIBA grant at /token with a
+      TLS client cert receives an access token bound by x5t#S256; the
+      refresh token is NOT sender-constrained.
+    status: pending
+
+  - id: MTLS-012
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A CIBA grant redemption for a cert-binding-required client
+      with no TLS client cert is rejected with 400 invalid_grant
+      "mutual TLS client certificate not provided".
+    status: pending
+
+  - id: MTLS-013
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A public client redeeming a CIBA grant with a TLS client cert
+      receives both an access token and a refresh token bound by
+      x5t#S256.
+    status: pending
+
+  - id: MTLS-014
+    severity: P0
+    spec: RFC 8705 §3 / RFC 6749 §4.1
+    behaviour: |
+      A confidential client redeeming an authorization_code at /token
+      with a TLS client cert receives an access token bound by
+      x5t#S256; the refresh token is NOT sender-constrained.
+    status: pending
+
+  - id: MTLS-015
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      An authorization_code redemption for a cert-binding-required
+      client with no TLS client cert is rejected with 400
+      invalid_grant "mutual TLS client certificate not provided".
+    status: pending
+
+  - id: MTLS-016
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A confidential client refresh_token redemption with a TLS
+      client cert issues a new access token bound by x5t#S256; the
+      refresh token remains unbound.
+    status: pending
+
+  - id: MTLS-017
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A refresh_token redemption for a cert-binding-required
+      confidential client without a TLS client cert is rejected with
+      400 invalid_grant "mutual TLS client certificate not provided".
+    status: pending
+
+  - id: MTLS-018
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A public client redeeming an authorization_code at /token with
+      a TLS client cert receives both an access token and a refresh
+      token bound by x5t#S256.
+    status: pending
+
+  - id: MTLS-019
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A public client authorization_code redemption without a TLS
+      client cert is rejected with 400 invalid_grant "mutual TLS
+      client certificate not provided".
+    status: pending
+
+  - id: MTLS-020
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A public client refresh_token redemption with the same TLS
+      client cert issues a new access token and a rotated refresh
+      token both bound by x5t#S256.
+    status: pending
+
+  - id: MTLS-021
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A public client refresh_token redemption without a TLS client
+      cert is rejected with 400 invalid_grant "mutual TLS client
+      certificate not provided".
+    status: pending
+
+  - id: MTLS-022
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A public client refresh_token redemption with a different
+      (non-binding) TLS client cert is rejected with 400
+      invalid_grant "failed x5t#S256 verification".
+    status: pending
+
+  - id: MTLS-023
+    severity: P0
+    spec: RFC 8705 §3 / RFC 6749 §4.4
+    behaviour: |
+      A client_credentials redemption with a TLS client cert issues
+      a ClientCredentials access token bound by x5t#S256.
+    status: pending
+
+  - id: MTLS-024
+    severity: P0
+    spec: RFC 8705 §3
+    behaviour: |
+      A client_credentials redemption for a cert-binding-required
+      client without a TLS client cert is rejected with 400
+      invalid_grant "mutual TLS client certificate not provided".
+    status: pending
+
+  - id: MTLS-025
+    severity: P2
+    spec: RFC 6749 §5.2 / RFC 8705 §3
+    behaviour: |
+      A grant-time mTLS verification failure returns HTTP 400 with
+      body {"error":"invalid_grant","error_description":"grant
+      request is invalid"} and surfaces the detailed reason via the
+      audit/error_detail channel.
+    status: pending

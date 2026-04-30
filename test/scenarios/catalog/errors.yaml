@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=./schema.json
+feature: errors
+prefix: ERR
+title: Error envelope and content negotiation
+specs:
+  - RFC 6749 §5.2 — Error Response
+  - RFC 7807 — Problem Details (informational; NOT used by OAuth)
+  - OpenID Connect Core 1.0 §3.1.2.6 — Authentication Error Response
+  - OpenID Connect Core 1.0 §16.5 — Native Apps / non-redirect errors
+  - RFC 7235 — HTTP Authentication (WWW-Authenticate)
+  - RFC 9207 — iss parameter on errors
+  - RFC 6750 §3 — Bearer authentication challenge
+
+description: |
+  Default error response shape and content negotiation across JSON
+  endpoints, browser HTML rendering, WWW-Authenticate semantics on
+  bearer endpoints, server-fault behaviour, and the RFC 9207 iss
+  parameter on authorization-endpoint error redirects.
+
+rows:
+  - id: ERR-001
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When the request carries no Accept header the error response's
+      Content-Type matches /json/.
+    status: pending
+
+  - id: ERR-002
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When the request carries Accept: */* the error response is
+      JSON.
+    status: pending
+
+  - id: ERR-003
+    severity: P0
+    spec: RFC 7231 §5.3.2 / OWASP
+    behaviour: |
+      When the Accept header matches a typical browser preamble
+      (e.g. text/html,application/xhtml+xml,application/xml;q=0.9,
+      image/webp,*/*;q=0.8) the OP renders an HTML error page
+      instead of JSON.
+    status: pending
+
+  - id: ERR-010
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      The JSON error body MUST contain error (one of the registered
+      codes) and SHOULD contain error_description as a single ASCII
+      line per RFC 6749.
+    status: pending
+
+  - id: ERR-011
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      error_uri is OPTIONAL; the OP MUST NOT emit it unless
+      explicitly configured per error catalog.
+    status: pending
+
+  - id: ERR-012
+    severity: P1
+    spec: OIDC Core §3.1.2.6
+    behaviour: |
+      OIDC adds error_description and state to redirect-style
+      errors; JSON error responses MUST NOT include state because it
+      has no meaning at JSON endpoints.
+    status: pending
+
+  - id: ERR-020
+    severity: P0
+    spec: RFC 6750 §3
+    behaviour: |
+      Bearer-token endpoints (UserInfo, introspection, revocation)
+      MUST emit WWW-Authenticate: Bearer ... on 401 responses with
+      error, error_description, and an optional scope.
+    status: pending
+
+  - id: ERR-021
+    severity: P0
+    spec: RFC 6749 §3.2.1
+    behaviour: |
+      A token-endpoint failure under HTTP Basic authentication MUST
+      return 401 with WWW-Authenticate: Basic realm="...".
+    status: pending
+
+  - id: ERR-022
+    severity: P1
+    spec: CORS cross-link
+    behaviour: |
+      When CORS is open, Access-Control-Expose-Headers:
+      WWW-Authenticate MUST be set so the browser exposes the
+      header to JavaScript.
+    status: pending
+
+  - id: ERR-030
+    severity: P1
+    spec: OIDC Core §3.1.2.6 (UI-relevant errors)
+    behaviour: |
+      The HTML error path MUST be reachable via the
+      renderError(ctx, out, error) hook.
+    status: pending
+
+  - id: ERR-031
+    severity: P0
+    spec: OWASP XSS
+    behaviour: |
+      Every interpolated value (state, error_description,
+      redirect_uri, etc.) MUST be HTML-escaped when rendering the
+      error page.
+    status: pending
+
+  - id: ERR-032
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      The OP error catalog MUST be the single source of truth for
+      error codes; fmt.Errorf MUST NOT be used to construct API
+      errors.
+    status: pending
+
+  - id: ERR-040
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      Uncaught exceptions in OP code paths MUST surface as 500
+      server_error with body
+      {"error":"server_error","error_description":"oops! something
+      went wrong"} and emit a server_error audit event.
+    status: pending
+
+  - id: ERR-050
+    severity: P0
+    spec: RFC 9207
+    behaviour: |
+      When an authorization-endpoint error redirects to the client,
+      the redirect MUST include iss=<issuer>.
+    status: pending

@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=./schema.json
+feature: signatures
+prefix: SIG
+title: JWS signing — ID Token / JARM / UserInfo / introspection
+specs:
+  - RFC 7515 — JWS
+  - RFC 7518 §3 — JWA (alg)
+  - RFC 8037 — CFRG curves (EdDSA, Ed25519)
+  - OIDC Core 1.0 §3.1.3.6 (at_hash, c_hash)
+  - OIDC Core 1.0 §3.1.3.7 (id_token signing)
+  - RFC 9700 §2 / FAPI 1.0 / FAPI 2.0 (alg policy)
+
+description: |
+  Algorithm selection and hash-claim semantics for JWS-signed OP
+  output (id_token, JARM response, signed UserInfo, signed
+  introspection). Hash-claim length tests run in the hybrid
+  response_type flows that emit both at_hash and c_hash.
+
+rows:
+  - id: SIG-001
+    severity: P0
+    spec: OIDC Core §3.1.3.7
+    behaviour: |
+      When id_token_signed_response_alg=HS256, /token returns an
+      id_token with three compact-JWS segments and a non-empty
+      signature; the JWS header alg is HS256.
+    status: pending
+    notes: needs RP simulator + per-client alg pinning.
+
+  - id: SIG-002
+    severity: P1
+    spec: OIDC Core §3.1.3.7 (id_token_hint)
+    behaviour: |
+      An HS256-signed id_token MUST be accepted as id_token_hint at
+      /authorize?prompt=none for the same client; the flow returns
+      code + state.
+    status: pending
+
+  - id: SIG-010
+    severity: P0
+    spec: OIDC Core §3.1.3.6
+    behaviour: |
+      For RS256 / ES256 / PS256, at_hash and c_hash are the left 128
+      bits of SHA-256 (base64url, 22 chars).
+    status: pending
+    notes: needs hybrid response_type wiring.
+
+  - id: SIG-011
+    severity: P0
+    spec: OIDC Core §3.1.3.6
+    behaviour: |
+      For RS384 / ES384 / PS384, at_hash and c_hash are the left 192
+      bits of SHA-384 (base64url, 32 chars).
+    status: pending
+
+  - id: SIG-012
+    severity: P0
+    spec: OIDC Core §3.1.3.6
+    behaviour: |
+      For RS512 / ES512 / PS512, at_hash and c_hash are the left 256
+      bits of SHA-512 (base64url, 43 chars).
+    status: pending
+
+  - id: SIG-013
+    severity: P1
+    spec: OIDC Core §3.1.3.6 + RFC 8037
+    behaviour: |
+      For EdDSA, at_hash and c_hash are the left 256 bits of SHA-512
+      (base64url, 43 chars).
+    status: pending
+
+  - id: SIG-014
+    severity: P1
+    spec: OIDC Core §3.1.3.6 + RFC 8037
+    behaviour: |
+      For Ed25519, at_hash and c_hash are the left 256 bits of
+      SHA-512 (base64url, 43 chars).
+    status: pending
+
+  - id: SIG-015
+    severity: P2
+    spec: draft-ietf-cose-dilithium
+    behaviour: |
+      For ML-DSA-44 / 65 / 87, at_hash and c_hash are the left 256
+      bits of SHAKE256(m, 64) (base64url, 43 chars).
+    status: out-of-scope
+    out_of_scope_reason: |
+      ML-DSA support is post-v1.0; the draft is not Final and the Go
+      crypto runtime has no built-in ML-DSA primitives.
+
+  - id: SIG-020
+    severity: P0
+    spec: OIDC Core §3.1.3.7 + RFC 7515
+    behaviour: |
+      The OP signs with the alg from the client's
+      id_token_signed_response_alg and selects the matching key from
+      the OP keystore (with kid in the JWS header).
+    status: pending
+
+  - id: SIG-021
+    severity: P1
+    spec: OIDC Discovery
+    behaviour: |
+      Supported alg values MUST be advertised in
+      id_token_signing_alg_values_supported.
+    status: pending
+    notes: partially covered by SIG-022; expand once per-alg policy lands.
+
+  - id: SIG-022
+    severity: P0
+    spec: RFC 9700 §2 / FAPI 1.0 / FAPI 2.0
+    behaviour: |
+      none MUST NOT appear in id_token_signing_alg_values_supported;
+      RS256 is the OIDC mandatory baseline; FAPI mandates PS256 /
+      ES256 / EdDSA.
+    status: active

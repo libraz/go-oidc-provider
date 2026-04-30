@@ -1,0 +1,355 @@
+# yaml-language-server: $schema=./schema.json
+feature: client_id_metadata_document
+prefix: CIMD
+title: Client ID Metadata Document
+specs:
+  - draft-ietf-oauth-client-id-metadata-document
+  - RFC 7591 §2 — Client Metadata Field Definitions
+  - OpenID Connect Core 1.0 §16.16, §16.17 — fetch security
+  - RFC 8414 — Authorization Server Metadata
+  - RFC 7517 — JWK / jwks_uri
+  - RFC 6749 §3.1.2 — redirect_uri matching
+
+description: |
+  Clients present an HTTPS URL as their client_id; the OP fetches a
+  JSON metadata document from that URL and treats the client as
+  ephemeral. Covers URL-form validation, fetch lifecycle (including
+  SSRF defenses), metadata validity, discovery advertisement, cache
+  semantics, and integration with the authorization flow.
+
+rows:
+  - id: CIMD-URL-01
+    severity: P0
+    spec: OIDC Core §16.17
+    behaviour: |
+      Only the https scheme is allowed. An http URL is rejected; the
+      OP does not attempt a CIMD fetch and lookup falls through to
+      not-found.
+    status: pending
+
+  - id: CIMD-URL-02
+    severity: P0
+    spec: draft §3
+    behaviour: |
+      A path component is required. URLs without a path
+      (https://example.com or https://example.com/) are rejected.
+    status: pending
+
+  - id: CIMD-URL-03
+    severity: P0
+    spec: RFC 3986 §5.2.4
+    behaviour: |
+      URLs whose path contains "." or ".." segments are rejected to
+      prevent directory traversal.
+    status: pending
+
+  - id: CIMD-URL-04
+    severity: P0
+    spec: RFC 3986 §3.5
+    behaviour: |
+      URLs containing a fragment (#frag) are rejected.
+    status: pending
+
+  - id: CIMD-URL-05
+    severity: P0
+    spec: RFC 3986 §3.2.1
+    behaviour: |
+      URLs containing userinfo (user@ or user:pass@) are rejected.
+    status: pending
+
+  - id: CIMD-URL-06
+    severity: P1
+    spec: RFC 3986
+    behaviour: |
+      An explicit port (e.g. :8443) and a query string (e.g. ?id=123)
+      are accepted.
+    status: pending
+
+  - id: CIMD-URL-07
+    severity: P0
+    spec: draft §3
+    behaviour: |
+      A non-URL string (e.g. "nonexistent-client") is treated as a
+      regular client_id; CIMD resolution is not attempted.
+    status: pending
+
+  - id: CIMD-RES-01
+    severity: P0
+    spec: draft §4
+    behaviour: |
+      Pre-registered static or adapter-managed clients take
+      precedence over CIMD; if a registered client_id collides with
+      the CIMD URL the registered record wins.
+    status: pending
+
+  - id: CIMD-RES-02
+    severity: P0
+    spec: draft §5 / OIDC Core §16.17
+    behaviour: |
+      The OP issues an HTTP GET against the client_id URL.
+      Redirects are forbidden; receiving a 301 or 302 yields 400
+      invalid_client.
+    status: pending
+
+  - id: CIMD-RES-03
+    severity: P0
+    spec: draft §5
+    behaviour: |
+      The fetched response Content-Type MUST be application/json
+      (with application/oauth-client-id+json reserved as a future
+      candidate).
+    status: pending
+
+  - id: CIMD-RES-04
+    severity: P0
+    spec: draft §5
+    behaviour: |
+      Only HTTP status 200 is accepted; 404 or 5xx yields 400
+      invalid_client.
+    status: pending
+
+  - id: CIMD-RES-05
+    severity: P0
+    spec: draft §5
+    behaviour: |
+      A response body that fails JSON parse yields 400 invalid_client.
+    status: pending
+
+  - id: CIMD-RES-06
+    severity: P0
+    spec: OWASP ASVS / SSRF mitigation
+    behaviour: |
+      Bodies larger than the configured maxResponseSize (default
+      around 16 KiB) are rejected early. Content-Length is checked
+      first, and any chunked stream that exceeds the threshold mid-
+      read aborts.
+    status: pending
+
+  - id: CIMD-RES-07
+    severity: P0
+    spec: draft §5
+    behaviour: |
+      A network failure, TLS error, or DNS failure during fetch
+      yields 400 invalid_client.
+    status: pending
+
+  - id: CIMD-RES-08
+    severity: P1
+    spec: RFC 7234 / draft §5
+    behaviour: |
+      The OP honours HTTP Cache-Control: max-age and Expires headers
+      (bounded by configurable minimum and maximum TTLs); a second
+      request for the same URL is served from cache.
+    status: pending
+
+  - id: CIMD-RES-09
+    severity: P0
+    spec: draft §6
+    behaviour: |
+      An OP setting allowFetch(ctx, url) bool gates the request
+      before it leaves the OP; returning false yields 400
+      invalid_client. This is the SSRF gate hook.
+    status: pending
+
+  - id: CIMD-RES-10
+    severity: P1
+    spec: draft §6
+    behaviour: |
+      An OP setting allowClient(ctx, metadata) bool runs after the
+      fetch so business rules can refuse the metadata.
+    status: pending
+
+  - id: CIMD-RES-11
+    severity: P0
+    spec: RFC 6890 / SSRF mitigation
+    behaviour: |
+      The default allowFetch implementation MUST refuse private IP
+      ranges, link-local, loopback, 0.0.0.0, and the metadata
+      address 169.254.169.254. To prevent DNS rebinding, the
+      resolved IP MUST be re-checked after DNS resolution.
+    status: pending
+
+  - id: CIMD-RES-12
+    severity: P1
+    spec: OWASP
+    behaviour: |
+      Both connect and read fetch timeouts are configurable; the
+      defaults are roughly 5 seconds.
+    status: pending
+
+  - id: CIMD-META-01
+    severity: P0
+    spec: draft §4
+    behaviour: |
+      The metadata's client_id field MUST equal the request's
+      client_id URL exactly; otherwise the OP returns 400
+      invalid_client_metadata.
+    status: pending
+
+  - id: CIMD-META-02
+    severity: P0
+    spec: draft §4
+    behaviour: |
+      token_endpoint_auth_method MUST be one of none,
+      private_key_jwt, tls_client_auth, or
+      self_signed_tls_client_auth; client_secret_* methods are
+      rejected with 400 invalid_client_metadata.
+    status: pending
+
+  - id: CIMD-META-03
+    severity: P0
+    spec: draft §4
+    behaviour: |
+      Presence of a client_secret field is rejected with 400
+      invalid_client_metadata; CIMD clients are public or asymmetric
+      only.
+    status: pending
+
+  - id: CIMD-META-04
+    severity: P0
+    spec: RFC 7591 §2 / OIDC Core §2
+    behaviour: |
+      URI-valued metadata fields (client_uri, logo_uri, tos_uri,
+      policy_uri, jwks_uri, sector_identifier_uri,
+      initiate_login_uri, etc.) MUST use https.
+    status: pending
+
+  - id: CIMD-META-05
+    severity: P0
+    spec: RFC 6749 §3.1.2
+    behaviour: |
+      redirect_uris MUST contain at least one entry, and each entry
+      MUST satisfy the registration rules (https, or loopback http
+      where allowed).
+    status: pending
+
+  - id: CIMD-META-06
+    severity: P0
+    spec: RFC 7591 §2
+    behaviour: |
+      Unsupported grant_types values are filtered out; if the
+      filtered list is empty the OP returns 400
+      invalid_client_metadata.
+    status: pending
+
+  - id: CIMD-META-07
+    severity: P1
+    spec: RFC 7591 §2
+    behaviour: |
+      Unsupported response_types values are filtered out; an empty
+      filtered list is either accepted (OP default) or rejected with
+      invalid_client_metadata depending on policy.
+    status: pending
+
+  - id: CIMD-META-08
+    severity: P1
+    spec: OAuth Multiple Response Types
+    behaviour: |
+      Unsupported response_modes values are filtered out; an empty
+      filtered list does not abort registration here (flow failure
+      is handled separately).
+    status: pending
+
+  - id: CIMD-META-09
+    severity: P0
+    spec: OIDC Core §3
+    behaviour: |
+      After filtering, grant_types and response_types MUST remain
+      consistent (authorization_code <-> code, implicit <-> id_token
+      / token, etc.).
+    status: pending
+
+  - id: CIMD-META-10
+    severity: P0
+    spec: OIDC Core §16.5
+    behaviour: |
+      jwks and jwks_uri MUST NOT be supplied simultaneously.
+    status: pending
+
+  - id: CIMD-META-11
+    severity: P1
+    spec: OIDC Core §2
+    behaviour: |
+      For application_type=native, redirect_uris are limited to
+      loopback addresses, http://localhost, or custom URI schemes,
+      reusing the OIDC Core rule.
+    status: pending
+
+  - id: CIMD-DISC-01
+    severity: P0
+    spec: draft §7
+    behaviour: |
+      OP discovery advertises
+      client_id_metadata_document_supported: true.
+    status: pending
+
+  - id: CIMD-DISC-02
+    severity: P1
+    spec: draft §7
+    behaviour: |
+      When the feature is disabled the discovery flag is omitted.
+    status: pending
+
+  - id: CIMD-CACHE-01
+    severity: P1
+    spec: RFC 3986 §6
+    behaviour: |
+      Cache keys are normalised URL strings (lower-case scheme and
+      host, port included).
+    status: pending
+
+  - id: CIMD-CACHE-02
+    severity: P2
+    spec: performance
+    behaviour: |
+      It is desirable to suppress concurrent fetches of the same URL
+      across OP instances using singleflight semantics.
+    status: pending
+
+  - id: CIMD-CACHE-03
+    severity: P2
+    spec: RFC 7234
+    behaviour: |
+      Cache entries strictly expire once max-age elapses; the OP
+      does not implement stale-while-revalidate by default.
+    status: pending
+
+  - id: CIMD-FLOW-01
+    severity: P0
+    spec: draft §4
+    behaviour: |
+      When /authorize receives a URL-form client_id, the OP first
+      consults static records and only then attempts a CIMD fetch.
+    status: pending
+
+  - id: CIMD-FLOW-02
+    severity: P0
+    spec: draft §4
+    behaviour: |
+      A fetched client is treated as ephemeral; the OP does not
+      issue a registration_access_token for it.
+    status: pending
+
+  - id: CIMD-FLOW-03
+    severity: P0
+    spec: RFC 6749 §3.1.2
+    behaviour: |
+      redirect_uri matching follows the standard rules (strict
+      equality or the OP's registration policy).
+    status: pending
+
+  - id: CIMD-FLOW-04
+    severity: P1
+    spec: RFC 9126 / draft §4
+    behaviour: |
+      /par accepts CIMD clients on the same terms as /authorize.
+    status: pending
+
+  - id: CIMD-FLOW-05
+    severity: P0
+    spec: draft §4
+    behaviour: |
+      The token endpoint also performs CIMD resolution during client
+      authentication, since CIMD clients are not present in static
+      storage.
+    status: pending

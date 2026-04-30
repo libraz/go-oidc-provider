@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=./schema.json
+feature: external_signing
+prefix: ESK
+title: External signing keys (KMS / HSM)
+specs:
+  - RFC 7515 — JSON Web Signature (abstract Sign)
+  - RFC 7517 — JSON Web Key
+  - OIDC Core 1.0 §10
+  - OIDC Core 1.0 §3.1.3.7 (ID Token validation via JWKS)
+  - NIST SP 800-57 — key lifecycle / HSM
+  - AWS KMS / GCP KMS / Azure Key Vault sign APIs (informational)
+
+description: |
+  KMS / HSM / external-key-material backed signing for ID Tokens, JARM
+  responses, and other JWS output. Covers the per-client signer
+  selection contract, the JWKS publication invariant for external
+  public keys, and failure-mode handling.
+
+rows:
+  - id: ESK-001
+    severity: P0
+    spec: OIDC Core §10
+    behaviour: |
+      A client configured to use the in-process keystore (no external
+      binding) MUST continue to receive locally-signed ID tokens; an
+      /authorize?response_type=id_token request for that client returns
+      303 fragment with a valid id_token and state.
+    status: pending
+
+  - id: ESK-002
+    severity: P0
+    spec: implementation contract
+    behaviour: |
+      A client configured to use external signing MUST receive an ID
+      token signed by the external signer, and the OP MUST publish the
+      external public key in /jwks so RPs can verify locally without
+      round-tripping the OP.
+    status: pending
+
+  - id: ESK-003
+    severity: P0
+    spec: RFC 7515 §5.1
+    behaviour: |
+      An externally-signed ID token verifies against a remote JWK set
+      fetched from jwks_uri — the public-key material in /jwks
+      corresponds to the private key held by the external signer.
+    status: pending
+
+  - id: ESK-010
+    severity: P1
+    spec: OIDC Core §3.1.3.7
+    behaviour: |
+      An externally-signed id_token MUST be acceptable as id_token_hint
+      on a subsequent /authorize?prompt=...&id_token_hint=... request;
+      the OP MUST verify it locally (decrypt plus signature check via
+      its own key material registry) without re-calling the external
+      KMS for verification.
+    status: pending
+
+  - id: ESK-020
+    severity: P0
+    spec: implementation contract
+    behaviour: |
+      The OP MUST expose a Signer interface (or equivalent) that takes
+      (alg, kid, payload) and returns the JWS signature; in-process
+      and external implementations MUST be interchangeable behind that
+      contract.
+    status: pending
+
+  - id: ESK-021
+    severity: P0
+    spec: implementation contract
+    behaviour: |
+      Calls to the external signer MUST be context-aware so embedder
+      cancellation and deadline propagation surface as OP errors
+      (server_error mapped from the upstream cancel).
+    status: pending
+
+  - id: ESK-022
+    severity: P1
+    spec: NIST SP 800-57
+    behaviour: |
+      External key lifecycle (rotate, revoke) MUST integrate with the
+      JWKS publication pipeline so the published set always reflects
+      the externally held material.
+    status: pending
+
+  - id: ESK-023
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      The OP MUST NOT attempt to extract or copy private key material
+      from the external backend — HSMs reject by design. All signing
+      operations are remote-call only.
+    status: pending
+
+  - id: ESK-030
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      An external signer call timeout or 5xx MUST surface as
+      server_error with no token issued; an audit event captures the
+      underlying cause.
+    status: pending
+
+  - id: ESK-031
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      An external signer permission denial (for example KMS IAM)
+      MUST surface as server_error and the OP MUST NOT leak the
+      backend error message to the client.
+    status: pending
+
+  - id: ESK-040
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      Test fixtures MUST allow toggling per-client between in-process
+      and external signing, including controlled network access to the
+      simulated external endpoint during the test.
+    status: pending

@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=./schema.json
+feature: oauth_native_apps
+prefix: NA
+title: OAuth 2.0 for Native Apps
+specs:
+  - RFC 8252 — OAuth 2.0 for Native Apps (§7.3 Loopback Interface Redirection)
+  - RFC 6749 §3.1.2 (Redirection Endpoint), §10.6 (authorization code redirection-URI manipulation)
+  - RFC 3986 — Uniform Resource Identifier (Generic Syntax)
+  - OIDC Dynamic Client Registration §2 (application_type=native)
+  - OpenID Connect RP-Initiated Logout (post_logout_redirect_uris semantics)
+
+description: |
+  Loopback redirect URI handling for native applications: parse-time
+  rejection of malformed URIs, port-flexibility for IPv4/IPv6/localhost
+  loopback variants on both redirect_uri and post_logout_redirect_uris,
+  and registration-time rejection of non-loopback http schemes.
+
+rows:
+  - id: NA-001
+    severity: P0
+    spec: RFC 8252 §7.3 / RFC 3986
+    behaviour: |
+      The redirectUriAllowed and postLogoutRedirectUriAllowed
+      predicates MUST return false for redirect URI strings that are
+      not parseable URLs (for example "http:", "http://127.0.0.",
+      "http://127.0.0.1::"); malformed URIs MUST NOT be approved.
+    status: pending
+
+  - id: NA-002
+    severity: P0
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client registered with
+      http://localhost:2355/op/callback, redirectUriAllowed MUST
+      return true for any port variant on the same host and path: no
+      port, port 80, port 443, the originally registered port, and
+      any other port (e.g. 8888).
+    status: pending
+
+  - id: NA-003
+    severity: P0
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client registered with http://localhost/op/callback
+      (no port), redirectUriAllowed MUST return true for any port
+      variant (none, 80, 443, 2355, 8888) on the same host and path.
+    status: pending
+
+  - id: NA-004
+    severity: P0
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client registered with
+      http://127.0.0.1:2355/op/callback, redirectUriAllowed MUST
+      return true for any port variant on 127.0.0.1 with the same
+      path.
+    status: pending
+
+  - id: NA-005
+    severity: P0
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client registered with http://127.0.0.1/op/callback
+      (no port), redirectUriAllowed MUST return true for any port
+      variant on 127.0.0.1 with the same path.
+    status: pending
+
+  - id: NA-006
+    severity: P0
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client registered with
+      http://[::1]:2355/op/callback, redirectUriAllowed MUST return
+      true for any port variant on [::1] with the same path.
+    status: pending
+
+  - id: NA-007
+    severity: P0
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client registered with http://[::1]/op/callback
+      (no port), redirectUriAllowed MUST return true for any port
+      variant on [::1] with the same path.
+    status: pending
+
+  - id: NA-008
+    severity: P1
+    spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout §3
+    behaviour: |
+      For a native client whose post_logout_redirect_uris registers
+      http://localhost:2355/op/logout, postLogoutRedirectUriAllowed
+      MUST return true for any port variant on localhost with the
+      same path.
+    status: pending
+
+  - id: NA-009
+    severity: P1
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client whose post_logout_redirect_uris registers
+      a localhost URL without a port, postLogoutRedirectUriAllowed
+      MUST return true for any port variant on the same host and
+      path.
+    status: pending
+
+  - id: NA-010
+    severity: P1
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client whose post_logout_redirect_uris registers
+      http://127.0.0.1:2355/op/logout, postLogoutRedirectUriAllowed
+      MUST return true for any port variant on 127.0.0.1 with the
+      same path.
+    status: pending
+
+  - id: NA-011
+    severity: P1
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client whose post_logout_redirect_uris registers
+      http://127.0.0.1/op/logout, postLogoutRedirectUriAllowed MUST
+      return true for any port variant on 127.0.0.1 with the same
+      path.
+    status: pending
+
+  - id: NA-012
+    severity: P1
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client whose post_logout_redirect_uris registers
+      http://[::1]:2355/op/logout, postLogoutRedirectUriAllowed MUST
+      return true for any port variant on [::1] with the same path.
+    status: pending
+
+  - id: NA-013
+    severity: P1
+    spec: RFC 8252 §7.3
+    behaviour: |
+      For a native client whose post_logout_redirect_uris registers
+      http://[::1]/op/logout, postLogoutRedirectUriAllowed MUST
+      return true for any port variant on [::1] with the same path.
+    status: pending
+
+  - id: NA-014
+    severity: P0
+    spec: RFC 8252 §7.3 / §8.3
+    behaviour: |
+      A client registration with application_type=native and a
+      redirect_uri using http to a non-loopback host (e.g.
+      http://rp.example.com/op/callback) MUST be rejected with
+      invalid_redirect_uri and the description
+      "redirect_uris for native clients using http as a protocol can
+      only use loopback addresses as hostnames".
+    status: pending
+
+  - id: NA-015
+    severity: P0
+    spec: RFC 8252 §7.3 / OIDC RP-Initiated Logout §3
+    behaviour: |
+      A native client registered with valid loopback redirect_uris
+      but post_logout_redirect_uris pointing at a non-loopback http
+      URL MUST be rejected with invalid_client_metadata and the
+      description "post_logout_redirect_uris for native clients
+      using http as a protocol can only use loopback addresses as
+      hostnames".
+    status: pending

@@ -1,0 +1,300 @@
+# yaml-language-server: $schema=./schema.json
+feature: attestation_client_auth
+prefix: ATB
+title: OAuth 2.0 Attestation-Based Client Authentication
+specs:
+  - draft-ietf-oauth-attestation-based-client-auth — OAuth 2.0 Attestation-Based Client Authentication
+  - RFC 9126 — Pushed Authorization Requests
+  - RFC 8628 — Device Authorization Grant
+  - OpenID CIBA Core 1.0
+  - RFC 7662 — OAuth 2.0 Token Introspection
+  - RFC 7009 — OAuth 2.0 Token Revocation
+
+description: |
+  Attestation-Based Client Authentication via the
+  OAuth-Client-Attestation and OAuth-Client-Attestation-PoP headers.
+  Covers attestation envelope validation (typ/alg/iss/sub/exp/cnf),
+  PoP envelope validation (typ/alg/iss/aud/jti/key/challenge),
+  refresh-token binding to attestation jkt across grants, instance
+  match/mismatch enforcement, introspection and revocation behaviour
+  with binding instances, and integration with PAR, device
+  authorization and CIBA flows.
+
+rows:
+  - id: ATB-001
+    severity: P0
+    spec: draft §4 / §5
+    behaviour: |
+      A request to a binding-eligible endpoint without both
+      OAuth-Client-Attestation and OAuth-Client-Attestation-PoP
+      headers is rejected with an attestation-related error
+      (invalid_client / invalid_request) per draft §4.
+    status: pending
+
+  - id: ATB-002
+    severity: P0
+    spec: draft §4.1
+    behaviour: |
+      An attestation JWT whose typ header does not equal
+      oauth-client-attestation+jwt fails attestation header parsing
+      with invalid_client.
+    status: pending
+
+  - id: ATB-003
+    severity: P0
+    spec: draft §4.1
+    behaviour: |
+      An attestation JWT signed with a disallowed alg (e.g. none or
+      a symmetric alg) is rejected with invalid_client.
+    status: pending
+
+  - id: ATB-004
+    severity: P0
+    spec: draft §4.1
+    behaviour: |
+      An attestation JWT whose iss is not a configured trusted
+      attester is rejected with invalid_client.
+    status: pending
+
+  - id: ATB-005
+    severity: P0
+    spec: draft §4.1
+    behaviour: |
+      An attestation JWT whose sub does not match the request
+      client_id is rejected with invalid_client.
+    status: pending
+
+  - id: ATB-006
+    severity: P0
+    spec: draft §4.1
+    behaviour: |
+      An attestation JWT whose exp is in the past is rejected with
+      invalid_client.
+    status: pending
+
+  - id: ATB-007
+    severity: P0
+    spec: draft §4.1
+    behaviour: |
+      An attestation body that lacks cnf.jwk describing the instance
+      public key is rejected with invalid_client.
+    status: pending
+
+  - id: ATB-008
+    severity: P0
+    spec: draft §4.2
+    behaviour: |
+      A PoP JWT whose typ header does not equal
+      oauth-client-attestation-pop+jwt is rejected with
+      invalid_client.
+    status: pending
+
+  - id: ATB-009
+    severity: P0
+    spec: draft §4.2
+    behaviour: |
+      A PoP JWT whose alg is disallowed or none is rejected with
+      invalid_client.
+    status: pending
+
+  - id: ATB-010
+    severity: P0
+    spec: draft §4.2
+    behaviour: |
+      A PoP JWT whose iss does not equal client_id is rejected with
+      invalid_client.
+    status: pending
+
+  - id: ATB-011
+    severity: P0
+    spec: draft §4.2
+    behaviour: |
+      A PoP JWT whose aud does not equal the authorization server
+      issuer URL is rejected with invalid_client.
+    status: pending
+
+  - id: ATB-012
+    severity: P0
+    spec: draft §4.2
+    behaviour: |
+      A PoP JWT that replays an already-seen jti within the
+      configured window is rejected as a replay with invalid_client.
+    status: pending
+
+  - id: ATB-013
+    severity: P0
+    spec: draft §4.2
+    behaviour: |
+      A PoP JWT not signed by the attested instance public key is
+      rejected with invalid_client.
+    status: pending
+
+  - id: ATB-014
+    severity: P0
+    spec: draft §4.2 / §6
+    behaviour: |
+      When challenge mode is active, a PoP JWT whose challenge claim
+      does not match a server-issued challenge is rejected with
+      invalid_client.
+    status: pending
+
+  - id: ATB-015
+    severity: P0
+    spec: draft §6.2
+    behaviour: |
+      An authorization_code grant carrying attestation+PoP headers
+      issues a refresh_token persisted with attestationJkt derived
+      from the attestation cnf.jwk thumbprint.
+    status: pending
+
+  - id: ATB-016
+    severity: P0
+    spec: draft §6.2
+    behaviour: |
+      A refresh_token grant carrying attestation+PoP from the same
+      instance keypair succeeds (200) and issues new tokens.
+    status: pending
+
+  - id: ATB-017
+    severity: P0
+    spec: draft §6.2
+    behaviour: |
+      A refresh_token grant carrying attestation+PoP from a different
+      instance keypair than initially bound is rejected with 400
+      invalid_grant "oauth-client-attestation instance public key
+      mismatch".
+    status: pending
+
+  - id: ATB-018
+    severity: P0
+    spec: draft §6.2 / RFC 7662
+    behaviour: |
+      Introspection of an attestation-bound refresh_token using a
+      different instance returns active=false (the token is not
+      exposed to a non-binding instance).
+    status: pending
+
+  - id: ATB-019
+    severity: P0
+    spec: draft §6.2 / RFC 7009 §2.2
+    behaviour: |
+      Revocation of an attestation-bound refresh_token using a
+      different instance returns 200 (per RFC 7009) but the token is
+      NOT revoked.
+    status: pending
+
+  - id: ATB-020
+    severity: P1
+    spec: draft §6.2
+    behaviour: |
+      Introspection of an attestation-bound refresh_token using the
+      binding instance returns active=true while the token is still
+      valid.
+    status: pending
+
+  - id: ATB-021
+    severity: P0
+    spec: draft §6.2 / RFC 7009
+    behaviour: |
+      Revocation of an attestation-bound refresh_token using the
+      binding instance returns 200 and marks the token revoked.
+    status: pending
+
+  - id: ATB-022
+    severity: P1
+    spec: RFC 7662
+    behaviour: |
+      Introspection of a revoked attestation-bound refresh_token via
+      the binding instance returns active=false.
+    status: pending
+
+  - id: ATB-023
+    severity: P0
+    spec: draft §6.1 / RFC 9126
+    behaviour: |
+      A PAR submission carrying attestation+PoP for a client persists
+      the attestation jkt on the stored PAR; the subsequent
+      /authorize and /token cycle preserves the binding.
+    status: pending
+
+  - id: ATB-024
+    severity: P0
+    spec: draft §6.1
+    behaviour: |
+      Redeeming a code obtained from a PAR-bound request at /token
+      with attestation from a different instance is rejected with 400
+      invalid_grant "oauth-client-attestation instance public key
+      mismatch".
+    status: pending
+
+  - id: ATB-025
+    severity: P0
+    spec: draft §6.1
+    behaviour: |
+      Redeeming a code obtained from a PAR-bound request at /token
+      with attestation from the same instance succeeds (200) and
+      issues a refresh_token bound by attestation jkt.
+    status: pending
+
+  - id: ATB-026
+    severity: P0
+    spec: draft §6 / RFC 8628
+    behaviour: |
+      A /device/auth submission carrying attestation+PoP persists
+      attestationJkt on the DeviceCode.
+    status: pending
+
+  - id: ATB-027
+    severity: P0
+    spec: draft §6
+    behaviour: |
+      A device_code grant whose attestation comes from a different
+      instance than the one used at /device/auth is rejected with 400
+      invalid_grant "oauth-client-attestation instance public key
+      mismatch".
+    status: pending
+
+  - id: ATB-028
+    severity: P0
+    spec: draft §6
+    behaviour: |
+      A device_code grant whose attestation comes from the binding
+      instance succeeds (200) and persists attestationJkt on the
+      issued refresh_token.
+    status: pending
+
+  - id: ATB-029
+    severity: P0
+    spec: draft §6 / OIDC CIBA Core
+    behaviour: |
+      A /backchannel submission carrying attestation+PoP persists
+      attestationJkt on the BackchannelAuthenticationRequest.
+    status: pending
+
+  - id: ATB-030
+    severity: P0
+    spec: draft §6
+    behaviour: |
+      A CIBA token grant whose attestation comes from a different
+      instance is rejected with 400 invalid_grant
+      "oauth-client-attestation instance public key mismatch".
+    status: pending
+
+  - id: ATB-031
+    severity: P0
+    spec: draft §6
+    behaviour: |
+      A CIBA token grant whose attestation comes from the binding
+      instance succeeds (200) and persists attestationJkt on the
+      issued refresh_token.
+    status: pending
+
+  - id: ATB-032
+    severity: P2
+    spec: draft §6 (observability)
+    behaviour: |
+      For any grant where the instance public key differs from the
+      bound jkt, the provider emits exactly one grant.error audit
+      event with error_detail="oauth-client-attestation instance
+      public key mismatch".
+    status: pending

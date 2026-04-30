@@ -1,0 +1,220 @@
+# yaml-language-server: $schema=./schema.json
+feature: registration_policies
+prefix: RP
+title: Registration Policies
+specs:
+  - RFC 7591 §5.2 — Software Statement / Registration Policies
+  - OpenID Connect Dynamic Client Registration §3 — Metadata Validation
+  - OP design — features.registration.policies map of name to function
+
+description: |
+  OP-administrator policy hooks bound to Initial Access Tokens (IAT)
+  or Registration Access Tokens (RAT). Policies apply default values,
+  enforce values, and run validation across DCR and registration
+  management. Covers configuration coupling, IAT-bound and RAT-bound
+  policy execution, validation of the policies array, error mapping,
+  and audit logging.
+
+rows:
+  - id: RP-CFG-01
+    severity: P0
+    spec: RFC 7591 §5.2
+    behaviour: |
+      Configuring policies without enabling adapter-managed IATs
+      causes OP construction to fail with "registration policies are
+      only available in conjuction with adapter-backed initial access
+      tokens".
+    status: pending
+
+  - id: RP-CFG-02
+    severity: P0
+    spec: RFC 7591 §5.2
+    behaviour: |
+      Combining a fixed-string IAT (DCR-IAT-01) with policies is
+      unsupported and fails OP construction.
+    status: pending
+
+  - id: RP-CFG-03
+    severity: P1
+    spec: OP design
+    behaviour: |
+      Policy names are strings; the policy function MAY be either
+      synchronous or asynchronous and both are accepted.
+    status: pending
+
+  - id: RP-IAT-01
+    severity: P0
+    spec: OP design
+    behaviour: |
+      new InitialAccessToken({ policies: ["p1", "p2"] }).save()
+      persists the IAT and the resulting initial_access_token.saved
+      audit event carries the policies value.
+    status: pending
+
+  - id: RP-IAT-02
+    severity: P0
+    spec: OP design
+    behaviour: |
+      During DCR (POST /reg) the OP runs every policy bound to the
+      IAT in declared order.
+    status: pending
+
+  - id: RP-IAT-03
+    severity: P0
+    spec: RFC 7591 §3
+    behaviour: |
+      A policy MAY set properties.<field> as a default value, taking
+      effect only when the client did not supply that field.
+    status: pending
+
+  - id: RP-IAT-04
+    severity: P0
+    spec: RFC 7591 §3
+    behaviour: |
+      A policy MAY enforce properties.<field>, overriding any
+      client-supplied value.
+    status: pending
+
+  - id: RP-IAT-05
+    severity: P0
+    spec: RFC 7591 §3.2.2
+    behaviour: |
+      A policy that throws InvalidClientMetadata("foo") yields 400
+      invalid_client_metadata with description "foo".
+    status: pending
+
+  - id: RP-IAT-06
+    severity: P1
+    spec: OP design
+    behaviour: |
+      A policy that mutates ctx.oidc.entities.RegistrationAccessToken
+      .policies replaces the policies attached to the issued RAT.
+    status: pending
+
+  - id: RP-IAT-07
+    severity: P0
+    spec: OP design
+    behaviour: |
+      By default the IAT's policies propagate verbatim onto the
+      issued RAT.
+    status: pending
+
+  - id: RP-RAT-01
+    severity: P0
+    spec: OP design
+    behaviour: |
+      During PUT /reg/:id the OP runs every policy bound to the RAT
+      in declared order.
+    status: pending
+
+  - id: RP-RAT-02
+    severity: P0
+    spec: RFC 7591 §3
+    behaviour: |
+      Default-value, enforce-value, and validation semantics on RATs
+      mirror their IAT counterparts.
+    status: pending
+
+  - id: RP-RAT-03
+    severity: P0
+    spec: OP design
+    behaviour: |
+      With rotation enabled, the freshly minted RAT carries the same
+      policies as its predecessor.
+    status: pending
+
+  - id: RP-RAT-04
+    severity: P1
+    spec: OP design
+    behaviour: |
+      Policies MUST only be attached to a RAT through an IAT — never
+      via a direct external API. A RAT loaded from the adapter with
+      an empty policies field is rejected on the safe side.
+    status: pending
+
+  - id: RP-VAL-01
+    severity: P0
+    spec: OP design
+    behaviour: |
+      policies: null on save fails with "policies must be an array".
+    status: pending
+
+  - id: RP-VAL-02
+    severity: P0
+    spec: OP design
+    behaviour: |
+      policies: [] on save fails with "policies must not be empty".
+    status: pending
+
+  - id: RP-VAL-03
+    severity: P0
+    spec: OP design
+    behaviour: |
+      A non-string element in policies fails with "policies must be
+      strings".
+    status: pending
+
+  - id: RP-VAL-04
+    severity: P0
+    spec: OP design
+    behaviour: |
+      A name that is not present in the configured policies map
+      fails with "policy <name> not configured".
+    status: pending
+
+  - id: RP-VAL-05
+    severity: P0
+    spec: OP design
+    behaviour: |
+      The same validations run both at save time and at find time so
+      that a corrupted adapter payload cannot bypass the guard.
+    status: pending
+
+  - id: RP-ERR-01
+    severity: P0
+    spec: RFC 7591 §3.2.2
+    behaviour: |
+      A policy throwing errors.InvalidClientMetadata maps to 400
+      invalid_client_metadata.
+    status: pending
+
+  - id: RP-ERR-02
+    severity: P0
+    spec: RFC 7591 §3.2.2
+    behaviour: |
+      A policy throwing errors.InvalidRedirectUri maps to 400
+      invalid_redirect_uri.
+    status: pending
+
+  - id: RP-ERR-03
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      An unexpected exception inside a policy maps to 500 server_error
+      while the OP-internal detail is recorded only in logs.
+    status: pending
+
+  - id: RP-ERR-04
+    severity: P1
+    spec: OP design
+    behaviour: |
+      Even if a policy mutates its properties argument, no side
+      effects leak to the registration of any other client (the
+      runtime defaults to passing copies).
+    status: pending
+
+  - id: RP-LOG-01
+    severity: P2
+    spec: OP audit
+    behaviour: |
+      registration_create.success and registration_update.success
+      payloads include the names of every policy that ran.
+    status: pending
+
+  - id: RP-LOG-02
+    severity: P1
+    spec: OWASP / GDPR
+    behaviour: |
+      Default-applied or enforced values are not written to logs to
+      avoid PII leakage.
+    status: pending

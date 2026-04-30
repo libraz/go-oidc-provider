@@ -1,0 +1,399 @@
+# yaml-language-server: $schema=./schema.json
+feature: claims
+prefix: CL
+title: claims authorization request parameter
+specs:
+  - OIDC Core 1.0 §5.5 (Requesting Claims using the claims Parameter)
+  - OIDC Core 1.0 §5.5.1 (Individual Claims Requests)
+  - OIDC Core 1.0 §5.5.1.1 (acr Claim Request)
+  - OIDC Core 1.0 §5.5.2 (Languages and Scripts)
+  - OIDC Core 1.0 §3.1.2.1 (id_token_hint), §15
+  - RFC 9101 — JWT Secured Authorization Request (JAR)
+  - RFC 9126 — Pushed Authorization Requests (PAR)
+
+description: |
+  Coverage of the claims authorization request parameter: which inputs
+  the OP accepts and which it rejects, projection into id_token vs
+  userinfo, related interactions (acr mismatch, sub value lock,
+  id_token_hint), consent gating, and JAR / PAR carriage.
+
+rows:
+  - id: CL-01
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the request omits the claims parameter, the OP treats it as
+      absent (nil) and applies no per-claim projection rules.
+
+  - id: CL-02
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the claims parameter is present but its JSON value is not a
+      top-level object, the OP rejects the request with invalid_request
+      ("claims parameter should be a JSON object").
+
+  - id: CL-03
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the claims parameter cannot be JSON-parsed at all, the OP
+      rejects the request with invalid_request ("could not parse the
+      claims parameter JSON").
+
+  - id: CL-04
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the top-level claims object contains neither id_token nor
+      userinfo properties, the OP rejects the request with
+      invalid_request ("claims parameter should have userinfo or
+      id_token properties").
+
+  - id: CL-05
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the value of id_token or userinfo is not an object (e.g. a
+      string, array, or non-null scalar), the OP rejects the request
+      with invalid_request (e.g. "claims.id_token should be an
+      object").
+
+  - id: CL-06
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      When id_token or userinfo is null or an empty object, the OP
+      accepts the request and treats that section as an empty request
+      (no projection performed).
+
+  - id: CL-07
+    severity: P2
+    spec: OIDC Core §5.5
+    behaviour: |
+      Unknown top-level keys (such as _claim_names) inside the claims
+      parameter are ignored without raising an error.
+
+  - id: CL-08
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the claims parameter is combined with response_type=none,
+      the OP rejects the request with invalid_request ("claims
+      parameter should not be combined with response_type none").
+
+  - id: CL-09
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the request asks for claims.userinfo but the OP's userinfo
+      endpoint feature is disabled, the OP rejects the request with
+      invalid_request ("claims.userinfo should not be used since
+      userinfo endpoint is not supported").
+
+  - id: CL-10
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When claims.userinfo is requested in a flow that does not issue
+      an access token (e.g. response_type=id_token alone), the OP
+      rejects the request with invalid_request ("claims.userinfo
+      should not be used if access_token is not issued").
+
+  - id: CL-20
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When the value of an individual claim entry is null, the OP
+      accepts it as a voluntary request.
+
+  - id: CL-21
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When the value of an individual claim entry is an empty object,
+      the OP accepts it as a voluntary request (equivalent to null).
+
+  - id: CL-22
+    severity: P1
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When a claim is requested with essential=true but the source has
+      no value for it, the OP omits the claim from the response rather
+      than raising an error (the spec mandates "MUST attempt", not
+      "MUST succeed").
+
+  - id: CL-23
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When a claim is requested with a value constraint that the
+      source value does not match, the OP omits the claim from the
+      response.
+
+  - id: CL-24
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When a claim is requested with a values array, the OP releases
+      the claim if the source matches any element and omits it
+      otherwise.
+
+  - id: CL-25
+    severity: P1
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      Value comparisons for the value/values constraints use JSON
+      equality across strings, numbers, booleans, objects, and arrays
+      (numeric precision is preserved).
+
+  - id: CL-26
+    severity: P1
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      Non-standard claim entry shapes (a bare boolean, number, or
+      string instead of an object) are ignored: the OP does not
+      project such entries and only releases values whose source key
+      matches.
+
+  - id: CL-27
+    severity: P2
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      Language-tagged keys (e.g. name#ja-JP) are passed through the
+      parser transparently as keys.
+
+  - id: CL-30
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      A claim listed under id_token that the source provides is
+      embedded directly in the id_token regardless of scope.
+
+  - id: CL-31
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      A claim listed under userinfo is included only in the
+      /userinfo response and never leaks into the id_token.
+
+  - id: CL-32
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the same claim is requested under both id_token and
+      userinfo, the OP projects it independently into each location
+      without cross-contamination.
+
+  - id: CL-33
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      A claim that the requested scope would not release is still
+      released individually when requested via the claims parameter.
+
+  - id: CL-34
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the source has no value for a requested claim, the OP
+      omits it entirely; null values are never emitted.
+
+  - id: CL-35
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      Even when sub appears in the claims parameter, the projector
+      protects the sub claim and does not overwrite it.
+
+  - id: CL-36
+    severity: P1
+    spec: OIDC Core §5.5.2
+    behaviour: |
+      An id_token re-issued through the refresh token grant inherits
+      the original claims parameter (the grant carries it forward and
+      re-projects).
+
+  - id: CL-37
+    severity: P1
+    spec: OIDC Core §5.5.2
+    behaviour: |
+      An id_token issued at the token endpoint via the authorization
+      code grant inherits the original claims parameter just like
+      refresh-issued tokens.
+
+  - id: CL-40
+    severity: P0
+    spec: OIDC Core §5.5.1.1
+    behaviour: |
+      When claims.id_token.acr has essential=true and a single value
+      that the session satisfies, the OP issues the id_token as
+      requested.
+
+  - id: CL-41
+    severity: P0
+    spec: OIDC Core §5.5.1.1
+    behaviour: |
+      When claims.id_token.acr has essential=true and a values array
+      whose entries the session satisfies one of, the OP issues the
+      id_token.
+
+  - id: CL-42
+    severity: P0
+    spec: OIDC Core §5.5.1.1
+    behaviour: |
+      When an essential acr request cannot be satisfied and
+      prompt=none was requested, the OP returns login_required
+      ("requested ACR could not be obtained").
+
+  - id: CL-43
+    severity: P0
+    spec: OIDC Core §5.5.1.1
+    behaviour: |
+      When claims.id_token.acr.values is not an array (e.g. a string
+      or other invalid type), the OP rejects the request with
+      invalid_request ("invalid claims.id_token.acr.values type").
+
+  - id: CL-44
+    severity: P1
+    spec: OIDC Core §5.5.1.1
+    behaviour: |
+      A non-essential (voluntary) acr request that cannot be satisfied
+      is allowed to pass without erroring; the claim is simply omitted.
+
+  - id: CL-45
+    severity: P2
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the client metadata default_acr_values supplies an acr
+      request after the fact, the resulting id_token still carries the
+      acr claim (backwards-compatible backfill).
+
+  - id: CL-50
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When claims.id_token.sub.value matches the current session
+      subject, the OP issues the id_token unchanged.
+
+  - id: CL-51
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      For a pairwise client, when claims.id_token.sub.value matches
+      the pairwise sub for the session, the OP issues the id_token.
+
+  - id: CL-52
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When the requested sub does not match the current session
+      subject and prompt=none was requested, the OP returns
+      login_required ("requested subject could not be obtained").
+
+  - id: CL-53
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      For a pairwise client whose pairwise sub differs from the
+      requested sub value with prompt=none, the OP returns
+      login_required.
+
+  - id: CL-54
+    severity: P1
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      When no session is established and a sub value is requested,
+      the OP redirects the user agent into the login interaction
+      with reason claims_id_token_sub_value (or equivalent signal).
+
+  - id: CL-60
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      When the id_token_hint sub matches the current session subject,
+      the OP allows the request and issues an id_token.
+
+  - id: CL-61
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      For a pairwise client, when the id_token_hint sub matches the
+      pairwise sub, the OP issues the id_token.
+
+  - id: CL-62
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      When id_token_hint sub mismatches the current session subject
+      and prompt=none was requested, the OP returns login_required
+      ("id_token_hint and authenticated subject do not match").
+
+  - id: CL-63
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      For a pairwise client whose pairwise sub differs from the hint
+      sub with prompt=none, the OP returns login_required.
+
+  - id: CL-64
+    severity: P1
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      When no session exists and an id_token_hint is presented, the
+      OP routes into the login interaction with reason id_token_hint.
+
+  - id: CL-65
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      When the id_token_hint fails signature verification or its iss,
+      aud, or azp checks fail, the OP rejects the request with
+      invalid_request.
+
+  - id: CL-66
+    severity: P1
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      An expired id_token_hint is still accepted for sub matching
+      purposes on this code path; signature verification, however,
+      remains mandatory.
+
+  - id: CL-70
+    severity: P0
+    spec: OIDC Core §5.5
+    behaviour: |
+      When the claims parameter requests a claim that consent has not
+      granted and prompt=none is set, the OP returns consent_required
+      ("requested claims not granted").
+
+  - id: CL-71
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      Claims that consent rejected are removed from projection: the
+      OP intersects the requested set with the consent's granted
+      subset (rejectedClaims concept).
+
+  - id: CL-80
+    severity: P1
+    spec: RFC 9101 §6
+    behaviour: |
+      When the claims parameter is carried inside a JAR request
+      object, the OP parses and applies it identically to the
+      query-string form.
+
+  - id: CL-81
+    severity: P1
+    spec: RFC 9126 §3
+    behaviour: |
+      When the claims parameter is submitted via PAR, the OP
+      re-evaluates it at authorize-time pickup so the same projection
+      semantics apply.
+
+  - id: CL-82
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      Authorization requests that carry claims via either GET or POST
+      yield identical parsing results.

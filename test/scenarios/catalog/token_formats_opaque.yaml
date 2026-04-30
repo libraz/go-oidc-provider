@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=./schema.json
+feature: token_formats_opaque
+prefix: TFO
+title: Opaque token persistence payload
+specs:
+  - RFC 6749 — OAuth 2.0
+  - RFC 6750 — Bearer Token
+  - RFC 7009 / 7662 — Revocation / Introspection
+  - RFC 8628 — Device Authorization Grant
+  - OIDC Core 1.0 §3 — AuthorizationCode / IdToken
+  - RFC 7591 / 7592 — Initial / Registration access tokens
+  - OIDC CIBA — Backchannel authentication request
+  - RFC 8705 — `x5t#S256` confirmation
+  - RFC 9449 — `jkt` / `dpopJkt` confirmation
+
+description: |
+  Per-kind contract for the payload the OP hands to adapter.upsert when
+  persisting an opaque token. The body is always a 43-character
+  base64url string (32 random bytes), and each token kind carries a
+  fixed property set so storage layers can rely on a stable shape.
+
+rows:
+  - id: TFO-001
+    severity: P0
+    spec: RFC 6749 / RFC 8705 / RFC 9449
+    behaviour: |
+      Saving an opaque access token writes a 43-character jti and a
+      payload containing accountId, aud, claims, clientId, exp,
+      grantId, gty, iat, jti, kind=AccessToken, scope, sid, x5t#S256,
+      jkt, sessionUid, expiresWithSession, and extra.
+    status: pending
+
+  - id: TFO-002
+    severity: P1
+    spec: RFC 9068 §2.2.3.1
+    behaviour: |
+      When extra is omitted at construction, the extraTokenClaims hook
+      runs during save and the resulting token instance carries the
+      configurator-supplied extra values.
+    status: pending
+
+  - id: TFO-003
+    severity: P0
+    spec: OIDC Core §3.1 / RFC 7636 / RFC 9449
+    behaviour: |
+      Saving an authorization code writes a 43-character jti and a
+      payload containing accountId, acr, amr, authTime, claims,
+      clientId, codeChallenge, codeChallengeMethod, consumed, exp,
+      grantId, iat, jti, kind=AuthorizationCode, nonce, redirectUri,
+      resource, scope, sid, sessionUid, expiresWithSession, and
+      dpopJkt.
+    status: pending
+
+  - id: TFO-004
+    severity: P0
+    spec: RFC 8628
+    behaviour: |
+      Saving a device code writes a 43-character jti and a payload
+      containing accountId, acr, amr, authTime, claims, clientId,
+      consumed, deviceInfo, error, errorDescription, exp, grantId, iat,
+      jti, kind=DeviceCode, nonce, params, resource, scope, sid,
+      userCode, sessionUid, expiresWithSession, and inFlight.
+    status: pending
+
+  - id: TFO-005
+    severity: P0
+    spec: OIDC CIBA
+    behaviour: |
+      Saving a backchannel authentication request writes a
+      43-character jti and a payload containing accountId, acr, amr,
+      authTime, claims, clientId, consumed, error, errorDescription,
+      exp, grantId, iat, jti, kind, nonce, params, resource, scope,
+      sid, sessionUid, and expiresWithSession.
+    status: pending
+
+  - id: TFO-006
+    severity: P0
+    spec: RFC 6749 §6 / OIDC Core §12
+    behaviour: |
+      Saving a refresh token writes a 43-character jti and a payload
+      containing accountId, acr, amr, authTime, claims, iiat,
+      rotations, clientId, consumed, exp, grantId, gty, iat, jti,
+      kind=RefreshToken, nonce, resource, scope, sid, x5t#S256, jkt,
+      sessionUid, and expiresWithSession.
+    status: pending
+
+  - id: TFO-007
+    severity: P0
+    spec: RFC 6749 §4.4
+    behaviour: |
+      Saving a client_credentials access token writes a 43-character
+      jti and a payload containing aud, clientId, exp, iat, jti,
+      kind=ClientCredentials, scope, x5t#S256, jkt, and extra (no
+      end-user fields).
+    status: pending
+
+  - id: TFO-008
+    severity: P1
+    spec: RFC 6749 §4.4
+    behaviour: |
+      When extra is omitted on a client_credentials token, the
+      extraTokenClaims hook fires during save and populates the
+      resulting token instance's extra property.
+    status: pending
+
+  - id: TFO-009
+    severity: P1
+    spec: RFC 7591
+    behaviour: |
+      Saving an initial access token writes a 43-character jti and a
+      payload of exp, iat, jti, kind=InitialAccessToken, and policies
+      only (no client binding).
+    status: pending
+
+  - id: TFO-010
+    severity: P1
+    spec: RFC 7592
+    behaviour: |
+      Saving a registration access token writes a payload of clientId,
+      kind=RegistrationAccessToken, policies, jti, iat, and exp.
+    status: pending

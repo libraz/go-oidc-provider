@@ -1,0 +1,468 @@
+# yaml-language-server: $schema=./schema.json
+feature: dpop
+prefix: DPOP
+title: DPoP — Demonstrating Proof-of-Possession
+specs:
+  - RFC 9449 — OAuth 2.0 Demonstrating Proof of Possession (DPoP)
+  - RFC 6749 — OAuth 2.0 Authorization Framework
+  - RFC 6750 — OAuth 2.0 Bearer Token Usage
+  - OIDC Core 1.0
+  - RFC 9126 — Pushed Authorization Requests
+  - RFC 8628 — Device Authorization Grant
+  - OpenID CIBA Core 1.0
+
+description: |
+  Sender-constrained access and refresh tokens via DPoP proof JWTs.
+  Covers the proof envelope (typ/alg/jwk), proof claims (jti/htm/htu/
+  iat/ath/nonce), replay defence, jkt verification at the resource
+  server, nonce challenge handling, and binding semantics across the
+  authorization-code, refresh, device, CIBA and client-credentials
+  grants for both confidential and public clients.
+
+rows:
+  - id: DPOP-001
+    severity: P1
+    spec: RFC 9449 §5.1
+    behaviour: |
+      The discovery document advertises
+      dpop_signing_alg_values_supported listing the asymmetric algs
+      (e.g. ES256, PS256) the OP accepts in DPoP proofs.
+    status: pending
+
+  - id: DPOP-002
+    severity: P0
+    spec: RFC 9449 §6 / RFC 8705 §3
+    behaviour: |
+      An access token cannot carry two proof-of-possession bindings at
+      once; setting both jkt and x5t#S256 thumbprints on a single AT
+      MUST fail with a construction error.
+    status: pending
+
+  - id: DPOP-003
+    severity: P0
+    spec: RFC 9449 §7.1
+    behaviour: |
+      A DPoP-bound access token presented at /userinfo with
+      Authorization: Bearer is rejected with 401 invalid_token; the
+      WWW-Authenticate challenge uses scheme DPoP and advertises the
+      allowed algs.
+    status: pending
+
+  - id: DPOP-004
+    severity: P0
+    spec: RFC 9449 §7
+    behaviour: |
+      A DPoP-bound access token presented with Authorization: DPoP but
+      no DPoP proof header is rejected with 400 invalid_request
+      ("DPoP header not provided"); WWW-Authenticate uses scheme DPoP
+      with the advertised algs.
+    status: pending
+
+  - id: DPOP-005
+    severity: P0
+    spec: RFC 9449 §7.1 / RFC 6750 §2
+    behaviour: |
+      DPoP-bound tokens MUST be sent only in the Authorization header.
+      A POST /userinfo carrying access_token in the form body together
+      with a DPoP header is rejected with 400 invalid_request.
+    status: pending
+
+  - id: DPOP-006
+    severity: P0
+    spec: RFC 9449 §7.1
+    behaviour: |
+      When a DPoP proof header is present, the Authorization scheme
+      MUST be DPoP. Combining a DPoP header with Authorization: Bearer
+      is rejected with 400 invalid_request.
+    status: pending
+
+  - id: DPOP-007
+    severity: P0
+    spec: RFC 9449 §4.2
+    behaviour: |
+      The proof JWT typ header MUST equal dpop+jwt. Any other value
+      (e.g. JWT, secevent+jwt) is rejected with 401
+      invalid_dpop_proof and an "unexpected typ JWT header value"
+      detail.
+    status: pending
+
+  - id: DPOP-008
+    severity: P0
+    spec: RFC 9449 §4.2
+    behaviour: |
+      The proof JWT alg header MUST be one of the configured
+      asymmetric algs. Values of none, symmetric algs (HS*),
+      unsupported algs, missing alg, or non-string alg are rejected
+      with 401 invalid_dpop_proof.
+    status: pending
+
+  - id: DPOP-009
+    severity: P0
+    spec: RFC 9449 §4.2
+    behaviour: |
+      The proof JWT jwk header MUST be a JSON object. Missing,
+      empty, or non-object jwk values (string, number, boolean, null,
+      array) are rejected with 401 invalid_dpop_proof "jwk header
+      parameter must be a JSON object".
+    status: pending
+
+  - id: DPOP-010
+    severity: P0
+    spec: RFC 9449 §4.2 / RFC 7517 §1
+    behaviour: |
+      The proof JWT jwk header MUST publish only public key material.
+      Any private key parameters in the jwk are rejected with 401
+      invalid_dpop_proof "jwk header parameter must be a public key".
+    status: pending
+
+  - id: DPOP-011
+    severity: P0
+    spec: RFC 9449 §4.2
+    behaviour: |
+      The proof JWT jwk header MUST NOT carry a symmetric key. An
+      oct kty is rejected with 401 invalid_dpop_proof "jwk header
+      parameter must be a public key".
+    status: pending
+
+  - id: DPOP-012
+    severity: P0
+    spec: RFC 9449 §4.2
+    behaviour: |
+      The proof JWT body MUST contain a string jti claim. A missing
+      or non-string jti is rejected with 401 invalid_dpop_proof
+      "DPoP proof must have a jti string property".
+    status: pending
+
+  - id: DPOP-013
+    severity: P0
+    spec: RFC 9449 §4.3
+    behaviour: |
+      The proof htm claim MUST equal the current HTTP method. A
+      mismatch is rejected with 401 invalid_dpop_proof "DPoP proof
+      htm mismatch".
+    status: pending
+
+  - id: DPOP-014
+    severity: P0
+    spec: RFC 9449 §4.3
+    behaviour: |
+      The proof htu claim MUST equal the canonical resource URI
+      (scheme + host + path, no query, no fragment). A mismatch is
+      rejected with 401 invalid_dpop_proof "DPoP proof htu mismatch".
+    status: pending
+
+  - id: DPOP-015
+    severity: P0
+    spec: RFC 9449 §4.3 / §11.1
+    behaviour: |
+      When the nonce mechanism is disabled, a proof iat outside the
+      configured freshness window (in either direction) is rejected
+      with 401 invalid_dpop_proof "DPoP proof iat is not recent
+      enough"; no DPoP-Nonce header is emitted.
+    status: pending
+
+  - id: DPOP-016
+    severity: P0
+    spec: RFC 9449 §8 / §9
+    behaviour: |
+      When the server nonce mechanism is enabled, a proof iat outside
+      the freshness window is answered with 401 use_dpop_nonce and a
+      DPoP-Nonce response header so the client can retry with the
+      issued nonce.
+    status: pending
+
+  - id: DPOP-017
+    severity: P0
+    spec: RFC 9449 §11.1
+    behaviour: |
+      Replaying the same proof JWT (same jti and jwk thumbprint)
+      within the freshness window is rejected with 401 invalid_token
+      "DPoP proof JWT Replay detected".
+    status: pending
+
+  - id: DPOP-018
+    severity: P0
+    spec: RFC 9449 §7.1 / §6.1
+    behaviour: |
+      A DPoP-bound access token presented at the resource server with
+      a proof signed by a different keypair than the binding key is
+      rejected with 401 invalid_token "failed jkt verification".
+    status: pending
+
+  - id: DPOP-019
+    severity: P0
+    spec: RFC 9449 §7.1
+    behaviour: |
+      Presenting a DPoP-bound access token under the Bearer scheme is
+      rejected with 401 invalid_token "failed jkt verification" and a
+      WWW-Authenticate DPoP challenge.
+    status: pending
+
+  - id: DPOP-020
+    severity: P0
+    spec: RFC 9449 §4.3
+    behaviour: |
+      The proof ath claim MUST equal base64url(SHA-256(access_token)).
+      A mismatch is rejected with 401 invalid_dpop_proof "DPoP proof
+      ath mismatch".
+    status: pending
+
+  - id: DPOP-021
+    severity: P0
+    spec: RFC 9449 §4.3
+    behaviour: |
+      A DPoP proof presented at a protected resource MUST carry an
+      ath claim; its absence is rejected with 401
+      invalid_dpop_proof.
+    status: pending
+
+  - id: DPOP-022
+    severity: P0
+    spec: RFC 9449 §5
+    behaviour: |
+      A malformed DPoP header value at /token is rejected with 400
+      invalid_dpop_proof "invalid DPoP key binding".
+    status: pending
+
+  - id: DPOP-023
+    severity: P0
+    spec: RFC 9449 §8 / §9
+    behaviour: |
+      A proof carrying a nonce the server does not recognise at
+      /userinfo is answered with 401 use_dpop_nonce "invalid nonce in
+      DPoP proof" and a fresh DPoP-Nonce response header.
+    status: pending
+
+  - id: DPOP-024
+    severity: P0
+    spec: RFC 9449 §8 / §9
+    behaviour: |
+      A proof carrying a nonce the server does not recognise at
+      /token is answered with 400 use_dpop_nonce "invalid nonce in
+      DPoP proof" and a fresh DPoP-Nonce response header.
+    status: pending
+
+  - id: DPOP-025
+    severity: P0
+    spec: RFC 9449 §8 / RFC 9126
+    behaviour: |
+      When the nonce-required policy is active, a proof omitting the
+      nonce at PAR is answered with 400 use_dpop_nonce "nonce is
+      required in the DPoP proof" and a DPoP-Nonce response header.
+    status: pending
+
+  - id: DPOP-026
+    severity: P0
+    spec: RFC 9449 §8
+    behaviour: |
+      When the nonce-required policy is active, a proof omitting the
+      nonce at /userinfo is answered with 401 use_dpop_nonce "nonce is
+      required in the DPoP proof" and a DPoP-Nonce response header.
+    status: pending
+
+  - id: DPOP-027
+    severity: P0
+    spec: RFC 9449 §8
+    behaviour: |
+      When the nonce-required policy is active, a proof omitting the
+      nonce at /token is answered with 400 use_dpop_nonce "nonce is
+      required in the DPoP proof" and a DPoP-Nonce response header.
+    status: pending
+
+  - id: DPOP-028
+    severity: P1
+    spec: RFC 9449 §8
+    behaviour: |
+      When the client supplies a fresh server-issued nonce, the
+      response succeeds (200/201) and does NOT emit a new DPoP-Nonce
+      header.
+    status: pending
+
+  - id: DPOP-029
+    severity: P1
+    spec: RFC 9449 §6 / RFC 7662
+    behaviour: |
+      Introspection of a DPoP-bound access token surfaces cnf.jkt and
+      token_type=DPoP in the response.
+    status: pending
+
+  - id: DPOP-030
+    severity: P0
+    spec: RFC 9449 §5 / §6 / RFC 8628
+    behaviour: |
+      A confidential client redeeming a device_code with a valid DPoP
+      proof receives an access token bound by jkt; the issued refresh
+      token is NOT sender-constrained.
+    status: pending
+
+  - id: DPOP-031
+    severity: P0
+    spec: RFC 9449 §5
+    behaviour: |
+      A public client (auth method none) redeeming a device_code with
+      a valid DPoP proof receives both an access token and a refresh
+      token bound by jkt (RTs MUST be sender-constrained for public
+      clients).
+    status: pending
+
+  - id: DPOP-032
+    severity: P0
+    spec: RFC 9449 §5 / OIDC CIBA Core
+    behaviour: |
+      A confidential client redeeming a CIBA grant with a valid DPoP
+      proof receives an access token bound by jkt; the refresh token
+      is NOT sender-constrained.
+    status: pending
+
+  - id: DPOP-033
+    severity: P0
+    spec: RFC 9449 §5
+    behaviour: |
+      A public client redeeming a CIBA grant with a valid DPoP proof
+      receives both an access token and a refresh token bound by jkt.
+    status: pending
+
+  - id: DPOP-034
+    severity: P0
+    spec: RFC 9449 §10 / RFC 9126
+    behaviour: |
+      A PAR submission carrying a dpop_jkt parameter that equals the
+      proof jwk thumbprint is accepted (201).
+    status: pending
+
+  - id: DPOP-035
+    severity: P0
+    spec: RFC 9449 §10
+    behaviour: |
+      A PAR submission whose dpop_jkt parameter differs from the
+      proof jwk thumbprint is rejected with 400 invalid_request
+      "DPoP proof key thumbprint does not match dpop_jkt".
+    status: pending
+
+  - id: DPOP-036
+    severity: P0
+    spec: RFC 9449 §10 / RFC 9126
+    behaviour: |
+      A PAR submission carrying a DPoP proof but no dpop_jkt parameter
+      is stored under a request_uri whose dpop_jkt is auto-derived
+      from the proof (43-char base64url thumbprint).
+    status: pending
+
+  - id: DPOP-037
+    severity: P0
+    spec: RFC 9449 §10 / RFC 9101
+    behaviour: |
+      A PAR submission with a signed request JWT plus a DPoP proof
+      and no dpop_jkt parameter persists an authorization code whose
+      dpopJkt is derived from the proof (43-char base64url
+      thumbprint).
+    status: pending
+
+  - id: DPOP-038
+    severity: P0
+    spec: RFC 9449 §5 / §6.1
+    behaviour: |
+      An authorization_code redemption with a DPoP proof, where the
+      authorization request had no dpop_jkt, issues an access token
+      bound by jkt; the refresh token (confidential client) is NOT
+      sender-constrained.
+    status: pending
+
+  - id: DPOP-039
+    severity: P0
+    spec: RFC 9449 §10
+    behaviour: |
+      When dpop_jkt was set at the authorization request and the
+      /token DPoP proof matches, the access token is bound by jkt;
+      the refresh token (confidential client) is NOT
+      sender-constrained.
+    status: pending
+
+  - id: DPOP-040
+    severity: P0
+    spec: RFC 9449 §10
+    behaviour: |
+      When dpop_jkt was set at the authorization request and the
+      /token DPoP proof comes from a different key, the redemption is
+      rejected with 400 invalid_grant "DPoP proof key thumbprint does
+      not match dpop_jkt".
+    status: pending
+
+  - id: DPOP-041
+    severity: P0
+    spec: RFC 9449 §10
+    behaviour: |
+      When dpop_jkt was set at the authorization request, the /token
+      redemption MUST carry a DPoP header. Its absence is rejected
+      with 400 invalid_grant "missing DPoP proof JWT".
+    status: pending
+
+  - id: DPOP-042
+    severity: P0
+    spec: RFC 9449 §5
+    behaviour: |
+      A confidential client refresh_token redemption with a DPoP
+      proof from the binding key issues a new access token bound by
+      jkt; the refresh token remains unbound.
+    status: pending
+
+  - id: DPOP-043
+    severity: P0
+    spec: RFC 9449 §5
+    behaviour: |
+      A public client authorization_code redemption with a DPoP proof
+      issues both an access token and a refresh token bound by jkt
+      (the RT MUST be sender-constrained for public clients).
+    status: pending
+
+  - id: DPOP-044
+    severity: P0
+    spec: RFC 9449 §5
+    behaviour: |
+      A public client refresh_token redemption with a DPoP proof from
+      the binding key issues a new access token and a rotated refresh
+      token both bound by jkt.
+    status: pending
+
+  - id: DPOP-045
+    severity: P0
+    spec: RFC 9449 §5 / §6.1
+    behaviour: |
+      A public client refresh_token redemption with a DPoP proof from
+      a different key is rejected with 400 invalid_grant "failed jkt
+      verification".
+    status: pending
+
+  - id: DPOP-046
+    severity: P0
+    spec: RFC 9449 §5 / RFC 6749 §4.4
+    behaviour: |
+      A client_credentials redemption with a DPoP proof issues a
+      ClientCredentials access token bound by jkt.
+    status: pending
+
+  - id: DPOP-047
+    severity: P2
+    spec: RFC 9449 §5.2
+    behaviour: |
+      An invalid DPoP header at /token returns HTTP 400 with body
+      {"error":"invalid_dpop_proof","error_description":"invalid DPoP
+      key binding"}.
+    status: pending
+
+  - id: DPOP-048
+    severity: P2
+    spec: RFC 9449 §7.1 / RFC 6750 §3
+    behaviour: |
+      DPoP errors at the protected resource return a
+      WWW-Authenticate header of the form
+      DPoP error="<code>", algs="<list>".
+    status: pending
+
+  - id: DPOP-049
+    severity: P1
+    spec: RFC 9449 §8
+    behaviour: |
+      A server-issued DPoP-Nonce header value matches the 43-char
+      URL-safe pattern ^[\w-]{43}$.
+    status: pending

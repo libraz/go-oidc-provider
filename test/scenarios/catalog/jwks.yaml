@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=./schema.json
+feature: jwks
+prefix: JWKS
+title: JWKS endpoint
+specs:
+  - RFC 7517 — JSON Web Key
+  - RFC 7518 §3 — JSON Web Algorithms
+  - OIDC Core 1.0 §10, §10.1, §10.1.1, §10.2
+  - OIDC Discovery 1.0 §3 (jwks_uri)
+
+description: |
+  /jwks endpoint contract; key publication and rotation invariants.
+
+rows:
+  - id: JWKS-001
+    severity: P0
+    spec: RFC 7517 §5 + IANA media-type registration
+    behaviour: |
+      GET /jwks returns 200 with
+      Content-Type: application/jwk-set+json; charset=utf-8.
+    status: active
+
+  - id: JWKS-002
+    severity: P0
+    spec: RFC 7517 §5
+    behaviour: |
+      Body is a JSON object {"keys": [...]}.
+    status: active
+
+  - id: JWKS-003
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      The handler MUST NOT bind any client/session/token entity —
+      /jwks is unauthenticated and stateless.
+    status: pending
+
+  - id: JWKS-010
+    severity: P0
+    spec: RFC 7517 §4.5 / OIDC Core §10.1.1
+    behaviour: |
+      Each published key entry has a kid (key ID); the value is
+      stable across restarts unless explicitly rotated.
+    status: active
+
+  - id: JWKS-011
+    severity: P0
+    spec: RFC 7517 §4.1
+    behaviour: |
+      Each published key entry has a kty (one of RSA, EC, OKP, oct).
+    status: active
+
+  - id: JWKS-012
+    severity: P0
+    spec: RFC 7518 §6.3
+    behaviour: |
+      RSA keys publish n and e (public modulus and exponent).
+    status: pending
+    notes: testkit currently wires EC keys only; revisit after RSA fixture lands.
+
+  - id: JWKS-013
+    severity: P0
+    spec: RFC 7518 §6.2.1
+    behaviour: |
+      EC keys publish crv, x, y; never publish d.
+    status: active
+
+  - id: JWKS-014
+    severity: P0
+    spec: RFC 8037 §2
+    behaviour: |
+      OKP keys publish crv and x; never publish d.
+    status: pending
+    notes: testkit currently wires EC keys only; revisit after OKP fixture lands.
+
+  - id: JWKS-015
+    severity: P0
+    spec: RFC 7517 §4.2
+    behaviour: |
+      use MUST be sig or enc when the key is dedicated; signing-only
+      deployments MAY publish keys without use (clients infer from alg).
+    status: pending
+
+  - id: JWKS-016
+    severity: P0
+    spec: RFC 7517 §4.4 / RFC 7518 §3
+    behaviour: |
+      alg is OPTIONAL but, when present, MUST be a registered JWA value
+      (e.g. RS256, ES256, RSA-OAEP, ECDH-ES).
+    status: pending
+
+  - id: JWKS-017
+    severity: P0
+    spec: RFC 7517 §4.7
+    behaviour: |
+      Private fields (d, p, q, dp, dq, qi, oth, k) MUST NEVER appear
+      in any published JWK.
+    status: active
+
+  - id: JWKS-020
+    severity: P0
+    spec: OIDC Core §10.2
+    behaviour: |
+      When the encryption feature is enabled, /jwks publishes
+      encryption keys alongside signing keys. Keys with use=enc carry
+      alg matching their JWE algorithm (e.g. RSA-OAEP, ECDH-ES).
+    status: pending
+    notes: encryption feature not implemented yet.
+
+  - id: JWKS-021
+    severity: P1
+    spec: OIDC Discovery §3
+    behaviour: |
+      A signing-only key MAY be published without use and alg so it
+      can serve multiple algs; embedders SHOULD prefer pinning
+      per-purpose for clarity.
+    status: pending
+
+  - id: JWKS-030
+    severity: P0
+    spec: OIDC Core §10.1
+    behaviour: |
+      When encryption is disabled, all published keys MUST have
+      use=sig and (where applicable) a concrete alg.
+    status: pending
+
+  - id: JWKS-040
+    severity: P0
+    spec: RFC 7517 §4.5 + OIDC Core §10.1.1
+    behaviour: |
+      Newly added keys MUST be published before being used to sign or
+      encrypt; freshly added keys SHOULD remain in JWKS for at least
+      the longest token lifetime so lazy verifiers can fetch them.
+    status: pending
+
+  - id: JWKS-041
+    severity: P0
+    spec: OIDC Core §10.1.1
+    behaviour: |
+      Rotated-out keys MUST stay in JWKS until all in-flight tokens
+      signed by them have expired.
+    status: pending
+
+  - id: JWKS-042
+    severity: P1
+    spec: RFC 7517 §4.5
+    behaviour: |
+      Each rotation MUST issue a new kid.
+    status: pending
+
+  - id: JWKS-050
+    severity: P1
+    spec: OIDC Discovery
+    behaviour: |
+      Embedders SHOULD cache /jwks with a short TTL via
+      Cache-Control: max-age=...
+    status: pending
+
+  - id: JWKS-051
+    severity: P0
+    spec: Fetch CORS
+    behaviour: |
+      /jwks MUST be CORS-open for any origin.
+    status: pending
+    cross_refs:
+      - cors#COR-003

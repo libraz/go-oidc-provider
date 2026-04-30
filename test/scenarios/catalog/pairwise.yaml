@@ -1,0 +1,306 @@
+# yaml-language-server: $schema=./schema.json
+feature: pairwise
+prefix: PW
+title: Pairwise Pseudonymous Identifier
+specs:
+  - OIDC Core 1.0 §8 (Subject Identifier Types)
+  - OIDC Core 1.0 §8.1 (Pairwise Identifier Algorithm)
+  - OIDC Core 1.0 §8.2 (Sector Identifier Validation)
+  - OIDC Core 1.0 §3.1.2.1, §5.3, §5.5.1, §16
+  - OIDC Dynamic Client Registration 1.0 §2 (subject_type, sector_identifier_uri)
+  - OIDC CIBA Core 1.0 §11
+  - OIDC Device Authorization 1.0 §6
+  - RFC 7662 (OAuth 2.0 Token Introspection)
+
+description: |
+  Subject identifier types: public vs pairwise. Covers sector
+  identifier resolution (with and without sector_identifier_uri),
+  CIBA / Device-flow specific jwks_uri rules, the deterministic
+  pairwise sub generation algorithm, and projection of the
+  resulting sub through id_token, userinfo, and introspection.
+
+rows:
+  - id: PW-01
+    severity: P0
+    spec: OIDC Core §8
+    behaviour: |
+      Discovery's subject_types_supported MUST enumerate every
+      identifier type the implementation actually supports
+      (including at least public).
+
+  - id: PW-02
+    severity: P0
+    spec: OIDC Core §8
+    behaviour: |
+      When client metadata omits subject_type, the OP falls back to
+      its default (public).
+
+  - id: PW-03
+    severity: P0
+    spec: OIDC Core §8
+    behaviour: |
+      A client requesting subject_type=pairwise registration is
+      rejected with a metadata error when the OP's pairwise feature
+      is disabled.
+
+  - id: PW-04
+    severity: P0
+    spec: Dynamic Client Registration §2
+    behaviour: |
+      When the OP does not implement pairwise at all, registering
+      subject_type=pairwise yields invalid_client_metadata.
+
+  - id: PW-10
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      When sector_identifier_uri is absent and all redirect_uris
+      share a single host, the OP adopts that host as the sector
+      identifier.
+
+  - id: PW-11
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      When redirect_uris span multiple hosts and
+      sector_identifier_uri is absent, the OP rejects registration
+      ("sector_identifier_uri is mandatory property").
+
+  - id: PW-12
+    severity: P1
+    spec: OIDC Core §8.1
+    behaviour: |
+      Multiple redirect_uris that differ only by path on a shared
+      host pass the single-host check; only the host has to match.
+
+  - id: PW-13
+    severity: P1
+    spec: OIDC Core §8.1
+    behaviour: |
+      Clients without redirect_uris (CIBA, device flow) using
+      pairwise rely on jwks_uri as the sole basis for the sector
+      identifier (see PW-30 series).
+
+  - id: PW-20
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      sector_identifier_uri MUST use the HTTPS scheme; other
+      schemes are rejected ("sector_identifier_uri must be a https
+      uri").
+
+  - id: PW-21
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      At registration time the OP fetches sector_identifier_uri and
+      retrieves a JSON array of redirect_uris.
+
+  - id: PW-22
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      A non-200 response status from sector_identifier_uri (500 /
+      201 / 302 / etc.) fails registration ("unexpected
+      sector_identifier_uri response status code").
+
+  - id: PW-23
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      A response that is not parseable as JSON fails registration
+      ("failed to parse sector_identifier_uri JSON response").
+
+  - id: PW-24
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      A response whose top-level shape is not a JSON array (string,
+      object, etc.) fails registration ("sector_identifier_uri must
+      return single JSON array").
+
+  - id: PW-25
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      Registration fails when the response array does not contain
+      every redirect_uri the client registered ("all registered
+      redirect_uris must be included").
+
+  - id: PW-26
+    severity: P1
+    spec: OIDC Core §8.1
+    behaviour: |
+      A subject_type=public client that supplies
+      sector_identifier_uri still has its host recorded so that a
+      later switch to pairwise (or audit) has the value already.
+
+  - id: PW-27
+    severity: P1
+    spec: OIDC Core §8.1
+    behaviour: |
+      The sector identifier is derived from the URL host
+      (lowercased); port and path are discarded.
+
+  - id: PW-30
+    severity: P0
+    spec: OIDC CIBA §11
+    behaviour: |
+      A CIBA client using pairwise with sector_identifier_uri MUST
+      have its jwks_uri included in the response array
+      ("client's jwks_uri must be included").
+
+  - id: PW-31
+    severity: P0
+    spec: OIDC Device §6
+    behaviour: |
+      A Device-flow client using pairwise with
+      sector_identifier_uri MUST have its jwks_uri included in the
+      response array.
+
+  - id: PW-32
+    severity: P1
+    spec: OIDC Core §8.1
+    behaviour: |
+      Because CIBA and Device flow clients lack redirect_uris, the
+      jwks_uri serves as the safe sector-binding anchor (consistent
+      with the spec's intent for those client types).
+
+  - id: PW-40
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      The pairwise sub is a deterministic function of
+      (sector_identifier, local_account_id, salt); the same triple
+      always produces the same sub.
+
+  - id: PW-41
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      The salt is an OP-managed secret supplied by the embedder; it
+      MUST be treated as sensitive because reusing the same salt
+      across environments makes pairwise subs predictable.
+
+  - id: PW-42
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      A typical concrete algorithm is
+      SHA-256(sector_identifier || local_id || salt) truncated to
+      16 bytes and rendered as a UUIDv5-shaped 128-bit value; the
+      spec does not mandate one specific shape.
+
+  - id: PW-43
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      Different sector identifiers MUST produce different pairwise
+      subs for the same local account at the same OP.
+
+  - id: PW-44
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      Clients that share a sector identifier MUST receive the same
+      pairwise sub for the same local account (the sector grouping
+      is the whole point).
+
+  - id: PW-45
+    severity: P0
+    spec: OIDC Core §8.1
+    behaviour: |
+      A subject_type=public client receives the local account id
+      verbatim as the sub; the pairwise transform does not run.
+
+  - id: PW-46
+    severity: P0
+    spec: OIDC Core §16
+    behaviour: |
+      The pairwise sub stays within 255 characters as the spec
+      recommends.
+
+  - id: PW-50
+    severity: P0
+    spec: OIDC Core §8
+    behaviour: |
+      The id_token sub follows the client's subject_type (public ->
+      local id, pairwise -> pairwise sub).
+
+  - id: PW-51
+    severity: P0
+    spec: OIDC Core §5.3
+    behaviour: |
+      The /userinfo response sub follows the same rule as the
+      id_token sub.
+
+  - id: PW-52
+    severity: P1
+    spec: RFC 7662
+    behaviour: |
+      The introspection response sub follows the access_token's
+      issuing client's subject_type (pairwise where applicable).
+
+  - id: PW-53
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      id_token_hint sub comparison uses the public / pairwise sub
+      that matches the client's subject_type (consistent with
+      claims#CL-61 / claims#CL-63).
+
+  - id: PW-54
+    severity: P0
+    spec: OIDC Core §5.5.1
+    behaviour: |
+      For a pairwise client using claims.id_token.sub.value, the
+      requested value MUST match the pairwise sub or the OP returns
+      login_required (consistent with claims#CL-51 / claims#CL-53).
+
+  - id: PW-60
+    severity: P0
+    spec: OIDC Core §16
+    behaviour: |
+      Rotating the pairwise salt invalidates every pairwise sub
+      across all clients; embedder documentation MUST flag this
+      consequence.
+
+  - id: PW-61
+    severity: P0
+    spec: OIDC Core §16
+    behaviour: |
+      The local account id MUST NOT be emitted verbatim into logs
+      or audit event payloads delivered to a pairwise client; only
+      the pairwise sub is exposed.
+
+  - id: PW-62
+    severity: P1
+    spec: OIDC Core §8
+    behaviour: |
+      When the pairwise feature is enabled, discovery's
+      subject_types_supported advertises pairwise so clients know
+      they may select it.
+
+  - id: PW-63
+    severity: P2
+    spec: OIDC Core §8
+    behaviour: |
+      The OP exposes a hook (e.g. WithPairwiseSubject(salt, hashFn))
+      that lets the embedder supply per-environment salt and hash
+      function.
+
+  - id: PW-64
+    severity: P1
+    spec: OIDC Core §8.1
+    behaviour: |
+      The sector_identifier_uri fetch completes within the
+      registration request lifetime and uses a bounded HTTP
+      timeout.
+
+  - id: PW-65
+    severity: P2
+    spec: OIDC Core §8.1
+    behaviour: |
+      The sector_identifier_uri response is cacheable, but change
+      detection is the OP's responsibility; the spec does not
+      mandate a particular freshness policy.

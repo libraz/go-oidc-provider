@@ -1,0 +1,269 @@
+# yaml-language-server: $schema=./schema.json
+feature: par
+prefix: PAR
+title: PAR — Pushed Authorization Requests
+specs:
+  - RFC 9126 — OAuth 2.0 Pushed Authorization Requests
+  - RFC 9101 — JWT-Secured Authorization Request (JAR)
+  - OpenID Connect Core 1.0 §3.1.2 (Authorization Endpoint, redirect_uri rules)
+  - OpenID Connect Discovery 1.0 §3 (pushed_authorization_request_endpoint,
+    require_pushed_authorization_requests, request_uri_parameter_supported,
+    request_object_signing_alg_values_supported)
+
+description: |
+  Pushed Authorization Requests at /request, including discovery
+  surface, redirect_uri validation (registered, unregistered,
+  malformed, fragmenting), single-use request_uri lifecycle, plain
+  push and JAR-signed push, request_uri rejection at PAR, error
+  remapping, JAR exp clamping, and integration with adapters that may
+  fail. The request_uri prefix is RFC 9126 §2.2's
+  urn:ietf:params:oauth:request_uri:.
+
+rows:
+  - id: PAR-001
+    severity: P1
+    spec: RFC 9126 §5
+    behaviour: |
+      When PAR is enabled without JAR, discovery exposes
+      pushed_authorization_request_endpoint with
+      request_uri_parameter_supported=false and does NOT advertise
+      request_object_signing_alg_values_supported or
+      require_pushed_authorization_requests.
+    status: pending
+
+  - id: PAR-002
+    severity: P1
+    spec: RFC 9126 §5
+    behaviour: |
+      When requirePushedAuthorizationRequests is toggled on globally,
+      discovery advertises require_pushed_authorization_requests=true.
+    status: pending
+
+  - id: PAR-003
+    severity: P1
+    spec: RFC 9126 §5 / RFC 9101 §10.5
+    behaviour: |
+      When both PAR and JAR are enabled, discovery advertises a
+      non-empty request_object_signing_alg_values_supported,
+      request_parameter_supported=true and
+      request_uri_parameter_supported=false.
+    status: pending
+
+  - id: PAR-004
+    severity: P1
+    spec: RFC 9126 §2.4 / OAuth 2.1 §3.1.2
+    behaviour: |
+      When the OP allows unregistered redirect_uris via PAR for
+      confidential clients, the pushed redirect_uri is persisted with
+      the request_uri and honoured by the subsequent /authorize and
+      /token calls.
+    status: pending
+
+  - id: PAR-005
+    severity: P0
+    spec: RFC 9126 §2.4
+    behaviour: |
+      A public client (no auth) attempting an unregistered
+      redirect_uri push is rejected with 400 invalid_request
+      ("redirect_uri did not match any of the client's registered
+      redirect_uris"); only confidential clients may use this option.
+    status: pending
+
+  - id: PAR-006
+    severity: P0
+    spec: RFC 6749 §3.1.2 / OIDC Core §3.1.2.1
+    behaviour: |
+      A push with a malformed redirect_uri is rejected with 400
+      invalid_request ("redirect_uri must only contain valid uris").
+    status: pending
+
+  - id: PAR-007
+    severity: P0
+    spec: RFC 6749 §3.1.2
+    behaviour: |
+      A push with a redirect_uri containing a fragment is rejected
+      with 400 invalid_request ("redirect_uri must not contain
+      fragments").
+    status: pending
+
+  - id: PAR-008
+    severity: P1
+    spec: RFC 9126 §3 / RFC 9101 §6.2
+    behaviour: |
+      In PAR-only mode (JAR disabled), a push that includes a request
+      parameter is rejected with 400 request_not_supported.
+    status: pending
+
+  - id: PAR-009
+    severity: P2
+    spec: RFC 9126 §2.1
+    behaviour: |
+      A successful PAR submission exposes Client and
+      PushedAuthorizationRequest entities on the OP request context
+      for downstream observers.
+    status: pending
+
+  - id: PAR-010
+    severity: P0
+    spec: RFC 9126 §2.2
+    behaviour: |
+      A plain push (inline params plus extras and claims) returns 201
+      with body {expires_in, request_uri}; the request_uri matches
+      ^urn:ietf:params:oauth:request_uri:; defaulted parameters are
+      merged; the stored object is unsigned (alg=none envelope) and
+      carries iat/exp/nbf and the claims payload.
+    status: pending
+
+  - id: PAR-011
+    severity: P0
+    spec: RFC 9126 §2.1
+    behaviour: |
+      The PAR endpoint MUST NOT accept a request_uri parameter; such
+      submissions are rejected with 400 request_uri_not_supported
+      (only inline params or a request JWT are accepted).
+    status: pending
+
+  - id: PAR-012
+    severity: P1
+    spec: RFC 9126 §2.3
+    behaviour: |
+      A push with a redirect_uri unknown to the client registration
+      is rejected with 400 invalid_request (originally
+      invalid_redirect_uri); the error MUST be remapped to
+      invalid_request per PAR.
+    status: pending
+
+  - id: PAR-013
+    severity: P1
+    spec: RFC 9126 §2.3 / RFC 6749 §5.2
+    behaviour: |
+      When the storage adapter throws a non-OIDC error during upsert,
+      the response is 500 server_error ("oops! something went
+      wrong"); non-OIDC errors MUST NOT leak verbatim to the client.
+    status: pending
+
+  - id: PAR-014
+    severity: P0
+    spec: RFC 9126 §2.2
+    behaviour: |
+      After a plain push, exchanging the returned request_uri at
+      /authorize succeeds (303 with code) and the persisted PAR is
+      marked consumed (single-use).
+    status: pending
+
+  - id: PAR-015
+    severity: P1
+    spec: RFC 9126 §2.2 / RFC 9101 §6.2
+    behaviour: |
+      A client with request_object_signing_alg registered may push
+      plain params (no JAR) and then exchange the returned
+      request_uri at /authorize; the PAR is consumed exactly once.
+    status: pending
+
+  - id: PAR-016
+    severity: P2
+    spec: RFC 9126 §2.1 / RFC 9101 §6.1
+    behaviour: |
+      A successful PAR submission carrying a signed Request Object
+      exposes Client and PushedAuthorizationRequest entities on the
+      OP request context.
+    status: pending
+
+  - id: PAR-017
+    severity: P0
+    spec: RFC 9126 §2.1 / RFC 9101 §6.1
+    behaviour: |
+      A push with a signed Request Object (e.g. HS256, exp=30s)
+      returns 201; expires_in is close to 30; the stored params
+      include the payload extras (e.g. extra=provided) plus defaults.
+    status: pending
+
+  - id: PAR-018
+    severity: P1
+    spec: RFC 9126 §2.2
+    behaviour: |
+      A signed Request Object without an exp claim is stored with
+      expires_in clamped to the provider MAX_TTL (e.g. 60).
+    status: pending
+
+  - id: PAR-019
+    severity: P1
+    spec: RFC 9126 §2.2
+    behaviour: |
+      A signed Request Object with exp shorter than MAX_TTL has
+      expires_in reflect the JWT exp.
+    status: pending
+
+  - id: PAR-020
+    severity: P1
+    spec: RFC 9126 §2.2
+    behaviour: |
+      A signed Request Object with exp longer than MAX_TTL has
+      expires_in clamped to MAX_TTL (e.g. 60).
+    status: pending
+
+  - id: PAR-021
+    severity: P0
+    spec: RFC 9126 §2.1 / RFC 9101 §5
+    behaviour: |
+      When a push includes both outer form params (e.g. nonce,
+      response_type=code token) and a signed request JWT, the stored
+      params reflect the Request Object only (no nonce;
+      response_type=code).
+    status: pending
+
+  - id: PAR-022
+    severity: P0
+    spec: RFC 9101 §6.1
+    behaviour: |
+      When a client has a pre-registered request_object_signing_alg
+      (e.g. HS256) and pushes a Request Object signed with a
+      different alg (e.g. HS384), the push is rejected with 400
+      invalid_request_object (preregistered alg required).
+    status: pending
+
+  - id: PAR-023
+    severity: P0
+    spec: RFC 9126 §2.1 / RFC 9101 §5
+    behaviour: |
+      A signed Request Object whose client_id differs from the
+      authenticated client is rejected with 400
+      invalid_request_object ("request client_id must equal the
+      authenticated client's client_id").
+    status: pending
+
+  - id: PAR-024
+    severity: P1
+    spec: RFC 9126 §2.3
+    behaviour: |
+      A signed Request Object pushed with an unregistered
+      redirect_uri is rejected with 400 invalid_request (remapped
+      from invalid_redirect_uri).
+    status: pending
+
+  - id: PAR-025
+    severity: P1
+    spec: RFC 9126 §2.3
+    behaviour: |
+      When the storage adapter throws a non-OIDC error during a
+      signed PAR upsert, the response is 500 server_error.
+    status: pending
+
+  - id: PAR-026
+    severity: P0
+    spec: RFC 9126 §2.2
+    behaviour: |
+      After a signed Request Object push, exchanging the returned
+      request_uri at /authorize succeeds (303 with code) and the PAR
+      is marked consumed.
+    status: pending
+
+  - id: PAR-027
+    severity: P0
+    spec: RFC 9126 §2.2 / RFC 9101 §6.2
+    behaviour: |
+      An /authorize call with an unknown, expired, or already-consumed
+      request_uri is rejected with invalid_request_uri
+      ("request_uri is invalid, expired, or was already used") and
+      preserves state.
+    status: pending

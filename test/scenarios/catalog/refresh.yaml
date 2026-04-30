@@ -1,0 +1,230 @@
+# yaml-language-server: $schema=./schema.json
+feature: refresh
+prefix: REF
+title: Refresh Token grant
+specs:
+  - RFC 6749 §6 — Refreshing an Access Token
+  - RFC 6749 §5.1 / §5.2 — Successful and Error Response
+  - RFC 6749 §10.4 — Refresh Token Security
+  - OpenID Connect Core 1.0 §11 — Offline Access
+  - OpenID Connect Core 1.0 §12 — Using Refresh Tokens
+  - RFC 9700 §4.13 — Refresh Token Replay
+  - RFC 9700 §4.14 — Refresh Token Rotation
+
+description: |
+  Token-endpoint behaviour for grant_type=refresh_token: success
+  shapes, scope upgrade/downgrade semantics, client binding, rotation
+  (with both static and predicate forms), and refresh-token replay
+  revocation.
+
+rows:
+  - id: REF-001
+    severity: P0
+    spec: RFC 6749 §6, §5.1 / OIDC Core §12
+    behaviour: |
+      With rotateRefreshToken=false, a valid refresh_token redeemed by
+      the owning client returns 200 with access_token, id_token,
+      expires_in, token_type, refresh_token, and scope; the ID Token
+      preserves the original nonce and a grant.success audit event is
+      emitted.
+    status: pending
+
+  - id: REF-002
+    severity: P2
+    spec: OIDC Core §12
+    behaviour: |
+      A non-rotation refresh success resolves Account, Grant, Client,
+      AccessToken, and RefreshToken entities; the RefreshToken records
+      gty=authorization_code while the AccessToken records
+      gty="authorization_code refresh_token".
+    status: pending
+
+  - id: REF-003
+    severity: P0
+    spec: RFC 6749 §10.4
+    behaviour: |
+      A refresh_token presented after its TTL is rejected with 400
+      invalid_grant ("refresh token is expired") and a grant.error
+      audit event is emitted.
+    status: pending
+
+  - id: REF-004
+    severity: P0
+    spec: RFC 6749 §6 / §10.4
+    behaviour: |
+      A refresh_token presented by a different (registered) client is
+      rejected with 400 invalid_grant ("client mismatch") and a
+      grant.error audit event is emitted.
+    status: pending
+
+  - id: REF-005
+    severity: P0
+    spec: RFC 6749 §6 (scope MUST NOT exceed original)
+    behaviour: |
+      A refresh request that includes a single scope not in the
+      original grant is rejected with 400 invalid_scope; the
+      description reads "refresh token missing requested scope" and
+      the body's scope field carries the offending scope token.
+    status: pending
+
+  - id: REF-006
+    severity: P0
+    spec: RFC 6749 §6
+    behaviour: |
+      A refresh request that includes multiple scopes not in the
+      original grant is rejected with 400 invalid_scope; the
+      description reads "refresh token missing requested scopes" and
+      the body's scope field lists every offending scope.
+    status: pending
+
+  - id: REF-007
+    severity: P1
+    spec: RFC 6749 §6 / OIDC Core §3.1.3.7 (id_token only when openid scope)
+    behaviour: |
+      A refresh request that narrows scope and drops openid returns
+      200 with an AccessToken whose scope reflects the narrowed value;
+      the response body's scope matches and no id_token is issued.
+    status: pending
+
+  - id: REF-008
+    severity: P1
+    spec: OIDC Core §3.1.3.7
+    behaviour: |
+      A refresh request that narrows scope while keeping openid
+      returns 200 with a reduced AccessToken.scope; the body returns
+      the reduced scope and includes an id_token.
+    status: pending
+
+  - id: REF-009
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When findAccount returns nothing at refresh time the request is
+      rejected with 400 invalid_grant ("refresh token invalid
+      (referenced account not found)") and a grant.error audit event
+      is emitted.
+    status: pending
+
+  - id: REF-010
+    severity: P1
+    spec: RFC 6749 §6
+    behaviour: |
+      A refresh request without the refresh_token parameter is
+      rejected with 400 invalid_request whose description matches
+      "missing required parameter" and includes "refresh_token".
+    status: pending
+
+  - id: REF-011
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A well-formed but non-existent refresh_token value is rejected
+      with 400 invalid_grant ("refresh token not found") and a
+      grant.error audit event is emitted.
+    status: pending
+
+  - id: REF-012
+    severity: P1
+    spec: RFC 9700 §4.14 / OIDC Core §12
+    behaviour: |
+      With rotateRefreshToken=true, the refresh entities include both
+      a RotatedRefreshToken (the consumed token) and a distinct new
+      RefreshToken. The RotatedRefreshToken records
+      gty=authorization_code, the new RefreshToken records
+      gty="authorization_code refresh_token", and the AccessToken
+      records gty="authorization_code refresh_token".
+    status: pending
+
+  - id: REF-013
+    severity: P0
+    spec: RFC 9700 §4.14
+    behaviour: |
+      With rotateRefreshToken=true, the first redemption emits
+      refresh_token.consumed and refresh_token.saved exactly once
+      each; the response includes a new refresh_token value distinct
+      from the old one and the ID Token retains the original nonce.
+    status: pending
+
+  - id: REF-014
+    severity: P1
+    spec: OIDC Core §12
+    behaviour: |
+      With rotateRefreshToken=true and a default-scope token request,
+      the new refresh_token retains the original full scope so the
+      consumed token's scope equals the new token's scope.
+    status: pending
+
+  - id: REF-015
+    severity: P1
+    spec: OIDC Core §12 / RFC 6749 §6
+    behaviour: |
+      With rotateRefreshToken=true, a request that narrows scope still
+      mints a new refresh_token carrying the original scope while the
+      AccessToken returned reflects only the narrowed scope.
+    status: pending
+
+  - id: REF-016
+    severity: P0
+    spec: RFC 9700 §4.13 (refresh token replay -> revoke whole chain)
+    behaviour: |
+      With rotateRefreshToken=true, redeeming the old refresh_token
+      twice in parallel causes one call to fail; the entire grant is
+      revoked (grant.revoked emitted once) and previously issued
+      refresh tokens are destroyed (refresh_token.destroyed emitted).
+    status: pending
+
+  - id: REF-017
+    severity: P2
+    spec: OIDC Core §12
+    behaviour: |
+      When rotateRefreshToken is supplied as a predicate that returns
+      true, the predicate is invoked exactly once and the entity
+      shape matches rotateRefreshToken=true (RotatedRefreshToken plus
+      a new RefreshToken).
+    status: pending
+
+  - id: REF-018
+    severity: P1
+    spec: RFC 9700 §4.14
+    behaviour: |
+      With a predicate that returns true, the first redemption issues
+      a new refresh_token distinct from the old one, preserves the ID
+      Token nonce, and fires the consumed/saved audit events.
+    status: pending
+
+  - id: REF-019
+    severity: P1
+    spec: OIDC Core §12
+    behaviour: |
+      With a predicate that returns true, consumed and saved
+      refresh_tokens share the original scope.
+    status: pending
+
+  - id: REF-020
+    severity: P1
+    spec: OIDC Core §12
+    behaviour: |
+      With a predicate that returns true, a narrowed scope request
+      mints a new refresh_token retaining the original full scope
+      while the AccessToken returned reflects only the narrowed
+      scope.
+    status: pending
+
+  - id: REF-021
+    severity: P0
+    spec: RFC 9700 §4.13
+    behaviour: |
+      With a predicate that returns true, a parallel reuse of the old
+      token rejects one call, revokes the entire grant, and emits
+      refresh_token.destroyed.
+    status: pending
+
+  - id: REF-022
+    severity: P1
+    spec: OIDC Core §12 (rotation optional)
+    behaviour: |
+      When the rotateRefreshToken predicate returns false, the
+      refresh_token is reused rather than rotated; the entities omit
+      RotatedRefreshToken, the response body still includes a
+      refresh_token, and the ID Token nonce is preserved.
+    status: pending

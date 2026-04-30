@@ -1,0 +1,199 @@
+# yaml-language-server: $schema=./schema.json
+feature: jarm
+prefix: JARM
+title: JARM — JWT Secured Authorization Response Mode
+specs:
+  - OAuth 2.0 JWT Secured Authorization Response Mode (JARM) — Final
+  - RFC 7515 — JSON Web Signature
+  - RFC 7516 — JSON Web Encryption
+  - RFC 8414 — OAuth 2.0 Authorization Server Metadata
+  - RFC 9101 — JWT-Secured Authorization Request (JAR)
+  - OpenID Connect Core 1.0 §3.1.2 (response_mode), §3.3 (hybrid)
+  - RFC 9207 — Authorization Server Issuer Identification
+
+description: |
+  Authorization responses delivered as signed (and optionally
+  encrypted) JWTs. Covers discovery surface, response_mode=jwt
+  auto-resolution per response_type, the aud/exp/iss/state envelope,
+  expired-secret handling, query.jwt encryption gating, and per-
+  transport HTTP error shapes (query.jwt / fragment.jwt /
+  form_post.jwt / web_message.jwt).
+
+rows:
+  - id: JARM-001
+    severity: P0
+    spec: JARM §6 / RFC 8414
+    behaviour: |
+      When JARM is enabled, /.well-known/openid-configuration MUST
+      include authorization_signing_alg_values_supported,
+      authorization_encryption_alg_values_supported,
+      authorization_encryption_enc_values_supported, and
+      response_modes_supported MUST include jwt, query.jwt,
+      fragment.jwt, form_post.jwt (and web_message.jwt when
+      web_message support is enabled).
+    status: pending
+
+  - id: JARM-010
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      For response_type=id_token token (implicit/hybrid producing
+      tokens), response_mode=jwt resolves to fragment delivery; the
+      response JWT payload includes id_token, access_token,
+      expires_in, token_type plus the JARM core claims aud=client_id,
+      exp (number), state, iss=issuer, scope=openid.
+    status: pending
+
+  - id: JARM-011
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      For response_type=code, response_mode=jwt resolves to query
+      delivery; the payload includes code, aud, exp, state, iss and
+      does NOT include scope.
+    status: pending
+
+  - id: JARM-012
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      For response_type=none, response_mode=jwt resolves to query
+      delivery; the payload contains only the envelope claims exp,
+      aud, state, iss (no token or code claims).
+    status: pending
+
+  - id: JARM-020
+    severity: P0
+    spec: JARM §4.1
+    behaviour: |
+      The JARM response JWT aud claim MUST equal the requesting
+      client's client_id.
+    status: pending
+
+  - id: JARM-021
+    severity: P0
+    spec: JARM §4.1
+    behaviour: |
+      The JARM response JWT exp claim MUST be present and be a number
+      (UTC seconds).
+    status: pending
+
+  - id: JARM-022
+    severity: P0
+    spec: JARM §4.1 / RFC 9207
+    behaviour: |
+      The JARM response JWT iss claim MUST equal the OP issuer URL.
+    status: pending
+
+  - id: JARM-023
+    severity: P1
+    spec: JARM §4.1
+    behaviour: |
+      When the request supplied state, the JARM response JWT
+      round-trips it verbatim.
+    status: pending
+
+  - id: JARM-030
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      When the JARM signing/encryption alg requires a client_secret
+      (HS*, A*KW, dir) and the secret is expired, all JARM transports
+      surface invalid_client "client secret is expired, cannot issue
+      a JWT Authorization response" via the redirect (or rendered
+      page for non-redirecting modes).
+    status: pending
+
+  - id: JARM-040
+    severity: P0
+    spec: JARM §4.3 (security note)
+    behaviour: |
+      For implicit/hybrid response types (id_token token), query.jwt
+      is FORBIDDEN unless the response JWT is encrypted; an
+      unencrypted attempt yields a JWT payload with
+      error=invalid_request,
+      error_description="requested response_mode is not allowed for
+      the requested response_type unless encrypted" plus state, aud,
+      exp, iss.
+    status: pending
+
+  - id: JARM-041
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      When the client has authorization-encryption metadata
+      configured, implicit/hybrid + query.jwt is allowed and the OP
+      emits an authorization.success event.
+    status: pending
+
+  - id: JARM-042
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      response_type=code with response_mode=query.jwt succeeds with a
+      payload matching JARM-011.
+    status: pending
+
+  - id: JARM-043
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      response_type=none with response_mode=query.jwt succeeds with
+      envelope-only claims (exp, aud, state, iss).
+    status: pending
+
+  - id: JARM-044
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      Expired client_secret with response_mode=query.jwt for any
+      response_type yields invalid_client "client secret is expired,
+      cannot issue a JWT Authorization response" delivered via the
+      bare query (no JWT can be produced).
+    status: pending
+
+  - id: JARM-050
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      For response_type=code + prompt=none (forced login_required),
+      query.jwt errors are delivered as a 303 redirect carrying the
+      signed response JWT with the error claims.
+    status: pending
+
+  - id: JARM-051
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      For response_type=code + prompt=none, fragment.jwt errors are
+      delivered as a 303 redirect whose fragment carries the JWT.
+    status: pending
+
+  - id: JARM-052
+    severity: P0
+    spec: JARM §4.3
+    behaviour: |
+      For response_type=code + prompt=none, form_post.jwt errors
+      return a 400 with an HTML form auto-POSTing the JWT to
+      redirect_uri.
+    status: pending
+
+  - id: JARM-053
+    severity: P1
+    spec: JARM §4.3 (deprecated transport)
+    behaviour: |
+      For response_type=code + prompt=none, web_message.jwt errors
+      return a 400 rendered HTML page (web_message is deprecated;
+      treat as P1).
+    status: pending
+
+  - id: JARM-054
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      An expired client_secret on any of the four JARM transports
+      yields error=invalid_client,
+      error_description="client secret is expired, cannot issue a
+      JWT Authorization response" and emits an authorization.error
+      event.
+    status: pending

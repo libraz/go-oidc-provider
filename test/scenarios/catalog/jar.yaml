@@ -1,0 +1,223 @@
+# yaml-language-server: $schema=./schema.json
+feature: jar
+prefix: JAR
+title: JAR — JWT-Secured Authorization Request
+specs:
+  - RFC 9101 — The OAuth 2.0 Authorization Framework — JWT-Secured Authorization Request (JAR)
+  - OpenID Connect Core 1.0 §6 (Passing Request Parameters as JWTs)
+  - OpenID Connect Discovery 1.0 §3 (request_parameter_supported,
+    request_object_signing_alg_values_supported,
+    require_signed_request_object)
+  - RFC 8628 §3.1 — Device Authorization Endpoint
+
+description: |
+  JWT-Secured Authorization Request (Request Object) handling at the
+  authorization and device authorization endpoints. Covers discovery
+  surface, parameter precedence and coercion, signing-alg policy,
+  inception and registration restrictions, error envelope shape, and
+  state preservation across error paths.
+
+rows:
+  - id: JAR-001
+    severity: P1
+    spec: RFC 9101 §10.5 / OIDC Discovery §3
+    behaviour: |
+      When JAR is enabled without require_signed_request_object,
+      /.well-known/openid-configuration advertises
+      request_parameter_supported=true and does NOT include
+      require_signed_request_object.
+    status: pending
+
+  - id: JAR-002
+    severity: P1
+    spec: RFC 9101 §10.5
+    behaviour: |
+      When require_signed_request_object is toggled on, the discovery
+      document advertises require_signed_request_object=true so RPs
+      cannot rely on plaintext requests.
+    status: pending
+
+  - id: JAR-003
+    severity: P0
+    spec: RFC 9101 §5 / OIDC Core §6.1
+    behaviour: |
+      Request Object claims override outer query/form parameters at
+      both the authorization and device authorization endpoints; the
+      OP honours only the Request Object values.
+    status: pending
+
+  - id: JAR-004
+    severity: P2
+    spec: OIDC Core §6.1
+    behaviour: |
+      Numeric Request Object claims (e.g. max_age) MUST be coerced to
+      strings before downstream processing so all authorization
+      parameters share a single representation.
+    status: pending
+
+  - id: JAR-005
+    severity: P1
+    spec: RFC 6749 §3.1.2 / OIDC Core §6.1
+    behaviour: |
+      A Request Object that supplies scope as a JSON array (forcing
+      duplicate semantics) is rejected with invalid_request and a
+      message indicating scope cannot be supplied twice.
+    status: pending
+
+  - id: JAR-006
+    severity: P2
+    spec: OIDC Core §5.5 / §6.1
+    behaviour: |
+      A claims parameter delivered as a serialised JSON string in the
+      Request Object is accepted and exposed verbatim to downstream
+      params.
+    status: pending
+
+  - id: JAR-007
+    severity: P2
+    spec: OIDC Core §5.5 / §6.1
+    behaviour: |
+      A claims parameter delivered as a JSON object in the Request
+      Object is accepted and re-serialised back to a canonical JSON
+      string.
+    status: pending
+
+  - id: JAR-008
+    severity: P2
+    spec: RFC 9101 §10.8 / RFC 7519 §4.1.6
+    behaviour: |
+      A Request Object whose iat is slightly in the future but within
+      the configured clock-skew tolerance is accepted.
+    status: pending
+
+  - id: JAR-009
+    severity: P1
+    spec: RFC 9101 §6.1
+    behaviour: |
+      A Request Object signed with HS256 by a client whose
+      request_object_signing_alg=HS256 is accepted.
+    status: pending
+
+  - id: JAR-010
+    severity: P0
+    spec: RFC 9101 §6.1 / OIDC Core §6.3
+    behaviour: |
+      A Request Object signed with an HMAC key whose backing client
+      secret has expired is rejected with invalid_request_object
+      indicating an expired secret.
+    status: pending
+
+  - id: JAR-011
+    severity: P0
+    spec: RFC 9101 §10.4 / OIDC Core §6.1
+    behaviour: |
+      A Request Object that nests a request parameter is rejected
+      with invalid_request_object; Request Objects MUST NOT contain
+      request or request_uri.
+    status: pending
+
+  - id: JAR-012
+    severity: P0
+    spec: RFC 9101 §10.4
+    behaviour: |
+      A Request Object that nests a request_uri parameter is rejected
+      with invalid_request_object.
+    status: pending
+
+  - id: JAR-013
+    severity: P1
+    spec: OIDC Core §6.1
+    behaviour: |
+      When the Request Object specifies response_mode=fragment at the
+      authorization endpoint, the OP applies fragment encoding for
+      the response.
+    status: pending
+
+  - id: JAR-014
+    severity: P1
+    spec: RFC 6749 §3.1.2 / OIDC Core §6.1
+    behaviour: |
+      A Request Object that carries an unsupported response_mode at
+      the authorization endpoint is rejected with
+      unsupported_response_mode.
+    status: pending
+
+  - id: JAR-015
+    severity: P0
+    spec: RFC 9101 §5 / OIDC Core §6.1
+    behaviour: |
+      When the outer response_type differs from the Request Object
+      claim at the authorization endpoint, the request is rejected
+      with invalid_request_object (response_type mismatch).
+    status: pending
+
+  - id: JAR-016
+    severity: P1
+    spec: RFC 6749 §4.1.2.1 / RFC 9101 §10.7
+    behaviour: |
+      When a client_id mismatch error fires and the Request Object
+      carried a state value, the authorization error response carries
+      that state so the RP can correlate the failure.
+    status: pending
+
+  - id: JAR-017
+    severity: P0
+    spec: RFC 9101 §5
+    behaviour: |
+      When the outer client_id differs from the Request Object
+      client_id at either the authorization or device authorization
+      endpoint, the request is rejected with invalid_request_object
+      (client_id mismatch).
+    status: pending
+
+  - id: JAR-018
+    severity: P0
+    spec: RFC 9101 §6.1 / RFC 7519 §7.2
+    behaviour: |
+      An outer request parameter that is not a JWT (e.g.
+      "definitely.notsigned.jwt") is rejected with
+      invalid_request_object and a parse-failure description.
+    status: pending
+
+  - id: JAR-019
+    severity: P0
+    spec: RFC 9101 §6.1 / OIDC Core §6.3
+    behaviour: |
+      A Request Object signed with an alg different from the client's
+      pre-registered request_object_signing_alg is rejected with
+      invalid_request_object (the pre-registered alg MUST be used).
+    status: pending
+
+  - id: JAR-020
+    severity: P0
+    spec: RFC 9101 §10.1
+    behaviour: |
+      A Request Object signed with an alg outside the server's
+      configured supported list is rejected with
+      invalid_request_object (unsupported signed request alg).
+    status: pending
+
+  - id: JAR-021
+    severity: P0
+    spec: RFC 9101 §6.1 / RFC 7515 §5.2
+    behaviour: |
+      A Request Object signed with the wrong key/secret is rejected
+      with invalid_request_object and a validation-failure
+      description.
+    status: pending
+
+  - id: JAR-022
+    severity: P1
+    spec: OIDC Core §7.2.1
+    behaviour: |
+      A Request Object that carries a registration claim is rejected
+      with registration_not_supported.
+    status: pending
+
+  - id: JAR-023
+    severity: P2
+    spec: RFC 9101 §6.1 / OIDC Core §6.1
+    behaviour: |
+      A Request Object that includes unrecognised members is accepted
+      and the unknown members are ignored per spec.
+    status: pending

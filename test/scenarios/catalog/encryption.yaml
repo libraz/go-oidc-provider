@@ -1,0 +1,215 @@
+# yaml-language-server: $schema=./schema.json
+feature: encryption
+prefix: ENC
+title: Encryption (JWE) for tokens, request objects and responses
+specs:
+  - RFC 7516 — JSON Web Encryption
+  - RFC 7518 — JSON Web Algorithms (alg / enc)
+  - RFC 7519 §11 — JWE-nested-JWT
+  - RFC 8037 — CFRG curves
+  - OIDC Core 1.0 §3.1.3.7, §10.1, §16.7
+  - OIDC Discovery 1.0 §3 (*_encryption_alg/enc_values_supported)
+  - RFC 9101 — JWT-Secured Authorization Request (JAR)
+  - RFC 9126 — Pushed Authorization Requests (PAR)
+
+description: |
+  Token, response object and request object encryption (JWE) — covering
+  symmetric vs. asymmetric algorithms, discovery surface, encrypted
+  ID Token / UserInfo / Request Object payloads, key selection, and
+  client_secret-derived encryption paths.
+
+rows:
+  - id: ENC-001
+    severity: P0
+    spec: OIDC Core §10.1 / §16.7
+    behaviour: |
+      Whenever any of authorization_encrypted_response_alg,
+      id_token_encrypted_response_alg, introspection_encrypted_response_alg,
+      request_object_encryption_alg or userinfo_encrypted_response_alg
+      is set to a symmetric alg (A128GCMKW, A192GCMKW, A256GCMKW,
+      A128KW, A192KW, A256KW, dir), Client.needsSecret() MUST return
+      true even when token_endpoint_auth_method=none, because a public
+      client cannot validly derive the encryption key.
+    status: pending
+
+  - id: ENC-002
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      An expired client_secret combined with a symmetric alg MUST
+      yield a front-channel invalid_client error
+      ("client secret is expired - cannot issue an encrypted ID Token
+      (<alg>)") before any token is minted.
+    status: pending
+
+  - id: ENC-010
+    severity: P1
+    spec: OIDC Discovery §3
+    behaviour: |
+      When the encryption feature is enabled, the discovery document
+      MUST list id_token_encryption_alg_values_supported,
+      id_token_encryption_enc_values_supported,
+      request_object_encryption_alg_values_supported,
+      request_object_encryption_enc_values_supported,
+      userinfo_encryption_alg_values_supported,
+      userinfo_encryption_enc_values_supported,
+      introspection_encryption_alg_values_supported and
+      introspection_encryption_enc_values_supported.
+    status: pending
+
+  - id: ENC-020
+    severity: P0
+    spec: RFC 7516 §3 / OIDC Core §10.2
+    behaviour: |
+      A nested JWE-of-signed-JWT MUST be a 5-part compact serialization
+      (header.cek.iv.ct.tag); decrypting yields a valid inner JWS.
+    status: pending
+
+  - id: ENC-021
+    severity: P1
+    spec: OIDC Core §16
+    behaviour: |
+      An encrypted ID Token JWE protected header MUST duplicate iss
+      and aud so the RP can route decryption keys without parsing the
+      payload; the values match the OP issuer and client_id.
+    status: pending
+
+  - id: ENC-022
+    severity: P0
+    spec: OIDC Core §5.3.2
+    behaviour: |
+      An encrypted UserInfo response uses Content-Type: application/jwt,
+      is a 5-part JWE, the JWE header carries iss and aud, and the
+      decrypted payload has an exp claim in the future.
+    status: pending
+
+  - id: ENC-023
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      An expired client_secret combined with HS256-signed UserInfo
+      MUST produce 400 invalid_client
+      ("client secret is expired - cannot respond with HS256 JWT
+      UserInfo response").
+    status: pending
+
+  - id: ENC-024
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      An expired client_secret combined with dir-encrypted UserInfo
+      MUST produce 400 invalid_client
+      ("client secret is expired - cannot respond with dir encrypted
+      JWT UserInfo response").
+    status: pending
+
+  - id: ENC-030
+    severity: P0
+    spec: RFC 9101 §6.1 / OIDC Discovery
+    behaviour: |
+      An unsupported alg on a Request Object (for example RSA-OAEP-512
+      when only RSA-OAEP is advertised) MUST trigger a redirect with
+      error=invalid_request_object and
+      error_description="could not decrypt request object".
+    status: pending
+
+  - id: ENC-031
+    severity: P0
+    spec: RFC 9101 §6.1
+    behaviour: |
+      An unsupported enc on a Request Object (for example A192CBC-HS384
+      when not advertised) MUST trigger the same invalid_request_object
+      response with description "could not decrypt request object".
+    status: pending
+
+  - id: ENC-032
+    severity: P1
+    spec: OIDC Core §10.1
+    behaviour: |
+      The default supported set is the JWE algorithms the OP keystore
+      can decrypt; the embedder controls inventory by configuring
+      which keys are loaded.
+    status: pending
+
+  - id: ENC-040
+    severity: P0
+    spec: RFC 9126 + RFC 9101
+    behaviour: |
+      POST /request (PAR) accepts an encrypted-and-signed Request
+      Object, the OP returns a request_uri, and a subsequent
+      /authorize?request_uri=... MUST decrypt the object and produce a
+      code redirect to redirect_uri.
+    status: pending
+
+  - id: ENC-041
+    severity: P1
+    spec: RFC 9101 §6.1 + per-client metadata
+    behaviour: |
+      When client metadata mandates a non-none request_object_signing_alg,
+      PAR MUST still accept signed Request Objects matching that alg
+      (including symmetric paths such as HS256).
+    status: pending
+
+  - id: ENC-050
+    severity: P0
+    spec: OIDC Core §10.1
+    behaviour: |
+      When id_token_encrypted_response_alg=ECDH-ES but the client JWKS
+      contains no suitable EC key, the OP MUST emit a fragment redirect
+      with error=invalid_client_metadata and
+      error_description="no suitable encryption key found (ECDH-ES)".
+    status: pending
+
+  - id: ENC-060
+    severity: P1
+    spec: OIDC Core §16.7 / RFC 7518 §4.4
+    behaviour: |
+      The OP accepts a Request Object encrypted with A128KW plus
+      A128CBC-HS256 keyed off client_secret (HMAC-SHA-256 truncated
+      to 128 bits per OIDC Core §16.7).
+    status: pending
+
+  - id: ENC-061
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      An expired client_secret blocks symmetric Request Object
+      decryption with a redirect carrying error=invalid_request_object
+      and error_description="could not decrypt the Request Object - the
+      client secret used for its encryption is expired".
+    status: pending
+
+  - id: ENC-062
+    severity: P1
+    spec: RFC 7516 §4.1.1
+    behaviour: |
+      A symmetrically encrypted ID Token JWE header carries
+      alg=A128KW, iss and aud.
+    status: pending
+
+  - id: ENC-070
+    severity: P1
+    spec: OIDC Core §16.7 / RFC 7518 §4.5
+    behaviour: |
+      A Request Object encrypted with alg=dir, enc=A128CBC-HS256
+      derived from client_secret (HMAC-SHA-256 producing a 256-bit key
+      for A128CBC-HS256 per OIDC Core §16.7) MUST be accepted.
+    status: pending
+
+  - id: ENC-071
+    severity: P0
+    spec: OIDC Core §16.7
+    behaviour: |
+      An expired client_secret combined with a dir-encrypted Request
+      Object MUST trigger the same invalid_request_object response
+      with description "could not decrypt the Request Object - the
+      client secret used for its encryption is expired".
+    status: pending
+
+  - id: ENC-072
+    severity: P1
+    spec: RFC 7516 §4.1.1
+    behaviour: |
+      A direct-key encrypted ID Token JWE header carries alg=dir,
+      enc=A128CBC-HS256, iss and aud.
+    status: pending

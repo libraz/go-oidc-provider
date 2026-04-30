@@ -1,0 +1,249 @@
+# yaml-language-server: $schema=./schema.json
+feature: introspection
+prefix: INT
+title: Token introspection endpoint
+specs:
+  - RFC 7662 — OAuth 2.0 Token Introspection
+  - RFC 6749 §2.3 — Client Authentication
+  - RFC 8414 §2 — `introspection_endpoint` discovery metadata
+  - RFC 9068 §6 — JWT access tokens are not introspectable
+  - RFC 9701 — JWT Response for OAuth Token Introspection (cross-ref)
+
+description: |
+  Behaviour of the OAuth 2.0 token introspection endpoint. Covers
+  discovery metadata, success responses for access / refresh /
+  client_credentials tokens, token_type_hint handling, failure modes
+  (missing token, structured JWT, invalid / expired / consumed
+  tokens), pairwise and RS-only client semantics, HTTP cache headers,
+  and audit observability.
+
+rows:
+  - id: INT-001
+    severity: P2
+    spec: RFC 8414 §2
+    behaviour: |
+      When introspection is enabled, the discovery document advertises
+      introspection_endpoint with a concrete URL; the
+      introspection_signing_alg_values_supported field is omitted
+      unless JWT introspection is also enabled.
+    status: pending
+
+  - id: INT-002
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      A confidential client introspecting its own access token without
+      a hint receives active=true plus client_id, scope, sub, iss, iat,
+      exp, token_type=Bearer, and aud.
+    status: pending
+
+  - id: INT-003
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      Introspecting an access token with token_type_hint=access_token
+      returns active=true and the standard base claim set.
+    status: pending
+
+  - id: INT-004
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      Introspecting an access token with token_type_hint=refresh_token
+      still resolves it as an access token; the hint is an optimization
+      only and does not gate lookup.
+    status: pending
+
+  - id: INT-005
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      An unrecognised token_type_hint such as foobar is ignored and
+      the endpoint resolves the token normally, returning active=true.
+    status: pending
+
+  - id: INT-006
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      A confidential client introspecting its own refresh token
+      without a hint receives active=true plus client_id, scope, sub,
+      and the other base claims.
+    status: pending
+
+  - id: INT-007
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      Introspecting a refresh token with
+      token_type_hint=refresh_token returns active=true.
+    status: pending
+
+  - id: INT-008
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      Introspecting a refresh token with token_type_hint=access_token
+      still resolves the refresh token and returns active=true.
+    status: pending
+
+  - id: INT-009
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      An unrecognised hint when introspecting a refresh token is
+      ignored; the endpoint returns active=true.
+    status: pending
+
+  - id: INT-010
+    severity: P0
+    spec: RFC 7662 §2.2 / RFC 6749 §4.4
+    behaviour: |
+      Introspecting a client_credentials access token without a hint
+      returns active=true and at least client_id (sub is not required
+      because there is no end user).
+    status: pending
+
+  - id: INT-011
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      Introspecting a client_credentials access token with
+      token_type_hint=access_token returns active=true and client_id.
+    status: pending
+
+  - id: INT-012
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      An unrecognised hint when introspecting a client_credentials
+      access token is ignored; the endpoint returns active=true.
+    status: pending
+
+  - id: INT-013
+    severity: P0
+    spec: RFC 9068 §6 / RFC 7662 §2.3
+    behaviour: |
+      Submitting a structured JWT access token to the introspection
+      endpoint is rejected with 400 unsupported_token_type and the
+      message "Structured JWT Tokens cannot be introspected via the
+      introspection_endpoint".
+    status: pending
+
+  - id: INT-014
+    severity: P0
+    spec: OIDC Core §8.1 / RFC 7662 §2.2
+    behaviour: |
+      A pairwise client introspecting its own refresh token receives a
+      sub that is the pairwise subject (different from the raw account
+      id).
+    status: pending
+
+  - id: INT-015
+    severity: P1
+    spec: OIDC Core §8.1
+    behaviour: |
+      A resource-server-style introspection client inspecting another
+      pairwise client's token receives the original token's pairwise
+      sub; the inspecting client's subject_type does not override it.
+    status: pending
+
+  - id: INT-016
+    severity: P1
+    spec: RFC 7662 §4
+    behaviour: |
+      Every introspection response carries Cache-Control: no-store.
+    status: pending
+
+  - id: INT-017
+    severity: P1
+    spec: RFC 7662 §2.1
+    behaviour: |
+      Posting to the introspection endpoint without a token parameter
+      returns 400 invalid_request "missing required parameter
+      'token'".
+    status: pending
+
+  - id: INT-018
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      Submitting an arbitrary unrelated string as token returns 200
+      with body {"active": false} and no other claims.
+    status: pending
+
+  - id: INT-019
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      A public client (token_endpoint_auth_method=none) submitting
+      another client's token receives 200 {"active": false} only,
+      preventing token-existence leaks.
+    status: pending
+
+  - id: INT-020
+    severity: P0
+    spec: RFC 6749 §2.3 / RFC 7662 §2.1
+    behaviour: |
+      A client presenting an incorrect basic-auth secret receives 401
+      and an introspection.error audit event is emitted.
+    status: pending
+
+  - id: INT-021
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      Submitting an authorization code as the token parameter returns
+      200 {"active": false} only; authorization codes are not
+      introspectable.
+    status: pending
+
+  - id: INT-022
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      Introspecting an expired access token returns 200
+      {"active": false} only.
+    status: pending
+
+  - id: INT-023
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      Introspecting an already-consumed refresh token returns 200
+      {"active": false} only.
+    status: pending
+
+  - id: INT-024
+    severity: P0
+    spec: RFC 7662 §2.2
+    behaviour: |
+      If the storage adapter mistakenly returns an authorization-code
+      record for what should be a refresh-token lookup, the endpoint
+      returns 200 {"active": false} and avoids any internal type
+      confusion.
+    status: pending
+
+  - id: INT-025
+    severity: P2
+    spec: implementation observability
+    behaviour: |
+      A successful access-token introspection registers both Client
+      and AccessToken entities on the observability context.
+    status: pending
+
+  - id: INT-026
+    severity: P2
+    spec: implementation observability
+    behaviour: |
+      A successful refresh-token introspection registers Client and
+      RefreshToken entities on the observability context.
+    status: pending
+
+  - id: INT-027
+    severity: P2
+    spec: implementation observability
+    behaviour: |
+      A successful client_credentials introspection registers Client
+      and ClientCredentials entities on the observability context.
+    status: pending

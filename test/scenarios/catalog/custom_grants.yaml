@@ -1,0 +1,106 @@
+# yaml-language-server: $schema=./schema.json
+feature: custom_grants
+prefix: CG
+title: Custom token-endpoint grants
+specs:
+  - RFC 6749 §4.5 — Extension Grants
+  - RFC 6749 §3.2 — Token Endpoint (parameter validation)
+  - RFC 6749 §5.2 — Error Response (invalid_request)
+  - RFC 8693 — OAuth 2.0 Token Exchange (audience/resource as repeatable parameters; informative)
+
+description: |
+  Embedder-registered grant types at the token endpoint via a
+  registerGrantType(name, handler, paramNames) hook. Covers
+  registration-time options, the default duplicate-parameter rule from
+  RFC 6749 §3.2, the dupes-allowed exemption list (e.g. for
+  RFC 8693 audience/resource), the carve-out that grant_type itself
+  can never be exempted, client opt-in via registered grant_types, and
+  the entity-resolution contract on the request context.
+
+rows:
+  - id: CG-001
+    severity: P1
+    spec: RFC 6749 §4.5
+    behaviour: |
+      The provider MUST expose a registerGrantType(name, handler,
+      paramNames) hook; once called, the grant_type MUST appear in
+      the supported grant types registry.
+    status: pending
+
+  - id: CG-002
+    severity: P2
+    spec: RFC 6749 §4.5
+    behaviour: |
+      Calling registerGrantType without a paramNames argument MUST
+      succeed.
+    status: pending
+
+  - id: CG-003
+    severity: P2
+    spec: RFC 6749 §4.5
+    behaviour: |
+      registerGrantType MUST accept both null and a single-string
+      paramNames specification; in both cases the grant type is
+      registered.
+    status: pending
+
+  - id: CG-004
+    severity: P0
+    spec: RFC 6749 §3.2 (parameters MUST NOT be duplicated)
+    behaviour: |
+      For a client allowed to use a custom grant, a request whose
+      body duplicates a registered parameter (e.g.
+      name=John&name=FooBar) MUST be rejected with 400 invalid_request
+      and the description "'name' parameter must not be provided
+      twice".
+    status: pending
+
+  - id: CG-005
+    severity: P1
+    spec: RFC 6749 §3.2 / RFC 8693
+    behaviour: |
+      When a grant is registered with an explicit dupes-allowed list
+      including a parameter, the request MUST succeed with 200 OK
+      and the handler MUST receive that parameter as an array of all
+      submitted values, preserving order.
+    status: pending
+
+  - id: CG-006
+    severity: P1
+    spec: RFC 6749 §3.2
+    behaviour: |
+      When a grant declares two parameters but exempts only one, a
+      request that duplicates the non-exempt parameter MUST be
+      rejected with 400 invalid_request and the description
+      "'<other>' parameter must not be provided twice".
+    status: pending
+
+  - id: CG-007
+    severity: P0
+    spec: RFC 6749 §3.2
+    behaviour: |
+      grant_type itself MUST NEVER be exempted from the duplication
+      rule; a duplicated grant_type MUST be rejected with 400
+      invalid_request and the description "'grant_type' parameter
+      must not be provided twice", regardless of any exemption
+      configuration.
+    status: pending
+
+  - id: CG-008
+    severity: P1
+    spec: RFC 6749 §4.5 / RFC 7591 §2
+    behaviour: |
+      A registered custom grant invoked by a client whose metadata
+      grant_types includes it MUST execute the handler and return
+      200 OK with a body matching the handler's ctx.body.
+    status: pending
+
+  - id: CG-009
+    severity: P2
+    spec: RFC 6749 §4.5
+    behaviour: |
+      When the custom grant request reaches the handler,
+      ctx.oidc.entities MUST resolve the Client only; Account and
+      token entities MUST NOT be present unless the handler creates
+      them.
+    status: pending

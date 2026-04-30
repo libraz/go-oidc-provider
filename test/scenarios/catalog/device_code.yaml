@@ -1,0 +1,565 @@
+# yaml-language-server: $schema=./schema.json
+feature: device_code
+prefix: DEV
+title: Device Authorization Grant
+specs:
+  - RFC 8628 — OAuth 2.0 Device Authorization Grant
+  - RFC 6749 §5.1 / §5.2 — Token response and error format
+  - OpenID Connect Core 1.0 §11 (Offline Access), §3.1.3
+  - RFC 8414 — Discovery (device_authorization_endpoint)
+  - RFC 8252 — OAuth 2.0 for Native Apps
+  - OWASP XSS / CSRF prevention guidance
+
+description: |
+  RFC 8628 device authorization endpoint (POST /device/auth), the
+  device-code grant at the token endpoint, the user-facing verification
+  flow (GET/POST /device), and the interaction-resume path
+  (GET /device/:uid). Covers content-type and parameter validation,
+  client authentication, response shape, persistence, expiry/replay
+  semantics, charset/mask configuration, and CSRF/XSS hardening of the
+  verification UI.
+
+rows:
+  - id: DEV-001
+    severity: P1
+    spec: RFC 8628 §3.1 / RFC 6749 §3.2
+    behaviour: |
+      POST /device/auth with a body whose Content-Type is not
+      application/x-www-form-urlencoded returns 400 invalid_request
+      with the description "only application/x-www-form-urlencoded
+      content-type bodies are supported on POST /device/auth" and
+      emits a device_authorization.error audit event.
+    status: pending
+
+  - id: DEV-002
+    severity: P0
+    spec: RFC 8628 §3.1 / RFC 7591
+    behaviour: |
+      A client whose registered grant_types do not include
+      urn:ietf:params:oauth:grant-type:device_code MUST be rejected
+      with 400 invalid_request and the description
+      "urn:ietf:params:oauth:grant-type:device_code is not allowed for
+      this client"; the OP emits device_authorization.error.
+    status: pending
+
+  - id: DEV-003
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      Unknown or unauthenticated clients calling /device/auth receive
+      401 invalid_client with the description "client authentication
+      failed"; the OP emits device_authorization.error.
+    status: pending
+
+  - id: DEV-004
+    severity: P1
+    spec: OIDC Core §6.1
+    behaviour: |
+      /device/auth requests carrying a request parameter MUST be
+      rejected with 400 request_not_supported; signed Request Objects
+      are not allowed at the device authorization endpoint.
+    status: pending
+
+  - id: DEV-005
+    severity: P1
+    spec: OIDC Core §6.2
+    behaviour: |
+      /device/auth requests carrying a request_uri parameter MUST be
+      rejected with 400 request_uri_not_supported.
+    status: pending
+
+  - id: DEV-006
+    severity: P1
+    spec: OIDC Core §7.2.1
+    behaviour: |
+      /device/auth requests carrying a registration parameter MUST be
+      rejected with 400 registration_not_supported.
+    status: pending
+
+  - id: DEV-007
+    severity: P0
+    spec: RFC 8628 §3.2
+    behaviour: |
+      A well-formed device authorization request (with scope, extra,
+      claims, PKCE) returns 200 application/json whose body has
+      exactly the keys device_code, user_code, verification_uri,
+      verification_uri_complete, expires_in.
+      verification_uri_complete equals
+      "${verification_uri}?user_code=${user_code}", verification_uri
+      ends with /device, and expires_in is approximately 600 seconds.
+    status: pending
+
+  - id: DEV-008
+    severity: P1
+    spec: RFC 8628 §3.1
+    behaviour: |
+      Successful device authorization persists a DeviceCode entity
+      bound to the requesting client, with a normalized user_code and
+      a params object containing client_id, scope, extra, and claims.
+      redirect_uri, response_type, state, and response_mode MUST be
+      stripped from the persisted params.
+    status: pending
+
+  - id: DEV-009
+    severity: P1
+    spec: RFC 9126 / RFC 8628
+    behaviour: |
+      A client with require_pushed_authorization_requests=true that
+      posts directly to /device/auth still receives 200 OK; PAR is not
+      enforced at the device authorization endpoint because the device
+      flow predates PAR.
+    status: pending
+
+  - id: DEV-010
+    severity: P2
+    spec: RFC 6749 §2.3.1
+    behaviour: |
+      Clients authenticating to /device/auth via HTTP Basic instead of
+      the client_id form parameter receive 200 OK with the full device
+      authorization response body.
+    status: pending
+
+  - id: DEV-011
+    severity: P2
+    spec: RFC 8628 §3.1
+    behaviour: |
+      On the success path the request context resolves both the Client
+      and the DeviceCode entities for downstream observability.
+    status: pending
+
+  - id: DEV-020
+    severity: P1
+    spec: OIDC Core §5.4
+    behaviour: |
+      With conformIdTokenClaims=false, redeeming a resolved DeviceCode
+      at the token endpoint returns 200 OK with access_token, id_token,
+      expires_in, token_type, scope, and refresh_token; the ID Token
+      includes profile claims such as given_name.
+    status: pending
+
+  - id: DEV-021
+    severity: P1
+    spec: OIDC Core §5.4
+    behaviour: |
+      With conformIdTokenClaims=true (default), the token response
+      shape is identical but the ID Token MUST NOT include profile
+      claims; clients are expected to call UserInfo for those claims.
+    status: pending
+
+  - id: DEV-022
+    severity: P2
+    spec: RFC 8628 §3.5
+    behaviour: |
+      Successful device-code redemption without offline_access scope
+      resolves Account, Grant, Client, DeviceCode, and AccessToken
+      entities; AccessToken.gty equals device_code and the response
+      body MUST NOT include refresh_token.
+    status: pending
+
+  - id: DEV-023
+    severity: P2
+    spec: OIDC Core §11
+    behaviour: |
+      With offline_access scope, redemption additionally resolves a
+      RefreshToken entity; both AccessToken and RefreshToken carry
+      gty=device_code.
+    status: pending
+
+  - id: DEV-024
+    severity: P1
+    spec: RFC 8628 §3.4
+    behaviour: |
+      Device-code token requests missing the device_code parameter
+      receive 400 application/json invalid_request with the
+      description "missing required parameter 'device_code'".
+    status: pending
+
+  - id: DEV-025
+    severity: P0
+    spec: RFC 8628 §3.5 / RFC 6749 §5.2
+    behaviour: |
+      A well-formed but non-existent device_code value yields 400
+      invalid_grant with the description "device code not found"; the
+      OP emits a grant.error audit event.
+    status: pending
+
+  - id: DEV-026
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When findAccount returns nothing for a resolved code, the
+      response is 400 invalid_grant with the description
+      "device code invalid (referenced account not found)" and a
+      grant.error audit event.
+    status: pending
+
+  - id: DEV-027
+    severity: P0
+    spec: RFC 8628 §3.4
+    behaviour: |
+      A device_code originally issued for client A but presented by
+      client B MUST be rejected with 400 invalid_grant
+      ("client mismatch") and a grant.error audit event.
+    status: pending
+
+  - id: DEV-028
+    severity: P0
+    spec: RFC 8628 §3.5 (expired_token)
+    behaviour: |
+      A device_code older than the configured TTL yields 400
+      expired_token with the description "device code is expired".
+    status: pending
+
+  - id: DEV-029
+    severity: P0
+    spec: RFC 8628 §3.5
+    behaviour: |
+      The first valid token redemption persists the DeviceCode with a
+      consumed timestamp less than or equal to now.
+    status: pending
+
+  - id: DEV-030
+    severity: P0
+    spec: RFC 8628 §3.5 / RFC 6749 §10.5
+    behaviour: |
+      A second redemption of an already-consumed device_code MUST
+      return 400 invalid_grant ("device code already consumed") and
+      emit grant.error.
+    status: pending
+
+  - id: DEV-031
+    severity: P0
+    spec: RFC 8628 §3.5
+    behaviour: |
+      When a device_code exists but has no accountId yet (the user has
+      not interacted), the token endpoint returns 400
+      authorization_pending with the description "authorization
+      request is still pending as the end-user hasn't yet completed
+      the user interaction steps".
+    status: pending
+
+  - id: DEV-032
+    severity: P1
+    spec: RFC 8628 §3.5
+    behaviour: |
+      When a device_code resolves to a custom error and
+      errorDescription, the token endpoint returns 400 with the
+      resolved error code and description verbatim.
+    status: pending
+
+  - id: DEV-033
+    severity: P0
+    spec: RFC 8628 §3.5
+    behaviour: |
+      When a device_code resolves with a standard error such as
+      access_denied, the token endpoint returns 400 access_denied with
+      the description verbatim and emits grant.error.
+    status: pending
+
+  - id: DEV-040
+    severity: P2
+    spec: RFC 8628 §6.1
+    behaviour: |
+      Provider construction MUST accept charset="digits".
+    status: pending
+
+  - id: DEV-041
+    severity: P2
+    spec: RFC 8628 §6.1
+    behaviour: |
+      Provider construction MUST accept charset="base-20".
+    status: pending
+
+  - id: DEV-042
+    severity: P1
+    spec: RFC 8628 §6.1
+    behaviour: |
+      Any charset other than "base-20" or "digits" MUST cause provider
+      construction to fail with the message
+      'only supported charsets are "base-20" and "digits"'.
+    status: pending
+
+  - id: DEV-043
+    severity: P2
+    spec: RFC 8628 §6.1
+    behaviour: |
+      Provider construction MUST accept the mask "*** *** ***".
+    status: pending
+
+  - id: DEV-044
+    severity: P2
+    spec: RFC 8628 §6.1
+    behaviour: |
+      Provider construction MUST accept the mask "***-***-***".
+    status: pending
+
+  - id: DEV-045
+    severity: P1
+    spec: RFC 8628 §6.1
+    behaviour: |
+      A mask containing characters other than asterisk, hyphen-minus,
+      or space (e.g. ".") MUST cause provider construction to fail
+      with the message 'mask can only contain asterisk("*"),
+      hyphen-minus("-") and space(" ") characters'.
+    status: pending
+
+  - id: DEV-046
+    severity: P1
+    spec: RFC 8414 / RFC 8628 §4
+    behaviour: |
+      With the device flow feature enabled,
+      /.well-known/openid-configuration advertises
+      device_authorization_endpoint.
+    status: pending
+
+  - id: DEV-060
+    severity: P1
+    spec: RFC 8628 §3.3 / OWASP CSRF
+    behaviour: |
+      GET /device with no user_code parameter (the verification_uri
+      target) returns 200 text/html, stores a CSRF secret in
+      session.state.secret, and renders the end-user input form whose
+      action posts to /device.
+    status: pending
+
+  - id: DEV-061
+    severity: P1
+    spec: RFC 8628 §3.3.1
+    behaviour: |
+      GET /device?user_code=... (the verification_uri_complete target)
+      returns 200 text/html with an auto-submitting form bound to
+      DOMContentLoaded; the form contains a hidden xsrf input carrying
+      the session secret and a hidden user_code input carrying the
+      provided value.
+    status: pending
+
+  - id: DEV-062
+    severity: P0
+    spec: OWASP XSS prevention
+    behaviour: |
+      GET /device?user_code values containing HTML-special characters
+      (&, <, >, ", ') MUST be HTML-escaped in the rendered output to
+      &amp; &lt; &gt; &quot; &#39; respectively.
+    status: pending
+
+  - id: DEV-063
+    severity: P1
+    spec: RFC 8628 §3.3
+    behaviour: |
+      POST /device with a valid xsrf and a user_code matching a
+      pending DeviceCode renders deviceConfirmForm with a single
+      invocation of userCodeConfirmSource carrying the resolved client
+      and deviceInfo.
+    status: pending
+
+  - id: DEV-064
+    severity: P2
+    spec: RFC 8628 §3.3
+    behaviour: |
+      POST /device with a valid xsrf but no user_code re-renders
+      userCodeInputSource with NoCodeError ("The code you entered is
+      incorrect. Try again") and MUST NOT emit code_verification.error.
+    status: pending
+
+  - id: DEV-065
+    severity: P1
+    spec: RFC 8628 §3.3
+    behaviour: |
+      POST /device with a valid xsrf and an unknown user_code
+      re-renders the input form with NotFoundError and MUST NOT emit
+      code_verification.error.
+    status: pending
+
+  - id: DEV-066
+    severity: P1
+    spec: RFC 8628 §3.3 / §3.5
+    behaviour: |
+      POST /device with a valid xsrf and a user_code whose DeviceCode
+      has expired re-renders the input form with ExpiredError and MUST
+      NOT emit code_verification.error.
+    status: pending
+
+  - id: DEV-067
+    severity: P0
+    spec: RFC 8628 §3.3
+    behaviour: |
+      POST /device with a user_code whose DeviceCode already has
+      accountId set re-renders the input form with AlreadyUsedError
+      and MUST NOT emit code_verification.error.
+    status: pending
+
+  - id: DEV-068
+    severity: P0
+    spec: RFC 8628 §3.3 / RFC 6749 §5.2
+    behaviour: |
+      POST /device for a code whose client cannot be found returns
+      400 with InvalidClient surfaced via the input form and emits
+      code_verification.error exactly once.
+    status: pending
+
+  - id: DEV-069
+    severity: P0
+    spec: OWASP CSRF
+    behaviour: |
+      POST /device after session.state has been cleared returns 400
+      with InvalidRequest "could not find device form details" and
+      emits code_verification.error exactly once.
+    status: pending
+
+  - id: DEV-070
+    severity: P0
+    spec: OWASP CSRF
+    behaviour: |
+      POST /device with an xsrf token that does not match the session
+      secret returns 400 with InvalidRequest "xsrf token invalid" and
+      emits code_verification.error exactly once.
+    status: pending
+
+  - id: DEV-071
+    severity: P0
+    spec: RFC 8628 §3.3 / RFC 6749 §4.1.2.1
+    behaviour: |
+      POST /device with confirm='' and abort=yes renders the
+      interrupted message; the persisted DeviceCode has no accountId,
+      error=access_denied, and errorDescription="End-User aborted
+      interaction".
+    status: pending
+
+  - id: DEV-072
+    severity: P0
+    spec: RFC 8628 §3.3 / OIDC Core §2
+    behaviour: |
+      POST /device with confirm=yes and a matching code persists the
+      DeviceCode with accountId=session.accountId, authTime=
+      session.loginTs, and scope/claims drawn from params; sid is set
+      only when required.
+    status: pending
+
+  - id: DEV-073
+    severity: P1
+    spec: OIDC Back-Channel Logout §2.4
+    behaviour: |
+      Confirming a code for a client whose backchannel logout
+      configuration requires sid persists sid on the DeviceCode.
+    status: pending
+
+  - id: DEV-074
+    severity: P1
+    spec: OIDC Core §5.5
+    behaviour: |
+      Confirming a code whose claims request asks for sid in id_token
+      persists sid on the DeviceCode.
+    status: pending
+
+  - id: DEV-075
+    severity: P1
+    spec: RFC 8628 §6.1
+    behaviour: |
+      User-friendly entry of user_code (e.g. "f o o b a r" matching
+      "FOOBAR") MUST be accepted: whitespace is stripped and lower-
+      case characters are upper-cased prior to lookup.
+    status: pending
+
+  - id: DEV-080
+    severity: P0
+    spec: RFC 8628 §3.3 / OWASP session management
+    behaviour: |
+      GET /device/:uid with a cleared _interaction_resume cookie
+      returns 400 and re-renders userCodeInputSource with
+      SessionNotFound "authorization request has expired".
+    status: pending
+
+  - id: DEV-081
+    severity: P1
+    spec: RFC 8628 §3.3
+    behaviour: |
+      When Interaction.find returns undefined on resume, the OP
+      returns 400 and surfaces SessionNotFound "interaction session
+      not found" via userCodeInputSource.
+    status: pending
+
+  - id: DEV-082
+    severity: P1
+    spec: RFC 8628 §3.3
+    behaviour: |
+      When DeviceCode.find returns undefined for a resumed
+      interaction, the OP returns 200 and invokes userCodeInputSource
+      with NotFoundError "the code was not found".
+    status: pending
+
+  - id: DEV-083
+    severity: P1
+    spec: RFC 8628 §3.3 / §3.5
+    behaviour: |
+      When DeviceCode.find resolves with isExpired=true on resume,
+      the OP returns 200 and invokes userCodeInputSource with
+      ExpiredError "the code has expired".
+    status: pending
+
+  - id: DEV-084
+    severity: P0
+    spec: RFC 8628 §3.3
+    behaviour: |
+      When the resumed DeviceCode already has accountId set, the OP
+      returns 200 and invokes userCodeInputSource with
+      AlreadyUsedError "code has already been used".
+    status: pending
+
+  - id: DEV-085
+    severity: P0
+    spec: RFC 8628 §3.3
+    behaviour: |
+      When the resumed DeviceCode resolves with error=access_denied,
+      the OP returns 200 and invokes userCodeInputSource with
+      AlreadyUsedError "code has already been used".
+    status: pending
+
+  - id: DEV-086
+    severity: P1
+    spec: RFC 6749 §10.12
+    behaviour: |
+      Resuming after a login result without an explicit remember flag
+      returns 200, sets a permanent session cookie carrying an expires
+      attribute, keeps the session non-transient, and assigns
+      accountId on the DeviceCode.
+    status: pending
+
+  - id: DEV-087
+    severity: P1
+    spec: RFC 6749 §10.12
+    behaviour: |
+      Resuming after a login result with remember=true returns 200,
+      sets a permanent cookie, and keeps the session non-transient.
+    status: pending
+
+  - id: DEV-088
+    severity: P1
+    spec: OIDC Core §15.6
+    behaviour: |
+      Resuming after a login result with remember=false returns 200,
+      marks the session transient, and assigns accountId on the
+      DeviceCode.
+    status: pending
+
+  - id: DEV-089
+    severity: P0
+    spec: OIDC RP-Initiated Logout §3 / OIDC Front-Channel Logout
+    behaviour: |
+      When resume detects that the previous session subject differs
+      from the current login, the OP returns 200 and renders an
+      auto-submitting logout form posting to /session/end/confirm.
+      session.state carries clientId and a postLogoutRedirectUri
+      pointing back to the interaction; submitting confirm performs
+      the logout (303 to postLogoutRedirectUri) and the follow-up GET
+      succeeds with 200.
+    status: pending
+
+  - id: DEV-090
+    severity: P1
+    spec: RFC 6749 §4.1.2.1
+    behaviour: |
+      Resuming after an interaction error result of
+      {error:'access_denied', error_description:'scope out of reach'}
+      renders the user-code input source with the message "the
+      interaction was aborted".
+    status: pending

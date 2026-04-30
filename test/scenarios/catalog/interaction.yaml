@@ -1,0 +1,290 @@
+# yaml-language-server: $schema=./schema.json
+feature: interaction
+prefix: ITX
+title: Interaction state machine and /auth/resume
+specs:
+  - OIDC Core 1.0 §3.1.2.1 (`prompt`)
+  - OIDC Core 1.0 §3.1.2.6 (Authentication Error Response)
+  - OIDC Core 1.0 §3.2.1
+  - OIDC Core 1.0 §15 (Implementation Considerations — interaction)
+  - OIDC RP-Initiated Logout 1.0
+  - RFC 6749 §4.1, §4.1.2.1 (`access_denied`)
+  - RFC 9700 (BCP 240) §4 (CSRF / session integrity)
+
+description: |
+  End-user interaction (login / consent / custom prompts) and the
+  `/auth/resume` continuation. Covers cookie-bound interaction
+  sessions, default `prompt=login` synthesis, consent flow, abort,
+  resume cookies and remember semantics, custom interaction failures,
+  and requestable / unrequestable extension prompts.
+
+rows:
+  - id: ITX-001
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      A GET against an interaction URL without the `_interaction`
+      cookie MUST return 400 with the `SessionNotFound` error envelope
+      `{name: 'SessionNotFound', error_description: 'interaction
+      session id cookie not found'}`.
+    status: pending
+
+  - id: ITX-002
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      A GET against an interaction URL whose `_interaction` cookie is
+      present but the corresponding interaction record was deleted
+      MUST return 400 `SessionNotFound` with description
+      "interaction session not found".
+    status: pending
+
+  - id: ITX-010
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      An unauthenticated user hitting
+      `/auth?response_type=code&scope=openid` MUST be 303 redirected
+      to the interaction URL. The rendered HTML form has
+      `action="{issuer}{interaction_url}"`, a hidden input
+      `prompt=login`, and a Sign-in label.
+    status: pending
+
+  - id: ITX-011
+    severity: P0
+    spec: OWASP XSS guidance
+    behaviour: |
+      Authorization request parameters echoed into the debug section
+      of the rendered interaction page MUST be HTML-escaped. For
+      example `state=<img src=x onerror=alert(1)>` MUST appear as
+      `&lt;img src=x ...&gt;` and never as raw markup.
+    status: pending
+
+  - id: ITX-012
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      Posting `prompt=login` plus `login=<accountId>` to the
+      interaction URL MUST 303 back to the auth URL. Following that
+      auth URL MUST 303 to the client redirect URI.
+    status: pending
+
+  - id: ITX-013
+    severity: P0
+    spec: input contract
+    behaviour: |
+      Posting `login=""` (empty string) MUST flow through to auth
+      resume, where resume MUST surface `server_error` with
+      `TypeError "accountId must be a non-empty string, got: string"`.
+      Defensive validation lives in the OP, not in the embedder UI.
+    status: pending
+
+  - id: ITX-020
+    severity: P0
+    spec: OIDC Core §3.1.2.1
+    behaviour: |
+      An authenticated user with `prompt=consent` MUST be shown a
+      consent form whose hidden input is `prompt=consent` and whose
+      submit label reads Authorize.
+    status: pending
+
+  - id: ITX-021
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      If the underlying authentication session was destroyed between
+      consent render and POST, the OP MUST return 400 `text/html`
+      with a body matching `/session not found/`.
+    status: pending
+
+  - id: ITX-022
+    severity: P0
+    spec: OIDC Core §15 / RFC 9700
+    behaviour: |
+      If the authentication session's `accountId` (principal) changed
+      between consent render and POST, the OP MUST return 400
+      `text/html` matching `/session principal changed/`.
+    status: pending
+
+  - id: ITX-023
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      A successful consent POST MUST 303 back to the auth URL, which
+      then completes the flow with a 303 to the client redirect URI.
+    status: pending
+
+  - id: ITX-024
+    severity: P0
+    spec: OIDC Core §15 / RFC 9700
+    behaviour: |
+      After a valid consent POST, if the authentication session was
+      destroyed before resume executes, the OP MUST return 400
+      `text/html` matching
+      `/interaction session and authentication session mismatch/`.
+    status: pending
+
+  - id: ITX-025
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      After a valid consent POST, if a *new* login (different
+      session) happens before resume, the OP MUST return the same
+      `interaction session and authentication session mismatch`
+      error as ITX-024.
+    status: pending
+
+  - id: ITX-030
+    severity: P1
+    spec: OIDC Core §3.1.2.1 / extension policy
+    behaviour: |
+      If a persisted Interaction record carries a `prompt.name` that
+      is not registered (e.g. tampering), a GET against the
+      interaction URL MUST return 501 Not Implemented.
+    status: pending
+
+  - id: ITX-040
+    severity: P0
+    spec: RFC 6749 §4.1.2.1
+    behaviour: |
+      A GET against `{interaction_url}/abort` MUST 303 redirect; the
+      subsequent return to `/auth/...` resumes with
+      `error=access_denied`,
+      `error_description="End-User aborted interaction"`, and the
+      original `state` round-tripped.
+    status: pending
+
+  - id: ITX-050
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      `/auth/resume` without the `_interaction_resume` cookie MUST
+      return 400 with a rendered error matching
+      `/authorization request has expired/`.
+    status: pending
+
+  - id: ITX-051
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      `/auth/resume` with the `_interaction_resume` cookie present
+      but no resolvable Interaction record MUST return 400 with a
+      rendered error matching `/interaction session not found/`.
+    status: pending
+
+  - id: ITX-052
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      A newly established login result with no `remember` flag MUST
+      yield a permanent session cookie (the `expires` attribute is
+      set). `getSession()` MUST be non-`transient`.
+    status: pending
+
+  - id: ITX-053
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      A login result with `remember: true` MUST yield the same
+      permanent cookie behaviour as ITX-052.
+    status: pending
+
+  - id: ITX-054
+    severity: P0
+    spec: OIDC Core §15
+    behaviour: |
+      A login result with `remember: false` MUST yield a transient
+      `_session` cookie (no `expires` attribute) and the session
+      MUST be reported as `transient`.
+    status: pending
+
+  - id: ITX-055
+    severity: P0
+    spec: OIDC Core §3.2.1 / OIDC RP-Initiated Logout
+    behaviour: |
+      When the resume's login result yields an `accountId` different
+      from the existing session subject, the OP MUST render an
+      auto-submitting logout form
+      (`<form method="post" action=".../session/end/confirm">`).
+      After the user confirms with the XSRF secret, the next
+      `/auth/resume` MUST succeed and 303 to the client.
+    status: pending
+
+  - id: ITX-060
+    severity: P1
+    spec: extension API
+    behaviour: |
+      A custom interaction failure with `prompt=none` MUST 303
+      redirect carrying `error=<custom>`,
+      `error_description=<custom>`, and `state`.
+    status: pending
+
+  - id: ITX-061
+    severity: P1
+    spec: extension API
+    behaviour: |
+      A custom interactive failure MUST resume into another
+      interaction round-trip (e.g.
+      `validateInteraction('login', 'reason_foo')`).
+    status: pending
+
+  - id: ITX-062
+    severity: P0
+    spec: OIDC Core §3.1.2.6
+    behaviour: |
+      A resume carrying `error: 'access_denied'` (no description)
+      MUST 303 with `error=access_denied` and `state` preserved.
+    status: pending
+
+  - id: ITX-063
+    severity: P0
+    spec: OIDC Core §3.1.2.6
+    behaviour: |
+      A resume carrying both `error: 'access_denied'` and
+      `error_description: '...'` MUST 303 with both fields set.
+    status: pending
+
+  - id: ITX-064
+    severity: P1
+    spec: OIDC Core §3.1.2.6
+    behaviour: |
+      A resume carrying a custom (non-standard) error code MUST 303
+      and round-trip the custom `error` and `error_description`
+      verbatim.
+    status: pending
+
+  - id: ITX-065
+    severity: P0
+    spec: OIDC Core §3.1.2.6
+    behaviour: |
+      When the original auth request carried `state`, error
+      redirects MUST round-trip it.
+    status: pending
+
+  - id: ITX-070
+    severity: P1
+    spec: extension API
+    behaviour: |
+      An RP requesting a registered `prompt=custom` whose interaction
+      is unresolved MUST 303 to the interaction redirect (e.g.
+      `validateInteraction('custom', 'custom_prompt')`).
+    status: pending
+
+  - id: ITX-071
+    severity: P1
+    spec: extension API
+    behaviour: |
+      When OP-side conditions trigger an "unrequestable" prompt that
+      the RP cannot ask for but the OP injects, the initial `/auth`
+      MUST 303 to the interaction (e.g.
+      `validateInteraction('unrequestable', 'un_foo')`).
+    status: pending
+
+  - id: ITX-072
+    severity: P0
+    spec: extension API
+    behaviour: |
+      An unsatisfied unrequestable prompt at resume time MUST 303
+      back to interaction. The loop continues until the prompt is
+      satisfied or an external abort intervenes.
+    status: pending

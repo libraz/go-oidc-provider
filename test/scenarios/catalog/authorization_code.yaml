@@ -1,0 +1,287 @@
+# yaml-language-server: $schema=./schema.json
+feature: authorization_code
+prefix: AC
+title: Authorization Code grant
+specs:
+  - RFC 6749 §4.1 — Authorization Code Grant
+  - RFC 6749 §4.1.3 — Access Token Request
+  - RFC 6749 §5.1 — Successful Response
+  - RFC 6749 §5.2 — Error Response
+  - OpenID Connect Core 1.0 §3.1.3 — Token Endpoint
+  - RFC 8414 / RFC 6750 — Bearer Token Usage
+  - RFC 7636 — PKCE (cross-reference for redirect_uri reuse semantics)
+
+description: |
+  Token-endpoint behaviour for the authorization_code grant: success
+  shapes, entity wiring, redirect_uri exact-match, code consumption /
+  replay revocation, and parameter-validation error envelopes for both
+  multi-redirect-uri and single-redirect-uri (allow-omit) clients.
+
+rows:
+  - id: AC-001
+    severity: P0
+    spec: RFC 6749 §4.1.3, §5.1 / OIDC Core §3.1.3.3
+    behaviour: |
+      A client registered with multiple redirect_uris exchanges a fresh
+      code with a matching redirect_uri. The token endpoint returns 200
+      with access_token, id_token, expires_in, token_type, and scope;
+      refresh_token is absent because offline_access was not requested.
+      A single grant.success audit event is emitted.
+    status: pending
+
+  - id: AC-002
+    severity: P2
+    spec: RFC 6749 §4.1.3 / OIDC Core §3.1.3
+    behaviour: |
+      On a successful exchange without offline_access, the issued
+      AccessToken records gty=authorization_code and the request
+      context resolves the Account, Grant, Client, AuthorizationCode,
+      and AccessToken entities.
+    status: pending
+
+  - id: AC-003
+    severity: P1
+    spec: RFC 6749 §4.1.3 / OIDC Core §11
+    behaviour: |
+      On a successful exchange that requested offline_access, a
+      RefreshToken with gty=authorization_code is issued alongside the
+      AccessToken; both appear in the resolved entities together with
+      Account, Grant, Client, and AuthorizationCode.
+    status: pending
+
+  - id: AC-004
+    severity: P1
+    spec: RFC 6749 §5.1
+    behaviour: |
+      A successful token response carries Cache-Control: no-store so
+      the response is not cached by intermediaries.
+    status: pending
+
+  - id: AC-005
+    severity: P0
+    spec: RFC 6749 §4.1.2, §5.2
+    behaviour: |
+      A code presented after its TTL has elapsed is rejected with 400
+      invalid_grant; the error_description explains that the
+      authorization code is expired and a grant.error event is emitted.
+    status: pending
+
+  - id: AC-006
+    severity: P0
+    spec: RFC 6749 §4.1.2 / §10.5 / OIDC Core §3.1.3.2
+    behaviour: |
+      A code that has already been consumed is rejected with 400
+      invalid_grant. The grant is revoked (grant.revoked emitted) so
+      every token issued from the same code chain is invalidated.
+    status: pending
+
+  - id: AC-007
+    severity: P0
+    spec: RFC 6749 §4.1.2 / §10.5
+    behaviour: |
+      The first valid exchange marks the code as consumed with an epoch
+      no later than now, unlocking the revocation logic that fires when
+      the code is presented again.
+    status: pending
+
+  - id: AC-008
+    severity: P0
+    spec: RFC 6749 §4.1.3 / §10.5
+    behaviour: |
+      A code presented by a client other than the one that requested it
+      is rejected with 400 invalid_grant ("client mismatch") and a
+      grant.error event is emitted.
+    status: pending
+
+  - id: AC-009
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A request with an unsupported or unknown grant_type value returns
+      400 unsupported_grant_type.
+    status: pending
+
+  - id: AC-010
+    severity: P0
+    spec: RFC 6749 §4.1.3 (MUST exact match)
+    behaviour: |
+      A redirect_uri sent on the token request that differs from the
+      authorize-time value is rejected with 400 invalid_grant
+      ("authorization code redirect_uri mismatch") and a grant.error is
+      emitted.
+    status: pending
+
+  - id: AC-011
+    severity: P1
+    spec: RFC 6749 §4.1.3
+    behaviour: |
+      A client registered with multiple redirect_uris that omits the
+      redirect_uri parameter at the token endpoint receives 400
+      invalid_request with description "missing required parameter
+      'redirect_uri'".
+    status: pending
+
+  - id: AC-012
+    severity: P0
+    spec: RFC 6749 §5.2 / OIDC Core §3.1.3
+    behaviour: |
+      When findAccount returns no account at exchange time the request
+      is rejected with 400 invalid_grant ("authorization code invalid
+      (referenced account not found)") and a grant.error is emitted.
+    status: pending
+
+  - id: AC-013
+    severity: P1
+    spec: RFC 6749 §4.1.3
+    behaviour: |
+      A client registered with exactly one redirect_uri and the
+      allow-omit option disabled that omits redirect_uri is rejected
+      with 400 invalid_request ("missing required parameter
+      'redirect_uri'").
+    status: pending
+
+  - id: AC-014
+    severity: P1
+    spec: RFC 6749 §3.1.2.3 (server may infer when single registered URI)
+    behaviour: |
+      A client registered with a single redirect_uri and the allow-omit
+      option enabled may omit redirect_uri at the token endpoint and
+      receive 200 with access_token, id_token, expires_in, token_type,
+      and scope; no refresh_token is issued and grant.success is
+      emitted.
+    status: pending
+
+  - id: AC-015
+    severity: P2
+    spec: RFC 6749 §4.1.3
+    behaviour: |
+      An allow-omit single-redirect-uri exchange without offline_access
+      resolves Account, Grant, Client, AuthorizationCode, and
+      AccessToken; the AccessToken records gty=authorization_code.
+    status: pending
+
+  - id: AC-016
+    severity: P2
+    spec: OIDC Core §11
+    behaviour: |
+      An allow-omit single-redirect-uri exchange that requested
+      offline_access additionally resolves a RefreshToken with
+      gty=authorization_code.
+    status: pending
+
+  - id: AC-017
+    severity: P1
+    spec: RFC 6749 §5.1
+    behaviour: |
+      A successful allow-omit single-redirect-uri token response
+      carries Cache-Control: no-store.
+    status: pending
+
+  - id: AC-018
+    severity: P0
+    spec: RFC 6749 §4.1.2
+    behaviour: |
+      An allow-omit single-redirect-uri code presented after its TTL is
+      rejected with 400 invalid_grant ("authorization code is
+      expired") and a grant.error is emitted.
+    status: pending
+
+  - id: AC-019
+    severity: P0
+    spec: RFC 6749 §4.1.2 / §10.5
+    behaviour: |
+      An allow-omit single-redirect-uri code that has already been
+      consumed is rejected with 400 invalid_grant ("authorization code
+      already consumed") and the grant is revoked.
+    status: pending
+
+  - id: AC-020
+    severity: P0
+    spec: RFC 6749 §4.1.2
+    behaviour: |
+      The first valid allow-omit single-redirect-uri exchange marks the
+      code as consumed with an epoch no later than now.
+    status: pending
+
+  - id: AC-021
+    severity: P0
+    spec: RFC 6749 §4.1.3
+    behaviour: |
+      An allow-omit single-redirect-uri code presented by a mismatched
+      client is rejected with 400 invalid_grant ("client mismatch")
+      and a grant.error is emitted.
+    status: pending
+
+  - id: AC-022
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      An unsupported grant_type submitted by an allow-omit
+      single-redirect-uri client returns 400 unsupported_grant_type.
+    status: pending
+
+  - id: AC-023
+    severity: P0
+    spec: RFC 6749 §4.1.3
+    behaviour: |
+      An allow-omit single-redirect-uri client that supplies a
+      redirect_uri which does not match the registered value is
+      rejected with 400 invalid_grant ("authorization code
+      redirect_uri mismatch").
+    status: pending
+
+  - id: AC-024
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When findAccount returns nothing for an allow-omit
+      single-redirect-uri exchange the request is rejected with 400
+      invalid_grant ("authorization code invalid (referenced account
+      not found)").
+    status: pending
+
+  - id: AC-025
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A token request with an empty body (no grant_type at all) is
+      rejected with 400 invalid_request whose description matches
+      "missing required parameter" and includes "grant_type".
+    status: pending
+
+  - id: AC-026
+    severity: P1
+    spec: RFC 6749 §4.1.3
+    behaviour: |
+      A token request with grant_type=authorization_code but no code
+      parameter is rejected with 400 invalid_request whose description
+      matches "missing required parameter" and includes "code".
+    status: pending
+
+  - id: AC-027
+    severity: P1
+    spec: RFC 6749 §4.1.3
+    behaviour: |
+      A multi-redirect-uri client that submits a token request without
+      redirect_uri is rejected with 400 invalid_request whose
+      description matches "missing required parameter" and includes
+      "redirect_uri".
+    status: pending
+
+  - id: AC-028
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A well-formed but non-existent code value is rejected with 400
+      invalid_grant ("authorization code not found") and a grant.error
+      is emitted.
+    status: pending
+
+  - id: AC-029
+    severity: P2
+    spec: RFC 6749 §5.2 / OIDC Core §3.1.3.4
+    behaviour: |
+      An unexpected exception thrown by a downstream Client.find call
+      surfaces as 500 server_error with description "oops! something
+      went wrong" and a server_error audit event is emitted.
+    status: pending

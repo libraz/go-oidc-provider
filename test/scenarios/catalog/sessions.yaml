@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=./schema.json
+feature: sessions
+prefix: SES
+title: Authentication session lifecycle
+specs:
+  - OIDC Core 1.0 §3.1.2 (Authorization Endpoint)
+  - OIDC Core 1.0 §15 (Implementation Considerations)
+  - OIDC Session Management 1.0
+  - RFC 6749 §3.1 (User authentication preconditions)
+  - RFC 7519 §4.1.4 (`exp` claim semantics; clock-skew handling)
+
+description: |
+  Authorization-time handling of the persisted authentication session:
+  expiry enforcement, clock-tolerance window, and session-id rotation
+  when a stale session is rejected.
+
+rows:
+  - id: SES-001
+    severity: P0
+    spec: OIDC Core §3.1.2.3 / RFC 7519 §4.1.4
+    behaviour: |
+      When an authorization request arrives while the persisted session
+      has `exp < now` and no clock tolerance is configured, the OP MUST
+      NOT reuse the session. The request is treated as unauthenticated,
+      an interaction redirect is returned with reason `login` /
+      `no_session`, and a fresh session id is issued (rotation).
+    status: pending
+
+  - id: SES-002
+    severity: P1
+    spec: RFC 7519 §4.1.4 / OIDC Core §15
+    behaviour: |
+      With `clockTolerance=10s`, an authorization request whose session
+      expired only 5 seconds ago MUST be accepted as still valid. No
+      session destroy is invoked and the request proceeds to issue an
+      authorization code (303 with `code` and `state`).
+    status: pending
+
+  - id: SES-003
+    severity: P0
+    spec: RFC 7519 §4.1.4 / OIDC Core §3.1.2.3
+    behaviour: |
+      With `clockTolerance=10s`, an authorization request whose session
+      expired exactly 10 seconds ago is at the boundary and MUST be
+      treated as expired. The OP returns an interaction redirect with
+      reason `login` / `no_session` and issues a new session id.
+    status: pending
