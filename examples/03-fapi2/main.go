@@ -1,128 +1,223 @@
 //go:build example
 
-// Example fapi2 demonstrates the FAPI 2.0 Baseline wiring shape for
-// an OP. A single [op.WithProfile] call activates the profile and
-// auto-enables the three features the spec requires (PAR / JAR /
-// DPoP); the example pre-registers a confidential client whose
-// authentication method is private_key_jwt with inline JWKs. The
-// example exists to make the constraint set the library imposes
-// auditable as docs-as-code: running the example and curling the
-// discovery document is the fastest way to confirm the OP advertises
-// the FAPI 2.0 surface.
+// Example 03-fapi2 demonstrates a complete FAPI 2.0 Baseline round-
+// trip: an OP with the FAPI 2.0 profile activated and an in-process
+// Relying Party that drives PAR + private_key_jwt + PKCE and
+// presents a DPoP-bound access token. The example exists to make
+// the FAPI 2.0 wire form readable end-to-end as docs-as-code:
+// operators see in one screen what the OP advertises (discovery doc)
+// and what an RP must send (rpkit/fapi2.go).
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/fapi2
+//	go run -tags example ./examples/03-fapi2
 //
-// Then inspect:
+// Two listeners come up in the same process:
 //
-//	curl http://localhost:8080/.well-known/openid-configuration | jq
+//   - :8080 — the OP, with WithProfile(FAPI2Baseline) plus
+//     WithFeature(DPoP) for the sender-constraint binding (the
+//     profile mandates DPoP or mTLS), and one client registered as
+//     PrivateKeyJWTClient with an inline JWKS the RP signs against.
+//   - :9090 — the FAPI 2.0 RP from examples/internal/rpkit. It
+//     exposes /, /login, /callback, /me.
 //
-// You should see:
+// Manual verification:
 //
-//   - "token_endpoint_auth_methods_supported" limited to private_key_jwt
-//     (FAPI 2.0 §3.1.3 allow-list intersected with the OP's enabled
-//     methods; the example does not enable mTLS so tls_client_auth /
-//     self_signed_tls_client_auth are filtered out).
-//   - "dpop_signing_alg_values_supported": ["ES256", "EdDSA", "PS256"]
-//     (DPoP feature on, RFC 9449 §5.1).
-//   - "request_parameter_supported": true and the request-object alg
-//     advertisement (JAR feature on).
-//   - "pushed_authorization_request_endpoint" present (PAR feature on).
+//  1. Open http://127.0.0.1:9090/ — you see the RP landing page.
+//  2. Click "Log in via the OP (PAR)" — the RP POSTs the
+//     authorization request to /par with a private_key_jwt
+//     assertion, gets a request_uri, and redirects the browser to
+//     /auth?request_uri=...&client_id=...
+//  3. Sign in as username "demo" / password "demo".
+//  4. Approve the consent prompt.
+//  5. The browser ends up at http://127.0.0.1:9090/me. The JSON body
+//     includes the verified ID Token claims plus
+//     "_token_type": "DPoP" and "_access_token_cnf_jkt" — the JWK
+//     thumbprint the OP recorded in the access token's "cnf" claim.
 //
-// And POSTing to /oidc/token without a DPoP proof returns 400
-// invalid_request, even with a perfectly-formed private_key_jwt
-// assertion. FAPI 2.0 Baseline §5.3 requires sender-constrained
-// access tokens via DPoP **or** mTLS; this example enables only DPoP,
-// so DPoP is the OP-side choice that satisfies the rule. An embedder
-// who prefers mTLS leaves the DPoP wiring out and configures
-// [op.WithMTLSCertHeader] / [op.WithTrustedProxies] instead.
+// Cross-check the OP's advertised surface:
+//
+//	curl http://127.0.0.1:8080/.well-known/openid-configuration | jq
+//
+// You should see token_endpoint_auth_methods_supported limited to
+// private_key_jwt, dpop_signing_alg_values_supported populated, and
+// pushed_authorization_request_endpoint present.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
-//   - Private-key emission to stdout: replace with an out-of-band delivery channel (operator paste, secret manager) before adapting to production.
+//   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
+//   - rpkit: the RP code in examples/internal/rpkit is a demo wrapper, not a library. Production FAPI 2.0 RPs use a tested client framework rather than copy-pasting the proof.
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 const (
-	demoIssuer      = "https://op.example.com"
-	demoClientID    = "fapi2-example-client"
-	demoListen      = ":8080"
-	demoRedirectURI = "https://rp.example.com/callback"
-	demoClientKID   = "fapi2-example-client-1"
+	opAddr      = ":8080"
+	rpAddr      = ":9090"
+	issuer      = "http://127.0.0.1" + opAddr
+	rpBase      = "http://127.0.0.1" + rpAddr
+	clientID    = "fapi2-example-client"
+	clientKID   = "fapi2-example-client-1"
+	redirectURI = rpBase + "/callback"
+
+	demoUsername = "demo"
+	demoPassword = "demo"
+	demoSubject  = "demo-user"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	keys := devkeys.MustEphemeral("fapi2-example-1")
+
 	clientPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		log.Fatalf("generate client private key: %v", err)
+		return err
+	}
+	clientJWKs, err := rpkit.PublicJWKSetJSON(&clientPriv.PublicKey, clientKID)
+	if err != nil {
+		return err
 	}
 
-	clientJWKs, err := publicJWKSetJSON(&clientPriv.PublicKey)
-	if err != nil {
-		log.Fatalf("encode client JWKs: %v", err)
+	st := inmem.New()
+	if err := seedUser(st); err != nil {
+		return err
+	}
+
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
 	}
 
 	provider, err := op.New(
-		op.WithIssuer(demoIssuer),
-		op.WithStore(inmem.New()),
+		op.WithIssuer(issuer),
+		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKey(keys.CookieKey),
-		// WithProfile(FAPI2Baseline) auto-enables PAR / JAR / DPoP per
-		// the spec's required feature set; embedders do NOT need to
-		// call WithFeature(...) for them. A profile is one option.
+		op.WithLoginFlow(flow),
+		// WithProfile(FAPI2Baseline) caps client-auth methods at
+		// private_key_jwt and forces sender-constrained access tokens.
+		// The profile requires the embedder to choose between DPoP
+		// (RFC 9449) and mTLS (RFC 8705) for the constraint binding,
+		// surfaced via WithFeature so the choice is auditable in the
+		// op.New call.
 		op.WithProfile(profile.FAPI2Baseline),
-		// PrivateKeyJWTClient is the typed seam for FAPI 2.0 clients:
-		// it pins TokenEndpointAuthMethod to private_key_jwt and
-		// embeds the inline JWKS the OP uses to verify assertions.
-		// Bypassing the seam (a raw store.Client + store.RegisterClient)
-		// works but loses the compile-time guarantees the type carries.
+		op.WithFeature(feature.DPoP),
 		op.WithStaticClients(op.PrivateKeyJWTClient{
-			ID:            demoClientID,
+			ID:            clientID,
 			JWKS:          clientJWKs,
-			RedirectURIs:  []string{demoRedirectURI},
+			RedirectURIs:  []string{redirectURI},
 			Scopes:        []string{"openid", "profile", "email"},
 			GrantTypes:    []string{"authorization_code", "refresh_token"},
 			ResponseTypes: []string{"code"},
 		}),
 	)
 	if err != nil {
-		log.Fatalf("op.New: %v", err)
+		return err
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/", provider)
+	opMux := http.NewServeMux()
+	opMux.Handle("/", provider)
 
-	clientPrivPEM, err := encodeECPrivateKeyPEM(clientPriv)
+	opErrCh := make(chan error, 1)
+	go func() {
+		log.Printf("OP listening on %s (issuer %s, FAPI 2.0 Baseline)", opAddr, issuer)
+		opErrCh <- serve.Listen(opAddr, opMux)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := waitForIssuer(ctx, issuer); err != nil {
+		return err
+	}
+
+	rp, err := rpkit.NewFAPI2(context.Background(), rpkit.FAPI2Options{
+		Issuer:           issuer,
+		ClientID:         clientID,
+		RedirectURL:      redirectURI,
+		Scopes:           []string{"openid", "profile", "email"},
+		ClientPrivateKey: clientPriv,
+		ClientKeyID:      clientKID,
+	})
 	if err != nil {
-		log.Fatalf("encode client private key: %v", err)
+		return err
 	}
 
-	log.Println("FAPI 2.0 Baseline example OP listening on", demoListen)
-	log.Println("issuer:", demoIssuer)
-	log.Println("client_id:", demoClientID)
-	log.Println("client kid:", demoClientKID)
-	log.Println("client private key (PKCS#8 PEM, sign private_key_jwt assertions with this):")
-	log.Print("\n" + string(clientPrivPEM))
-	log.Println("try: curl http://localhost" + demoListen + "/.well-known/openid-configuration | jq")
+	rpMux := http.NewServeMux()
+	rpMux.Handle("/", rp.Handler())
 
-	if err := serve.Listen(demoListen, mux); err != nil {
-		log.Fatalf("listen: %v", err)
+	log.Printf("RP listening on %s — open %s/", rpAddr, rpBase)
+	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
+
+	rpErrCh := make(chan error, 1)
+	go func() { rpErrCh <- serve.Listen(rpAddr, rpMux) }()
+
+	select {
+	case err := <-opErrCh:
+		return err
+	case err := <-rpErrCh:
+		return err
+	}
+}
+
+func seedUser(st *inmem.Store) error {
+	hash, err := op.HashPassword(demoPassword)
+	if err != nil {
+		return err
+	}
+	st.PutUserWithPassword(context.Background(), &store.User{
+		Subject: demoSubject,
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": "demo@example.com",
+		},
+	}, demoUsername, hash)
+	return nil
+}
+
+func waitForIssuer(ctx context.Context, iss string) error {
+	url := iss + "/.well-known/openid-configuration"
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("waitForIssuer: timeout polling " + url)
+		case <-tick.C:
+		}
 	}
 }

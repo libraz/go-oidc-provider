@@ -1,98 +1,203 @@
 //go:build example
 
 // Example 10 demonstrates [op.WithSPAUI]: the OP delegates the
-// login / consent / logout screens to a SPA at the configured mount
-// paths. The seam is framework-neutral — the example wires up a
-// React build, but Vue, Svelte, Angular, and any other SPA stack
-// drop in the same way. The library serves the OAuth + OIDC
-// endpoints AND the SPA shell + JSON state surface; embedders only
-// supply the bundled assets.
+// login screens to a SPA at the configured mount paths while still
+// driving the OAuth + OIDC protocol surface. The SPA bundle in
+// ./web/dist is hand-rolled vanilla HTML/CSS/JS with no build step
+// so the demo runs out of the box.
 //
 // Run with the example build tag:
 //
 //	go run -tags example ./examples/10-react-login
 //
-// The example expects a SPA build at ./web/dist. Pointing
-// StaticDir at a non-existent path causes [op.New] to fail at
-// construction so a misconfigured deployment surfaces immediately.
+// Two listeners come up in the same process:
 //
-// SPA bundle requirements (Vite shown; other bundlers follow the
-// same pattern):
+//   - :8080 — the OP, with one seeded password user, one
+//     statically-registered public client, and the SPA bundle
+//     served from ./web/dist at /login.
+//   - :9090 — the RP, built from examples/internal/rpkit. It
+//     exposes /, /login, /callback, /me.
 //
-//   - Build with `base: '/login/'` so HTML asset references resolve
-//     under LoginMount.
-//   - Place hashed assets under ./web/dist/assets/ — the OP serves
-//     this subtree at LoginMount/assets/{path...}.
-//   - Read the interaction UID from `location.pathname.split('/').pop()`
-//     on shell load.
-//   - Fetch prompt state from `/login/state/{uid}` (GET) and POST
-//     submissions to the same path; the OP enforces CSRF via a
-//     cookie + X-CSRF-Token header pair.
+// Manual verification:
 //
-// Routes the OP mounts under [op.SPAUI.LoginMount] (here "/login"):
+//  1. Open http://127.0.0.1:9090/ — the RP landing page.
+//  2. Click "Log in via the OP" — the browser is redirected to the
+//     OP's /authorize, then to /login/{uid} where the SPA bundle
+//     loads.
+//  3. The SPA fetches /login/state/{uid}, renders the password
+//     prompt, and POSTs the submission. The OP completes the flow
+//     and redirects back to the RP callback.
+//  4. Sign in as username "demo" / password "demo".
+//  5. Approve consent (the SPA renders the same prompt shape).
+//  6. The browser ends up at http://127.0.0.1:9090/me with the
+//     verified ID Token claims rendered as JSON.
 //
-//	GET    /login/{uid}             → SPA shell (./web/dist/index.html)
-//	GET    /login/{uid}/...         → 404 (only the literal {uid} path)
-//	GET    /login/state/{uid}       → prompt JSON
-//	POST   /login/state/{uid}       → submission
-//	DELETE /login/state/{uid}       → cancel
-//	GET    /login/assets/{path...}  → ./web/dist/assets/{path...}
-//
-// Static asset hardening: the OP refuses dotfiles (.env, .git/...),
-// directory listings, and symlinks pointing outside StaticDir, so a
-// committed secret or workspace symlink in ./web/dist cannot reach
-// the wire.
+// Restart the process whenever the round-trip stalls; ephemeral
+// keys mean every restart invalidates every in-flight session.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
-//   - WithSPAUI: ConsentMount and LogoutMount are accepted at
-//     validation time but their dedicated bundle routes are still
-//     in flight; today the LoginMount bundle drives consent and
-//     RP-Initiated Logout confirmation alongside the login screen.
+//   - SPA bundle: vanilla JS for clarity; production embedders ship
+//     their framework's build output (React/Vue/Svelte/Angular)
+//     under StaticDir with the same JSON contract.
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
+const (
+	opAddr      = ":8080"
+	rpAddr      = ":9090"
+	issuer      = "http://127.0.0.1" + opAddr
+	rpBase      = "http://127.0.0.1" + rpAddr
+	clientID    = "demo-rp"
+	redirectURI = rpBase + "/callback"
+
+	demoUsername = "demo"
+	demoPassword = "demo"
+	demoSubject  = "demo-user"
+
+	staticDir = "./web/dist"
+)
+
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	if _, err := os.Stat(staticDir); err != nil {
+		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/dist resolves")
+	}
+
 	keys := devkeys.MustEphemeral("react-1")
 
-	const staticDir = "./web/dist"
-	if _, err := os.Stat(staticDir); err != nil {
-		log.Fatalf("StaticDir %s missing — build the SPA first or override with -spa-dir", staticDir)
+	st := inmem.New()
+	if err := seedUser(st); err != nil {
+		return err
+	}
+
+	flow := op.LoginFlow{
+		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
 	}
 
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
-		op.WithStore(inmem.New()),
+		op.WithIssuer(issuer),
+		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKey(keys.CookieKey),
+		op.WithLoginFlow(flow),
 		op.WithSPAUI(op.SPAUI{
-			LoginMount:   "/login",
-			ConsentMount: "/consent",
-			LogoutMount:  "/logout",
-			StaticDir:    staticDir,
+			LoginMount: "/login",
+			StaticDir:  staticDir,
+		}),
+		op.WithStaticClients(op.PublicClient{
+			ID:           clientID,
+			RedirectURIs: []string{redirectURI},
+			Scopes:       []string{"openid", "profile"},
 		}),
 	)
 	if err != nil {
-		log.Fatalf("op.New: %v", err)
+		return err
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/", provider)
+	opMux := http.NewServeMux()
+	opMux.Handle("/", provider)
 
-	log.Println("react-login example listening on :8080 (SPA at /login, /consent, /logout)")
-	if err := serve.Listen(":8080", mux); err != nil {
-		log.Fatalf("listen: %v", err)
+	opErrCh := make(chan error, 1)
+	go func() {
+		log.Printf("OP listening on %s (issuer %s, SPA at /login)", opAddr, issuer)
+		opErrCh <- serve.Listen(opAddr, opMux)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := waitForIssuer(ctx, issuer); err != nil {
+		return err
+	}
+
+	rp, err := rpkit.New(context.Background(), rpkit.Options{
+		Issuer:      issuer,
+		ClientID:    clientID,
+		RedirectURL: redirectURI,
+		Scopes:      []string{"openid", "profile"},
+	})
+	if err != nil {
+		return err
+	}
+
+	rpMux := http.NewServeMux()
+	rpMux.Handle("/", rp.Handler())
+
+	log.Printf("RP listening on %s — open %s/", rpAddr, rpBase)
+	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
+
+	rpErrCh := make(chan error, 1)
+	go func() { rpErrCh <- serve.Listen(rpAddr, rpMux) }()
+
+	select {
+	case err := <-opErrCh:
+		return err
+	case err := <-rpErrCh:
+		return err
+	}
+}
+
+func seedUser(st *inmem.Store) error {
+	hash, err := op.HashPassword(demoPassword)
+	if err != nil {
+		return err
+	}
+	st.PutUserWithPassword(context.Background(), &store.User{
+		Subject: demoSubject,
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": "demo@example.com",
+		},
+	}, demoUsername, hash)
+	return nil
+}
+
+// waitForIssuer polls iss + "/.well-known/openid-configuration"
+// until it returns 200 or ctx is cancelled. The example boots the OP
+// and the RP in the same process, so the RP's OIDC discovery runs as
+// soon as the OP listener is ready.
+func waitForIssuer(ctx context.Context, iss string) error {
+	url := iss + "/.well-known/openid-configuration"
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("waitForIssuer: timeout polling " + url)
+		case <-tick.C:
+		}
 	}
 }

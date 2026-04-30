@@ -4,6 +4,8 @@ SHELL := /usr/bin/env bash
 
 .PHONY: tools fmt lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
+        scenario-coverage-yaml-only scenario-stats \
+        example-01 example-03 example-17 example-41 example-51 \
         conformance-certs conformance-up conformance-down \
         conformance-ofcs-up conformance-ofcs-down conformance-ofcs-status \
         conformance-op-up conformance-op-down conformance-op-status \
@@ -48,6 +50,26 @@ verify:
 verify-examples:
 	@scripts/verify_examples.sh
 
+# Manual smoke targets for examples that pair an OP with an
+# in-process Relying Party. These targets are operator-driven —
+# they boot a long-running process the developer drives from a
+# browser, and they are NOT wired into `make verify`. See the
+# example godoc for the click path.
+example-01:
+	cd examples/01-minimal && go run -tags example .
+
+example-03:
+	cd examples/03-fapi2 && go run -tags example .
+
+example-17:
+	cd examples/17-claims-request && go run -tags example .
+
+example-41:
+	cd examples/41-dynamic-registration && go run -tags example .
+
+example-51:
+	cd examples/51-dpop-nonce && go run -tags example .
+
 # Spec Scenario Suite — catalog validation and coverage.
 # Catalog source of truth: test/scenarios/catalog/<feature>.yaml.
 # See test/scenarios/catalog/README.md for the schema.
@@ -62,6 +84,16 @@ scenario-coverage:
 
 scenario-coverage-strict:
 	@scripts/scenario.sh coverage --strict
+
+# Catalog-only coverage view — does not run `go test -list`, so it
+# stays useful when the main module currently fails to build.
+scenario-coverage-yaml-only:
+	@scripts/scenario.sh coverage --yaml-only
+
+# Severity x status dashboard for the catalog. Pass `feature=<slug>`
+# to narrow to one file.
+scenario-stats:
+	@scripts/scenario.sh stats $(feature)
 
 clean:
 	go clean -testcache
