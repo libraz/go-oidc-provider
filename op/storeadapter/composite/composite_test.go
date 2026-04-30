@@ -240,6 +240,7 @@ func TestKind_String(t *testing.T) {
 		{composite.RegistrationAccessTokens, "RegistrationAccessTokens"},
 		{composite.AccessTokens, "AccessTokens"},
 		{composite.OpaqueAccessTokens, "OpaqueAccessTokens"},
+		{composite.GrantRevocations, "GrantRevocations"},
 		{composite.Kind(99), "Kind(99)"},
 	}
 	for _, tc := range cases {

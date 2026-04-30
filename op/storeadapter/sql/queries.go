@@ -58,6 +58,14 @@ type queries struct {
 	opaqueAccessTokenRevokeByGrant string
 	opaqueAccessTokenGC            string
 
+	// grant revocation (ADR 0025)
+	grantTombstoneUpsert string
+	grantTombstoneFind   string
+	grantTombstoneGC     string
+	revokedJTIInsert     string
+	revokedJTIFind       string
+	revokedJTIGC         string
+
 	// grants
 	grantSave                string
 	grantFind                string
@@ -195,6 +203,35 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
 		opaqueAccessTokenGC: d.rebind(
 			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at < ?"),
+
+		// grant revocation (ADR 0025). Two physical tables share one
+		// substore: oidc_grant_revocations holds per-grant tombstones,
+		// oidc_revoked_jtis holds the per-JTI denylist for RFC 7009
+		// single-AT revocation. RevokeGrant is idempotent — a second
+		// call against the same grant_id extends expires_at to
+		// max(existing, supplied) and leaves revoked_at unchanged so
+		// the verifier's iat <= revoked_at rule keeps its meaning
+		// across retries. RevokeJTI is idempotent in the simpler shape
+		// (a second insert is a no-op).
+		grantTombstoneUpsert: d.rebind(
+			"INSERT INTO " + n.grantTombstones +
+				" (grant_id, revoked_at, expires_at, reason)" +
+				" VALUES (?, ?, ?, ?)" + d.upsertAlias() +
+				d.upsertOnConflict("grant_id",
+					"expires_at="+d.greatestExpr(d.excludedRef("expires_at"), "expires_at"))),
+		grantTombstoneFind: d.rebind(
+			"SELECT revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?"),
+		grantTombstoneGC: d.rebind(
+			"DELETE FROM " + n.grantTombstones + " WHERE expires_at > 0 AND expires_at < ?"),
+		revokedJTIInsert: d.rebind(
+			"INSERT INTO " + n.revokedJTIs +
+				" (jti, grant_id, expires_at)" +
+				" VALUES (?, ?, ?)" + d.upsertAlias() +
+				d.upsertDoNothing("jti")),
+		revokedJTIFind: d.rebind(
+			"SELECT expires_at FROM " + n.revokedJTIs + " WHERE jti = ?"),
+		revokedJTIGC: d.rebind(
+			"DELETE FROM " + n.revokedJTIs + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// grants (upsert keyed on id)
 		grantSave: d.rebind(

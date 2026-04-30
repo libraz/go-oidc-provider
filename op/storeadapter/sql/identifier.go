@@ -57,6 +57,8 @@ type nameMap struct {
 	refreshes          string
 	accessTokens       string
 	opaqueAccessTokens string
+	grantTombstones    string
+	revokedJTIs        string
 	grants             string
 	sessions           string
 	pars               string
@@ -79,6 +81,8 @@ func defaultNames() nameMap {
 		refreshes:          "oidc_refresh_tokens",
 		accessTokens:       "oidc_access_tokens",
 		opaqueAccessTokens: "oidc_opaque_access_tokens",
+		grantTombstones:    "oidc_grant_revocations",
+		revokedJTIs:        "oidc_revoked_jtis",
 		grants:             "oidc_grants",
 		sessions:           "oidc_sessions",
 		pars:               "oidc_par_records",
@@ -94,7 +98,7 @@ func defaultNames() nameMap {
 // field on n. Unknown logical keys cause an error; this catches typos
 // at construction time rather than silently ignoring them.
 //
-//nolint:cyclop // 12-arm switch is irreducibly complex; one arm per nameMap field.
+//nolint:cyclop // 14-arm switch is irreducibly complex; one arm per nameMap field.
 func (n *nameMap) applyOverrides(overrides map[string]string) error {
 	for logical, physical := range overrides {
 		if err := validateIdentifier(physical); err != nil {
@@ -111,6 +115,10 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.accessTokens = physical
 		case "opaque_access_tokens":
 			n.opaqueAccessTokens = physical
+		case "grant_revocations":
+			n.grantTombstones = physical
+		case "revoked_jtis":
+			n.revokedJTIs = physical
 		case "grants":
 			n.grants = physical
 		case "sessions":
@@ -146,6 +154,8 @@ func (n nameMap) all() []string {
 		n.refreshes,
 		n.accessTokens,
 		n.opaqueAccessTokens,
+		n.grantTombstones,
+		n.revokedJTIs,
 		n.grants,
 		n.sessions,
 		n.pars,
@@ -178,6 +188,8 @@ var knownNamingKeys = []string{
 	"refresh_tokens",
 	"access_tokens",
 	"opaque_access_tokens",
+	"grant_revocations",
+	"revoked_jtis",
 	"grants",
 	"sessions",
 	"par_records",
@@ -204,6 +216,8 @@ func rewriteSchema(raw []byte, n nameMap) string {
 		{defaults.refreshes, n.refreshes},
 		{defaults.accessTokens, n.accessTokens},
 		{defaults.opaqueAccessTokens, n.opaqueAccessTokens},
+		{defaults.grantTombstones, n.grantTombstones},
+		{defaults.revokedJTIs, n.revokedJTIs},
 		{defaults.grants, n.grants},
 		{defaults.sessions, n.sessions},
 		{defaults.pars, n.pars},

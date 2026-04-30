@@ -56,6 +56,12 @@ func (stubStore) AccessTokens() store.AccessTokenRegistry { return stubAccessTok
 // branch never fires.
 func (stubStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
 
+// GrantRevocations returns nil; construction tests do not exercise the
+// grant-tombstone JWT access-token revocation strategy (ADR 0025) so
+// the library's fail-fast path that requires a non-nil substore never
+// fires.
+func (stubStore) GrantRevocations() store.GrantRevocationStore { return nil }
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }

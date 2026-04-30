@@ -128,6 +128,16 @@ const (
 	// the save-on-issue path commits alongside the matching grant
 	// write.
 	OpaqueAccessTokens
+
+	// GrantRevocations routes [store.GrantRevocationStore] calls
+	// (ADR 0025). Used by the userinfo, introspection, and revocation
+	// endpoints to enforce JWT access-token revocation under the
+	// grant-tombstone strategy, and written by the code-replay /
+	// logout cascades. Part of the transactional cluster: a tombstone
+	// or denylist write commits alongside the matching grant /
+	// refresh-token write so a partially-committed cascade cannot
+	// leave a still-redeemable grant next to its tombstone.
+	GrantRevocations
 )
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -161,6 +171,8 @@ func (k Kind) String() string {
 		return "AccessTokens"
 	case OpaqueAccessTokens:
 		return "OpaqueAccessTokens"
+	case GrantRevocations:
+		return "GrantRevocations"
 	default:
 		return fmt.Sprintf("Kind(%d)", int(k))
 	}
@@ -184,6 +196,7 @@ var allKinds = []Kind{
 	RegistrationAccessTokens,
 	AccessTokens,
 	OpaqueAccessTokens,
+	GrantRevocations,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -203,6 +216,7 @@ var TxClusterKinds = []Kind{
 	PushedAuthRequests,
 	AccessTokens,
 	OpaqueAccessTokens,
+	GrantRevocations,
 }
 
 // Sentinel errors. Each one is wrapped with [fmt.Errorf] %w by the helpers in
@@ -469,6 +483,20 @@ func (s *Store) AccessTokens() store.AccessTokenRegistry {
 // place to persist.
 func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return s.routes[OpaqueAccessTokens].OpaqueAccessTokens()
+}
+
+// GrantRevocations implements [store.Store] (ADR 0025) by routing the
+// call through the transactional-cluster anchor. The substore belongs
+// to the same atomic-commit cluster as [Grants] and [RefreshTokens]:
+// cascade revocations write a tombstone alongside the underlying
+// refresh-token chain revocation so a partial failure cannot leave a
+// still-redeemable grant next to its tombstone. The routed backend MAY
+// return nil from its own [store.Store.GrantRevocations] accessor when
+// the grant-tombstone strategy is not enabled; the library checks the
+// resulting nil at op.New time and rejects the strategy when its
+// substore is missing.
+func (s *Store) GrantRevocations() store.GrantRevocationStore {
+	return s.routes[GrantRevocations].GrantRevocations()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

@@ -83,4 +83,18 @@ type Store interface {
 	// a Save call accompanies the grant write so a partially-committed
 	// token issuance cannot leave a wire token unaccounted for.
 	OpaqueAccessTokens() OpaqueAccessTokenStore
+
+	// GrantRevocations returns the [GrantRevocationStore] for this
+	// backend (ADR 0025). The substore powers the grant-tombstone JWT
+	// access-token revocation strategy: cascades write one row per
+	// revoked grant rather than one row per access token, and
+	// /revocation by jti writes a single denylist row. Backends that
+	// never enable the grant-tombstone strategy MAY return nil; the
+	// library detects nil at op.New construction time and rejects the
+	// strategy when its substore is missing (fail-fast). Part of the
+	// transactional cluster: RevokeGrant / RevokeJTI calls commit
+	// alongside the grant or refresh-token writes that triggered the
+	// cascade so a partially-committed revocation cannot leave a
+	// tombstone next to a still-redeemable grant.
+	GrantRevocations() GrantRevocationStore
 }

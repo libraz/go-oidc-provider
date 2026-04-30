@@ -72,6 +72,7 @@ func Run(t *testing.T, f Factory) {
 		{"InitialAccessTokenStore", iatCases},
 		{"RegistrationAccessTokenStore", ratCases},
 		{"OpaqueAccessTokenStore", opaqueAccessTokenCases},
+		{"GrantRevocationStore", grantRevocationCases},
 		{"Transactional", transactionalCases},
 	}
 

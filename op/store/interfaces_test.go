@@ -245,7 +245,27 @@ func (fakeStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return fakeOpaqueAccessTokenStore{}
 }
 
+func (fakeStore) GrantRevocations() store.GrantRevocationStore {
+	return fakeGrantRevocationStore{}
+}
+
 var _ store.Store = (*fakeStore)(nil)
+
+type fakeGrantRevocationStore struct{}
+
+func (fakeGrantRevocationStore) RevokeGrant(context.Context, store.GrantTombstone) error {
+	return nil
+}
+
+func (fakeGrantRevocationStore) RevokeJTI(context.Context, store.RevokedJTI) error { return nil }
+
+func (fakeGrantRevocationStore) IsRevoked(context.Context, string, string, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (fakeGrantRevocationStore) GC(context.Context, time.Time) (int, error) { return 0, nil }
+
+var _ store.GrantRevocationStore = (*fakeGrantRevocationStore)(nil)
 
 type fakeOpaqueAccessTokenStore struct{}
 

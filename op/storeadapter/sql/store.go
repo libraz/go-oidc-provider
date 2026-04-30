@@ -50,13 +50,15 @@ func WithClock(c Clock) Option {
 
 // WithNaming overrides the physical table names. Keys are the logical
 // names the adapter uses internally ("clients",
-// "authorization_codes", "refresh_tokens", "access_tokens", "grants",
-// "sessions", "par_records", "interactions", "consumed_jtis", "users",
-// "initial_access_tokens", "registration_access_tokens"); values are
-// the physical identifiers to use. Unknown logical keys cause [New]
-// to return an error so typos surface at construction time. Each
-// physical identifier is validated against the SQL standard regular
-// identifier grammar before any query is built.
+// "authorization_codes", "refresh_tokens", "access_tokens",
+// "opaque_access_tokens", "grant_revocations", "revoked_jtis",
+// "grants", "sessions", "par_records", "interactions",
+// "consumed_jtis", "users", "initial_access_tokens",
+// "registration_access_tokens"); values are the physical identifiers
+// to use. Unknown logical keys cause [New] to return an error so typos
+// surface at construction time. Each physical identifier is validated
+// against the SQL standard regular identifier grammar before any query
+// is built.
 func WithNaming(overrides map[string]string) Option {
 	return func(cfg *config) {
 		if cfg.overrides == nil {
@@ -85,6 +87,7 @@ type Store struct {
 	refreshesImpl          *refreshStore
 	accessTokensImpl       *accessTokenStore
 	opaqueAccessTokensImpl *opaqueAccessTokenStore
+	grantRevocationsImpl   *grantRevocationStore
 	grantsImpl             *grantStore
 	sessionsImpl           *sessionStore
 	parsImpl               *parStore
@@ -145,6 +148,7 @@ func (s *Store) attachSubstores() {
 	s.refreshesImpl = newRefreshStore(s, nil)
 	s.accessTokensImpl = newAccessTokenStore(s, nil)
 	s.opaqueAccessTokensImpl = newOpaqueAccessTokenStore(s, nil)
+	s.grantRevocationsImpl = newGrantRevocationStore(s, nil)
 	s.grantsImpl = newGrantStore(s, nil)
 	s.sessionsImpl = newSessionStore(s, nil)
 	s.parsImpl = newParStore(s, nil)
@@ -303,6 +307,17 @@ func (s *Store) AccessTokens() store.AccessTokenRegistry { return s.accessTokens
 // satisfies. Embedders that never enable opaque tokens incur no cost
 // beyond the unused table.
 func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return s.opaqueAccessTokensImpl }
+
+// GrantRevocations returns the [store.GrantRevocationStore] handle
+// (ADR 0025). The substore fronts two physical tables
+// (oidc_grant_revocations + oidc_revoked_jtis) under one Go type so
+// the verification path's denylist-first / tombstone-second precedence
+// rule maps cleanly onto two indexable PK lookups. The handle is
+// non-nil regardless of whether the embedder selects
+// [op.RevocationStrategyGrantTombstone]; the library's nil-check at
+// op.New consults the returned interface for nil, which a non-nil
+// concrete pointer always satisfies.
+func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRevocationsImpl }
 
 // --- store.ClientRegistry ----------------------------------------------------
 

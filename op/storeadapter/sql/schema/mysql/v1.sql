@@ -117,6 +117,21 @@ CREATE TABLE IF NOT EXISTS oidc_opaque_access_tokens (
     INDEX idx_oidc_opaque_access_tokens_expires (expires_at)
 );
 
+CREATE TABLE IF NOT EXISTS oidc_grant_revocations (
+    grant_id VARCHAR(255) NOT NULL PRIMARY KEY,
+    revoked_at BIGINT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    reason VARCHAR(64) NOT NULL DEFAULT '',
+    INDEX idx_oidc_grant_revocations_expires (expires_at)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_revoked_jtis (
+    jti VARCHAR(255) NOT NULL PRIMARY KEY,
+    grant_id VARCHAR(255) NOT NULL DEFAULT '',
+    expires_at BIGINT NOT NULL,
+    INDEX idx_oidc_revoked_jtis_expires (expires_at)
+);
+
 CREATE TABLE IF NOT EXISTS oidc_grants (
     id VARCHAR(255) NOT NULL PRIMARY KEY,
     client_id VARCHAR(255) NOT NULL,

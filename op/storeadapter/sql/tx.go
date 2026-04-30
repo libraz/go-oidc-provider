@@ -27,6 +27,7 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 		pars:               newParStore(s, dbtx),
 		accessTokens:       newAccessTokenStore(s, dbtx),
 		opaqueAccessTokens: newOpaqueAccessTokenStore(s, dbtx),
+		grantRevocations:   newGrantRevocationStore(s, dbtx),
 	}
 	return tx, nil
 }
@@ -45,6 +46,7 @@ type sqlTx struct {
 	pars               *parStore
 	accessTokens       *accessTokenStore
 	opaqueAccessTokens *opaqueAccessTokenStore
+	grantRevocations   *grantRevocationStore
 
 	done bool
 }
@@ -79,6 +81,16 @@ func (t *sqlTx) AccessTokens() store.AccessTokenRegistry { return t.accessTokens
 // the same atomic transaction.
 func (t *sqlTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return t.opaqueAccessTokens
+}
+
+// GrantRevocations returns the tx-bound grant-revocation substore
+// (ADR 0025). As with [sqlTx.AccessTokens] and [sqlTx.OpaqueAccessTokens],
+// [store.Tx] does not expose this method directly; the library reaches
+// it through a runtime type assertion so a tombstone insert / JTI
+// denylist insert commits atomically with the underlying grant or
+// refresh-token write that triggered the cascade.
+func (t *sqlTx) GrantRevocations() store.GrantRevocationStore {
+	return t.grantRevocations
 }
 
 // Commit finalises the transaction. After Commit returns the handle

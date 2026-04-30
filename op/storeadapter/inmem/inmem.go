@@ -131,6 +131,7 @@ type Store struct {
 	emailotps          *emailOTPStore
 	accessTokens       *accessTokenStore
 	opaqueAccessTokens *opaqueAccessTokenStore
+	grantRevocations   *grantRevocationStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -160,6 +161,7 @@ func New(opts ...Option) *Store {
 	s.emailotps = newEmailOTPStore(s.clock)
 	s.accessTokens = newAccessTokenStore()
 	s.opaqueAccessTokens = newOpaqueAccessTokenStore()
+	s.grantRevocations = newGrantRevocationStore()
 	return s
 }
 
@@ -208,6 +210,14 @@ func (s *Store) AccessTokens() store.AccessTokenRegistry { return s.accessTokens
 // credential. Revocation flips a flag rather than deleting the row so
 // audit metadata remains recoverable.
 func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return s.opaqueAccessTokens }
+
+// GrantRevocations implements [store.Store] (ADR 0025). The reference
+// implementation keeps two maps under one mutex: tombstones keyed by
+// GrantID and a JTI denylist; the lookup order honours the contract's
+// "denylist first, tombstone second" precedence. Both row shapes are
+// plain strings -- GrantID is internal and JTI is a non-secret claim,
+// so no hash-on-store contract applies.
+func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRevocations }
 
 // TOTPs returns the [store.TOTPStore] backed by this Store. The
 // substore is not part of the aggregate [store.Store] interface (the

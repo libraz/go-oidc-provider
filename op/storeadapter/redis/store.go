@@ -378,6 +378,19 @@ func (s *Store) AccessTokens() store.AccessTokenRegistry { panic(unimplemented("
 // with op/storeadapter/composite + a SQL anchor.
 func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
 
+// GrantRevocations implements [store.Store] (ADR 0025). Redis cannot
+// host the transactional cluster on its own — the tombstone /
+// denylist write must commit atomically alongside the matching grant
+// or refresh-token write — so the accessor returns nil. The library
+// detects the nil at op.New time when an embedder selects the
+// grant-tombstone strategy without routing the substore to a
+// transactional backend through composite, and surfaces a fail-fast
+// configuration error instead of crashing on the first revocation.
+// Embedders that want JWT access-token revocation under the grant-
+// tombstone strategy compose this adapter with
+// op/storeadapter/composite + a SQL anchor.
+func (s *Store) GrantRevocations() store.GrantRevocationStore { return nil }
+
 func unimplemented(kind string) string {
 	return fmt.Sprintf("oidcredis: %s is out of scope; route this substore via composite to a durable backend", kind)
 }

@@ -19,6 +19,7 @@ type Dialect struct {
 	name           string
 	usesDollar     bool
 	upsertConflict bool
+	greatest       string
 	schema         []byte
 }
 
@@ -36,7 +37,12 @@ func SQLite() Dialect {
 		name:           "sqlite",
 		usesDollar:     false,
 		upsertConflict: true,
-		schema:         mustSchema("sqlite"),
+		// SQLite exposes MAX as a scalar (variadic) function distinct
+		// from the aggregate; PostgreSQL and MySQL spell the same shape
+		// GREATEST. The grant-tombstone upsert uses this to extend
+		// ExpiresAt to max(existing, supplied) idempotently.
+		greatest: "MAX",
+		schema:   mustSchema("sqlite"),
 	}
 }
 
@@ -47,6 +53,7 @@ func MySQL() Dialect {
 		name:           "mysql",
 		usesDollar:     false,
 		upsertConflict: false,
+		greatest:       "GREATEST",
 		schema:         mustSchema("mysql"),
 	}
 }
@@ -59,6 +66,7 @@ func Postgres() Dialect {
 		name:           "postgres",
 		usesDollar:     true,
 		upsertConflict: true,
+		greatest:       "GREATEST",
 		schema:         mustSchema("postgres"),
 	}
 }
@@ -125,6 +133,29 @@ func (d Dialect) upsertAlias() string {
 		return ""
 	}
 	return " AS new"
+}
+
+// upsertDoNothing returns the dialect-appropriate "ignore the conflict"
+// tail. SQLite and PostgreSQL spell it `ON CONFLICT(key) DO NOTHING`;
+// MySQL has no DO NOTHING form, so the substore re-binds the key
+// column to itself in `ON DUPLICATE KEY UPDATE` which is a no-op the
+// optimiser elides. Used by [GrantRevocationStore.RevokeJTI] where a
+// second insert against an already-denylisted JTI must not perturb the
+// existing row's audit fields.
+func (d Dialect) upsertDoNothing(key string) string {
+	if d.upsertConflict {
+		return " ON CONFLICT(" + key + ") DO NOTHING"
+	}
+	return " ON DUPLICATE KEY UPDATE " + key + " = " + key
+}
+
+// greatestExpr returns the dialect-appropriate two-argument max-of
+// scalar expression. SQLite exposes MAX as a variadic scalar function;
+// PostgreSQL and MySQL spell the same shape GREATEST. The grant
+// tombstone upsert uses this to extend ExpiresAt to max(existing,
+// supplied) without losing the original RevokedAt.
+func (d Dialect) greatestExpr(a, b string) string {
+	return d.greatest + "(" + a + ", " + b + ")"
 }
 
 // itoa renders a non-negative int without pulling in strconv (the
