@@ -178,7 +178,7 @@ func runAuthorize(t testing.TB, tk *testkit.Provider, clientID, redirectURI, cha
 		"client_id":             {clientID},
 		"response_type":         {"code"},
 		"redirect_uri":          {redirectURI},
-		"scope":                 {"openid email"},
+		"scope":                 {"openid email offline_access"},
 		"state":                 {state},
 		"nonce":                 {nonce},
 		"code_challenge":        {challenge},
@@ -287,7 +287,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 		ID:                      "rp-dpop",
 		SecretHash:              hash,
 		RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
-		Scopes:                  []string{"openid", "profile", "email"},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
 		TokenEndpointAuthMethod: "client_secret_basic",
 	})
 	tk.Store.PutUser(context.Background(), &store.User{

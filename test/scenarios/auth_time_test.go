@@ -8,6 +8,7 @@ package scenarios_test
 //   - OIDC Registration 1.0 §2 (`require_auth_time`, `default_max_age`)
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -105,7 +106,7 @@ func atFlowAssertAuthTime(t *testing.T, opts ...func(*atFlowConfig)) {
 	})
 	if cfg.clientMutator != nil {
 		cfg.clientMutator(rp)
-		if err := tk.Store.UpdateClient(t.Context(), rp); err != nil {
+		if err := tk.Store.UpdateClient(context.Background(), rp); err != nil {
 			t.Fatalf("UpdateClient: %v", err)
 		}
 	}
