@@ -24,14 +24,19 @@ rows:
     severity: P0
     spec: JARM §6 / RFC 8414
     behaviour: |
-      When JARM is enabled, /.well-known/openid-configuration MUST
-      include authorization_signing_alg_values_supported,
-      authorization_encryption_alg_values_supported,
-      authorization_encryption_enc_values_supported, and
-      response_modes_supported MUST include jwt, query.jwt,
-      fragment.jwt, form_post.jwt (and web_message.jwt when
-      web_message support is enabled).
-    status: pending
+      When JARM is enabled, /.well-known/openid-configuration
+      publishes authorization_signing_alg_values_supported with at
+      least "ES256" (v1.0 signs with ES256 only) and
+      response_modes_supported equal to ["query", "form_post",
+      "query.jwt", "fragment.jwt", "form_post.jwt", "jwt"]. The
+      authorization_encryption_alg_values_supported and
+      authorization_encryption_enc_values_supported fields are NOT
+      published (JWE for JARM responses is out-of-scope in v1.0;
+      see encryption.yaml). The response_modes list does NOT
+      include "web_message" or "web_message.jwt" (web_message
+      transport is not implemented and is discouraged by OAuth 2.1
+      / RFC 9700).
+    status: active
 
   - id: JARM-010
     severity: P0
@@ -67,7 +72,8 @@ rows:
       For response_type=none, response_mode=jwt resolves to query
       delivery; the payload contains only the envelope claims exp,
       aud, state, iss (no token or code claims).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "response_type=none is not supported. response_types_supported=[\"code\"] only per the v0.x design (no implicit/hybrid, no none); internal/discovery/build_test.go pins this list. The bare /authorize never accepts response_type=none, so a JARM resolution test for it has no caller."
 
   - id: JARM-020
     severity: P0
@@ -75,7 +81,7 @@ rows:
     behaviour: |
       The JARM response JWT aud claim MUST equal the requesting
       client's client_id.
-    status: pending
+    status: active
 
   - id: JARM-021
     severity: P0
@@ -83,14 +89,14 @@ rows:
     behaviour: |
       The JARM response JWT exp claim MUST be present and be a number
       (UTC seconds).
-    status: pending
+    status: active
 
   - id: JARM-022
     severity: P0
     spec: JARM §4.1 / RFC 9207
     behaviour: |
       The JARM response JWT iss claim MUST equal the OP issuer URL.
-    status: pending
+    status: active
 
   - id: JARM-023
     severity: P1
@@ -98,7 +104,7 @@ rows:
     behaviour: |
       When the request supplied state, the JARM response JWT
       round-trips it verbatim.
-    status: pending
+    status: active
 
   - id: JARM-030
     severity: P0
@@ -109,7 +115,8 @@ rows:
       surface invalid_client "client secret is expired, cannot issue
       a JWT Authorization response" via the redirect (or rendered
       page for non-redirecting modes).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: HMAC client-secret-bound JARM signing algs (HS*) and JWE alg families (A*KW, dir) are both out-of-scope in v1.0. client_secret_jwt is OOS per docs/plans/002-product-design.md, encryption is OOS per encryption.yaml. The Go OP cannot pin a client to those algs, so the expired-secret rejection path has no caller.
 
   - id: JARM-040
     severity: P0
@@ -122,7 +129,8 @@ rows:
       error_description="requested response_mode is not allowed for
       the requested response_type unless encrypted" plus state, aud,
       exp, iss.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "No implicit/hybrid grant flows (response_types_supported=[\"code\"]); same rationale as JARM-010. JWE for JARM responses is also OOS in v1.0."
 
   - id: JARM-041
     severity: P0
@@ -131,7 +139,8 @@ rows:
       When the client has authorization-encryption metadata
       configured, implicit/hybrid + query.jwt is allowed and the OP
       emits an authorization.success event.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: No implicit/hybrid grant flows; JWE-encrypted JARM responses are OOS in v1.0 per encryption.yaml. Both prerequisites are absent.
 
   - id: JARM-042
     severity: P0
@@ -139,7 +148,8 @@ rows:
     behaviour: |
       response_type=code with response_mode=query.jwt succeeds with a
       payload matching JARM-011.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Subsumed by JARM-011. response_mode=query.jwt is the explicit form; response_mode=jwt with response_type=code resolves to query per JARM §4.3 — same wire path. JARM-011 is the canonical home for the code-success payload assertions (code, aud, exp, state, iss, no scope).
 
   - id: JARM-043
     severity: P0
@@ -147,7 +157,8 @@ rows:
     behaviour: |
       response_type=none with response_mode=query.jwt succeeds with
       envelope-only claims (exp, aud, state, iss).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "response_type=none is not supported (response_types_supported=[\"code\"] only). Same rationale as JARM-012."
 
   - id: JARM-044
     severity: P0
@@ -157,33 +168,39 @@ rows:
       response_type yields invalid_client "client secret is expired,
       cannot issue a JWT Authorization response" delivered via the
       bare query (no JWT can be produced).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as JARM-030: HS*/A*KW/dir families are OOS (client_secret_jwt + encryption both OOS in v1.0); the OP cannot enter the expired-client_secret rejection path for a JARM transport because no JARM-bound alg consumes the secret."
 
   - id: JARM-050
     severity: P0
     spec: JARM §4.3
     behaviour: |
       For response_type=code + prompt=none (forced login_required),
-      query.jwt errors are delivered as a 303 redirect carrying the
-      signed response JWT with the error claims.
-    status: pending
+      query.jwt errors are delivered as a 302 redirect whose query
+      string carries response=<signed JARM JWT>; the JWT's claims
+      include error=login_required, error_description, state, aud,
+      exp, iss.
+    status: active
 
   - id: JARM-051
     severity: P0
     spec: JARM §4.3
     behaviour: |
       For response_type=code + prompt=none, fragment.jwt errors are
-      delivered as a 303 redirect whose fragment carries the JWT.
-    status: pending
+      delivered as a 302 redirect whose URL fragment carries
+      response=<signed JARM JWT> with error=login_required and the
+      JARM envelope (state, aud, exp, iss).
+    status: active
 
   - id: JARM-052
     severity: P0
     spec: JARM §4.3
     behaviour: |
       For response_type=code + prompt=none, form_post.jwt errors
-      return a 400 with an HTML form auto-POSTing the JWT to
-      redirect_uri.
-    status: pending
+      return a 200 (text/html) with an auto-POST HTML form whose
+      hidden "response" input carries the signed error JWT and
+      whose action attribute is the registered redirect_uri.
+    status: active
 
   - id: JARM-053
     severity: P1
@@ -192,7 +209,8 @@ rows:
       For response_type=code + prompt=none, web_message.jwt errors
       return a 400 rendered HTML page (web_message is deprecated;
       treat as P1).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "web_message response_mode is not implemented (response_modes_supported set is [\"query\",\"form_post\",\"query.jwt\",\"fragment.jwt\",\"form_post.jwt\",\"jwt\"], no web_message variant). RFC 9700 / OAuth 2.1 also discourage it."
 
   - id: JARM-054
     severity: P0
@@ -203,4 +221,5 @@ rows:
       error_description="client secret is expired, cannot issue a
       JWT Authorization response" and emits an authorization.error
       event.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as JARM-030/JARM-044: HS*/A*KW/dir families are OOS, so the expired-client_secret JARM rejection path has no caller across any transport."
