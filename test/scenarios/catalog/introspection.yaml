@@ -128,7 +128,8 @@ rows:
       endpoint is rejected with 400 unsupported_token_type and the
       message "Structured JWT Tokens cannot be introspected via the
       introspection_endpoint".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The OP collapses every cross-client / unrecognised / malformed token submission to {active:false} per RFC 7662 §2.2 (single inactive envelope) and the doc.go same-client-only policy. Returning 400 unsupported_token_type with the wording this row asserts would leak token-shape information (\"this is a JWT but I don't introspect those\") to a probing caller; the privacy-preserving baseline already in place is strictly stronger. RFC 9068 §6 leaves JWT introspection optional, so the OP's choice is spec-compliant."
 
   - id: INT-014
     severity: P0
@@ -179,7 +180,7 @@ rows:
       A public client (token_endpoint_auth_method=none) submitting
       another client's token receives 200 {"active": false} only,
       preventing token-existence leaks.
-    status: pending
+    status: active
 
   - id: INT-020
     severity: P0

@@ -722,9 +722,113 @@ func TestScenario_INT_018_NonsenseTokenReturnsActiveFalse(t *testing.T) {
 	}
 }
 
+// TestScenario_INT_019_PublicClientCannotInspectOtherTokens
+// verifies the same-client-only introspection policy: a public client
+// (token_endpoint_auth_method=none) submitting another client's
+// access token receives 200 {"active": false} only — no claims, no
+// hints about whether the token exists. The OP MUST collapse
+// "wrong owner" onto the inactive envelope so a public probe cannot
+// enumerate live tokens issued to other clients.
+//
+// Spec: RFC 7662 §2.2 (single inactive envelope) plus the OP's
+// same-client-only policy documented in introspectendpoint/doc.go.
 func TestScenario_INT_019_PublicClientCannotInspectOtherTokens(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-019")
+
+	const (
+		ownerID       = "rp-int-019-owner"
+		ownerCallback = "https://rp.testkit.invalid/owner"
+		ownerSecret   = "rp-int-019-owner-secret" //nolint:gosec // test fixture
+		probePublicID = "rp-int-019-public-probe"
+		probePublicCB = "https://rp.testkit.invalid/probe"
+	)
+
+	ownerHash, err := op.HashClientSecret(ownerSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	owner := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      ownerID,
+		SecretHash:              ownerHash,
+		RedirectURIs:            []string{ownerCallback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+	probe := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      probePublicID,
+		RedirectURIs:            []string{probePublicCB},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "none",
+		GrantTypes:              []string{"authorization_code"},
+		PublicClient:            true,
+	})
+
+	// Mint an access token for the OWNER client through a full code flow.
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    owner.ID,
+		RedirectURI: ownerCallback,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  ownerCallback,
+		Verifier:     pkce.Verifier,
+		ClientID:     owner.ID,
+		ClientSecret: ownerSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.AccessToken == "" {
+		t.Fatalf("/token status=%d body=%v, want 200 with access_token", tok.StatusCode, tok.Raw)
+	}
+
+	// PROBE the owner's access token from the PUBLIC client. The body
+	// carries client_id (no Authorization header) since the public
+	// client has token_endpoint_auth_method=none.
+	form := url.Values{
+		"token":     {tok.AccessToken},
+		"client_id": {probe.ID},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200; body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); active {
+		t.Fatalf("active=true; cross-client introspection MUST collapse onto {active:false}; body=%s", string(body))
+	}
+	// Inactive envelope is the canonical single-key body. Any extra
+	// claim (client_id, sub, scope, exp, ...) leaks token existence.
+	for _, leak := range []string{"client_id", "sub", "scope", "iss", "exp", "iat", "token_type", "username"} {
+		if _, present := env[leak]; present {
+			t.Errorf("inactive body leaks %q=%v (RFC 7662 §2.2 requires bare {active:false})", leak, env[leak])
+		}
+	}
 }
 
 // TestScenario_INT_020_BadClientAuthEmitsAuditError drives a
