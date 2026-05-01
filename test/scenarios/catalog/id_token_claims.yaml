@@ -27,6 +27,7 @@ rows:
     behaviour: |
       Every id_token carries iss, sub, aud, exp, and iat
       unconditionally.
+    status: active
 
   - id: IDT-02
     severity: P0
@@ -34,6 +35,7 @@ rows:
     behaviour: |
       The aud claim contains at least one client_id, regardless of
       pairwise/public subject type.
+    status: active
 
   - id: IDT-03
     severity: P0
@@ -41,6 +43,8 @@ rows:
     behaviour: |
       When aud has multiple values, or whenever azp is required, azp
       is set to the current client_id.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 never emits azp on id_tokens. internal/tokens/tokens.go declares the AZP field with omitempty, but no caller in internal/grants/{authcode,refresh,clientcred}/ populates IDTokenClaims.AZP — the field is structurally unused in v1.0's id-token issuance path. Multi-aud id_tokens are themselves not produced by any grant (single-aud only), so the conditional posited by this row never triggers."
 
   - id: IDT-04
     severity: P1
@@ -77,6 +81,7 @@ rows:
     behaviour: |
       The iss claim is the OP's absolute issuer URL and matches the
       discovery document.
+    status: active
 
   - id: IDT-10
     severity: P0
@@ -104,6 +109,8 @@ rows:
       In conform=false (legacy) mode, scope-derived claims are
       embedded in the id_token even when an access_token is also
       issued.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no conformIdTokenClaims toggle. There is no public op.With* option, no internal flag, and no per-client metadata field that switches the id_token composition into a 'legacy/conform=false' shape that embeds scope-derived claims when an access_token is also issued. The OP fixes the conform=true behaviour (scope-derived claims live on /userinfo when an AT is minted)."
 
   - id: IDT-13
     severity: P0
@@ -216,12 +223,17 @@ rows:
     behaviour: |
       aud is either a string or an array of strings; in either form
       it MUST contain the client_id.
+    status: active
 
   - id: IDT-31
     severity: P0
     spec: OIDC Core §2
     behaviour: |
-      When aud has a single value, azp MAY be omitted.
+      When aud has a single value, azp is omitted. v1.0 has no
+      grant code path that populates IDTokenClaims.AZP, so azp
+      never appears on the wire for the canonical single-aud
+      id_token shape.
+    status: active
 
   - id: IDT-32
     severity: P0
@@ -250,15 +262,23 @@ rows:
     severity: P0
     spec: OIDC Core §2
     behaviour: |
-      The lifetime exp - iat follows the client metadata
-      id_token_lifetime (or the OP default when unset).
+      The id_token lifetime exp - iat follows the OP's default
+      id_token TTL (10 minutes; internal/tokenendpoint/handler.go's
+      defaultIDTokenTTL). v1.0 does not expose a public option to
+      override the value, so the assertion is pinned to the
+      default.
+    status: active
 
   - id: IDT-41
     severity: P0
     spec: OIDC Core §10.1
     behaviour: |
       The id_token is signed with the client's
-      id_token_signed_response_alg; RS256 is the default.
+      id_token_signed_response_alg. v1.0's keyset generator only
+      emits ES256 keys (internal/keys/generate.go's GenerateES256
+      and the AlgRS256/AlgPS256/AlgES256/AlgEdDSA registry in
+      internal/jose/alg.go), so the OP signs with ES256 by default.
+    status: active
 
   - id: IDT-42
     severity: P1
@@ -288,6 +308,7 @@ rows:
     behaviour: |
       /userinfo always returns scope-derived claims bound to the
       access_token's consent.
+    status: active
 
   - id: IDT-51
     severity: P0
@@ -316,6 +337,7 @@ rows:
     spec: OIDC Core §5.3.2
     behaviour: |
       The /userinfo response always includes sub.
+    status: active
 
   - id: IDT-55
     severity: P0
@@ -323,6 +345,7 @@ rows:
     behaviour: |
       The /userinfo response's sub MUST match the access_token's
       issued subject exactly to prevent subject swap.
+    status: active
 
   - id: IDT-60
     severity: P0
@@ -338,6 +361,7 @@ rows:
     behaviour: |
       iat is read from the OP's internal clock (internal/timex) so
       wall-clock skew is centrally controlled.
+    status: active
 
   - id: IDT-62
     severity: P0
@@ -345,3 +369,4 @@ rows:
     behaviour: |
       iss never deviates from the issuer advertised in the discovery
       document.
+    status: active
