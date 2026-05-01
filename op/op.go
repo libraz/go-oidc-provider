@@ -1934,6 +1934,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 			OPPolicyURI:          cfg.discoveryMetadata.OPPolicyURI,
 			OPTermsOfServiceURI:  cfg.discoveryMetadata.OPTermsOfServiceURI,
 			UILocalesSupported:   cfg.discoveryMetadata.UILocalesSupported,
+			MTLSEndpointAliases:  cfg.discoveryMetadata.MTLSEndpointAliases,
 			Extra:                cfg.discoveryMetadata.Extra,
 		},
 	}

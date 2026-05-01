@@ -2014,6 +2014,29 @@ type DiscoveryMetadata struct {
 	// equivalent — the field is omitted from the wire.
 	UILocalesSupported []string
 
+	// MTLSEndpointAliases publishes alternative URLs at which the OP
+	// serves its mTLS-required endpoints (RFC 8705 §5). Keys MUST
+	// match discovery endpoint metadata names exactly as they appear
+	// on the wire (e.g. "token_endpoint", "introspection_endpoint",
+	// "revocation_endpoint", "userinfo_endpoint",
+	// "registration_endpoint",
+	// "device_authorization_endpoint",
+	// "pushed_authorization_request_endpoint"); values are absolute
+	// URLs that require client-certificate authentication.
+	//
+	// The field is structurally feature-gated: it is published only
+	// when [feature.MTLS] is enabled. Supplying aliases without the
+	// MTLS feature is a no-op so an embedder can keep the option in
+	// place across feature toggles without further branching.
+	//
+	// Deployments that front a single hostname (the canonical
+	// *_endpoint values are already mTLS-capable) leave this map nil
+	// or empty so the field stays absent from the discovery
+	// document — RFC 8705 §5 makes the publication MAY, not MUST.
+	//
+	// Spec: RFC 8705 §5.
+	MTLSEndpointAliases map[string]string
+
 	// Extra carries arbitrary embedder-defined passthrough keys. The
 	// values are JSON-marshalled into the discovery document at the
 	// top level. Keys MUST be valid RFC 8414 metadata names (lowercase
@@ -2081,6 +2104,13 @@ func WithDiscoveryMetadata(meta DiscoveryMetadata) Option {
 			OPPolicyURI:          meta.OPPolicyURI,
 			OPTermsOfServiceURI:  meta.OPTermsOfServiceURI,
 			UILocalesSupported:   slices.Clone(meta.UILocalesSupported),
+		}
+		if len(meta.MTLSEndpointAliases) > 0 {
+			c.discoveryMetadata.MTLSEndpointAliases = make(map[string]string,
+				len(meta.MTLSEndpointAliases))
+			for k, v := range meta.MTLSEndpointAliases {
+				c.discoveryMetadata.MTLSEndpointAliases[k] = v
+			}
 		}
 		if len(meta.Extra) > 0 {
 			c.discoveryMetadata.Extra = make(map[string]any, len(meta.Extra))

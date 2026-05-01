@@ -153,6 +153,16 @@ type Document struct {
 	// client certificate at /token.
 	TLSClientCertificateBoundAccessTokens bool `json:"tls_client_certificate_bound_access_tokens,omitempty"`
 
+	// MTLSEndpointAliases publishes the alternative URLs at which
+	// the OP serves its mTLS-required endpoints (RFC 8705 §5). Only
+	// emitted when the MTLS feature is enabled AND the embedder
+	// supplied a non-empty alias map through op.WithDiscoveryMetadata.
+	// A deployment that fronts a single hostname keeps this absent —
+	// the canonical *_endpoint values are already reachable over
+	// mTLS — and embedders that need the field publish it explicitly
+	// to declare the alternative host topology.
+	MTLSEndpointAliases map[string]string `json:"mtls_endpoint_aliases,omitempty"`
+
 	// ResponseModesSupported lists the response_mode values the OP
 	// accepts at /authorize. The default v1.0 set is omitted from the
 	// wire (the spec defines well-known defaults); the field becomes

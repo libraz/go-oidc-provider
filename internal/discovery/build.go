@@ -105,6 +105,19 @@ type Metadata struct {
 	// empty are equivalent (the field is omitted).
 	UILocalesSupported []string
 
+	// MTLSEndpointAliases maps to "mtls_endpoint_aliases" (RFC 8705
+	// §5). The keys are discovery endpoint metadata names exactly as
+	// they appear on the wire (e.g. "token_endpoint",
+	// "introspection_endpoint", "revocation_endpoint",
+	// "userinfo_endpoint", "registration_endpoint",
+	// "device_authorization_endpoint", "pushed_authorization_request_endpoint");
+	// the values are the alternative URLs that require client-
+	// certificate authentication. Nil and empty are equivalent (the
+	// field is omitted). The discovery builder ignores this map
+	// entirely unless [Features.MTLS] is true so the field is
+	// structurally feature-gated.
+	MTLSEndpointAliases map[string]string
+
 	// Extra carries arbitrary passthrough fields. Keys MUST NOT
 	// collide with any name returned by [OPControlledFieldNames];
 	// the op layer enforces this at construction time.
@@ -282,6 +295,19 @@ func Build(in Input) Document {
 			"tls_client_auth",
 			"self_signed_tls_client_auth",
 		)
+		// RFC 8705 §5: an OP that serves separate hostnames for its
+		// mTLS-required endpoints publishes the alternative URLs
+		// here. The field is published only when the embedder
+		// supplied at least one alias; an MTLS-enabled deployment
+		// that fronts a single hostname keeps this absent (the
+		// canonical *_endpoint values are already mTLS-capable).
+		if len(in.Metadata.MTLSEndpointAliases) > 0 {
+			doc.MTLSEndpointAliases = make(map[string]string,
+				len(in.Metadata.MTLSEndpointAliases))
+			for k, v := range in.Metadata.MTLSEndpointAliases {
+				doc.MTLSEndpointAliases[k] = v
+			}
+		}
 	}
 	// FAPI 2.0 §3.1.3 narrowing: when an active profile constrains the
 	// token-endpoint auth methods, intersect the advertised list with
