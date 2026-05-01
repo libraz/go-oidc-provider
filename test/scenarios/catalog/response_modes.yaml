@@ -154,16 +154,25 @@ rows:
     severity: P0
     spec: OAuth Multiple Response Type §2
     behaviour: |
-      An unknown response_mode value (neither built-in nor registered)
-      MUST trigger a redirect with error=unsupported_response_mode and
-      error_description="unsupported response_mode requested".
-    status: pending
+      An unknown response_mode value (one outside the OP's known set
+      {"", "query", "form_post", "query.jwt", "fragment.jwt",
+      "form_post.jwt", "jwt"}) MUST trigger a redirect to the
+      registered redirect_uri carrying error=unsupported_response_mode
+      and error_description="response_mode is not supported", with the
+      original `state` echoed.
+    status: active
 
   - id: RMO-040
     severity: P0
     spec: OIDC Core §3.1.2
     behaviour: |
-      Default response_mode selection: response_type=code defaults to
-      query, while implicit response types (id_token token) default to
-      fragment.
-    status: pending
+      Default response_mode selection (code half): a successful
+      authorization with response_type=code and no response_mode in the
+      request encodes the response in the redirect URL's query string
+      (no fragment). The implicit half of the spec rule (id_token /
+      token defaulting to fragment) is not exercisable at the wire in
+      v1.0 because response_types_supported is ["code"] only and any
+      implicit response_type is rejected upstream as
+      unsupported_response_type; that half is intentionally not part of
+      this row's coverage.
+    status: active

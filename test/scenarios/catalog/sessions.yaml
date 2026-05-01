@@ -24,7 +24,8 @@ rows:
       NOT reuse the session. The request is treated as unauthenticated,
       an interaction redirect is returned with reason `login` /
       `no_session`, and a fresh session id is issued (rotation).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does implement session expiration semantically (internal/sessions/manager.go: Resolve returns ErrCurrentSessionExpired; internal/authorizeendpoint/authorize.go clears the cookie and falls through to the no-session interaction path), but the wire output does not carry a 'reason' query/JSON field at all — the row's panva-style `login` / `no_session` reason vocabulary has no v1.0 wire seam to assert against. The remaining wire-observable consequence (cookie cleared via Set-Cookie max-age=0; subsequent /authorize redirects to /oidc/interaction/{uid} for a fresh login) duplicates the no-cookie path that every active code-flow scenario already exercises end-to-end. Constructing a stale-but-decodable session cookie also requires capturing the encrypted blob from a prior interaction, which the scenariokit harness intentionally hides; binding this row would require a new helper to surface it."
 
   - id: SES-002
     severity: P1
@@ -44,4 +45,5 @@ rows:
       expired exactly 10 seconds ago is at the boundary and MUST be
       treated as expired. The OP returns an interaction redirect with
       reason `login` / `no_session` and issues a new session id.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's public surface does not expose a session clock-tolerance knob (no WithClockTolerance / WithSessionClockTolerance option; internal/sessions/manager.go's Resolve treats now>=ExpiresAt as expired with no leeway window). Without a settable tolerance, the boundary-condition assertion in the row has no wire seam to drive. Adjacent JWT verification surfaces (DPoP, JAR, /userinfo) carry their own per-feature leeways, but those do not extend to the chooser-group session lifecycle."

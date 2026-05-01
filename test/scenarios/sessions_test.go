@@ -9,9 +9,11 @@ package scenarios_test
 
 import "testing"
 
+// TestScenario_SES_001_ExpiredSessionForcesFreshLogin is OOS — see
+// catalog out_of_scope_reason.
 func TestScenario_SES_001_ExpiredSessionForcesFreshLogin(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SES-001")
+	t.Skip("out-of-scope: SES-001 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_SES_002_ClockToleranceAcceptsWithinSkewSession(t *testing.T) {
@@ -19,7 +21,9 @@ func TestScenario_SES_002_ClockToleranceAcceptsWithinSkewSession(t *testing.T) {
 	t.Skip("pending: SES-002")
 }
 
+// TestScenario_SES_003_ClockToleranceRejectsBeyondSkewSession is OOS —
+// see catalog out_of_scope_reason.
 func TestScenario_SES_003_ClockToleranceRejectsBeyondSkewSession(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SES-003")
+	t.Skip("out-of-scope: SES-003 (see catalog out_of_scope_reason)")
 }

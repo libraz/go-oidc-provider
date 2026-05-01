@@ -24,9 +24,11 @@ func TestScenario_CG_003_RegisterGrantTypeAcceptsNullOrString(t *testing.T) {
 	t.Skip("pending: CG-003")
 }
 
+// TestScenario_CG_004_DuplicateParameterRejectedByDefault is OOS — see
+// catalog out_of_scope_reason.
 func TestScenario_CG_004_DuplicateParameterRejectedByDefault(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-004")
+	t.Skip("out-of-scope: CG-004 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_CG_005_WhitelistedParameterMayRepeat(t *testing.T) {
@@ -39,9 +41,11 @@ func TestScenario_CG_006_PartialExemptionStillRejectsOthers(t *testing.T) {
 	t.Skip("pending: CG-006")
 }
 
+// TestScenario_CG_007_GrantTypeCannotBeExempted is OOS — see catalog
+// out_of_scope_reason.
 func TestScenario_CG_007_GrantTypeCannotBeExempted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-007")
+	t.Skip("out-of-scope: CG-007 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_CG_008_ClientOptInExecutesHandler(t *testing.T) {

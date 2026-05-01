@@ -28,7 +28,8 @@ rows:
       access token inherits the binding. UserInfo with the access
       token MUST return 200 while the session is alive and 401 with
       `invalid_token` once the session is destroyed.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'expiresWithSession' marker is a panva-internal model: tokens carry a session-link flag and the verifier consults it on every /userinfo call. v1.0 does not implement this model — neither store.AccessToken, store.AuthorizationCode, nor store.Grant carries a SessionID column, and internal/userinfo/handler.go performs no session-membership check during AT verification. The functionally adjacent v1.0 behaviour is the /end_session grant-tombstone cascade (internal/endsession/handler.go revokeAccessTokens), which is already exercised end-to-end by GTM-003 (TestScenario_GTM_003_EndSessionTombstonesRevokeAccessToken). Binding this row would either duplicate GTM-003 or assert a session-binding model the OP does not have."
 
   - id: SBT-002
     severity: P0
@@ -41,7 +42,8 @@ rows:
       remain session-bound; after the session is destroyed the access
       token MUST be rejected (401) and the refresh exchange MUST fail
       (400 with an OAuth error).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The scenario presupposes that v1.0 issues a refresh token for an authorization_code exchange whose granted scope contains 'openid' but NOT 'offline_access'. v1.0 explicitly forbids this combination: internal/tokenendpoint/handler.go clientPermitsRefresh requires both scopeContainsOpenID(scope) AND scopeContainsOfflineAccess(scope) before issuing a refresh token, and the refresh grant itself rejects exchanges whose scope omits offline_access (refresh.go: 'refresh issued without offline_access; refresh disabled by current policy'). The 'session-bound refresh token without offline_access' state the row asserts is therefore unreachable at v1.0's wire. The session-bound semantics piece is also panva-internal (see SBT-001 OOS reason)."
 
   - id: SBT-003
     severity: P0
@@ -52,7 +54,8 @@ rows:
       NOT carry the `expiresWithSession` flag. UserInfo and refresh
       exchange continue to succeed after the session is destroyed, and
       refreshed tokens also remain non-session-bound.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The row asserts that with offline_access + prompt=consent, the AT and RT survive session destruction. v1.0 contradicts this: internal/endsession/handler.go revokeAccessTokens cascades grant tombstones for EVERY grant the subject holds at logout, regardless of whether the granted scope includes offline_access. Both the AT (via GrantRevocations.IsRevoked at /userinfo) and the RT (via the pre-mint IsRevoked check in the refresh grant) are rejected after /end_session — the same path GTM-003 / GTM-004 cover. The 'survives session destroy' guarantee is a panva model where session-binding is a per-token flag the offline_access scope clears; v1.0's mental model is 'logout cascades the grant', which has no offline_access carve-out. Binding this row to v1.0 would require asserting the opposite of what the OP actually does."
 
   - id: SBT-004
     severity: P0

@@ -9,19 +9,25 @@ package scenarios_test
 
 import "testing"
 
+// TestScenario_SBT_001_CodeAccessTokenBoundToSession is OOS — see
+// catalog out_of_scope_reason.
 func TestScenario_SBT_001_CodeAccessTokenBoundToSession(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SBT-001")
+	t.Skip("out-of-scope: SBT-001 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SBT_002_OnlineRefreshTokenBoundToSession is OOS — see
+// catalog out_of_scope_reason.
 func TestScenario_SBT_002_OnlineRefreshTokenBoundToSession(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SBT-002")
+	t.Skip("out-of-scope: SBT-002 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SBT_003_OfflineAccessSurvivesSessionDestroy is OOS — see
+// catalog out_of_scope_reason.
 func TestScenario_SBT_003_OfflineAccessSurvivesSessionDestroy(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SBT-003")
+	t.Skip("out-of-scope: SBT-003 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_SBT_004_ImplicitAccessTokenBoundToSession(t *testing.T) {
