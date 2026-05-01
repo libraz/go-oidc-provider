@@ -55,7 +55,8 @@ rows:
     spec: RFC 7518 §6.3
     behaviour: |
       RSA keys publish n and e (public modulus and exponent).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 supports ES256 (ECDSA P-256) signing keys only. WithKeyset rejects RSA at construction time, so the OP cannot publish n / e parameters in JWKS. Reintroducing RSA support would require an alg negotiation surface the project deliberately omitted to keep the signing posture predictable; revisit if RS256 graduates from optional to required for an embedder we care about.
     notes: testkit currently wires EC keys only; revisit after RSA fixture lands.
 
   - id: JWKS-013
@@ -70,7 +71,8 @@ rows:
     spec: RFC 8037 §2
     behaviour: |
       OKP keys publish crv and x; never publish d.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 supports ES256 (ECDSA P-256) signing keys only. WithKeyset rejects OKP / Ed25519 at construction time, so the OP cannot publish crv / x parameters from an OKP key. Revisit if EdDSA graduates to required for an embedder we care about.
     notes: testkit currently wires EC keys only; revisit after OKP fixture lands.
 
   - id: JWKS-015
@@ -104,7 +106,8 @@ rows:
       When the encryption feature is enabled, /jwks publishes
       encryption keys alongside signing keys. Keys with use=enc carry
       alg matching their JWE algorithm (e.g. RSA-OAEP, ECDH-ES).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Token / response / request-object encryption (JWE) is intentionally not implemented in v1.0. The encryption.yaml feature is OOS in its entirety (see encryption.yaml row reasons). With no JWE support, the OP never publishes use=enc keys, so the alg-on-encryption-key negotiation this row asserts cannot be exercised.
     notes: encryption feature not implemented yet.
 
   - id: JWKS-021
