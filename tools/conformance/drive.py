@@ -29,6 +29,13 @@ def _extract_field(html: bytes, name: str) -> str:
     return m.group(1).decode("utf-8") if m else ""
 
 
+def _has_approved_scopes_input(html: bytes) -> bool:
+    # The consent template renders an approved_scopes hidden input,
+    # even when the value happens to be empty. Detect by name alone so
+    # the empty-scope edge case still routes to the consent POST path.
+    return bool(re.search(rb'name="approved_scopes"', html))
+
+
 def _save_render_html(runner_id: str, kind: str, body: bytes) -> None:
     if not body:
         return
@@ -146,6 +153,34 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
             sys.stdout.write("[drive reject] no OFCS callback redirect; aborting\n")
             return
         _forward_implicit_bridge(loc, None)
+        return
+
+    # If the initial prompt already carries an approved_scopes hidden
+    # input, the OP recognised an existing session and skipped straight
+    # to consent (the second-client subtests in OFCS happy-flow / refresh
+    # plans hit this — different client, same browser session). Go
+    # directly to the consent POST instead of submitting credentials,
+    # which would fail "consent: approved_scopes field is missing".
+    initial_approved = _extract_field(body, "approved_scopes")
+    if initial_approved or _has_approved_scopes_input(body):
+        sys.stdout.write(
+            f"[drive 2/2] POST consent (approved_scopes={initial_approved}) — session reused\n"
+        )
+        reuse_status, reuse_location, _ = ofcs.post_form(
+            interaction_url,
+            fields={
+                "state_ref": state_ref,
+                "csrf_token": csrf,
+                "approved_scopes": initial_approved,
+            },
+            headers={"Origin": ISSUER},
+            cookies=cookies,
+        )
+        sys.stdout.write(f"[drive 2/2] response={reuse_status} {reuse_location or ''}\n")
+        if not reuse_location or not _OFCS_CALLBACK_RE.match(reuse_location):
+            sys.stdout.write("[drive] no OFCS callback redirect; aborting\n")
+            return
+        _forward_implicit_bridge(reuse_location, None)
         return
 
     sys.stdout.write(f"[drive 2/3] POST credentials (user={opts.user})\n")

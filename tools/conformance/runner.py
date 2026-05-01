@@ -68,11 +68,20 @@ def run_one(plan: str, module: str) -> ModuleOutcome:
         driven: set[str] = set()
         resolved: set[str] = set()
         prev_log = 0
-        idle = 0
         info: dict[str, object] = {}
-        # 240s overall cap. WaitFor30Seconds × 2 = 60s, request_uri
-        # TTL = 60s, plus driver overhead. Tests rarely need more.
-        for _ in range(240):
+        # Per-test wall-clock budget. WaitFor30Seconds × 2 = 60s,
+        # request_uri TTL = 60s, plus driver overhead -- 240s is generous.
+        # The bound is wall-clock (not iteration count) so that a slow
+        # drive HTTP call or a stuck OFCS WAITING state cannot eat into
+        # the next test's budget and cascade INTERRUPTED across the plan.
+        deadline_ms = start_ms + 240_000
+        idle_break_ms = 90_000
+        last_progress_ms = start_ms
+        while True:
+            now_ms = int(time.time() * 1000)
+            if now_ms >= deadline_ms:
+                sys.stdout.write("  [runner] wall-clock deadline reached; abandoning test\n")
+                break
             info = ofcs.info(rid)
             status = str(info.get("status") or "")
             if status in ("FINISHED", "INTERRUPTED"):
@@ -109,19 +118,21 @@ def run_one(plan: str, module: str) -> ModuleOutcome:
                     review.resolve(rid)
                     for placeholder in pending_new:
                         resolved.add(placeholder)
-                    idle = 0
+                    last_progress_ms = int(time.time() * 1000)
 
             cur_log = len(log)
-            if cur_log == prev_log:
-                idle += 1
-                # 90s of idleness means the test really is stuck —
-                # typically waiting for a manual UI step the driver
-                # cannot satisfy. Bail rather than chew up the 240s cap.
-                if idle >= 90:
-                    break
-            else:
-                idle = 0
+            if cur_log != prev_log:
                 prev_log = cur_log
+                last_progress_ms = int(time.time() * 1000)
+            elif int(time.time() * 1000) - last_progress_ms >= idle_break_ms:
+                # 90s of wall-clock idleness means the test really is
+                # stuck -- typically waiting for a manual UI step the
+                # driver cannot satisfy. Bail rather than burn the rest
+                # of the 240s budget waiting for nothing.
+                sys.stdout.write(
+                    f"  [runner] idle {idle_break_ms // 1000}s with no log progress; abandoning\n"
+                )
+                break
             time.sleep(1)
         out.status = str(info.get("status") or "")
         out.result = str(info.get("result") or "")
