@@ -1,0 +1,82 @@
+# Local stack for example 09-redis-volatile.
+#
+# Boots three services on a private docker network:
+#
+#   * mysql  — the durable substores (oidc_users, clients, codes,
+#              refresh tokens, grants, PAR, access tokens)
+#   * redis  — the volatile substores (Sessions, Interactions,
+#              ConsumedJTIs)
+#   * op     — the OP example (this repository) paired with a
+#              rpkit-driven RP, both in the same Go process
+#
+# The mysql / redis ports are *not* published to the host because the
+# OP runs inside the compose network and reaches them by service name.
+# Only the OP container publishes 8080 (the OP issuer) and 9090 (the
+# RP) so the developer's browser can drive the login round-trip.
+#
+# Bring it all up:
+#
+#   docker compose -f examples/09-redis-volatile/compose.yaml up -d --build
+#   open http://127.0.0.1:9090/
+#   # sign in as demo / demo, approve consent, /me shows the ID Token
+#   docker compose -f examples/09-redis-volatile/compose.yaml down -v
+#
+# Image / engine versions are pinned and aligned with the
+# testcontainers contract harness (op/storeadapter/sql,
+# op/storeadapter/redis) so the adapter-level and example-level
+# integration share a single engine matrix.
+#
+# REDIS_DEV_MODE=1 is required because the bundled compose stack does
+# not terminate TLS on the Redis container; the adapter rejects
+# plaintext `redis://` DSNs unless dev mode is opted in. Production
+# deployments must front Redis with TLS (`rediss://`) — see
+# op/storeadapter/redis/doc.go.
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: oidc
+      MYSQL_USER: oidc
+      MYSQL_PASSWORD: oidc
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpw"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--requirepass", "oidc"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "oidc", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  op:
+    build:
+      context: ../..
+      dockerfile: examples/09-redis-volatile/Dockerfile
+    environment:
+      MYSQL_HOST: mysql:3306
+      MYSQL_USER: oidc
+      MYSQL_PASS: oidc
+      MYSQL_DB: oidc
+      REDIS_DSN: redis://redis:6379/0
+      REDIS_PASSWORD: oidc
+      REDIS_DEV_MODE: "1"
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mysql-data:

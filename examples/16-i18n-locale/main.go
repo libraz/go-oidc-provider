@@ -44,8 +44,12 @@ import (
 )
 
 // frenchMessages is a minimal French bundle covering the consent and
-// login surfaces. A real catalogue covers every key the seed bundles
-// declare; missing keys fall back to the default locale's bundle.
+// login surfaces. The seed catalogue does not ship a French entry, so
+// keys this map omits fall back to the configured default locale's
+// bundle (here "fr" itself, then "en" through the resolver chain).
+// For overrides on a seeded locale (en / ja) the bundle merges on top
+// of the seed at key granularity — embedders only supply the keys
+// they want to change.
 var frenchMessages = map[string]string{
 	"consent.title":          "Autoriser {client_name}",
 	"consent.subtitle":       "{client_name} souhaite accéder à :",

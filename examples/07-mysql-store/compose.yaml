@@ -1,0 +1,57 @@
+# Local stack for example 07-mysql-store.
+#
+# Boots two services on a private docker network:
+#
+#   * mysql — every substore (durable + volatile) backed by SQL
+#   * op    — the OP example paired with a rpkit-driven RP
+#
+# MySQL is not exposed to the host; the OP container reaches it by
+# service name on the compose-internal network. Only the OP container
+# publishes 8080 (the OP) and 9090 (the RP) so the developer's browser
+# can drive the login round-trip.
+#
+# Bring it all up:
+#
+#   docker compose -f examples/07-mysql-store/compose.yaml up -d --build
+#   open http://127.0.0.1:9090/
+#   # sign in as demo / demo, approve consent, /me shows the ID Token
+#   docker compose -f examples/07-mysql-store/compose.yaml down -v
+#
+# Engine version (mysql:8.4) is pinned and aligned with the
+# testcontainers contract harness (op/storeadapter/sql) so the
+# adapter-level and example-level integration share a single matrix.
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: oidc
+      MYSQL_USER: oidc
+      MYSQL_PASSWORD: oidc
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpw"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  op:
+    build:
+      context: ../..
+      dockerfile: examples/07-mysql-store/Dockerfile
+    environment:
+      MYSQL_HOST: mysql:3306
+      MYSQL_USER: oidc
+      MYSQL_PASS: oidc
+      MYSQL_DB: oidc
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
