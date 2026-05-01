@@ -24,7 +24,7 @@ rows:
     behaviour: |
       When the request carries no Accept header the error response's
       Content-Type matches /json/.
-    status: pending
+    status: active
 
   - id: ERR-002
     severity: P0
@@ -32,7 +32,7 @@ rows:
     behaviour: |
       When the request carries Accept: */* the error response is
       JSON.
-    status: pending
+    status: active
 
   - id: ERR-003
     severity: P0
@@ -51,7 +51,7 @@ rows:
       The JSON error body MUST contain error (one of the registered
       codes) and SHOULD contain error_description as a single ASCII
       line per RFC 6749.
-    status: pending
+    status: active
 
   - id: ERR-011
     severity: P1
@@ -68,7 +68,7 @@ rows:
       OIDC adds error_description and state to redirect-style
       errors; JSON error responses MUST NOT include state because it
       has no meaning at JSON endpoints.
-    status: pending
+    status: active
 
   - id: ERR-020
     severity: P0
@@ -77,7 +77,7 @@ rows:
       Bearer-token endpoints (UserInfo, introspection, revocation)
       MUST emit WWW-Authenticate: Bearer ... on 401 responses with
       error, error_description, and an optional scope.
-    status: pending
+    status: active
 
   - id: ERR-021
     severity: P0
@@ -85,7 +85,7 @@ rows:
     behaviour: |
       A token-endpoint failure under HTTP Basic authentication MUST
       return 401 with WWW-Authenticate: Basic realm="...".
-    status: pending
+    status: active
 
   - id: ERR-022
     severity: P1
@@ -138,4 +138,4 @@ rows:
     behaviour: |
       When an authorization-endpoint error redirects to the client,
       the redirect MUST include iss=<issuer>.
-    status: pending
+    status: active

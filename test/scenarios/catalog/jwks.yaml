@@ -79,7 +79,7 @@ rows:
     behaviour: |
       use MUST be sig or enc when the key is dedicated; signing-only
       deployments MAY publish keys without use (clients infer from alg).
-    status: pending
+    status: active
 
   - id: JWKS-016
     severity: P0
@@ -87,7 +87,7 @@ rows:
     behaviour: |
       alg is OPTIONAL but, when present, MUST be a registered JWA value
       (e.g. RS256, ES256, RSA-OAEP, ECDH-ES).
-    status: pending
+    status: active
 
   - id: JWKS-017
     severity: P0
@@ -122,7 +122,7 @@ rows:
     behaviour: |
       When encryption is disabled, all published keys MUST have
       use=sig and (where applicable) a concrete alg.
-    status: pending
+    status: active
 
   - id: JWKS-040
     severity: P0

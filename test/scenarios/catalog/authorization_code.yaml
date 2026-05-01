@@ -66,7 +66,7 @@ rows:
       A code presented after its TTL has elapsed is rejected with 400
       invalid_grant; the error_description explains that the
       authorization code is expired and a grant.error event is emitted.
-    status: pending
+    status: active
 
   - id: AC-006
     severity: P0
@@ -75,7 +75,7 @@ rows:
       A code that has already been consumed is rejected with 400
       invalid_grant. The grant is revoked (grant.revoked emitted) so
       every token issued from the same code chain is invalidated.
-    status: pending
+    status: active
 
   - id: AC-007
     severity: P0
@@ -84,7 +84,7 @@ rows:
       The first valid exchange marks the code as consumed with an epoch
       no later than now, unlocking the revocation logic that fires when
       the code is presented again.
-    status: pending
+    status: active
 
   - id: AC-008
     severity: P0
@@ -93,7 +93,7 @@ rows:
       A code presented by a client other than the one that requested it
       is rejected with 400 invalid_grant ("client mismatch") and a
       grant.error event is emitted.
-    status: pending
+    status: active
 
   - id: AC-009
     severity: P1
@@ -101,7 +101,7 @@ rows:
     behaviour: |
       A request with an unsupported or unknown grant_type value returns
       400 unsupported_grant_type.
-    status: pending
+    status: active
 
   - id: AC-010
     severity: P0
@@ -111,7 +111,7 @@ rows:
       authorize-time value is rejected with 400 invalid_grant
       ("authorization code redirect_uri mismatch") and a grant.error is
       emitted.
-    status: pending
+    status: active
 
   - id: AC-011
     severity: P1
@@ -249,7 +249,7 @@ rows:
       A token request with an empty body (no grant_type at all) is
       rejected with 400 invalid_request whose description matches
       "missing required parameter" and includes "grant_type".
-    status: pending
+    status: active
 
   - id: AC-026
     severity: P1
@@ -258,7 +258,7 @@ rows:
       A token request with grant_type=authorization_code but no code
       parameter is rejected with 400 invalid_request whose description
       matches "missing required parameter" and includes "code".
-    status: pending
+    status: active
 
   - id: AC-027
     severity: P1
@@ -268,7 +268,7 @@ rows:
       redirect_uri is rejected with 400 invalid_request whose
       description matches "missing required parameter" and includes
       "redirect_uri".
-    status: pending
+    status: active
 
   - id: AC-028
     severity: P0
@@ -277,7 +277,7 @@ rows:
       A well-formed but non-existent code value is rejected with 400
       invalid_grant ("authorization code not found") and a grant.error
       is emitted.
-    status: pending
+    status: active
 
   - id: AC-029
     severity: P2

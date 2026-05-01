@@ -28,7 +28,7 @@ rows:
     behaviour: |
       Successful response MUST NOT bind any client/session/token
       entity (the handler is unauthenticated and stateless).
-    status: pending
+    status: active
 
   - id: DIS-003
     severity: P0

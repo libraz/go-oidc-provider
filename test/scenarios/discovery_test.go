@@ -17,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 const wellKnownOIDC = "/.well-known/openid-configuration"
@@ -153,9 +154,49 @@ func TestScenario_DIS_022_FeatureEndpointsAdvertisedWhenEnabled(t *testing.T) {
 // flip the row's status to "active" in discovery.yaml, and update the
 // test function's doc comment with the spec citation.
 
+// TestScenario_DIS_002_DiscoveryDoesNotBindEntities verifies that the
+// discovery endpoint is unauthenticated and stateless: a fresh GET
+// MUST NOT mint a session cookie, MUST NOT emit a client/session/token
+// audit event, and MUST NOT depend on any prior entity in the store.
+//
+// Spec: OIDC Discovery §4 (the document is published at a well-known
+// location and is not gated by any authentication context).
 func TestScenario_DIS_002_DiscoveryDoesNotBindEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-002")
+
+	audit := scenariokit.NewAuditCapture()
+	p := testkit.NewProvider(t, testkit.WithOptions(op.WithAuditLogger(audit.Logger())))
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, p.Server.URL+wellKnownOIDC, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET discovery: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	if cookies := resp.Cookies(); len(cookies) != 0 {
+		t.Errorf("discovery response set %d cookie(s); the endpoint must be stateless: %+v", len(cookies), cookies)
+	}
+	for _, ev := range audit.Events() {
+		// The discovery handler is unauthenticated and stateless;
+		// any client/session/token-bound audit event leaking from
+		// it would be a regression. Audit events for OP self-state
+		// (e.g. provider startup) are permitted.
+		switch {
+		case strings.HasPrefix(ev.Name, "client."),
+			strings.HasPrefix(ev.Name, "session."),
+			strings.HasPrefix(ev.Name, "token."),
+			strings.HasPrefix(ev.Name, "grant."),
+			strings.HasPrefix(ev.Name, "login."):
+			t.Errorf("discovery emitted audit event %q (must not bind to any client/session/token entity)", ev.Name)
+		}
+	}
 }
 
 func TestScenario_DIS_003_EmbedderExtraPropertiesMerge(t *testing.T) {

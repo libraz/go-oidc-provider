@@ -83,7 +83,7 @@ rows:
     behaviour: |
       For an allowed resource, the issued access token's aud claim
       MUST equal the resource value.
-    status: pending
+    status: active
 
   - id: RI-022
     severity: P1
@@ -100,7 +100,7 @@ rows:
     behaviour: |
       Resource validation MUST behave identically between
       GET /authorize and POST /authorize.
-    status: pending
+    status: active
 
   - id: RI-030
     severity: P0
@@ -109,7 +109,7 @@ rows:
       An unknown resource at /authorize?response_type=code yields a
       query-parameter redirect carrying invalid_target (no fragment
       because the code flow does not use fragments).
-    status: pending
+    status: active
 
   - id: RI-031
     severity: P0
@@ -117,7 +117,7 @@ rows:
     behaviour: |
       An allowed resource MUST be persisted on the authorization code
       as code.resource.
-    status: pending
+    status: active
 
   - id: RI-032
     severity: P0

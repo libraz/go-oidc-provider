@@ -207,14 +207,89 @@ func TestScenario_JWKS_014_OKPKeyPublishesCrvAndX(t *testing.T) {
 	t.Skip("pending: JWKS-014 — testkit wires EC only; revisit after OKP fixture lands")
 }
 
+// TestScenario_JWKS_015_UseFieldIsSigOrEnc verifies that every JWK
+// the OP publishes either omits the `use` field (RFC 7517 §4.2 makes
+// it OPTIONAL — clients infer from `alg`) or sets it to one of the
+// two values the spec defines (`sig` or `enc`). Any other value is a
+// regression that breaks RP key-selection logic.
+//
+// Spec: RFC 7517 §4.2.
 func TestScenario_JWKS_015_UseFieldIsSigOrEnc(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-015")
+
+	p := testkit.NewProvider(t)
+
+	_, _, body := fetchJWKS(t, p.Server.URL)
+	keys, _ := body["keys"].([]any)
+	if len(keys) == 0 {
+		t.Fatal("body[keys] is empty; testkit always wires one signing key")
+	}
+	for i, raw := range keys {
+		k, _ := raw.(map[string]any)
+		v, present := k["use"]
+		if !present {
+			continue
+		}
+		use, _ := v.(string)
+		if use != "sig" && use != "enc" {
+			t.Errorf("keys[%d] use=%q want sig or enc (RFC 7517 §4.2)", i, use)
+		}
+	}
 }
 
+// TestScenario_JWKS_016_AlgFieldIsRegisteredJWA verifies that every
+// JWK that publishes an `alg` declares a registered JWA value. The
+// allowlist intentionally covers the project's signing & encryption
+// algorithm sets (RFC 7518 + RFC 8037 + RFC 8812) without trying to
+// be a complete IANA mirror — the goal is to catch typos and hostile
+// values like "none" or unregistered legacy strings.
+//
+// Spec: RFC 7517 §4.4 + RFC 7518 §3 (IANA "JSON Web Signature and
+// Encryption Algorithms" registry).
 func TestScenario_JWKS_016_AlgFieldIsRegisteredJWA(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-016")
+
+	p := testkit.NewProvider(t)
+
+	_, _, body := fetchJWKS(t, p.Server.URL)
+	keys, _ := body["keys"].([]any)
+	if len(keys) == 0 {
+		t.Fatal("body[keys] is empty; testkit always wires one signing key")
+	}
+	registered := map[string]struct{}{
+		// Signing.
+		"HS256": {}, "HS384": {}, "HS512": {},
+		"RS256": {}, "RS384": {}, "RS512": {},
+		"ES256": {}, "ES384": {}, "ES512": {}, "ES256K": {},
+		"PS256": {}, "PS384": {}, "PS512": {},
+		"EdDSA": {},
+		// Key management / content encryption.
+		"RSA-OAEP": {}, "RSA-OAEP-256": {}, "RSA-OAEP-384": {}, "RSA-OAEP-512": {},
+		"ECDH-ES": {}, "ECDH-ES+A128KW": {}, "ECDH-ES+A192KW": {}, "ECDH-ES+A256KW": {},
+		"A128KW": {}, "A192KW": {}, "A256KW": {},
+		"A128GCMKW": {}, "A192GCMKW": {}, "A256GCMKW": {},
+		"PBES2-HS256+A128KW": {}, "PBES2-HS384+A192KW": {}, "PBES2-HS512+A256KW": {},
+		"dir": {},
+	}
+	for i, raw := range keys {
+		k, _ := raw.(map[string]any)
+		v, present := k["alg"]
+		if !present {
+			continue
+		}
+		alg, _ := v.(string)
+		if alg == "" {
+			t.Errorf("keys[%d] has empty alg field", i)
+			continue
+		}
+		if alg == "none" {
+			t.Errorf("keys[%d] alg=%q is not a JWS/JWE algorithm and MUST NOT appear in JWKS", i, alg)
+			continue
+		}
+		if _, ok := registered[alg]; !ok {
+			t.Errorf("keys[%d] alg=%q is not a registered JWA value", i, alg)
+		}
+	}
 }
 
 func TestScenario_JWKS_020_EncryptionKeysPublishedWhenFeatureOn(t *testing.T) {
@@ -227,9 +302,35 @@ func TestScenario_JWKS_021_SigningKeyMayOmitUseAndAlg(t *testing.T) {
 	t.Skip("pending: JWKS-021")
 }
 
+// TestScenario_JWKS_030_AllKeysAreSigWhenEncryptionOff verifies that,
+// with the encryption feature disabled (the project default), every
+// key the OP publishes either omits `use` or sets it to `sig`. A
+// `use=enc` key under a non-encryption-enabled OP would be a
+// configuration leak: the OP would advertise material it has no
+// crypto path to use, and RPs that key-pin on `use` would route
+// traffic into a dead end.
+//
+// Spec: OIDC Core §10.1.
 func TestScenario_JWKS_030_AllKeysAreSigWhenEncryptionOff(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-030")
+
+	p := testkit.NewProvider(t)
+
+	_, _, body := fetchJWKS(t, p.Server.URL)
+	keys, _ := body["keys"].([]any)
+	if len(keys) == 0 {
+		t.Fatal("body[keys] is empty; testkit always wires one signing key")
+	}
+	for i, raw := range keys {
+		k, _ := raw.(map[string]any)
+		v, present := k["use"]
+		if !present {
+			continue
+		}
+		if got, _ := v.(string); got != "sig" {
+			t.Errorf("keys[%d] use=%q want sig (encryption feature is off)", i, got)
+		}
+	}
 }
 
 func TestScenario_JWKS_040_NewKeyPublishedBeforeUse(t *testing.T) {

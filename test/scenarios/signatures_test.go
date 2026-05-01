@@ -80,7 +80,50 @@ func TestScenario_SIG_020_AlgFromClientMetadataAndKidInHeader(t *testing.T) {
 	t.Skip("pending: SIG-020")
 }
 
+// TestScenario_SIG_021_AlgValuesAdvertisedInDiscovery verifies that
+// id_token_signing_alg_values_supported is non-empty, contains only
+// registered JWA signing algorithms, and includes at least one of the
+// concrete public-key algorithms the testkit's default key set
+// signs with (ES256). The discovery contract is "advertise what you
+// can do" — RPs that pin a per-client alg need this list to be
+// authoritative.
+//
+// Spec: OIDC Discovery 1.0 §3.
 func TestScenario_SIG_021_AlgValuesAdvertisedInDiscovery(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-021 — covered partially by SIG-022; expand once per-alg policy lands")
+
+	p := testkit.NewProvider(t)
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+	algsRaw, _ := doc["id_token_signing_alg_values_supported"].([]any)
+	if len(algsRaw) == 0 {
+		t.Fatal("id_token_signing_alg_values_supported is empty")
+	}
+	registered := map[string]struct{}{
+		"RS256": {}, "RS384": {}, "RS512": {},
+		"ES256": {}, "ES384": {}, "ES512": {}, "ES256K": {},
+		"PS256": {}, "PS384": {}, "PS512": {},
+		"HS256": {}, "HS384": {}, "HS512": {},
+		"EdDSA": {},
+	}
+	algs := make([]string, 0, len(algsRaw))
+	for _, raw := range algsRaw {
+		alg, _ := raw.(string)
+		algs = append(algs, alg)
+		if _, ok := registered[alg]; !ok {
+			t.Errorf("id_token_signing_alg_values_supported entry %q is not a registered JWA signing alg", alg)
+		}
+	}
+	// The testkit signs ID tokens with ES256 by default; if the OP
+	// stops advertising it here, the discovery contract is broken.
+	found := false
+	for _, alg := range algs {
+		if alg == "ES256" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("id_token_signing_alg_values_supported=%v must include ES256 (testkit default)", algs)
+	}
 }

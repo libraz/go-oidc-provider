@@ -24,7 +24,7 @@ rows:
       When this feature is enabled,
       /.well-known/openid-configuration sets
       authorization_response_iss_parameter_supported: true.
-    status: pending
+    status: active
 
   - id: ISS-010
     severity: P0
@@ -32,7 +32,7 @@ rows:
     behaviour: |
       A successful response_type=code redirect carries code, state,
       and iss as query parameters.
-    status: pending
+    status: active
 
   - id: ISS-011
     severity: P0
@@ -102,7 +102,7 @@ rows:
       A regular response_modes error (e.g. invalid scope "openid
       profile") redirects back with error, error_description,
       state, and iss as query parameters.
-    status: pending
+    status: active
 
   - id: ISS-021
     severity: P0

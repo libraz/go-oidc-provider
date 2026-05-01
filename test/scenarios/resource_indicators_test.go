@@ -60,9 +60,47 @@ func TestScenario_RI_020_AuthorizeUnknownResourceFragmentRedirect(t *testing.T) 
 	t.Skip("pending: RI-020")
 }
 
+// TestScenario_RI_021_AuthorizeAllowedResourceBindsAudience verifies
+// that requesting an allowed resource at /authorize lands as the
+// access token's aud claim after a successful token exchange.
+//
+// Spec: RFC 8707 §3 (the AS MUST scope tokens to the requested
+// resource; the conventional surface for that scoping is the JWT
+// AT's aud claim).
 func TestScenario_RI_021_AuthorizeAllowedResourceBindsAudience(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-021")
+
+	tk, rp, secret, callback := newResourceProvider(t)
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid profile",
+		PKCE:        pkce,
+		Extra: map[string][]string{
+			"resource": {"https://api.example.com"},
+		},
+	})
+	if flow.Error != "" {
+		t.Fatalf("authorize error=%s desc=%s", flow.Error, flow.ErrorDesc)
+	}
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: secret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	claims := decodeScenarioAccessTokenClaims(t, tok.AccessToken)
+	if got := claims["aud"]; got != "https://api.example.com" {
+		t.Fatalf("access_token aud=%v want https://api.example.com", got)
+	}
 }
 
 func TestScenario_RI_022_AuthorizeAppliesDefaultResource(t *testing.T) {
@@ -70,19 +108,162 @@ func TestScenario_RI_022_AuthorizeAppliesDefaultResource(t *testing.T) {
 	t.Skip("pending: RI-022")
 }
 
+// TestScenario_RI_023_AuthorizeGetAndPostBehaveIdentically verifies
+// that resource validation behaves identically across GET /authorize
+// (URL-encoded query) and POST /authorize (form-urlencoded body). An
+// unknown resource MUST yield the same error envelope (302 redirect
+// to the RP carrying error=invalid_target) on both methods.
+//
+// Spec: RFC 8707 §3 (resource validation is method-independent) /
+// RFC 6749 §3.1 (the AS MUST support GET and MAY support POST at the
+// authorization endpoint, with identical semantics).
 func TestScenario_RI_023_AuthorizeGetAndPostBehaveIdentically(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-023")
+
+	tk, rp, _, callback := newResourceProvider(t)
+	pkce := scenariokit.NewPKCEPair("")
+	values := scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid profile",
+		PKCE:        pkce,
+		Extra: map[string][]string{
+			"resource": {"https://api.unknown.example"},
+		},
+	}.Values()
+
+	httpClient := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	getReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/oidc/auth?"+values.Encode(), http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET /authorize: %v", err)
+	}
+	getResp, err := httpClient.Do(getReq)
+	if err != nil {
+		t.Fatalf("GET /authorize: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	if getResp.StatusCode != http.StatusFound {
+		t.Fatalf("GET /authorize status=%d want 302", getResp.StatusCode)
+	}
+	getLoc, err := getResp.Location()
+	if err != nil {
+		t.Fatalf("GET /authorize Location: %v", err)
+	}
+
+	postReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/auth", strings.NewReader(values.Encode()))
+	if err != nil {
+		t.Fatalf("build POST /authorize: %v", err)
+	}
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postResp, err := httpClient.Do(postReq)
+	if err != nil {
+		t.Fatalf("POST /authorize: %v", err)
+	}
+	defer func() { _ = postResp.Body.Close() }()
+	if postResp.StatusCode != http.StatusFound {
+		t.Fatalf("POST /authorize status=%d want 302", postResp.StatusCode)
+	}
+	postLoc, err := postResp.Location()
+	if err != nil {
+		t.Fatalf("POST /authorize Location: %v", err)
+	}
+
+	for _, want := range []struct {
+		name string
+		loc  *url.URL
+	}{{"GET", getLoc}, {"POST", postLoc}} {
+		if got := want.loc.Query().Get("error"); got != "invalid_target" {
+			t.Errorf("%s error=%q want invalid_target (loc=%s)", want.name, got, want.loc.String())
+		}
+		if got := want.loc.Query().Get("state"); got != scenariokit.DefaultState {
+			t.Errorf("%s state=%q want %q", want.name, got, scenariokit.DefaultState)
+		}
+		if want.loc.Fragment != "" || want.loc.RawFragment != "" {
+			t.Errorf("%s response uses fragment encoding (got %q); code-flow MUST use query",
+				want.name, want.loc.Fragment)
+		}
+	}
+	if got, want := postLoc.Query().Get("error"), getLoc.Query().Get("error"); got != want {
+		t.Errorf("POST error=%q != GET error=%q (parity violated)", got, want)
+	}
 }
 
+// TestScenario_RI_030_AuthorizeCodeUnknownResourceQueryRedirect
+// verifies that a response_type=code request asking for an unknown
+// resource is rejected via a query-parameter redirect carrying
+// error=invalid_target. Code-flow responses MUST use query encoding,
+// never fragment encoding (RFC 6749 §4.1.2.1).
+//
+// Spec: RFC 8707 §3 (resource validation) / RFC 6749 §4.1.2.1
+// (query-mode redirect for code flow).
 func TestScenario_RI_030_AuthorizeCodeUnknownResourceQueryRedirect(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-030")
+
+	flow := runResourceAuthorizeError(t, "https://api.unknown.example")
+	if flow.Error != "invalid_target" {
+		t.Fatalf("error=%q want invalid_target", flow.Error)
+	}
+	if flow.Location == nil {
+		t.Fatal("captured callback Location is nil")
+	}
+	if flow.Location.Fragment != "" || flow.Location.RawFragment != "" {
+		t.Errorf("code-flow error redirect must not use fragment encoding, got fragment=%q",
+			flow.Location.Fragment)
+	}
+	if flow.Location.RawQuery == "" {
+		t.Error("code-flow error redirect must carry query parameters")
+	}
+	if flow.State != scenariokit.DefaultState {
+		t.Errorf("state=%q want %q (state must be preserved across error redirects)",
+			flow.State, scenariokit.DefaultState)
+	}
 }
 
+// TestScenario_RI_031_AuthorizationCodePersistsResource verifies that
+// an allowed `resource` parameter sent at /authorize is persisted on
+// the authorization code record so the subsequent token exchange can
+// scope tokens to the audience the user authorized.
+//
+// Spec: RFC 8707 §3 (the AS MUST remember the requested resource for
+// the flow's full lifetime; the authorization-code record is the
+// canonical place to persist it for the code grant).
 func TestScenario_RI_031_AuthorizationCodePersistsResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-031")
+
+	tk, rp, _, callback := newResourceProvider(t)
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid profile",
+		PKCE:        pkce,
+		Extra: map[string][]string{
+			"resource": {"https://api.example.com"},
+		},
+	})
+	if flow.Error != "" {
+		t.Fatalf("authorize error=%s desc=%s", flow.Error, flow.ErrorDesc)
+	}
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	rec, err := tk.Store.AuthorizationCodes().Find(context.Background(), flow.Code)
+	if err != nil {
+		t.Fatalf("AuthorizationCodes.Find: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("authorization code record not found")
+	}
+	if got := rec.Resource; got != "https://api.example.com" {
+		t.Errorf("authorization code resource=%q want %q", got, "https://api.example.com")
+	}
 }
 
 func TestScenario_RI_032_TokenExchangePropagatesCodeResource(t *testing.T) {

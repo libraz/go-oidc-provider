@@ -72,7 +72,7 @@ rows:
       For a native client registered with
       http://[::1]:2355/op/callback, redirectUriAllowed MUST return
       true for any port variant on [::1] with the same path.
-    status: pending
+    status: active
 
   - id: NA-007
     severity: P0
@@ -81,7 +81,7 @@ rows:
       For a native client registered with http://[::1]/op/callback
       (no port), redirectUriAllowed MUST return true for any port
       variant on [::1] with the same path.
-    status: pending
+    status: active
 
   - id: NA-008
     severity: P1

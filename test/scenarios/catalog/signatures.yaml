@@ -103,7 +103,7 @@ rows:
     behaviour: |
       Supported alg values MUST be advertised in
       id_token_signing_alg_values_supported.
-    status: pending
+    status: active
     notes: partially covered by SIG-022; expand once per-alg policy lands.
 
   - id: SIG-022
