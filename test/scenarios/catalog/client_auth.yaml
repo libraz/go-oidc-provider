@@ -1128,6 +1128,7 @@ rows:
       private_key_jwt; client_secret_jwt and attestation-based methods
       are intentionally absent (both are out-of-scope per
       docs/plans/002-product-design.md line 2159).
+    status: active
 
   - id: CA-DISC-02
     severity: P0
@@ -1139,6 +1140,7 @@ rows:
       is out-of-scope per docs/plans/002-product-design.md line
       2159), so the field is published whenever private_key_jwt
       remains in token_endpoint_auth_methods_supported.
+    status: active
 
   - id: CA-DISC-03
     severity: P0
@@ -1169,6 +1171,7 @@ rows:
       token_endpoint_auth_signing_alg_values_supported; HMAC algs
       (HS256/384/512) MUST NOT appear because client_secret_jwt is
       out-of-scope per docs/plans/002-product-design.md line 2159.
+    status: active
 
   - id: CA-DISC-05
     severity: P1
