@@ -22,7 +22,8 @@ rows:
       The terminal segment of registration_client_uri is constructed
       with encodeURIComponent semantics so that ":", "/", "?", "#",
       "%", "&", "=", and "+" are all percent-encoded.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding (URL-safe [A-Za-z0-9_-]); no character ever needs percent-encoding. registrationendpoint/secret.go:39 hard-wires newOpaqueID(16) → base64url. The OP does not expose a configuration knob for URL-form client_ids. The 'encodeURIComponent semantics' contract is a panva-ism imported wholesale; not part of v1.0 surface."
 
   - id: CIDU-02
     severity: P0
@@ -30,7 +31,8 @@ rows:
     behaviour: |
       The constructed URL MUST NOT carry a query string; everything
       after "?" is empty.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding; no '?' character ever appears so the 'no query string' contract holds trivially. The 'no query string' framing assumes a panva-style configurable URL-form client_id. registrationClientURI() at registrationendpoint/handler.go:309 simply concatenates issuer+prefix+registerPath+'/'+clientID; no query is ever attached."
 
   - id: CIDU-03
     severity: P0
@@ -38,7 +40,8 @@ rows:
     behaviour: |
       GET /reg/<encoded> is accepted; the OP decodes the path segment
       internally before looking up the client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 mints URL-safe base64url client_ids, so the encoded vs decoded path-segment dichotomy never arises. The handler routes via http.ServeMux 'GET /reg/{client_id}' (registrationendpoint/handler.go) — go's mux passes the raw segment through with no decoding step. There is no 'encoded path' for v1.0 to decode."
 
   - id: CIDU-04
     severity: P0
@@ -46,14 +49,16 @@ rows:
     behaviour: |
       PUT /reg/<encoded> is accepted on the same encoding contract;
       the request body's client_id MUST equal the decoded path value.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as CIDU-03: v1.0 client_ids are base64url-safe, no encoded path segment ever exists. PUT /reg/{client_id} parity with the decoded path is exercised by the existing registration_management_test.go RM-* coverage — the URL-encoding axis the row tests is collapsed in v1.0."
 
   - id: CIDU-05
     severity: P0
     spec: RFC 7592 §2.3
     behaviour: |
       DELETE /reg/<encoded> is accepted on the same encoding contract.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as CIDU-03/CIDU-04: v1.0 client_ids are URL-safe base64url; the 'encoded path' axis collapses. DELETE /reg/{client_id} round-trip is exercised by existing RM coverage."
 
   - id: CIDU-LC-01
     severity: P0
@@ -62,7 +67,8 @@ rows:
       The URL produced in the DCR response carries the client_id, and
       the subsequent GET / PUT / DELETE round-trip against it
       succeeds end-to-end.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Full DCR lifecycle round-trip is covered by registration_management_test.go RM-LC rows; the URL-encoding axis the CIDU-LC contract layers on top collapses to a no-op in v1.0 because client_ids are URL-safe base64url. The lifecycle aspect is covered, the encoding aspect is non-applicable.
 
   - id: CIDU-LC-02
     severity: P0
@@ -70,7 +76,8 @@ rows:
     behaviour: |
       The registration_client_uri regenerated on PUT obeys the same
       encoding rules.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "PUT regenerates registration_client_uri via registrationendpoint/manage.go:319 calling the same registrationClientURI helper as on register; encoding parity holds trivially because the helper is identical and v1.0's client_ids never contain non-URL-safe characters."
 
   - id: CIDU-LC-03
     severity: P1
@@ -80,7 +87,8 @@ rows:
       possible to distinguish them from CIMD URLs (CIMD points at an
       external URL, while CIDU stays under the OP's own base path);
       use a flag or a dedicated base path prefix.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Client ID Metadata Document (CIMD) is intentionally not implemented in v1.0 (catalog feature client_id_metadata_document has 0 active rows). Without CIMD there is no second URL form to disambiguate against; the contrast the row tests does not exist.
 
   - id: CIDU-CHR-01
     severity: P0
@@ -88,7 +96,8 @@ rows:
     behaviour: |
       client_id values are restricted to VSCHAR (%x20-%x7E); control
       characters and non-ASCII code points are forbidden.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not accept user-supplied client_ids. The OP itself mints every client_id via newOpaqueID(16) (registrationendpoint/secret.go) producing base64url-no-pad strings drawn from [A-Za-z0-9_-]; every issued client_id satisfies VSCHAR by construction. The 'enforcement' contract collapses because the OP never reads an external client_id at registration time."
 
   - id: CIDU-CHR-02
     severity: P1
@@ -97,7 +106,8 @@ rows:
       Only when URL-form client_id values are accepted MAY ":" and
       "/" appear in client_id; the OP setting clientIdValidation
       otherwise constrains the character set.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not accept user-supplied client_ids and has no clientIdValidation knob. URL-form client_ids are unsupported (CIDU-01..05 OOS), so the conditional ':' / '/' carve-out the row contemplates does not apply."
 
   - id: CIDU-CHR-03
     severity: P1
@@ -105,4 +115,5 @@ rows:
     behaviour: |
       When a percent-encoded path is written back into a Location
       header, the same encoding rules apply.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 DCR responses do NOT issue a Location header — the success envelope is a 201 JSON body containing registration_client_uri (per RFC 7591 §3, RFC 7592 §3). registrationendpoint/register.go writes the body via JSON encoder and never sets w.Header().Set(\"Location\", ...). The 'Location header same encoding' contract has no surface to test against."
