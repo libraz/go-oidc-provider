@@ -9,13 +9,30 @@ package scenarios_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
+
+// newScenarioSigningKey returns a fresh ECDSA P-256 signer wrapped in
+// op.SigningKey. The helper is local to the scenarios suite so JWKS
+// rotation rows can build a multi-entry Keyset without depending on
+// op-internal test fixtures (which are not exported).
+func newScenarioSigningKey(tb testing.TB, kid string) op.SigningKey {
+	tb.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		tb.Fatalf("generate signing key %q: %v", kid, err)
+	}
+	return op.SigningKey{KeyID: kid, Signer: priv}
+}
 
 // fetchJWKS issues a GET against the OP's `jwks_uri` (resolved through
 // the discovery document so the test does not hard-code the path).
@@ -397,14 +414,74 @@ func TestScenario_JWKS_030_AllKeysAreSigWhenEncryptionOff(t *testing.T) {
 	}
 }
 
+// TestScenario_JWKS_040_NewKeyPublishedBeforeUse verifies that every
+// kid the embedder placed in [op.Keyset] is published in /jwks
+// immediately. RFC 7517 §4.5 / OIDC Core §10.1.1 require lazy verifiers
+// to be able to fetch a freshly added key before the OP signs anything
+// with it; the wire-level evidence is that the kid is reachable in the
+// public set as soon as op.New returns.
+//
+// The test wires a two-entry Keyset {active, retired} (the OP signs
+// with index 0; later entries are retired) and asserts both kids are
+// observable in /jwks. JWKS-041 leans on the same setup but reads it
+// from the retired-key angle.
+//
+// Spec: RFC 7517 §4.5 / OIDC Core §10.1.1.
 func TestScenario_JWKS_040_NewKeyPublishedBeforeUse(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-040")
+
+	active := newScenarioSigningKey(t, "scenario-jwks-040-active")
+	retired := newScenarioSigningKey(t, "scenario-jwks-040-retired")
+	p := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithKeyset(op.Keyset{active, retired}),
+	))
+
+	_, _, body := fetchJWKS(t, p.Server.URL)
+	keys, _ := body["keys"].([]any)
+	got := publishedKIDs(keys)
+	for _, want := range []string{active.KeyID, retired.KeyID} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("kid %q missing from /jwks (got %v)", want, got)
+		}
+	}
 }
 
+// TestScenario_JWKS_041_RotatedOutKeysRetainedUntilExpiry asserts that
+// a key occupying a non-zero Keyset index — i.e. one the embedder
+// rotated out of the active signing slot — continues to be published
+// in /jwks until the embedder explicitly drops it. OIDC Core §10.1.1
+// requires retired keys to remain reachable so RPs can verify
+// in-flight tokens that were signed by them.
+//
+// Spec: OIDC Core §10.1.1.
 func TestScenario_JWKS_041_RotatedOutKeysRetainedUntilExpiry(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-041")
+
+	active := newScenarioSigningKey(t, "scenario-jwks-041-active")
+	retired := newScenarioSigningKey(t, "scenario-jwks-041-retired")
+	p := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithKeyset(op.Keyset{active, retired}),
+	))
+
+	_, _, body := fetchJWKS(t, p.Server.URL)
+	keys, _ := body["keys"].([]any)
+	got := publishedKIDs(keys)
+	if _, ok := got[retired.KeyID]; !ok {
+		t.Errorf("retired kid %q missing from /jwks (got %v); rotated-out keys MUST stay published", retired.KeyID, got)
+	}
+}
+
+// publishedKIDs collects the "kid" string of every JWK in the slice so
+// rotation rows can assert membership without nested loops.
+func publishedKIDs(keys []any) map[string]struct{} {
+	out := make(map[string]struct{}, len(keys))
+	for _, raw := range keys {
+		k, _ := raw.(map[string]any)
+		if kid, _ := k["kid"].(string); kid != "" {
+			out[kid] = struct{}{}
+		}
+	}
+	return out
 }
 
 func TestScenario_JWKS_042_RotationIssuesNewKid(t *testing.T) {

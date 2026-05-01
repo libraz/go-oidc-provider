@@ -134,7 +134,7 @@ rows:
       Newly added keys MUST be published before being used to sign or
       encrypt; freshly added keys SHOULD remain in JWKS for at least
       the longest token lifetime so lazy verifiers can fetch them.
-    status: pending
+    status: active
 
   - id: JWKS-041
     severity: P0
@@ -142,7 +142,7 @@ rows:
     behaviour: |
       Rotated-out keys MUST stay in JWKS until all in-flight tokens
       signed by them have expired.
-    status: pending
+    status: active
 
   - id: JWKS-042
     severity: P1
