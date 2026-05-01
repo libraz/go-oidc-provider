@@ -33,7 +33,8 @@ rows:
       An access token cannot carry two proof-of-possession bindings
       at once; setting both x5t#S256 and jkt thumbprints on a single
       AT MUST fail with a construction error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "panva-residue: catalog asserts a 'construction error' when an access token would carry both x5t#S256 and jkt; v1.0 instead resolves the conflict at issuance by preferring DPoP over mTLS (internal/tokenendpoint/mtls.go: when a DPoP proof is present the cert lookup is skipped and the AT carries cnf.jkt only). A single token therefore never carries both members in the first place, so there is nothing to reject at construction time. The userinfo path still enforces both proofs when a token does carry both members, defensive against forged tokens; that is the v1.0 contract embedders rely on."
 
   - id: MTLS-003
     severity: P0
@@ -42,7 +43,7 @@ rows:
       A cert-bound access token presented as Bearer at /userinfo with
       no TLS client cert header is rejected with 401 invalid_token
       (cannot validate x5t#S256).
-    status: pending
+    status: active
 
   - id: MTLS-004
     severity: P0
@@ -51,7 +52,7 @@ rows:
       A cert-bound access token presented with a malformed TLS client
       cert header (e.g. non-PEM/garbage in x-ssl-client-cert) is
       rejected with 401 invalid_token.
-    status: pending
+    status: active
 
   - id: MTLS-005
     severity: P0
@@ -60,7 +61,7 @@ rows:
       A cert-bound access token presented at /userinfo with the same
       TLS client certificate that bound it is accepted (200) and
       resource access is permitted.
-    status: pending
+    status: active
 
   - id: MTLS-006
     severity: P1
@@ -75,7 +76,7 @@ rows:
     spec: RFC 8705 §3
     behaviour: |
       The x5t#S256 thumbprint MUST equal base64url(SHA-256(DER(cert))).
-    status: pending
+    status: active
 
   - id: MTLS-008
     severity: P0
@@ -84,7 +85,8 @@ rows:
       A confidential client redeeming a device_code at /token with a
       TLS client cert receives an access token bound by x5t#S256;
       the refresh token is NOT sender-constrained.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/device_code.yaml. Revisit when the device_code wave lands.
 
   - id: MTLS-009
     severity: P0
@@ -93,7 +95,8 @@ rows:
       A device_code redemption for a cert-binding-required client
       with no TLS client cert is rejected with 400 invalid_grant
       "mutual TLS client certificate not provided".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/device_code.yaml.
 
   - id: MTLS-010
     severity: P0
@@ -103,7 +106,8 @@ rows:
       with a TLS client cert receives both an access token and a
       refresh token bound by x5t#S256 (RTs MUST be sender-constrained
       for public clients).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/device_code.yaml.
 
   - id: MTLS-011
     severity: P0
@@ -112,7 +116,8 @@ rows:
       A confidential client redeeming a CIBA grant at /token with a
       TLS client cert receives an access token bound by x5t#S256; the
       refresh token is NOT sender-constrained.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: OpenID CIBA Core 1.0 is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/ciba.yaml. Revisit when CIBA lands.
 
   - id: MTLS-012
     severity: P0
@@ -121,7 +126,8 @@ rows:
       A CIBA grant redemption for a cert-binding-required client
       with no TLS client cert is rejected with 400 invalid_grant
       "mutual TLS client certificate not provided".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: OpenID CIBA Core 1.0 is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/ciba.yaml.
 
   - id: MTLS-013
     severity: P0
@@ -130,7 +136,8 @@ rows:
       A public client redeeming a CIBA grant with a TLS client cert
       receives both an access token and a refresh token bound by
       x5t#S256.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: OpenID CIBA Core 1.0 is intentionally deferred to v1.x and not present in v1.0; mirrors the blanket OOS already applied to test/scenarios/catalog/ciba.yaml.
 
   - id: MTLS-014
     severity: P0
@@ -139,7 +146,8 @@ rows:
       A confidential client redeeming an authorization_code at /token
       with a TLS client cert receives an access token bound by
       x5t#S256; the refresh token is NOT sender-constrained.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "panva-residue: the row asserts that on a confidential client's authorization_code redemption, the issued access token is bound by x5t#S256 (true in v1.0) AND that the refresh token is NOT sender-constrained (false in v1.0). The implementation propagates the cert binding onto the rotated refresh-token record for confidential clients as well as public ones (internal/tokenendpoint/authcode.go MTLSCertThumbprint: binding.MTLSThumbprint, with no public-vs-confidential split). Leaving the RT unbound would silently downgrade the chain on first refresh; the project chose the safer 'bind once, enforce always' posture. The AT-binding half is exercised by MTLS-007 (thumbprint encoding) and MTLS-018/-023 (issuance for public client / client_credentials)."
 
   - id: MTLS-015
     severity: P0
@@ -148,7 +156,8 @@ rows:
       An authorization_code redemption for a cert-binding-required
       client with no TLS client cert is rejected with 400
       invalid_grant "mutual TLS client certificate not provided".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no per-client 'cert-binding-required' policy knob. RFC 8705 §3 prescribes opportunistic binding (a presented cert binds the token; an absent cert is the bearer path) and the OP follows that posture: an authorization_code redemption with no cert succeeds and yields a bearer access token. Embedders that need a hard 'must present cert' posture compose it from FAPI 2.0 profile defaults plus a gateway-layer policy; the OP itself never rejects a cert-less request that is otherwise well-formed. Revisit when / if the OP grows a per-client mTLS-required policy surface."
 
   - id: MTLS-016
     severity: P0
@@ -157,7 +166,8 @@ rows:
       A confidential client refresh_token redemption with a TLS
       client cert issues a new access token bound by x5t#S256; the
       refresh token remains unbound.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "panva-residue: same shape as MTLS-014. The row asserts that a confidential client's refresh redemption issues a new access token bound by x5t#S256 (true) and that the refresh token 'remains unbound' (false in v1.0). The implementation always inherits the cert binding onto the rotated RT record regardless of client auth method; whether RFC 8705 §3 mandates this is debated upstream, and the project takes the safer posture. The public-client variants (MTLS-020 / MTLS-021 / MTLS-022) cover the same enforcement contract."
 
   - id: MTLS-017
     severity: P0
@@ -166,7 +176,7 @@ rows:
       A refresh_token redemption for a cert-binding-required
       confidential client without a TLS client cert is rejected with
       400 invalid_grant "mutual TLS client certificate not provided".
-    status: pending
+    status: active
 
   - id: MTLS-018
     severity: P0
@@ -175,7 +185,7 @@ rows:
       A public client redeeming an authorization_code at /token with
       a TLS client cert receives both an access token and a refresh
       token bound by x5t#S256.
-    status: pending
+    status: active
 
   - id: MTLS-019
     severity: P0
@@ -184,7 +194,8 @@ rows:
       A public client authorization_code redemption without a TLS
       client cert is rejected with 400 invalid_grant "mutual TLS
       client certificate not provided".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same v1.0-has-no-cert-binding-required-policy reason as MTLS-015. A public client's authorization_code redemption with no cert returns a bearer access token; the OP follows the opportunistic-binding posture RFC 8705 §3 prescribes. Embedders that want a hard requirement compose it via FAPI 2.0 profile + gateway policy. Revisit when the OP grows a per-client mTLS-required policy surface."
 
   - id: MTLS-020
     severity: P0
@@ -193,7 +204,7 @@ rows:
       A public client refresh_token redemption with the same TLS
       client cert issues a new access token and a rotated refresh
       token both bound by x5t#S256.
-    status: pending
+    status: active
 
   - id: MTLS-021
     severity: P0
@@ -202,7 +213,7 @@ rows:
       A public client refresh_token redemption without a TLS client
       cert is rejected with 400 invalid_grant "mutual TLS client
       certificate not provided".
-    status: pending
+    status: active
 
   - id: MTLS-022
     severity: P0
@@ -211,7 +222,7 @@ rows:
       A public client refresh_token redemption with a different
       (non-binding) TLS client cert is rejected with 400
       invalid_grant "failed x5t#S256 verification".
-    status: pending
+    status: active
 
   - id: MTLS-023
     severity: P0
@@ -219,7 +230,7 @@ rows:
     behaviour: |
       A client_credentials redemption with a TLS client cert issues
       a ClientCredentials access token bound by x5t#S256.
-    status: pending
+    status: active
 
   - id: MTLS-024
     severity: P0
@@ -228,7 +239,8 @@ rows:
       A client_credentials redemption for a cert-binding-required
       client without a TLS client cert is rejected with 400
       invalid_grant "mutual TLS client certificate not provided".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Same v1.0-has-no-cert-binding-required-policy reason as MTLS-015 / MTLS-019. A client_credentials redemption with no cert returns a bearer access token; the OP follows the opportunistic-binding posture. Revisit when / if the OP grows a per-client mTLS-required policy surface.
 
   - id: MTLS-025
     severity: P2
