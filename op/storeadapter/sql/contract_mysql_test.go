@@ -17,10 +17,10 @@ import (
 )
 
 // mysqlImage pins the engine version the contract harness validates
-// against. 8.0 is the long-term-supported release the testcontainers
-// module tests against; bumping it must coincide with re-running the
-// full contract suite.
-const mysqlImage = "mysql:8.0"
+// against. 8.4 is the current LTS release. Bumping this must coincide
+// with re-running the full contract suite, and must stay aligned with
+// the example compose files (examples/07-mysql-store, examples/09-redis-volatile).
+const mysqlImage = "mysql:8.4"
 
 // newMySQLFactory boots a single MySQL container for the calling test,
 // opens a root admin connection, and returns a [contract.Factory] that

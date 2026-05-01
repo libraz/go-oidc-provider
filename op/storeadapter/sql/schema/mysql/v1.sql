@@ -187,7 +187,10 @@ CREATE TABLE IF NOT EXISTS oidc_consumed_jtis (
 CREATE TABLE IF NOT EXISTS oidc_users (
     subject VARCHAR(255) NOT NULL PRIMARY KEY,
     claims JSON NOT NULL,
-    updated_at BIGINT NOT NULL
+    updated_at BIGINT NOT NULL,
+    username VARCHAR(255) NULL,
+    password_hash VARBINARY(512) NULL,
+    UNIQUE KEY oidc_users_username (username)
 );
 
 CREATE TABLE IF NOT EXISTS oidc_initial_access_tokens (

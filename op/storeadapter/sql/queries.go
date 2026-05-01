@@ -96,8 +96,11 @@ type queries struct {
 	jtiGC   string
 
 	// users
-	userFindBySubject string
-	userPut           string
+	userFindBySubject    string
+	userFindByUsername   string
+	userReadPasswordHash string
+	userPut              string
+	userPutWithPassword  string
 
 	// initial access tokens
 	iatPut                 string
@@ -323,12 +326,24 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// users
 		userFindBySubject: d.rebind(
 			"SELECT subject, claims, updated_at FROM " + n.users + " WHERE subject = ?"),
+		userFindByUsername: d.rebind(
+			"SELECT subject, claims, updated_at FROM " + n.users + " WHERE username = ?"),
+		userReadPasswordHash: d.rebind(
+			"SELECT password_hash FROM " + n.users + " WHERE subject = ?"),
 		userPut: d.rebind(
 			"INSERT INTO " + n.users + " (subject, claims, updated_at) VALUES (?, ?, ?)" +
 				d.upsertAlias() +
 				d.upsertOnConflict("subject",
 					"claims="+d.excludedRef("claims")+
 						", updated_at="+d.excludedRef("updated_at"))),
+		userPutWithPassword: d.rebind(
+			"INSERT INTO " + n.users + " (subject, claims, updated_at, username, password_hash) VALUES (?, ?, ?, ?, ?)" +
+				d.upsertAlias() +
+				d.upsertOnConflict("subject",
+					"claims="+d.excludedRef("claims")+
+						", updated_at="+d.excludedRef("updated_at")+
+						", username="+d.excludedRef("username")+
+						", password_hash="+d.excludedRef("password_hash"))),
 
 		// initial access tokens
 		iatPut: d.rebind(

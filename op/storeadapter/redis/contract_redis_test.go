@@ -18,9 +18,10 @@ import (
 )
 
 // redisImage pins the engine version the contract harness validates
-// against. Bumping it must coincide with re-running the full contract
-// suite.
-const redisImage = "redis:7-alpine"
+// against. Bumping this must coincide with re-running the full contract
+// suite, and must stay aligned with the example compose files
+// (examples/09-redis-volatile).
+const redisImage = "redis:7.4-alpine"
 
 // fixedClock wires [contract.Reference] through every backend the
 // harness builds.

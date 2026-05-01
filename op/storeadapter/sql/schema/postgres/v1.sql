@@ -188,8 +188,12 @@ CREATE TABLE IF NOT EXISTS oidc_consumed_jtis (
 CREATE TABLE IF NOT EXISTS oidc_users (
     subject TEXT PRIMARY KEY,
     claims JSONB NOT NULL DEFAULT 'null'::jsonb,
-    updated_at BIGINT NOT NULL
+    updated_at BIGINT NOT NULL,
+    username TEXT NULL,
+    password_hash BYTEA NULL
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_users_username ON oidc_users (username);
 
 CREATE TABLE IF NOT EXISTS oidc_initial_access_tokens (
     id TEXT PRIMARY KEY,
