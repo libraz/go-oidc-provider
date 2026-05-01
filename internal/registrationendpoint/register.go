@@ -42,6 +42,7 @@ type registrationResponse struct {
 	InitiateLoginURI        string   `json:"initiate_login_uri,omitempty"`
 	RequestURIs             []string `json:"request_uris,omitempty"`
 	RequestObjectSigningAlg string   `json:"request_object_signing_alg,omitempty"`
+	PostLogoutRedirectURIs  []string `json:"post_logout_redirect_uris,omitempty"`
 }
 
 // handleRegister implements POST /register (RFC 7591 §3). The function
@@ -159,6 +160,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		InitiateLoginURI:         m.InitiateLoginURI,
 		RequestURIs:              slices.Clone(m.RequestURIs),
 		RequestObjectSigningAlg:  m.RequestObjectSigningAlg,
+		PostLogoutRedirectURIs:   slices.Clone(m.PostLogoutRedirectURIs),
 	}
 	if err := deps.Clients.RegisterClient(ctx, client); err != nil {
 		deps.logger().Error("dcr.client.register_failed", "err", err, "client_id", clientID)
@@ -216,6 +218,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		InitiateLoginURI:        m.InitiateLoginURI,
 		RequestURIs:             m.RequestURIs,
 		RequestObjectSigningAlg: m.RequestObjectSigningAlg,
+		PostLogoutRedirectURIs:  m.PostLogoutRedirectURIs,
 	})
 }
 

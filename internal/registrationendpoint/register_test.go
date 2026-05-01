@@ -277,6 +277,42 @@ func TestRegister_RejectsNegativeDefaultMaxAge(t *testing.T) {
 	}
 }
 
+// TestRegister_HappyPath_PostLogoutRedirectURIsRoundTrip confirms a
+// POST carrying a valid post_logout_redirect_uris list is accepted,
+// the value is persisted on the [store.Client] record, and the
+// response body echoes the same list. The field is optional in
+// RFC 7591 / OIDC RP-Initiated Logout 1.0 §3 so this test is the
+// happy-path sibling of the validator unit table.
+func TestRegister_HappyPath_PostLogoutRedirectURIsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+
+	body := minimalMetadata()
+	body["post_logout_redirect_uris"] = []string{"https://rp.test.invalid/logout"}
+	resp := f.post(t, body, iat)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 201 body=%s", resp.StatusCode, raw)
+	}
+	got := decodeBody(t, resp)
+	echoed, _ := got["post_logout_redirect_uris"].([]any)
+	if len(echoed) != 1 || echoed[0] != "https://rp.test.invalid/logout" {
+		t.Errorf("post_logout_redirect_uris echo=%v", got["post_logout_redirect_uris"])
+	}
+	clientID, _ := got["client_id"].(string)
+	stored, err := f.prov.Store.GetClient(context.Background(), clientID)
+	if err != nil {
+		t.Fatalf("GetClient(%q): %v", clientID, err)
+	}
+	if len(stored.PostLogoutRedirectURIs) != 1 || stored.PostLogoutRedirectURIs[0] != "https://rp.test.invalid/logout" {
+		t.Errorf("stored.PostLogoutRedirectURIs=%v", stored.PostLogoutRedirectURIs)
+	}
+}
+
 // TestRegister_HappyPath_PublicClient_OmitsSecret confirms the response
 // envelope omits client_secret when token_endpoint_auth_method is
 // "none".

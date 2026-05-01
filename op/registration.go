@@ -211,6 +211,16 @@ type ClientMetadata struct {
 	// OIDC Dynamic Client Registration 1.0 §2). Empty leaves the choice
 	// to the OP's allow-list.
 	RequestObjectSigningAlg string
+
+	// PostLogoutRedirectURIs lists the candidate URIs the client wants
+	// to register for OpenID Connect RP-Initiated Logout 1.0 §3
+	// post_logout_redirect_uri matching. The library has already
+	// enforced the scheme/host shape (https, loopback http, or a
+	// reverse-DNS custom scheme for native clients) by the time the
+	// hook runs; embedders MAY tighten further (e.g. host allow-list
+	// per tenant). An empty slice means the client cannot use
+	// post_logout_redirect_uri at /end_session at all.
+	PostLogoutRedirectURIs []string
 }
 
 // InitialAccessTokenSpec configures the IAT issued by

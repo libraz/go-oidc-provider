@@ -49,6 +49,7 @@ type ClientMetadata struct {
 	InitiateLoginURI         string
 	RequestURIs              []string
 	RequestObjectSigningAlg  string
+	PostLogoutRedirectURIs   []string
 }
 
 // metadataWire is the JSON shape RFC 7591 §2 / OIDC Dynamic Client
@@ -79,6 +80,7 @@ type metadataWire struct {
 	InitiateLoginURI         string          `json:"initiate_login_uri,omitempty"`
 	RequestURIs              []string        `json:"request_uris,omitempty"`
 	RequestObjectSigningAlg  string          `json:"request_object_signing_alg,omitempty"`
+	PostLogoutRedirectURIs   []string        `json:"post_logout_redirect_uris,omitempty"`
 
 	// SoftwareStatement is parsed only so the handler can detect its
 	// presence and reject with invalid_software_statement; v1.0 does
@@ -150,6 +152,7 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		InitiateLoginURI:         w.InitiateLoginURI,
 		RequestURIs:              cloneStrings(w.RequestURIs),
 		RequestObjectSigningAlg:  w.RequestObjectSigningAlg,
+		PostLogoutRedirectURIs:   cloneStrings(w.PostLogoutRedirectURIs),
 	}
 	extras := metadataExtras{
 		SoftwareStatement: w.SoftwareStatement,
@@ -201,6 +204,9 @@ func validatePolicy(
 		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
 		func() error { return validatePairwiseMetadata(canonical) },
 		func() error { return validateDefaultMaxAge(canonical.DefaultMaxAge) },
+		func() error {
+			return validatePostLogoutRedirectURIs(canonical.PostLogoutRedirectURIs, canonical.ApplicationType, allowLocalhostLoopback)
+		},
 	}
 	for _, check := range checks {
 		if err := check(); err != nil {
@@ -360,6 +366,109 @@ func validateWebRedirectURIScheme(u *url.URL, hasImplicit, allowLocalhostLoopbac
 	default:
 		return errInvalidRedirectURI("web client redirect_uri scheme must be https; custom URI schemes require application_type=native")
 	}
+}
+
+// validatePostLogoutRedirectURIs enforces the OpenID Connect
+// RP-Initiated Logout 1.0 §3 requirement that every
+// post_logout_redirect_uris entry be an absolute, fragment-free URL the
+// OP can later compare byte-for-byte against /end_session input. The
+// scheme matrix mirrors the redirect_uris policy: native clients may
+// use https, loopback http (RFC 8252 §7.3), or a reverse-DNS custom
+// scheme; web clients may use https with the existing AllowLocalhostLoopback
+// gate widening the loopback http carve-out to the textual "localhost".
+// On any failure the error code is invalid_client_metadata (the field
+// is post-logout-specific; the redirect_uris-shaped invalid_redirect_uri
+// code would mis-categorise it) and the description names both
+// "post_logout_redirect_uris" and "loopback" so embedders can
+// self-correct without inspecting source.
+func validatePostLogoutRedirectURIs(uris []string, applicationType string, allowLocalhostLoopback bool) error {
+	if len(uris) == 0 {
+		return nil
+	}
+	for _, raw := range uris {
+		if err := validatePostLogoutRedirectURI(raw, applicationType, allowLocalhostLoopback); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validatePostLogoutRedirectURI runs the per-URI checks from
+// [validatePostLogoutRedirectURIs]. Split out so the per-row diagnostic
+// names the offending entry rather than collapsing the loop into a
+// single message and so the gocognit / cyclop budget on the parent
+// helper stays well below the project caps.
+func validatePostLogoutRedirectURI(raw, applicationType string, allowLocalhostLoopback bool) error {
+	if raw == "" {
+		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry must not be empty (loopback http requires 127.0.0.1, [::1], or localhost when AllowLocalhostLoopback is set)")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " is not a valid URL (loopback http hosts must be 127.0.0.1, [::1], or localhost)")
+	}
+	if !u.IsAbs() {
+		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " must be an absolute URL (loopback http requires the explicit scheme://host form)")
+	}
+	if u.Fragment != "" {
+		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " must not contain a fragment (loopback http URIs are compared byte-for-byte at /end_session)")
+	}
+	if applicationType == applicationTypeNative {
+		return validateNativePostLogoutScheme(u)
+	}
+	return validateWebPostLogoutScheme(u, allowLocalhostLoopback)
+}
+
+// validateNativePostLogoutScheme implements the native carve-out for
+// post_logout_redirect_uris: https, loopback http (the textual
+// "localhost" host is admitted unconditionally for native clients,
+// matching [validateNativeRedirectURIScheme]), or a reverse-DNS custom
+// scheme per RFC 8252 §7.1.
+func validateNativePostLogoutScheme(u *url.URL) error {
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if !isLoopbackRedirectHost(u.Hostname(), true) {
+			return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme for native clients requires a loopback host (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+		}
+		return nil
+	default:
+		if err := validateNativeCustomScheme(u.Scheme); err != nil {
+			return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris " + u.String() + ": " + err.Error() + " (loopback http hosts: 127.0.0.1, [::1], localhost)")
+		}
+		return nil
+	}
+}
+
+// validateWebPostLogoutScheme implements the web-client policy:
+// https only, with the AllowLocalhostLoopback gate admitting loopback
+// http for embedders that opted in. Mirrors
+// [validateWebRedirectURIScheme] without the implicit-flow carve-out
+// (post_logout never participates in the implicit response).
+func validateWebPostLogoutScheme(u *url.URL, allowLocalhostLoopback bool) error {
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if !isLoopbackRedirectHost(u.Hostname(), allowLocalhostLoopback) {
+			if allowLocalhostLoopback {
+				return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme is permitted only for loopback hosts (127.0.0.1, [::1], or localhost) per RFC 8252 §7.3")
+			}
+			return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris http scheme is permitted only for loopback IP literals (127.0.0.1, [::1]); pass op.WithAllowLocalhostLoopback() to also admit the textual \"localhost\" host")
+		}
+		return nil
+	default:
+		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris scheme must be https for web clients; loopback http (127.0.0.1, [::1], localhost) and custom URI schemes require application_type=native")
+	}
+}
+
+// errInvalidPostLogoutRedirectURI constructs a [validationError] whose
+// description always names both "post_logout_redirect_uris" and
+// "loopback". Centralising the wording keeps the embedder-facing
+// contract — "if you see this error, the literal substrings tell you
+// which field and which carve-out applies" — encoded in one place.
+func errInvalidPostLogoutRedirectURI(desc string) error {
+	return errInvalidClientMetadata(desc)
 }
 
 // hasImplicitResponseType reports whether any response_type entry
