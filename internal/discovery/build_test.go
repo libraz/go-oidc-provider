@@ -1,6 +1,7 @@
 package discovery_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -312,5 +313,186 @@ func TestBuild_ClaimsSupported_EmptySlicePreserved(t *testing.T) {
 	}
 	if len(doc.ClaimsSupported) != 0 {
 		t.Errorf("claims_supported = %v, want empty slice", doc.ClaimsSupported)
+	}
+}
+
+// baseInput returns a minimal [discovery.Input] suitable for the
+// metadata-passthrough table tests. Each row layers its own
+// [discovery.Metadata] on top of this baseline.
+func baseInput() discovery.Input {
+	return discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints: discovery.EndpointPaths{
+			JWKS:      "/jwks",
+			Authorize: "/auth",
+			Token:     "/token",
+			UserInfo:  "/userinfo",
+		},
+		GrantsSupported: []string{"authorization_code"},
+		ScopesSupported: []string{"openid"},
+	}
+}
+
+// TestBuild_Metadata_NoneSupplied verifies that the four named static
+// metadata keys ("service_documentation", "op_policy_uri", "op_tos_uri",
+// "ui_locales_supported") and any embedder-supplied passthrough keys
+// stay absent from the wire when the embedder did not configure
+// [discovery.Metadata]. The omitempty JSON tags carry the load.
+//
+// Spec: RFC 8414 §2.
+func TestBuild_Metadata_NoneSupplied(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(baseInput())
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{
+		"service_documentation", "op_policy_uri",
+		"op_tos_uri", "ui_locales_supported",
+	} {
+		if _, present := wire[key]; present {
+			t.Errorf("wire %q should be omitted when no metadata is supplied", key)
+		}
+	}
+}
+
+// TestBuild_Metadata_ServiceDocumentationRoundTrips confirms that the
+// embedder's "service_documentation" URL appears in the JSON exactly
+// once with the supplied value. RFC 8414 §2 lists the field as
+// RECOMMENDED.
+func TestBuild_Metadata_ServiceDocumentationRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Metadata.ServiceDocumentation = "https://idp.example.com/docs"
+	doc := discovery.Build(in)
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, _ := wire["service_documentation"].(string)
+	if got != "https://idp.example.com/docs" {
+		t.Errorf("service_documentation=%q want %q", got, "https://idp.example.com/docs")
+	}
+}
+
+// TestBuild_Metadata_UILocalesSupportedAsArray pins
+// "ui_locales_supported" to the JSON-array shape RFC 8414 §2 requires.
+// A bare string would silently break RP locale negotiation.
+func TestBuild_Metadata_UILocalesSupportedAsArray(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Metadata.UILocalesSupported = []string{"ja-JP", "en-US"}
+	doc := discovery.Build(in)
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	arr, ok := wire["ui_locales_supported"].([]any)
+	if !ok {
+		t.Fatalf("ui_locales_supported is not a JSON array: %T (%v)",
+			wire["ui_locales_supported"], wire["ui_locales_supported"])
+	}
+	if len(arr) != 2 || arr[0] != "ja-JP" || arr[1] != "en-US" {
+		t.Errorf("ui_locales_supported=%v want [ja-JP en-US]", arr)
+	}
+}
+
+// TestBuild_Metadata_ExtraPassthrough confirms that an unknown metadata
+// key from [discovery.Metadata.Extra] reaches the wire at the top level
+// with its supplied JSON value. RFC 8414 §2 explicitly permits unknown
+// metadata members.
+func TestBuild_Metadata_ExtraPassthrough(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Metadata.Extra = map[string]any{
+		"x_custom_thing": "frobnicate",
+	}
+	doc := discovery.Build(in)
+	body, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, _ := wire["x_custom_thing"].(string)
+	if got != "frobnicate" {
+		t.Errorf("x_custom_thing=%q want %q", got, "frobnicate")
+	}
+}
+
+// TestBuild_Metadata_MarshalDoesNotMutateExtra confirms that repeated
+// marshal calls on the same [discovery.Document] do not double-merge or
+// drop the embedder's Extra entries. The merge happens in
+// [discovery.Document.MarshalJSON] without mutating the source map.
+func TestBuild_Metadata_MarshalDoesNotMutateExtra(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Metadata.Extra = map[string]any{"x_custom": "v"}
+	doc := discovery.Build(in)
+	for i := range 3 {
+		body, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatalf("marshal[%d]: %v", i, err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(body, &wire); err != nil {
+			t.Fatalf("unmarshal[%d]: %v", i, err)
+		}
+		if got, _ := wire["x_custom"].(string); got != "v" {
+			t.Errorf("iteration %d: x_custom=%q want v", i, got)
+		}
+	}
+}
+
+// TestOPControlledFieldNames_CoversCriticalFields pins the deny-list
+// returned by [discovery.OPControlledFieldNames] so a refactor that
+// drops a critical field from [discovery.Document] also fails this
+// test. The list is the contract that
+// op.WithDiscoveryMetadata's override-deny check consults.
+func TestOPControlledFieldNames_CoversCriticalFields(t *testing.T) {
+	t.Parallel()
+
+	got := discovery.OPControlledFieldNames()
+	gotSet := make(map[string]struct{}, len(got))
+	for _, n := range got {
+		gotSet[n] = struct{}{}
+	}
+	for _, want := range []string{
+		"issuer",
+		"authorization_endpoint",
+		"token_endpoint",
+		"jwks_uri",
+		"response_types_supported",
+		"grant_types_supported",
+		"subject_types_supported",
+		"id_token_signing_alg_values_supported",
+		"scopes_supported",
+		"code_challenge_methods_supported",
+		"token_endpoint_auth_methods_supported",
+	} {
+		if _, present := gotSet[want]; !present {
+			t.Errorf("OPControlledFieldNames missing %q (got %v)", want, got)
+		}
 	}
 }

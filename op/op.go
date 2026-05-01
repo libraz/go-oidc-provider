@@ -776,6 +776,7 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 		InitiateLoginURI:         m.InitiateLoginURI,
 		RequestURIs:              m.RequestURIs,
 		RequestObjectSigningAlg:  m.RequestObjectSigningAlg,
+		PostLogoutRedirectURIs:   m.PostLogoutRedirectURIs,
 	}
 }
 
@@ -868,6 +869,7 @@ func mountIntrospectionEndpoint(
 			OpaqueAccessTokens:         cfg.store.OpaqueAccessTokens(),
 			GrantRevocations:           cfg.store.GrantRevocations(),
 			RevocationStrategy:         cfg.atRevocation,
+			Audit:                      cfg.effectiveAuditEmitter(),
 		})),
 	)
 }
@@ -1926,6 +1928,13 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 		ProfileAllowedAuthMethods: cfg.profileAllowedAuthMethodNames(),
 		ClaimsParameterSupported:  cfg.claimsParameterSupported(),
 		ClaimsSupported:           cfg.claimsSupported,
+		Metadata: discovery.Metadata{
+			ServiceDocumentation: cfg.discoveryMetadata.ServiceDocumentation,
+			OPPolicyURI:          cfg.discoveryMetadata.OPPolicyURI,
+			OPTermsOfServiceURI:  cfg.discoveryMetadata.OPTermsOfServiceURI,
+			UILocalesSupported:   cfg.discoveryMetadata.UILocalesSupported,
+			Extra:                cfg.discoveryMetadata.Extra,
+		},
 	}
 }
 

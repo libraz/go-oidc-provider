@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -75,6 +76,39 @@ type Input struct {
 	// the embedder's behalf. A non-nil (possibly empty) slice is
 	// copied verbatim onto the wire.
 	ClaimsSupported []string
+
+	// Metadata carries the static RFC 8414 §2 metadata fields the
+	// embedder injects through op.WithDiscoveryMetadata. The op
+	// layer pre-validates the struct (override-deny check on
+	// Metadata.Extra) so the discovery builder copies the values
+	// onto the document without further policy.
+	Metadata Metadata
+}
+
+// Metadata carries the static RFC 8414 §2 metadata fields the embedder
+// publishes alongside the OP-controlled discovery document. The struct
+// is wire-shape-aligned: each field maps to exactly one discovery JSON
+// key, plus an Extra map for embedder-defined passthrough keys. The
+// override-deny enforcement against [OPControlledFieldNames] lives in
+// the op layer; this struct is a pure carrier.
+type Metadata struct {
+	// ServiceDocumentation maps to "service_documentation".
+	ServiceDocumentation string
+
+	// OPPolicyURI maps to "op_policy_uri".
+	OPPolicyURI string
+
+	// OPTermsOfServiceURI maps to "op_tos_uri".
+	OPTermsOfServiceURI string
+
+	// UILocalesSupported maps to "ui_locales_supported". Nil and
+	// empty are equivalent (the field is omitted).
+	UILocalesSupported []string
+
+	// Extra carries arbitrary passthrough fields. Keys MUST NOT
+	// collide with any name returned by [OPControlledFieldNames];
+	// the op layer enforces this at construction time.
+	Extra map[string]any
 }
 
 // EndpointPaths mirrors op.Endpoints with internal-friendly types.
@@ -341,7 +375,73 @@ func Build(in Input) Document {
 		// tag drops both shapes from the wire identically.
 		doc.ClaimsSupported = slices.Clone(in.ClaimsSupported)
 	}
+	// RFC 8414 §2: copy the static metadata the embedder supplied
+	// through op.WithDiscoveryMetadata. The op layer has already
+	// rejected any Metadata.Extra key that collides with an
+	// OP-controlled field name, so the builder copies values
+	// verbatim. Empty strings and nil/empty slices stay omitted by
+	// virtue of the json:",omitempty" tag.
+	doc.ServiceDocumentation = in.Metadata.ServiceDocumentation
+	doc.OPPolicyURI = in.Metadata.OPPolicyURI
+	doc.OPTermsOfServiceURI = in.Metadata.OPTermsOfServiceURI
+	if len(in.Metadata.UILocalesSupported) > 0 {
+		doc.UILocalesSupported = slices.Clone(in.Metadata.UILocalesSupported)
+	}
+	if len(in.Metadata.Extra) > 0 {
+		doc.Extra = make(map[string]any, len(in.Metadata.Extra))
+		for k, v := range in.Metadata.Extra {
+			doc.Extra[k] = v
+		}
+	}
 	return doc
+}
+
+// OPControlledFieldNames returns the JSON tag names of every field on
+// [Document] that the OP itself populates. Embedders MUST NOT supply
+// any of these names through [Metadata.Extra]; the op layer consults
+// this list at construction time to surface a configuration error from
+// op.New rather than silently dropping or overwriting the embedder's
+// value at marshal time.
+//
+// The list is computed once via reflection over the [Document] struct
+// tags so it stays in lock-step with the wire shape: adding a new
+// field to [Document] automatically extends the deny-list.
+//
+// The four typed metadata fields ([Document.ServiceDocumentation] etc.)
+// ARE included in the deny-list because the embedder supplies them
+// through the named [Metadata] members rather than through Extra; an
+// Extra entry whose key is "service_documentation" would create two
+// sources of truth.
+func OPControlledFieldNames() []string {
+	return slices.Clone(opControlledFieldNames)
+}
+
+// opControlledFieldNames is the precomputed list of JSON tag names the
+// builder claims for OP-controlled output. The list is populated at
+// package-init via reflection over [Document]; see [OPControlledFieldNames].
+var opControlledFieldNames = computeOPControlledFieldNames()
+
+// computeOPControlledFieldNames walks every exported field of [Document]
+// and extracts the JSON tag's name segment (the part before the first
+// comma). Fields tagged json:"-" are skipped because they are not
+// emitted on the wire. The returned slice is sorted so the deny-list
+// is stable across builds.
+func computeOPControlledFieldNames() []string {
+	t := reflect.TypeOf(Document{})
+	out := make([]string, 0, t.NumField())
+	for i := range t.NumField() {
+		tag := t.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "" || name == "-" {
+			continue
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // containsAssertionBearingMethod reports whether methods includes a

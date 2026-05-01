@@ -384,6 +384,18 @@ type config struct {
 	// per-token in storage. Out-of-range values and FAPI-incompatible
 	// combinations are rejected at construction time.
 	atRevocation store.AccessTokenRevocationStrategy
+
+	// discoveryMetadata carries the static RFC 8414 §2 metadata fields
+	// the embedder injected through [WithDiscoveryMetadata]. The zero
+	// value (every field empty / nil) is the library default and emits
+	// no extra discovery keys; populated values are merged into the
+	// document at build time and override-deny-checked at option time.
+	discoveryMetadata DiscoveryMetadata
+
+	// discoveryMetadataSet records whether [WithDiscoveryMetadata]
+	// was invoked, so a duplicate call can fail at construction time
+	// instead of silently overwriting the previous metadata.
+	discoveryMetadataSet bool
 }
 
 // claimsParameterSupported returns the effective discovery
@@ -1967,6 +1979,143 @@ func WithClaimsParameterSupported(enabled bool) Option {
 		return nil
 	})
 }
+
+// DiscoveryMetadata carries the static RFC 8414 §2 metadata fields an
+// embedder injects into the OP's discovery document. The fields are
+// values the OP itself does not own — the human-readable URLs and the
+// list of UI locales the deployment supports — so they MUST be
+// supplied by the embedder rather than guessed by the library.
+//
+// The four named fields map 1:1 to discovery JSON keys; Extra accepts
+// arbitrary additional keys (RFC 8414 §2 explicitly permits unknown
+// metadata members). Keys that collide with an OP-controlled field
+// name (issuer, authorization_endpoint, response_types_supported, …)
+// are rejected at op.New construction time so embedders cannot silently
+// shadow protocol-defining values.
+type DiscoveryMetadata struct {
+	// ServiceDocumentation is the URL of the OP's developer
+	// documentation (RFC 8414 §2 "service_documentation"). The empty
+	// string omits the field from the wire.
+	ServiceDocumentation string
+
+	// OPPolicyURI is the URL of the OP's privacy policy
+	// (OpenID Connect Discovery 1.0 §3 / RFC 8414 §2
+	// "op_policy_uri"). The empty string omits the field.
+	OPPolicyURI string
+
+	// OPTermsOfServiceURI is the URL of the OP's terms-of-service
+	// page (OpenID Connect Discovery 1.0 §3 / RFC 8414 §2
+	// "op_tos_uri"). The empty string omits the field.
+	OPTermsOfServiceURI string
+
+	// UILocalesSupported lists the BCP 47 language tags the OP's
+	// human-facing UI supports (OpenID Connect Discovery 1.0 §3 /
+	// RFC 8414 §2 "ui_locales_supported"). Nil and empty are
+	// equivalent — the field is omitted from the wire.
+	UILocalesSupported []string
+
+	// Extra carries arbitrary embedder-defined passthrough keys. The
+	// values are JSON-marshalled into the discovery document at the
+	// top level. Keys MUST be valid RFC 8414 metadata names (lowercase
+	// snake_case is conventional but the library does not enforce a
+	// shape) and MUST NOT collide with any OP-controlled field name;
+	// op.New rejects collisions at construction time so a typo cannot
+	// silently shadow a protocol-defining value.
+	Extra map[string]any
+}
+
+// WithDiscoveryMetadata injects static RFC 8414 §2 metadata fields into
+// the OP's discovery document. The OP does not own the URLs or the
+// list of UI locales the deployment supports; the embedder supplies
+// them through this option, and the library merges them into the
+// document at construction time.
+//
+// The four named [DiscoveryMetadata] fields are typed for safety;
+// arbitrary additional metadata keys go into [DiscoveryMetadata.Extra]
+// and are passed through verbatim. RFC 8414 §2 explicitly permits
+// unknown metadata members, so embedders that publish a custom field
+// (e.g. an organisation-specific extension) can do so without the
+// library knowing about it.
+//
+// The option enforces an override-deny invariant: any [Extra] key that
+// matches an OP-controlled field name (issuer, authorization_endpoint,
+// response_types_supported, jwks_uri, …) is rejected at op.New, and
+// the error names the offending key. The deny-list is computed via
+// reflection over the discovery document shape, so it stays in sync
+// with the library's wire output as new fields land.
+//
+// The option may be supplied at most once; a duplicate call returns
+// a configuration error so an embedder notices the conflict.
+//
+// Spec: RFC 8414 §2.
+//
+// Stable since v0.x.
+func WithDiscoveryMetadata(meta DiscoveryMetadata) Option {
+	return optionFunc(func(c *config) error {
+		if c.discoveryMetadataSet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDiscoveryMetadata was supplied more than once",
+			}
+		}
+		denied := opControlledKeySet()
+		// Reject the four named fields appearing under Extra; they
+		// already have typed slots on DiscoveryMetadata and a duplicate
+		// here would create two sources of truth.
+		for key := range meta.Extra {
+			if key == "" {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithDiscoveryMetadata: Extra contains an empty key",
+				}
+			}
+			if _, blocked := denied[key]; blocked {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithDiscoveryMetadata: Extra key " + key + " collides with an OP-controlled discovery field",
+				}
+			}
+		}
+		c.discoveryMetadata = DiscoveryMetadata{
+			ServiceDocumentation: meta.ServiceDocumentation,
+			OPPolicyURI:          meta.OPPolicyURI,
+			OPTermsOfServiceURI:  meta.OPTermsOfServiceURI,
+			UILocalesSupported:   slices.Clone(meta.UILocalesSupported),
+		}
+		if len(meta.Extra) > 0 {
+			c.discoveryMetadata.Extra = make(map[string]any, len(meta.Extra))
+			for k, v := range meta.Extra {
+				c.discoveryMetadata.Extra[k] = v
+			}
+		}
+		c.discoveryMetadataSet = true
+		return nil
+	})
+}
+
+// opControlledKeySet returns the set of discovery JSON keys the OP
+// itself populates. The set is computed once from
+// [discovery.OPControlledFieldNames] and cached on the package so the
+// override-deny check on every [WithDiscoveryMetadata] call is O(1)
+// per Extra key.
+func opControlledKeySet() map[string]struct{} {
+	if opControlledKeyCache != nil {
+		return opControlledKeyCache
+	}
+	names := discovery.OPControlledFieldNames()
+	out := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		out[n] = struct{}{}
+	}
+	opControlledKeyCache = out
+	return out
+}
+
+// opControlledKeyCache caches the [opControlledKeySet] result. The
+// cache is safe under concurrent reads because the slice returned by
+// [discovery.OPControlledFieldNames] is computed at package init and
+// never mutated; the first option-application wins the cache write.
+var opControlledKeyCache map[string]struct{}
 
 // WithOpenIDScopeOptional lifts the OpenID Connect Core 1.0 §3.1.2.1
 // requirement that every authorization request include the "openid"

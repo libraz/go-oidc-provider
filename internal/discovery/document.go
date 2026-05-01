@@ -1,5 +1,7 @@
 package discovery
 
+import "encoding/json"
+
 // Document is the JSON shape of the OpenID Connect Discovery 1.0 metadata
 // response. Field names match the spec; optional members carry omitempty
 // so deployments that disable a feature do not advertise dead endpoints.
@@ -205,4 +207,66 @@ type Document struct {
 	// configured user store. Embedders publish the closed list via
 	// op.WithClaimsSupported(...).
 	ClaimsSupported []string `json:"claims_supported,omitempty"`
+
+	// ServiceDocumentation is the URL of a human-readable page that
+	// documents the OP for developers. RFC 8414 §2 lists the field as
+	// RECOMMENDED. The library does not own the URL; the embedder
+	// supplies it through op.WithDiscoveryMetadata.
+	ServiceDocumentation string `json:"service_documentation,omitempty"`
+
+	// OPPolicyURI is the URL of the OP's privacy policy page.
+	// OpenID Connect Discovery 1.0 §3 / RFC 8414 §2 list the field
+	// as RECOMMENDED. Embedder-supplied via op.WithDiscoveryMetadata.
+	OPPolicyURI string `json:"op_policy_uri,omitempty"`
+
+	// OPTermsOfServiceURI is the URL of the OP's terms-of-service
+	// page. OpenID Connect Discovery 1.0 §3 / RFC 8414 §2 list the
+	// field as RECOMMENDED. Embedder-supplied via
+	// op.WithDiscoveryMetadata.
+	OPTermsOfServiceURI string `json:"op_tos_uri,omitempty"`
+
+	// UILocalesSupported lists the BCP 47 language tags the OP's
+	// human-facing UI supports. OpenID Connect Discovery 1.0 §3 /
+	// RFC 8414 §2 list the field as OPTIONAL. Embedder-supplied via
+	// op.WithDiscoveryMetadata.
+	UILocalesSupported []string `json:"ui_locales_supported,omitempty"`
+
+	// Extra carries embedder-supplied passthrough fields that are not
+	// otherwise modelled on Document. The map is merged into the wire
+	// output at the top level by Document.MarshalJSON; keys that
+	// collide with an OP-controlled field are rejected at OP build
+	// time (see op.WithDiscoveryMetadata). The field is internal to
+	// the discovery package and never appears under its own JSON tag.
+	Extra map[string]any `json:"-"`
+}
+
+// MarshalJSON serialises the discovery [Document] and merges any
+// embedder-supplied [Document.Extra] entries at the top level of the
+// JSON object. The merge runs at marshal time so the on-the-wire shape
+// is the union of OP-controlled fields and embedder passthrough; the
+// override-deny check that prevents Extra from clobbering OP-controlled
+// fields runs earlier (op.WithDiscoveryMetadata) so a collision surfaces
+// at op.New, not on first /.well-known fetch.
+func (d Document) MarshalJSON() ([]byte, error) {
+	type alias Document
+	core, err := json.Marshal(alias(d))
+	if err != nil {
+		return nil, err
+	}
+	if len(d.Extra) == 0 {
+		return core, nil
+	}
+	// Decode the core into a generic map so we can merge passthrough
+	// keys without re-implementing the struct's omitempty handling.
+	var merged map[string]any
+	if err := json.Unmarshal(core, &merged); err != nil {
+		return nil, err
+	}
+	if merged == nil {
+		merged = make(map[string]any, len(d.Extra))
+	}
+	for k, v := range d.Extra {
+		merged[k] = v
+	}
+	return json.Marshal(merged)
 }
