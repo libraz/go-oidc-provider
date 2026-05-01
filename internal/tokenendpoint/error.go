@@ -14,6 +14,7 @@ const (
 	errUnauthorizedClient   = "unauthorized_client"
 	errUnsupportedGrantType = "unsupported_grant_type"
 	errInvalidScope         = "invalid_scope"
+	errInvalidTarget        = "invalid_target"
 	errServerError          = "server_error"
 
 	// errUseDPoPNonce is the RFC 9449 §8 wire code the token endpoint

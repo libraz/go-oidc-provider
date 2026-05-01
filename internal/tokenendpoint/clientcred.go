@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/clientcred"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -24,8 +25,11 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
-	requested, ok := parseClientCredsRequest(w, r)
+	requested, resource, ok := parseClientCredsRequest(w, r)
 	if !ok {
+		return
+	}
+	if !validateClientCredsResource(w, client, resource) {
 		return
 	}
 	authorized, ok := authorizeClientCreds(w, client, requested)
@@ -47,17 +51,53 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
-	issueClientCredsResponse(ctx, w, deps, client, authorized.Scope, binding)
+	issueClientCredsResponse(ctx, w, deps, client, authorized.Scope, resource, binding)
 }
 
-// parseClientCredsRequest extracts the optional "scope" form parameter.
-// RFC 6749 §4.4 makes scope optional; an absent or empty value yields a
-// nil slice and the authorizer falls back to the client's registered
-// set. The function returns ok=false only on a structurally malformed
-// body, which the dispatcher has already filtered through
-// [http.Request.ParseForm].
-func parseClientCredsRequest(_ http.ResponseWriter, r *http.Request) ([]string, bool) {
-	return parseScopeParam(r.PostForm.Get("scope")), true
+// parseClientCredsRequest extracts the optional "scope" and "resource"
+// form parameters. RFC 6749 §4.4 makes scope optional; an absent or
+// empty value yields a nil slice and the authorizer falls back to the
+// client's registered set. RFC 8707 §2 permits at most one resource
+// indicator on a token request in this profile: the form parser
+// surfaces a wire error when the same parameter occurs more than once
+// with differing values, mirroring the authorize-side single-value
+// posture (see [internal/authorize.singleValue]). Repeated identical
+// values are tolerated so an HTTP middleware that re-emits the body
+// does not break the handler.
+func parseClientCredsRequest(w http.ResponseWriter, r *http.Request) ([]string, string, bool) {
+	scope := parseScopeParam(r.PostForm.Get("scope"))
+	values := r.PostForm["resource"]
+	if len(values) == 0 {
+		return scope, "", true
+	}
+	first := values[0]
+	for _, candidate := range values[1:] {
+		if candidate != first {
+			writeError(w, http.StatusBadRequest, errInvalidTarget,
+				"only a single resource indicator value is supported")
+			return nil, "", false
+		}
+	}
+	return scope, first, true
+}
+
+// validateClientCredsResource enforces the RFC 8707 §3 allowlist for
+// the client_credentials grant: when the request carries a resource
+// indicator the value MUST appear in [store.Client.Resources]. Empty
+// resource is the no-op path; the issuance helper falls back to the
+// issuer audience. The error code matches [internal/authorize.ErrResourceNotAllowed]
+// verbatim so a client porting a request from /authorize sees the same
+// wire shape on /token.
+func validateClientCredsResource(w http.ResponseWriter, client *store.Client, resource string) bool {
+	if resource == "" {
+		return true
+	}
+	if client == nil || !slices.Contains(client.Resources, resource) {
+		writeError(w, http.StatusBadRequest, errInvalidTarget,
+			"resource indicator is missing, or unknown")
+		return false
+	}
+	return true
 }
 
 // authorizeClientCreds wraps [clientcred.Authorize] and maps its
@@ -134,6 +174,7 @@ func issueClientCredsResponse(
 	deps Deps,
 	client *store.Client,
 	scope []string,
+	resource string,
 	binding tokenBinding,
 ) {
 	now := deps.now().UTC()
@@ -145,7 +186,9 @@ func issueClientCredsResponse(
 	// is a no-op, which is the correct shape — there is no chain to
 	// cascade because the wire token is already the only artefact tied
 	// to this issuance.
-	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, "", scope, "", now, 0, binding)
+	// resource carries the validated RFC 8707 §3 indicator (empty when
+	// the request omitted it); mintAccessToken puts it in aud.
+	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, "", scope, resource, now, 0, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
