@@ -100,7 +100,7 @@ func TestScenario_DIS_020_MandatoryOIDCMetadataFieldsPresent(t *testing.T) {
 // `end_session_endpoint` is excluded from the "hidden by default" facet
 // because the OP enables RP-Initiated Logout by default;
 // `backchannel_authentication_endpoint` is excluded until the CIBA
-// feature lands (see docs/research/09-impl-bug-survey.md §A).
+// feature lands.
 //
 // Spec: RFC 8414 §3, RFC 9126 §5, RFC 7662 §2.
 func TestScenario_DIS_022_FeatureEndpointsAdvertisedWhenEnabled(t *testing.T) {

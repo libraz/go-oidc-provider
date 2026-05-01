@@ -12,9 +12,9 @@
 --     identical across SQLite, MySQL, and PostgreSQL.
 --   * Timestamps are stored as INTEGER (unix nanoseconds) so the
 --     adapter never depends on the driver's TIME type quirks.
---   * Column order mirrors the project convention recorded in
---     .claude/agents/op-store.md: id > *_id (foreign keys) > data
---     columns > notes > updated_at > created_at.
+--   * Column order follows the project convention:
+--     id > *_id (foreign keys) > data columns > notes >
+--     updated_at > created_at.
 -- Run schema/sqlite/v1.sql once before opening the adapter.
 
 CREATE TABLE IF NOT EXISTS oidc_clients (

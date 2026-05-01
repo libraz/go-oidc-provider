@@ -952,7 +952,6 @@ func TestScenario_AC_026_AuthCodeWithoutCodeParam(t *testing.T) {
 		clientID = "rp-ac-026"
 		callback = "https://rp.testkit.invalid/callback"
 	)
-	//nolint:gosec // test fixture: not a real credential.
 	const clientSecret = "rp-ac-026-secret"
 
 	hash, err := op.HashClientSecret(clientSecret)

@@ -316,7 +316,7 @@ type Exchanged struct {
 	// "iat <= RevokedAt" mint-refusal rule before signing the rotated
 	// access token: a tombstoned grant whose tombstone post-dates the
 	// chain's first issuance MUST refuse a fresh AT, closing the ADR
-	// 0013 race window described in [docs/adr/0025-grant-tombstone-revocation-default.md].
+	// 0013 race window.
 	IssuedAt time.Time
 
 	// DPoPJKT is the RFC 7638 thumbprint the chain was bound to at

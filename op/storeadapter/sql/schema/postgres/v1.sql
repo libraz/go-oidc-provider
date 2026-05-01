@@ -11,9 +11,9 @@
 --     other dialects; pgx accepts integer-typed bind values into
 --     SMALLINT columns and the conversion is symmetric.
 --   * Timestamps use BIGINT (unix nanoseconds).
---   * Column order mirrors the project convention recorded in
---     .claude/agents/op-store.md: id > *_id (foreign keys) > data
---     columns > notes > updated_at > created_at.
+--   * Column order follows the project convention:
+--     id > *_id (foreign keys) > data columns > notes >
+--     updated_at > created_at.
 -- Apply once before opening the adapter.
 
 CREATE TABLE IF NOT EXISTS oidc_clients (
