@@ -15,10 +15,12 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -312,9 +314,70 @@ func TestScenario_ERR_030_HTMLErrorPathReachableViaHook(t *testing.T) {
 	t.Skip("pending: ERR-030")
 }
 
+// TestScenario_ERR_031_ErrorPageHTMLEscapesValues drives the public
+// [interaction.HTMLDriver] with an [interaction.ErrorPrompt] whose
+// Code, Description, and State carry attacker-controlled markup, and
+// asserts that the rendered HTML body never contains the unescaped
+// payload. Every interpolated value (in both the visible body and the
+// data-* attributes the SPA layer reads) MUST flow through HTML
+// escaping so a hostile state / error_description cannot break out of
+// the surrounding context.
+//
+// Spec: OWASP XSS (HTML output encoding).
 func TestScenario_ERR_031_ErrorPageHTMLEscapesValues(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ERR-031")
+
+	prompt := interaction.ErrorPrompt{
+		Code:        `<script>alert("code")</script>`,
+		Description: `"><img src=x onerror=alert("desc")>`,
+		State:       `"><svg/onload=alert("state")>`,
+		Status:      http.StatusBadRequest,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/error", http.NoBody)
+	if err := (interaction.HTMLDriver{}).RenderError(rec, req, prompt); err != nil {
+		t.Fatalf("RenderError: %v", err)
+	}
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Errorf("Content-Type=%q want text/html", got)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	rendered := string(body)
+
+	for _, payload := range []string{
+		`<script>alert("code")</script>`,
+		`"><img src=x onerror=alert("desc")>`,
+		`"><svg/onload=alert("state")>`,
+	} {
+		if strings.Contains(rendered, payload) {
+			t.Errorf("rendered body leaked unescaped payload %q\nbody=%s", payload, rendered)
+		}
+	}
+	// The metacharacters `<`, `>`, `"` are the only bytes that can break
+	// out of HTML text or quoted-attribute context. Asserting that the
+	// distinct entity-encoded forms appear catches every concrete XSS
+	// shape regardless of the surrounding payload (the literal
+	// substrings above are just representative).
+	for _, want := range []string{
+		"&lt;script&gt;",
+		"&#34;&gt;&lt;img",
+		"&#34;&gt;&lt;svg",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("expected escaped sequence %q in body=%s", want, rendered)
+		}
+	}
 }
 
 func TestScenario_ERR_032_ErrorCatalogIsSingleSourceOfTruth(t *testing.T) {

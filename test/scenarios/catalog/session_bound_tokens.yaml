@@ -62,4 +62,5 @@ rows:
       issued access token is session-bound. UserInfo succeeds while
       the session is alive and MUST return 401 `invalid_token` after
       the session is destroyed.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Implicit response_type (id_token token) is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167) records the policy: \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised."

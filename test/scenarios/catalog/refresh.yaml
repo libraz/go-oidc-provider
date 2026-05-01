@@ -103,7 +103,8 @@ rows:
       rejected with 400 invalid_grant ("refresh token invalid
       (referenced account not found)") and a grant.error audit event
       is emitted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "UserStore is intentionally read-only on the public surface. docs/plans/002-product-design.md (line 1122 + §\"ライブラリ性の核\") records: \"users テーブルを奪わない\" — the embedder owns user lifecycle. Simulating \"findAccount returns nothing at refresh time\" requires either (a) UserStore.Delete (which the OP does not expose by design) or (b) a testkit injection seam that has not been built. Until a non-Delete seam is decided this row is not reachable from black-box scenarios."
 
   - id: REF-010
     severity: P1
@@ -137,13 +138,14 @@ rows:
 
   - id: REF-013
     severity: P0
-    spec: RFC 9700 §4.14
+    spec: RFC 9700 §4.14 / OIDC Core §12
     behaviour: |
-      With rotateRefreshToken=true, the first redemption emits
-      refresh_token.consumed and refresh_token.saved exactly once
-      each; the response includes a new refresh_token value distinct
-      from the old one and the ID Token retains the original nonce.
-    status: pending
+      With refresh-token rotation enabled (the library default), the
+      first redemption emits a single token.refreshed audit event;
+      the response includes a new refresh_token value distinct from
+      the original; and the rotated ID Token preserves the nonce
+      from the originating authorization request.
+    status: active
 
   - id: REF-014
     severity: P1

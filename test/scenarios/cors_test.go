@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -148,14 +149,106 @@ func TestScenario_COR_012_TokenEarlyErrorCarriesCORSHeaders(t *testing.T) {
 	t.Skip("pending: COR-012")
 }
 
+// TestScenario_COR_013_RevocationCORSGatedByClientPolicy verifies that
+// the /revoke endpoint exposes the same Strict-CORS shape as /token: an
+// allowlisted Origin gets a 204 preflight and an Access-Control-Allow-Origin
+// echo on the actual POST, while a non-allowlisted Origin is rejected with
+// 403 on preflight and receives no Allow-Origin echo on the actual POST.
+// Vary: Origin is always stamped so a shared cache cannot conflate origins.
+//
+// Spec: RFC 7009 §2 / plan 002 §F.4.
 func TestScenario_COR_013_RevocationCORSGatedByClientPolicy(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-013")
+	p := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithCORSOrigins(allowedRPOrigin),
+			op.WithFeature(feature.Revoke),
+		),
+	)
+	assertStrictCORSGatedEndpoint(t, p, "/oidc/revoke", http.MethodPost)
 }
 
+// TestScenario_COR_014_IntrospectionCORSGatedByClientPolicy verifies that
+// the /introspect endpoint exposes the same Strict-CORS shape as /token: an
+// allowlisted Origin gets a 204 preflight and an Access-Control-Allow-Origin
+// echo on the actual POST, while a non-allowlisted Origin is rejected with
+// 403 on preflight and receives no Allow-Origin echo on the actual POST.
+// Vary: Origin is always stamped so a shared cache cannot conflate origins.
+//
+// Spec: RFC 7662 §2 / plan 002 §F.4.
 func TestScenario_COR_014_IntrospectionCORSGatedByClientPolicy(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-014")
+	p := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithCORSOrigins(allowedRPOrigin),
+			op.WithFeature(feature.Introspect),
+		),
+	)
+	assertStrictCORSGatedEndpoint(t, p, "/oidc/introspect", http.MethodPost)
+}
+
+// assertStrictCORSGatedEndpoint exercises the Strict-CORS shape on a
+// credentialed POST endpoint mounted on the given provider. It mirrors
+// the assertions used by COR-050/051/052 for /token but consolidates
+// preflight + actual checks into a single helper because COR-013/014
+// only target one endpoint each. The helper drives both the allowed
+// and disallowed Origin axes so callers do not duplicate the matrix.
+func assertStrictCORSGatedEndpoint(tb testing.TB, p *testkit.Provider, path, actualMethod string) {
+	tb.Helper()
+	url := p.Server.URL + path
+
+	// Allowed-Origin preflight: 204 with per-origin echo, credentials,
+	// max-age, Vary: Origin.
+	status, headers := corsRequestFrom(tb, http.MethodOptions, url, allowedRPOrigin, actualMethod)
+	if status != http.StatusNoContent {
+		tb.Fatalf("allowed preflight status=%d want 204", status)
+	}
+	if got := headers.Get("Access-Control-Allow-Origin"); got != allowedRPOrigin {
+		tb.Errorf("allowed preflight Access-Control-Allow-Origin=%q want %q", got, allowedRPOrigin)
+	}
+	if got := headers.Get("Access-Control-Allow-Credentials"); got != "true" {
+		tb.Errorf("allowed preflight Access-Control-Allow-Credentials=%q want true", got)
+	}
+	if got := headers.Get("Access-Control-Max-Age"); got == "" {
+		tb.Errorf("allowed preflight Access-Control-Max-Age is empty; preflight should be cacheable")
+	}
+	if got := headers.Get("Vary"); !strings.Contains(got, "Origin") {
+		tb.Errorf("allowed preflight Vary=%q must include Origin", got)
+	}
+
+	// Disallowed-Origin preflight: 403, no leak about what would be allowed.
+	status, headers = corsRequestFrom(tb, http.MethodOptions, url, disallowedRPOrigin, actualMethod)
+	if status != http.StatusForbidden {
+		tb.Fatalf("disallowed preflight status=%d want 403", status)
+	}
+	if got := headers.Get("Access-Control-Allow-Origin"); got != "" {
+		tb.Errorf("disallowed preflight Access-Control-Allow-Origin=%q want empty (no leak)", got)
+	}
+	if got := headers.Get("Access-Control-Allow-Methods"); got != "" {
+		tb.Errorf("disallowed preflight Access-Control-Allow-Methods=%q want empty", got)
+	}
+
+	// Allowed-Origin actual request: CORS headers stamp before the
+	// handler runs and rejects the bare empty body, so we only assert
+	// on headers, not on response status.
+	_, allowed := corsRequestFrom(tb, actualMethod, url, allowedRPOrigin, actualMethod)
+	if got := allowed.Get("Access-Control-Allow-Origin"); got != allowedRPOrigin {
+		tb.Errorf("allowed actual Access-Control-Allow-Origin=%q want %q", got, allowedRPOrigin)
+	}
+	if got := allowed.Get("Vary"); !strings.Contains(got, "Origin") {
+		tb.Errorf("allowed actual Vary=%q must include Origin", got)
+	}
+
+	// Disallowed-Origin actual request: no Allow-Origin echo, but
+	// Vary: Origin still stamped so a shared cache cannot serve the
+	// no-CORS response to a later allowed-Origin request.
+	_, denied := corsRequestFrom(tb, actualMethod, url, disallowedRPOrigin, actualMethod)
+	if got := denied.Get("Access-Control-Allow-Origin"); got != "" {
+		tb.Errorf("disallowed actual Access-Control-Allow-Origin=%q want empty", got)
+	}
+	if got := denied.Get("Vary"); !strings.Contains(got, "Origin") {
+		tb.Errorf("disallowed actual Vary=%q must include Origin", got)
+	}
 }
 
 func TestScenario_COR_015_DeviceAuthorizationCORSGatedByClientPolicy(t *testing.T) {

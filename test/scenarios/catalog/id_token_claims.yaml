@@ -94,6 +94,8 @@ rows:
       In conform=true mode with response_type=id_token alone
       (no access_token), scope-derived claims ARE emitted in the
       id_token because there is no userinfo channel.
+    status: out-of-scope
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-12
     severity: P0
@@ -111,6 +113,8 @@ rows:
       the authorize-endpoint id_token does NOT carry scope-derived
       claims; the access_token is used to retrieve them via
       /userinfo.
+    status: out-of-scope
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-14
     severity: P0
@@ -148,6 +152,8 @@ rows:
       at_hash is required when an id_token and an access_token are
       issued together at the authorize endpoint
       (response_type=token id_token or code id_token token).
+    status: out-of-scope
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-21
     severity: P0
@@ -163,6 +169,8 @@ rows:
     behaviour: |
       c_hash is required when an id_token and a code are issued
       together (response_type=code id_token or code id_token token).
+    status: out-of-scope
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167): \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" Only response_type=code is advertised; this row exercises a hybrid/implicit-only behaviour."
 
   - id: IDT-23
     severity: P0

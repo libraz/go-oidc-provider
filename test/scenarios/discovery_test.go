@@ -9,13 +9,18 @@ package scenarios_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -199,14 +204,80 @@ func TestScenario_DIS_002_DiscoveryDoesNotBindEntities(t *testing.T) {
 	}
 }
 
+// TestScenario_DIS_003_EmbedderExtraPropertiesMerge verifies that
+// embedder-injected static metadata (RFC 8414 §2 "service_documentation")
+// AND arbitrary passthrough keys reach the discovery JSON at the top
+// level. The OP merges the embedder-supplied map into the document at
+// build time so RPs see the union of OP-controlled fields and
+// embedder extensions.
+//
+// Spec: OIDC Discovery §4 / RFC 8414 §3.
 func TestScenario_DIS_003_EmbedderExtraPropertiesMerge(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-003")
+
+	p := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+				ServiceDocumentation: "https://idp.example.com/docs",
+				Extra: map[string]any{
+					"x_custom_thing": "frobnicate",
+				},
+			}),
+		),
+	)
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+	if got, _ := doc["service_documentation"].(string); got != "https://idp.example.com/docs" {
+		t.Errorf("service_documentation=%q want %q",
+			got, "https://idp.example.com/docs")
+	}
+	if got, _ := doc["x_custom_thing"].(string); got != "frobnicate" {
+		t.Errorf("x_custom_thing=%q want %q (passthrough Extra key did not reach the wire)",
+			got, "frobnicate")
+	}
 }
 
+// TestScenario_DIS_004_EmbedderCannotOverrideOPControlledFields pins
+// the override-deny invariant: an embedder MUST NOT be able to inject
+// a value for an OP-controlled field through op.WithDiscoveryMetadata.
+// op.New surfaces a configuration error that names the offending key,
+// so a typo cannot silently shadow a protocol-defining field.
+//
+// Spec: RFC 8414 §3 (the OP owns the protocol-shaping metadata).
 func TestScenario_DIS_004_EmbedderCannotOverrideOPControlledFields(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-004")
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate signing key: %v", err)
+	}
+	cookieKey := make([]byte, 32)
+	if _, err := rand.Read(cookieKey); err != nil {
+		t.Fatalf("generate cookie key: %v", err)
+	}
+
+	const offending = "authorization_endpoint"
+	_, err = op.New(
+		op.WithIssuer("https://idp.testkit.invalid"),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(op.Keyset{{KeyID: "dis-004-sig", Signer: priv}}),
+		op.WithCookieKey(cookieKey),
+		op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+			Extra: map[string]any{
+				offending: "https://attacker.example.com/auth",
+			},
+		}),
+	)
+	if err == nil {
+		t.Fatal("expected error when WithDiscoveryMetadata.Extra overrides authorization_endpoint, got nil")
+	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want *op.Error", err)
+	}
+	if !strings.Contains(err.Error(), offending) {
+		t.Errorf("err = %v, want it to mention %q", err, offending)
+	}
 }
 
 func TestScenario_DIS_010_KnownErrorReturnsJSONEnvelope(t *testing.T) {
@@ -229,9 +300,91 @@ func TestScenario_DIS_013_ServerErrorAuditEvent(t *testing.T) {
 	t.Skip("pending: DIS-013")
 }
 
+// TestScenario_DIS_021_RFC8414MetadataFieldsPresent verifies that
+// every RFC 8414 §2 metadata field the catalog row enumerates is
+// served when the OP is configured for it. The fields split into two
+// classes:
+//
+//   - Default-on: response_modes_supported (gated on the JARM feature
+//     in the current implementation), grant_types_supported,
+//     token_endpoint_auth_methods_supported. The first is enabled here
+//     by turning on the JARM feature; the latter two are present in
+//     every default discovery document.
+//   - Embedder-supplied: service_documentation, ui_locales_supported,
+//     op_policy_uri, op_tos_uri. Injected via op.WithDiscoveryMetadata.
+//
+// Spec: RFC 8414 §2.
 func TestScenario_DIS_021_RFC8414MetadataFieldsPresent(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-021")
+
+	const (
+		wantServiceDoc = "https://idp.example.com/docs"
+		wantPolicy     = "https://idp.example.com/policy"
+		wantTOS        = "https://idp.example.com/tos"
+	)
+	wantLocales := []string{"ja-JP", "en-US"}
+
+	p := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithFeature(feature.JARM),
+			op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+				ServiceDocumentation: wantServiceDoc,
+				OPPolicyURI:          wantPolicy,
+				OPTermsOfServiceURI:  wantTOS,
+				UILocalesSupported:   wantLocales,
+			}),
+		),
+	)
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+
+	// Default-on RFC 8414 §2 array fields. grant_types_supported and
+	// token_endpoint_auth_methods_supported are advertised by every
+	// build; response_modes_supported is JARM-gated and the option
+	// above turns the feature on.
+	for _, key := range []string{
+		"response_modes_supported",
+		"grant_types_supported",
+		"token_endpoint_auth_methods_supported",
+	} {
+		arr, ok := doc[key].([]any)
+		if !ok {
+			t.Errorf("%s missing or not an array: %T (%v)", key, doc[key], doc[key])
+			continue
+		}
+		if len(arr) == 0 {
+			t.Errorf("%s is empty: %v", key, arr)
+		}
+	}
+
+	// Embedder-supplied scalar fields.
+	stringChecks := map[string]string{
+		"service_documentation": wantServiceDoc,
+		"op_policy_uri":         wantPolicy,
+		"op_tos_uri":            wantTOS,
+	}
+	for key, want := range stringChecks {
+		got, _ := doc[key].(string)
+		if got != want {
+			t.Errorf("%s=%q want %q", key, got, want)
+		}
+	}
+
+	// Embedder-supplied locale list — JSON array of strings.
+	locales, ok := doc["ui_locales_supported"].([]any)
+	if !ok {
+		t.Fatalf("ui_locales_supported missing or not an array: %T (%v)",
+			doc["ui_locales_supported"], doc["ui_locales_supported"])
+	}
+	if len(locales) != len(wantLocales) {
+		t.Fatalf("ui_locales_supported len=%d want %d (%v)",
+			len(locales), len(wantLocales), locales)
+	}
+	for i, want := range wantLocales {
+		if locales[i] != want {
+			t.Errorf("ui_locales_supported[%d]=%v want %q", i, locales[i], want)
+		}
+	}
 }
 
 // TestScenario_DIS_030_IssParameterSupportedWhenIssFeatureOn verifies

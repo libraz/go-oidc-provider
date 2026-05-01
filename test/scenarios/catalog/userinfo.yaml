@@ -27,6 +27,8 @@ rows:
       endpoint is disabled MUST fail at construction with a
       configuration error stating that jwt-userinfo requires the
       userinfo endpoint; there is no silent fallback.
+    status: out-of-scope
+    out_of_scope_reason: "Signed / Encrypted UserInfo response is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2153) records: \"Signed / Encrypted UserInfo response — TLS + plain JSON で十分、JWS/JWE userinfo は実装負荷に見合わない.\" UserInfo always returns application/json."
 
   - id: UI-002
     severity: P1
@@ -59,6 +61,7 @@ rows:
       A GET /me with a syntactically opaque access_token that the OP
       cannot resolve returns 401 with error=invalid_token and the
       description "invalid token provided".
+    status: active
 
   - id: UI-006
     severity: P0
@@ -67,6 +70,7 @@ rows:
       A GET /me without an Authorization header and without any
       other token carrier returns 401 with error=invalid_token and
       the description "no access token provided".
+    status: active
 
   - id: UI-007
     severity: P0

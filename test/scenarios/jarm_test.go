@@ -10,7 +10,15 @@ package scenarios_test
 //   - OpenID Connect Core 1.0 §3.1.2, §3.3
 //   - RFC 9207 — Authorization Server Issuer Identification
 
-import "testing"
+import (
+	"net/url"
+	"testing"
+
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
+)
 
 func TestScenario_JARM_001_DiscoverySurfaceAdvertised(t *testing.T) {
 	t.Parallel()
@@ -22,9 +30,85 @@ func TestScenario_JARM_010_JwtModeFragmentForImplicitHybrid(t *testing.T) {
 	t.Skip("pending: JARM-010")
 }
 
+// TestScenario_JARM_011_JwtModeQueryForCode confirms that an
+// /authorize request with response_type=code and the bare alias
+// response_mode=jwt resolves to query-delivery (per JARM §4.3) and
+// that the resulting JARM JWT carries code, aud, exp, state, and iss
+// while omitting the scope claim.
+//
+// Spec: JARM §4.3 (response_mode=jwt resolution) / §4.1 (claim set).
 func TestScenario_JARM_011_JwtModeQueryForCode(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-011")
+
+	const (
+		clientID = "rp-jarm-011"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-jarm-011-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JARM)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		ResponseTypes:           []string{"code"},
+		GrantTypes:              []string{"authorization_code"},
+	})
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+		Extra:       url.Values{"response_mode": {"jwt"}},
+	})
+
+	if flow.Code != "" {
+		t.Errorf("legacy 'code' parameter leaked alongside JARM response: %s", flow.Location.String())
+	}
+	if flow.Error != "" {
+		t.Fatalf("authorize error=%s desc=%s", flow.Error, flow.ErrorDesc)
+	}
+	if flow.Location.RawFragment != "" || flow.Location.Fragment != "" {
+		t.Errorf("response_type=code with response_mode=jwt must resolve to query delivery; got fragment=%q in %s",
+			flow.Location.Fragment, flow.Location.String())
+	}
+
+	rawJWT := flow.Location.Query().Get("response")
+	if rawJWT == "" {
+		t.Fatalf("'response' parameter missing from callback: %s", flow.Location.String())
+	}
+
+	claims := decodeScenarioJWTClaims(t, rawJWT)
+
+	if got, _ := claims["code"].(string); got == "" {
+		t.Errorf("code claim missing or empty: %v", claims)
+	}
+	if got := claims["aud"]; got != rp.ID {
+		t.Errorf("aud=%v want %q", got, rp.ID)
+	}
+	if got := claims["iss"]; got != tk.Issuer {
+		t.Errorf("iss=%v want %q", got, tk.Issuer)
+	}
+	if got := claims["state"]; got != scenariokit.DefaultState {
+		t.Errorf("state=%v want %q", got, scenariokit.DefaultState)
+	}
+	if _, ok := claims["exp"].(float64); !ok {
+		t.Errorf("exp must be a JSON number: %T (claims=%v)", claims["exp"], claims)
+	}
+	if _, present := claims["scope"]; present {
+		t.Errorf("response_type=code JARM payload must NOT include scope: %v", claims)
+	}
+	if _, present := claims["error"]; present {
+		t.Errorf("error claim leaked on success path: %v", claims)
+	}
 }
 
 func TestScenario_JARM_012_JwtModeQueryForNone(t *testing.T) {

@@ -40,7 +40,14 @@ rows:
     behaviour: |
       A successful response_type="code token" redirect carries code,
       state, access_token, and iss in the fragment.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      Implicit / hybrid response_type is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
+      records the policy: "Bearer token の URL fragment 露出 — implicit
+      を持たないため自動的に不在." The OP advertises only
+      response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
+      deprecate the implicit grant for the same reason.
 
   - id: ISS-012
     severity: P0
@@ -50,7 +57,14 @@ rows:
       code, state, and id_token in the fragment; the iss claim is
       embedded inside the id_token (RFC 9207 implies a redirect-
       level iss as well).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      Implicit / hybrid response_type is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
+      records the policy: "Bearer token の URL fragment 露出 — implicit
+      を持たないため自動的に不在." The OP advertises only
+      response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
+      deprecate the implicit grant for the same reason.
 
   - id: ISS-013
     severity: P0
@@ -59,7 +73,14 @@ rows:
       A successful response_type="code id_token token" redirect
       carries code, state, id_token, access_token, token_type,
       expires_in, and scope in the fragment.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      Implicit / hybrid response_type is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
+      records the policy: "Bearer token の URL fragment 露出 — implicit
+      を持たないため自動的に不在." The OP advertises only
+      response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
+      deprecate the implicit grant for the same reason.
 
   - id: ISS-014
     severity: P0
@@ -68,7 +89,14 @@ rows:
       A successful response_type="id_token token" redirect carries
       state, id_token, access_token, token_type, expires_in, and
       scope in the fragment.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      Implicit / hybrid response_type is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
+      records the policy: "Bearer token の URL fragment 露出 — implicit
+      を持たないため自動的に不在." The OP advertises only
+      response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
+      deprecate the implicit grant for the same reason.
 
   - id: ISS-015
     severity: P0
@@ -76,7 +104,14 @@ rows:
     behaviour: |
       A successful response_type=id_token redirect carries state and
       id_token in the fragment.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      Implicit / hybrid response_type is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
+      records the policy: "Bearer token の URL fragment 露出 — implicit
+      を持たないため自動的に不在." The OP advertises only
+      response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
+      deprecate the implicit grant for the same reason.
 
   - id: ISS-016
     severity: P0
@@ -84,7 +119,8 @@ rows:
     behaviour: |
       A successful response_type=none redirect carries state and iss
       as query parameters.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "response_type=none is intentionally not supported. docs/plans/002-product-design.md line 2146 records the policy: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一\" — the OP advertises response_types_supported=[\"code\"] only. response_type=none is a session-check oddity that does not return tokens; it expands the attack surface (silent issuance with no envelope) without adding usable functionality."
 
   - id: ISS-017
     severity: P0
@@ -93,7 +129,7 @@ rows:
       With response_mode=jwt (any response_type), the redirect query
       carries the response JWT; the iss claim is embedded inside the
       JWT payload.
-    status: pending
+    status: active
 
   - id: ISS-020
     severity: P0
@@ -110,7 +146,8 @@ rows:
     behaviour: |
       A response_type=none error redirects back with error, iss, and
       state as query parameters.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "response_type=none is intentionally not supported. docs/plans/002-product-design.md line 2146 records the policy: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一\" — the OP advertises response_types_supported=[\"code\"] only. response_type=none is a session-check oddity that does not return tokens; it expands the attack surface (silent issuance with no envelope) without adding usable functionality."
 
   - id: ISS-022
     severity: P0
@@ -127,4 +164,5 @@ rows:
       A response_mode=jwt + response_type="code id_token" error
       redirects back with the response JWT (which carries iss) in
       the fragment.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Implicit / hybrid response_type is intentionally not supported. docs/plans/002-product-design.md §\"Out-of-scope\" (line 2167) records the policy: \"Bearer token の URL fragment 露出 — implicit を持たないため自動的に不在.\" The OP advertises only response_types_supported=[\"code\"]; OAuth 2.1 / RFC 9700 §1.4 deprecate the implicit grant for the same reason."

@@ -24,7 +24,8 @@ rows:
       When id_token_signed_response_alg=HS256, /token returns an
       id_token with three compact-JWS segments and a non-empty
       signature; the JWS header alg is HS256.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "ES256 sole-issuance policy (002 §J.5 / line 2163: \"ES256 単一\"). HS256 issuance is not supported because the symmetric-key model violates §J.5 and §non-goals (line 2159)."
     notes: needs RP simulator + per-client alg pinning.
 
   - id: SIG-002
@@ -42,7 +43,8 @@ rows:
     behaviour: |
       For RS256 / ES256 / PS256, at_hash and c_hash are the left 128
       bits of SHA-256 (base64url, 22 chars).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: ES256-only issuance per 002 §J.5 (line 2248). RS*/PS*/ES384/ES512 are not minted by the OP; only verification-side acceptance is wider (line 2255).
     notes: needs hybrid response_type wiring.
 
   - id: SIG-011
@@ -51,7 +53,8 @@ rows:
     behaviour: |
       For RS384 / ES384 / PS384, at_hash and c_hash are the left 192
       bits of SHA-384 (base64url, 32 chars).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: ES256-only issuance per 002 §J.5 (line 2248). RS*/PS*/ES384/ES512 are not minted by the OP; only verification-side acceptance is wider (line 2255).
 
   - id: SIG-012
     severity: P0
@@ -59,7 +62,8 @@ rows:
     behaviour: |
       For RS512 / ES512 / PS512, at_hash and c_hash are the left 256
       bits of SHA-512 (base64url, 43 chars).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: ES256-only issuance per 002 §J.5 (line 2248). RS*/PS*/ES384/ES512 are not minted by the OP; only verification-side acceptance is wider (line 2255).
 
   - id: SIG-013
     severity: P1

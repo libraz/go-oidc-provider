@@ -79,7 +79,7 @@ rows:
     behaviour: |
       /token/revocation behaves identically to /token (gated actual,
       always-open preflight).
-    status: pending
+    status: active
 
   - id: COR-014
     severity: P0
@@ -87,7 +87,7 @@ rows:
     behaviour: |
       /token/introspection behaves identically to /token (gated actual,
       always-open preflight).
-    status: pending
+    status: active
 
   - id: COR-015
     severity: P0

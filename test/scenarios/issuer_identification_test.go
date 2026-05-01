@@ -12,9 +12,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -147,9 +149,73 @@ func TestScenario_ISS_016_NoneResponseTypeQueryCarriesIss(t *testing.T) {
 	t.Skip("pending: ISS-016")
 }
 
+// TestScenario_ISS_017_JARMResponseEmbedsIssClaim checks that, with
+// the JARM feature enabled, an authorize success delivered via
+// response_mode=jwt carries the response JWT in the redirect's query
+// string and embeds the OP's `iss` value as a claim inside the JWT
+// payload (rather than as a bare query parameter).
+//
+// Spec: RFC 9207 §2 + JARM §4.1.
 func TestScenario_ISS_017_JARMResponseEmbedsIssClaim(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-017")
+
+	const (
+		clientID = "rp-iss-017"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-iss-017-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JARM)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		ResponseTypes:           []string{"code"},
+		GrantTypes:              []string{"authorization_code"},
+	})
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+		Extra:       url.Values{"response_mode": {"jwt"}},
+	})
+
+	if flow.Error != "" {
+		t.Fatalf("authorize error=%s desc=%s", flow.Error, flow.ErrorDesc)
+	}
+	if flow.Location == nil {
+		t.Fatal("captured callback Location is nil")
+	}
+	if flow.Location.RawFragment != "" || flow.Location.Fragment != "" {
+		t.Errorf("response_type=code with response_mode=jwt must resolve to query delivery; got fragment=%q in %s",
+			flow.Location.Fragment, flow.Location.String())
+	}
+	if got := flow.Location.Query().Get("iss"); got != "" {
+		t.Errorf("response_mode=jwt must not stamp a bare iss query parameter (iss travels inside the JWT); got %q", got)
+	}
+
+	rawJWT := flow.Location.Query().Get("response")
+	if rawJWT == "" {
+		t.Fatalf("'response' parameter missing from JARM callback: %s", flow.Location.String())
+	}
+
+	claims := decodeScenarioJWTClaims(t, rawJWT)
+	iss, _ := claims["iss"].(string)
+	if iss == "" {
+		t.Fatalf("iss claim missing from JARM payload: %v", claims)
+	}
+	if iss != tk.Issuer {
+		t.Errorf("iss=%q want %q", iss, tk.Issuer)
+	}
 }
 
 // TestScenario_ISS_020_RegularErrorRedirectCarriesIss checks that a

@@ -8,51 +8,482 @@ package scenarios_test
 //   - RFC 9068 §6 — JWT access tokens not introspectable
 //   - RFC 9701 — JWT Response for OAuth Token Introspection (cross-ref)
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
+)
 
 func TestScenario_INT_001_DiscoveryAdvertisesIntrospectionEndpoint(t *testing.T) {
 	t.Parallel()
 	t.Skip("pending: INT-001")
 }
 
+// TestScenario_INT_002_AccessTokenIntrospectNoHint drives a full code
+// → /token → /introspect round-trip for a confidential client and
+// asserts that introspecting its own access token (without a
+// token_type_hint) returns active=true with the metadata bundle RFC
+// 7662 §2.2 names: client_id, scope, sub, iss, iat, exp,
+// token_type=Bearer, and aud.
+//
+// Spec: RFC 7662 §2.2.
 func TestScenario_INT_002_AccessTokenIntrospectNoHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-002")
+
+	const (
+		clientID = "rp-int-002"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-002-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.AccessToken == "" {
+		t.Fatalf("/token status=%d body=%v, want 200 with access_token", tok.StatusCode, tok.Raw)
+	}
+
+	form := url.Values{"token": {tok.AccessToken}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+
+	if active, _ := env["active"].(bool); !active {
+		t.Fatalf("active=%v want true; body=%s", env["active"], string(body))
+	}
+	if got, _ := env["client_id"].(string); got != rp.ID {
+		t.Errorf("client_id=%v want %q", env["client_id"], rp.ID)
+	}
+	if got, _ := env["sub"].(string); got != scenariokit.DefaultSubject {
+		t.Errorf("sub=%v want %q", env["sub"], scenariokit.DefaultSubject)
+	}
+	if got, _ := env["iss"].(string); got != tk.Issuer {
+		t.Errorf("iss=%v want %q", env["iss"], tk.Issuer)
+	}
+	if got, _ := env["token_type"].(string); got != "Bearer" {
+		t.Errorf("token_type=%v want Bearer", env["token_type"])
+	}
+	if got, _ := env["scope"].(string); got == "" {
+		t.Errorf("scope missing from active introspection: %v", env)
+	}
+	if _, ok := env["iat"].(float64); !ok {
+		t.Errorf("iat must be a JSON number: %T", env["iat"])
+	}
+	if _, ok := env["exp"].(float64); !ok {
+		t.Errorf("exp must be a JSON number: %T", env["exp"])
+	}
+	auds, _ := env["aud"].([]any)
+	if len(auds) == 0 {
+		// RFC 7662 allows aud as string OR array; accept either.
+		if got, _ := env["aud"].(string); got == "" {
+			t.Errorf("aud missing from active introspection: %v", env)
+		}
+	}
 }
 
+// TestScenario_INT_003_AccessTokenIntrospectCorrectHint mirrors
+// INT-002 but supplies token_type_hint=access_token. RFC 7662 §2.1
+// makes the hint advisory only — the endpoint MUST still resolve the
+// access token and return active=true with the standard envelope.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_003_AccessTokenIntrospectCorrectHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-003")
+	assertAccessTokenIntrospectActiveWithHint(t, "rp-int-003", "access_token")
 }
 
+// TestScenario_INT_004_AccessTokenIntrospectWrongHint supplies the
+// wrong hint (token_type_hint=refresh_token) for an access token. The
+// endpoint MUST treat the hint as an optimization hint only and still
+// resolve the underlying access token, returning active=true.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_004_AccessTokenIntrospectWrongHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-004")
+	assertAccessTokenIntrospectActiveWithHint(t, "rp-int-004", "refresh_token")
 }
 
+// TestScenario_INT_005_AccessTokenIntrospectUnrecognisedHint supplies
+// a hint value the OP does not advertise. RFC 7662 §2.1 says the
+// endpoint MUST ignore unrecognised hints rather than reject the
+// request, so the response is the standard active=true envelope.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_005_AccessTokenIntrospectUnrecognisedHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-005")
+	assertAccessTokenIntrospectActiveWithHint(t, "rp-int-005", "foobar")
 }
 
+// assertAccessTokenIntrospectActiveWithHint drives a code → /token →
+// /introspect round-trip for a confidential client and asserts the
+// hint-bearing introspection still returns active=true with at least
+// the spec-required claims. The clientIDPrefix scopes the testkit
+// fixture so parallel sub-tests do not collide.
+func assertAccessTokenIntrospectActiveWithHint(t *testing.T, clientID, hint string) {
+	t.Helper()
+
+	const callback = "https://rp.testkit.invalid/callback"
+	clientSecret := clientID + "-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.AccessToken == "" {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+
+	form := url.Values{
+		"token":           {tok.AccessToken},
+		"token_type_hint": {hint},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); !active {
+		t.Fatalf("active=%v want true with hint=%q; body=%s", env["active"], hint, string(body))
+	}
+	if got, _ := env["client_id"].(string); got != rp.ID {
+		t.Errorf("client_id=%v want %q", env["client_id"], rp.ID)
+	}
+	if got, _ := env["token_type"].(string); got != "Bearer" {
+		t.Errorf("token_type=%v want Bearer", env["token_type"])
+	}
+}
+
+// TestScenario_INT_006_RefreshTokenIntrospectNoHint drives a code →
+// /token (offline_access) → /introspect round-trip and asserts that
+// introspecting an opaque refresh token without a hint resolves
+// against the refresh-token store and returns active=true plus the
+// owning client_id, scope, and sub.
+//
+// Spec: RFC 7662 §2.2.
 func TestScenario_INT_006_RefreshTokenIntrospectNoHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-006")
+
+	const (
+		clientID = "rp-int-006"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-006-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithFeature(feature.Introspect),
+			op.WithStrictOfflineAccess(),
+		),
+	)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid offline_access",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.RefreshToken == "" {
+		t.Fatalf("/token status=%d body=%v, want 200 with refresh_token (offline_access scope?)", tok.StatusCode, tok.Raw)
+	}
+
+	form := url.Values{"token": {tok.RefreshToken}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); !active {
+		t.Fatalf("active=%v want true; body=%s", env["active"], string(body))
+	}
+	if got, _ := env["client_id"].(string); got != rp.ID {
+		t.Errorf("client_id=%v want %q", env["client_id"], rp.ID)
+	}
+	if got, _ := env["sub"].(string); got != scenariokit.DefaultSubject {
+		t.Errorf("sub=%v want %q", env["sub"], scenariokit.DefaultSubject)
+	}
+	if got, _ := env["scope"].(string); !strings.Contains(got, "offline_access") {
+		t.Errorf("scope=%q must include offline_access", got)
+	}
 }
 
+// TestScenario_INT_007_RefreshTokenIntrospectCorrectHint mirrors
+// INT-006 but supplies token_type_hint=refresh_token. The hint is
+// advisory; the endpoint MUST still resolve the refresh token and
+// return active=true.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_007_RefreshTokenIntrospectCorrectHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-007")
+	assertRefreshTokenIntrospectActiveWithHint(t, "rp-int-007", "refresh_token")
 }
 
+// TestScenario_INT_008_RefreshTokenIntrospectWrongHint supplies the
+// wrong hint (token_type_hint=access_token) for a refresh token. The
+// endpoint MUST still resolve the underlying refresh token and return
+// active=true.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_008_RefreshTokenIntrospectWrongHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-008")
+	assertRefreshTokenIntrospectActiveWithHint(t, "rp-int-008", "access_token")
 }
 
+// TestScenario_INT_009_RefreshTokenIntrospectUnrecognisedHint supplies
+// a hint value the OP does not advertise. RFC 7662 §2.1 requires the
+// endpoint to ignore unrecognised hints and still resolve the token.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_009_RefreshTokenIntrospectUnrecognisedHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-009")
+	assertRefreshTokenIntrospectActiveWithHint(t, "rp-int-009", "foobar")
+}
+
+// assertRefreshTokenIntrospectActiveWithHint drives a code →
+// /token (offline_access) → /introspect round-trip and asserts that
+// the hint-bearing introspection of the resulting refresh token still
+// returns active=true with the standard claim subset.
+func assertRefreshTokenIntrospectActiveWithHint(t *testing.T, clientID, hint string) {
+	t.Helper()
+
+	const callback = "https://rp.testkit.invalid/callback"
+	clientSecret := clientID + "-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithFeature(feature.Introspect),
+			op.WithStrictOfflineAccess(),
+		),
+	)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid offline_access",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.RefreshToken == "" {
+		t.Fatalf("/token status=%d body=%v, want refresh_token", tok.StatusCode, tok.Raw)
+	}
+
+	form := url.Values{
+		"token":           {tok.RefreshToken},
+		"token_type_hint": {hint},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); !active {
+		t.Fatalf("active=%v want true with hint=%q; body=%s", env["active"], hint, string(body))
+	}
+	if got, _ := env["client_id"].(string); got != rp.ID {
+		t.Errorf("client_id=%v want %q", env["client_id"], rp.ID)
+	}
+	if got, _ := env["scope"].(string); !strings.Contains(got, "offline_access") {
+		t.Errorf("scope=%q must include offline_access", got)
+	}
 }
 
 func TestScenario_INT_010_ClientCredentialsIntrospectNoHint(t *testing.T) {
@@ -85,19 +516,210 @@ func TestScenario_INT_015_RSIntrospectionRespectsTokenSubjectType(t *testing.T) 
 	t.Skip("pending: INT-015")
 }
 
+// TestScenario_INT_016_ResponseCarriesNoStore confirms that every
+// /introspect response carries `Cache-Control: no-store`. RFC 7662 §4
+// makes this MUST: the introspection envelope is a snapshot of token
+// state and may not be reused, so caching agents must be told to drop
+// it. The check fires on a successful active=true response so the
+// header lives on the success path (the inactive branch is
+// straightforward by inspection of the same handler).
+//
+// Spec: RFC 7662 §4.
 func TestScenario_INT_016_ResponseCarriesNoStore(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-016")
+
+	const (
+		clientID = "rp-int-016"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-016-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+	})
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.AccessToken == "" {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+
+	form := url.Values{"token": {tok.AccessToken}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	cacheControl := resp.Header.Get("Cache-Control")
+	if !strings.Contains(cacheControl, "no-store") {
+		t.Errorf("Cache-Control=%q must contain no-store", cacheControl)
+	}
 }
 
+// TestScenario_INT_017_MissingTokenParameterRejected POSTs an
+// authenticated /introspect request whose form body omits the `token`
+// parameter entirely. RFC 7662 §2.1 makes `token` REQUIRED; the OP
+// MUST reject the call with 400 invalid_request and an
+// error_description that names the missing parameter so an embedder
+// can self-correct without guessing.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_017_MissingTokenParameterRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-017")
+
+	const clientID = "rp-int-017"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-017-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	form := url.Values{}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if got, _ := env["error"].(string); got != "invalid_request" {
+		t.Errorf("error=%q want invalid_request (raw=%s)", got, string(body))
+	}
+	desc, _ := env["error_description"].(string)
+	if !strings.Contains(desc, "token") {
+		t.Errorf("error_description=%q must name the missing 'token' parameter", desc)
+	}
 }
 
+// TestScenario_INT_018_NonsenseTokenReturnsActiveFalse confirms that
+// an authenticated client submitting an arbitrary, unrelated string
+// as the token parameter receives 200 with body {"active": false}.
+// RFC 7662 §2.2 requires the inactive shape to omit every other
+// claim so a probing client cannot infer anything about the token's
+// existence.
+//
+// Spec: RFC 7662 §2.2.
 func TestScenario_INT_018_NonsenseTokenReturnsActiveFalse(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-018")
+
+	const clientID = "rp-int-018"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-018-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	form := url.Values{"token": {"this-token-was-never-issued-by-the-op"}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); active {
+		t.Fatalf("active=true for unknown token; body=%s", string(body))
+	}
+	for _, leak := range []string{"sub", "client_id", "scope", "iat", "exp", "iss", "token_type", "aud", "jti"} {
+		if _, present := env[leak]; present {
+			t.Errorf("inactive response leaked %q: %v", leak, env)
+		}
+	}
 }
 
 func TestScenario_INT_019_PublicClientCannotInspectOtherTokens(t *testing.T) {
@@ -105,24 +727,378 @@ func TestScenario_INT_019_PublicClientCannotInspectOtherTokens(t *testing.T) {
 	t.Skip("pending: INT-019")
 }
 
+// TestScenario_INT_020_BadClientAuthEmitsAuditError drives a
+// /introspect POST whose Basic-auth header carries the right
+// client_id but the wrong secret. The OP MUST reject with 401
+// invalid_client AND emit a single "introspection.error" audit event
+// carrying the failing client_id so SOC tooling can detect probing
+// for a known client_id even though the wire response stays generic.
+//
+// Spec: RFC 6749 §2.3 / RFC 7662 §2.1.
 func TestScenario_INT_020_BadClientAuthEmitsAuditError(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-020")
+
+	const clientID = "rp-int-020"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-020-correct-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	auditCap := scenariokit.NewAuditCapture()
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithFeature(feature.Introspect),
+			op.WithAuditLogger(auditCap.Logger()),
+		),
+	)
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	form := url.Values{"token": {"any-value"}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, "wrong-secret")
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, raw)
+	}
+
+	events := auditCap.EventsByName(string(op.AuditIntrospectionError))
+	if len(events) != 1 {
+		t.Fatalf("got %d %q events, want exactly 1; all=%+v",
+			len(events), op.AuditIntrospectionError, auditCap.Events())
+	}
+	ev := events[0]
+	var gotClientID string
+	for _, attr := range ev.Attrs {
+		if attr.Key == "client_id" {
+			gotClientID = attr.Value.String()
+			break
+		}
+	}
+	if gotClientID != clientID {
+		t.Errorf("audit event client_id=%q want %q (attrs=%+v)",
+			gotClientID, clientID, ev.Attrs)
+	}
 }
 
+// TestScenario_INT_021_AuthorizationCodeIsNotIntrospectable mints a
+// fresh authorization code via the code flow and submits it to the
+// introspection endpoint as the token parameter. RFC 7662's
+// introspection contract covers access and refresh tokens only;
+// authorization codes are a transient grant artefact and MUST resolve
+// to {"active": false} so a probing client cannot use the
+// introspection endpoint to enumerate live codes.
+//
+// Spec: RFC 7662 §2.2 (token semantics — codes are not tokens).
 func TestScenario_INT_021_AuthorizationCodeIsNotIntrospectable(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-021")
+
+	const (
+		clientID = "rp-int-021"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-021-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	form := url.Values{"token": {flow.Code}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); active {
+		t.Fatalf("active=true for authorization code; codes are not introspectable. body=%s", string(body))
+	}
+	for _, leak := range []string{"sub", "client_id", "scope", "iat", "exp", "iss", "token_type", "jti"} {
+		if _, present := env[leak]; present {
+			t.Errorf("inactive code response leaked %q: %v", leak, env)
+		}
+	}
 }
 
+// TestScenario_INT_022_ExpiredAccessTokenReturnsActiveFalse confirms
+// that an access token presented after its exp has elapsed resolves
+// to {"active": false} on the introspection endpoint. The wall clock
+// is driven via [op.Clock] so the test does not sleep.
+//
+// Spec: RFC 7662 §2.2.
 func TestScenario_INT_022_ExpiredAccessTokenReturnsActiveFalse(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-022")
+
+	const (
+		clientID = "rp-int-022"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-022-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	clock := newAdvanceableClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	tk := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithFeature(feature.Introspect),
+			op.WithAccessTokenTTL(2*time.Minute),
+		),
+	)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.AccessToken == "" {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+
+	// Push past WithAccessTokenTTL so the introspector observes exp <= now.
+	clock.Advance(10 * time.Minute)
+
+	form := url.Values{"token": {tok.AccessToken}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); active {
+		t.Fatalf("active=true for expired access token; body=%s", string(body))
+	}
+	for _, leak := range []string{"sub", "client_id", "scope", "iat", "exp", "iss", "token_type", "jti"} {
+		if _, present := env[leak]; present {
+			t.Errorf("inactive expired-token response leaked %q: %v", leak, env)
+		}
+	}
 }
 
+// TestScenario_INT_023_ConsumedRefreshTokenReturnsActiveFalse drives a
+// code → /token (offline_access) round-trip, then exchanges the
+// resulting refresh token for a fresh pair to consume it via rotation,
+// and finally asserts that introspecting the *original* refresh token
+// returns 200 {"active": false} with no metadata leaked. RFC 7662 §2.2
+// requires inactive tokens to surface only the active=false envelope so
+// a probing client cannot infer that the token ever existed.
+//
+// Spec: RFC 7662 §2.2 / RFC 6749 §6.
 func TestScenario_INT_023_ConsumedRefreshTokenReturnsActiveFalse(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-023")
+
+	const (
+		clientID = "rp-int-023"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-023-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithFeature(feature.Introspect),
+			op.WithStrictOfflineAccess(),
+		),
+	)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid offline_access",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.RefreshToken == "" {
+		t.Fatalf("/token status=%d body=%v, want 200 with refresh_token (offline_access scope?)", tok.StatusCode, tok.Raw)
+	}
+	originalRefresh := tok.RefreshToken
+
+	// Consume the original refresh token by rotating it through /token.
+	rotateForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {originalRefresh},
+	}
+	rotateReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(rotateForm.Encode()))
+	if err != nil {
+		t.Fatalf("build /token rotate request: %v", err)
+	}
+	rotateReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rotateReq.SetBasicAuth(rp.ID, clientSecret)
+
+	rotateResp, err := tk.HTTPClient(nil).Do(rotateReq)
+	if err != nil {
+		t.Fatalf("POST /token rotate: %v", err)
+	}
+	rotateBody, _ := io.ReadAll(rotateResp.Body)
+	_ = rotateResp.Body.Close()
+	if rotateResp.StatusCode != http.StatusOK {
+		t.Fatalf("rotate /token status=%d want 200 body=%s", rotateResp.StatusCode, rotateBody)
+	}
+
+	form := url.Values{"token": {originalRefresh}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); active {
+		t.Fatalf("active=true for consumed refresh token; body=%s", string(body))
+	}
+	for _, leak := range []string{"sub", "client_id", "scope", "iat", "exp", "iss", "token_type", "aud", "jti"} {
+		if _, present := env[leak]; present {
+			t.Errorf("inactive consumed-refresh response leaked %q: %v", leak, env)
+		}
+	}
 }
 
 func TestScenario_INT_024_AdapterTypeMismatchHandledSafely(t *testing.T) {

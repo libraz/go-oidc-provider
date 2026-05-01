@@ -111,7 +111,7 @@ rows:
       Every interpolated value (state, error_description,
       redirect_uri, etc.) MUST be HTML-escaped when rendering the
       error page.
-    status: pending
+    status: active
 
   - id: ERR-032
     severity: P1

@@ -51,7 +51,8 @@ rows:
       response_type=code id_token without PKCE; PKCE is NOT mandatory
       at /authorize when an ID Token is co-issued (detached signature
       path).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-011
     severity: P0
@@ -61,7 +62,8 @@ rows:
       mandatory; missing code_challenge MUST yield 400 invalid_request
       with description "Authorization Server policy requires PKCE to
       be used for this request".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-012
     severity: P0
@@ -72,7 +74,8 @@ rows:
       alone), response_mode=jwt (JARM) MUST be required; otherwise
       the OP returns invalid_request with description "requested
       response_mode is not allowed for this client or request".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-013
     severity: P0
@@ -80,7 +83,8 @@ rows:
     behaviour: |
       The same response_mode=jwt requirement applies when the
       authorization request is sent as a signed Request Object (JAR).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-014
     severity: P0
@@ -89,7 +93,8 @@ rows:
       The Request Object MUST contain exp; missing exp triggers a
       fragment redirect with error=invalid_request_object and
       error_description="Request Object is missing the 'exp' claim".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-015
     severity: P0
@@ -98,7 +103,8 @@ rows:
       The Request Object MUST contain nbf; missing nbf yields
       invalid_request_object with description "Request Object is
       missing the 'nbf' claim".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-016
     severity: P0
@@ -107,7 +113,8 @@ rows:
       Request Object exp - nbf MUST be at most 3600 seconds; otherwise
       invalid_request_object with description "Request Object 'exp'
       claim too far from 'nbf' claim".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V1-017
     severity: P1
@@ -116,7 +123,8 @@ rows:
       A valid signed Request Object on the hybrid flow MUST still
       produce id_token, code and state in the fragment for
       response_type=code id_token.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "FAPI 1.0 Final (hybrid / signed front-channel) is intentionally not shipped as a profile. docs/plans/002-product-design.md line 2146 records: \"Hybrid flow ... OAuth 2.1 / FAPI 2.0 が code-only に統一.\" The OP advertises ProfileFAPI2Baseline and ProfileFAPI2MessageSigning only (line 2333-2334); FAPI 1.0 advanced requirements are subsumed into FAPI 2.0 Message Signing."
 
   - id: FAPI-V2-020
     severity: P0

@@ -9,9 +9,16 @@ package scenarios_test
 //   - OpenID Connect RP-Initiated Logout
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -110,14 +117,127 @@ func TestScenario_NA_013_PostLogoutIPv6WithoutPort(t *testing.T) {
 	t.Skip("pending: NA-013")
 }
 
+// TestScenario_NA_014_RegistrationRejectsNonLoopbackHTTPRedirect drives
+// the public /oidc/register endpoint with application_type=native and a
+// redirect_uri that uses plain http to a non-loopback host. RFC 8252
+// §7.3 (and §8.3) forbids the carve-out for non-loopback hosts; the OP
+// MUST reject the registration with 400 invalid_redirect_uri and the
+// error_description MUST name the loopback constraint so an embedder
+// reading the response can self-correct.
+//
+// Spec: RFC 8252 §7.3 / §8.3, OIDC Dynamic Client Registration §2.
 func TestScenario_NA_014_RegistrationRejectsNonLoopbackHTTPRedirect(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-014")
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+	)
+	issued, err := tk.OP.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"application_type": "native",
+		"redirect_uris":    []string{"http://rp.example.com/op/callback"},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/register", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issued.Value)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /oidc/register: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(raw))
+	}
+	if got, _ := env["error"].(string); got != "invalid_redirect_uri" {
+		t.Errorf("error=%q want invalid_redirect_uri (raw=%s)", got, string(raw))
+	}
+	desc, _ := env["error_description"].(string)
+	if !strings.Contains(desc, "loopback") {
+		t.Errorf("error_description=%q must name the loopback carve-out", desc)
+	}
 }
 
+// TestScenario_NA_015_RegistrationRejectsNonLoopbackHTTPPostLogout drives
+// the public /oidc/register endpoint with a loopback http redirect_uri
+// (so the OP infers native from the redirect_uri shape per RFC 8252
+// §7.3) and a non-loopback http post_logout_redirect_uri. OIDC
+// RP-Initiated Logout 1.0 §3 inherits the native loopback constraint;
+// the OP MUST reject the registration with 400 invalid_client_metadata
+// and the error_description MUST name both the offending field and the
+// loopback carve-out so an embedder reading the response can
+// self-correct.
+//
+// Spec: RFC 8252 §7.3, OIDC RP-Initiated Logout 1.0 §3.
 func TestScenario_NA_015_RegistrationRejectsNonLoopbackHTTPPostLogout(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-015")
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+	)
+	issued, err := tk.OP.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"redirect_uris":             []string{"http://127.0.0.1/op/callback"},
+		"post_logout_redirect_uris": []string{"http://rp.example.com/op/logout"},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/register", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issued.Value)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /oidc/register: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(raw))
+	}
+	if got, _ := env["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata (raw=%s)", got, string(raw))
+	}
+	desc, _ := env["error_description"].(string)
+	if !strings.Contains(desc, "post_logout_redirect_uris") {
+		t.Errorf("error_description=%q must name the post_logout_redirect_uris field", desc)
+	}
+	if !strings.Contains(desc, "loopback") {
+		t.Errorf("error_description=%q must name the loopback carve-out", desc)
+	}
 }
 
 func assertNativeLoopbackAuthorize(t *testing.T, registered, requested string) {

@@ -36,7 +36,8 @@ rows:
       client) hook that fails closed: the default rejects with
       invalid_target ("resource indicator is missing, or unknown") so
       unconfigured resources are denied.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Dynamic getResourceServerInfo(ctx, resource, client) hook is not exposed. The OP relies on the per-client store.Client.Resources []string allowlist (RI-010/011/030 cover that path). docs/plans/002 favours narrow, declarative configuration over imperative hooks because a per-resource hook expands the attack surface (an embedder bug → bad audience) without adding capability the allowlist cannot already express.
 
   - id: RI-010
     severity: P0
@@ -257,7 +258,7 @@ rows:
     behaviour: |
       grant_type=client_credentials with an explicit resource MUST
       yield an access token whose aud equals that resource.
-    status: pending
+    status: active
 
   - id: RI-061
     severity: P1

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -404,9 +405,77 @@ func TestScenario_RI_054_CIBAUseGrantedResourceFalseLeavesAudienceUnset(t *testi
 	t.Skip("pending: RI-054")
 }
 
+// TestScenario_RI_060_ClientCredentialsBindsAudience verifies the
+// RFC 8707 §3 contract on the client_credentials grant: a request
+// carrying an explicit, allowlisted resource indicator MUST yield an
+// access token whose "aud" equals that resource. The fall-back to the
+// issuer audience covers the absent-resource path; this scenario
+// exercises the bound-audience path.
+//
+// Spec: RFC 8707 §3.
 func TestScenario_RI_060_ClientCredentialsBindsAudience(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-060")
+
+	const (
+		clientID = "rp-ri-060"
+		callback = "https://rp.testkit.invalid/callback"
+		resource = "https://api.example.com"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ri-060-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t)
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"read"},
+		Resources:               []string{resource},
+		GrantTypes:              []string{"client_credentials"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	form := url.Values{
+		"grant_type": {"client_credentials"},
+		"scope":      {"read"},
+		"resource":   {resource},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode /token body: %v", err)
+	}
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatalf("access_token missing on success path: %v", body)
+	}
+	claims := decodeScenarioAccessTokenClaims(t, at)
+	if got := claims["aud"]; got != resource {
+		t.Fatalf("access_token aud=%v want %q", got, resource)
+	}
 }
 
 func TestScenario_RI_061_ClientCredentialsDropsUnsupportedScopes(t *testing.T) {

@@ -42,7 +42,14 @@ rows:
       response JWT payload includes id_token, access_token,
       expires_in, token_type plus the JARM core claims aud=client_id,
       exp (number), state, iss=issuer, scope=openid.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      Implicit / hybrid response_type is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2167)
+      records the policy: "Bearer token の URL fragment 露出 — implicit
+      を持たないため自動的に不在." The OP advertises only
+      response_types_supported=["code"]; OAuth 2.1 / RFC 9700 §1.4
+      deprecate the implicit grant for the same reason.
 
   - id: JARM-011
     severity: P0
@@ -51,7 +58,7 @@ rows:
       For response_type=code, response_mode=jwt resolves to query
       delivery; the payload includes code, aud, exp, state, iss and
       does NOT include scope.
-    status: pending
+    status: active
 
   - id: JARM-012
     severity: P0

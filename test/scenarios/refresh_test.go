@@ -732,9 +732,110 @@ func TestScenario_REF_012_RotationEntitiesIncludeBothTokens(t *testing.T) {
 	t.Skip("pending: REF-012")
 }
 
+// TestScenario_REF_013_RotationFirstRedemptionMintsNewToken
+// exercises the refresh-token rotation contract: the first
+// redemption emits a single token.refreshed audit event, the
+// response carries a new refresh_token distinct from the original,
+// and the rotated id_token preserves the nonce stamped on the
+// originating authorization request.
+//
+// Spec: OIDC Core §12 / RFC 9700 §4.14.
 func TestScenario_REF_013_RotationFirstRedemptionMintsNewToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-013")
+
+	const (
+		clientID = "rp-ref-013"
+		callback = "https://rp.testkit.invalid/callback"
+		nonce    = "n-REF-013-original-authz-nonce"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ref-013-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	audit := scenariokit.NewAuditCapture()
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithAuditLogger(audit.Logger()),
+		op.WithStrictOfflineAccess(),
+	))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid offline_access",
+		Nonce:       nonce,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	first := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first /token status=%d body=%v", first.StatusCode, first.Raw)
+	}
+	if first.RefreshToken == "" {
+		t.Fatalf("first exchange missing refresh_token (offline_access scope?)")
+	}
+	if first.IDToken == "" {
+		t.Fatal("first exchange missing id_token")
+	}
+	firstClaims := decodeScenarioJWTClaims(t, first.IDToken)
+	if got := firstClaims["nonce"]; got != nonce {
+		t.Fatalf("initial id_token nonce=%v want %q (precondition)", got, nonce)
+	}
+
+	rotated := postRefreshToken(t, tk, first.RefreshToken, rp.ID, clientSecret)
+	if rotated.StatusCode != http.StatusOK {
+		t.Fatalf("/token refresh status=%d body=%v, want 200", rotated.StatusCode, rotated.Raw)
+	}
+
+	// Rotation contract: the response MUST carry a new refresh_token
+	// distinct from the presented one (RFC 9700 §4.14).
+	if rotated.RefreshToken == "" {
+		t.Fatal("rotated response missing refresh_token")
+	}
+	if rotated.RefreshToken == first.RefreshToken {
+		t.Fatalf("rotated refresh_token must differ from original; got %q == %q", rotated.RefreshToken, first.RefreshToken)
+	}
+
+	// OIDC Core §12: the rotated id_token MUST preserve the original
+	// nonce. This is the bug REF-013 anchors.
+	if rotated.IDToken == "" {
+		t.Fatal("rotated response missing id_token")
+	}
+	rotatedClaims := decodeScenarioJWTClaims(t, rotated.IDToken)
+	if got := rotatedClaims["nonce"]; got != nonce {
+		t.Fatalf("rotated id_token nonce=%v want %q (OIDC Core §12)", got, nonce)
+	}
+
+	// Audit surface: the rotation path emits exactly one
+	// token.refreshed event. The catalog row was updated to reflect
+	// the actually-emitted name (the previous wording cited
+	// refresh_token.consumed / refresh_token.saved which the OP
+	// does not emit today).
+	refreshed := audit.EventsByName("token.refreshed")
+	if len(refreshed) != 1 {
+		t.Fatalf("token.refreshed events=%d want 1; events=%+v", len(refreshed), audit.Events())
+	}
 }
 
 func TestScenario_REF_014_RotationDefaultScopeInheritsOriginal(t *testing.T) {
