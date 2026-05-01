@@ -2358,9 +2358,73 @@ func TestScenario_CA_ERR_02_ErrorDescriptionDoesNotLeakDetail(t *testing.T) {
 	t.Skip("pending: CA-ERR-02")
 }
 
+// TestScenario_CA_ERR_03_TimingEqualisedAcrossFailurePaths locks the
+// shape-equivalence defence against client-auth timing oracles. v1.0's
+// handler routes both "unknown client_id" and "wrong secret" through
+// clientauth.ErrCredentialsInvalid (lookupClient maps store.ErrNotFound
+// onto the same sentinel) so the wire response is byte-equivalent: same
+// status code, same RFC 6749 §5.2 envelope, same WWW-Authenticate
+// challenge. The structural defence (shared path + Argon2id constant-
+// time KDF) makes wall-clock timing assertions redundant; we lock the
+// observable property instead.
+//
+// Spec: RFC 6749 §10.4 / RFC 6749 §5.2.
 func TestScenario_CA_ERR_03_TimingEqualisedAcrossFailurePaths(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ERR-03")
+
+	tk := testkit.NewProvider(t)
+	const knownID = "ca-err-03-known"
+	//nolint:gosec // test fixture: not a real credential.
+	const knownSecret = "ca-err-03-known-secret"
+	registerCASecretClient(t, tk, knownID, knownSecret, "client_secret_basic")
+
+	// Unknown client: id never registered, any secret.
+	unknown := postTokenForm(t, tk, url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {"never-issued"},
+		"redirect_uri": {"https://rp.testkit.invalid/callback"},
+	}, func(r *http.Request) {
+		r.SetBasicAuth("ca-err-03-never-registered", "any-guess")
+	})
+
+	// Wrong secret: registered client, wrong secret.
+	wrong := postTokenForm(t, tk, url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {"never-issued"},
+		"redirect_uri": {"https://rp.testkit.invalid/callback"},
+	}, func(r *http.Request) {
+		r.SetBasicAuth(knownID, "wrong-secret")
+	})
+
+	if unknown.StatusCode != http.StatusUnauthorized || wrong.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status: unknown=%d wrong=%d, want both 401", unknown.StatusCode, wrong.StatusCode)
+	}
+	if unknown.StatusCode != wrong.StatusCode {
+		t.Errorf("status differs across failure modes: unknown=%d wrong=%d", unknown.StatusCode, wrong.StatusCode)
+	}
+	uErr, _ := unknown.Body["error"].(string)
+	wErr, _ := wrong.Body["error"].(string)
+	if uErr != "invalid_client" || wErr != "invalid_client" {
+		t.Fatalf("error: unknown=%q wrong=%q, want both invalid_client", uErr, wErr)
+	}
+	if uErr != wErr {
+		t.Errorf("error code differs: unknown=%q wrong=%q", uErr, wErr)
+	}
+	uDesc, _ := unknown.Body["error_description"].(string)
+	wDesc, _ := wrong.Body["error_description"].(string)
+	if uDesc != wDesc {
+		t.Errorf("error_description differs across failure modes:\n  unknown=%q\n  wrong  =%q", uDesc, wDesc)
+	}
+	// WWW-Authenticate challenge MUST be byte-identical: a probing
+	// client cannot tell unknown_client from wrong_secret apart by
+	// header diff. The realm parameter and any other parameters are
+	// part of the assertion.
+	if unknown.WWWAuth != wrong.WWWAuth {
+		t.Errorf("WWW-Authenticate differs:\n  unknown=%q\n  wrong  =%q", unknown.WWWAuth, wrong.WWWAuth)
+	}
+	if !strings.HasPrefix(strings.ToLower(unknown.WWWAuth), "basic ") {
+		t.Errorf("WWW-Authenticate=%q want Basic challenge after Basic-auth failure", unknown.WWWAuth)
+	}
 }
 
 func TestScenario_CA_ERR_04_AuthFlowRateLimitOPScoped(t *testing.T) {
