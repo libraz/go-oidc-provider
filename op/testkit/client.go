@@ -2,6 +2,7 @@ package testkit
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -21,6 +22,7 @@ import (
 //   - Scopes:                    ["openid", "profile", "email"]
 //   - TokenEndpointAuthMethod:   "client_secret_basic" (or "none" if PublicClient)
 //   - PublicClient:              false
+//   - JWKs:                      nil (set when registering a private_key_jwt client)
 type ClientFixture struct {
 	ID                      string
 	RedirectURIs            []string
@@ -32,6 +34,12 @@ type ClientFixture struct {
 	TokenEndpointAuthMethod string
 	SecretHash              string
 	PublicClient            bool
+
+	// JWKs is the raw JWK Set the client publishes for private_key_jwt /
+	// request-object verification. The testkit stores the bytes verbatim
+	// onto [store.Client.JWKs]; consumers parse them lazily. Leave nil
+	// for clients that authenticate via shared secret.
+	JWKs json.RawMessage
 }
 
 // RegisterClient seeds the testkit's [inmem.Store] with a client built from
@@ -63,6 +71,7 @@ func buildClient(fix ClientFixture) *store.Client {
 		TokenEndpointAuthMethod: fix.TokenEndpointAuthMethod,
 		SecretHash:              fix.SecretHash,
 		PublicClient:            fix.PublicClient,
+		JWKs:                    append(json.RawMessage(nil), fix.JWKs...),
 	}
 	if len(out.RedirectURIs) == 0 {
 		out.RedirectURIs = []string{"https://rp.testkit.invalid/callback"}
@@ -105,5 +114,8 @@ func cloneClient(c *store.Client) *store.Client {
 	cp.ResponseTypes = slices.Clone(c.ResponseTypes)
 	cp.Scopes = slices.Clone(c.Scopes)
 	cp.Resources = slices.Clone(c.Resources)
+	if c.JWKs != nil {
+		cp.JWKs = append(json.RawMessage(nil), c.JWKs...)
+	}
 	return &cp
 }

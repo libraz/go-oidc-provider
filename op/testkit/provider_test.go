@@ -102,6 +102,29 @@ func TestRegisterClient_DefaultsAndRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRegisterClient_JWKsRoundTrip verifies that a JWK Set supplied via
+// [testkit.ClientFixture.JWKs] is persisted onto [store.Client.JWKs] so
+// the private_key_jwt verifier can resolve client public keys without
+// the test having to bypass the fixture.
+func TestRegisterClient_JWKsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tk := testkit.NewProvider(t)
+	const raw = `{"keys":[{"kty":"EC","crv":"P-256","x":"AAA","y":"BBB","kid":"k-1"}]}`
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "fixture-jwks",
+		TokenEndpointAuthMethod: "private_key_jwt",
+		JWKs:                    []byte(raw),
+	})
+	got, err := tk.Store.Clients().GetClient(context.Background(), "fixture-jwks")
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if string(got.JWKs) != raw {
+		t.Fatalf("JWKs=%q want %q", string(got.JWKs), raw)
+	}
+}
+
 // TestRegisterClient_PublicClientPicksNoneAuth verifies the auth method
 // default flips to "none" when the fixture marks the client as public.
 func TestRegisterClient_PublicClientPicksNoneAuth(t *testing.T) {
