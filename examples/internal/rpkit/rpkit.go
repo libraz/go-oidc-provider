@@ -143,6 +143,18 @@ func (cf *CodeFlow) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cf *CodeFlow) login(w http.ResponseWriter, r *http.Request) {
+	cf.startLogin(w, r, "")
+}
+
+// startLogin generates a fresh state + PKCE pair, registers the
+// verifier under the state, and redirects the user agent to the OP's
+// /authorize endpoint. When acrValues is non-empty the helper appends
+// `acr_values=<acrValues>` and `prompt=login` to the authorize URL so
+// the OP runs a fresh authentication ceremony at the requested ACR
+// level. Both the standard /login route and [CodeFlow.StepUpHandler]
+// flow through this single helper to keep the PKCE / state /
+// claims-request wiring consistent.
+func (cf *CodeFlow) startLogin(w http.ResponseWriter, r *http.Request, acrValues string) {
 	state, err := randURL(16)
 	if err != nil {
 		http.Error(w, "rpkit: generate state: "+err.Error(), http.StatusInternalServerError)
@@ -169,7 +181,32 @@ func (cf *CodeFlow) login(w http.ResponseWriter, r *http.Request) {
 		authOpts = append(authOpts,
 			oauth2.SetAuthURLParam("claims", cf.claimsRequest))
 	}
+	if acrValues != "" {
+		authOpts = append(authOpts,
+			oauth2.SetAuthURLParam("acr_values", acrValues),
+			oauth2.SetAuthURLParam("prompt", "login"),
+		)
+	}
 	http.Redirect(w, r, cf.cfg.AuthCodeURL(state, authOpts...), http.StatusFound)
+}
+
+// StepUpHandler returns an [http.HandlerFunc] that begins a fresh
+// login with acrValues passed through as the OIDC `acr_values` query
+// parameter and `prompt=login` set so the OP forces re-authentication
+// even when an active session already exists. The OP's LoginFlow
+// rules (e.g. RuleACR) schedule the additional factors required to
+// satisfy the requested ACR before issuing a new authorization code;
+// on return the RP sees the requested level reflected in the verified
+// ID Token's `acr` claim.
+//
+// Mount the returned handler under any path; the example pattern is
+// /step-up alongside the existing /login. acrValues follows the OIDC
+// Core 1.0 §3.1.2.1 syntax: a single value or a space-separated list
+// of values in preference order.
+func (cf *CodeFlow) StepUpHandler(acrValues string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cf.startLogin(w, r, acrValues)
+	}
 }
 
 func (cf *CodeFlow) callback(w http.ResponseWriter, r *http.Request) {
