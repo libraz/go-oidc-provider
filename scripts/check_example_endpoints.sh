@@ -31,7 +31,7 @@ allowed=(
 # examples. We grep .go files (godoc + log strings) and filter out
 # the allowed paths; any remaining match is a divergence between
 # documented and actual endpoint shape.
-matches="$(grep -RhoE '/oidc/[a-zA-Z0-9_./-]+' examples/ | sort -u || true)"
+matches="$(grep -RhoIE '/oidc/[a-zA-Z0-9_./-]+' examples/ | sort -u || true)"
 
 bad=()
 while IFS= read -r m; do
@@ -51,7 +51,7 @@ if [ "${#bad[@]}" -gt 0 ]; then
   warn "examples reference /oidc paths not in the closed set:"
   for b in "${bad[@]}"; do
     printf '  - %s\n' "$b" >&2
-    grep -RnF "$b" examples/ >&2 || true
+    grep -RnIF "$b" examples/ >&2 || true
   done
   die "fix the example godoc / log strings to match op/endpoints.go defaults"
 fi
