@@ -82,10 +82,26 @@ func WithDefaultLocale(locale Locale) Option {
 	})
 }
 
-// WithLocale registers (or overrides) a [LocaleBundle] for the given
-// locale. The bundle replaces any previously registered bundle for
-// the same locale, including the seed en / ja catalogues, so
-// embedders can swap in their own brand-aligned strings.
+// WithLocale registers a [LocaleBundle] for the given locale. The
+// bundle is merged on top of any previously registered bundle for the
+// same locale at key granularity: the embedder's keys win on
+// collision, but keys the embedder did not supply are preserved from
+// the existing layer (the seed en / ja catalogue, or earlier
+// [WithLocale] calls). Embedders therefore override only the strings
+// they care about — typical brand-aligned overlays only redefine a
+// handful of titles or button labels and inherit everything else from
+// the seed catalogue.
+//
+// Layered overrides compose deterministically: repeated [WithLocale]
+// calls for the same locale apply in option-list order, so the last
+// call wins per key while earlier overrides remain authoritative for
+// keys the later call did not redefine.
+//
+// Locales the seed catalogue does not ship (e.g. "fr", "de") are
+// registered as-is on first call and merged on subsequent calls. The
+// resolver still falls back to the configured default locale (see
+// [WithDefaultLocale]) for any key the new locale's bundles never
+// supply.
 //
 // At least one bundle for the configured default locale (see
 // [WithDefaultLocale]) MUST be registered — either via this option

@@ -57,6 +57,36 @@ func LoadBundle(tag Tag, raw []byte) (*Bundle, error) {
 // Tag returns the locale tag the bundle was constructed for.
 func (b *Bundle) Tag() Tag { return b.tag }
 
+// Merge returns a new [Bundle] tagged with the receiver's tag whose
+// messages are the union of the receiver's and over's, with over's
+// entries winning on key collisions. Neither input is mutated. A nil
+// over yields a defensive copy of the receiver so callers can chain
+// without aliasing the original map.
+//
+// The receiver is treated as the base layer (typically a seed catalogue
+// shipped with the library) and over as the overlay (typically an
+// embedder-supplied bundle that overrides only the keys the embedder
+// cares about). Keys present only in the receiver are preserved; keys
+// present only in over are added; keys present in both take over's
+// value.
+//
+// Both bundles MUST share the same [Tag] — Merge mirrors a per-locale
+// overlay and combining different locales would silently lose
+// information. A tag mismatch returns a non-nil error so a programmer
+// bug fails loudly at the call site.
+func (b *Bundle) Merge(over *Bundle) (*Bundle, error) {
+	if over == nil {
+		return &Bundle{tag: b.tag, messages: maps.Clone(b.messages)}, nil
+	}
+	if b.tag != over.tag {
+		return nil, fmt.Errorf("i18n: Bundle.Merge: tag mismatch %q vs %q", b.tag, over.tag)
+	}
+	merged := make(map[string]string, len(b.messages)+len(over.messages))
+	maps.Copy(merged, b.messages)
+	maps.Copy(merged, over.messages)
+	return &Bundle{tag: b.tag, messages: merged}, nil
+}
+
 // Has reports whether the bundle carries a message for key.
 func (b *Bundle) Has(key string) bool {
 	_, ok := b.messages[key]

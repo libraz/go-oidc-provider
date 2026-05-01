@@ -238,8 +238,13 @@ func wrapWithProfileMiddleware(mux http.Handler, cfg *config) http.Handler {
 
 // buildLocaleResolver assembles the [i18n.Resolver] from the seed
 // bundles plus any embedder overrides registered through [WithLocale].
-// Override entries replace seeds with the same tag so an embedder
-// can ship branded copy without forking the library catalogue.
+// Override entries are merged on top of the existing bundle for the
+// same tag at key granularity: the embedder's keys win on collision,
+// keys present only on the existing bundle are preserved. This means
+// embedders override only the strings they care about without having
+// to re-supply the entire seed catalogue. Layered [WithLocale] calls
+// for the same tag compose by repeated merge, so the last call wins
+// per key.
 func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 	seeds, err := i18n.DefaultBundles()
 	if err != nil {
@@ -259,10 +264,21 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 		if b.internal == nil {
 			continue
 		}
-		if _, exists := bundles[b.internal.Tag()]; !exists {
-			order = append(order, b.internal.Tag())
+		tag := b.internal.Tag()
+		if existing, exists := bundles[tag]; exists {
+			merged, mergeErr := existing.Merge(b.internal)
+			if mergeErr != nil {
+				return nil, &Error{
+					Code:        codeConfiguration,
+					Description: "WithLocale: " + mergeErr.Error(),
+					Cause:       mergeErr,
+				}
+			}
+			bundles[tag] = merged
+			continue
 		}
-		bundles[b.internal.Tag()] = b.internal
+		order = append(order, tag)
+		bundles[tag] = b.internal
 	}
 	merged := make([]*i18n.Bundle, 0, len(order))
 	for _, t := range order {
@@ -895,8 +911,9 @@ func mountRevocationEndpoint(
 // The function is a no-op when no static clients were configured. It
 // fails [New] when:
 //
-//   - the configured store does not satisfy [store.ClientRegistry] (the
-//     embedder asked for static seeding but supplied a read-only store);
+//   - the configured store does not satisfy [store.ClientRegistry] and
+//     does not vend one through [clientRegistryProvider] (the embedder
+//     asked for static seeding but supplied a read-only store);
 //   - any [store.ClientRegistry.RegisterClient] call fails (e.g. the
 //     same id is registered twice).
 //
@@ -906,13 +923,9 @@ func seedStaticClients(cfg *config) error {
 	if len(cfg.staticClients) == 0 {
 		return nil
 	}
-	registry, ok := cfg.store.(store.ClientRegistry)
-	if !ok {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithStaticClients requires a Store that implements " +
-				"store.ClientRegistry; got a read-only store",
-		}
+	registry, err := resolveClientRegistry(cfg.store)
+	if err != nil {
+		return err
 	}
 	ctx := context.Background()
 	for i := range cfg.staticClients {
@@ -926,6 +939,40 @@ func seedStaticClients(cfg *config) error {
 		}
 	}
 	return nil
+}
+
+// clientRegistryProvider is the optional capability stores expose when
+// they cannot satisfy [store.ClientRegistry] directly but can vend one.
+// The composite adapter (op/storeadapter/composite) is the canonical
+// implementer: its godoc explains why it deliberately does NOT implement
+// [store.ClientRegistry] via a type assertion (a read-only Clients
+// backend would otherwise be silently coerced into a registry). The
+// interface is duck-typed because composite cannot import this package.
+type clientRegistryProvider interface {
+	ClientRegistry() (store.ClientRegistry, bool)
+}
+
+// resolveClientRegistry returns the [store.ClientRegistry] view of s.
+// It first tries a direct interface assertion (every storeadapter that
+// can register clients satisfies [store.ClientRegistry]); when that
+// fails it probes [clientRegistryProvider] so composite stores opt in
+// without re-implementing the registry surface. A store that does
+// neither is rejected with [codeConfiguration] so [WithStaticClients]
+// fails fast at [New].
+func resolveClientRegistry(s store.Store) (store.ClientRegistry, error) {
+	if registry, ok := s.(store.ClientRegistry); ok {
+		return registry, nil
+	}
+	if provider, ok := s.(clientRegistryProvider); ok {
+		if registry, has := provider.ClientRegistry(); has {
+			return registry, nil
+		}
+	}
+	return nil, &Error{
+		Code: codeConfiguration,
+		Description: "WithStaticClients requires a Store that implements " +
+			"store.ClientRegistry; got a read-only store",
+	}
 }
 
 // featureEnabled reports whether flag is in the configured feature list.

@@ -520,6 +520,16 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 // supported: that would silently treat every composite as registry-capable
 // and only fail at the moment a write call hits an unsupported backend. The
 // explicit accessor surfaces the capability gap at wiring time instead.
+//
+// op.WithStaticClients consumes this accessor automatically: when the
+// configured Store is a *Store, op probes ClientRegistry() and uses the
+// returned registry for seeding. Embedders therefore do not need to register
+// static clients against the underlying durable backend before wrapping it
+// in a composite — op.WithStaticClients(op.PublicClient{...}) flows through
+// the composite directly. If the routed Clients backend is read-only, the
+// probe returns (nil, false) and op.New rejects the configuration with the
+// same "ClientRegistry required" error a directly-supplied read-only store
+// would produce.
 func (s *Store) ClientRegistry() (store.ClientRegistry, bool) {
 	if s.registry == nil {
 		return nil, false

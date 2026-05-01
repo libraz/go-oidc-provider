@@ -89,6 +89,93 @@ func TestLoadBundle_RejectsNonString(t *testing.T) {
 	}
 }
 
+func TestBundle_MergeOverlay(t *testing.T) {
+	t.Parallel()
+
+	base, err := i18n.NewBundle(i18n.English, map[string]string{
+		"consent.title":     "Authorize {client_name}",
+		"consent.button.ok": "Allow",
+		"login.title":       "Sign in",
+		"login.password":    "Password",
+		"error.invalid_req": "Invalid request",
+	})
+	if err != nil {
+		t.Fatalf("base NewBundle: %v", err)
+	}
+	overlay, err := i18n.NewBundle(i18n.English, map[string]string{
+		"consent.title":  "Authorize {client_name} on Acme",
+		"login.password": "Passphrase",
+	})
+	if err != nil {
+		t.Fatalf("overlay NewBundle: %v", err)
+	}
+
+	merged, err := base.Merge(overlay)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+
+	if got, _ := merged.Get("consent.title", map[string]string{"client_name": "Acme"}); got != "Authorize Acme on Acme" {
+		t.Errorf("overlay should win for consent.title; got %q", got)
+	}
+	if got, _ := merged.Get("login.password", nil); got != "Passphrase" {
+		t.Errorf("overlay should win for login.password; got %q", got)
+	}
+	if got, _ := merged.Get("consent.button.ok", nil); got != "Allow" {
+		t.Errorf("base-only key consent.button.ok dropped; got %q", got)
+	}
+	if got, _ := merged.Get("login.title", nil); got != "Sign in" {
+		t.Errorf("base-only key login.title dropped; got %q", got)
+	}
+	if got, _ := merged.Get("error.invalid_req", nil); got != "Invalid request" {
+		t.Errorf("base-only key error.invalid_req dropped; got %q", got)
+	}
+
+	// Mutating the returned bundle's surface keys via a fresh overlay
+	// must not leak back into the base — the base must remain untouched.
+	if got, _ := base.Get("consent.title", map[string]string{"client_name": "Acme"}); got != "Authorize Acme" {
+		t.Errorf("base bundle was mutated by Merge; got %q", got)
+	}
+	if got, _ := base.Get("login.password", nil); got != "Password" {
+		t.Errorf("base bundle was mutated by Merge; got %q", got)
+	}
+}
+
+func TestBundle_MergeNilOverlay(t *testing.T) {
+	t.Parallel()
+
+	base, err := i18n.NewBundle(i18n.English, map[string]string{"login.title": "Sign in"})
+	if err != nil {
+		t.Fatalf("NewBundle: %v", err)
+	}
+	merged, err := base.Merge(nil)
+	if err != nil {
+		t.Fatalf("Merge(nil): %v", err)
+	}
+	if got, _ := merged.Get("login.title", nil); got != "Sign in" {
+		t.Errorf("nil overlay should preserve base entries; got %q", got)
+	}
+	if merged == base {
+		t.Errorf("Merge(nil) must return a fresh bundle, not the receiver")
+	}
+}
+
+func TestBundle_MergeRejectsTagMismatch(t *testing.T) {
+	t.Parallel()
+
+	en, err := i18n.NewBundle(i18n.English, map[string]string{"k": "v"})
+	if err != nil {
+		t.Fatalf("NewBundle(en): %v", err)
+	}
+	ja, err := i18n.NewBundle(i18n.Japanese, map[string]string{"k": "v"})
+	if err != nil {
+		t.Fatalf("NewBundle(ja): %v", err)
+	}
+	if _, err := en.Merge(ja); err == nil {
+		t.Fatal("Merge across mismatched tags must error")
+	}
+}
+
 func TestDefaultBundles_ContainsEnAndJa(t *testing.T) {
 	t.Parallel()
 
