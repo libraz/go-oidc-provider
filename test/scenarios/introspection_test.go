@@ -24,9 +24,45 @@ import (
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
+// TestScenario_INT_001_DiscoveryAdvertisesIntrospectionEndpoint
+// checks the discovery surface: when the introspection feature is
+// enabled, /.well-known/openid-configuration MUST list
+// "introspection_endpoint" pointing at /oidc/introspect, and MUST also
+// list "introspection_signing_alg_values_supported" with the OP's
+// JWT-response algorithms. RFC 9701 JWT-formatted responses are
+// available unconditionally whenever the endpoint is mounted, so the
+// alg list ships together with the endpoint URL — there is no
+// separate JWT-introspection feature toggle.
+//
+// Spec: RFC 8414 §2 / RFC 9701 §5.
 func TestScenario_INT_001_DiscoveryAdvertisesIntrospectionEndpoint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-001")
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+
+	_, _, doc := fetchDiscovery(t, tk.Server.URL)
+	endpoint, _ := doc["introspection_endpoint"].(string)
+	if endpoint == "" {
+		t.Fatalf("introspection_endpoint missing when Introspect feature is on; doc=%v", doc)
+	}
+	if !strings.HasSuffix(endpoint, "/oidc/introspect") {
+		t.Errorf("introspection_endpoint=%q must end with /oidc/introspect", endpoint)
+	}
+	algsRaw, present := doc["introspection_signing_alg_values_supported"]
+	if !present {
+		t.Fatalf("introspection_signing_alg_values_supported missing; RFC 9701 alg list ships with the endpoint")
+	}
+	algs, _ := algsRaw.([]any)
+	hasES256 := false
+	for _, a := range algs {
+		if s, _ := a.(string); s == "ES256" {
+			hasES256 = true
+			break
+		}
+	}
+	if !hasES256 {
+		t.Errorf("introspection_signing_alg_values_supported=%v must include ES256 (the OP's only signing alg)", algs)
+	}
 }
 
 // TestScenario_INT_002_AccessTokenIntrospectNoHint drives a full code

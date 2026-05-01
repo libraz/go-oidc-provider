@@ -20,13 +20,16 @@ description: |
 rows:
   - id: INT-001
     severity: P2
-    spec: RFC 8414 §2
+    spec: RFC 8414 §2 / RFC 9701 §5
     behaviour: |
       When introspection is enabled, the discovery document advertises
-      introspection_endpoint with a concrete URL; the
-      introspection_signing_alg_values_supported field is omitted
-      unless JWT introspection is also enabled.
-    status: pending
+      introspection_endpoint with a concrete URL and
+      introspection_signing_alg_values_supported with the OP's JWT-
+      response algorithms. RFC 9701 JWT-formatted responses are
+      available unconditionally whenever the introspection endpoint
+      is mounted (no separate feature toggle), so the alg list ships
+      together with the endpoint URL.
+    status: active
 
   - id: INT-002
     severity: P0
