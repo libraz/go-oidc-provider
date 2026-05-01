@@ -120,7 +120,7 @@ rows:
     behaviour: |
       When the iss feature is ON, discovery sets
       authorization_response_iss_parameter_supported: true.
-    status: pending
+    status: active
     cross_refs:
       - issuer_identification#ISS-001
 
@@ -151,7 +151,7 @@ rows:
       authorization_encryption_enc_values_supported, and
       response_modes_supported includes jwt, query.jwt, fragment.jwt,
       form_post.jwt, optionally web_message.jwt.
-    status: pending
+    status: active
     cross_refs:
       - jarm#JARM-001
 
@@ -180,7 +180,7 @@ rows:
       When PAR is ON, discovery advertises
       pushed_authorization_request_endpoint and
       require_pushed_authorization_requests (boolean, default false).
-    status: pending
+    status: active
 
   - id: DIS-036
     severity: P0

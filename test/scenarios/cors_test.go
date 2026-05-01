@@ -165,7 +165,7 @@ func TestScenario_COR_015_DeviceAuthorizationCORSGatedByClientPolicy(t *testing.
 
 func TestScenario_COR_020_PreflightAlwaysSucceedsForClientGatedEndpoints(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-020")
+	t.Skip("pending: COR-020 — needs clientBasedCORS hook wiring (testkit default uses strict-allowlist gating, not the client-based path this row exercises)")
 }
 
 func TestScenario_COR_030_NonBooleanPolicyReturns500WithCORS(t *testing.T) {

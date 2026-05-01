@@ -27,7 +27,7 @@ rows:
       expires_in, token_type, refresh_token, and scope; the ID Token
       preserves the original nonce and a grant.success audit event is
       emitted.
-    status: pending
+    status: active
 
   - id: REF-002
     severity: P2
@@ -46,7 +46,7 @@ rows:
       A refresh_token presented after its TTL is rejected with 400
       invalid_grant ("refresh token is expired") and a grant.error
       audit event is emitted.
-    status: pending
+    status: active
 
   - id: REF-004
     severity: P0
@@ -55,7 +55,7 @@ rows:
       A refresh_token presented by a different (registered) client is
       rejected with 400 invalid_grant ("client mismatch") and a
       grant.error audit event is emitted.
-    status: pending
+    status: active
 
   - id: REF-005
     severity: P0
@@ -65,7 +65,7 @@ rows:
       original grant is rejected with 400 invalid_scope; the
       description reads "refresh token missing requested scope" and
       the body's scope field carries the offending scope token.
-    status: pending
+    status: active
 
   - id: REF-006
     severity: P0
@@ -75,7 +75,7 @@ rows:
       original grant is rejected with 400 invalid_scope; the
       description reads "refresh token missing requested scopes" and
       the body's scope field lists every offending scope.
-    status: pending
+    status: active
 
   - id: REF-007
     severity: P1
@@ -84,7 +84,7 @@ rows:
       A refresh request that narrows scope and drops openid returns
       200 with an AccessToken whose scope reflects the narrowed value;
       the response body's scope matches and no id_token is issued.
-    status: pending
+    status: active
 
   - id: REF-008
     severity: P1
@@ -93,7 +93,7 @@ rows:
       A refresh request that narrows scope while keeping openid
       returns 200 with a reduced AccessToken.scope; the body returns
       the reduced scope and includes an id_token.
-    status: pending
+    status: active
 
   - id: REF-009
     severity: P0
@@ -112,7 +112,7 @@ rows:
       A refresh request without the refresh_token parameter is
       rejected with 400 invalid_request whose description matches
       "missing required parameter" and includes "refresh_token".
-    status: pending
+    status: active
 
   - id: REF-011
     severity: P0
@@ -121,7 +121,7 @@ rows:
       A well-formed but non-existent refresh_token value is rejected
       with 400 invalid_grant ("refresh token not found") and a
       grant.error audit event is emitted.
-    status: pending
+    status: active
 
   - id: REF-012
     severity: P1

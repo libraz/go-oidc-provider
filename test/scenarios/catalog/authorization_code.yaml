@@ -49,7 +49,7 @@ rows:
       RefreshToken with gty=authorization_code is issued alongside the
       AccessToken; both appear in the resolved entities together with
       Account, Grant, Client, and AuthorizationCode.
-    status: pending
+    status: active
 
   - id: AC-004
     severity: P1
@@ -57,7 +57,7 @@ rows:
     behaviour: |
       A successful token response carries Cache-Control: no-store so
       the response is not cached by intermediaries.
-    status: pending
+    status: active
 
   - id: AC-005
     severity: P0
@@ -121,7 +121,7 @@ rows:
       redirect_uri parameter at the token endpoint receives 400
       invalid_request with description "missing required parameter
       'redirect_uri'".
-    status: pending
+    status: active
 
   - id: AC-012
     severity: P0

@@ -172,14 +172,136 @@ func TestScenario_AC_002_NoOfflineAccessEntitiesResolved(t *testing.T) {
 	t.Skip("pending: AC-002")
 }
 
+// TestScenario_AC_003_OfflineAccessIssuesRefreshToken verifies that a
+// successful authorization_code exchange that requested offline_access
+// receives a refresh_token alongside access_token and id_token. The
+// refresh_token MUST be a non-empty string in the JSON envelope.
+//
+// Spec: RFC 6749 §4.1.3 / OIDC Core §11 (offline_access semantics).
 func TestScenario_AC_003_OfflineAccessIssuesRefreshToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-003")
+
+	const (
+		clientID = "rp-ac-003"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ac-003-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStrictOfflineAccess()))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid offline_access",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	if tok.AccessToken == "" {
+		t.Error("access_token missing")
+	}
+	if tok.IDToken == "" {
+		t.Error("id_token missing")
+	}
+	if tok.RefreshToken == "" {
+		t.Error("refresh_token missing on offline_access exchange")
+	}
 }
 
+// TestScenario_AC_004_TokenResponseIsNoStore verifies that a successful
+// /token response carries Cache-Control: no-store so intermediaries do
+// not cache the bearer credentials. RFC 6749 §5.1 makes this MUST.
+//
+// Spec: RFC 6749 §5.1 (Successful Response).
 func TestScenario_AC_004_TokenResponseIsNoStore(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-004")
+
+	const (
+		clientID = "rp-ac-004"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ac-004-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {flow.Code},
+		"redirect_uri":  {callback},
+		"code_verifier": {pkce.Verifier},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, string(body))
+	}
+	cc := resp.Header.Get("Cache-Control")
+	if !strings.Contains(strings.ToLower(cc), "no-store") {
+		t.Errorf("Cache-Control=%q must include no-store (RFC 6749 §5.1)", cc)
+	}
 }
 
 // TestScenario_AC_005_ExpiredCodeRejected checks that an authorization
@@ -628,9 +750,87 @@ func TestScenario_AC_010_RedirectURIMismatchRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_AC_011_MultiURIClientMustSendRedirectURI verifies the
+// canonical "<param> is required" wire phrasing of RFC 6749 §4.1.3:
+// a multi-URI client that omits `redirect_uri` at /token receives 400
+// invalid_request whose error_description names the parameter and
+// uses the "is required" form. AC-027 covers the looser
+// "must include redirect_uri somewhere" contract; this row pins the
+// phrase shape so the wire wording does not silently drift.
+//
+// Spec: RFC 6749 §4.1.3 / §5.2.
 func TestScenario_AC_011_MultiURIClientMustSendRedirectURI(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-011")
+
+	const (
+		clientID    = "rp-ac-011"
+		callback    = "https://rp.testkit.invalid/callback"
+		altCallback = "https://rp.testkit.invalid/alt"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ac-011-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback, altCallback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {flow.Code},
+		"code_verifier": {pkce.Verifier},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if got, _ := env["error"].(string); got != "invalid_request" {
+		t.Errorf("error=%q want invalid_request (raw=%s)", got, string(body))
+	}
+	desc, _ := env["error_description"].(string)
+	if !strings.Contains(desc, "redirect_uri") {
+		t.Errorf("error_description=%q must name redirect_uri", desc)
+	}
+	if !strings.Contains(desc, "is required") {
+		t.Errorf("error_description=%q must use canonical \"is required\" phrasing", desc)
+	}
 }
 
 func TestScenario_AC_012_AccountNotFoundRejected(t *testing.T) {

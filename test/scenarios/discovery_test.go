@@ -234,9 +234,29 @@ func TestScenario_DIS_021_RFC8414MetadataFieldsPresent(t *testing.T) {
 	t.Skip("pending: DIS-021")
 }
 
+// TestScenario_DIS_030_IssParameterSupportedWhenIssFeatureOn verifies
+// that when the issuer-identification feature is enabled (the default),
+// the discovery document advertises
+// `authorization_response_iss_parameter_supported: true`. RPs key off
+// this flag to know they can/should validate the redirect-level `iss`
+// parameter.
+//
+// Spec: RFC 9207 §3 (discovery field). Cross-ref:
+// issuer_identification#ISS-001.
 func TestScenario_DIS_030_IssParameterSupportedWhenIssFeatureOn(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-030")
+
+	p := testkit.NewProvider(t)
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+	got, ok := doc["authorization_response_iss_parameter_supported"]
+	if !ok {
+		t.Fatalf("authorization_response_iss_parameter_supported missing; iss feature is on by default")
+	}
+	b, isBool := got.(bool)
+	if !isBool || !b {
+		t.Errorf("authorization_response_iss_parameter_supported=%v want true", got)
+	}
 }
 
 func TestScenario_DIS_031_EncryptionMetadataAdvertisedWhenFeatureOn(t *testing.T) {
@@ -244,9 +264,50 @@ func TestScenario_DIS_031_EncryptionMetadataAdvertisedWhenFeatureOn(t *testing.T
 	t.Skip("pending: DIS-031")
 }
 
+// TestScenario_DIS_032_JARMMetadataAdvertisedWhenFeatureOn verifies
+// that when the JARM feature is enabled, the discovery document
+// advertises `authorization_signing_alg_values_supported` (so RPs can
+// pin a verification alg) and that `response_modes_supported` includes
+// the JARM modes `jwt`, `query.jwt`, `fragment.jwt`, and
+// `form_post.jwt`. The encryption-side fields
+// (`authorization_encryption_*`) are gated on the encryption feature
+// and are covered separately by DIS-031.
+//
+// Spec: JARM (OpenID Foundation FAPI 2.0).
 func TestScenario_DIS_032_JARMMetadataAdvertisedWhenFeatureOn(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-032")
+
+	p := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JARM)))
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+
+	algs, _ := doc["authorization_signing_alg_values_supported"].([]any)
+	if len(algs) == 0 {
+		t.Fatalf("authorization_signing_alg_values_supported missing/empty: %v",
+			doc["authorization_signing_alg_values_supported"])
+	}
+
+	modes, _ := doc["response_modes_supported"].([]any)
+	if len(modes) == 0 {
+		t.Fatalf("response_modes_supported missing/empty: %v", doc["response_modes_supported"])
+	}
+	want := map[string]bool{
+		"jwt":           false,
+		"query.jwt":     false,
+		"fragment.jwt":  false,
+		"form_post.jwt": false,
+	}
+	for _, raw := range modes {
+		mode, _ := raw.(string)
+		if _, ok := want[mode]; ok {
+			want[mode] = true
+		}
+	}
+	for mode, present := range want {
+		if !present {
+			t.Errorf("response_modes_supported=%v must include JARM mode %q", modes, mode)
+		}
+	}
 }
 
 func TestScenario_DIS_033_WebMessageResponseModeAdvertisedWhenOn(t *testing.T) {
@@ -259,9 +320,37 @@ func TestScenario_DIS_034_DeviceAuthorizationEndpointWhenDeviceOn(t *testing.T) 
 	t.Skip("pending: DIS-034")
 }
 
+// TestScenario_DIS_035_PAREndpointAdvertisedWhenPAROn verifies that
+// when the PAR feature (RFC 9126) is enabled, the discovery document
+// advertises `pushed_authorization_request_endpoint` and exposes
+// `require_pushed_authorization_requests` as a boolean. RPs key off
+// these fields to discover the PAR URL and to learn whether direct
+// /authorize calls are still permitted.
+//
+// Spec: RFC 9126 §5 (discovery metadata).
 func TestScenario_DIS_035_PAREndpointAdvertisedWhenPAROn(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-035")
+
+	p := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.PAR)))
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+
+	parURL, ok := doc["pushed_authorization_request_endpoint"].(string)
+	if !ok || parURL == "" {
+		t.Fatalf("pushed_authorization_request_endpoint missing/empty: %v",
+			doc["pushed_authorization_request_endpoint"])
+	}
+	if !strings.HasSuffix(parURL, "/par") && !strings.Contains(parURL, "/par") {
+		t.Errorf("pushed_authorization_request_endpoint=%q must reference a /par path", parURL)
+	}
+	// RFC 9126 §5 lists require_pushed_authorization_requests as an
+	// OPTIONAL boolean defaulting to false. When advertised it MUST be
+	// a JSON boolean; absence is equivalent to false.
+	if require, present := doc["require_pushed_authorization_requests"]; present {
+		if _, isBool := require.(bool); !isBool {
+			t.Errorf("require_pushed_authorization_requests=%v must be boolean", require)
+		}
+	}
 }
 
 func TestScenario_DIS_036_RequestObjectMetadataConsistent(t *testing.T) {

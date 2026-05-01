@@ -192,9 +192,73 @@ func TestScenario_JWKS_017_NoPrivateMaterialEverPublished(t *testing.T) {
 
 // --- Pending bindings --------------------------------------------------
 
+// TestScenario_JWKS_003_HandlerDoesNotBindEntities verifies that
+// /jwks is unauthenticated and stateless: it MUST NOT bind any
+// client/session/token entity, MUST NOT require Authorization, and
+// MUST NOT mint a Set-Cookie. The wire-level signal is that an
+// arbitrary bogus Authorization header has no effect on status or
+// body shape, and no Set-Cookie appears on either response.
+//
+// Spec: implementation contract — /jwks is the public key set, not a
+// per-caller resource.
 func TestScenario_JWKS_003_HandlerDoesNotBindEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-003")
+
+	p := testkit.NewProvider(t)
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+	jwksURI, _ := doc["jwks_uri"].(string)
+	if jwksURI == "" {
+		t.Fatalf("discovery missing jwks_uri")
+	}
+	if strings.HasPrefix(jwksURI, "https://") {
+		if slash := strings.Index(jwksURI[len("https://"):], "/"); slash >= 0 {
+			jwksURI = p.Server.URL + jwksURI[len("https://")+slash:]
+		}
+	}
+
+	get := func(authz string) (int, http.Header, map[string]any) {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, jwksURI, http.NoBody)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		if authz != "" {
+			req.Header.Set("Authorization", authz)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s authz=%q: %v", jwksURI, authz, err)
+		}
+		defer resp.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode jwks body: %v", err)
+		}
+		return resp.StatusCode, resp.Header.Clone(), body
+	}
+
+	statusAnon, headersAnon, bodyAnon := get("")
+	if statusAnon != http.StatusOK {
+		t.Fatalf("anonymous /jwks status=%d want 200", statusAnon)
+	}
+	if cookies := headersAnon.Values("Set-Cookie"); len(cookies) > 0 {
+		t.Errorf("anonymous /jwks emitted Set-Cookie=%v; handler must be stateless", cookies)
+	}
+
+	statusBogus, headersBogus, bodyBogus := get("Bearer not.a.real.token.value")
+	if statusBogus != http.StatusOK {
+		t.Errorf("bogus-Authorization /jwks status=%d want 200; bearer MUST be ignored", statusBogus)
+	}
+	if cookies := headersBogus.Values("Set-Cookie"); len(cookies) > 0 {
+		t.Errorf("bogus-Authorization /jwks emitted Set-Cookie=%v; handler must be stateless", cookies)
+	}
+
+	keysAnon, _ := bodyAnon["keys"].([]any)
+	keysBogus, _ := bodyBogus["keys"].([]any)
+	if len(keysAnon) != len(keysBogus) {
+		t.Errorf("body shape diverged when Authorization was supplied: anon=%d keys, bogus=%d keys",
+			len(keysAnon), len(keysBogus))
+	}
 }
 
 func TestScenario_JWKS_012_RSAKeyPublishesNAndE(t *testing.T) {
@@ -348,12 +412,61 @@ func TestScenario_JWKS_042_RotationIssuesNewKid(t *testing.T) {
 	t.Skip("pending: JWKS-042")
 }
 
+// TestScenario_JWKS_050_CacheControlAdvisedShortTTL verifies that the
+// /jwks response carries a Cache-Control header advertising a max-age
+// so browsers and intermediaries can cache the public key set. The
+// implementation publishes "public, max-age=86400, stale-while-
+// revalidate=3600" by default (a shorter window applies during a
+// rotation window). This row pins the wire-level cacheability
+// contract; the exact TTL is implementation policy.
+//
+// Spec: OIDC Discovery §3 (jwks_uri caching guidance).
 func TestScenario_JWKS_050_CacheControlAdvisedShortTTL(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-050")
+
+	p := testkit.NewProvider(t)
+
+	_, headers, _ := fetchJWKS(t, p.Server.URL)
+	cc := headers.Get("Cache-Control")
+	if cc == "" {
+		t.Fatalf("Cache-Control missing on /jwks; embedders need a cacheability hint")
+	}
+	if !strings.Contains(cc, "max-age=") {
+		t.Errorf("Cache-Control=%q must advertise max-age=...", cc)
+	}
+	if !strings.Contains(cc, "public") {
+		t.Errorf("Cache-Control=%q must include \"public\" — JWKS is not user-specific", cc)
+	}
 }
 
+// TestScenario_JWKS_051_JWKSEndpointIsCORSOpen verifies that /jwks is
+// reachable from any browser origin: both the actual GET and the
+// OPTIONS preflight emit Access-Control-Allow-Origin echoing the
+// caller's Origin or "*". Browsers MUST be able to cache the public
+// key set without a per-RP allowlist.
+//
+// Spec: Fetch CORS / OIDC Core §10. Cross-ref: cors#COR-003.
 func TestScenario_JWKS_051_JWKSEndpointIsCORSOpen(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-051")
+
+	p := testkit.NewProvider(t)
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+	jwksURI, _ := doc["jwks_uri"].(string)
+	if jwksURI == "" {
+		t.Fatalf("discovery missing jwks_uri")
+	}
+	if strings.HasPrefix(jwksURI, "https://") {
+		if slash := strings.Index(jwksURI[len("https://"):], "/"); slash >= 0 {
+			jwksURI = p.Server.URL + jwksURI[len("https://")+slash:]
+		}
+	}
+
+	for _, method := range []string{http.MethodGet, http.MethodOptions} {
+		_, headers := corsRequest(t, method, jwksURI)
+		allow := headers.Get("Access-Control-Allow-Origin")
+		if allow != corsOrigin && allow != "*" {
+			t.Errorf("[%s] Access-Control-Allow-Origin=%q want %q or *", method, allow, corsOrigin)
+		}
+	}
 }

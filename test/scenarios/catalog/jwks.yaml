@@ -33,7 +33,7 @@ rows:
     behaviour: |
       The handler MUST NOT bind any client/session/token entity —
       /jwks is unauthenticated and stateless.
-    status: pending
+    status: active
 
   - id: JWKS-010
     severity: P0
@@ -154,13 +154,13 @@ rows:
     behaviour: |
       Embedders SHOULD cache /jwks with a short TTL via
       Cache-Control: max-age=...
-    status: pending
+    status: active
 
   - id: JWKS-051
     severity: P0
     spec: Fetch CORS
     behaviour: |
       /jwks MUST be CORS-open for any origin.
-    status: pending
+    status: active
     cross_refs:
       - cors#COR-003
