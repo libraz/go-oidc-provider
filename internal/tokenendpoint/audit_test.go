@@ -2,9 +2,11 @@ package tokenendpoint_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +112,61 @@ func auditRefreshClient(tb testing.TB, f *fixture) (*store.Client, string) {
 		GrantTypes:              []string{"authorization_code", "refresh_token"},
 	})
 	return client, secret
+}
+
+// TestAudit_ClientAuthnFailure_BadSecret pins the failure-side
+// audit event: a /token POST whose Basic-auth header carries the
+// right client_id but the wrong secret MUST collapse to 401
+// invalid_client AND emit a single "client_authn.failure" audit
+// event carrying the failing client_id, the parsed auth method, and
+// an "invalid_client_credentials" reason code.
+//
+// Spec: RFC 6749 §5.2.
+func TestAudit_ClientAuthnFailure_BadSecret(t *testing.T) {
+	t.Parallel()
+
+	f, capture := auditFixture(t)
+	client, _ := auditRefreshClient(t, f)
+
+	form := url.Values{
+		"grant_type": {"refresh_token"},
+		"refresh_token": {
+			"opaque-token-the-rotation-path-never-sees-because-auth-fails-first",
+		},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		f.endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(client.ID, "wrong-secret")
+	resp, err := f.prov.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+
+	rec := capture.findEvent(t, "client_authn.failure")
+	if rec == nil {
+		t.Fatalf("client_authn.failure not emitted; capture=%s", capture.buf.String())
+	}
+	if got := rec["client_id"]; got != client.ID {
+		t.Errorf("client_id=%v want %q", got, client.ID)
+	}
+	extras, _ := rec["extras"].(map[string]any)
+	if extras == nil {
+		t.Fatalf("extras missing on client_authn.failure: %v", rec)
+	}
+	if got := extras["reason"]; got != "invalid_client_credentials" {
+		t.Errorf("extras.reason=%v want invalid_client_credentials", got)
+	}
+	if got := extras["method"]; got != "client_secret_basic" {
+		t.Errorf("extras.method=%v want client_secret_basic", got)
+	}
 }
 
 // TestAudit_TokenIssued_NoOfflineAccessNoRefreshEvent pins the new

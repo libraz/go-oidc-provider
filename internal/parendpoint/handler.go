@@ -5,12 +5,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
+)
+
+// Audit event names mirrored from the public op.AuditEvent catalogue.
+// internal/parendpoint cannot import op/, so the strings are duplicated
+// and TestAuditEvent_ClientAuthnMirror in op/audit_test.go pins the
+// values together.
+const (
+	auditClientAuthnFailure = "client_authn.failure"
 )
 
 // Defaults the handler applies when [Deps] omits the corresponding field.
@@ -184,6 +193,24 @@ type Deps struct {
 	// downstream /authorize → /token flow behaves as if the
 	// parameter had been silently ignored.
 	ClaimsParameterEnabled bool
+
+	// Audit is the structured audit-event sink. A nil Emitter falls
+	// back to [audit.Discard] so the handler can call the emitter
+	// unconditionally. The PAR endpoint emits "client_authn.failure"
+	// on every pre-issuance client authentication failure (mirroring
+	// the token endpoint) so SOC tooling can spot probing patterns
+	// the wire response — collapsed onto RFC 6749 §5.2
+	// "invalid_client" — deliberately hides.
+	Audit audit.Emitter
+}
+
+// auditEmitter returns the configured audit sink, or a [audit.Discard]
+// emitter so call sites can invoke Emit unconditionally.
+func (d *Deps) auditEmitter() audit.Emitter {
+	if d.Audit == nil {
+		return audit.Discard()
+	}
+	return d.Audit
 }
 
 // Handler returns the HTTP handler the OP mounts at its PAR endpoint. The

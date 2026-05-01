@@ -124,6 +124,18 @@ const (
 	AuditIntrospectionError = AuditEvent("introspection.error")
 )
 
+// Client authentication events. Fire from every pre-issuance surface
+// that runs the client-authentication chain (/token, /par). The wire
+// response is collapsed onto the canonical RFC 6749 §5.2 "invalid_client"
+// shape — it deliberately hides whether the client_id was unknown, the
+// secret was wrong, or the signed assertion failed verification — so SOC
+// tooling needs an audit signal that carries the attempted client_id (when
+// known), the auth method, and a short reason code for triage. This event
+// fills that gap; the wire shape is unchanged.
+const (
+	AuditClientAuthnFailure = AuditEvent("client_authn.failure")
+)
+
 // Dynamic Client Registration events. Fire from /register and
 // /register/{client_id}.
 const (

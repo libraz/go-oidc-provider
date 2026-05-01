@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -467,7 +468,11 @@ func writeSuccess(w http.ResponseWriter, body successResponse) {
 // identical authentication contract.
 //
 // The function emits its own response on every failure path so the caller
-// only checks the bool: false means "stop, response written".
+// only checks the bool: false means "stop, response written". Each
+// failure path also raises a "client_authn.failure" audit event so SOC
+// tooling can spot probing for a known client_id even though RFC 6749
+// §5.2 mandates the wire response stays at the generic "invalid_client"
+// code.
 func authenticate(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -477,15 +482,18 @@ func authenticate(
 	creds, err := clientauth.Parse(r)
 	usedBasic := r.Header.Get("Authorization") != ""
 	if err != nil {
+		emitClientAuthnFailure(ctx, deps, "", "", reasonForAuthnError(err))
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
 	if creds.Method == clientauth.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
+		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), "private_key_jwt_disabled")
 		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
 		return nil, nil, false
 	}
 	client, err := lookupClient(ctx, deps.Clients, creds.ClientID)
 	if err != nil {
+		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
@@ -494,10 +502,56 @@ func authenticate(
 		AssertionVerifier: deps.AssertionVerifier,
 		AllowedMethods:    deps.AllowedClientAuthMethods,
 	}); err != nil {
+		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
 	return client, creds, true
+}
+
+// emitClientAuthnFailure raises [audit.Event] for a pre-issuance client
+// authentication failure on /par. Mirrors the token endpoint's emitter:
+// the wire response stays on the canonical RFC 6749 §5.2
+// "invalid_client" envelope, so the audit stream is the only place the
+// failing client_id and a triage-level reason code surface.
+func emitClientAuthnFailure(ctx context.Context, deps Deps, clientID, method, reason string) {
+	extras := map[string]any{"reason": reason}
+	if method != "" {
+		extras["method"] = method
+	}
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     auditClientAuthnFailure,
+		Level:    audit.LevelWarn,
+		Message:  "client authentication failed at PAR endpoint",
+		ClientID: clientID,
+		Extras:   extras,
+	})
+}
+
+// reasonForAuthnError maps a clientauth sentinel onto the short reason
+// code emitted on the audit event. The codes match the clientauth error
+// names so a reader can grep from an audit line back to the failing
+// branch in the verifier; mirrors the helper in
+// [internal/tokenendpoint] so the two surfaces emit identical reasons.
+func reasonForAuthnError(err error) string {
+	switch {
+	case errors.Is(err, clientauth.ErrNoCredentials):
+		return "no_credentials"
+	case errors.Is(err, clientauth.ErrAmbiguousCredentials):
+		return "ambiguous_credentials"
+	case errors.Is(err, clientauth.ErrUnsupportedMethod):
+		return "unsupported_method"
+	case errors.Is(err, clientauth.ErrClientMismatch):
+		return "client_mismatch"
+	case errors.Is(err, clientauth.ErrCredentialsInvalid):
+		return "invalid_client_credentials"
+	case errors.Is(err, clientauth.ErrAssertionMalformed):
+		return "assertion_malformed"
+	case errors.Is(err, clientauth.ErrAssertionReplayed):
+		return "assertion_replayed"
+	default:
+		return "server_error"
+	}
 }
 
 // lookupClient resolves the registered client for id, mapping

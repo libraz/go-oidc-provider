@@ -826,6 +826,7 @@ func mountPAREndpoint(
 			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
 			OpenIDScopeOptional:        cfg.openIDScopeOptional,
 			ClaimsParameterEnabled:     cfg.claimsParameterSupported(),
+			Audit:                      cfg.effectiveAuditEmitter(),
 		})),
 	)
 	return nil
