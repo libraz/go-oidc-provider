@@ -22,7 +22,8 @@ rows:
     behaviour: |
       With JWT introspection enabled, the discovery document
       advertises introspection_signing_alg_values_supported.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Covered by INT-001; introspection_signing_alg_values_supported ships unconditionally when introspection is mounted, no separate JWT toggle exists.
 
   - id: JINT-002
     severity: P1
@@ -31,7 +32,8 @@ rows:
       Enabling jwtIntrospection without the base introspection feature
       fails provider construction with "jwtIntrospection is only
       available in conjuction with introspection".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: No separate jwtIntrospection toggle exists; RFC 9701 JWS responses are unconditional behaviour of the introspection endpoint (see INT-001). The construction-time coupling error has no caller.
 
   - id: JINT-003
     severity: P1
@@ -39,8 +41,8 @@ rows:
     behaviour: |
       A client registered for JWT introspection that issues an
       introspection request without an Accept header still receives
-      a normal application/json; charset=utf-8 response.
-    status: pending
+      a normal application/json response.
+    status: active
 
   - id: JINT-004
     severity: P0
@@ -48,9 +50,8 @@ rows:
     behaviour: |
       The same client repeating the request with
       Accept: application/token-introspection+jwt receives a JWT body
-      with content-type application/token-introspection+jwt;
-      charset=utf-8.
-    status: pending
+      with content-type application/token-introspection+jwt.
+    status: active
 
   - id: JINT-005
     severity: P0
@@ -59,14 +60,14 @@ rows:
       The signed JWT response carries iss=provider issuer,
       aud=client_id, iat, and a token_introspection claim that nests
       the original introspection JSON document.
-    status: pending
+    status: active
 
   - id: JINT-006
     severity: P0
     spec: RFC 9701 §5
     behaviour: |
       The signed JWT response sets header typ=token-introspection+jwt.
-    status: pending
+    status: active
 
   - id: JINT-007
     severity: P1
@@ -75,7 +76,7 @@ rows:
       Repeating the introspection after time advances produces a JWT
       whose iat claim has progressed by the elapsed seconds relative
       to the earlier JSON response.
-    status: pending
+    status: active
 
   - id: JINT-008
     severity: P0
@@ -85,7 +86,7 @@ rows:
       application/token-introspection+jwt still returns 200 plus a
       JWT whose token_introspection claim is {"active": false} and
       whose iss, aud, and iat envelope claims are populated.
-    status: pending
+    status: active
 
   - id: JINT-009
     severity: P0
@@ -95,7 +96,8 @@ rows:
       expired receives 400 invalid_client "client secret is expired -
       cannot respond with HS256 JWT Introspection response" delivered
       as JSON.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: client_secret_jwt and HS* token-endpoint-auth signing algs are out-of-scope per docs/plans/002-product-design.md (cited in CA-DISC-04). The OP advertises no HS* in token_endpoint_auth_signing_alg_values_supported and registration cannot pin a client to an HMAC introspection-response alg, so the expired-secret rejection path has no caller.
 
   - id: JINT-010
     severity: P0
@@ -105,7 +107,8 @@ rows:
       requests without the JWT Accept header receives 400
       invalid_request "introspection must be requested with Accept:
       application/token-introspection+jwt for this client".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "JWE / encrypted response types are out-of-scope in v1.0 (see test/scenarios/catalog/encryption.yaml). Without JWE the 'encrypted introspection mandated' client configuration cannot exist, so the JWT-Accept guard described here has no caller."
 
   - id: JINT-011
     severity: P0
@@ -113,4 +116,5 @@ rows:
     behaviour: |
       A client configured for encrypted introspection responses
       receives a JWE with header alg=A128KW and enc=A128CBC-HS256.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted response types are out-of-scope in v1.0 (see test/scenarios/catalog/encryption.yaml). The OP cannot emit JWE introspection responses, so the A128KW / A128CBC-HS256 envelope shape has no caller.
