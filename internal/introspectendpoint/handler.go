@@ -9,12 +9,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
+)
+
+// Audit event names mirrored from the public op.AuditEvent catalogue.
+// internal/introspectendpoint cannot import op/, so the strings are
+// duplicated and TestAuditEvent_IntrospectionMirror in op/audit_test.go
+// pins the values together.
+const (
+	auditIntrospectionError = "introspection.error"
 )
 
 // Defaults the handler applies when [Deps] omits the corresponding field.
@@ -174,6 +183,16 @@ type Deps struct {
 	// Wave 2 plumbs this field; the handler logic that consumes it
 	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
+
+	// Audit is the structured audit-event sink. A nil Emitter falls
+	// back to [audit.Discard] so the handler can call the emitter
+	// unconditionally. The introspection endpoint emits
+	// "introspection.error" on every pre-authentication failure
+	// (invalid_client / malformed credentials / private_key_jwt
+	// disabled). The wire response stays at the RFC 6749 §5.2
+	// canonical shape; the audit event surfaces the attempted
+	// client_id and a short reason code for SOC tooling.
+	Audit audit.Emitter
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection
@@ -270,6 +289,9 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 //
 // The function emits its own response on every failure path so the
 // caller only checks the bool: false means "stop, response written".
+// Each failure path also raises an "introspection.error" audit event so
+// SOC tooling can spot probing for a known client_id even though the
+// wire response stays at the RFC 6749 §5.2 canonical shape.
 func authenticate(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -279,15 +301,18 @@ func authenticate(
 	creds, err := clientauth.Parse(r)
 	usedBasic := r.Header.Get("Authorization") != ""
 	if err != nil {
+		emitIntrospectionError(ctx, deps, "", reasonForAuthnError(err))
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
 	if creds.Method == clientauth.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
+		emitIntrospectionError(ctx, deps, creds.ClientID, "private_key_jwt_disabled")
 		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
 		return nil, nil, false
 	}
 	client, err := lookupClient(ctx, deps.Clients, creds.ClientID)
 	if err != nil {
+		emitIntrospectionError(ctx, deps, creds.ClientID, reasonForAuthnError(err))
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
@@ -296,10 +321,64 @@ func authenticate(
 		AssertionVerifier: deps.AssertionVerifier,
 		AllowedMethods:    deps.AllowedClientAuthMethods,
 	}); err != nil {
+		emitIntrospectionError(ctx, deps, creds.ClientID, reasonForAuthnError(err))
 		writeAuthnError(w, err, usedBasic)
 		return nil, nil, false
 	}
 	return client, creds, true
+}
+
+// auditEmitter returns the configured audit sink, or a [audit.Discard]
+// emitter so call sites can invoke Emit unconditionally.
+func (d *Deps) auditEmitter() audit.Emitter {
+	if d.Audit == nil {
+		return audit.Discard()
+	}
+	return d.Audit
+}
+
+// emitIntrospectionError raises [audit.Event] for a pre-authentication
+// failure on /introspect. The event carries the attempted client_id
+// (when known) and a short reason code so SOC tooling can distinguish
+// "wrong secret" from "unknown client" probing patterns. The wire
+// response is unchanged — RFC 6749 §5.2 mandates the generic
+// "invalid_client" envelope — but the audit stream surfaces the
+// failing client_id which the wire response deliberately omits.
+func emitIntrospectionError(ctx context.Context, deps Deps, clientID, reason string) {
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     auditIntrospectionError,
+		Level:    audit.LevelWarn,
+		Message:  "introspection client authentication failed",
+		ClientID: clientID,
+		Extras: map[string]any{
+			"reason": reason,
+		},
+	})
+}
+
+// reasonForAuthnError maps a clientauth sentinel onto the short reason
+// code emitted on the audit event. The codes match the clientauth
+// error names so a reader can grep from audit line back to the failing
+// branch in the verifier.
+func reasonForAuthnError(err error) string {
+	switch {
+	case errors.Is(err, clientauth.ErrNoCredentials):
+		return "no_credentials"
+	case errors.Is(err, clientauth.ErrAmbiguousCredentials):
+		return "ambiguous_credentials"
+	case errors.Is(err, clientauth.ErrUnsupportedMethod):
+		return "unsupported_method"
+	case errors.Is(err, clientauth.ErrClientMismatch):
+		return "client_mismatch"
+	case errors.Is(err, clientauth.ErrCredentialsInvalid):
+		return "invalid_client_credentials"
+	case errors.Is(err, clientauth.ErrAssertionMalformed):
+		return "assertion_malformed"
+	case errors.Is(err, clientauth.ErrAssertionReplayed):
+		return "assertion_replayed"
+	default:
+		return "server_error"
+	}
 }
 
 // lookupClient resolves the registered client for id, mapping

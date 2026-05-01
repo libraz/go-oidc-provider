@@ -47,6 +47,25 @@ func TestAuditEvent_TokenMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_IntrospectionMirror keeps the public
+// op.AuditIntrospectionError constant aligned with the raw string the
+// introspection endpoint emits. The internal handler cannot import op/,
+// so the value is duplicated as a string (auditIntrospectionError in
+// internal/introspectendpoint/handler.go) and this test pins them
+// together.
+func TestAuditEvent_IntrospectionMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"introspection.error": op.AuditIntrospectionError,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_DCRMirror keeps the public op.AuditDCR* constants
 // aligned with the strings that the registration endpoint emits.
 // The internal handler cannot reference op.AuditEvent (no

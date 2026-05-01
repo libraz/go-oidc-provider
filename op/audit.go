@@ -114,6 +114,16 @@ const (
 	AuditAlgLegacyUsed       = AuditEvent("alg.legacy_used")
 )
 
+// Introspection events. Fire from the /introspect endpoint. Only the
+// pre-authentication failure is surfaced today: a client that presents
+// invalid credentials at /introspect MUST be visible to SOC tooling so
+// the embedder can spot probing for a known client_id even though RFC
+// 7662 §2.3 mandates the wire response stays at the generic
+// "invalid_client" code.
+const (
+	AuditIntrospectionError = AuditEvent("introspection.error")
+)
+
 // Dynamic Client Registration events. Fire from /register and
 // /register/{client_id}.
 const (
