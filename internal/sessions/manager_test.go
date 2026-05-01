@@ -195,6 +195,27 @@ func TestManager_Logout_Idempotent(t *testing.T) {
 	}
 }
 
+// TestManager_Rotate_IssuesFreshIDPreservingChooserGroup pins the
+// structural session-fixation defence: every re-authentication path
+// MUST issue a fresh session ID and immediately invalidate the old
+// one, so any pre-fixation cookie value the attacker may have planted
+// becomes useless. The chooser group, subject, AMR, and ACR are
+// carried over so the rotation is invisible to legitimate callers
+// (one chooser group, one logical session) — only the wire ID
+// changes.
+//
+// Tracks:
+//   - GHSA-xhpr-465j-7p9q (Keycloak, 2024) — first-login phishing
+//     via email verification: a session that pre-existed the trust
+//     transition continued to be authoritative after verification,
+//     letting an attacker who planted the cookie ride the
+//     post-verification trust. CWE-384 "Session Fixation". The fix
+//     was to rotate session IDs on the trust boundary.
+//
+// The companion TestManager_Rotate_PreservesCreatedAt pins the
+// second half of the contract: the absolute-TTL clock is NOT reset
+// by rotation, so an attacker who triggers a rotate cannot extend
+// session lifetime.
 func TestManager_Rotate_IssuesFreshIDPreservingChooserGroup(t *testing.T) {
 	t.Parallel()
 
@@ -248,6 +269,17 @@ func TestManager_Rotate_IssuesFreshIDPreservingChooserGroup(t *testing.T) {
 	}
 }
 
+// TestManager_Rotate_PreservesCreatedAt pins that rotation does NOT
+// reset the absolute-TTL clock. Combined with the fresh-ID rotation
+// from TestManager_Rotate_IssuesFreshIDPreservingChooserGroup this
+// closes the second half of the GHSA-xhpr-465j-7p9q class: an
+// attacker who manages to trigger a rotation does not gain
+// additional session lifetime even if they hold the new ID briefly,
+// because the absolute TTL still counts from the original Issue.
+//
+// Tracks: GHSA-xhpr-465j-7p9q — see
+// TestManager_Rotate_IssuesFreshIDPreservingChooserGroup for the
+// full threat model.
 func TestManager_Rotate_PreservesCreatedAt(t *testing.T) {
 	t.Parallel()
 

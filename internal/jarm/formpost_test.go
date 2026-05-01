@@ -56,6 +56,19 @@ func TestWriteFormPost_HappyPath(t *testing.T) {
 	}
 }
 
+// TestWriteFormPost_EscapesRedirectAndJWT pins the defensive HTML
+// escape on every value flowing into the form_post body. Both action=
+// (redirect_uri) and value= (the JARM JWT or any echoed param) MUST
+// pass through [html.EscapeString] before reaching the wire — without
+// it, a malformed value that survived earlier validation could inject
+// markup into the auto-submit page.
+//
+// Tracks: GHSA-27gc-wj6x-9w55 (Keycloak, 2024) — error_description
+// was reflected into HTML error pages without escaping, enabling
+// phishing / open-redirect chains. CWE-79. The form_post surface here
+// is the analogous emit point in this library; the test exercises
+// the same threat shape (raw "<script>"-bearing input → must not
+// appear unescaped in the response body).
 func TestWriteFormPost_EscapesRedirectAndJWT(t *testing.T) {
 	t.Parallel()
 

@@ -459,10 +459,17 @@ func TestPrivateKeyJWTVerifier_AudArrayWithExtraneous_StillAccepted(t *testing.T
 // requirement that a private_key_jwt assertion's jti MUST NOT be
 // replayed within its lifetime.
 //
-// Tracks: CVE-2020-15222 (ory/fosite < 0.31.0, GHSA-mh3m-8c74-74xh) —
-// jti uniqueness was not enforced for private_key_jwt, so an
-// intercepted assertion could be replayed to authenticate the client
-// repeatedly. Equivalent to CWE-345 "Insufficient Verification of Data
+// Tracks:
+//   - CVE-2020-15222 / GHSA-mh3m-8c74-74xh (ory/fosite < 0.31.0) — jti
+//     uniqueness was not enforced for private_key_jwt, so an
+//     intercepted assertion could be replayed to authenticate the
+//     client repeatedly.
+//   - GHSA-v3q9-2p3m-7g43 (ory/fosite, 2020 cluster) — same defect
+//     class re-disclosed under a separate GHSA; the structural
+//     mitigation is identical (per-jti single-use within the
+//     assertion's exp window).
+//
+// Equivalent to CWE-345 "Insufficient Verification of Data
 // Authenticity". This test exercises both halves: first call succeeds,
 // second call with the same assertion fails with ErrAssertionReplayed.
 func TestPrivateKeyJWTVerifier_JTIReplay_Rejected(t *testing.T) {

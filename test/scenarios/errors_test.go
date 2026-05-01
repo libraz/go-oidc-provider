@@ -23,13 +23,24 @@ import (
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
+// errorResponse captures the fields the ERR-NNN scenarios assert on.
+// The helper returns this struct rather than *http.Response so the
+// body-close lifecycle stays inside the helper (the bodyclose linter
+// can't see helper-internal defer chains, and threading the response
+// up to the callers would either leak or trip the linter).
+type errorResponse struct {
+	Status      int
+	ContentType string
+	Body        []byte
+}
+
 // postTokenErrorJSON drives a deliberately malformed /token request
 // against tk so the OP returns a JSON RFC 6749 §5.2 error envelope.
 // The grant_type is omitted, so the dispatcher rejects with
 // invalid_request before any client authentication runs. The test
 // caller controls the request's Accept header, which is the
 // content-negotiation surface ERR-001 / ERR-002 / ERR-003 exercise.
-func postTokenErrorJSON(tb testing.TB, tk *testkit.Provider, accept string) (*http.Response, []byte) {
+func postTokenErrorJSON(tb testing.TB, tk *testkit.Provider, accept string) errorResponse {
 	tb.Helper()
 	body := strings.NewReader("foo=bar")
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
@@ -50,7 +61,11 @@ func postTokenErrorJSON(tb testing.TB, tk *testkit.Provider, accept string) (*ht
 	if err != nil {
 		tb.Fatalf("read /token body: %v", err)
 	}
-	return resp, raw
+	return errorResponse{
+		Status:      resp.StatusCode,
+		ContentType: resp.Header.Get("Content-Type"),
+		Body:        raw,
+	}
 }
 
 // TestScenario_ERR_001_NoAcceptHeaderProducesJSON verifies that a
@@ -64,19 +79,19 @@ func TestScenario_ERR_001_NoAcceptHeaderProducesJSON(t *testing.T) {
 
 	tk := testkit.NewProvider(t)
 
-	resp, body := postTokenErrorJSON(t, tk, "")
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("status=%d want 4xx error", resp.StatusCode)
+	resp := postTokenErrorJSON(t, tk, "")
+	if resp.Status == http.StatusOK {
+		t.Fatalf("status=%d want 4xx error", resp.Status)
 	}
-	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "json") {
-		t.Errorf("Content-Type=%q want a json media type", got)
+	if !strings.Contains(resp.ContentType, "json") {
+		t.Errorf("Content-Type=%q want a json media type", resp.ContentType)
 	}
 	var env map[string]any
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	if err := json.Unmarshal(resp.Body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(resp.Body))
 	}
 	if env["error"] == nil {
-		t.Errorf("body missing error field: %s", string(body))
+		t.Errorf("body missing error field: %s", string(resp.Body))
 	}
 }
 
@@ -91,19 +106,19 @@ func TestScenario_ERR_002_AcceptStarSlashStarProducesJSON(t *testing.T) {
 
 	tk := testkit.NewProvider(t)
 
-	resp, body := postTokenErrorJSON(t, tk, "*/*")
-	if resp.StatusCode == http.StatusOK {
-		t.Fatalf("status=%d want 4xx error", resp.StatusCode)
+	resp := postTokenErrorJSON(t, tk, "*/*")
+	if resp.Status == http.StatusOK {
+		t.Fatalf("status=%d want 4xx error", resp.Status)
 	}
-	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "json") {
-		t.Errorf("Content-Type=%q want a json media type", got)
+	if !strings.Contains(resp.ContentType, "json") {
+		t.Errorf("Content-Type=%q want a json media type", resp.ContentType)
 	}
 	var env map[string]any
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	if err := json.Unmarshal(resp.Body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(resp.Body))
 	}
 	if env["error"] == nil {
-		t.Errorf("body missing error field: %s", string(body))
+		t.Errorf("body missing error field: %s", string(resp.Body))
 	}
 }
 
@@ -123,14 +138,14 @@ func TestScenario_ERR_010_JSONErrorBodyHasErrorCode(t *testing.T) {
 
 	tk := testkit.NewProvider(t)
 
-	_, body := postTokenErrorJSON(t, tk, "application/json")
+	resp := postTokenErrorJSON(t, tk, "application/json")
 	var env map[string]any
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	if err := json.Unmarshal(resp.Body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(resp.Body))
 	}
 	code, _ := env["error"].(string)
 	if code == "" {
-		t.Fatalf("error field empty or missing: %s", string(body))
+		t.Fatalf("error field empty or missing: %s", string(resp.Body))
 	}
 	registered := map[string]struct{}{
 		"invalid_request":            {},
@@ -189,13 +204,13 @@ func TestScenario_ERR_012_JSONErrorOmitsState(t *testing.T) {
 
 	tk := testkit.NewProvider(t)
 
-	_, body := postTokenErrorJSON(t, tk, "application/json")
+	resp := postTokenErrorJSON(t, tk, "application/json")
 	var env map[string]any
-	if err := json.Unmarshal(body, &env); err != nil {
-		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	if err := json.Unmarshal(resp.Body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(resp.Body))
 	}
 	if _, present := env["state"]; present {
-		t.Errorf("JSON error body MUST NOT include state: %s", string(body))
+		t.Errorf("JSON error body MUST NOT include state: %s", string(resp.Body))
 	}
 }
 

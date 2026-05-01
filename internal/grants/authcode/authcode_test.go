@@ -271,6 +271,19 @@ func TestExchange_ReplayReturnsSentinel(t *testing.T) {
 	}
 }
 
+// TestExchange_RejectsClientMismatch pins the (code, client_id) half
+// of RFC 6749 §4.1.3's tuple-binding contract: a code issued to one
+// client MUST NOT be exchangeable by another client, regardless of
+// who else holds the value.
+//
+// Tracks: GHSA-vh7g-p26c-j2cw (dexidp/dex, 2024) — the back-channel
+// ID-token retrieval path did not re-check the authorization-code's
+// bound client_id, so an attacker who intercepted a code at the front
+// channel could redeem it under a different client_id and obtain
+// tokens minted for the victim. The structural mitigation is the
+// (code, client_id, redirect_uri[, code_verifier]) tuple match — this
+// test pins the client_id half; sibling tests pin redirect_uri and
+// code_verifier.
 func TestExchange_RejectsClientMismatch(t *testing.T) {
 	t.Parallel()
 

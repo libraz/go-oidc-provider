@@ -20,6 +20,32 @@ import (
 // The seed corpus contains three known-bad inputs and one well-formed
 // malformed-signature value. Real signed tokens are exercised in unit
 // tests where the keyset is in scope.
+//
+// Tracks (parse-DoS / panic-immunity class): a JOSE parser that
+// crashes, allocates unboundedly, or recurses on malformed input lets
+// any unauthenticated caller knock the OP over via the token endpoint
+// (client_assertion), the userinfo endpoint (DPoP), or the request
+// object endpoint (JAR / PAR). The fuzz harness pins the structural
+// contract — no panic, sentinel-error-or-allowlist-alg only — that
+// every advisory below relies on for mitigation.
+//
+//   - GHSA-78h2-9frx-2jm8 (go-jose) — JWE decryption panic on crafted
+//     input. Class-covered: ParseSigned never reaches JWE decrypt.
+//   - GHSA-c6gw-w398-hv78 (go-jose) — parse DoS on pathological JSON.
+//     Class-covered by the no-panic fuzz contract.
+//   - GHSA-c5q2-7r4c-mv6g (go-jose) — compression amplification on
+//     JWE (CVE-2024-29371 cluster). Class-covered: compact JWS only;
+//     JWE / compression paths are out of the parse surface.
+//   - GHSA-pvcr-v8j8-j5q3 (lestrrat-go/jwx) — JSON-form parse panic.
+//     Class-covered: the JSON-serialised seed pins compact-only
+//     rejection; ParseSigned never enters the JSON parse branch.
+//   - GHSA-hj3v-m684-v259 (lestrrat-go/jwx) — JWE compression DoS.
+//     Class-covered: same compact-only contract.
+//   - GHSA-7f9x-gw85-8grf (lestrrat-go/jwx) — malicious JWE params
+//     DoS. Class-covered: same compact-only contract.
+//   - GHSA-rm8v-mxj3-5rmq (lestrrat-go/jwx) — CBC-mode JWE padding
+//     oracle possibility. Class-covered: JWS-only allowlist
+//     (RS256/PS256/ES256/EdDSA) excludes every CBC-mode JWE alg.
 func FuzzJOSEParse(f *testing.F) {
 	// Seed: alg=none compact JWS — historically devastating to JWT
 	// libs. Tracks CVE-2015-2951 (jose4j) and the broader 2015
