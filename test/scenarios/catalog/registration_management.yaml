@@ -10,45 +10,52 @@ specs:
 
 description: |
   Read, update, and delete operations against
-  registration_client_uri for clients minted by Dynamic Client
-  Registration. Covers feature-flag coupling with DCR, PUT /reg/:id
-  semantics, DELETE /reg/:id semantics, ctx.oidc.entities population,
-  audit events, and Registration Access Token (RAT) lifecycle.
+  /register/{client_id} for clients minted by Dynamic Client
+  Registration. Covers feature-flag coupling with DCR, PUT
+  /register/{client_id} semantics, DELETE /register/{client_id}
+  semantics, audit events, and Registration Access Token (RAT)
+  lifecycle.
 
 rows:
   - id: RM-FF-01
     severity: P0
     spec: RFC 7592 §1
     behaviour: |
-      Enabling registration management requires DCR to be enabled.
-      Otherwise OP construction fails with "registrationManagement is
-      only available in conjuction with registration".
-    status: pending
+      v1.0 has no separate registrationManagement toggle. The
+      management routes (PUT/GET/DELETE /register/{client_id}) ride
+      along with WithDynamicRegistration unconditionally; there is
+      therefore no error path for "registrationManagement enabled
+      without registration".
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no separate registrationManagement toggle: the management routes (PUT/GET/DELETE /register/{client_id}) ride along with op.WithDynamicRegistration unconditionally. The panva-style 'registrationManagement enabled without registration' construction error has no v1.0 equivalent."
 
   - id: RM-FF-02
     severity: P1
     spec: RFC 7592 §3
     behaviour: |
-      When the feature is OFF the OP MUST NOT expose PUT or DELETE
-      routes on /reg/:id; requests return 404.
-    status: pending
+      When WithDynamicRegistration is NOT configured the OP MUST NOT
+      expose the management endpoints; PUT /register/{client_id}
+      against an unmounted handler returns 404.
+    status: active
 
   - id: RM-PUT-01
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
-      PUT /reg/:id requires Authorization: Bearer <RAT>. A missing
-      header yields 401 invalid_token with description "no access
-      token provided".
-    status: pending
+      PUT /register/{client_id} requires Authorization: Bearer <RAT>.
+      A missing header yields 401 invalid_token with description
+      "registration access token is required" and a WWW-Authenticate
+      Bearer challenge.
+    status: active
 
   - id: RM-PUT-02
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
       An invalid RAT yields 401 invalid_token with description
-      "invalid token provided".
-    status: pending
+      "registration access token is invalid" and a WWW-Authenticate
+      Bearer challenge.
+    status: active
 
   - id: RM-PUT-03
     severity: P0
@@ -56,7 +63,7 @@ rows:
     behaviour: |
       A successful PUT returns 200 OK with Cache-Control: no-store and
       Content-Type: application/json.
-    status: pending
+    status: active
 
   - id: RM-PUT-04
     severity: P0
@@ -66,7 +73,7 @@ rows:
       client_secret_expires_at, client_id_issued_at,
       registration_client_uri, and registration_access_token; the RAT
       value depends on the rotation setting.
-    status: pending
+    status: active
 
   - id: RM-PUT-05
     severity: P0
@@ -75,208 +82,246 @@ rows:
       A request body containing registration_access_token is rejected
       with 400 invalid_request and description "request MUST NOT
       include the registration_access_token field".
-    status: pending
+    status: active
 
   - id: RM-PUT-06
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
       A request body containing registration_client_uri is rejected
-      with 400 invalid_request.
-    status: pending
+      with 400 invalid_request and description "request MUST NOT
+      include the registration_client_uri field".
+    status: active
 
   - id: RM-PUT-07
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
       A request body containing client_secret_expires_at is rejected
-      with 400 invalid_request.
-    status: pending
+      with 400 invalid_request and description "request MUST NOT
+      include the client_secret_expires_at field".
+    status: active
 
   - id: RM-PUT-08
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
       A request body containing client_id_issued_at is rejected with
-      400 invalid_request.
-    status: pending
+      400 invalid_request and description "request MUST NOT include
+      the client_id_issued_at field".
+    status: active
 
   - id: RM-PUT-09
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
-      Omitting an existing property is equivalent to deleting it
-      (sending null is also accepted), except that client_secret MUST
-      NOT be deleted; attempts to do so return 400.
-    status: pending
+      Omitting an existing optional property (or sending null) on
+      update is equivalent to deleting it. The persisted client no
+      longer carries the value and the response body omits the field.
+    status: active
 
   - id: RM-PUT-10
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
-      Sending client_secret as null or as a different value yields 400
-      invalid_request with description "provided client_secret does
-      not match the authenticated client's one".
-    status: pending
+      Sending client_secret as null or as a value that does not match
+      the authenticated client's stored hash yields 400 invalid_request
+      with description "provided client_secret does not match the
+      authenticated client's one".
+    status: active
 
   - id: RM-PUT-11
     severity: P0
     spec: RFC 7592 §2.2 / OIDC Core §16
     behaviour: |
-      Switching token_endpoint_auth_method from none to a
-      secret-based method causes the OP to mint a new client_secret
-      and include it in the response.
-    status: pending
+      Switching token_endpoint_auth_method from "none" to a
+      secret-based method (client_secret_basic) on PUT causes the OP
+      to mint a fresh client_secret, persist its hash, and return the
+      raw secret in the response body.
+    status: active
 
   - id: RM-PUT-12
     severity: P0
     spec: RFC 7592 §3
     behaviour: |
-      The same RAT remains usable across PUTs. With OP setting
-      rotateRegistrationAccessToken=true (or a function returning
-      true) each PUT issues a fresh RAT, destroys the old one, and
-      emits registration_access_token.destroyed.
-    status: pending
+      Each successful PUT mints a fresh registration_access_token,
+      destroys the previous one, and returns the new value in the
+      response body. The previous RAT no longer authenticates
+      (subsequent GET/PUT/DELETE under the stale RAT yield 401
+      invalid_token).
+    status: active
 
   - id: RM-PUT-13
     severity: P1
     spec: OP design
     behaviour: |
-      During rotation, ctx.oidc.entities carries both the new
-      RegistrationAccessToken and the previous
-      RotatedRegistrationAccessToken so audit consumers can observe
-      the swap.
-    status: pending
+      v1.0 has no panva-style ctx.oidc.entities request-context
+      surface; rotation observability is provided through audit
+      events (see RM-EVT-01) rather than a per-request entities
+      bundle.
+    status: out-of-scope
+    out_of_scope_reason: v1.0 has no panva-style ctx.oidc.entities request-context surface; rotation observability lives in the audit stream (see RM-EVT-01) instead of a per-request entities bundle.
 
   - id: RM-PUT-14
     severity: P1
     spec: OP audit
     behaviour: |
-      A registration_update.success event is emitted on every
-      successful PUT.
-    status: pending
+      A dcr.client.metadata_updated audit event
+      (op.AuditDCRClientMetadataUpdated) is emitted on every
+      successful PUT /register/{client_id} carrying the client_id of
+      the updated record.
+    status: active
 
   - id: RM-PUT-15
     severity: P0
     spec: RFC 7592 §2
     behaviour: |
-      PUT against a static client (even with an adapter-minted RAT)
-      yields 403 invalid_request with description "client does not
-      have permission to update its record".
-    status: pending
+      Management requests against a static (non-DCR) client are
+      rejected with 401 invalid_token "registration access token is
+      invalid". v1.0 enforces RFC 7592 §2.3's "static clients cannot
+      be managed" through the absence of a RAT for static clients —
+      the absence of a RAT row is the authorisation gate, not a
+      separate permission code.
+    status: active
 
   - id: RM-PUT-16
     severity: P0
     spec: RFC 7591 §3.2.2
     behaviour: |
-      Validation failures (invalid enums, etc.) are mapped to 400
-      invalid_client_metadata, matching DCR semantics.
-    status: pending
+      Validation failures (invalid enums, disallowed grant types,
+      etc.) are mapped to 400 invalid_client_metadata, matching DCR
+      semantics on POST /register.
+    status: active
 
   - id: RM-PUT-17
     severity: P0
     spec: RFC 7592 §2.2
     behaviour: |
-      A request that tries to mutate client_id (path id and body id
-      disagree) is rejected with 400 invalid_request.
-    status: pending
+      A request whose body sets client_id to a value other than the
+      path {client_id} is rejected with 400 invalid_request and
+      description "client_id is immutable".
+    status: active
 
   - id: RM-DEL-01
     severity: P0
     spec: RFC 7592 §2.3
     behaviour: |
-      DELETE /reg/:id requires the RAT; missing or invalid yields 401
-      invalid_token.
-    status: pending
+      DELETE /register/{client_id} requires the RAT; missing or
+      invalid yields 401 invalid_token with the same
+      "required" / "invalid" descriptions used by PUT.
+    status: active
 
   - id: RM-DEL-02
     severity: P0
     spec: RFC 7592 §2.3
     behaviour: |
-      A successful DELETE returns 204 No Content with an empty body
-      and Cache-Control: no-store.
-    status: pending
+      A successful DELETE returns 204 No Content with an empty body,
+      Cache-Control: no-store, and Pragma: no-cache.
+    status: active
 
   - id: RM-DEL-03
     severity: P0
     spec: RFC 7592 §2.3
     behaviour: |
-      The RAT is destroyed on success and is not reusable.
-    status: pending
+      The RAT row is destroyed on success; the same RAT used a
+      second time against any management endpoint yields 401
+      invalid_token.
+    status: active
 
   - id: RM-DEL-04
     severity: P0
     spec: RFC 7592 §2.3 / OIDC Core §16.21
     behaviour: |
-      The client record is destroyed and any associated tokens
-      (access tokens, refresh tokens, grants) are invalidated per the
-      OP's client-deletion contract.
-    status: pending
+      The client record is destroyed and the OnClientDeleted cascade
+      hook (op.RegistrationOption.OnClientDeleted) is invoked with
+      the deleted client_id. v1.0's store interfaces do not publish
+      a "by client" enumeration, so the library does NOT cascade
+      access-token / refresh-token / session destruction itself —
+      embedders maintain those indexes through the hook.
+    status: active
 
   - id: RM-DEL-05
     severity: P0
     spec: RFC 7592 §2
     behaviour: |
-      DELETE against a static client yields 403 invalid_request with
-      description "client does not have permission to delete its
-      record".
-    status: pending
+      DELETE against a static (non-DCR) client is rejected with 401
+      invalid_token "registration access token is invalid", on the
+      same RAT-absence gate as RM-PUT-15.
+    status: active
 
   - id: RM-DEL-06
     severity: P1
     spec: OP audit
     behaviour: |
-      A registration_delete.success event is emitted on every
-      successful DELETE.
-    status: pending
+      A dcr.client.deleted audit event (op.AuditDCRClientDeleted) is
+      emitted on every successful DELETE /register/{client_id}
+      carrying the deleted client_id.
+    status: active
 
   - id: RM-CTX-01
     severity: P1
     spec: OP design
     behaviour: |
-      Every handler populates ctx.oidc.entities with Client and
-      RegistrationAccessToken.
-    status: pending
+      v1.0 does not expose a panva-style ctx.oidc.entities
+      request-context bundle. The client and RAT records the handler
+      operates on are internal request-scoped state, not a
+      wire-visible artifact.
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a panva-style ctx.oidc.entities bundle; the client and RAT records the handler operates on are internal request-scoped state, not a wire-visible artifact.
 
   - id: RM-EVT-01
     severity: P1
     spec: OP audit
     behaviour: |
-      registration_access_token.saved and
-      registration_access_token.destroyed events are emitted in order
-      whenever the RAT is rotated.
-    status: pending
+      A successful PUT /register/{client_id} emits the
+      dcr.client.metadata_updated audit event after the RAT has been
+      rotated (the old RAT row is overwritten in the same Put call,
+      and a follow-up authentication under the stale RAT fails with
+      dcr.rat.invalid). Tests observe rotation by capturing
+      dcr.client.metadata_updated and verifying that the previous RAT
+      no longer authenticates.
+    status: active
 
   - id: RM-RAT-01
     severity: P0
     spec: RFC 7592 §2 + security hardening
     behaviour: |
-      A RAT is scoped to its issuing client_id. Use against a
-      different client's URL yields 401, and the misused RAT is
-      destroyed automatically.
-    status: pending
+      A RAT is scoped to its issuing client_id. A request that
+      presents client A's RAT against client B's
+      /register/{client_id} URL yields 401 invalid_token, matching
+      the constant-time RAT verifier's hash-mismatch path. (v1.0
+      does not auto-destroy the misused RAT on cross-client probe;
+      the constant-time mismatch leaks no client A vs client B
+      signal.)
+    status: active
 
   - id: RM-RAT-02
     severity: P0
     spec: RFC 7592 §2
     behaviour: |
-      The OP persists the RAT through the adapter and the entry
-      carries a unique jti.
-    status: pending
+      The OP persists the RAT through the
+      RegistrationAccessTokenStore adapter. v1.0's RAT record carries
+      ClientID + HashedValue + CreatedAt; there is no separately
+      surfaced RAT JTI in the public store contract.
+    status: active
 
   - id: RM-RAT-03
     severity: P1
     spec: RFC 6750 §2.1
     behaviour: |
-      The RAT value is an opaque OP-internal token (not an
-      irreversible hash).
-    status: pending
+      The RAT value returned in the registration response body is an
+      opaque OP-internal token (base64url, no padding). The persisted
+      record stores only the SHA-256 hash, so the RAT cannot be
+      recovered from the store.
+    status: active
 
   - id: RM-RAT-04
     severity: P1
     spec: OP design
     behaviour: |
-      During rotation the new RAT inherits
-      RegistrationAccessToken.policies from its predecessor (see the
-      registration policies catalog).
-    status: pending
+      v1.0 does not expose a per-RAT policy bundle on the public
+      store contract; rotation overwrites the RAT row with a fresh
+      ClientID + HashedValue + CreatedAt triple. There is no
+      "policy inheritance" surface to assert against.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's RegistrationAccessTokenStore contract surfaces only ClientID + HashedValue + CreatedAt; there is no per-RAT policy bundle to inherit on rotation."
