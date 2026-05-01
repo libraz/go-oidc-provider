@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -944,5 +945,198 @@ func TestLoginFlowACRRuleSilentWhenStateOmitsACRValues(t *testing.T) {
 	}
 	if step.Result == nil {
 		t.Fatalf("expected terminal Result after Primary (no ACRValues, no rule match), got %+v", step)
+	}
+}
+
+// TestLoginFlowSoftFactorErrorReemitsPrompt regression-locks the
+// path that drops a wrong-credential submission back into the same
+// factor's prompt. Authenticators that wrap [authn.ErrFactorRetry]
+// MUST trigger the orchestrator to (a) observe the failure (so
+// [RuleAfterFailedAttempts] can fire) and (b) re-emit the prompt
+// instead of bubbling the error to the HTTP layer as a 500.
+func TestLoginFlowSoftFactorErrorReemitsPrompt(t *testing.T) {
+	t.Parallel()
+
+	pwPrompt := promptForFactor(op.FactorPassword)
+	beginCalls := 0
+	pw := &stubAuthenticator{
+		typeID:  op.FactorPassword,
+		aal:     op.AAL1,
+		amr:     "pwd",
+		prompts: []string{pwPrompt.Type},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			beginCalls++
+			return interaction.Step{Prompt: &pwPrompt}, nil
+		},
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{}, fmt.Errorf("password: invalid: %w", authn.ErrFactorRetry)
+		},
+	}
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first Tick: %v", err)
+	}
+	if step.Prompt == nil {
+		t.Fatalf("expected initial prompt, got %+v", step)
+	}
+	if beginCalls != 1 {
+		t.Fatalf("Begin call count after first Tick = %d, want 1", beginCalls)
+	}
+
+	st2, step2, err := o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "wrong"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("retry Tick returned err = %v, want nil (soft retry must re-emit prompt)", err)
+	}
+	if step2.Result != nil {
+		t.Fatalf("retry Tick produced Result; soft retry must keep the chain pending")
+	}
+	if step2.Prompt == nil || step2.Prompt.Type != pwPrompt.Type {
+		t.Fatalf("retry Tick prompt = %+v, want %s", step2.Prompt, pwPrompt.Type)
+	}
+	if beginCalls != 2 {
+		t.Fatalf("Begin call count after retry = %d, want 2 (orchestrator must call Begin to refresh prompt)", beginCalls)
+	}
+	if got := st2.LastFailures; got != 1 {
+		t.Errorf("LastFailures after one soft failure = %d, want 1", got)
+	}
+}
+
+// TestLoginFlowCaptchaRuleFiresAfterFailedAttempts pins the contract
+// that a captcha-shaped rule (e.g. RuleAfterFailedAttempts(3,
+// StepCaptcha)) actually interposes between the failing credential
+// factor and the next prompt. Without the pre-Primary captcha-rule
+// scan the rule list is consulted only after Primary completes — a
+// state soft credential failures never reach — so the rule would
+// silently never fire.
+func TestLoginFlowCaptchaRuleFiresAfterFailedAttempts(t *testing.T) {
+	t.Parallel()
+
+	pwPrompt := promptForFactor(op.FactorPassword)
+	pw := &stubAuthenticator{
+		typeID:  op.FactorPassword,
+		aal:     op.AAL1,
+		amr:     "pwd",
+		prompts: []string{pwPrompt.Type},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &pwPrompt}, nil
+		},
+		continueFn: func(_ context.Context, in op.ContinueInput) (interaction.Step, error) {
+			if in.Submission.Values["password"] == "correct" {
+				return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+			}
+			return interaction.Step{}, fmt.Errorf("password: invalid: %w", authn.ErrFactorRetry)
+		},
+	}
+
+	captchaPrompt := interaction.Prompt{Type: "captcha"}
+	captchaAuth := &stubAuthenticator{
+		typeID:  "myorg.captcha",
+		aal:     op.AAL1,
+		amr:     "captcha",
+		prompts: []string{captchaPrompt.Type},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &captchaPrompt}, nil
+		},
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{Result: &interaction.Result{}}, nil
+		},
+	}
+
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{
+				When: func(lc authn.LoginFlowContext) bool { return lc.FailedAttempts >= 3 },
+				Then: authn.LoginFlowStep{Kind: "myorg.captcha", Authenticator: captchaAuth, IsCaptcha: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != pwPrompt.Type {
+		t.Fatalf("first prompt = %+v, want password", step.Prompt)
+	}
+
+	// Submit three wrong passwords. Each soft failure increments
+	// LastFailures. The captcha rule predicate flips on the third
+	// pass and the orchestrator emits the captcha prompt.
+	for i := 1; i <= 3; i++ {
+		st, step, err = o.Tick(context.Background(), st, authn.Input{
+			Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "wrong"}},
+			Now:        fakeNow(),
+		})
+		if err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+		if step.Prompt == nil {
+			t.Fatalf("attempt %d: expected a prompt, got %+v", i, step)
+		}
+		if i < 3 && step.Prompt.Type != pwPrompt.Type {
+			t.Fatalf("attempt %d prompt = %s, want password", i, step.Prompt.Type)
+		}
+		if i == 3 && step.Prompt.Type != captchaPrompt.Type {
+			t.Fatalf("attempt %d prompt = %s, want captcha (rule must fire)", i, step.Prompt.Type)
+		}
+	}
+	if got := st.LastFailures; got != 3 {
+		t.Errorf("LastFailures after 3 soft failures = %d, want 3", got)
+	}
+
+	// Solve the captcha. The orchestrator should clear LastFailures
+	// and re-prompt for the password.
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"token": "ok"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("captcha continue: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != pwPrompt.Type {
+		t.Fatalf("after captcha prompt = %+v, want password", step.Prompt)
+	}
+	if got := st.LastFailures; got != 0 {
+		t.Errorf("LastFailures after captcha success = %d, want 0", got)
+	}
+	if !st.CaptchaPassed {
+		t.Errorf("CaptchaPassed = false, want true after captcha success")
+	}
+
+	// Final correct password lands the chain in PhaseAfterAuthn.
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "correct"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("final continue: %v", err)
+	}
+	if step.Result == nil {
+		t.Fatalf("expected terminal Result, got %+v", step)
+	}
+	if st.Subject != "user-1" {
+		t.Errorf("Subject = %q, want user-1", st.Subject)
 	}
 }

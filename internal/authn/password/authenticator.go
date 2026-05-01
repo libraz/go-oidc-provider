@@ -42,9 +42,10 @@ const (
 // hash unparseable, candidate mismatch. Collapsing all four onto one
 // error is intentional: distinguishing them in the response lets an
 // attacker enumerate which usernames exist or which accounts have a
-// password set. The orchestrator surfaces a generic
-// invalid-credentials prompt to the SPA.
-var ErrInvalidCredentials = errors.New("password: invalid credentials")
+// password set. The error wraps [authn.ErrFactorRetry] so the
+// orchestrator observes the failure and re-emits the password
+// prompt rather than terminating the chain with a 500.
+var ErrInvalidCredentials = fmt.Errorf("password: invalid credentials: %w", authn.ErrFactorRetry)
 
 // ErrFieldMissing is returned by [Authenticator.Continue] when the
 // submission omits the username or password field. The orchestrator's

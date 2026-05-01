@@ -290,6 +290,18 @@ var (
 	// Result populated. The orchestrator rejects the bad return so
 	// a misbehaving authenticator cannot stall the chain.
 	ErrInvalidStep = errors.New("authn: invalid step")
+
+	// ErrFactorRetry signals "the user-supplied credential was
+	// rejected; the orchestrator MUST observe the failure and
+	// re-emit the current factor's prompt rather than terminating
+	// the chain." Authenticators that cannot resolve the failure to
+	// a fresh Prompt themselves (the password adapter, for instance,
+	// has no in-flight per-attempt state to amend) wrap their
+	// soft-failure sentinel in [ErrFactorRetry] so the orchestrator
+	// can route the response uniformly. Hard errors — store outage,
+	// codec misconfiguration, lockout — MUST NOT wrap this sentinel;
+	// they continue to flow to the HTTP layer as 500 / 4xx.
+	ErrFactorRetry = errors.New("authn: factor retry")
 )
 
 // Config is the [Orchestrator] construction payload. It mirrors the
@@ -540,6 +552,14 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	if err != nil {
 		o.observeFailure(ctx, st, in.Now, auth.Type())
 		st.FactorScratch = nil
+		// Soft failures wrap [ErrFactorRetry]; observe the failure
+		// (already done), advance the brute-force counter, and
+		// re-emit the same factor's prompt so the SPA can offer a
+		// retry. Hard failures bubble up so the HTTP layer can
+		// surface 5xx / 4xx unchanged.
+		if errors.Is(err, ErrFactorRetry) {
+			return o.softRetryAuthFactor(ctx, st, auth, in.Now, err)
+		}
 		return st, interaction.Step{}, err
 	}
 	if step.Prompt != nil {
@@ -565,6 +585,31 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	st.ActiveFactorIdx = -1
 	st.Phase = PhaseAfterAuthn
 	return st, interaction.Step{}, nil
+}
+
+// softRetryAuthFactor advances the brute-force counter and re-emits
+// the active factor's prompt after a soft credential failure. The
+// helper is split out of [handleAuthSubmission] so the latter stays
+// under the gocognit ceiling. origErr is the [ErrFactorRetry]-wrapped
+// error from the authenticator's Continue; we surface it verbatim
+// when Begin cannot produce a retry prompt so the HTTP layer renders
+// the original auth-failure response rather than swallowing the
+// failure into a generic 5xx.
+func (o *Orchestrator) softRetryAuthFactor(ctx context.Context, st State, auth Authenticator, now time.Time, origErr error) (State, interaction.Step, error) {
+	st.LastFailures++
+	retry, berr := auth.Begin(ctx, BeginInput{
+		Subject:  st.Subject,
+		ClientID: st.ClientID,
+		AuthTime: st.AuthTime,
+	})
+	if berr != nil || retry.Prompt == nil {
+		return st, interaction.Step{}, origErr
+	}
+	next, emitted, perr := o.emitFactorPrompt(st, auth, retry, now)
+	if perr != nil {
+		return st, interaction.Step{}, perr
+	}
+	return next, emitted, nil
 }
 
 // handleInteractionSubmission dispatches to the active interaction;
@@ -995,6 +1040,7 @@ func (o *Orchestrator) runRiskPreFactor(ctx context.Context, st State, now time.
 		RemoteIP:  st.RemoteIP,
 		UserAgent: st.UserAgent,
 		AMRSoFar:  collectAMR(st.Factors),
+		ACRValues: append([]string(nil), st.ACRValues...),
 		AuthTime:  now,
 	})
 	if err != nil {
@@ -1024,6 +1070,7 @@ func (o *Orchestrator) runRiskPostFactor(ctx context.Context, st State, now time
 		RemoteIP:   st.RemoteIP,
 		UserAgent:  st.UserAgent,
 		AMRSoFar:   collectAMR(st.Factors),
+		ACRValues:  append([]string(nil), st.ACRValues...),
 		LastFactor: last,
 		AuthTime:   now,
 	})

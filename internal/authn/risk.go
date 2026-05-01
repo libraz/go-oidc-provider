@@ -71,6 +71,15 @@ type RiskInput struct {
 	// before this slice is built.
 	AMRSoFar []string
 
+	// ACRValues echoes the original /authorize request's
+	// space-separated acr_values parameter as a slice. Empty when the
+	// caller did not request any specific ACR. Implementations may
+	// inspect it to gate risk policy on requested strength (e.g.
+	// require step-up factors only when acr_values names a high
+	// assurance class). The slice is a defensive copy: assessors MUST
+	// NOT retain references across calls.
+	ACRValues []string
+
 	// LastFactor is populated only when [RiskInput.Stage] is
 	// [RiskPostFactor]; it identifies the factor that just
 	// completed. Empty otherwise.

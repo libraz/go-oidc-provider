@@ -332,6 +332,7 @@ func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, fl
 		RemoteIP:  st.RemoteIP,
 		UserAgent: st.UserAgent,
 		AMRSoFar:  collectAMR(st.Factors),
+		ACRValues: append([]string(nil), st.ACRValues...),
 		AuthTime:  st.AuthTime,
 	})
 	if err != nil {
@@ -414,10 +415,17 @@ func (o *Orchestrator) advanceLoginFlow(ctx context.Context, st State, now time.
 	// Primary runs first (subject binding). The captcha threshold
 	// gate fires before Primary the same way it fires before any
 	// other factor — an after-N-failures captcha is independent of
-	// the LoginFlow seam.
-	if len(st.CompletedStepKinds) == 0 {
+	// the LoginFlow seam. We key the pre-Primary phase off
+	// st.Subject (Primary populates it via appendFactor) rather
+	// than CompletedStepKinds so a pre-Primary captcha that has
+	// already cleared does not flip the chain into the post-Primary
+	// rules pass before the credential factor has bound a subject.
+	if st.Subject == "" {
 		if o.captchaRequired(st) {
 			return o.emitCaptchaPrompt(st, now)
+		}
+		if handled, ns, step, err := o.evalLoginFlowCaptchaRulesPrePrimary(ctx, st, flow, now); handled {
+			return ns, step, err
 		}
 		return o.runLoginFlowStep(ctx, st, flow.primary, now)
 	}
@@ -484,6 +492,36 @@ func (o *Orchestrator) evalLoginFlowDecider(ctx context.Context, st State, flow 
 	default:
 		return false, st, interaction.Step{}, nil
 	}
+}
+
+// evalLoginFlowCaptchaRulesPrePrimary walks the rule list before
+// Primary runs and fires the first not-yet-completed captcha-shaped
+// rule whose predicate matches. This gives [RuleAfterFailedAttempts]
+// (and other captcha-typed rules) a chance to interpose between a
+// failed credential attempt and the next prompt — without it, a rule
+// whose Then is a captcha Step never gets a chance to fire because
+// rules are otherwise consulted only after Primary completes, which
+// soft credential failures never reach.
+//
+// Only captcha-shaped Steps are eligible here. Factor-shaped rules
+// must wait for Primary to complete (subject binding) before they can
+// run, so the pre-Primary scan deliberately ignores them.
+func (o *Orchestrator) evalLoginFlowCaptchaRulesPrePrimary(ctx context.Context, st State, flow *CompiledLoginFlow, now time.Time) (bool, State, interaction.Step, error) {
+	lc := o.loginFlowContext(st)
+	for i, r := range flow.rules {
+		if !r.then.isCaptcha {
+			continue
+		}
+		if containsString(st.CompletedStepKinds, r.then.kind) {
+			continue
+		}
+		if !recoverPredicate(o.logger, i, r.when, lc) {
+			continue
+		}
+		ns, step, err := o.runLoginFlowStep(ctx, st, r.then, now)
+		return true, ns, step, err
+	}
+	return false, st, interaction.Step{}, nil
 }
 
 // evalLoginFlowRules walks the compiled rule list in declaration
@@ -617,6 +655,23 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 			o.observeFailure(ctx, st, in.Now, step.auth.Type())
 		}
 		st.FactorScratch = nil
+		// Soft failures (wrong password, etc.) advance the failure
+		// counter and re-emit the same factor's prompt so the SPA
+		// can let the user retry. Hard failures (store outage,
+		// codec misconfiguration) skip this branch and surface to
+		// the HTTP layer as 5xx / 4xx unchanged.
+		if errors.Is(err, ErrFactorRetry) {
+			if !step.isCaptcha {
+				st.LastFailures++
+			}
+			// Re-enter the dispatcher so a captcha-shaped rule whose
+			// predicate just became true (e.g., RuleAfterFailedAttempts
+			// crossing its threshold) can interpose. When no rule fires
+			// the dispatcher falls through to Primary and re-emits the
+			// same factor's prompt.
+			st.ActiveStepKind = ""
+			return o.advanceLoginFlow(ctx, st, in.Now)
+		}
 		return st, interaction.Step{}, err
 	}
 	if cont.Prompt != nil {
