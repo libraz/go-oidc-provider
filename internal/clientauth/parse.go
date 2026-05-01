@@ -51,7 +51,10 @@ func Parse(r *http.Request) (*Credentials, error) {
 	if r == nil {
 		return nil, errors.New("authn: nil request")
 	}
-	basicID, basicSecret, hasBasic := r.BasicAuth()
+	basicID, basicSecret, hasBasic, err := parseBasicAuth(r)
+	if err != nil {
+		return nil, err
+	}
 
 	form, err := readForm(r)
 	if err != nil {
@@ -204,4 +207,36 @@ func readForm(r *http.Request) (url.Values, error) {
 		return nil, ErrAssertionMalformed
 	}
 	return r.PostForm, nil
+}
+
+// parseBasicAuth extracts the HTTP Basic credentials per RFC 6749 §2.3.1
+// and Appendix B: the username and password MUST be
+// application/x-www-form-urlencoded before being joined with ":" and
+// base64-encoded. Go's [http.Request.BasicAuth] only base64-decodes and
+// splits on the first ":", so this wrapper applies the form-decode step
+// the spec requires. A credential containing %, &, +, or space is
+// authenticated under the same value the registry stores for it.
+//
+// A malformed header (non-Basic, undecodable base64, missing ":") is
+// reported as hasBasic=false rather than an error so the caller can fall
+// back to the form-body channel — that mirrors Go's BasicAuth contract
+// and keeps the channel-selection logic identical to the pre-Appendix-B
+// behaviour. A credential whose form-decode fails is the only path that
+// raises [ErrCredentialsInvalid]; the wire shape is "the header was
+// present but malformed", which is indistinguishable from "wrong
+// secret" by design (same RFC 6749 §5.2 invalid_client envelope).
+func parseBasicAuth(r *http.Request) (id, secret string, ok bool, err error) {
+	rawID, rawSecret, hasBasic := r.BasicAuth()
+	if !hasBasic {
+		return "", "", false, nil
+	}
+	decodedID, derr := url.QueryUnescape(rawID)
+	if derr != nil {
+		return "", "", false, ErrCredentialsInvalid
+	}
+	decodedSecret, derr := url.QueryUnescape(rawSecret)
+	if derr != nil {
+		return "", "", false, ErrCredentialsInvalid
+	}
+	return decodedID, decodedSecret, true, nil
 }
