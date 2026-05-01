@@ -142,7 +142,7 @@ func (f *dcrFixture) postWithContentType(tb testing.TB, body any, bearer, ct str
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		tb.Fatalf("Do: %v", err)
 	}
@@ -762,7 +762,7 @@ func TestRegister_NotAllowedMethods(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewRequest: %v", err)
 			}
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := f.prov.HTTPClient(nil).Do(req)
 			if err != nil {
 				t.Fatalf("Do: %v", err)
 			}

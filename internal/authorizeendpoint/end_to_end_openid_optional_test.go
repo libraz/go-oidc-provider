@@ -129,12 +129,7 @@ func runOpenIDOptionalAuthCodeFlow(
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 
 	authResp, err := newGet(tk.Server.URL + "/oidc/auth?" + values.Encode()).Do(client)
 	if err != nil {
@@ -221,7 +216,7 @@ func runOpenIDOptionalAuthCodeFlow(
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenReq.SetBasicAuth(clientID, secret)
-	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	tokenResp, err := client.Do(tokenReq)
 	if err != nil {
 		t.Fatalf("POST /token: %v", err)
 	}

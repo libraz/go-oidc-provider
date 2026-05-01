@@ -366,12 +366,7 @@ func TestEndToEnd_JARM_FeatureDisabled_ReturnsLegacyError(t *testing.T) {
 		TokenEndpointAuthMethod: "client_secret_basic",
 	})
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 	values := jarmAuthorizeValues(rp.ID, rp.RedirectURIs[0], "query.jwt")
 	resp, err := newGet(tk.Server.URL + "/oidc/auth?" + values.Encode()).Do(client)
 	if err != nil {

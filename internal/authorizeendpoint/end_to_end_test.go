@@ -55,13 +55,7 @@ func TestEndToEnd_AuthorizeInteractionToken_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		// Disable redirect following so each hop can be inspected.
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 
 	authorizeURL := tk.Server.URL + "/oidc/auth?" + e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0]).Encode()
 	authResp, err := newGet(authorizeURL).Do(client)
@@ -155,7 +149,7 @@ func TestEndToEnd_AuthorizeInteractionToken_HappyPath(t *testing.T) {
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenReq.SetBasicAuth(rp.ID, secret)
-	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	tokenResp, err := client.Do(tokenReq)
 	if err != nil {
 		t.Fatalf("POST /token: %v", err)
 	}

@@ -54,12 +54,7 @@ func TestEndToEnd_CodeReplayRevokesAT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	browser := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	browser := tk.HTTPClient(jar)
 	code := authorizeAndConsent(t, browser, tk, rp, secret)
 
 	// 1: First /token exchange — happy path.
@@ -82,7 +77,7 @@ func TestEndToEnd_CodeReplayRevokesAT(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(rp.ID, secret)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("POST replay: %v", err)
 	}
@@ -178,7 +173,7 @@ func exchangeCode(t *testing.T, tk *testkit.Provider, rp *store.Client, secret, 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(rp.ID, secret)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("%s: POST /token: %v", label, err)
 	}
@@ -208,7 +203,7 @@ func userinfoStatus(t *testing.T, tk *testkit.Provider, accessToken string) int 
 		t.Fatalf("NewRequest /userinfo: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("GET /userinfo: %v", err)
 	}

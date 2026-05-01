@@ -132,7 +132,7 @@ func (f *fixture) post(tb testing.TB, form url.Values, basicID, basicSecret stri
 	if basicID != "" {
 		req.SetBasicAuth(basicID, basicSecret)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		tb.Fatalf("Do: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestHandler_GETRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestHandler_WrongContentType(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}

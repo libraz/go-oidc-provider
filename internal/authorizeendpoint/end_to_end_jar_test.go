@@ -72,12 +72,7 @@ func newJARHarness(t *testing.T, mutate func(*store.Client)) *jarHarness {
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	httpClient := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	httpClient := tk.HTTPClient(jar)
 	return &jarHarness{
 		tk:          tk,
 		rpID:        rp.ID,
@@ -318,11 +313,7 @@ func TestEndToEnd_JAR_FeatureDisabledRejectsRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := (&http.Client{
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}).Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -424,7 +415,7 @@ func TestEndToEnd_JAR_DiscoveryAdvertisesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}

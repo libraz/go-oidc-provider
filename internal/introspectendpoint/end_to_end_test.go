@@ -30,7 +30,7 @@ func TestEndToEnd_DiscoveryAdvertisement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestEndToEnd_DiscoveryHidesEndpointWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestEndToEnd_HappyPath_JWTAccessToken(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(rp.ID, secret)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestEndToEnd_HappyPath_RefreshToken(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(rp.ID, secret)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestEndToEnd_FeatureDisabledNoRoute(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestEndToEnd_InactiveForExpiredJWT(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(rp.ID, secret)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestEndToEnd_InactiveForUnknownRefreshToken(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(rp.ID, secret)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}

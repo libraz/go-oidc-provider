@@ -41,12 +41,7 @@ func runAuthorizeForMTLS(t testing.TB, tk *testkit.Provider, clientID, redirectU
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 	q := url.Values{
 		"client_id":             {clientID},
 		"response_type":         {"code"},

@@ -45,7 +45,7 @@ func (f *fixture) postWithAccept(tb testing.TB, form url.Values, basicID, basicS
 	if basicID != "" {
 		req.SetBasicAuth(basicID, basicSecret)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		tb.Fatalf("Do: %v", err)
 	}

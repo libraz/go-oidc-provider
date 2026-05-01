@@ -894,7 +894,7 @@ func TestAuthCode_OpaqueFormat_DPoPBindingPersisted(t *testing.T) {
 	key := newDPoPKey(t)
 	form := authCodeForm(codeID, redirect, verifier)
 	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-ac-opaque-dpop", "")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof)
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))

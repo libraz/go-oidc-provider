@@ -92,6 +92,7 @@ func makeDPoPProof(t testing.TB, key dpopKeyPair, method, htu string, now time.T
 // and a DPoP header. dpopProof may be empty to omit the header.
 func postWithDPoP(
 	t testing.TB,
+	client *http.Client,
 	endpoint string,
 	form url.Values,
 	basicID, basicSecret, dpopProof string,
@@ -111,7 +112,7 @@ func postWithDPoP(
 	if dpopProof != "" {
 		req.Header.Set("DPoP", dpopProof)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -144,7 +145,7 @@ func TestRefresh_DPoP_HappyPath(t *testing.T) {
 
 	form := refreshForm(tokenID, "")
 	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-refresh-1", "")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof)
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -189,7 +190,7 @@ func TestRefresh_DPoP_MissingProof(t *testing.T) {
 	})
 
 	form := refreshForm(tokenID, "")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, "")
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -221,7 +222,7 @@ func TestRefresh_DPoP_ThumbprintMismatch(t *testing.T) {
 
 	form := refreshForm(tokenID, "")
 	proof := makeDPoPProof(t, other, "POST", f.endpoint, f.clock.now, "jti-mismatch", "")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof)
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -250,7 +251,7 @@ func TestRefresh_DPoP_BearerChainStillWorks(t *testing.T) {
 	})
 
 	form := refreshForm(tokenID, "")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, "")
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, "")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -288,7 +289,7 @@ func TestRefresh_DPoP_BearerChainNoBindOnRefreshConfidential(t *testing.T) {
 
 	form := refreshForm(tokenID, "")
 	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-upgrade", "")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof)
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)

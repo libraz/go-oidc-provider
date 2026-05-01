@@ -184,7 +184,7 @@ func RunCodeFlow(tb testing.TB, p *testkit.Provider, subject string, params Auth
 	if subject == "" {
 		subject = DefaultSubject
 	}
-	client := mustClient(tb)
+	client := mustClient(tb, p)
 
 	// Step 1: GET /authorize → 302 to /interaction/{uid}
 	authorizeURL := p.Server.URL + "/oidc/auth?" + params.Values().Encode()
@@ -350,19 +350,15 @@ func ExchangeCode(tb testing.TB, p *testkit.Provider, req ExchangeCodeRequest) T
 }
 
 // mustClient returns an [*http.Client] with a cookie jar, redirects
-// disabled (so each hop can be inspected), and a per-test cleanup.
-func mustClient(tb testing.TB) *http.Client {
+// disabled (so each hop can be inspected), and the testkit server's
+// TLS root pool wired in.
+func mustClient(tb testing.TB, p *testkit.Provider) *http.Client {
 	tb.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		tb.Fatalf("scenariokit: cookiejar: %v", err)
 	}
-	return &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	return p.HTTPClient(jar)
 }
 
 // mustGet issues a GET against rawURL and fails the test on transport error.

@@ -148,7 +148,7 @@ func TestPAR_JAR_AcceptsRequestObject(t *testing.T) {
 		"client_id": {f.rp.ID},
 		"request":   {signed},
 	}
-	resp := postPARForm(t, f.endpoint, form, f.rp.ID, f.secret)
+	resp := postPARForm(t, f.prov.HTTPClient(nil), f.endpoint, form, f.rp.ID, f.secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != 201 {
 		body := decodeJSON(t, resp)
@@ -170,7 +170,7 @@ func TestPAR_JAR_RejectsBadAud(t *testing.T) {
 		"client_id": {f.rp.ID},
 		"request":   {signed},
 	}
-	resp := postPARForm(t, f.endpoint, form, f.rp.ID, f.secret)
+	resp := postPARForm(t, f.prov.HTTPClient(nil), f.endpoint, form, f.rp.ID, f.secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != 400 {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -188,7 +188,7 @@ func TestPAR_JAR_RejectsRequestURIInPARBody(t *testing.T) {
 		"client_id":   {f.rp.ID},
 		"request_uri": {"https://rp.testkit.invalid/req"},
 	}
-	resp := postPARForm(t, f.endpoint, form, f.rp.ID, f.secret)
+	resp := postPARForm(t, f.prov.HTTPClient(nil), f.endpoint, form, f.rp.ID, f.secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != 400 {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -213,7 +213,7 @@ func TestPAR_JAR_RejectsRequestPlusRequestURI(t *testing.T) {
 		"request":     {signed},
 		"request_uri": {"https://rp.testkit.invalid/req"},
 	}
-	resp := postPARForm(t, f.endpoint, form, f.rp.ID, f.secret)
+	resp := postPARForm(t, f.prov.HTTPClient(nil), f.endpoint, form, f.rp.ID, f.secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -233,7 +233,7 @@ func TestPAR_JAR_FeatureDisabledRejectsRequest(t *testing.T) {
 		"client_id": {client.ID},
 		"request":   {"eyJhbGciOiJFUzI1NiJ9.body.sig"},
 	}
-	resp := postPARForm(t, f.endpoint, form, client.ID, secret)
+	resp := postPARForm(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != 400 {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -269,7 +269,7 @@ func TestPAR_JAR_RequireSigned_RejectsPlainForm(t *testing.T) {
 	defer srv.Close()
 
 	form := goodAuthorizeForm(f.rp.ID, f.rp.RedirectURIs[0])
-	resp := postPARForm(t, srv.URL, form, f.rp.ID, f.secret)
+	resp := postPARForm(t, srv.Client(), srv.URL, form, f.rp.ID, f.secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)
@@ -302,7 +302,7 @@ func TestPAR_JAR_RequireSigned_AcceptsSignedRequest(t *testing.T) {
 		"client_id": {f.rp.ID},
 		"request":   {signed},
 	}
-	resp := postPARForm(t, f.endpoint, form, f.rp.ID, f.secret)
+	resp := postPARForm(t, f.prov.HTTPClient(nil), f.endpoint, form, f.rp.ID, f.secret)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		body := decodeJSON(t, resp)
@@ -325,7 +325,7 @@ func freshJTI() string {
 	return "jti-" + hex.EncodeToString(b[:])
 }
 
-func postPARForm(tb testing.TB, endpoint string, form url.Values, basicID, basicSecret string) *http.Response {
+func postPARForm(tb testing.TB, client *http.Client, endpoint string, form url.Values, basicID, basicSecret string) *http.Response {
 	tb.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint,
 		strings.NewReader(form.Encode()))
@@ -336,7 +336,7 @@ func postPARForm(tb testing.TB, endpoint string, form url.Values, basicID, basic
 	if basicID != "" {
 		req.SetBasicAuth(basicID, basicSecret)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		tb.Fatalf("Do: %v", err)
 	}

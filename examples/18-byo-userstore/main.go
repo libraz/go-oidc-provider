@@ -356,7 +356,7 @@ ON CONFLICT(member_id) DO UPDATE SET
     tenant_id     = excluded.tenant_id,
     last_modified = excluded.last_modified;
 `
-	now := time.Now().Unix()
+	now := time.Now().Unix() //nolint:forbidigo // example seed script — not OP business logic; internal/timex is unreachable from examples/.
 	_, err = db.ExecContext(ctx, upsert,
 		demoSubject, demoUsername, hash,
 		"Demo Member", "en-US", "tenant-acme", now,

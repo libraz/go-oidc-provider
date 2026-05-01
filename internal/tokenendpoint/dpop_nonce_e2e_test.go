@@ -145,7 +145,7 @@ func TestAuthCode_DPoPNonce_RetryFlow(t *testing.T) {
 	// First attempt: no nonce in the proof. Expect 400 +
 	// use_dpop_nonce + a fresh DPoP-Nonce header.
 	proof1 := makeDPoPProofWithNonce(t, key, "POST", f.endpoint, f.clock.now, "jti-rt-1", "")
-	resp1 := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof1)
+	resp1 := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof1)
 	defer resp1.Body.Close()
 	if resp1.StatusCode != http.StatusBadRequest {
 		t.Fatalf("first attempt status=%d want 400", resp1.StatusCode)
@@ -183,7 +183,7 @@ func TestAuthCode_DPoPNonce_RetryFlow(t *testing.T) {
 	})
 	form2 := authCodeForm(codeID2, redirect, verifier)
 	proof2 := makeDPoPProofWithNonce(t, key, "POST", f.endpoint, f.clock.now, "jti-rt-2", freshNonce)
-	resp2 := postWithDPoP(t, f.endpoint, form2, client.ID, secret, proof2)
+	resp2 := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form2, client.ID, secret, proof2)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("retry status=%d want 200, body=%v", resp2.StatusCode, decodeJSON(t, resp2))
@@ -235,7 +235,7 @@ func TestAuthCode_DPoPNonce_StaleNonceAlsoChallenges(t *testing.T) {
 	key := newDPoPKey(t)
 	form := authCodeForm(codeID, redirect, verifier)
 	proof := makeDPoPProofWithNonce(t, key, "POST", f.endpoint, f.clock.now, "jti-stale-1", "stale-value-the-server-no-longer-accepts")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof)
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400", resp.StatusCode)

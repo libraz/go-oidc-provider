@@ -3,13 +3,50 @@ package testkit
 import (
 	"crypto"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
+
+// trustOnce installs the testkit's TLS server certificate into
+// [http.DefaultTransport]'s root pool exactly once per test process.
+// It runs from inside [NewProvider] (which has a live [*httptest.Server]
+// to pull the cert from) and only the first call mutates the transport,
+// so subsequent parallel [NewProvider] calls observe the pool already
+// in place. Without this, [http.DefaultClient.Do] against the testkit's
+// HTTPS server fails with "x509: certificate signed by unknown
+// authority" on Go 1.25.x; Go 1.26+ relaxes loopback trust enough to
+// mask the problem. Switching to TLS is the upstream fix for Go 1.25's
+// cookiejar dropping Secure cookies on plain HTTP, so trusting the
+// testkit cert here is on the same critical path.
+var trustOnce sync.Once //nolint:gochecknoglobals // testkit-internal one-shot trust install; safe by sync.Once.
+
+func ensureTrust(srv *httptest.Server) {
+	trustOnce.Do(func() {
+		cert := srv.Certificate()
+		if cert == nil {
+			return
+		}
+		rt, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return
+		}
+		if rt.TLSClientConfig == nil {
+			rt.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+		if rt.TLSClientConfig.RootCAs == nil {
+			rt.TLSClientConfig.RootCAs = x509.NewCertPool()
+		}
+		rt.TLSClientConfig.RootCAs.AddCert(cert)
+	})
+}
 
 // cookieKeyLen is the AES-256-GCM key length the cookie codec expects. The
 // constant is duplicated here so the testkit need not import the internal
@@ -145,8 +182,16 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 	if err != nil {
 		tb.Fatalf("testkit: op.New: %v", err)
 	}
-	srv := httptest.NewServer(provider)
+	// httptest.NewTLSServer (rather than NewServer) so the OP serves over
+	// HTTPS. The cookie codec marks __Host- prefixed cookies Secure, and
+	// Go 1.25's net/http/cookiejar drops Secure cookies set over plain
+	// HTTP — even on loopback. Go 1.26 relaxed this for localhost, but
+	// we still target Go 1.23 as the floor declared in go.mod.
+	srv := httptest.NewTLSServer(provider)
 	tb.Cleanup(srv.Close)
+	// Make http.DefaultClient trust the testkit cert so legacy test
+	// helpers that call DefaultClient.Do continue to work.
+	ensureTrust(srv)
 
 	return &Provider{
 		OP:         provider,
@@ -154,6 +199,24 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		Store:      store,
 		Issuer:     cfg.issuer,
 		SigningKey: signKey,
+	}
+}
+
+// HTTPClient returns an [*http.Client] preconfigured to call the
+// testkit server: it trusts the server's self-signed certificate and
+// disables redirect following so each hop can be inspected (the
+// universal end-to-end pattern). Pass jar=nil to skip cookie storage.
+//
+// Each call returns a fresh [*http.Client] backed by the
+// [httptest.Server]'s pinned Transport, so concurrent tests do not
+// share Jar / CheckRedirect mutations.
+func (p *Provider) HTTPClient(jar http.CookieJar) *http.Client {
+	return &http.Client{
+		Transport: p.Server.Client().Transport,
+		Jar:       jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 }
 

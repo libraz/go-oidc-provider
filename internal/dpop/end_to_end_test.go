@@ -168,12 +168,7 @@ func runAuthorize(t testing.TB, tk *testkit.Provider, clientID, redirectURI, cha
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 	q := url.Values{
 		"client_id":             {clientID},
 		"response_type":         {"code"},
@@ -301,6 +296,8 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	verifier, challenge := pkcePair(t)
 	code := runAuthorize(t, tk, rp.ID, rp.RedirectURIs[0], challenge, "state-1", "nonce-1", clock)
 
+	client := tk.HTTPClient(nil)
+
 	// Exchange code for tokens with a DPoP proof.
 	key := newProofKey(t)
 	tokenURL := tk.Server.URL + "/oidc/token"
@@ -318,7 +315,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	tokReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokReq.SetBasicAuth(rp.ID, secret)
 	tokReq.Header.Set("DPoP", makeProof(t, key, "POST", tokenURL, clock.now, "jti-token-1", ""))
-	tokResp, err := http.DefaultClient.Do(tokReq)
+	tokResp, err := client.Do(tokReq)
 	if err != nil {
 		t.Fatalf("Do /token: %v", err)
 	}
@@ -345,7 +342,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	}
 	uinfoReq.Header.Set("Authorization", "Bearer "+at)
 	uinfoReq.Header.Set("DPoP", makeProof(t, key, "GET", userinfoURL, clock.now, "jti-uinfo-1", dpop.AccessTokenHash(at)))
-	uinfoResp, err := http.DefaultClient.Do(uinfoReq)
+	uinfoResp, err := client.Do(uinfoReq)
 	if err != nil {
 		t.Fatalf("Do /userinfo: %v", err)
 	}
@@ -361,7 +358,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 		t.Fatalf("NewRequest /userinfo plain: %v", err)
 	}
 	plainReq.Header.Set("Authorization", "Bearer "+at)
-	plainResp, err := http.DefaultClient.Do(plainReq)
+	plainResp, err := client.Do(plainReq)
 	if err != nil {
 		t.Fatalf("Do /userinfo plain: %v", err)
 	}
@@ -378,7 +375,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	}
 	otherReq.Header.Set("Authorization", "Bearer "+at)
 	otherReq.Header.Set("DPoP", makeProof(t, other, "GET", userinfoURL, clock.now, "jti-uinfo-other", dpop.AccessTokenHash(at)))
-	otherResp, err := http.DefaultClient.Do(otherReq)
+	otherResp, err := client.Do(otherReq)
 	if err != nil {
 		t.Fatalf("Do /userinfo other: %v", err)
 	}
@@ -401,7 +398,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	refReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	refReq.SetBasicAuth(rp.ID, secret)
 	refReq.Header.Set("DPoP", makeProof(t, key, "POST", tokenURL, clock.now, "jti-refresh-1", ""))
-	refResp, err := http.DefaultClient.Do(refReq)
+	refResp, err := client.Do(refReq)
 	if err != nil {
 		t.Fatalf("Do refresh: %v", err)
 	}
@@ -438,7 +435,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	misReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	misReq.SetBasicAuth(rp.ID, secret)
 	misReq.Header.Set("DPoP", makeProof(t, other, "POST", tokenURL, clock.now, "jti-refresh-other", ""))
-	misResp, err := http.DefaultClient.Do(misReq)
+	misResp, err := client.Do(misReq)
 	if err != nil {
 		t.Fatalf("Do mismatch refresh: %v", err)
 	}

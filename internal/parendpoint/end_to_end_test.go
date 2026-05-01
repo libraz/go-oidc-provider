@@ -64,7 +64,12 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 	}
 	parReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	parReq.SetBasicAuth(rp.ID, secret)
-	parResp, err := http.DefaultClient.Do(parReq)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := tk.HTTPClient(jar)
+	parResp, err := client.Do(parReq)
 	if err != nil {
 		t.Fatalf("Do /par: %v", err)
 	}
@@ -80,16 +85,6 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 	}
 
 	// 2: GET /authorize?client_id=...&request_uri=...
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookiejar.New: %v", err)
-	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 	authorizeQuery := url.Values{
 		"client_id":   {rp.ID},
 		"request_uri": {requestURI},
@@ -202,7 +197,7 @@ func TestEndToEnd_PAR_AuthorizeInteractionToken(t *testing.T) {
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenReq.SetBasicAuth(rp.ID, secret)
-	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	tokenResp, err := client.Do(tokenReq)
 	if err != nil {
 		t.Fatalf("Do /token: %v", err)
 	}
@@ -278,7 +273,7 @@ func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
 	}
 	parReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	parReq.SetBasicAuth(rp.ID, secret)
-	parResp, err := http.DefaultClient.Do(parReq)
+	parResp, err := tk.HTTPClient(nil).Do(parReq)
 	if err != nil {
 		t.Fatalf("Do /par: %v", err)
 	}
@@ -290,7 +285,7 @@ func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
 
 	// First /authorize parks the user at interaction; the URI remains
 	// resolvable so a second visit before auth completes can reuse it.
-	first := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
+	first := getAuthorize(t, tk, rp.ID, requestURI)
 	if first.StatusCode != http.StatusFound {
 		t.Fatalf("first /authorize status=%d want 302", first.StatusCode)
 	}
@@ -298,7 +293,7 @@ func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
 
 	// Second /authorize before auth completion: still acceptable, the
 	// URI is single-use only once a code has been issued.
-	preAuth := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
+	preAuth := getAuthorize(t, tk, rp.ID, requestURI)
 	if preAuth.StatusCode != http.StatusFound {
 		t.Fatalf("pre-auth replay status=%d want 302", preAuth.StatusCode)
 	}
@@ -312,7 +307,7 @@ func TestEndToEnd_PAR_AuthorizeRejectsReplay(t *testing.T) {
 	}
 
 	// Post-emission /authorize must be rejected as invalid_request_uri.
-	second := getAuthorize(t, tk.Server.URL, rp.ID, requestURI)
+	second := getAuthorize(t, tk, rp.ID, requestURI)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusBadRequest {
 		t.Fatalf("second /authorize status=%d want 400", second.StatusCode)
@@ -333,7 +328,7 @@ func TestEndToEnd_PAR_DisabledRejectsRequestURI(t *testing.T) {
 	tk := testkit.NewProvider(t)
 	rp := tk.RegisterClient(t, testkit.ClientFixture{ID: "rp-no-par"})
 
-	resp := getAuthorize(t, tk.Server.URL, rp.ID,
+	resp := getAuthorize(t, tk, rp.ID,
 		"urn:ietf:params:oauth:request_uri:something")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -359,7 +354,7 @@ func TestEndToEnd_PAR_DiscoveryAdvertisement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		t.Fatalf("Do: %v", err)
 	}
@@ -412,20 +407,16 @@ func approvedScopesFromPromptPAR(env map[string]any) string {
 // getAuthorize issues a GET /authorize with the supplied client_id and
 // request_uri. It returns the raw [http.Response]; the caller is
 // responsible for closing the body.
-func getAuthorize(tb testing.TB, base, clientID, requestURI string) *http.Response {
+func getAuthorize(tb testing.TB, tk *testkit.Provider, clientID, requestURI string) *http.Response {
 	tb.Helper()
 	values := url.Values{"client_id": {clientID}, "request_uri": {requestURI}}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-		base+"/oidc/auth?"+values.Encode(), http.NoBody)
+		tk.Server.URL+"/oidc/auth?"+values.Encode(), http.NoBody)
 	if err != nil {
 		tb.Fatalf("NewRequest: %v", err)
 	}
-	// Bypass the default redirect follower so the test sees the 302.
-	resp, err := (&http.Client{
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}).Do(req)
+	// HTTPClient already disables redirect following so the test sees the 302.
+	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
 		tb.Fatalf("Do: %v", err)
 	}

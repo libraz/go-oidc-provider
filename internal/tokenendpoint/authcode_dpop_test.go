@@ -45,7 +45,7 @@ func TestAuthCode_DPoP_BindsCnfJkt(t *testing.T) {
 	key := newDPoPKey(t)
 	form := authCodeForm(codeID, redirect, verifier)
 	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-authcode-1", "")
-	resp := postWithDPoP(t, f.endpoint, form, client.ID, secret, proof)
+	resp := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
@@ -188,13 +188,13 @@ func TestAuthCode_DPoP_Replay(t *testing.T) {
 
 	proof := makeDPoPProof(t, key, "POST", f.endpoint, f.clock.now, "jti-replay-shared", "")
 
-	first := postWithDPoP(t, f.endpoint, authCodeForm(codeID1, redirect, verifier1), client.ID, secret, proof)
+	first := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, authCodeForm(codeID1, redirect, verifier1), client.ID, secret, proof)
 	if first.StatusCode != http.StatusOK {
 		t.Fatalf("first status=%d want 200, body=%v", first.StatusCode, decodeJSON(t, first))
 	}
 	first.Body.Close()
 
-	second := postWithDPoP(t, f.endpoint, authCodeForm(codeID2, redirect, verifier2), client.ID, secret, proof)
+	second := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, authCodeForm(codeID2, redirect, verifier2), client.ID, secret, proof)
 	defer second.Body.Close()
 	if second.StatusCode != http.StatusBadRequest {
 		t.Fatalf("replay status=%d want 400", second.StatusCode)

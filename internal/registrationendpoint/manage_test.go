@@ -86,7 +86,7 @@ func (f *dcrFixture) manage(tb testing.TB, method, path, bearer string, body any
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := f.prov.HTTPClient(nil).Do(req)
 	if err != nil {
 		tb.Fatalf("Do: %v", err)
 	}
@@ -810,7 +810,7 @@ func TestManage_NotAllowedMethods(t *testing.T) {
 				t.Fatalf("NewRequest: %v", err)
 			}
 			req.Header.Set("Authorization", "Bearer "+created.registrationAccessToken)
-			resp, err := http.DefaultClient.Do(req)
+			resp, err := f.prov.HTTPClient(nil).Do(req)
 			if err != nil {
 				t.Fatalf("Do: %v", err)
 			}

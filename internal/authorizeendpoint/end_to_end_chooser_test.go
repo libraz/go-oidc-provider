@@ -74,12 +74,7 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 
 	// Hop 1: /authorize?prompt=select_account with the seeded session
 	// cookie attached. Cookiejar refuses to deliver Secure cookies on
@@ -233,7 +228,7 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenReq.SetBasicAuth(rp.ID, secret)
-	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	tokenResp, err := client.Do(tokenReq)
 	if err != nil {
 		t.Fatalf("POST /token: %v", err)
 	}
@@ -294,12 +289,7 @@ func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 
 	// Drive /authorize?prompt=login with user-A's session cookie
 	// attached. The orchestrator runs the testkit SubjectAuthenticator
@@ -446,12 +436,7 @@ func TestEndToEnd_SelectAccount_NoSession_FallsBackToLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 	values := e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0])
 	values.Set("prompt", "select_account")
 

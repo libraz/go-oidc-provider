@@ -44,12 +44,7 @@ func TestEndToEnd_AuthorizeACRValuesEcho(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cookiejar.New: %v", err)
 	}
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := tk.HTTPClient(jar)
 	values := e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0])
 	values.Set("acr_values", "1 2")
 	authResp, err := newGet(tk.Server.URL + "/oidc/auth?" + values.Encode()).Do(client)
@@ -124,7 +119,7 @@ func TestEndToEnd_AuthorizeACRValuesEcho(t *testing.T) {
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenReq.SetBasicAuth(rp.ID, secret)
-	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	tokenResp, err := client.Do(tokenReq)
 	if err != nil {
 		t.Fatalf("POST /token: %v", err)
 	}
