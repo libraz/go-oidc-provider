@@ -38,6 +38,7 @@ rows:
       openid email returns 200 with sub and email present in the JSON
       body; a rejected email_verified claim is omitted from the
       response.
+    status: active
 
   - id: UI-003
     severity: P1
@@ -45,6 +46,7 @@ rows:
     behaviour: |
       A POST /me carrying the same access_token as UI-002 returns
       200 with the same body composition.
+    status: active
 
   - id: UI-004
     severity: P2
@@ -53,6 +55,8 @@ rows:
       A successful userinfo call exposes Client, Grant, AccessToken,
       and Account on the request context for hooks and audit
       consumers.
+    status: out-of-scope
+    out_of_scope_reason: "Internal request-context plumbing is not part of the public wire surface of go-oidc-provider v1.0; observability hooks attach via op.WithAuditEmitter (op.AuditEvent), not via implicit ctx.entities. The panva 'oidc-provider request.entities' inspection is not portable to a non-Node OP."
 
   - id: UI-005
     severity: P0
@@ -79,6 +83,8 @@ rows:
       An access_token that resolves but lacks the openid scope yields
       403 with error=insufficient_scope, scope=openid, and the
       description "access token missing openid scope".
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 /userinfo does not enforce per-request scope; OIDC Core §5.3.1 'insufficient_scope' is not part of the v1.0 wire (no scope gate at /userinfo). Reconsider when v1.x adds RFC 6750 §3.1 scope enforcement."
 
   - id: UI-008
     severity: P0
@@ -88,15 +94,18 @@ rows:
       can no longer be loaded, the endpoint returns 401 with
       error=invalid_token and the description "invalid token
       provided".
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 /userinfo never resolves the client by id (no GetClient call on the path). 'Client gone' has no observable wire effect. Out-of-scope until the userinfo handler grows a per-request client check."
 
   - id: UI-009
     severity: P0
     spec: OIDC Core §5.3.2 (sub MUST be issued for an existing account); RFC 6750 §3.1
     behaviour: |
       When the access_token is otherwise valid but the bound account
-      no longer resolves, the endpoint returns 401 with
-      error=invalid_token and the description "invalid token
-      provided".
+      no longer resolves (UserStore returns ErrNotFound), the endpoint
+      returns 401 with WWW-Authenticate carrying error=invalid_token
+      and the description "subject unknown".
+    status: active
 
   - id: UI-010
     severity: P1
@@ -105,6 +114,8 @@ rows:
       A GET /me?scope=openid against a token issued with
       scope=openid email returns 200 with only sub (the request
       narrows the response).
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 /userinfo does not consult a request-level scope parameter; OIDC Core §5.4 'request narrows scope' has no effect (the access token's granted scope is the only ground truth)."
 
   - id: UI-011
     severity: P0
@@ -114,50 +125,65 @@ rows:
       scope=openid email yields 403 with error=insufficient_scope,
       scope=profile, and the description "access token missing
       requested scope" (request must not widen the token).
+    status: out-of-scope
+    out_of_scope_reason: v1.0 /userinfo does not enforce per-request scope; OIDC Core §5.4 widening rejection is not part of the v1.0 wire (no scope gate at /userinfo). Reconsider when v1.x adds RFC 6750 §3.1 scope enforcement.
 
   - id: UI-012
     severity: P0
     spec: RFC 6750 §3; RFC 9449 §7 (DPoP challenge)
     behaviour: |
       A GET /me with no Authorization header, query, or body yields
-      401 error=invalid_token "no access token provided"; the
-      WWW-Authenticate response MUST cover both Bearer and DPoP
-      schemes.
+      401 with WWW-Authenticate equal to `Bearer realm="userinfo"`
+      (single challenge; v1.0 does not enumerate DPoP alongside Bearer
+      because the bare "missing credentials" branch leaves the wire
+      free of error= / scope= attributes).
+    status: active
 
   - id: UI-013
     severity: P0
     spec: RFC 6750 §2 (clients MUST NOT use more than one method to transmit the token)
     behaviour: |
-      A GET /me that carries the access_token both via Authorization
-      header AND via ?access_token= returns 400 with
-      error=invalid_request and the description "access token must
-      only be provided using one mechanism".
+      A POST /me that carries the access_token both via Authorization:
+      Bearer header AND via the access_token= form field returns 400
+      with WWW-Authenticate `Bearer error="invalid_request",
+      error_description="The request is missing a required parameter
+      or is malformed"`. (v1.0 does not consult the URL query for
+      access tokens, so the multi-channel collision is observable on
+      the body channel only.)
+    status: active
 
   - id: UI-014
     severity: P0
     spec: RFC 6750 §2.1; RFC 7235 §2.1
     behaviour: |
-      An Authorization header literally equal to "Bearer" with no
-      token component returns 400 with error=invalid_request and the
-      description "invalid authorization header value format".
+      An Authorization header literally equal to "Bearer" (no token
+      component) yields 401 with the bare WWW-Authenticate challenge
+      `Bearer realm="userinfo"` (v1.0 treats the unrecognised header
+      shape as missing credentials rather than as an invalid_request
+      diagnostic).
+    status: active
 
   - id: UI-015
     severity: P0
     spec: RFC 6750 §2.1; RFC 7235 §2.1
     behaviour: |
-      An Authorization header containing more than scheme + token
-      (e.g. "Bearer some three") returns 400 with
-      error=invalid_request and the description "invalid
-      authorization header value format".
+      An Authorization header that contains "Bearer " followed by
+      additional whitespace-delimited parts (e.g. "Bearer some three")
+      is parsed as token="some three"; the verifier rejects the value
+      and the endpoint returns 401 with WWW-Authenticate carrying
+      error=invalid_token and the description "The access token is
+      invalid".
+    status: active
 
   - id: UI-016
     severity: P0
     spec: RFC 6750 §2.1
     behaviour: |
-      An Authorization header whose scheme is neither Bearer nor
-      DPoP (e.g. Basic) returns 400 with error=invalid_request and
-      the description "authorization header scheme must be
-      `Bearer`".
+      An Authorization header whose scheme is neither Bearer nor DPoP
+      (e.g. "Authorization: Basic ...") is treated as missing
+      credentials: the endpoint returns 401 with the bare
+      WWW-Authenticate challenge `Bearer realm="userinfo"`.
+    status: active
 
   - id: UI-017
     severity: P0
@@ -166,20 +192,25 @@ rows:
       A GET /me?access_token= with an empty value returns 401 with
       error=invalid_token "no access token provided"; the
       WWW-Authenticate challenges include both Bearer and DPoP.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 deliberately does not consult URL query for the access token (RFC 9700 §2.4 hardening: query-string credentials are forbidden as a defence against referer leakage / proxy logging). The empty query value is therefore unobservable as a distinct error path; the request collapses onto the bare-challenge 'no credentials' path UI-006 already covers."
 
   - id: UI-018
     severity: P0
     spec: RFC 6750 §2.2, §3
     behaviour: |
-      A POST /me with an empty access_token= body field returns 401
-      with error=invalid_token "no access token provided"; the
-      WWW-Authenticate challenges include both Bearer and DPoP.
+      A POST /me with `access_token=` in an
+      application/x-www-form-urlencoded body (empty value) is parsed
+      as token="", which the verifier rejects: the endpoint returns
+      401 with WWW-Authenticate carrying error=invalid_token and the
+      description "The access token is invalid".
+    status: active
 
   - id: UI-019
     severity: P0
     spec: RFC 6750 §3
     behaviour: |
-      A POST /me with no Authorization header and an empty body
-      returns 401 with error=invalid_token "no access token
-      provided"; the WWW-Authenticate challenges include both Bearer
-      and DPoP.
+      A POST /me with no Authorization header and an empty body is
+      treated as missing credentials: the endpoint returns 401 with
+      the bare WWW-Authenticate challenge `Bearer realm="userinfo"`.
+    status: active

@@ -25,17 +25,19 @@ rows:
       The discovery document advertises revocation_endpoint with a
       concrete URL and does not emit the legacy
       token_revocation_endpoint name.
-    status: pending
+    status: active
 
   - id: REV-002
     severity: P0
     spec: RFC 7009 §2
     behaviour: |
       A confidential client revoking its own access token without a
-      hint receives 200 with an empty body, the access token is
-      destroyed, and the underlying grant is preserved when the
-      revokeGrantPolicy is off.
-    status: pending
+      hint receives 200 with an empty body and the access token is
+      destroyed (subsequent /userinfo calls fail with WWW-Authenticate
+      error="invalid_token"). The underlying grant is preserved: the
+      paired refresh token still rotates at /token. Per ADR 0025,
+      single-AT revocation never cascades to a grant tombstone.
+    status: active
 
   - id: REV-003
     severity: P0
@@ -43,7 +45,8 @@ rows:
     behaviour: |
       With revokeGrantPolicy=true, revoking an access token returns
       200 and destroys both the access token and its grant.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 explicitly does NOT cascade single-AT revocation to grant tombstone (ADR 0025 Alternatives). The runtime 'revokeGrantPolicy' flag is panva-specific. Grant cascade in v1.0 is triggered by refresh-token revocation, not access-token revocation. Reconsider when grant-revocation-on-AT-revoke becomes a v1.x option."
 
   - id: REV-004
     severity: P1
@@ -76,16 +79,18 @@ rows:
     behaviour: |
       If adapter.find throws while resolving the token, the request
       fails with 500 server_error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 collapses adapter errors onto silent 200 per RFC 7009 §2.2 ('invalid tokens do not cause an error response'); a token.revoke_failed audit event is emitted instead. The panva 'adapter exception → 500 server_error' shape leaks the failure mode through HTTP, contradicting RFC 7009 §2.2."
 
   - id: REV-008
     severity: P0
     spec: RFC 7009 §2
     behaviour: |
       A confidential client revoking its own refresh token without a
-      hint returns 200 with an empty body and destroys both the
-      refresh token and the underlying grant.
-    status: pending
+      hint returns 200 with an empty body and destroys the
+      refresh-token chain; subsequent /token grant_type=refresh_token
+      attempts return invalid_grant.
+    status: active
 
   - id: REV-009
     severity: P1
@@ -119,7 +124,7 @@ rows:
       A confidential client revoking its own client_credentials
       access token without a hint destroys the token and returns 200
       with an empty body.
-    status: pending
+    status: active
 
   - id: REV-013
     severity: P1
@@ -154,7 +159,7 @@ rows:
       Submitting an arbitrary nonsense string as token returns 200
       with an empty body, never disclosing whether the value
       corresponded to any token.
-    status: pending
+    status: active
 
   - id: REV-017
     severity: P0
@@ -164,7 +169,8 @@ rows:
       endpoint is rejected with 400 unsupported_token_type
       "Structured JWT Tokens cannot be revoked via the
       revocation_endpoint".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does NOT emit unsupported_token_type at /revoke. RFC 9068 §6 says JWT access tokens are revocable via the revocation endpoint, and v1.0 implements this by writing a JTI denylist row (ADR 0025 GrantTombstone). The panva 'JWT cannot be revoked, return 400 unsupported_token_type' shape is the opposite of what v1.0 does. Reconsider only if the OP is reconfigured to RevocationStrategyNone, in which case the current silent-200 path is still correct, never 400."
 
   - id: REV-018
     severity: P0
@@ -173,7 +179,8 @@ rows:
       A confidential client attempting to revoke another client's
       token receives 400 invalid_request "client is not authorized to
       revoke the presented token"; the token is not destroyed.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 silently returns 200 for cross-client revocation (both confidential and public clients), per RFC 7009 §2.2 'invalid tokens do not cause an error response'. The 400 invalid_request 'client is not authorized to revoke the presented token' shape leaks the failure mode through HTTP; v1.0 deliberately does not."
 
   - id: REV-019
     severity: P0
@@ -182,15 +189,18 @@ rows:
       A public client attempting to revoke another client's token
       silently receives 200 with an empty body; the token is not
       destroyed and no information about ownership leaks.
-    status: pending
+    status: active
 
   - id: REV-020
     severity: P0
     spec: RFC 6749 §2.3 / RFC 7009
     behaviour: |
-      A client presenting an incorrect basic-auth secret receives 401
-      and a revocation.error audit event is emitted.
-    status: pending
+      A client presenting an incorrect basic-auth secret at /revoke
+      receives 401 invalid_client with WWW-Authenticate: Basic
+      realm="oidc". (v1.0's /revoke does not currently emit a
+      client-auth failure audit event; a token.revoke_failed event is
+      reserved for non-NotFound store faults after successful auth.)
+    status: active
 
   - id: REV-021
     severity: P0
@@ -199,7 +209,8 @@ rows:
       If the adapter returns an authorization-code record for the
       revocation lookup, the endpoint silently returns 200 without
       invoking destroy on the unrevocable kind.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's revokeOpaque branches consult OpaqueAccessTokenStore and RefreshTokenStore only; there is no 'auth code' substore at /revoke. The panva 'adapter returns auth-code record' shape is unobservable at v1.0's wire — an authorization code as a /revoke token simply collapses onto the silent-200 path REV-016 already covers."
 
   - id: REV-022
     severity: P2
