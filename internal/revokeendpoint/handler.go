@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -155,6 +156,26 @@ type Deps struct {
 	// Wave 2 plumbs this field; the handler logic that consumes it
 	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
+
+	// Audit is the structured audit-event sink. A nil Emitter falls
+	// back to [audit.Discard] so the handler can call the emitter
+	// unconditionally. The /revoke endpoint emits "token.revoke_failed"
+	// when a non-NotFound storage fault prevents a record from being
+	// flipped to revoked. The wire response stays HTTP 200 per RFC
+	// 7009 §2.2 ("invalid tokens do not cause an error response"); the
+	// audit event lets SOC tooling detect the silent-failure class
+	// (GHSA-7mqr-2v3q-v2wm) without violating the spec response
+	// contract.
+	Audit audit.Emitter
+}
+
+// audit returns the configured audit sink, or a [audit.Discard]
+// emitter so call sites can invoke Emit unconditionally.
+func (d *Deps) audit() audit.Emitter {
+	if d.Audit == nil {
+		return audit.Discard()
+	}
+	return d.Audit
 }
 
 // Handler returns the HTTP handler the OP mounts at its revocation

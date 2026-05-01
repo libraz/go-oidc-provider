@@ -907,6 +907,7 @@ func mountRevocationEndpoint(
 			OpaqueAccessTokens:       cfg.store.OpaqueAccessTokens(),
 			GrantRevocations:         cfg.store.GrantRevocations(),
 			RevocationStrategy:       cfg.atRevocation,
+			Audit:                    cfg.effectiveAuditEmitter(),
 		})),
 	)
 }

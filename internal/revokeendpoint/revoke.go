@@ -2,8 +2,10 @@ package revokeendpoint
 
 import (
 	"context"
+	"errors"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -201,9 +203,11 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 		return false
 	}
 	if err := deps.RefreshTokens.RevokeChain(ctx, rootID); err != nil {
-		// Store fault: surface as a silent miss. The caller
-		// still writes 200 — the user-visible contract is
-		// "revocation submitted", not "revocation committed".
+		// Store fault: the wire stays 200 (RFC 7009 §2.2) but the
+		// audit channel surfaces the silent failure so SOC tooling
+		// can detect a fosite-class GHSA-7mqr-2v3q-v2wm regression
+		// where the OP claims success while persistence broke.
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain", err)
 		return false
 	}
 	return true
@@ -234,12 +238,39 @@ func revokeOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClient
 		return false
 	}
 	if err := deps.OpaqueAccessTokens.RevokeByID(ctx, token); err != nil {
-		// Store fault: surface as a silent miss. The caller still
-		// writes 200 — the user-visible contract is "revocation
-		// submitted", not "revocation committed".
+		// Store fault: see [revokeOpaque] — wire stays 200, audit
+		// surfaces the failure for SOC observability.
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "opaque_access_token", err)
 		return false
 	}
 	return true
+}
+
+// emitRevokeFailed raises [audit.Event] for a non-NotFound storage
+// fault encountered while revoking. ErrNotFound (and nil-rec misses)
+// are not faults — they collapse onto the "no such token" branch the
+// caller already treats as 200. Only real persistence errors flow
+// through this helper.
+//
+// The event keeps the wire response 200 per RFC 7009 §2.2 ("invalid
+// tokens do not cause an error response") while still surfacing the
+// fosite GHSA-7mqr-2v3q-v2wm class to operators: a token is recorded
+// as "revocation requested but not committed" rather than silently
+// disappearing.
+func emitRevokeFailed(ctx context.Context, deps Deps, clientID, surface string, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		return
+	}
+	deps.audit().Emit(ctx, audit.Event{
+		Name:     "token.revoke_failed",
+		Level:    audit.LevelError,
+		Message:  "revoke endpoint encountered a storage fault while flipping a record",
+		ClientID: clientID,
+		Extras: map[string]any{
+			"surface": surface,
+			"err":     err.Error(),
+		},
+	})
 }
 
 // findChainRoot follows parent pointers from startID up to the

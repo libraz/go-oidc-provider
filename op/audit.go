@@ -66,7 +66,11 @@ const (
 )
 
 // Code / token events. Fire from the authorize-code issuance path
-// and the token endpoint.
+// and the token / revoke endpoints. AuditTokenRevokeFailed is the
+// /revoke companion to AuditTokenRevoked: the wire response stays
+// HTTP 200 per RFC 7009 §2.2, but a non-NotFound storage fault
+// raises this event so SOC tooling can detect the silent-failure
+// class (GHSA-7mqr-2v3q-v2wm).
 const (
 	AuditCodeIssued            = AuditEvent("code.issued")
 	AuditCodeConsumed          = AuditEvent("code.consumed")
@@ -74,6 +78,7 @@ const (
 	AuditTokenIssued           = AuditEvent("token.issued")
 	AuditTokenRefreshed        = AuditEvent("token.refreshed")
 	AuditTokenRevoked          = AuditEvent("token.revoked")
+	AuditTokenRevokeFailed     = AuditEvent("token.revoke_failed")
 	AuditRefreshReplayDetected = AuditEvent("refresh.replay_detected")
 )
 

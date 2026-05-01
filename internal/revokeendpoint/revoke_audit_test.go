@@ -1,0 +1,237 @@
+package revokeendpoint_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+)
+
+// errStoreFault is the sentinel a faultyRefreshStore.RevokeChain
+// returns; the test asserts the audit event surfaces this exact
+// error string in the Extras map.
+var errStoreFault = errors.New("simulated storage outage")
+
+// faultyRefreshStore wraps an inmem RefreshTokenStore and replaces
+// RevokeChain with a deterministic non-nil error, simulating the
+// fosite GHSA-7mqr-2v3q-v2wm class: the OP claims revocation success
+// while persistence broke. The other methods delegate verbatim so the
+// handler's lookup / chain walk reach the RevokeChain call site.
+type faultyRefreshStore struct {
+	inner store.RefreshTokenStore
+}
+
+func (f *faultyRefreshStore) Save(ctx context.Context, token *store.RefreshToken) error {
+	return f.inner.Save(ctx, token)
+}
+
+func (f *faultyRefreshStore) Find(ctx context.Context, id string) (*store.RefreshToken, error) {
+	return f.inner.Find(ctx, id)
+}
+
+func (f *faultyRefreshStore) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
+	return f.inner.Consume(ctx, id)
+}
+
+func (f *faultyRefreshStore) RevokeChain(_ context.Context, _ string) error {
+	return errStoreFault
+}
+
+func (f *faultyRefreshStore) RevokeByGrant(_ context.Context, _ string) error {
+	return errStoreFault
+}
+
+// TestHandler_RefreshToken_StoreFault_EmitsAudit pins the structural
+// mitigation for the fosite "revoke silently swallowed storage errors"
+// class: when RefreshTokenStore.RevokeChain returns a non-NotFound
+// error, the wire response stays HTTP 200 (RFC 7009 §2.2 mandates
+// this — disclosure equivalence between "unknown token" and "store
+// fault" prevents enumeration), but the OP MUST raise the
+// "token.revoke_failed" audit event so SOC tooling can detect that a
+// revoke request was acknowledged on the wire while persistence broke.
+//
+// Tracks: GHSA-7mqr-2v3q-v2wm (ory/fosite) — the original advisory
+// pre-dates audit-emitter plumbing in fosite; the structural defect
+// is "no observable signal that revocation failed". The library's
+// posture (CLAUDE.md "ライブラリ性の核": observability for OIDC-domain
+// events is the OP's responsibility) forbids the silent-swallow path
+// even though RFC 7009 §2.2 still requires the wire 200.
+//
+// The two halves of the assertion:
+//
+//  1. resp.StatusCode == 200, body empty, Cache-Control: no-store —
+//     RFC 7009 §2.2 wire compliance preserved.
+//  2. capture.findEvent("token.revoke_failed") != nil with matching
+//     client_id and the error string carried in Extras["err"] —
+//     proves the silent-swallow path is observable to operators.
+func TestHandler_RefreshToken_StoreFault_EmitsAudit(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa key: %v", err)
+	}
+	keyset, err := keys.NewSet([]keys.Entry{{KeyID: "audit-1", Signer: priv}})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+
+	innerStore := inmem.New(inmem.WithClock(clock))
+
+	const clientID = "client-revoke-fault"
+	const secret = "revoke-fault-secret"
+	hash, err := (&clientauth.Argon2id{}).Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	if err := innerStore.RegisterClient(context.Background(), &store.Client{
+		ID:                      clientID,
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"refresh_token"},
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	// Seed a refresh token whose ID we will revoke. The inmem store
+	// hashes the bearer string into the ID column; the bearer string
+	// itself is the wire value the test posts.
+	const refreshID = "refresh-fault-1"
+	const grantID = "grant-fault-1"
+	if err := innerStore.RefreshTokens().Save(context.Background(), &store.RefreshToken{
+		ID:        refreshID,
+		ClientID:  clientID,
+		Subject:   "user-1",
+		GrantID:   grantID,
+		CreatedAt: clock.now,
+		ExpiresAt: clock.now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("RefreshTokens.Save: %v", err)
+	}
+
+	capture := newRevokeAuditCapture()
+	deps := revokeendpoint.Deps{
+		Issuer:        "https://op.example",
+		Clients:       innerStore.Clients(),
+		RefreshTokens: &faultyRefreshStore{inner: innerStore.RefreshTokens()},
+		Keys:          keyset,
+		Clock:         clock,
+		Audit:         capture.emitter(),
+	}
+	srv := httptest.NewServer(revokeendpoint.Handler(deps))
+	defer srv.Close()
+
+	form := url.Values{
+		"token":           {refreshID},
+		"token_type_hint": {"refresh_token"},
+	}
+	req, err := http.NewRequestWithContext(context.Background(),
+		http.MethodPost, srv.URL, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, secret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+
+	// RFC 7009 §2.2 wire compliance: wire stays 200 even though
+	// persistence broke. A regression that flips this to 5xx would
+	// also be a defect (it leaks the failure mode to a cross-client
+	// revoker), so we pin both halves.
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("StatusCode=%d want 200 (RFC 7009 §2.2)", resp.StatusCode)
+	}
+	if len(body) != 0 {
+		t.Errorf("body=%q want empty", body)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control=%q want no-store", got)
+	}
+
+	// Audit event MUST surface so SOC tooling can detect the
+	// silent-swallow path. Without this assertion the test passes
+	// even if the handler regresses to fosite's defect.
+	rec := capture.findEvent("token.revoke_failed")
+	if rec == nil {
+		t.Fatalf("expected audit event token.revoke_failed, captured=%s", capture.dump())
+	}
+	if got, _ := rec["client_id"].(string); got != clientID {
+		t.Errorf("audit client_id=%q want %q", got, clientID)
+	}
+	extras, ok := rec["extras"].(map[string]any)
+	if !ok {
+		t.Fatalf("audit record missing extras: %v", rec)
+	}
+	if got, _ := extras["surface"].(string); got != "refresh_chain" {
+		t.Errorf("extras.surface=%q want refresh_chain", got)
+	}
+	if got, _ := extras["err"].(string); !strings.Contains(got, errStoreFault.Error()) {
+		t.Errorf("extras.err=%q want it to contain %q", got, errStoreFault.Error())
+	}
+	if got, _ := rec["level"].(string); !strings.EqualFold(got, "ERROR") {
+		t.Errorf("audit level=%q want ERROR", got)
+	}
+}
+
+// revokeAuditCapture wraps a slog logger that emits audit events as
+// JSON records into a bytes.Buffer. Mirrors the auditCapture pattern
+// in internal/tokenendpoint/audit_test.go but is local to the revoke
+// suite so the two test packages stay independent.
+type revokeAuditCapture struct {
+	buf *bytes.Buffer
+}
+
+func newRevokeAuditCapture() *revokeAuditCapture {
+	return &revokeAuditCapture{buf: &bytes.Buffer{}}
+}
+
+func (c *revokeAuditCapture) emitter() audit.Emitter {
+	return audit.Slog(slog.New(slog.NewJSONHandler(c.buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+}
+
+func (c *revokeAuditCapture) findEvent(name string) map[string]any {
+	dec := json.NewDecoder(strings.NewReader(c.buf.String()))
+	for dec.More() {
+		var rec map[string]any
+		if err := dec.Decode(&rec); err != nil {
+			return nil
+		}
+		if rec["audit"] != "true" {
+			continue
+		}
+		if rec["event"] == name {
+			return rec
+		}
+	}
+	return nil
+}
+
+func (c *revokeAuditCapture) dump() string { return c.buf.String() }
