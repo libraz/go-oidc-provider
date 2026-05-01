@@ -284,6 +284,7 @@ func recoverDecider(ctx context.Context, logger *slog.Logger, decider LoginFlowD
 func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 	completed := append([]string(nil), st.CompletedStepKinds...)
 	scopes := append([]string(nil), st.RequestedScopes...)
+	acrValues := append([]string(nil), st.ACRValues...)
 	return LoginFlowContext{
 		Subject:         st.Subject,
 		ClientID:        st.ClientID,
@@ -291,6 +292,7 @@ func (o *Orchestrator) loginFlowContext(st State) LoginFlowContext {
 		FailedAttempts:  st.LastFailures,
 		RiskScore:       st.RiskScoreCached,
 		CompletedKinds:  completed,
+		ACRValues:       acrValues,
 		RemoteIP:        st.RemoteIP.String(),
 		UserAgent:       st.UserAgent,
 	}

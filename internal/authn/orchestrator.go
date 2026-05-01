@@ -224,6 +224,14 @@ type State struct {
 	// per-step authenticator and to append to [CompletedStepKinds]
 	// once the step's Result lands.
 	ActiveStepKind string `json:"active_step_kind,omitempty"`
+
+	// ACRValues is the OIDC Core 1.0 §3.1.2.1 acr_values request
+	// parameter forwarded from the authorize request, in arrival order.
+	// The HTTP layer populates it when initialising the chain so a
+	// LoginFlow rule predicate (e.g., [op.RuleACR]) can implement
+	// step-up against the requested ACR list. Empty when the request
+	// did not carry the parameter.
+	ACRValues []string `json:"acr_values,omitempty"`
 }
 
 // Input is the per-tick payload the HTTP layer hands to

@@ -477,6 +477,7 @@ func startInteraction(
 		Phase:           authn.PhaseBeforeAuthn,
 		InteractionsRun: interactionsRun,
 		RequestedScopes: append([]string(nil), req.Scope...),
+		ACRValues:       append([]string(nil), req.ACRValues...),
 		ChooserGroupID:  chooserGroupID,
 	}
 	authnRaw, err := encodeAuthnState(authnState)

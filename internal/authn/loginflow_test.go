@@ -696,3 +696,253 @@ func TestCompileLoginFlowNilPrimary(t *testing.T) {
 		t.Errorf("err = %v, want it to mention Primary", err)
 	}
 }
+
+// TestLoginFlowTOTPRequiresPrimary pins the chain-isolation property
+// that lets the OP avoid the cal.com / Keycloak primary-skip class:
+// even with TOTP declared as a Rule, the orchestrator's first Tick
+// MUST emit Primary's prompt and tag the StateRef with Primary's
+// kind. The TOTP step is unreachable until Primary's CompletedStepKind
+// has been recorded.
+//
+// Tracks:
+//   - GHSA-9r3w-4j8q-pw98 (cal.com, 2024-04, CVSS 9.8) — TRPC
+//     verifyTwoFactor accepted (email, password, totpCode) and
+//     returned a session without verifying the password. CWE-287.
+//   - GHSA-5jfq-x6xp-7rw2 (Keycloak, 2024-09, CVSS 6.8) — direct OTP
+//     submission bypassed the primary credential. Same structural
+//     defect.
+//
+// The matching adapter-side gate is
+// totp.TestAuthenticator_BeginRequiresSubject /
+// totp.TestAuthenticator_ContinueRequiresSubject. Together the two
+// layers (orchestrator first-step invariant + TOTP subject-required
+// gate) make the bypass class unreachable.
+func TestLoginFlowTOTPRequiresPrimary(t *testing.T) {
+	t.Parallel()
+
+	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+	totp := successAuth(op.FactorTOTP, op.AAL2, "otp", "user-1")
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{
+				When: func(authn.LoginFlowContext) bool { return true },
+				Then: authn.LoginFlowStep{Kind: "myorg.totp", Authenticator: totp},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// First Tick on a fresh State MUST emit Primary's prompt — the
+	// TOTP rule's `When: true` is irrelevant because advanceLoginFlow
+	// short-circuits to Primary while CompletedStepKinds is empty.
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first Tick: %v", err)
+	}
+	if step.Prompt == nil {
+		t.Fatalf("expected prompt on first Tick, got %+v", step)
+	}
+	if step.Prompt.Type != "auth.password" {
+		t.Errorf("first prompt = %q, want auth.password — TOTP-first would be the primary-skip bypass class", step.Prompt.Type)
+	}
+	if st.ActiveStepKind != "myorg.password" {
+		t.Errorf("ActiveStepKind = %q, want myorg.password", st.ActiveStepKind)
+	}
+	if len(st.CompletedStepKinds) != 0 {
+		t.Errorf("CompletedStepKinds = %v, want empty before any submission", st.CompletedStepKinds)
+	}
+
+	// Submitting a TOTP-shaped value to the password StateRef MUST be
+	// routed to Primary, not TOTP. successAuth's continueFn ignores
+	// the submission values, so the test asserts the routing — the
+	// completed kind that lands first is myorg.password regardless of
+	// what the SPA submitted.
+	primaryStateRef := step.Prompt.StateRef
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{
+			StateRef: primaryStateRef,
+			Values:   map[string]string{"code": "123456"},
+		},
+		Now: fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("second Tick: %v", err)
+	}
+	if len(st.CompletedStepKinds) == 0 || st.CompletedStepKinds[0] != "myorg.password" {
+		t.Errorf("first completed step = %v, want first entry = myorg.password — TOTP-first would mean cal.com-class bypass", st.CompletedStepKinds)
+	}
+
+	// After Primary completes, TOTP becomes reachable: the next Tick
+	// is expected to emit auth.totp. Driving it to terminal Result
+	// confirms the chain reaches AAL2 via the documented order, not a
+	// shortcut.
+	if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
+		t.Fatalf("expected auth.totp prompt after Primary, got %+v", step)
+	}
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{
+			StateRef: step.Prompt.StateRef,
+			Values:   map[string]string{"code": "123456"},
+		},
+		Now: fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("totp continue: %v", err)
+	}
+	if step.Result == nil {
+		t.Fatalf("expected terminal Result after TOTP, got %+v", step)
+	}
+	wantKinds := []string{"myorg.password", "myorg.totp"}
+	if len(st.CompletedStepKinds) != 2 || st.CompletedStepKinds[0] != wantKinds[0] || st.CompletedStepKinds[1] != wantKinds[1] {
+		t.Errorf("CompletedStepKinds = %v, want %v", st.CompletedStepKinds, wantKinds)
+	}
+}
+
+// TestLoginFlowACRRuleFiresWhenStateCarriesACRValues pins the projector's
+// ACRValues round-trip: a RuleACR-style predicate that inspects
+// LoginFlowContext.ACRValues MUST observe the request's acr_values list
+// after Primary completes, so the OP cannot assert an elevated ACR claim
+// without running the matching step-up factor.
+//
+// The original projector dropped State.ACRValues on the floor so every
+// RuleACR predicate evaluated against an empty slice; the chain
+// short-circuited to AfterAuthn with only the Primary factor on file
+// while the wire still echoed the requested acr_values to the RP. This
+// regression test asserts the fix: when State.ACRValues carries
+// "urn:test:silver" and a rule's predicate fires on that value, the
+// orchestrator schedules the rule's TOTP step before granting.
+func TestLoginFlowACRRuleFiresWhenStateCarriesACRValues(t *testing.T) {
+	t.Parallel()
+
+	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+	totp := successAuth(op.FactorTOTP, op.AAL2, "otp", "user-1")
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{
+				When: func(lc authn.LoginFlowContext) bool {
+					for _, v := range lc.ACRValues {
+						if v == "urn:test:silver" {
+							return true
+						}
+					}
+					return false
+				},
+				Then: authn.LoginFlowStep{Kind: "myorg.totp", Authenticator: totp},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	st := initialState()
+	st.ACRValues = []string{"urn:test:silver"}
+
+	// Drive Primary.
+	st, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("primary begin: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.password" {
+		t.Fatalf("expected auth.password prompt, got %+v", step)
+	}
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "x"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("primary continue: %v", err)
+	}
+	// Rule predicate must have fired: the orchestrator schedules TOTP
+	// instead of granting outright.
+	if step.Result != nil {
+		t.Fatalf("orchestrator granted before TOTP ran — RuleACR did not fire (security regression)")
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
+		t.Fatalf("expected auth.totp prompt after RuleACR fired, got %+v — projector likely dropped State.ACRValues", step)
+	}
+
+	// Drive TOTP to completion to confirm the chain reaches AAL2 via
+	// the documented order, not a shortcut.
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"code": "123456"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("totp continue: %v", err)
+	}
+	if step.Result == nil {
+		t.Fatalf("expected terminal Result after TOTP, got %+v", step)
+	}
+	wantKindsACR := []string{"myorg.password", "myorg.totp"}
+	if len(st.CompletedStepKinds) != 2 || st.CompletedStepKinds[0] != wantKindsACR[0] || st.CompletedStepKinds[1] != wantKindsACR[1] {
+		t.Errorf("CompletedStepKinds = %v, want %v", st.CompletedStepKinds, wantKindsACR)
+	}
+}
+
+// TestLoginFlowACRRuleSilentWhenStateOmitsACRValues is the control case
+// for [TestLoginFlowACRRuleFiresWhenStateCarriesACRValues]: with no
+// ACRValues on State, the same RuleACR-style predicate MUST NOT fire,
+// and the chain grants on Primary alone. The test exists to confirm
+// the projector did not start populating ACRValues unconditionally
+// (which would over-trigger every step-up rule).
+func TestLoginFlowACRRuleSilentWhenStateOmitsACRValues(t *testing.T) {
+	t.Parallel()
+
+	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+	totp := successAuth(op.FactorTOTP, op.AAL2, "otp", "user-1")
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{
+				When: func(lc authn.LoginFlowContext) bool {
+					for _, v := range lc.ACRValues {
+						if v == "urn:test:silver" {
+							return true
+						}
+					}
+					return false
+				},
+				Then: authn.LoginFlowStep{Kind: "myorg.totp", Authenticator: totp},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Initial State carries no ACRValues — the rule predicate must
+	// observe the empty slice and stay silent.
+	st := initialState()
+
+	st, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("primary begin: %v", err)
+	}
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "x"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("primary continue: %v", err)
+	}
+	if step.Result == nil {
+		t.Fatalf("expected terminal Result after Primary (no ACRValues, no rule match), got %+v", step)
+	}
+}
