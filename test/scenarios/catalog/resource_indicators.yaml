@@ -65,7 +65,8 @@ rows:
       When multiple resource values are supplied (for example via
       duplicate resource params), each value MUST be validated
       individually.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 parses /authorize 'resource' as single-valued (internal/authorize/request.go: singleParseFields → singleValue): differing duplicates yield ErrDuplicateParameter (invalid_request) before per-value validation, so there is no per-value path to test. The single-valued posture is intentional (and is the same pattern the /token client_credentials handler enforces)."
 
   - id: RI-020
     severity: P0
@@ -76,7 +77,8 @@ rows:
       error=invalid_target,
       error_description="resource indicator is missing, or unknown",
       and the supplied state is preserved.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 only ships response_type=code (internal/authorize/request.go validateResponseType rejects every other value with ErrResponseTypeUnsupported). There is no token-issuing response_type, so the 'fragment redirect' wire shape this row asserts cannot be produced. The query-mode error redirect for code flow is already covered by RI-030."
 
   - id: RI-021
     severity: P0
@@ -93,7 +95,8 @@ rows:
       When the client omits resource at /authorize and the
       defaultResource hook returns a value, the issued access token's
       aud MUST reflect that default.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not expose a defaultResource(ctx, client, oneOf) hook; the only resource-policy surface is the per-client store.Client.Resources allowlist. RI-002 (the sibling getResourceServerInfo hook row) is out-of-scope on the same grounds: docs/plans/002 favours declarative configuration over imperative hooks."
 
   - id: RI-023
     severity: P0
@@ -144,7 +147,8 @@ rows:
       When the client omits resource at /authorize and
       defaultResource returns a value, the code, access token, and
       refresh token MUST all carry that default.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Depends on the defaultResource hook that is out of scope for v1.0 (see RI-022); without the hook there is no way for a request to pick up a default resource at /authorize, so the assertion 'code, AT, and RT all carry that default' has no v1.0 wire seam."
 
   - id: RI-035
     severity: P1
@@ -171,7 +175,8 @@ rows:
       POST /device/auth with an unknown resource yields 400
       invalid_target with the description "resource indicator is
       missing, or unknown".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not implement the OAuth 2.0 Device Authorization Grant (RFC 8628). The /token dispatcher (internal/tokenendpoint/handler.go: serve) only routes authorization_code, refresh_token, and client_credentials; urn:ietf:params:oauth:grant-type:device_code falls through to unsupported_grant_type. There is no /device/auth endpoint either. Tracked as a feature-level gap, not a resource-indicator gap."
 
   - id: RI-041
     severity: P0
@@ -181,7 +186,8 @@ rows:
       urn:ietf:params:oauth:grant-type:device_code MUST emit an
       access token whose aud and a refresh token whose resource
       reflect the resource supplied at /device/auth.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same reason as RI-040: v1.0 ships no device authorization grant. The /token grant_type dispatcher (internal/tokenendpoint/handler.go: serve switch) does not handle urn:ietf:params:oauth:grant-type:device_code, so there is no AT mint path on which to assert RFC 8707 audience binding for the device flow."
 
   - id: RI-042
     severity: P1
@@ -213,7 +219,8 @@ rows:
     behaviour: |
       POST /backchannel with an unknown resource yields 400
       invalid_target.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not implement OIDC CIBA (no /backchannel endpoint, no urn:openid:params:grant-type:ciba dispatch). The CIBA-related profile selector op/profile.FAPICIBA exists but the grant itself is not wired; internal/backchannel/* is the unrelated Back-channel Logout subsystem (RP-initiated logout per OIDC RP-Initiated Logout / Back-Channel Logout spec). Tracked as a feature-level gap."
 
   - id: RI-051
     severity: P0
@@ -223,7 +230,8 @@ rows:
       subsequent grant_type=urn:openid:params:grant-type:ciba token
       call MUST yield an access token whose aud equals the resource
       and a refresh token whose resource equals the resource.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same reason as RI-050: no CIBA grant in v1.0. There is no /backchannel auth_req_id issuance path, no urn:openid:params:grant-type:ciba grant_type in the /token dispatcher, and no AT mint helper bound to a CIBA grant record."
 
   - id: RI-052
     severity: P1
@@ -250,7 +258,8 @@ rows:
       explicit resource MUST yield an access token with aud
       undefined (UserInfo-eligible) while the refresh token retains
       resource for refresh exchanges.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Two missing prerequisites: (1) v1.0 does not implement the CIBA grant (see RI-050/RI-051); (2) v1.0 does not expose a useGrantedResource hook. Even setting CIBA aside, the conditional 'when useGrantedResource returns false' has no v1.0 surface — the AT minter unconditionally embeds the validated resource as aud (internal/tokenendpoint/authcode.go: mintJWTAccessToken) and falls back to aud=Issuer when resource is empty, so 'aud undefined' is not a v1.0 wire shape."
 
   - id: RI-060
     severity: P0
@@ -266,7 +275,8 @@ rows:
     behaviour: |
       Unsupported scopes are silently dropped from the issued token's
       scope; the supported subset is honoured.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 client_credentials does not silently drop unsupported scopes; it rejects with invalid_scope (clientcred.ErrScopeForbidden in internal/grants/clientcred/clientcred.go: 'requested scope is not permitted for client'). The strict-rejection posture is documented on ErrScopeForbidden's godoc as a deliberate library posture vs the §3.3 'MAY narrow' permission. The silent-drop behaviour this row asserts is panva-specific; rebinding it would require us to adopt that posture, which docs/plans/002 declines."
 
   - id: RI-062
     severity: P0
@@ -274,7 +284,7 @@ rows:
     behaviour: |
       An unrecognised resource at the client_credentials grant MUST
       yield 400 invalid_target.
-    status: pending
+    status: active
 
   - id: RI-063
     severity: P0
@@ -283,7 +293,7 @@ rows:
       Multiple resource parameters on a client_credentials request
       MUST yield 400 invalid_target with the description "only a
       single resource indicator value is supported".
-    status: pending
+    status: active
 
   - id: RI-064
     severity: P0
@@ -292,7 +302,8 @@ rows:
       Each resource value MUST be validated for URI shape
       individually; one valid value combined with one malformed value
       MUST still be rejected.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 client_credentials accepts at most one resource value per request (internal/tokenendpoint/clientcred.go: parseClientCredsRequest). When two differing values are presented the handler short-circuits with invalid_target/'only a single resource indicator value is supported' BEFORE any URI-shape validation runs, so there is no per-value URI-shape check to assert. The single-value posture is documented on parseClientCredsRequest's godoc and is the same posture the /authorize side enforces via singleValue. RI-063 covers the differing-duplicate path."
 
   - id: RI-065
     severity: P1
@@ -328,7 +339,8 @@ rows:
       invalid_token, the description "invalid token provided", and an
       error_detail of "token audience prevents accessing the userinfo
       endpoint".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 /userinfo (internal/userinfo/handler.go: serveUserInfoJWT) does not enforce an audience constraint at all: the JWT verifier (internal/tokens/verify.go: AccessTokenVerifier.Verify) intentionally validates iss/exp/iat/sig but not aud, deferring audience policy to the caller, and the userinfo handler never checks claims.Audience. The behaviour this row asserts (resource-bound AT rejected at /userinfo) is the panva audience-gate; v1.0 takes the alternative posture of binding aud=Issuer for resource-less requests at mint time (internal/tokenendpoint/authcode.go: mintJWTAccessToken). Adopting an aud-gate at /userinfo is a feature-level decision that has not landed; tracked there, not as a resource-indicator scenario."
 
   - id: RI-072
     severity: P0
@@ -337,4 +349,5 @@ rows:
       Non-string aud values (object, false, number) MUST also fail at
       /userinfo with the same error envelope; this defends against
       storage tampering.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same root cause as RI-071: v1.0 /userinfo does not parse 'aud' for policy purposes. The decode side (internal/tokens/verify.go: decodeAudience) accepts string and []string per RFC 7519 §4.1.3; non-string non-array shapes cause the JWT to fail decoding earlier in Verify, surfacing ErrAccessTokenMalformed (invalid_token) regardless of the userinfo audience policy this row asserts. There is no v1.0 wire seam where a 'token audience prevents accessing the userinfo endpoint' error_detail is emitted."

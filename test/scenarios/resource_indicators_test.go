@@ -483,14 +483,153 @@ func TestScenario_RI_061_ClientCredentialsDropsUnsupportedScopes(t *testing.T) {
 	t.Skip("pending: RI-061")
 }
 
+// TestScenario_RI_062_ClientCredentialsRejectsUnknownResource verifies
+// that a grant_type=client_credentials request whose `resource`
+// parameter is not on the client's [store.Client.Resources] allowlist
+// is rejected with 400 invalid_target. The wire description matches
+// the /authorize-side `ErrResourceNotAllowed` posture so a client that
+// ports a request between endpoints sees a uniform error envelope.
+//
+// Spec: RFC 8707 §3 (the AS MUST refuse a token request whose resource
+// indicator is not authorised for the client) / RFC 6749 §5.2.
 func TestScenario_RI_062_ClientCredentialsRejectsUnknownResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-062")
+
+	const (
+		clientID = "rp-ri-062"
+		callback = "https://rp.testkit.invalid/callback"
+		allowed  = "https://api.example.com"
+		unknown  = "https://api.unknown.example"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ri-062-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t)
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"read"},
+		Resources:               []string{allowed},
+		GrantTypes:              []string{"client_credentials"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	form := url.Values{
+		"grant_type": {"client_credentials"},
+		"scope":      {"read"},
+		"resource":   {unknown},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode /token body: %v", err)
+	}
+	if got, _ := body["error"].(string); got != "invalid_target" {
+		t.Fatalf("error=%q want invalid_target (body=%v)", got, body)
+	}
+	if got, _ := body["error_description"].(string); got != "resource indicator is missing, or unknown" {
+		t.Errorf("error_description=%q want \"resource indicator is missing, or unknown\"", got)
+	}
 }
 
+// TestScenario_RI_063_ClientCredentialsRejectsMultipleResources verifies
+// the v1.0 single-valued posture for the `resource` parameter on the
+// client_credentials grant: when the request body carries two
+// different `resource` values, the OP MUST reject with 400
+// invalid_target and the description "only a single resource indicator
+// value is supported". Repeated *identical* values are tolerated (the
+// duplicate-tolerance posture mirrors the /authorize side's
+// `singleValue` parser; see internal/tokenendpoint/clientcred.go's
+// parseClientCredsRequest godoc).
+//
+// Spec: RFC 8707 §2 (the AS MAY restrict the resource parameter to a
+// single value per profile) / RFC 6749 §5.2.
 func TestScenario_RI_063_ClientCredentialsRejectsMultipleResources(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-063")
+
+	const (
+		clientID  = "rp-ri-063"
+		callback  = "https://rp.testkit.invalid/callback"
+		resourceA = "https://api.a.example"
+		resourceB = "https://api.b.example"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ri-063-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t)
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"read"},
+		Resources:               []string{resourceA, resourceB},
+		GrantTypes:              []string{"client_credentials"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	form := url.Values{
+		"grant_type": {"client_credentials"},
+		"scope":      {"read"},
+		"resource":   {resourceA, resourceB},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode /token body: %v", err)
+	}
+	if got, _ := body["error"].(string); got != "invalid_target" {
+		t.Fatalf("error=%q want invalid_target (body=%v)", got, body)
+	}
+	if got, _ := body["error_description"].(string); got != "only a single resource indicator value is supported" {
+		t.Errorf("error_description=%q want \"only a single resource indicator value is supported\"", got)
+	}
 }
 
 func TestScenario_RI_064_ClientCredentialsValidatesEachResource(t *testing.T) {
