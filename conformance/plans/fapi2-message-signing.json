@@ -12,7 +12,7 @@
   "client": {
     "client_id": "demo-fapi",
     "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-fapi2-msg-signing/callback",
-    "scope": "openid profile",
+    "scope": "openid profile offline_access",
     "client_authentication_type": "private_key_jwt",
     "jwks": {
       "keys": [
@@ -31,7 +31,7 @@
   },
   "client2": {
     "client_id": "demo-fapi-2",
-    "scope": "openid profile",
+    "scope": "openid profile offline_access",
     "client_authentication_type": "private_key_jwt",
     "jwks": {
       "keys": [
