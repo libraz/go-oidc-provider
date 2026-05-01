@@ -221,7 +221,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" (grant_id, revoked_at, expires_at, reason)" +
 				" VALUES (?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("grant_id",
-					"expires_at="+d.greatestExpr(d.excludedRef("expires_at"), "expires_at"))),
+					"revoked_at="+d.greatestExpr(d.excludedRef("revoked_at"), "revoked_at")+
+						", expires_at="+d.greatestExpr(d.excludedRef("expires_at"), "expires_at"))),
 		grantTombstoneFind: d.rebind(
 			"SELECT revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?"),
 		grantTombstoneGC: d.rebind(

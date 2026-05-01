@@ -96,13 +96,18 @@ type RevokedJTI struct {
 // substore is missing.
 type GrantRevocationStore interface {
 	// RevokeGrant tombstones t.GrantID. The call MUST be idempotent: a
-	// second call with the same GrantID extends ExpiresAt to the
-	// max(existing, supplied) value and leaves RevokedAt unchanged. The
-	// idempotency surface mirrors the cascade order in
+	// second call with the same GrantID extends BOTH RevokedAt and
+	// ExpiresAt to the max(existing, supplied) value. Advancing
+	// RevokedAt covers ATs minted under a Grant the OP has reused
+	// across repeat /authorize flows after an earlier cascade — those
+	// ATs carry a fresh iat that lies after the original cascade but
+	// before the next one, so the verifier's "iat <= RevokedAt" rule
+	// only catches them once a follow-up cascade pushes RevokedAt past
+	// their iat. The idempotency surface mirrors the cascade order in
 	// internal/tokenendpoint and internal/endsession: each handler runs
-	// the cascade once per request, but a retry loop or a request that
-	// races a /end_session call with a /token call MUST converge on the
-	// same row rather than ping-pong RevokedAt forward.
+	// the cascade once per request, and concurrent cascades against
+	// the same GrantID converge on the latest RevokedAt rather than
+	// drift backwards.
 	RevokeGrant(ctx context.Context, t GrantTombstone) error
 
 	// RevokeJTI denylists a single JWT access token by its jti. The call

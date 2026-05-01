@@ -76,10 +76,10 @@ func TestGrantRevocation_SQL_RoundTrip(t *testing.T) {
 }
 
 // TestGrantRevocation_SQL_Idempotent verifies that a second
-// RevokeGrant against the same grant_id extends ExpiresAt to the max of
-// the supplied / existing values and leaves RevokedAt untouched. The
-// SQL implementation uses the dialect's GREATEST / MAX scalar in the
-// upsert tail to satisfy this contract.
+// RevokeGrant against the same grant_id extends BOTH RevokedAt and
+// ExpiresAt to max(existing, supplied). The SQL implementation uses
+// the dialect's GREATEST / MAX scalar in the upsert tail to satisfy
+// this contract.
 func TestGrantRevocation_SQL_Idempotent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -93,7 +93,7 @@ func TestGrantRevocation_SQL_Idempotent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("first RevokeGrant: %v", err)
 	}
-	// Second call: drift RevokedAt forward, extend ExpiresAt.
+	// Second call: advance RevokedAt forward, extend ExpiresAt.
 	if err := gr.RevokeGrant(ctx, store.GrantTombstone{
 		GrantID:   "g-idem",
 		RevokedAt: now.Add(10 * time.Minute),
@@ -101,14 +101,22 @@ func TestGrantRevocation_SQL_Idempotent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("second RevokeGrant: %v", err)
 	}
-	// RevokedAt MUST be the original instant: a token issued at the
-	// original RevokedAt must still be revoked.
+	// A token issued at the original RevokedAt MUST still be revoked
+	// (advancing RevokedAt strictly widens the iat window).
 	revoked, err := gr.IsRevoked(ctx, "g-idem", "", now)
 	if err != nil {
 		t.Fatalf("IsRevoked: %v", err)
 	}
 	if !revoked {
-		t.Fatal("RevokedAt drifted: original instant no longer revoked")
+		t.Fatal("original RevokedAt no longer covers iat=original_RevokedAt")
+	}
+	// A token issued at the new RevokedAt MUST also be revoked.
+	revoked, err = gr.IsRevoked(ctx, "g-idem", "", now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("IsRevoked at advanced RevokedAt: %v", err)
+	}
+	if !revoked {
+		t.Fatal("RevokedAt did not advance: an AT issued after the prior cascade is still accepted")
 	}
 	// ExpiresAt MUST be the max: a GC cutoff between the original and
 	// extended ExpiresAt MUST leave the row intact.

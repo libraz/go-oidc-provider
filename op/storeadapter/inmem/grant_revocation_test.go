@@ -75,8 +75,10 @@ func TestGrantRevocation_IatBoundary(t *testing.T) {
 }
 
 // TestGrantRevocation_Idempotent verifies the contract: a second
-// RevokeGrant against the same GrantID extends ExpiresAt to the max of
-// the supplied / existing values and leaves RevokedAt untouched.
+// RevokeGrant against the same GrantID extends BOTH RevokedAt and
+// ExpiresAt to max(existing, supplied). Advancing RevokedAt covers ATs
+// minted under a Grant the OP reused across repeat /authorize flows
+// after an earlier cascade.
 func TestGrantRevocation_Idempotent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -97,14 +99,23 @@ func TestGrantRevocation_Idempotent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("second RevokeGrant: %v", err)
 	}
-	// RevokedAt MUST be the original instant: a token issued at the
-	// original RevokedAt must still be revoked.
+	// A token issued at the original RevokedAt MUST still be revoked
+	// (advancing RevokedAt strictly widens the iat window).
 	revoked, err := s.GrantRevocations().IsRevoked(ctx, "g-idem", "", now)
 	if err != nil {
 		t.Fatalf("IsRevoked: %v", err)
 	}
 	if !revoked {
-		t.Fatal("RevokedAt drifted: original instant no longer revoked")
+		t.Fatal("original RevokedAt no longer covers iat=original_RevokedAt")
+	}
+	// A token issued at the new RevokedAt MUST also be revoked: the
+	// second RevokeGrant must have advanced RevokedAt to now+10m.
+	revoked, err = s.GrantRevocations().IsRevoked(ctx, "g-idem", "", now.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("IsRevoked at advanced RevokedAt: %v", err)
+	}
+	if !revoked {
+		t.Fatal("RevokedAt did not advance: an AT issued after the prior cascade is still accepted")
 	}
 	// ExpiresAt MUST be the max: a GC cutoff between the original and
 	// extended ExpiresAt MUST leave the row intact.

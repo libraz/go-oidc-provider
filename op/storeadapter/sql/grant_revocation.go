@@ -38,11 +38,14 @@ func (s *grantRevocationStore) runner() runner { return pickRunner(s.parent, s.t
 
 // RevokeGrant implements [store.GrantRevocationStore]. The call is
 // idempotent at the database layer: a second insert against the same
-// grant_id extends expires_at to max(existing, supplied) (rendered via
-// the dialect's GREATEST / MAX scalar) and leaves revoked_at unchanged
-// so the verifier's "iat <= revoked_at" rule keeps its meaning across
-// retries. An empty GrantID is a no-op so cascade call sites can shed
-// guard branches.
+// grant_id extends both revoked_at and expires_at to max(existing,
+// supplied) (rendered via the dialect's GREATEST / MAX scalar).
+// Advancing revoked_at is required because the OP reuses an existing
+// (subject, client) Grant across repeat /authorize flows; a follow-up
+// cascade must extend revoked_at to cover any AT minted under the
+// grant after the previous cascade, otherwise the verifier's "iat <=
+// revoked_at" rule silently lets them through. An empty GrantID is a
+// no-op so cascade call sites can shed guard branches.
 func (s *grantRevocationStore) RevokeGrant(ctx context.Context, t store.GrantTombstone) error {
 	if t.GrantID == "" {
 		return nil

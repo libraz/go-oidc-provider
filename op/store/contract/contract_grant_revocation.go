@@ -14,9 +14,11 @@ import (
 // across every backend that ships op/storeadapter:
 //
 //   - tombstone insert is idempotent: a second RevokeGrant against the same
-//     GrantID extends ExpiresAt to max(existing, supplied) and leaves
-//     RevokedAt unchanged so the verifier's "iat <= RevokedAt" rule keeps
-//     its semantics across retries;
+//     GrantID extends both RevokedAt and ExpiresAt to max(existing,
+//     supplied). Advancing RevokedAt covers ATs minted under a Grant the
+//     OP reused across repeat /authorize flows after an earlier cascade;
+//     the verifier's "iat <= RevokedAt" rule then catches them on the
+//     next cascade;
 //   - the verifier rule itself: iat == RevokedAt is rejected (clock-tick
 //     race) and iat == RevokedAt + 1ns is accepted;
 //   - JTI denylist precedence: an access token whose jti has been
@@ -92,7 +94,10 @@ func grantRevIdempotent(t *testing.T, f Factory) {
 		t.Fatalf("first RevokeGrant: %v", err)
 	}
 	// Second RevokeGrant: shorter ExpiresAt MUST NOT shrink the row,
-	// and RevokedAt MUST NOT change to the new instant.
+	// and RevokedAt MUST advance to max(existing, supplied) so a
+	// follow-up cascade against a (subject, client) Grant the OP has
+	// reused across repeat /authorize flows covers any AT minted under
+	// the grant after the previous cascade.
 	second := store.GrantTombstone{
 		GrantID:   "grant-idem",
 		RevokedAt: now.Add(10 * time.Second),
@@ -102,17 +107,27 @@ func grantRevIdempotent(t *testing.T, f Factory) {
 	if err := gr.RevokeGrant(ctx, second); err != nil {
 		t.Fatalf("second RevokeGrant: %v", err)
 	}
-	// A token issued after the original RevokedAt but before the new
-	// instant MUST still be considered revoked, proving RevokedAt was
-	// preserved.
+	// A token issued at the original RevokedAt MUST still be considered
+	// revoked: a later RevokedAt strictly widens the iat window, never
+	// shrinks it.
 	revoked, err := gr.IsRevoked(ctx, "grant-idem", "", now)
 	if err != nil {
 		t.Fatalf("IsRevoked at original RevokedAt: %v", err)
 	}
 	if !revoked {
-		t.Fatal("RevokedAt drifted: a second RevokeGrant moved RevokedAt forward")
+		t.Fatal("original RevokedAt no longer covers iat=original_RevokedAt")
 	}
-	// Third RevokeGrant: longer ExpiresAt MUST extend the row.
+	// A token issued at the new RevokedAt MUST also be revoked: this is
+	// the new behaviour the second RevokeGrant introduced.
+	revoked, err = gr.IsRevoked(ctx, "grant-idem", "", now.Add(10*time.Second))
+	if err != nil {
+		t.Fatalf("IsRevoked at advanced RevokedAt: %v", err)
+	}
+	if !revoked {
+		t.Fatal("RevokedAt did not advance: an AT issued after the prior cascade is still accepted")
+	}
+	// Third RevokeGrant: longer ExpiresAt MUST extend the row, and
+	// RevokedAt MUST advance further.
 	third := store.GrantTombstone{
 		GrantID:   "grant-idem",
 		RevokedAt: now.Add(20 * time.Second),
@@ -121,6 +136,13 @@ func grantRevIdempotent(t *testing.T, f Factory) {
 	}
 	if err := gr.RevokeGrant(ctx, third); err != nil {
 		t.Fatalf("third RevokeGrant: %v", err)
+	}
+	revoked, err = gr.IsRevoked(ctx, "grant-idem", "", now.Add(20*time.Second))
+	if err != nil {
+		t.Fatalf("IsRevoked at third RevokedAt: %v", err)
+	}
+	if !revoked {
+		t.Fatal("RevokedAt did not advance to third value")
 	}
 	// A GC cutoff between the first and third ExpiresAt values MUST
 	// leave the row intact, proving ExpiresAt was extended to the max.

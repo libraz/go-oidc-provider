@@ -34,10 +34,16 @@ func newGrantRevocationStore() *grantRevocationStore {
 }
 
 // RevokeGrant implements [store.GrantRevocationStore]. The call is
-// idempotent: a second call against the same GrantID extends ExpiresAt
-// to the max of the supplied and existing values and leaves RevokedAt
-// unchanged so the verifier's "iat <= RevokedAt" rule keeps its
-// meaning across retries.
+// idempotent: a second call against the same GrantID extends both
+// RevokedAt and ExpiresAt to the max of the supplied and existing
+// values. Advancing RevokedAt is required because the OP reuses an
+// existing (subject, client) Grant across repeat /authorize flows; if
+// a fresh auth flow issued a new AT under the grant after an earlier
+// cascade, a follow-up cascade must extend RevokedAt to cover those
+// new ATs as well, otherwise the verifier's "iat <= RevokedAt" rule
+// silently lets them through. Reason is updated only when the
+// existing row has none so an audit trail latches onto the first
+// hint.
 //
 // An empty GrantID is a no-op so the call site can shed cascade calls
 // for grants that have no authorize-side identifier without a guard.
@@ -48,9 +54,9 @@ func (s *grantRevocationStore) RevokeGrant(_ context.Context, t store.GrantTombs
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.tombstones[t.GrantID]; ok {
-		// Idempotent: keep the original RevokedAt; extend ExpiresAt to
-		// max(existing, supplied); update Reason only if the existing
-		// row has none so an audit trail can latch onto the first hint.
+		if t.RevokedAt.After(existing.RevokedAt) {
+			existing.RevokedAt = t.RevokedAt
+		}
 		if t.ExpiresAt.After(existing.ExpiresAt) {
 			existing.ExpiresAt = t.ExpiresAt
 		}
