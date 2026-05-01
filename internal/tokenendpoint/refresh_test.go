@@ -934,6 +934,113 @@ func TestRefresh_GidClaim_PresentOnRotatedAT(t *testing.T) {
 	}
 }
 
+// TestRefresh_NoncePreservedAcrossRotation asserts that the rotated
+// id_token carries the original authorize-time nonce. OpenID Connect
+// Core 1.0 §12 mandates: "if a nonce value was sent in the
+// Authentication Request, a nonce Claim MUST be present and its value
+// checked to verify that it is the same value as the one that was
+// sent". The seeded refresh token records the originating nonce; the
+// handler MUST stamp it onto the rotated id_token AND propagate it
+// onto the next-generation refresh-token record so the chain survives
+// arbitrarily many rotations.
+func TestRefresh_NoncePreservedAcrossRotation(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const (
+		tokenID = "rt-nonce-preserve" //nolint:gosec // test fixture: not a real credential.
+		subject = "user-1"
+		grantID = "grant-rt-nonce-preserve"
+		nonce   = "n-0S6_WzA2Mj-original"
+	)
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "offline_access"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid", "offline_access"},
+		Nonce:    nonce,
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	idt, _ := body["id_token"].(string)
+	if idt == "" {
+		t.Fatal("id_token missing")
+	}
+	idClaims := decodeIDTokenClaims(t, idt)
+	if got := idClaims["nonce"]; got != nonce {
+		t.Fatalf("rotated id_token nonce=%v want %q", got, nonce)
+	}
+	rotated, _ := body["refresh_token"].(string)
+	if rotated == "" || rotated == tokenID {
+		t.Fatalf("refresh_token was not rotated: got %q (input %q)", rotated, tokenID)
+	}
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), rotated)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find: %v", err)
+	}
+	if rec.Nonce != nonce {
+		t.Fatalf("rotated refresh-token record Nonce=%q want %q (chain must propagate)", rec.Nonce, nonce)
+	}
+}
+
+// TestRefresh_NonceAbsent_OmitsClaim asserts that a refresh-token
+// chain whose originating authorize request did not carry a nonce
+// produces an id_token without a nonce claim. OIDC Core 1.0 §12 only
+// requires the claim "if a nonce value was sent"; emitting an empty
+// nonce on the wire would be a spec violation in the opposite
+// direction.
+func TestRefresh_NonceAbsent_OmitsClaim(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const (
+		tokenID = "rt-no-nonce" //nolint:gosec // test fixture: not a real credential.
+		subject = "user-1"
+		grantID = "grant-rt-no-nonce"
+	)
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid"},
+		// Nonce intentionally empty.
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	idt, _ := body["id_token"].(string)
+	if idt == "" {
+		t.Fatal("id_token missing")
+	}
+	idClaims := decodeIDTokenClaims(t, idt)
+	if got, present := idClaims["nonce"]; present {
+		t.Fatalf("id_token must omit nonce when chain has none; got %v", got)
+	}
+}
+
 // TestRefresh_MissingToken yields invalid_request when the body omits
 // refresh_token.
 func TestRefresh_MissingToken(t *testing.T) {

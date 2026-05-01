@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     resource TEXT NOT NULL,
     dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
     mtls_cert_thumbprint VARCHAR(64) NOT NULL DEFAULT '',
+    nonce VARCHAR(255) NOT NULL DEFAULT '',
     revoked TINYINT(1) NOT NULL DEFAULT 0,
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT NULL,

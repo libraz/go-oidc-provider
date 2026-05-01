@@ -161,10 +161,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// refresh tokens
 		refreshSave: d.rebind(
 			"INSERT INTO " + n.refreshes +
-				" (id, client_id, grant_id, parent_id, subject, scope, resource, dpop_jkt, mtls_cert_thumbprint, revoked, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" (id, client_id, grant_id, parent_id, subject, scope, resource, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		refreshFind: d.rebind(
-			"SELECT id, client_id, subject, grant_id, scope, resource, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, revoked" +
+			"SELECT id, client_id, subject, grant_id, scope, resource, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id = ?"),
 		refreshConsume: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),

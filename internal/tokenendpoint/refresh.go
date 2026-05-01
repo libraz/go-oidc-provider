@@ -280,6 +280,7 @@ func issueRefreshResponse(
 		AuthTime: authCtx.AuthTime,
 		ACR:      authCtx.ACR,
 		AMR:      authCtx.AMR,
+		Nonce:    exchanged.Nonce,
 		Extra:    idTokenExtra,
 	})
 	if err != nil {
@@ -306,8 +307,7 @@ func issueRefreshResponse(
 
 // refreshIDTokenInput collects the parameters
 // [maybeMintRefreshIDToken] needs. It mirrors [mintIDTokenInput] but
-// omits the at_hash / c_hash / nonce fields the refresh path does not
-// populate.
+// omits the at_hash / c_hash fields the refresh path does not populate.
 type refreshIDTokenInput struct {
 	Subject  string
 	ClientID string
@@ -317,6 +317,12 @@ type refreshIDTokenInput struct {
 	ACR      string
 	AMR      []string
 
+	// Nonce is the OIDC Core 1.0 §3.1.2.1 nonce captured at the
+	// originating authorization request, threaded through the
+	// persisted refresh-token chain. OIDC Core §12 requires the
+	// rotated id_token to preserve it.
+	Nonce string
+
 	// Extra carries the OIDC Core 1.0 §5.5 "claims"-projected
 	// id_token claims resolved from the originating grant. nil when
 	// the grant carried no §5.5 payload or the projector returned
@@ -325,12 +331,13 @@ type refreshIDTokenInput struct {
 }
 
 // maybeMintRefreshIDToken signs an id_token only when the rotated grant
-// carries the "openid" scope. The token omits at_hash / c_hash / nonce
-// because no fresh authentication occurred (OIDC Core 1.0 §12 — the
-// refresh-token id_token re-issues identity claims but does not bind a
-// fresh access token to a fresh authorization code). acr / amr are
-// copied from the originating authentication so the spec's "same as
-// the original ID Token" requirement holds across rotations.
+// carries the "openid" scope. The token omits at_hash / c_hash because
+// the refresh-token id_token does not bind a fresh access token to a
+// fresh authorization code, but it DOES carry the original nonce per
+// OIDC Core 1.0 §12 ("if a nonce value was sent in the Authentication
+// Request, a nonce Claim MUST be present"). acr / amr are copied from
+// the originating authentication so the spec's "same as the original
+// ID Token" requirement holds across rotations.
 func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) {
 	if !scopeContainsOpenID(in.Scope) {
 		return "", nil
@@ -342,6 +349,7 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 		IssuedAt:  in.Now.Unix(),
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
 		AuthTime:  in.AuthTime,
+		Nonce:     in.Nonce,
 		ACR:       in.ACR,
 		AMR:       append([]string(nil), in.AMR...),
 		Extra:     in.Extra,
@@ -397,6 +405,7 @@ func rotateRefreshToken(
 		ParentID:           &parent,
 		DPoPJKT:            rotatedJKT,
 		MTLSCertThumbprint: binding.MTLSThumbprint,
+		Nonce:              exchanged.Nonce,
 	})
 	if err != nil {
 		return "", err

@@ -503,6 +503,7 @@ func issueAuthCodeResponse(
 		exchanged.GrantID,
 		exchanged.Scope,
 		exchanged.Resource,
+		exchanged.Nonce,
 		binding,
 	)
 	if err != nil {
@@ -764,7 +765,7 @@ func maybeIssueRefreshToken(
 	client *store.Client,
 	subject, grantID string,
 	scope []string,
-	resource string,
+	resource, nonce string,
 	binding tokenBinding,
 ) (string, error) {
 	if !clientPermitsRefresh(client, scope) {
@@ -784,6 +785,7 @@ func maybeIssueRefreshToken(
 		GrantID:            grantID,
 		Scope:              append([]string(nil), scope...),
 		Resource:           resource,
+		Nonce:              nonce,
 		DPoPJKT:            refreshDPoPJKT(client, binding.DPoPJKT),
 		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})

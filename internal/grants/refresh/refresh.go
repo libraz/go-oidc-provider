@@ -166,6 +166,13 @@ type IssueInput struct {
 	// MTLSCertThumbprint and DPoPJKT are mutually exclusive on a
 	// single record; the token endpoint never issues both at once.
 	MTLSCertThumbprint string
+
+	// Nonce is the OIDC Core 1.0 §3.1.2.1 nonce value from the
+	// originating authorization request. The Issuer persists it on
+	// the [store.RefreshToken] so the rotated id_token preserves it
+	// per OIDC Core §12. Empty when the originating request omitted
+	// the parameter.
+	Nonce string
 }
 
 // Issue mints a new refresh token and persists it. It returns the opaque
@@ -192,6 +199,7 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 		CreatedAt:          now,
 		DPoPJKT:            in.DPoPJKT,
 		MTLSCertThumbprint: in.MTLSCertThumbprint,
+		Nonce:              in.Nonce,
 	}
 	if err := i.store.Save(ctx, rec); err != nil {
 		return "", fmt.Errorf("refresh: save: %w", err)
@@ -334,6 +342,15 @@ type Exchanged struct {
 	// generation token.
 	MTLSCertThumbprint string
 
+	// Nonce is the OIDC Core 1.0 §3.1.2.1 nonce stamped on the chain
+	// at the originating authorization request, copied verbatim from
+	// the consumed record. The rotation handler threads it onto the
+	// rotated id_token (OIDC Core §12) and onto the persisted next-
+	// generation refresh token so the nonce survives an arbitrary
+	// number of refreshes. Empty when the chain was not OIDC or when
+	// the originating request omitted the parameter.
+	Nonce string
+
 	// InGrace reports that this exchange resolved through the RFC
 	// 9700 §2.2.2 grace window: the presented token had already
 	// been consumed within [ExchangerConfig.GraceTTL]. Callers MUST
@@ -389,6 +406,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		IssuedAt:           rec.CreatedAt,
 		DPoPJKT:            rec.DPoPJKT,
 		MTLSCertThumbprint: rec.MTLSCertThumbprint,
+		Nonce:              rec.Nonce,
 	}, nil
 }
 
@@ -480,6 +498,7 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 		IssuedAt:           rec.CreatedAt,
 		DPoPJKT:            rec.DPoPJKT,
 		MTLSCertThumbprint: rec.MTLSCertThumbprint,
+		Nonce:              rec.Nonce,
 		InGrace:            true,
 	}, nil
 }

@@ -85,6 +85,16 @@ type RefreshToken struct {
 	// change.
 	MTLSCertThumbprint string
 
+	// Nonce is the OpenID Connect Core 1.0 §3.1.2.1 nonce value the
+	// client supplied at the originating authorization request. The
+	// token endpoint copies it onto every id_token issued under this
+	// chain, including id_tokens minted via refresh-token rotation:
+	// OIDC Core §12 requires the rotated id_token to preserve the
+	// original nonce. Empty when the originating request omitted the
+	// parameter (a non-OIDC chain or a profile that does not require
+	// nonce); the id_token claim is then omitted on the wire.
+	Nonce string
+
 	// Revoked is true when the record was retired via
 	// [RefreshTokenStore.RevokeChain] (typically after a replay was
 	// detected on a sibling). The library distinguishes "consumed by
