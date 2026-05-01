@@ -59,7 +59,7 @@ rows:
     behaviour: |
       error_uri is OPTIONAL; the OP MUST NOT emit it unless
       explicitly configured per error catalog.
-    status: pending
+    status: active
 
   - id: ERR-012
     severity: P1
@@ -130,7 +130,8 @@ rows:
       server_error with body
       {"error":"server_error","error_description":"oops! something
       went wrong"} and emit a server_error audit event.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Panic recovery and the request-scoped server_error envelope are the embedder's responsibility, not the OP library's. CLAUDE.md positions HTTP request lifecycle observability (panic recovery, request duration histograms, status-code distributions) outside the library: the OP issues domain audit events but does not wrap its own router. Production deployments install panic recovery in their reverse proxy or HTTP server middleware (e.g. otelhttp.NewMiddleware, chi.Recoverer), where the canonical envelope shape, log routing, and 5xx alerting already live. Reintroducing recovery here would duplicate or fight that wrapper."
 
   - id: ERR-050
     severity: P0

@@ -240,9 +240,29 @@ func TestScenario_ERR_010_JSONErrorBodyHasErrorCode(t *testing.T) {
 	}
 }
 
+// TestScenario_ERR_011_ErrorURIOmittedByDefault verifies that an
+// error envelope from /token never carries an "error_uri" field by
+// default. RFC 6749 §5.2 lists error_uri as OPTIONAL, and the OP's
+// error catalog does not configure one for any wire code, so the
+// field MUST be absent on every default-config error path.
+//
+// Spec: RFC 6749 §5.2.
 func TestScenario_ERR_011_ErrorURIOmittedByDefault(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ERR-011")
+
+	tk := testkit.NewProvider(t)
+
+	for _, accept := range []string{"", "*/*", "application/json"} {
+		resp := postTokenErrorJSON(t, tk, accept)
+		var env map[string]any
+		if err := json.Unmarshal(resp.Body, &env); err != nil {
+			t.Fatalf("Accept=%q body is not JSON: %v (raw=%q)", accept, err, string(resp.Body))
+		}
+		if _, present := env["error_uri"]; present {
+			t.Errorf("Accept=%q response carries error_uri (must be absent by default): %s",
+				accept, string(resp.Body))
+		}
+	}
 }
 
 // TestScenario_ERR_012_JSONErrorOmitsState verifies that a JSON error
