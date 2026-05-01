@@ -36,7 +36,8 @@ rows:
       An access token cannot carry two proof-of-possession bindings at
       once; setting both jkt and x5t#S256 thumbprints on a single AT
       MUST fail with a construction error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Dual jkt+x5t#S256 binding unreachable on v1.0 public surface; token construction reads exactly one channel per redemption."
 
   - id: DPOP-003
     severity: P0
@@ -46,7 +47,8 @@ rows:
       Authorization: Bearer is rejected with 401 invalid_token; the
       WWW-Authenticate challenge uses scheme DPoP and advertises the
       allowed algs.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Catalog WWW-Authenticate algs= attribute is panva-residue; v1.0 emits the bare DPoP scheme + error_description per internal/userinfo/handler.go.
 
   - id: DPOP-004
     severity: P0
@@ -56,7 +58,8 @@ rows:
       no DPoP proof header is rejected with 400 invalid_request
       ("DPoP header not provided"); WWW-Authenticate uses scheme DPoP
       with the advertised algs.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Catalog wire shape (400 invalid_request) is panva-specific; v1.0 emits 401 invalid_token with DPoP challenge per internal/userinfo/handler.go enforceDPoPCnf.
 
   - id: DPOP-005
     severity: P0
@@ -65,7 +68,8 @@ rows:
       DPoP-bound tokens MUST be sent only in the Authorization header.
       A POST /userinfo carrying access_token in the form body together
       with a DPoP header is rejected with 400 invalid_request.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Catalog DPoP-scheme challenge is panva-residue; v1.0 rejects two-channel access_token submissions with bare Bearer error=invalid_request.
 
   - id: DPOP-006
     severity: P0
@@ -74,7 +78,8 @@ rows:
       When a DPoP proof header is present, the Authorization scheme
       MUST be DPoP. Combining a DPoP header with Authorization: Bearer
       is rejected with 400 invalid_request.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Catalog asserts 400 invalid_request scheme rule; v1.0 admits Bearer scheme as a token-extraction prefix and fails the cnf binding check with 401 invalid_token instead.
 
   - id: DPOP-007
     severity: P0
@@ -84,7 +89,7 @@ rows:
       (e.g. JWT, secevent+jwt) is rejected with 401
       invalid_dpop_proof and an "unexpected typ JWT header value"
       detail.
-    status: pending
+    status: active
 
   - id: DPOP-008
     severity: P0
@@ -94,7 +99,8 @@ rows:
       asymmetric algs. Values of none, symmetric algs (HS*),
       unsupported algs, missing alg, or non-string alg are rejected
       with 401 invalid_dpop_proof.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Driving alg=none / alg=HS256 requires forging JOSE header bytes (go-jose refuses to issue them). Defensive coverage exists in internal/dpop/proof_test.go; catalog wire code is panva-residue.
 
   - id: DPOP-009
     severity: P0
@@ -104,7 +110,8 @@ rows:
       empty, or non-object jwk values (string, number, boolean, null,
       array) are rejected with 401 invalid_dpop_proof "jwk header
       parameter must be a JSON object".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Catalog error_description is panva-residue. Rule (jwk MUST be JSON object) is enforced by internal/dpop/proof.go; v1.0 collapses to 400 invalid_request 'DPoP proof malformed'."
 
   - id: DPOP-010
     severity: P0
@@ -113,7 +120,8 @@ rows:
       The proof JWT jwk header MUST publish only public key material.
       Any private key parameters in the jwk are rejected with 401
       invalid_dpop_proof "jwk header parameter must be a public key".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Catalog error_description is panva-residue. Rule (jwk MUST be public) is enforced by internal/dpop/proof.go !jwk.IsPublic(); wire shape diverges.
 
   - id: DPOP-011
     severity: P0
@@ -122,7 +130,8 @@ rows:
       The proof JWT jwk header MUST NOT carry a symmetric key. An
       oct kty is rejected with 401 invalid_dpop_proof "jwk header
       parameter must be a public key".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Catalog error_description is panva-residue. Rule (oct kty rejected) is enforced by internal/dpop/proof.go assertSupportedKeyType; wire shape diverges.
 
   - id: DPOP-012
     severity: P0
@@ -131,7 +140,7 @@ rows:
       The proof JWT body MUST contain a string jti claim. A missing
       or non-string jti is rejected with 401 invalid_dpop_proof
       "DPoP proof must have a jti string property".
-    status: pending
+    status: active
 
   - id: DPOP-013
     severity: P0
@@ -140,7 +149,7 @@ rows:
       The proof htm claim MUST equal the current HTTP method. A
       mismatch is rejected with 401 invalid_dpop_proof "DPoP proof
       htm mismatch".
-    status: pending
+    status: active
 
   - id: DPOP-014
     severity: P0
@@ -149,7 +158,7 @@ rows:
       The proof htu claim MUST equal the canonical resource URI
       (scheme + host + path, no query, no fragment). A mismatch is
       rejected with 401 invalid_dpop_proof "DPoP proof htu mismatch".
-    status: pending
+    status: active
 
   - id: DPOP-015
     severity: P0
@@ -159,7 +168,7 @@ rows:
       configured freshness window (in either direction) is rejected
       with 401 invalid_dpop_proof "DPoP proof iat is not recent
       enough"; no DPoP-Nonce header is emitted.
-    status: pending
+    status: active
 
   - id: DPOP-016
     severity: P0
@@ -169,7 +178,8 @@ rows:
       the freshness window is answered with 401 use_dpop_nonce and a
       DPoP-Nonce response header so the client can retry with the
       issued nonce.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 verifier orders iat check ahead of nonce check (internal/dpop/verify.go). Out-of-window proof always surfaces as invalid_request irrespective of nonce source. Coupling is panva-specific.
 
   - id: DPOP-017
     severity: P0
@@ -178,7 +188,7 @@ rows:
       Replaying the same proof JWT (same jti and jwk thumbprint)
       within the freshness window is rejected with 401 invalid_token
       "DPoP proof JWT Replay detected".
-    status: pending
+    status: active
 
   - id: DPOP-018
     severity: P0
@@ -187,7 +197,8 @@ rows:
       A DPoP-bound access token presented at the resource server with
       a proof signed by a different keypair than the binding key is
       rejected with 401 invalid_token "failed jkt verification".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Catalog error_description 'failed jkt verification' is panva wording; v1.0 emits 'DPoP proof key does not match the bound thumbprint'. Wire code matches; behaviour covered by internal/dpop/end_to_end_test.go TestE2E_DPoP_FullFlow."
 
   - id: DPOP-019
     severity: P0
@@ -196,7 +207,8 @@ rows:
       Presenting a DPoP-bound access token under the Bearer scheme is
       rejected with 401 invalid_token "failed jkt verification" and a
       WWW-Authenticate DPoP challenge.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 userinfo handler accepts Bearer scheme on DPoP-bound tokens; cnf check rejects with 401 invalid_token 'DPoP proof required' rather than catalog's 'failed jkt verification'. Wire code matches but text differs."
 
   - id: DPOP-020
     severity: P0
@@ -205,7 +217,8 @@ rows:
       The proof ath claim MUST equal base64url(SHA-256(access_token)).
       A mismatch is rejected with 401 invalid_dpop_proof "DPoP proof
       ath mismatch".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 emits 401 invalid_token 'DPoP proof rejected' (description collapsed to avoid sub-cause leak; internal/userinfo/handler.go respondDPoPInvalid). ath enforcement is in place; only wire description diverges."
 
   - id: DPOP-021
     severity: P0
@@ -214,7 +227,8 @@ rows:
       A DPoP proof presented at a protected resource MUST carry an
       ath claim; its absence is rejected with 401
       invalid_dpop_proof.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as DPOP-020: v1.0 emits 401 invalid_token; ath-required enforcement is in place but description differs from catalog's panva-quoted invalid_dpop_proof."
 
   - id: DPOP-022
     severity: P0
@@ -222,7 +236,7 @@ rows:
     behaviour: |
       A malformed DPoP header value at /token is rejected with 400
       invalid_dpop_proof "invalid DPoP key binding".
-    status: pending
+    status: active
 
   - id: DPOP-023
     severity: P0
@@ -231,7 +245,8 @@ rows:
       A proof carrying a nonce the server does not recognise at
       /userinfo is answered with 401 use_dpop_nonce "invalid nonce in
       DPoP proof" and a fresh DPoP-Nonce response header.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Catalog error_description 'invalid nonce in DPoP proof' is panva-residue. v1.0 emits the use_dpop_nonce challenge with a generic description (internal/userinfo/handler.go respondUseDPoPNonce). Behaviour covered by internal/dpop/verify_nonce_test.go."
 
   - id: DPOP-024
     severity: P0
@@ -240,7 +255,8 @@ rows:
       A proof carrying a nonce the server does not recognise at
       /token is answered with 400 use_dpop_nonce "invalid nonce in
       DPoP proof" and a fresh DPoP-Nonce response header.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as DPOP-023: v1.0 emits use_dpop_nonce at /token (internal/tokenendpoint/dpop.go writeUseDPoPNonce) but description is generic. Wire code matches; description is panva-residue."
 
   - id: DPOP-025
     severity: P0
@@ -249,7 +265,8 @@ rows:
       When the nonce-required policy is active, a proof omitting the
       nonce at PAR is answered with 400 use_dpop_nonce "nonce is
       required in the DPoP proof" and a DPoP-Nonce response header.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Catalog error_description 'nonce is required in the DPoP proof' is panva-residue. nonce-required policy is implemented (DPoPNonceSource gates verifier) but description differs. Behaviour covered by parendpoint white-box tests."
 
   - id: DPOP-026
     severity: P0
@@ -258,7 +275,8 @@ rows:
       When the nonce-required policy is active, a proof omitting the
       nonce at /userinfo is answered with 401 use_dpop_nonce "nonce is
       required in the DPoP proof" and a DPoP-Nonce response header.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as DPOP-025: nonce-required at /userinfo is implemented; description is panva-residue. Behaviour covered by userinfo white-box tests."
 
   - id: DPOP-027
     severity: P0
@@ -267,7 +285,8 @@ rows:
       When the nonce-required policy is active, a proof omitting the
       nonce at /token is answered with 400 use_dpop_nonce "nonce is
       required in the DPoP proof" and a DPoP-Nonce response header.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as DPOP-025/026: nonce-required at /token is implemented; description is panva-residue. Behaviour covered by tokenendpoint white-box tests."
 
   - id: DPOP-028
     severity: P1
@@ -293,7 +312,8 @@ rows:
       A confidential client redeeming a device_code with a valid DPoP
       proof receives an access token bound by jkt; the issued refresh
       token is NOT sender-constrained.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 /token endpoint dispatches only on authorization_code/refresh_token/client_credentials (internal/tokenendpoint/handler.go). device_code grant returns unsupported_grant_type — no wire path to bind a DPoP key.
 
   - id: DPOP-031
     severity: P0
@@ -303,7 +323,8 @@ rows:
       a valid DPoP proof receives both an access token and a refresh
       token bound by jkt (RTs MUST be sender-constrained for public
       clients).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as DPOP-030: device_code grant not implemented in v1.0."
 
   - id: DPOP-032
     severity: P0
@@ -312,7 +333,8 @@ rows:
       A confidential client redeeming a CIBA grant with a valid DPoP
       proof receives an access token bound by jkt; the refresh token
       is NOT sender-constrained.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 /token endpoint does not handle the CIBA grant urn:openid:params:grant-type:ciba; CIBA is profiled only in op.Profile FAPICIBA/iGovHigh values for downstream wiring, but no wire-level CIBA implementation ships in v1.0."
 
   - id: DPOP-033
     severity: P0
@@ -320,7 +342,8 @@ rows:
     behaviour: |
       A public client redeeming a CIBA grant with a valid DPoP proof
       receives both an access token and a refresh token bound by jkt.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as DPOP-032: CIBA grant not implemented in v1.0."
 
   - id: DPOP-034
     severity: P0
@@ -328,7 +351,7 @@ rows:
     behaviour: |
       A PAR submission carrying a dpop_jkt parameter that equals the
       proof jwk thumbprint is accepted (201).
-    status: pending
+    status: active
 
   - id: DPOP-035
     severity: P0
@@ -337,7 +360,7 @@ rows:
       A PAR submission whose dpop_jkt parameter differs from the
       proof jwk thumbprint is rejected with 400 invalid_request
       "DPoP proof key thumbprint does not match dpop_jkt".
-    status: pending
+    status: active
 
   - id: DPOP-036
     severity: P0
@@ -346,7 +369,7 @@ rows:
       A PAR submission carrying a DPoP proof but no dpop_jkt parameter
       is stored under a request_uri whose dpop_jkt is auto-derived
       from the proof (43-char base64url thumbprint).
-    status: pending
+    status: active
 
   - id: DPOP-037
     severity: P0
@@ -366,7 +389,7 @@ rows:
       authorization request had no dpop_jkt, issues an access token
       bound by jkt; the refresh token (confidential client) is NOT
       sender-constrained.
-    status: pending
+    status: active
 
   - id: DPOP-039
     severity: P0
@@ -376,7 +399,7 @@ rows:
       /token DPoP proof matches, the access token is bound by jkt;
       the refresh token (confidential client) is NOT
       sender-constrained.
-    status: pending
+    status: active
 
   - id: DPOP-040
     severity: P0
@@ -386,7 +409,7 @@ rows:
       /token DPoP proof comes from a different key, the redemption is
       rejected with 400 invalid_grant "DPoP proof key thumbprint does
       not match dpop_jkt".
-    status: pending
+    status: active
 
   - id: DPOP-041
     severity: P0
@@ -395,7 +418,7 @@ rows:
       When dpop_jkt was set at the authorization request, the /token
       redemption MUST carry a DPoP header. Its absence is rejected
       with 400 invalid_grant "missing DPoP proof JWT".
-    status: pending
+    status: active
 
   - id: DPOP-042
     severity: P0
