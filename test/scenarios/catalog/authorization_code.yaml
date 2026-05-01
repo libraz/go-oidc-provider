@@ -130,7 +130,8 @@ rows:
       When findAccount returns no account at exchange time the request
       is rejected with 400 invalid_grant ("authorization code invalid
       (referenced account not found)") and a grant.error is emitted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The Go OP does not reject /token on FindBySubject failure: the authorization code is itself the authentication assertion, and FindBySubject is consulted only for claims projection (silently omitting projected user claims when the user store returns ErrNotFound). RFC 6749 §5.2 lists user-existence rejection as OPTIONAL and FAPI 2.0 does not require it; recreating the JS oidc-provider 'referenced account not found' rejection would be a behavioural regression (existing tokens would become unredeemable on user-store maintenance) without a security upside. AC-024's allow-omit framing is additionally subsumed by the allow-omit OOS rationale on AC-013..AC-023."
 
   - id: AC-013
     severity: P1
@@ -140,7 +141,8 @@ rows:
       allow-omit option disabled that omits redirect_uri is rejected
       with 400 invalid_request ("missing required parameter
       'redirect_uri'").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-014
     severity: P1
@@ -151,7 +153,8 @@ rows:
       receive 200 with access_token, id_token, expires_in, token_type,
       and scope; no refresh_token is issued and grant.success is
       emitted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-015
     severity: P2
@@ -160,7 +163,8 @@ rows:
       An allow-omit single-redirect-uri exchange without offline_access
       resolves Account, Grant, Client, AuthorizationCode, and
       AccessToken; the AccessToken records gty=authorization_code.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-016
     severity: P2
@@ -169,7 +173,8 @@ rows:
       An allow-omit single-redirect-uri exchange that requested
       offline_access additionally resolves a RefreshToken with
       gty=authorization_code.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-017
     severity: P1
@@ -177,7 +182,8 @@ rows:
     behaviour: |
       A successful allow-omit single-redirect-uri token response
       carries Cache-Control: no-store.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-018
     severity: P0
@@ -186,7 +192,8 @@ rows:
       An allow-omit single-redirect-uri code presented after its TTL is
       rejected with 400 invalid_grant ("authorization code is
       expired") and a grant.error is emitted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-019
     severity: P0
@@ -195,7 +202,8 @@ rows:
       An allow-omit single-redirect-uri code that has already been
       consumed is rejected with 400 invalid_grant ("authorization code
       already consumed") and the grant is revoked.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-020
     severity: P0
@@ -203,7 +211,8 @@ rows:
     behaviour: |
       The first valid allow-omit single-redirect-uri exchange marks the
       code as consumed with an epoch no later than now.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-021
     severity: P0
@@ -212,7 +221,8 @@ rows:
       An allow-omit single-redirect-uri code presented by a mismatched
       client is rejected with 400 invalid_grant ("client mismatch")
       and a grant.error is emitted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-022
     severity: P1
@@ -220,7 +230,8 @@ rows:
     behaviour: |
       An unsupported grant_type submitted by an allow-omit
       single-redirect-uri client returns 400 unsupported_grant_type.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-023
     severity: P0
@@ -230,7 +241,8 @@ rows:
       redirect_uri which does not match the registered value is
       rejected with 400 invalid_grant ("authorization code
       redirect_uri mismatch").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'allow-omit single-redirect-uri' option is an oidc-provider (JS) feature where a client registered with exactly one redirect_uri may omit the redirect_uri parameter at /authorize and /token. go-oidc-provider does not implement this option in v1.0 and it is not on the roadmap: RFC 9700 §4.1.1 (FAPI 2.0 attacker model) requires explicit exact-match redirect_uri at every step of the code flow, so omit-on-single is incompatible with the security profile this library targets. The negative-direction case ('client with one redirect_uri must still send redirect_uri at /token') is implicit in AC-010/AC-011 (exact-match enforcement) and AC-027 (missing redirect_uri rejection)."
 
   - id: AC-024
     severity: P0
@@ -240,7 +252,8 @@ rows:
       single-redirect-uri exchange the request is rejected with 400
       invalid_grant ("authorization code invalid (referenced account
       not found)").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The Go OP does not reject /token on FindBySubject failure: the authorization code is itself the authentication assertion, and FindBySubject is consulted only for claims projection (silently omitting projected user claims when the user store returns ErrNotFound). RFC 6749 §5.2 lists user-existence rejection as OPTIONAL and FAPI 2.0 does not require it; recreating the JS oidc-provider 'referenced account not found' rejection would be a behavioural regression (existing tokens would become unredeemable on user-store maintenance) without a security upside. AC-024's allow-omit framing is additionally subsumed by the allow-omit OOS rationale on AC-013..AC-023."
 
   - id: AC-025
     severity: P1
