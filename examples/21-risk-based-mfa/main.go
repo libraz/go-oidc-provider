@@ -1,86 +1,129 @@
 //go:build example
 
-// Example 21 demonstrates risk-driven step-up. A [op.RiskAssessor]
-// scores each /authorize request; [op.RuleRisk] schedules a follow-on
-// factor when the score crosses the threshold the rule names. Lower
-// scores fall through to the password-only happy path.
+// Example 21 demonstrates [op.RiskAssessor]-driven step-up. A
+// [op.RuleRisk] schedules a follow-on factor when the score crosses
+// the threshold the rule names; lower scores fall through to the
+// password-only happy path.
 //
-// Run with the example build tag:
+// The browser-friendly variant grades on [op.RiskInput.ACRValues],
+// so a fixed Chrome User-Agent can exercise all three paths via
+// three landing-page buttons that each request a different
+// acr_values string. Real assessors look at IP geolocation, device
+// fingerprint, velocity counters, and similar signals.
 //
-//	go run -tags example ./examples/21-risk-based-mfa
+// Run with the example build tag, from this directory so
+// ./web/static resolves:
 //
-// The example wires a deliberately silly assessor that grades on the
-// User-Agent header:
+//	cd examples/21-risk-based-mfa && go run -tags example .
 //
-//   - "curl" / "python" / "go-http-client" → [op.RiskScoreHigh]
-//     (TOTP fires)
-//   - "headless" (anomalous browser) → [op.RiskScoreMedium]
-//     (captcha fires; not a hard block)
-//   - everything else → [op.RiskScoreLow] (password-only happy path)
+// Two listeners come up in the same process:
 //
-// The Medium path is the case [op.RiskOutcome.Score] exists for: the
-// Decision-only fallback can only reach Low or High. Returning
-// `Decision: RiskRequire, Score: RiskScoreMedium` lets a captcha
-// rule fire while a TOTP rule gated on High stays silent.
-// Real assessors look at IP geolocation, device fingerprint,
-// velocity counters, and similar signals.
+//   - :8080 — the OP, with the SPA bundle at /login.
+//   - :9090 — the RP, exposing /, /login-low, /login-medium,
+//     /login-high, /callback, /me.
+//
+// Manual verification (open http://127.0.0.1:9090/):
+//
+//  1. "Log in (low risk)" — acr_values is empty; assessor returns
+//     [op.RiskScoreLow]; password-only happy path.
+//  2. "Log in (medium risk)" — acr_values=demo:medium; assessor
+//     returns [op.RiskScoreMedium]; password + captcha.
+//  3. "Log in (high risk)" — acr_values=demo:high; assessor returns
+//     [op.RiskScoreHigh]; password + captcha + TOTP. Both rules
+//     match on High because each [op.RuleRisk] fires whenever the
+//     score crosses its threshold; the SPA prompts run in rule
+//     order (TOTP first, then captcha).
+//
+// The "demo:medium" / "demo:high" strings are illustrative — pick
+// real ACR values appropriate for your assurance framework
+// (urn:mace:incommon:iap:bronze / silver / gold, AAL1 / AAL2 / AAL3,
+// etc.). The assessor is library-agnostic: any string the RP can
+// request will reach it.
+//
+// Restart the process whenever the round-trip stalls; ephemeral
+// keys mean every restart invalidates every in-flight session, and
+// the seeded TOTP secret regenerates on each restart, so re-scan
+// the QR after each restart.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
-//   - Risk assessor: User-Agent heuristic is illustrative — never gate authentication on a single header. Real assessors call fraud-detection services (Cloudflare Bot Management, Castle, Sift, Stripe Radar) and aggregate multiple signals.
+//   - Risk assessor: ACR-string heuristic is illustrative — real
+//     assessors call fraud-detection services (Cloudflare Bot
+//     Management, Castle, Sift, Stripe Radar) and aggregate
+//     multiple signals. Do not gate authentication on a single
+//     RP-supplied parameter in production.
+//   - Demo seed: seedkit confirms TOTP at process start, skipping
+//     the round-trip "user types code back" enrolment step a
+//     production registration screen runs.
 package main
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
-	"strings"
+	"os"
+	"slices"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
+	"github.com/libraz/go-oidc-provider/examples/internal/seedkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+	"github.com/libraz/go-oidc-provider/op/totpkit"
 )
 
-// uaRiskAssessor grades on the User-Agent header. Scripted UAs are
-// surfaced as RiskScoreHigh through the Decision-only fallback;
-// "headless" UAs are surfaced as RiskScoreMedium through the
-// explicit Score field. Benign UAs return RiskAllow → RiskScoreLow.
-type uaRiskAssessor struct{}
+const (
+	opAddr      = ":8080"
+	rpAddr      = ":9090"
+	issuer      = "http://127.0.0.1" + opAddr
+	rpBase      = "http://127.0.0.1" + rpAddr
+	clientID    = "demo-rp"
+	redirectURI = rpBase + "/callback"
 
-func (uaRiskAssessor) Assess(_ context.Context, in op.RiskInput) (op.RiskOutcome, error) {
-	ua := strings.ToLower(in.UserAgent)
+	demoUsername = "demo"
+	demoPassword = "demo"
+	demoSubject  = "demo-user"
+	demoEmail    = "demo@example.com"
+
+	staticDir   = "./web/static"
+	mediumACR   = "demo:medium"
+	highACR     = "demo:high"
+	lowRiskHint = "low risk"
+)
+
+// acrRiskAssessor maps the original /authorize request's acr_values
+// to a risk score. The RP's three landing-page buttons request the
+// three values; the assessor turns each request into a different
+// challenge, demonstrating the [op.RiskOutcome.Score] seam without
+// depending on the inbound User-Agent string.
+type acrRiskAssessor struct{}
+
+func (acrRiskAssessor) Assess(_ context.Context, in op.RiskInput) (op.RiskOutcome, error) {
 	switch {
-	case strings.Contains(ua, "curl"),
-		strings.Contains(ua, "python"),
-		strings.Contains(ua, "go-http-client"):
-		// Scripted user-agents: hard step-up. The Decision-only path
-		// is enough — the orchestrator caches RiskScoreHigh.
+	case slices.Contains(in.ACRValues, highACR):
 		return op.RiskOutcome{
 			Decision: op.RiskRequire,
-			Reason:   "anomaly.scripted-user-agent",
+			Reason:   "demo.acr=" + highACR,
 		}, nil
-	case strings.Contains(ua, "headless"):
-		// Anomalous-but-not-blocking signal: ask for a captcha but
-		// not a strong factor. Score is the seam that makes Medium
-		// reachable; without it, RiskRequire would be cached as
-		// RiskScoreHigh and the captcha rule below would never fire
-		// in isolation from the TOTP rule.
+	case slices.Contains(in.ACRValues, mediumACR):
 		return op.RiskOutcome{
 			Decision: op.RiskRequire,
 			Score:    op.RiskScoreMedium,
-			Reason:   "anomaly.headless-browser",
+			Reason:   "demo.acr=" + mediumACR,
 		}, nil
 	default:
 		return op.RiskOutcome{Decision: op.RiskAllow}, nil
 	}
 }
 
-// stubCaptchaVerifier accepts any non-empty token. A real deployment
-// wires Cloudflare Turnstile / hCaptcha / reCAPTCHA here.
+// stubCaptchaVerifier accepts any non-empty token. A production
+// deployment wires Cloudflare Turnstile / hCaptcha / reCAPTCHA here.
 type stubCaptchaVerifier struct{}
 
 func (stubCaptchaVerifier) Verify(_ context.Context, in op.CaptchaInput) error {
@@ -91,23 +134,60 @@ func (stubCaptchaVerifier) Verify(_ context.Context, in op.CaptchaInput) error {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
+	if _, err := os.Stat(staticDir); err != nil {
+		return errors.New("StaticDir " + staticDir + " missing — run from the example directory so ./web/static resolves")
+	}
+
 	keys := devkeys.MustEphemeral("risk-1")
 
+	codec, err := totpkit.NewCodec(keys.TOTPKey)
+	if err != nil {
+		return err
+	}
+
 	st := inmem.New()
+
+	ctx := context.Background()
+	seed, err := seedkit.Seed(ctx, st, seedkit.SeedOptions{
+		Subject:  demoSubject,
+		Username: demoUsername,
+		Password: demoPassword,
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": demoEmail,
+		},
+		TOTP: &seedkit.SeedTOTP{
+			Codec:   codec,
+			Issuer:  "go-oidc-provider demo",
+			Account: demoEmail,
+			Now:     time.Now(), //nolint:forbidigo // example boots once at startup; embedders pass their own clock.
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	printSeedBanner(seed)
+
 	flow := op.LoginFlow{
 		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
-		Risk:    uaRiskAssessor{},
+		Risk:    acrRiskAssessor{},
 		Rules: []op.Rule{
-			// TOTP fires only when the assessor scores the
-			// request RiskScoreHigh or above (scripted UAs).
+			// TOTP fires when the assessor scores RiskScoreHigh or
+			// above. Rule order matters: TOTP wins on High because
+			// it appears first.
 			op.RuleRisk(op.RiskScoreHigh, op.StepTOTP{
 				Store:         st.TOTPs(),
 				EncryptionKey: keys.TOTPKey,
 			}),
-			// Captcha fires from RiskScoreMedium upward, so
-			// "headless" requests are challenged but not
-			// hard-blocked. Rule order matters: TOTP wins on High
-			// because it appears first.
+			// Captcha fires from RiskScoreMedium upward. The Medium
+			// branch hits this rule because TOTP gates on High.
 			op.RuleRisk(op.RiskScoreMedium, op.StepCaptcha{
 				Verifier: stubCaptchaVerifier{},
 			}),
@@ -115,24 +195,148 @@ func main() {
 	}
 
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
+		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKey(keys.CookieKey),
 		op.WithLoginFlow(flow),
+		op.WithSPAUI(op.SPAUI{
+			LoginMount: "/login",
+			StaticDir:  staticDir,
+		}),
+		op.WithStaticClients(op.PublicClient{
+			ID:           clientID,
+			RedirectURIs: []string{redirectURI},
+			Scopes:       []string{"openid", "profile", "email"},
+		}),
 	)
 	if err != nil {
-		log.Fatalf("op.New: %v", err)
+		return err
 	}
 
-	mux := http.NewServeMux()
-	mux.Handle("/", provider)
+	opMux := http.NewServeMux()
+	opMux.Handle("/", provider)
 
-	log.Println("risk-based example listening on :8080")
-	log.Println("  UA contains curl/python/go-http-client → RiskScoreHigh → TOTP")
-	log.Println("  UA contains 'headless'                 → RiskScoreMedium → captcha")
-	log.Println("  otherwise                              → RiskScoreLow → password only")
-	if err := serve.Listen(":8080", mux); err != nil {
-		log.Fatalf("listen: %v", err)
+	opErrCh := make(chan error, 1)
+	go func() {
+		log.Printf("OP listening on %s (issuer %s, SPA at /login)", opAddr, issuer)
+		opErrCh <- serve.Listen(opAddr, opMux)
+	}()
+
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := waitForIssuer(waitCtx, issuer); err != nil {
+		return err
+	}
+
+	rp, err := rpkit.New(ctx, rpkit.Options{
+		Issuer:      issuer,
+		ClientID:    clientID,
+		RedirectURL: redirectURI,
+		Scopes:      []string{"openid", "profile", "email"},
+	})
+	if err != nil {
+		return err
+	}
+
+	rpMux := http.NewServeMux()
+	rpMux.HandleFunc("/", landingHandler())
+	rpMux.HandleFunc("/login-low", rp.StepUpHandler(""))
+	rpMux.HandleFunc("/login-medium", rp.StepUpHandler(mediumACR))
+	rpMux.HandleFunc("/login-high", rp.StepUpHandler(highACR))
+	// Delegate the rest (login / callback / me / static) to rpkit.
+	rpMux.Handle("/login", rp.Handler())
+	rpMux.Handle("/callback", rp.Handler())
+	rpMux.Handle("/me", rp.Handler())
+
+	log.Printf("RP listening on %s — open %s/", rpAddr, rpBase)
+	log.Printf("demo user: username=%q password=%q", demoUsername, demoPassword)
+	log.Printf("paths: /login-low (password) | /login-medium (+captcha) | /login-high (+captcha +TOTP)")
+
+	rpErrCh := make(chan error, 1)
+	go func() { rpErrCh <- serve.Listen(rpAddr, rpMux) }()
+
+	select {
+	case err := <-opErrCh:
+		return err
+	case err := <-rpErrCh:
+		return err
+	}
+}
+
+// landingHandler renders three buttons — one per risk path. The
+// buttons trigger /login-low | /login-medium | /login-high, which
+// rpkit's StepUpHandler turns into /authorize calls with the
+// corresponding acr_values value.
+func landingHandler() http.HandlerFunc {
+	const page = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>risk-based MFA demo</title>
+<style>
+body { font-family: system-ui, sans-serif; max-width: 40em; margin: 4em auto; padding: 0 1em; }
+h1 { font-size: 1.4em; }
+ul { padding: 0; list-style: none; }
+li { margin: .8em 0; }
+a.btn { display: inline-block; padding: .6em 1em; background: #2563eb; color: #fff; text-decoration: none; border-radius: 4px; }
+a.btn.medium { background: #d97706; }
+a.btn.high { background: #b91c1c; }
+small { color: #6b7280; }
+</style></head>
+<body>
+<h1>Risk-based step-up demo</h1>
+<p>Each button issues an OAuth /authorize with a different <code>acr_values</code> string. The OP's RiskAssessor maps the value to a risk score, which decides whether the LoginFlow inserts a captcha or TOTP step.</p>
+<ul>
+<li><a class="btn" href="/login-low">Log in (low risk — password only)</a></li>
+<li><a class="btn medium" href="/login-medium">Log in (medium risk — captcha + password)</a></li>
+<li><a class="btn high" href="/login-high">Log in (high risk — TOTP + captcha + password)</a></li>
+</ul>
+<p><a href="/me">Show last verified ID Token claims</a></p>
+<small>Issuer: ` + issuer + ` · Client: ` + clientID + `</small>
+</body></html>`
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, page)
+	}
+}
+
+// printSeedBanner emits the operator-facing TOTP enrolment block:
+// the otpauth:// URI, the base32 manual-entry secret, and the
+// terminal QR code the seedkit helper pre-rendered.
+func printSeedBanner(seed *seedkit.SeedResult) {
+	if seed == nil {
+		return
+	}
+	log.Println("──────────── TOTP enrolment for demo user ────────────")
+	log.Printf("otpauth URI : %s", seed.OTPAuthURI)
+	log.Printf("base32 seed : %s", seed.SecretBase32)
+	log.Println("scan the QR below in an authenticator app:")
+	log.Println("\n" + seed.QRTerm)
+	log.Println("──────────────────────────────────────────────────────")
+}
+
+func waitForIssuer(ctx context.Context, iss string) error {
+	url := iss + "/.well-known/openid-configuration"
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("waitForIssuer: timeout polling " + url)
+		case <-tick.C:
+		}
 	}
 }

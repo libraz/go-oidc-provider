@@ -61,7 +61,9 @@ it boots with `go run -tags example ./examples/08-composite-hot-cold`.
 | translate prompts (i18n) | [`16-i18n-locale`](16-i18n-locale/main.go) |
 | split public-discoverable from internal-only scopes | [`12-scopes-public-private`](12-scopes-public-private/main.go) |
 | honour the OIDC §5.5 `claims` request parameter | [`17-claims-request`](17-claims-request/main.go) |
-| require TOTP / risk-based MFA / captcha / step-up | [`20-mfa-totp`](20-mfa-totp/main.go), [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go), [`23-step-up`](23-step-up/main.go) |
+| require password + TOTP at every login (always-on 2FA) | [`20-mfa-totp`](20-mfa-totp/main.go) |
+| require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
+| step a logged-in session up to a higher ACR (RFC 9470) | [`23-step-up`](23-step-up/main.go) |
 | skip consent for first-party clients | [`40-first-party-skip-consent`](40-first-party-skip-consent/main.go) |
 | let RPs register themselves (Dynamic Client Registration) | [`41-dynamic-registration`](41-dynamic-registration/main.go) |
 | notify RPs when a session ends (Back-Channel Logout) | [`42-back-channel-logout`](42-back-channel-logout/main.go) |

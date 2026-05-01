@@ -128,9 +128,14 @@ func TestSeed_WithTOTP(t *testing.T) {
 	if !rec.ConfirmedAt.Equal(now) {
 		t.Errorf("ConfirmedAt = %v, want %v", rec.ConfirmedAt, now)
 	}
-	wantStep := now.Unix() / 30
-	if rec.LastAcceptedStep != wantStep {
-		t.Errorf("LastAcceptedStep = %d, want %d", rec.LastAcceptedStep, wantStep)
+	// LastAcceptedStep MUST stay at the zero value: stamping it to
+	// the boot step would make the verifier's replay guard reject the
+	// very first user submission whenever it lands in the same 30 s
+	// window as the seed call. The zero check in
+	// [totp.Verifier.Verify] short-circuits the guard until the first
+	// successful verify advances the field for replay protection.
+	if rec.LastAcceptedStep != 0 {
+		t.Errorf("LastAcceptedStep = %d, want 0", rec.LastAcceptedStep)
 	}
 
 	// Decrypt the sealed secret under the same codec / AAD the

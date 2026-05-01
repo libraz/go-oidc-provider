@@ -51,6 +51,11 @@ function renderPrompt(prompt) {
     return;
   }
 
+  if (prompt.type === "captcha") {
+    renderCaptcha(prompt);
+    return;
+  }
+
   for (const spec of prompt.inputs ?? []) {
     formEl.appendChild(buildField(spec));
   }
@@ -59,6 +64,42 @@ function renderPrompt(prompt) {
   formEl.onsubmit = (ev) => {
     ev.preventDefault();
     submitForm(prompt, collectValues(formEl, prompt.inputs ?? []));
+  };
+}
+
+// renderCaptcha shows a visible text field for the demo's stub
+// verifier. A production deployment swaps this for the upstream
+// provider's widget (Cloudflare Turnstile / hCaptcha / reCAPTCHA);
+// the JS callback populates a hidden #captcha_token input. The
+// FieldSpec from the server is type=hidden — overridden here so
+// users can type a token manually, since the stub verifier accepts
+// any non-empty string.
+function renderCaptcha(prompt) {
+  const data = prompt.data ?? {};
+  if (data.Provider || data.provider) {
+    const note = document.createElement("p");
+    note.className = "muted";
+    note.textContent = "Provider: " + (data.Provider || data.provider);
+    formEl.appendChild(note);
+  }
+
+  const label = document.createElement("label");
+  const span = document.createElement("span");
+  span.textContent = "Verification token (any non-empty value passes the stub)";
+  label.appendChild(span);
+
+  const input = document.createElement("input");
+  input.name = "captcha_token";
+  input.type = "text";
+  input.required = true;
+  input.autocomplete = "off";
+  label.appendChild(input);
+  formEl.appendChild(label);
+  formEl.appendChild(buildSubmit("Continue"));
+
+  formEl.onsubmit = (ev) => {
+    ev.preventDefault();
+    submitForm(prompt, { captcha_token: input.value });
   };
 }
 
@@ -98,7 +139,8 @@ function renderConsent(prompt) {
 function buildField(spec) {
   const label = document.createElement("label");
   const span = document.createElement("span");
-  span.textContent = spec.Label || spec.label || spec.Name || spec.name;
+  const labelKey = spec.Label || spec.label || "";
+  span.textContent = labelFor(labelKey) || spec.Name || spec.name || labelKey;
   label.appendChild(span);
 
   const input = document.createElement("input");
@@ -213,6 +255,25 @@ function titleFor(type) {
     case "captcha":                return "Verify you are human";
     case "consent.scope":          return "Authorize access";
     default:                       return type || "Continue";
+  }
+}
+
+// labelFor mirrors titleFor for FieldSpec.Label values. The library
+// emits these as i18n keys and leaves resolution to the SPA; this
+// demo ships a minimal English table so per-field labels render as
+// "Username" / "Password" / "Authenticator code" rather than the
+// raw "auth.password.username" / "auth.totp.code" strings.
+function labelFor(key) {
+  switch (key) {
+    case "auth.password.username":  return "Username";
+    case "auth.password.password":  return "Password";
+    case "auth.totp.code":          return "Authenticator code";
+    case "auth.email_otp.email":    return "Email address";
+    case "auth.email_otp.code":     return "Email code";
+    case "auth.recovery_code.code": return "Recovery code";
+    case "auth.passkey.response":   return "Passkey response";
+    case "auth.captcha.token":      return "Verification token";
+    default:                        return "";
   }
 }
 

@@ -141,12 +141,17 @@ type SeedResult struct {
 //
 //  1. Calls [totpkit.NewEnrolment] under the supplied codec and
 //     subject.
-//  2. Stamps Pending.Record.ConfirmedAt to opts.TOTP.Now and
-//     LastAcceptedStep to (Now.Unix() / 30) so the verify path
-//     accepts the record without a separate user-confirms-the-code
-//     round-trip. The demo therefore cannot prove the user actually
-//     scanned the QR — that's a deliberate trade-off seedkit makes
-//     for CLI ergonomics.
+//  2. Stamps Pending.Record.ConfirmedAt to opts.TOTP.Now so the
+//     verify path treats the record as enrolled without a separate
+//     user-confirms-the-code round-trip. LastAcceptedStep is left
+//     at the zero value: the verifier's replay guard short-circuits
+//     on zero, so the first user submission is accepted regardless
+//     of which 30 s window it lands in. (Stamping it to the boot
+//     step instead would make any code generated during that window
+//     read as a replay and the demo would refuse the very first
+//     attempt for up to 30 s after boot.) The demo therefore cannot
+//     prove the user actually scanned the QR — that's a deliberate
+//     trade-off seedkit makes for CLI ergonomics.
 //  3. Persists the record via st.TOTPs().Put.
 //  4. Returns a [SeedResult] carrying the otpauth URI, base32
 //     secret, and pre-rendered terminal QR.
@@ -180,7 +185,6 @@ func Seed(ctx context.Context, st *inmem.Store, opts SeedOptions) (*SeedResult, 
 
 	rec := pending.Record
 	rec.ConfirmedAt = opts.TOTP.Now
-	rec.LastAcceptedStep = stepCounter(opts.TOTP.Now)
 	if err := st.TOTPs().Put(ctx, rec); err != nil {
 		return nil, err
 	}
@@ -225,18 +229,4 @@ func validateSeed(st *inmem.Store, opts SeedOptions) error {
 		return ErrSeedTOTPAccountRequired
 	}
 	return nil
-}
-
-// stepCounter returns the RFC 6238 step counter (seconds since epoch
-// divided by the 30-second window) for now, clamped to the non-
-// negative range. The demo helper's call site only ever passes a
-// post-1970 timestamp; the clamp keeps the function total without a
-// panic for pathological inputs.
-func stepCounter(now time.Time) int64 {
-	const stepSeconds = 30
-	secs := now.Unix()
-	if secs < 0 {
-		return 0
-	}
-	return secs / stepSeconds
 }
