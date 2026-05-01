@@ -19,54 +19,64 @@ import (
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
+// TestScenario_RMO_001_FormPostSuccessRendersSelfSubmittingForm is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_001_FormPostSuccessRendersSelfSubmittingForm(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-001")
+	t.Skip("out-of-scope: RMO-001 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_002_FormPostHTMLEscapesRedirectURI is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_002_FormPostHTMLEscapesRedirectURI(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-002")
+	t.Skip("out-of-scope: RMO-002 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_003_FormPostErrorPathRendersForm is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_003_FormPostErrorPathRendersForm(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-003")
+	t.Skip("out-of-scope: RMO-003 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_004_FormPostGetAndPostBehaveIdentically is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_004_FormPostGetAndPostBehaveIdentically(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-004")
+	t.Skip("out-of-scope: RMO-004 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_010_WebMessageSuccessRendersHTMLEnvelope is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_010_WebMessageSuccessRendersHTMLEnvelope(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-010")
+	t.Skip("out-of-scope: RMO-010 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_011_WebMessageIncludesStandardFields is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_011_WebMessageIncludesStandardFields(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-011")
+	t.Skip("out-of-scope: RMO-011 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_012_WebMessageRelayModeRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_012_WebMessageRelayModeRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-012")
+	t.Skip("out-of-scope: RMO-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_013_WebMessageStripsFramingHeaders is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_013_WebMessageStripsFramingHeaders(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-013")
+	t.Skip("out-of-scope: RMO-013 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_014_WebMessageErrorRendersEnvelope is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_014_WebMessageErrorRendersEnvelope(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-014")
+	t.Skip("out-of-scope: RMO-014 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_020_DiscoveryAdvertisesWebMessage is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_020_DiscoveryAdvertisesWebMessage(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-020")
+	t.Skip("out-of-scope: RMO-020 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_RMO_030_RegisterResponseModeHookExposed(t *testing.T) {

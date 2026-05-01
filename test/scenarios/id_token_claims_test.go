@@ -469,9 +469,10 @@ func idtAudContains(aud any, clientID string) bool {
 
 // ---- pending stubs (untouched in this batch) ----
 
+// TestScenario_IDT_03_AzpSetWhenAudMultiOrRequired is OOS — see catalog out_of_scope_reason.
 func TestScenario_IDT_03_AzpSetWhenAudMultiOrRequired(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: IDT-03")
+	t.Skip("out-of-scope: IDT-03 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_IDT_04_NonceMirroredFromRequest(t *testing.T) {
@@ -499,19 +500,22 @@ func TestScenario_IDT_10_ConformTrueExcludesScopeClaimsWithAT(t *testing.T) {
 	t.Skip("pending: IDT-10")
 }
 
+// TestScenario_IDT_11_ConformTrueIncludesScopeClaimsWhenIDTokenOnly is OOS — see catalog out_of_scope_reason.
 func TestScenario_IDT_11_ConformTrueIncludesScopeClaimsWhenIDTokenOnly(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: IDT-11")
+	t.Skip("out-of-scope: IDT-11 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_IDT_12_ConformFalseAlwaysIncludesScopeClaims is OOS — see catalog out_of_scope_reason.
 func TestScenario_IDT_12_ConformFalseAlwaysIncludesScopeClaims(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: IDT-12")
+	t.Skip("out-of-scope: IDT-12 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_IDT_13_HybridFlowExcludesScopeClaims is OOS — see catalog out_of_scope_reason.
 func TestScenario_IDT_13_HybridFlowExcludesScopeClaims(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: IDT-13")
+	t.Skip("out-of-scope: IDT-13 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_IDT_14_ClaimsParameterAlwaysProjectedToIDToken(t *testing.T) {
@@ -534,9 +538,10 @@ func TestScenario_IDT_17_RejectedClaimsExcluded(t *testing.T) {
 	t.Skip("pending: IDT-17")
 }
 
+// TestScenario_IDT_20_AtHashRequiredWhenIDTokenAndATIssued is OOS — see catalog out_of_scope_reason.
 func TestScenario_IDT_20_AtHashRequiredWhenIDTokenAndATIssued(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: IDT-20")
+	t.Skip("out-of-scope: IDT-20 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_IDT_21_AtHashComputation(t *testing.T) {
@@ -544,9 +549,10 @@ func TestScenario_IDT_21_AtHashComputation(t *testing.T) {
 	t.Skip("pending: IDT-21")
 }
 
+// TestScenario_IDT_22_CHashRequiredWhenIDTokenAndCodeIssued is OOS — see catalog out_of_scope_reason.
 func TestScenario_IDT_22_CHashRequiredWhenIDTokenAndCodeIssued(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: IDT-22")
+	t.Skip("out-of-scope: IDT-22 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_IDT_23_CHashComputation(t *testing.T) {

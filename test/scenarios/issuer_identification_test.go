@@ -119,34 +119,40 @@ func TestScenario_ISS_010_CodeFlowQueryCarriesIss(t *testing.T) {
 	}
 }
 
+// TestScenario_ISS_011_CodeTokenFragmentCarriesIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_011_CodeTokenFragmentCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-011")
+	t.Skip("out-of-scope: ISS-011 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ISS_012_CodeIDTokenFragmentEmbedsIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_012_CodeIDTokenFragmentEmbedsIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-012")
+	t.Skip("out-of-scope: ISS-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ISS_013_CodeIDTokenTokenFragmentCarriesIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_013_CodeIDTokenTokenFragmentCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-013")
+	t.Skip("out-of-scope: ISS-013 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ISS_014_IDTokenTokenFragmentCarriesIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_014_IDTokenTokenFragmentCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-014")
+	t.Skip("out-of-scope: ISS-014 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ISS_015_IDTokenFragmentCarriesIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_015_IDTokenFragmentCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-015")
+	t.Skip("out-of-scope: ISS-015 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ISS_016_NoneResponseTypeQueryCarriesIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_016_NoneResponseTypeQueryCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-016")
+	t.Skip("out-of-scope: ISS-016 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ISS_017_JARMResponseEmbedsIssClaim checks that, with
@@ -285,9 +291,10 @@ func TestScenario_ISS_020_RegularErrorRedirectCarriesIss(t *testing.T) {
 	}
 }
 
+// TestScenario_ISS_021_NoneResponseTypeErrorCarriesIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_021_NoneResponseTypeErrorCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-021")
+	t.Skip("out-of-scope: ISS-021 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ISS_022_JARMErrorQueryCarriesIss checks that an
@@ -379,7 +386,8 @@ func TestScenario_ISS_022_JARMErrorQueryCarriesIss(t *testing.T) {
 	}
 }
 
+// TestScenario_ISS_023_JARMHybridErrorFragmentCarriesIss is OOS — see catalog out_of_scope_reason.
 func TestScenario_ISS_023_JARMHybridErrorFragmentCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-023")
+	t.Skip("out-of-scope: ISS-023 (see catalog out_of_scope_reason)")
 }

@@ -280,24 +280,28 @@ func TestScenario_DIS_004_EmbedderCannotOverrideOPControlledFields(t *testing.T)
 	}
 }
 
+// TestScenario_DIS_010_KnownErrorReturnsJSONEnvelope is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_010_KnownErrorReturnsJSONEnvelope(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-010")
+	t.Skip("out-of-scope: DIS-010 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DIS_011_DiscoveryErrorAuditEvent is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_011_DiscoveryErrorAuditEvent(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-011")
+	t.Skip("out-of-scope: DIS-011 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DIS_012_UnknownExceptionReturnsServerError is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_012_UnknownExceptionReturnsServerError(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-012")
+	t.Skip("out-of-scope: DIS-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DIS_013_ServerErrorAuditEvent is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_013_ServerErrorAuditEvent(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-013")
+	t.Skip("out-of-scope: DIS-013 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_DIS_021_RFC8414MetadataFieldsPresent verifies that
@@ -412,9 +416,10 @@ func TestScenario_DIS_030_IssParameterSupportedWhenIssFeatureOn(t *testing.T) {
 	}
 }
 
+// TestScenario_DIS_031_EncryptionMetadataAdvertisedWhenFeatureOn is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_031_EncryptionMetadataAdvertisedWhenFeatureOn(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-031")
+	t.Skip("out-of-scope: DIS-031 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_DIS_032_JARMMetadataAdvertisedWhenFeatureOn verifies

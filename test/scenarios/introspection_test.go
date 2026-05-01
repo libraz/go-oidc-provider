@@ -643,14 +643,16 @@ func TestScenario_INT_012_ClientCredentialsIntrospectUnrecognisedHint(t *testing
 	t.Skip("pending: INT-012")
 }
 
+// TestScenario_INT_013_StructuredJWTRejectedAtIntrospection is OOS — see catalog out_of_scope_reason.
 func TestScenario_INT_013_StructuredJWTRejectedAtIntrospection(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-013")
+	t.Skip("out-of-scope: INT-013 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_INT_014_PairwiseClientReceivesPairwiseSub is OOS — see catalog out_of_scope_reason.
 func TestScenario_INT_014_PairwiseClientReceivesPairwiseSub(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-014")
+	t.Skip("out-of-scope: INT-014 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_INT_015_RSIntrospectionRespectsTokenSubjectType(t *testing.T) {
@@ -1438,17 +1440,20 @@ func TestScenario_INT_024_AdapterTypeMismatchHandledSafely(t *testing.T) {
 	}
 }
 
+// TestScenario_INT_025_AccessTokenSuccessRegistersEntities is OOS — see catalog out_of_scope_reason.
 func TestScenario_INT_025_AccessTokenSuccessRegistersEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-025")
+	t.Skip("out-of-scope: INT-025 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_INT_026_RefreshTokenSuccessRegistersEntities is OOS — see catalog out_of_scope_reason.
 func TestScenario_INT_026_RefreshTokenSuccessRegistersEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-026")
+	t.Skip("out-of-scope: INT-026 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_INT_027_ClientCredentialsSuccessRegistersEntities is OOS — see catalog out_of_scope_reason.
 func TestScenario_INT_027_ClientCredentialsSuccessRegistersEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-027")
+	t.Skip("out-of-scope: INT-027 (see catalog out_of_scope_reason)")
 }

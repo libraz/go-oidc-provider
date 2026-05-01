@@ -201,167 +201,200 @@ func TestScenario_PW_04_PairwiseUnimplementedRejectsRegistration(t *testing.T) {
 	}
 }
 
+// TestScenario_PW_10_SingleHostRedirectURIsAdoptHostAsSector is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_10_SingleHostRedirectURIsAdoptHostAsSector(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-10")
+	t.Skip("out-of-scope: PW-10 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_11_MultiHostRequiresSectorURI is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_11_MultiHostRequiresSectorURI(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-11")
+	t.Skip("out-of-scope: PW-11 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_12_PathDifferenceOnSameHostAllowed is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_12_PathDifferenceOnSameHostAllowed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-12")
+	t.Skip("out-of-scope: PW-12 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_13_NoRedirectURIsRelyOnJwksHost is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_13_NoRedirectURIsRelyOnJwksHost(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-13")
+	t.Skip("out-of-scope: PW-13 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_20_SectorURIMustBeHTTPS is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_20_SectorURIMustBeHTTPS(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-20")
+	t.Skip("out-of-scope: PW-20 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_21_SectorURIFetchedAtRegistration is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_21_SectorURIFetchedAtRegistration(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-21")
+	t.Skip("out-of-scope: PW-21 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_22_SectorURINon200StatusFails is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_22_SectorURINon200StatusFails(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-22")
+	t.Skip("out-of-scope: PW-22 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_23_SectorURIUnparseableJSONFails is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_23_SectorURIUnparseableJSONFails(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-23")
+	t.Skip("out-of-scope: PW-23 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_24_SectorURINonArrayBodyFails is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_24_SectorURINonArrayBodyFails(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-24")
+	t.Skip("out-of-scope: PW-24 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_25_SectorURIMustIncludeAllRedirectURIs is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_25_SectorURIMustIncludeAllRedirectURIs(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-25")
+	t.Skip("out-of-scope: PW-25 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_26_PublicClientSectorURIHostRecorded is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_26_PublicClientSectorURIHostRecorded(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-26")
+	t.Skip("out-of-scope: PW-26 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_27_SectorIdentifierIsLowercaseHost is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_27_SectorIdentifierIsLowercaseHost(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-27")
+	t.Skip("out-of-scope: PW-27 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_30_CIBARequiresJwksURIInSectorList is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_30_CIBARequiresJwksURIInSectorList(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-30")
+	t.Skip("out-of-scope: PW-30 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_31_DeviceFlowRequiresJwksURIInSectorList is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_31_DeviceFlowRequiresJwksURIInSectorList(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-31")
+	t.Skip("out-of-scope: PW-31 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_32_NoRedirectClientsUseJwksAsSectorAnchor is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_32_NoRedirectClientsUseJwksAsSectorAnchor(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-32")
+	t.Skip("out-of-scope: PW-32 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_40_PairwiseSubIsDeterministic is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_40_PairwiseSubIsDeterministic(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-40")
+	t.Skip("out-of-scope: PW-40 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_41_SaltIsSensitiveOPSecret is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_41_SaltIsSensitiveOPSecret(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-41")
+	t.Skip("out-of-scope: PW-41 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_42_DefaultAlgorithmShape is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_42_DefaultAlgorithmShape(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-42")
+	t.Skip("out-of-scope: PW-42 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_43_DifferentSectorsProduceDifferentSubs is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_43_DifferentSectorsProduceDifferentSubs(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-43")
+	t.Skip("out-of-scope: PW-43 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_44_SameSectorProducesSameSub is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_44_SameSectorProducesSameSub(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-44")
+	t.Skip("out-of-scope: PW-44 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_45_PublicClientUsesLocalAccountID is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_45_PublicClientUsesLocalAccountID(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-45")
+	t.Skip("out-of-scope: PW-45 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_46_PairwiseSubLengthBounded is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_46_PairwiseSubLengthBounded(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-46")
+	t.Skip("out-of-scope: PW-46 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_50_IDTokenSubFollowsSubjectType is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_50_IDTokenSubFollowsSubjectType(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-50")
+	t.Skip("out-of-scope: PW-50 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_51_UserinfoSubFollowsSubjectType is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_51_UserinfoSubFollowsSubjectType(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-51")
+	t.Skip("out-of-scope: PW-51 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_52_IntrospectionSubFollowsSubjectType is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_52_IntrospectionSubFollowsSubjectType(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-52")
+	t.Skip("out-of-scope: PW-52 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_53_HintSubComparedAgainstSubjectType is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_53_HintSubComparedAgainstSubjectType(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-53")
+	t.Skip("out-of-scope: PW-53 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_54_PairwiseClaimsSubValueMustMatch is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_54_PairwiseClaimsSubValueMustMatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-54")
+	t.Skip("out-of-scope: PW-54 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_60_SaltRotationInvalidatesAllSubs is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_60_SaltRotationInvalidatesAllSubs(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-60")
+	t.Skip("out-of-scope: PW-60 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_61_LocalIDNotLeakedInAuditPayload is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_61_LocalIDNotLeakedInAuditPayload(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-61")
+	t.Skip("out-of-scope: PW-61 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_62_DiscoveryAdvertisesPairwiseWhenEnabled is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_62_DiscoveryAdvertisesPairwiseWhenEnabled(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-62")
+	t.Skip("out-of-scope: PW-62 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_63_EmbedderHookForSaltAndHashFunction is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_63_EmbedderHookForSaltAndHashFunction(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-63")
+	t.Skip("out-of-scope: PW-63 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_64_SectorURIFetchHasBoundedTimeout is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_64_SectorURIFetchHasBoundedTimeout(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-64")
+	t.Skip("out-of-scope: PW-64 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PW_65_SectorURIResponseCacheablePolicyOPDefined is OOS — see catalog out_of_scope_reason.
 func TestScenario_PW_65_SectorURIResponseCacheablePolicyOPDefined(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-65")
+	t.Skip("out-of-scope: PW-65 (see catalog out_of_scope_reason)")
 }

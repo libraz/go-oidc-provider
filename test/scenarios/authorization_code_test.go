@@ -833,69 +833,82 @@ func TestScenario_AC_011_MultiURIClientMustSendRedirectURI(t *testing.T) {
 	}
 }
 
+// TestScenario_AC_012_AccountNotFoundRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_012_AccountNotFoundRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-012")
+	t.Skip("out-of-scope: AC-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_013_SingleURIWithoutAllowOmitRequiresParam is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_013_SingleURIWithoutAllowOmitRequiresParam(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-013")
+	t.Skip("out-of-scope: AC-013 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_014_SingleURIAllowOmitSuccess is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_014_SingleURIAllowOmitSuccess(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-014")
+	t.Skip("out-of-scope: AC-014 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_015_SingleURIAllowOmitNoOfflineEntities is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_015_SingleURIAllowOmitNoOfflineEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-015")
+	t.Skip("out-of-scope: AC-015 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_016_SingleURIAllowOmitOfflineEntities is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_016_SingleURIAllowOmitOfflineEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-016")
+	t.Skip("out-of-scope: AC-016 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_017_SingleURIAllowOmitNoStore is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_017_SingleURIAllowOmitNoStore(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-017")
+	t.Skip("out-of-scope: AC-017 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_018_SingleURIAllowOmitExpiredCode is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_018_SingleURIAllowOmitExpiredCode(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-018")
+	t.Skip("out-of-scope: AC-018 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_019_SingleURIAllowOmitReplayedCode is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_019_SingleURIAllowOmitReplayedCode(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-019")
+	t.Skip("out-of-scope: AC-019 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_020_SingleURIAllowOmitMarksConsumed is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_020_SingleURIAllowOmitMarksConsumed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-020")
+	t.Skip("out-of-scope: AC-020 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_021_SingleURIAllowOmitClientMismatch is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_021_SingleURIAllowOmitClientMismatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-021")
+	t.Skip("out-of-scope: AC-021 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_022_SingleURIAllowOmitUnsupportedGrant is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_022_SingleURIAllowOmitUnsupportedGrant(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-022")
+	t.Skip("out-of-scope: AC-022 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_023_SingleURIAllowOmitRedirectURIMismatch is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_023_SingleURIAllowOmitRedirectURIMismatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-023")
+	t.Skip("out-of-scope: AC-023 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_AC_024_SingleURIAllowOmitAccountNotFound is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_024_SingleURIAllowOmitAccountNotFound(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-024")
+	t.Skip("out-of-scope: AC-024 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_AC_025_EmptyBodyMissingGrantType verifies that a

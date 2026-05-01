@@ -457,9 +457,10 @@ func TestScenario_ERR_032_ErrorCatalogIsSingleSourceOfTruth(t *testing.T) {
 	t.Skip("pending: ERR-032")
 }
 
+// TestScenario_ERR_040_UncaughtExceptionsBecomeServerError is OOS — see catalog out_of_scope_reason.
 func TestScenario_ERR_040_UncaughtExceptionsBecomeServerError(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ERR-040")
+	t.Skip("out-of-scope: ERR-040 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ERR_050_AuthorizationErrorRedirectIncludesIss

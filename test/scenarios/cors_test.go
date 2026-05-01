@@ -139,14 +139,16 @@ func TestScenario_COR_010_UserinfoCORSGatedByClientPolicy(t *testing.T) {
 	t.Skip("pending: COR-010 — needs client-based-CORS hook coverage")
 }
 
+// TestScenario_COR_011_TokenCORSGatedByClientPolicy is OOS — see catalog out_of_scope_reason.
 func TestScenario_COR_011_TokenCORSGatedByClientPolicy(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-011")
+	t.Skip("out-of-scope: COR-011 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_COR_012_TokenEarlyErrorCarriesCORSHeaders is OOS — see catalog out_of_scope_reason.
 func TestScenario_COR_012_TokenEarlyErrorCarriesCORSHeaders(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-012")
+	t.Skip("out-of-scope: COR-012 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_COR_013_RevocationCORSGatedByClientPolicy verifies that
@@ -261,9 +263,10 @@ func TestScenario_COR_020_PreflightAlwaysSucceedsForClientGatedEndpoints(t *test
 	t.Skip("pending: COR-020 — needs clientBasedCORS hook wiring (testkit default uses strict-allowlist gating, not the client-based path this row exercises)")
 }
 
+// TestScenario_COR_030_NonBooleanPolicyReturns500WithCORS is OOS — see catalog out_of_scope_reason.
 func TestScenario_COR_030_NonBooleanPolicyReturns500WithCORS(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-030")
+	t.Skip("out-of-scope: COR-030 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_COR_040_EmbedderCORSMiddlewareWins(t *testing.T) {

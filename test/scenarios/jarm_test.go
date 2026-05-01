@@ -188,9 +188,10 @@ func TestScenario_JARM_001_DiscoverySurfaceAdvertised(t *testing.T) {
 	}
 }
 
+// TestScenario_JARM_010_JwtModeFragmentForImplicitHybrid is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_010_JwtModeFragmentForImplicitHybrid(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-010")
+	t.Skip("out-of-scope: JARM-010 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JARM_011_JwtModeQueryForCode confirms that an
@@ -274,9 +275,10 @@ func TestScenario_JARM_011_JwtModeQueryForCode(t *testing.T) {
 	}
 }
 
+// TestScenario_JARM_012_JwtModeQueryForNone is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_012_JwtModeQueryForNone(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-012")
+	t.Skip("out-of-scope: JARM-012 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JARM_020_AudEqualsClientID asserts that the JARM
@@ -346,34 +348,40 @@ func TestScenario_JARM_023_StateRoundTripped(t *testing.T) {
 	}
 }
 
+// TestScenario_JARM_030_ExpiredSecretSurfacesInvalidClient is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_030_ExpiredSecretSurfacesInvalidClient(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-030")
+	t.Skip("out-of-scope: JARM-030 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JARM_040_QueryJwtUnencryptedForbiddenForHybrid is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_040_QueryJwtUnencryptedForbiddenForHybrid(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-040")
+	t.Skip("out-of-scope: JARM-040 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JARM_041_QueryJwtAllowedWithEncryption is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_041_QueryJwtAllowedWithEncryption(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-041")
+	t.Skip("out-of-scope: JARM-041 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JARM_042_QueryJwtSuccessForCode is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_042_QueryJwtSuccessForCode(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-042")
+	t.Skip("out-of-scope: JARM-042 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JARM_043_QueryJwtSuccessForNone is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_043_QueryJwtSuccessForNone(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-043")
+	t.Skip("out-of-scope: JARM-043 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JARM_044_QueryJwtExpiredSecretBareError is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_044_QueryJwtExpiredSecretBareError(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-044")
+	t.Skip("out-of-scope: JARM-044 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JARM_050_QueryJwtErrorRedirect drives /authorize with
@@ -559,12 +567,14 @@ func extractFormResponseInput(tb testing.TB, body string) string {
 	return rest[:end]
 }
 
+// TestScenario_JARM_053_WebMessageJwtErrorRendered is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_053_WebMessageJwtErrorRendered(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-053")
+	t.Skip("out-of-scope: JARM-053 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JARM_054_ExpiredSecretAllTransports is OOS — see catalog out_of_scope_reason.
 func TestScenario_JARM_054_ExpiredSecretAllTransports(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JARM-054")
+	t.Skip("out-of-scope: JARM-054 (see catalog out_of_scope_reason)")
 }

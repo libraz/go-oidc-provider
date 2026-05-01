@@ -621,9 +621,10 @@ func TestScenario_REF_008_ScopeNarrowKeepsOpenidIssuesIDToken(t *testing.T) {
 	}
 }
 
+// TestScenario_REF_009_RefreshAccountNotFoundRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_009_RefreshAccountNotFoundRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-009")
+	t.Skip("out-of-scope: REF-009 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_REF_010_RefreshTokenParamRequired verifies that a
@@ -980,9 +981,10 @@ func TestScenario_REF_020_PredicateTrueNarrowedScopeRequest(t *testing.T) {
 	t.Skip("pending: REF-020")
 }
 
+// TestScenario_REF_021_PredicateTrueReplayRevokesChain is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_021_PredicateTrueReplayRevokesChain(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-021")
+	t.Skip("out-of-scope: REF-021 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_REF_022_PredicateFalseReusesRefreshToken(t *testing.T) {

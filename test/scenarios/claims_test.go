@@ -268,14 +268,16 @@ func TestScenario_CL_08_ClaimsWithResponseTypeNoneRejected(t *testing.T) {
 	t.Skip("pending: CL-08")
 }
 
+// TestScenario_CL_09_UserinfoRequestedWithoutEndpoint is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_09_UserinfoRequestedWithoutEndpoint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-09")
+	t.Skip("out-of-scope: CL-09 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_10_UserinfoRequestedWithoutAccessToken is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_10_UserinfoRequestedWithoutAccessToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-10")
+	t.Skip("out-of-scope: CL-10 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CL_20_NullClaimEntryAcceptedAsVoluntary checks that an

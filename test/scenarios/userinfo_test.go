@@ -90,9 +90,10 @@ func uiMintAccessToken(t *testing.T, tk *testkit.Provider, scope string) string 
 	return tok.AccessToken
 }
 
+// TestScenario_UI_001_JWTUserinfoRequiresEndpointEnabled is OOS — see catalog out_of_scope_reason.
 func TestScenario_UI_001_JWTUserinfoRequiresEndpointEnabled(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: UI-001")
+	t.Skip("out-of-scope: UI-001 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_UI_002_GETReturnsClaimsHonoringRejected asserts the OIDC

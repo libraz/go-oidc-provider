@@ -51,9 +51,10 @@ func TestScenario_SIG_001_HS256IDTokenIssuance(t *testing.T) {
 	t.Skip("pending: SIG-001 — needs RP simulator + per-client alg pinning")
 }
 
+// TestScenario_SIG_002_HS256IDTokenAcceptedAsHint is OOS — see catalog out_of_scope_reason.
 func TestScenario_SIG_002_HS256IDTokenAcceptedAsHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-002")
+	t.Skip("out-of-scope: SIG-002 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_SIG_010_AtHashLengthSHA256(t *testing.T) {
@@ -61,24 +62,28 @@ func TestScenario_SIG_010_AtHashLengthSHA256(t *testing.T) {
 	t.Skip("pending: SIG-010 — needs hybrid response_type wiring")
 }
 
+// TestScenario_SIG_011_AtHashLengthSHA384 is OOS — see catalog out_of_scope_reason.
 func TestScenario_SIG_011_AtHashLengthSHA384(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-011")
+	t.Skip("out-of-scope: SIG-011 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SIG_012_AtHashLengthSHA512 is OOS — see catalog out_of_scope_reason.
 func TestScenario_SIG_012_AtHashLengthSHA512(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-012")
+	t.Skip("out-of-scope: SIG-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SIG_013_EdDSAAtHashLength is OOS — see catalog out_of_scope_reason.
 func TestScenario_SIG_013_EdDSAAtHashLength(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-013")
+	t.Skip("out-of-scope: SIG-013 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SIG_014_Ed25519AtHashLength is OOS — see catalog out_of_scope_reason.
 func TestScenario_SIG_014_Ed25519AtHashLength(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-014")
+	t.Skip("out-of-scope: SIG-014 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_SIG_020_AlgFromClientMetadataAndKidInHeader confirms

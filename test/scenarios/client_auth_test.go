@@ -1034,9 +1034,10 @@ func TestScenario_CA_BASIC_09_BasicSecretMismatchInvalidClient(t *testing.T) {
 	}
 }
 
+// TestScenario_CA_BASIC_10_BasicSecretExpired is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_BASIC_10_BasicSecretExpired(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-BASIC-10")
+	t.Skip("out-of-scope: CA-BASIC-10 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CA_POST_01_FormBodyCredentialsAccepted drives a full
@@ -1193,9 +1194,10 @@ func TestScenario_CA_POST_04_EmptyPostSecretMethodMismatch(t *testing.T) {
 	}
 }
 
+// TestScenario_CA_POST_05_PostSecretExpired is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_POST_05_PostSecretExpired(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-POST-05")
+	t.Skip("out-of-scope: CA-POST-05 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_CA_POST_06_PostFromBasicRegisteredClientStrictReject(t *testing.T) {
@@ -1203,94 +1205,112 @@ func TestScenario_CA_POST_06_PostFromBasicRegisteredClientStrictReject(t *testin
 	t.Skip("pending: CA-POST-06")
 }
 
+// TestScenario_CA_CSJWT_01_AssertionTypeRequired is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_01_AssertionTypeRequired(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-01")
+	t.Skip("out-of-scope: CA-CSJWT-01 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_02_AssertionTypeWrongValueRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_02_AssertionTypeWrongValueRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-02")
+	t.Skip("out-of-scope: CA-CSJWT-02 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_03_MissingOrMalformedAssertionRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_03_MissingOrMalformedAssertionRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-03")
+	t.Skip("out-of-scope: CA-CSJWT-03 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_04_HMACSignedWithClientSecret is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_04_HMACSignedWithClientSecret(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-04")
+	t.Skip("out-of-scope: CA-CSJWT-04 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_05_RequiredClaimsEnforced is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_05_RequiredClaimsEnforced(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-05")
+	t.Skip("out-of-scope: CA-CSJWT-05 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_06_IssMustEqualClientID is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_06_IssMustEqualClientID(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-06")
+	t.Skip("out-of-scope: CA-CSJWT-06 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_07_SubMustEqualClientID is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_07_SubMustEqualClientID(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-07")
+	t.Skip("out-of-scope: CA-CSJWT-07 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_08_AudAcceptanceForms is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_08_AudAcceptanceForms(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-08")
+	t.Skip("out-of-scope: CA-CSJWT-08 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_09_JtiSingleUseEnforced is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_09_JtiSingleUseEnforced(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-09")
+	t.Skip("out-of-scope: CA-CSJWT-09 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_10_ExpiredAssertionRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_10_ExpiredAssertionRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-10")
+	t.Skip("out-of-scope: CA-CSJWT-10 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_11_ClockToleranceDefaultZero is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_11_ClockToleranceDefaultZero(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-11")
+	t.Skip("out-of-scope: CA-CSJWT-11 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_12_BodyClientIDMismatchAssertion is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_12_BodyClientIDMismatchAssertion(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-12")
+	t.Skip("out-of-scope: CA-CSJWT-12 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_13_AssertionWithBasicHeaderRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_13_AssertionWithBasicHeaderRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-13")
+	t.Skip("out-of-scope: CA-CSJWT-13 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_14_RegisteredAlgMismatchRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_14_RegisteredAlgMismatchRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-14")
+	t.Skip("out-of-scope: CA-CSJWT-14 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_15_DiscoveryAlgRestrictionEnforced is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_15_DiscoveryAlgRestrictionEnforced(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-15")
+	t.Skip("out-of-scope: CA-CSJWT-15 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_16_ClientSecretExpiredForAssertion is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_16_ClientSecretExpiredForAssertion(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-16")
+	t.Skip("out-of-scope: CA-CSJWT-16 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_17_NoneRegisteredCannotUseAssertion is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_17_NoneRegisteredCannotUseAssertion(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-17")
+	t.Skip("out-of-scope: CA-CSJWT-17 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_CSJWT_18_HSResponseAlgRequiresSecret is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_CSJWT_18_HSResponseAlgRequiresSecret(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-CSJWT-18")
+	t.Skip("out-of-scope: CA-CSJWT-18 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CA_PKJWT_01_AsymmetricAlgsAcceptedHSRejected covers two
@@ -1774,149 +1794,178 @@ func getDiscoveryJSON(t *testing.T, u string) map[string]any {
 	return out
 }
 
+// TestScenario_CA_MTLS_PKI_01_ProxyCertificateAuthorisedAccepted is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_01_ProxyCertificateAuthorisedAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-01")
+	t.Skip("out-of-scope: CA-MTLS-PKI-01 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_02_ExactlyOneSubjectMetadataAllowed is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_02_ExactlyOneSubjectMetadataAllowed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-02")
+	t.Skip("out-of-scope: CA-MTLS-PKI-02 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_03_RegisteredSubjectExactMatchRequired is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_03_RegisteredSubjectExactMatchRequired(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-03")
+	t.Skip("out-of-scope: CA-MTLS-PKI-03 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_04_NoCertificateForwardedRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_04_NoCertificateForwardedRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-04")
+	t.Skip("out-of-scope: CA-MTLS-PKI-04 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_05_ProxyVerifyFailureRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_05_ProxyVerifyFailureRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-05")
+	t.Skip("out-of-scope: CA-MTLS-PKI-05 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_06_SubjectDNCanonicalised is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_06_SubjectDNCanonicalised(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-06")
+	t.Skip("out-of-scope: CA-MTLS-PKI-06 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_07_SANDNSCaseAndIDNRules is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_07_SANDNSCaseAndIDNRules(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-07")
+	t.Skip("out-of-scope: CA-MTLS-PKI-07 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_08_SANURIExactMatch is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_08_SANURIExactMatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-08")
+	t.Skip("out-of-scope: CA-MTLS-PKI-08 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_09_SANIPNormalisation is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_09_SANIPNormalisation(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-09")
+	t.Skip("out-of-scope: CA-MTLS-PKI-09 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_10_SANEmailRFC822CaseRules is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_10_SANEmailRFC822CaseRules(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-10")
+	t.Skip("out-of-scope: CA-MTLS-PKI-10 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_11_EmbedderCertificateHooksDelegated is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_11_EmbedderCertificateHooksDelegated(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-11")
+	t.Skip("out-of-scope: CA-MTLS-PKI-11 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_PKI_12_DiscoveryAdvertisesMTLSAliases is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_PKI_12_DiscoveryAdvertisesMTLSAliases(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-PKI-12")
+	t.Skip("out-of-scope: CA-MTLS-PKI-12 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_SS_01_ThumbprintMatchesRegisteredJWK is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_SS_01_ThumbprintMatchesRegisteredJWK(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-SS-01")
+	t.Skip("out-of-scope: CA-MTLS-SS-01 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_SS_02_StaleJWKSURIRefetched is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_SS_02_StaleJWKSURIRefetched(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-SS-02")
+	t.Skip("out-of-scope: CA-MTLS-SS-02 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_SS_03_RSAECEd25519CertificatesAccepted is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_SS_03_RSAECEd25519CertificatesAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-SS-03")
+	t.Skip("out-of-scope: CA-MTLS-SS-03 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_SS_04_NoMatchingThumbprintRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_SS_04_NoMatchingThumbprintRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-SS-04")
+	t.Skip("out-of-scope: CA-MTLS-SS-04 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_SS_05_NoCertificateAvailableRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_SS_05_NoCertificateAvailableRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-SS-05")
+	t.Skip("out-of-scope: CA-MTLS-SS-05 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_MTLS_SS_06_TLSSubjectMetadataNotAllowed is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_MTLS_SS_06_TLSSubjectMetadataNotAllowed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-MTLS-SS-06")
+	t.Skip("out-of-scope: CA-MTLS-SS-06 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_01_BothAttestationAndPoPHeadersRequired is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_01_BothAttestationAndPoPHeadersRequired(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-01")
+	t.Skip("out-of-scope: CA-ATT-01 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_02_AttestationTypHeadersEnforced is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_02_AttestationTypHeadersEnforced(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-02")
+	t.Skip("out-of-scope: CA-ATT-02 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_03_AttestationRequiredClaims is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_03_AttestationRequiredClaims(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-03")
+	t.Skip("out-of-scope: CA-ATT-03 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_04_PoPRequiredClaims is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_04_PoPRequiredClaims(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-04")
+	t.Skip("out-of-scope: CA-ATT-04 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_05_PoPAudArrayShapeAndIssuer is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_05_PoPAudArrayShapeAndIssuer(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-05")
+	t.Skip("out-of-scope: CA-ATT-05 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_06_ChallengeEndpointEmitsHMACToken is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_06_ChallengeEndpointEmitsHMACToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-06")
+	t.Skip("out-of-scope: CA-ATT-06 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_07_MissingChallengeReturnsUseAttestationChallenge is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_07_MissingChallengeReturnsUseAttestationChallenge(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-07")
+	t.Skip("out-of-scope: CA-ATT-07 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_08_PoPJtiSingleUseEnforced is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_08_PoPJtiSingleUseEnforced(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-08")
+	t.Skip("out-of-scope: CA-ATT-08 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_09_AttesterKeyHookDelegated is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_09_AttesterKeyHookDelegated(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-09")
+	t.Skip("out-of-scope: CA-ATT-09 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_10_AttestationPolicyHookDelegated is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_10_AttestationPolicyHookDelegated(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-10")
+	t.Skip("out-of-scope: CA-ATT-10 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_ATT_11_CnfJwkBindsAttestationToPoP is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ATT_11_CnfJwkBindsAttestationToPoP(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ATT-11")
+	t.Skip("out-of-scope: CA-ATT-11 (see catalog out_of_scope_reason)")
 }
 
 // caFetchDiscovery issues a GET against the OP's well-known discovery
@@ -2427,9 +2476,10 @@ func TestScenario_CA_ERR_03_TimingEqualisedAcrossFailurePaths(t *testing.T) {
 	}
 }
 
+// TestScenario_CA_ERR_04_AuthFlowRateLimitOPScoped is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_ERR_04_AuthFlowRateLimitOPScoped(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ERR-04")
+	t.Skip("out-of-scope: CA-ERR-04 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CA_ERR_05_ClientAuthnFailureAuditEvent pins the

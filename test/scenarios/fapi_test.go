@@ -24,44 +24,52 @@ func TestScenario_FAPI_002_AuthorizationRejectsBadResponseMode(t *testing.T) {
 	t.Skip("pending: FAPI-002")
 }
 
+// TestScenario_FAPI_V1_010_HybridAcceptsNoPKCEWithIDToken is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_010_HybridAcceptsNoPKCEWithIDToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-010")
+	t.Skip("out-of-scope: FAPI-V1-010 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_FAPI_V1_011_PARRequiresPKCE is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_011_PARRequiresPKCE(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-011")
+	t.Skip("out-of-scope: FAPI-V1-011 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_FAPI_V1_012_CodeOnlyRequiresJARM is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_012_CodeOnlyRequiresJARM(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-012")
+	t.Skip("out-of-scope: FAPI-V1-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_FAPI_V1_013_JARRequestRequiresJARM is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_013_JARRequestRequiresJARM(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-013")
+	t.Skip("out-of-scope: FAPI-V1-013 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_FAPI_V1_014_RequestObjectRequiresExp is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_014_RequestObjectRequiresExp(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-014")
+	t.Skip("out-of-scope: FAPI-V1-014 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_FAPI_V1_015_RequestObjectRequiresNbf is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_015_RequestObjectRequiresNbf(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-015")
+	t.Skip("out-of-scope: FAPI-V1-015 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_FAPI_V1_016_RequestObjectExpNbfWindow is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_016_RequestObjectExpNbfWindow(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-016")
+	t.Skip("out-of-scope: FAPI-V1-016 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_FAPI_V1_017_HybridSignedRequestProducesIDToken is OOS — see catalog out_of_scope_reason.
 func TestScenario_FAPI_V1_017_HybridSignedRequestProducesIDToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: FAPI-V1-017")
+	t.Skip("out-of-scope: FAPI-V1-017 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_FAPI_V2_020_CodeFlowRequiresPKCE(t *testing.T) {

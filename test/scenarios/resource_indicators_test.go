@@ -30,9 +30,10 @@ func TestScenario_RI_001_DefaultResourceHookExposed(t *testing.T) {
 	t.Skip("pending: RI-001")
 }
 
+// TestScenario_RI_002_GetResourceServerInfoFailsClosed is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_002_GetResourceServerInfoFailsClosed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-002")
+	t.Skip("out-of-scope: RI-002 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_RI_010_ResourceMustBeAbsoluteURI(t *testing.T) {
@@ -51,14 +52,16 @@ func TestScenario_RI_011_ResourceMustNotContainFragment(t *testing.T) {
 	}
 }
 
+// TestScenario_RI_012_EachResourceValueValidatedIndividually is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_012_EachResourceValueValidatedIndividually(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-012")
+	t.Skip("out-of-scope: RI-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RI_020_AuthorizeUnknownResourceFragmentRedirect is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_020_AuthorizeUnknownResourceFragmentRedirect(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-020")
+	t.Skip("out-of-scope: RI-020 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_RI_021_AuthorizeAllowedResourceBindsAudience verifies
@@ -104,9 +107,10 @@ func TestScenario_RI_021_AuthorizeAllowedResourceBindsAudience(t *testing.T) {
 	}
 }
 
+// TestScenario_RI_022_AuthorizeAppliesDefaultResource is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_022_AuthorizeAppliesDefaultResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-022")
+	t.Skip("out-of-scope: RI-022 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_RI_023_AuthorizeGetAndPostBehaveIdentically verifies
@@ -340,9 +344,10 @@ func TestScenario_RI_033_RefreshPreservesResource(t *testing.T) {
 	}
 }
 
+// TestScenario_RI_034_DefaultResourceFlowsToCodeAndTokens is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_034_DefaultResourceFlowsToCodeAndTokens(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-034")
+	t.Skip("out-of-scope: RI-034 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_RI_035_UseGrantedResourceHookAtTokenExchange(t *testing.T) {
@@ -355,14 +360,16 @@ func TestScenario_RI_036_TokenExchangeAcceptsExplicitResource(t *testing.T) {
 	t.Skip("pending: RI-036")
 }
 
+// TestScenario_RI_040_DeviceAuthRejectsUnknownResource is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_040_DeviceAuthRejectsUnknownResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-040")
+	t.Skip("out-of-scope: RI-040 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RI_041_DeviceTokenBindsAudienceAndResource is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_041_DeviceTokenBindsAudienceAndResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-041")
+	t.Skip("out-of-scope: RI-041 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_RI_042_DeviceFlowDefaultResourceAndRefresh(t *testing.T) {
@@ -380,14 +387,16 @@ func TestScenario_RI_044_DeviceFlowExplicitResourceAtExchange(t *testing.T) {
 	t.Skip("pending: RI-044")
 }
 
+// TestScenario_RI_050_BackchannelRejectsUnknownResource is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_050_BackchannelRejectsUnknownResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-050")
+	t.Skip("out-of-scope: RI-050 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RI_051_CIBATokenBindsAudienceAndResource is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_051_CIBATokenBindsAudienceAndResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-051")
+	t.Skip("out-of-scope: RI-051 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_RI_052_CIBARefreshPreservesResource(t *testing.T) {
@@ -400,9 +409,10 @@ func TestScenario_RI_053_CIBADefaultResourceWithUseGrantedResource(t *testing.T)
 	t.Skip("pending: RI-053")
 }
 
+// TestScenario_RI_054_CIBAUseGrantedResourceFalseLeavesAudienceUnset is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_054_CIBAUseGrantedResourceFalseLeavesAudienceUnset(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-054")
+	t.Skip("out-of-scope: RI-054 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_RI_060_ClientCredentialsBindsAudience verifies the
@@ -478,9 +488,10 @@ func TestScenario_RI_060_ClientCredentialsBindsAudience(t *testing.T) {
 	}
 }
 
+// TestScenario_RI_061_ClientCredentialsDropsUnsupportedScopes is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_061_ClientCredentialsDropsUnsupportedScopes(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-061")
+	t.Skip("out-of-scope: RI-061 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_RI_062_ClientCredentialsRejectsUnknownResource verifies
@@ -632,9 +643,10 @@ func TestScenario_RI_063_ClientCredentialsRejectsMultipleResources(t *testing.T)
 	}
 }
 
+// TestScenario_RI_064_ClientCredentialsValidatesEachResource is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_064_ClientCredentialsValidatesEachResource(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-064")
+	t.Skip("out-of-scope: RI-064 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_RI_065_ClientCredentialsAppliesDefaultResource(t *testing.T) {
@@ -652,14 +664,16 @@ func TestScenario_RI_070_UserInfoAcceptsAudienceLessTokens(t *testing.T) {
 	t.Skip("pending: RI-070")
 }
 
+// TestScenario_RI_071_UserInfoRejectsResourceBoundTokens is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_071_UserInfoRejectsResourceBoundTokens(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-071")
+	t.Skip("out-of-scope: RI-071 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RI_072_UserInfoRejectsNonStringAudience is OOS — see catalog out_of_scope_reason.
 func TestScenario_RI_072_UserInfoRejectsNonStringAudience(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RI-072")
+	t.Skip("out-of-scope: RI-072 (see catalog out_of_scope_reason)")
 }
 
 func newResourceProvider(t *testing.T) (*testkit.Provider, *store.Client, string, string) {

@@ -30,7 +30,8 @@ func TestScenario_SBT_003_OfflineAccessSurvivesSessionDestroy(t *testing.T) {
 	t.Skip("out-of-scope: SBT-003 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SBT_004_ImplicitAccessTokenBoundToSession is OOS — see catalog out_of_scope_reason.
 func TestScenario_SBT_004_ImplicitAccessTokenBoundToSession(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SBT-004")
+	t.Skip("out-of-scope: SBT-004 (see catalog out_of_scope_reason)")
 }
