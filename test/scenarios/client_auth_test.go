@@ -329,6 +329,7 @@ func (c *pkjwtFixedClock) Now() time.Time {
 // kp.priv → OP resolves public via store.Client.JWKs → verify".
 func registerPKJWTClient(t *testing.T, tk *testkit.Provider, id string, kp *pkjwtKeypair) {
 	t.Helper()
+	//nolint:gosec // G101 false positive: "private_key_jwt" is the OIDC auth-method name, not a credential.
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      id,
 		TokenEndpointAuthMethod: "private_key_jwt",
@@ -795,6 +796,7 @@ func TestScenario_CA_BASIC_04_AppendixBFormURLEncoding(t *testing.T) {
 			clientID: "ca-basic-04-plus",
 			secret:   "secret+with+plus",
 		},
+		//nolint:gosec // G101 false positive: dummy fixture secret consumed only by the in-process testkit.
 		{
 			name:     "SpaceAndPlusInClientID",
 			clientID: "ca-basic 04+id",
@@ -1730,6 +1732,7 @@ func TestScenario_CA_PKJWT_11_OctKeyRejectedForPrivateKeyJWT(t *testing.T) {
 	sharedSecret := strings.Repeat("a", 64)
 	octJWKS := json.RawMessage(`{"keys":[{"kty":"oct","kid":"ca-pkjwt-11-oct","use":"sig","alg":"HS256","k":"` +
 		base64.RawURLEncoding.EncodeToString([]byte(sharedSecret)) + `"}]}`)
+	//nolint:gosec // G101 false positive: "private_key_jwt" is the OIDC auth-method name, not a credential.
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      clientID,
 		TokenEndpointAuthMethod: "private_key_jwt",
@@ -2205,6 +2208,7 @@ func TestScenario_CA_DISC_07_MTLSEndpointAliasesGated(t *testing.T) {
 
 	t.Run("MTLSEnabledWithAliasesEmits", func(t *testing.T) {
 		t.Parallel()
+		//nolint:gosec // G101 false positive: RFC 8705 §5 metadata key names, not credentials.
 		aliases := map[string]string{
 			"token_endpoint":         "https://mtls.op.testkit.invalid/oidc/token",
 			"introspection_endpoint": "https://mtls.op.testkit.invalid/oidc/introspect",
@@ -2255,6 +2259,7 @@ func TestScenario_CA_DISC_07_MTLSEndpointAliasesGated(t *testing.T) {
 		tk := testkit.NewProvider(t,
 			testkit.WithOptions(
 				op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+					//nolint:gosec // G101 false positive: RFC 8705 §5 metadata key name, not a credential.
 					MTLSEndpointAliases: map[string]string{
 						"token_endpoint": "https://mtls.op.testkit.invalid/oidc/token",
 					},

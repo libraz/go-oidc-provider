@@ -407,7 +407,7 @@ func TestScenario_ERR_031_ErrorPageHTMLEscapesValues(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/error", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/error", http.NoBody)
 	if err := (interaction.HTMLDriver{}).RenderError(rec, req, prompt); err != nil {
 		t.Fatalf("RenderError: %v", err)
 	}

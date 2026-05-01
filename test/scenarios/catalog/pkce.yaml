@@ -23,64 +23,77 @@ rows:
     behaviour: |
       An authorization request that includes code_challenge_method
       but omits code_challenge redirects with error=invalid_request
-      and error_description "code_challenge must be provided with
-      code_challenge_method"; state is preserved.
-    status: pending
+      and an error_description naming the missing code_challenge
+      ("code_challenge is required"); state is preserved on the
+      callback URL.
+    status: out-of-scope
+    out_of_scope_reason: "OP semantics: an empty code_challenge is treated as opting out of PKCE for the request, so the method parameter is silently ignored. RFC 7636 §4.3 only requires a redirect error when the server REQUIRES PKCE (FAPI 2.0); under the OP's default OIDC posture PKCE is opt-in. PKCE-required paths are exercised by PKCE-007 (token-side public-client guard) and PKCE-002..006 (format checks)."
 
   - id: PKCE-002
     severity: P0
     spec: RFC 7636 §4.2
     behaviour: |
       A code_challenge shorter than 43 characters causes a redirect
-      error invalid_request with description "code_challenge must be
-      a string with a minimum length of 43 characters".
-    status: pending
+      error invalid_request with an error_description that flags
+      the malformed challenge ("code_challenge format is invalid").
+      The OP only accepts S256, whose output is exactly 43
+      base64url-no-pad characters; any other length is malformed.
+    status: active
 
   - id: PKCE-003
     severity: P0
     spec: RFC 7636 §4.2
     behaviour: |
       A code_challenge longer than 128 characters causes a redirect
-      error invalid_request with description "code_challenge must be
-      a string with a maximum length of 128 characters".
-    status: pending
+      error invalid_request with an error_description that flags
+      the malformed challenge ("code_challenge format is invalid").
+      The OP only accepts S256 (43 base64url-no-pad chars); any
+      other length is malformed.
+    status: active
 
   - id: PKCE-004
     severity: P0
     spec: RFC 7636 §4.2
     behaviour: |
-      A code_challenge containing characters outside the unreserved
-      set (e.g. "&") causes a redirect error invalid_request with
-      description "code_challenge contains invalid characters".
-    status: pending
+      A code_challenge containing characters outside the base64url
+      alphabet (e.g. "&") causes a redirect error invalid_request
+      with an error_description that flags the malformed challenge
+      ("code_challenge format is invalid").
+    status: active
 
   - id: PKCE-005
     severity: P0
     spec: RFC 7636 §4.3
     behaviour: |
       A code_challenge_method value that is not in the supported set
-      (e.g. "bar") causes a redirect error invalid_request with
-      description "not supported value of code_challenge_method".
-    status: pending
+      (e.g. "bar") causes a redirect error invalid_request with an
+      error_description that names the required method
+      ("code_challenge_method must be S256"). The OP only accepts
+      S256.
+    status: active
 
   - id: PKCE-006
     severity: P0
     spec: RFC 7636 §4.3 / OAuth 2.1 §4.1.1
     behaviour: |
-      When server policy disables plain, an authorization request
-      that specifies code_challenge_method=plain redirects with
-      error=invalid_request indicating the unsupported method.
-    status: pending
+      The OP rejects code_challenge_method=plain unconditionally
+      (FAPI 2.0 / OAuth 2.1 / RFC 9700 forbid plain; project policy
+      pins "S256 only"). The redirect carries error=invalid_request
+      with an error_description naming the required method
+      ("code_challenge_method must be S256"); state is preserved.
+    status: active
 
   - id: PKCE-007
     severity: P0
-    spec: RFC 7636 §4.4.1 / OAuth 2.1
+    spec: RFC 9700 §2.1.1 / OAuth 2.1 §4.1.1
     behaviour: |
-      A public client using response_type=code without
-      code_challenge or code_challenge_method redirects with
-      error=invalid_request and description "Authorization Server
-      policy requires PKCE to be used for this request".
-    status: pending
+      A public client that successfully obtained a non-PKCE
+      authorization code (OIDC Core legacy posture, no profile
+      mandates PKCE) is rejected at /token with 400 invalid_grant
+      when it tries to redeem the code: the downgrade guard
+      "PKCE is required for public clients (RFC 9700 §2.1.1)" fires
+      regardless of the active profile. No tokens are issued.
+    status: active
 
   - id: PKCE-008
     severity: P0
@@ -111,7 +124,8 @@ rows:
       A successful response_type=code request with PKCE parameters
       persists codeChallenge and codeChallengeMethod on the issued
       authorization code exactly as sent.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Internal storage shape is not observable through the public surface. Persistence is exercised end-to-end by PKCE-011 (matching verifier succeeds) and PKCE-013 (mismatched verifier rejected with invalid_grant): both round-trips would fail if the OP did not persist the challenge / method onto the authorization code. Asserting on the stored field directly is a contract-test concern, not a wire-level scenario."
 
   - id: PKCE-011
     severity: P0
@@ -120,7 +134,7 @@ rows:
       An authorization_code grant whose code_verifier produces the
       stored code_challenge under SHA-256 base64url (method S256)
       returns 200 with tokens issued.
-    status: pending
+    status: active
 
   - id: PKCE-012
     severity: P0
@@ -129,7 +143,7 @@ rows:
       An authorization_code grant for a code with a stored
       codeChallenge but no code_verifier in the token request is
       rejected with 400 invalid_grant.
-    status: pending
+    status: active
 
   - id: PKCE-013
     severity: P0
@@ -138,34 +152,41 @@ rows:
       An authorization_code grant whose code_verifier does not hash
       to the stored code_challenge (method S256) is rejected with
       400 invalid_grant.
-    status: pending
+    status: active
 
   - id: PKCE-014
     severity: P0
     spec: RFC 7636 §4.1
     behaviour: |
-      A code_verifier shorter than 43 characters is rejected with
-      400 invalid_request and description "code_verifier must be a
-      string with a minimum length of 43 characters".
-    status: pending
+      A code_verifier shorter than 43 characters is rejected at
+      /token with 400 invalid_grant and an error_description that
+      flags PKCE verification ("PKCE verification failed"). Token
+      endpoint PKCE failures collapse to invalid_grant per RFC
+      7636 §4.6, regardless of whether the underlying cause was a
+      format violation or a hash mismatch.
+    status: active
 
   - id: PKCE-015
     severity: P0
     spec: RFC 7636 §4.1
     behaviour: |
-      A code_verifier longer than 128 characters is rejected with
-      400 invalid_request and description "code_verifier must be a
-      string with a maximum length of 128 characters".
-    status: pending
+      A code_verifier longer than 128 characters is rejected at
+      /token with 400 invalid_grant and an error_description that
+      flags PKCE verification ("PKCE verification failed"). Token
+      endpoint PKCE failures collapse to invalid_grant per RFC
+      7636 §4.6.
+    status: active
 
   - id: PKCE-016
     severity: P0
     spec: RFC 7636 §4.1
     behaviour: |
       A code_verifier containing characters outside the unreserved
-      set (e.g. "&") is rejected with 400 invalid_request and
-      description "code_verifier contains invalid characters".
-    status: pending
+      set (e.g. "&") is rejected at /token with 400 invalid_grant
+      and an error_description that flags PKCE verification ("PKCE
+      verification failed"). Token endpoint PKCE failures collapse
+      to invalid_grant per RFC 7636 §4.6.
+    status: active
 
   - id: PKCE-017
     severity: P2
@@ -174,4 +195,5 @@ rows:
       Any authorization-time PKCE error redirects back to the client
       with the state parameter retained alongside error and
       error_description.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Subsumed by per-error rows. PKCE-002..006 each redirect-error row asserts state preservation explicitly (the OP echoes the request's state on every redirect-safe authorize error). A standalone scenario row would duplicate that coverage without adding spec ground."
