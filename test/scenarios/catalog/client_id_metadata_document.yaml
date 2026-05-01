@@ -17,6 +17,15 @@ description: |
   SSRF defenses), metadata validity, discovery advertisement, cache
   semantics, and integration with the authorization flow.
 
+  Status: the entire feature is intentionally out of scope. The
+  source spec (draft-ietf-oauth-client-id-metadata-document) is an
+  unstable IETF working group draft, the OP has no plan to ship
+  URL-form client IDs, and adding an outbound fetch + SSRF defense
+  surface for an evolving spec expands attack surface without an
+  in-scope use case. The supported client lifecycle is covered by
+  static registration and Dynamic Client Registration (RFC 7591) —
+  see the dynamic_registration feature.
+
 rows:
   - id: CIMD-URL-01
     severity: P0
@@ -25,7 +34,13 @@ rows:
       Only the https scheme is allowed. An http URL is rejected; the
       OP does not attempt a CIMD fetch and lookup falls through to
       not-found.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      Client ID Metadata Document
+      (draft-ietf-oauth-client-id-metadata-document) is an unstable
+      IETF working group draft and is not implemented. The OP only
+      accepts opaque client_id values registered via static config
+      or Dynamic Client Registration (RFC 7591).
 
   - id: CIMD-URL-02
     severity: P0
@@ -33,7 +48,9 @@ rows:
     behaviour: |
       A path component is required. URLs without a path
       (https://example.com or https://example.com/) are rejected.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-URL-03
     severity: P0
@@ -41,21 +58,27 @@ rows:
     behaviour: |
       URLs whose path contains "." or ".." segments are rejected to
       prevent directory traversal.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-URL-04
     severity: P0
     spec: RFC 3986 §3.5
     behaviour: |
       URLs containing a fragment (#frag) are rejected.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-URL-05
     severity: P0
     spec: RFC 3986 §3.2.1
     behaviour: |
       URLs containing userinfo (user@ or user:pass@) are rejected.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-URL-06
     severity: P1
@@ -63,7 +86,9 @@ rows:
     behaviour: |
       An explicit port (e.g. :8443) and a query string (e.g. ?id=123)
       are accepted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-URL-07
     severity: P0
@@ -71,7 +96,10 @@ rows:
     behaviour: |
       A non-URL string (e.g. "nonexistent-client") is treated as a
       regular client_id; CIMD resolution is not attempted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). The OP always
+      treats client_id values as opaque registry keys.
 
   - id: CIMD-RES-01
     severity: P0
@@ -80,7 +108,9 @@ rows:
       Pre-registered static or adapter-managed clients take
       precedence over CIMD; if a registered client_id collides with
       the CIMD URL the registered record wins.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-RES-02
     severity: P0
@@ -89,7 +119,10 @@ rows:
       The OP issues an HTTP GET against the client_id URL.
       Redirects are forbidden; receiving a 301 or 302 yields 400
       invalid_client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). The OP issues no
+      outbound fetch for client_id resolution.
 
   - id: CIMD-RES-03
     severity: P0
@@ -98,7 +131,9 @@ rows:
       The fetched response Content-Type MUST be application/json
       (with application/oauth-client-id+json reserved as a future
       candidate).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-RES-04
     severity: P0
@@ -106,14 +141,18 @@ rows:
     behaviour: |
       Only HTTP status 200 is accepted; 404 or 5xx yields 400
       invalid_client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-RES-05
     severity: P0
     spec: draft §5
     behaviour: |
       A response body that fails JSON parse yields 400 invalid_client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-RES-06
     severity: P0
@@ -123,7 +162,10 @@ rows:
       around 16 KiB) are rejected early. Content-Length is checked
       first, and any chunked stream that exceeds the threshold mid-
       read aborts.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01); without an
+      outbound fetch path, SSRF size limits have no surface.
 
   - id: CIMD-RES-07
     severity: P0
@@ -131,7 +173,9 @@ rows:
     behaviour: |
       A network failure, TLS error, or DNS failure during fetch
       yields 400 invalid_client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-RES-08
     severity: P1
@@ -140,7 +184,9 @@ rows:
       The OP honours HTTP Cache-Control: max-age and Expires headers
       (bounded by configurable minimum and maximum TTLs); a second
       request for the same URL is served from cache.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-RES-09
     severity: P0
@@ -149,7 +195,10 @@ rows:
       An OP setting allowFetch(ctx, url) bool gates the request
       before it leaves the OP; returning false yields 400
       invalid_client. This is the SSRF gate hook.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01); without an
+      outbound fetch path, the gate hook has no surface.
 
   - id: CIMD-RES-10
     severity: P1
@@ -157,7 +206,9 @@ rows:
     behaviour: |
       An OP setting allowClient(ctx, metadata) bool runs after the
       fetch so business rules can refuse the metadata.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-RES-11
     severity: P0
@@ -167,7 +218,11 @@ rows:
       ranges, link-local, loopback, 0.0.0.0, and the metadata
       address 169.254.169.254. To prevent DNS rebinding, the
       resolved IP MUST be re-checked after DNS resolution.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01); the OP performs no
+      client_id-driven outbound fetches that would need an IP
+      allow-list.
 
   - id: CIMD-RES-12
     severity: P1
@@ -175,7 +230,9 @@ rows:
     behaviour: |
       Both connect and read fetch timeouts are configurable; the
       defaults are roughly 5 seconds.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-META-01
     severity: P0
@@ -184,7 +241,9 @@ rows:
       The metadata's client_id field MUST equal the request's
       client_id URL exactly; otherwise the OP returns 400
       invalid_client_metadata.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-META-02
     severity: P0
@@ -194,7 +253,9 @@ rows:
       private_key_jwt, tls_client_auth, or
       self_signed_tls_client_auth; client_secret_* methods are
       rejected with 400 invalid_client_metadata.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-META-03
     severity: P0
@@ -203,7 +264,9 @@ rows:
       Presence of a client_secret field is rejected with 400
       invalid_client_metadata; CIMD clients are public or asymmetric
       only.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-META-04
     severity: P0
@@ -212,7 +275,11 @@ rows:
       URI-valued metadata fields (client_uri, logo_uri, tos_uri,
       policy_uri, jwks_uri, sector_identifier_uri,
       initiate_login_uri, etc.) MUST use https.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). HTTPS-scheme
+      validation for registered clients lives in the
+      dynamic_registration feature.
 
   - id: CIMD-META-05
     severity: P0
@@ -221,7 +288,11 @@ rows:
       redirect_uris MUST contain at least one entry, and each entry
       MUST satisfy the registration rules (https, or loopback http
       where allowed).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). redirect_uri rules
+      for registered clients live in the dynamic_registration and
+      authorization_code features.
 
   - id: CIMD-META-06
     severity: P0
@@ -230,7 +301,11 @@ rows:
       Unsupported grant_types values are filtered out; if the
       filtered list is empty the OP returns 400
       invalid_client_metadata.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). grant_types
+      filtering for registered clients lives in the
+      dynamic_registration feature.
 
   - id: CIMD-META-07
     severity: P1
@@ -239,7 +314,9 @@ rows:
       Unsupported response_types values are filtered out; an empty
       filtered list is either accepted (OP default) or rejected with
       invalid_client_metadata depending on policy.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-META-08
     severity: P1
@@ -248,7 +325,9 @@ rows:
       Unsupported response_modes values are filtered out; an empty
       filtered list does not abort registration here (flow failure
       is handled separately).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-META-09
     severity: P0
@@ -257,14 +336,20 @@ rows:
       After filtering, grant_types and response_types MUST remain
       consistent (authorization_code <-> code, implicit <-> id_token
       / token, etc.).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-META-10
     severity: P0
     spec: OIDC Core §16.5
     behaviour: |
       jwks and jwks_uri MUST NOT be supplied simultaneously.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). The mutual
+      exclusion rule for registered clients lives in the
+      dynamic_registration feature.
 
   - id: CIMD-META-11
     severity: P1
@@ -273,7 +358,11 @@ rows:
       For application_type=native, redirect_uris are limited to
       loopback addresses, http://localhost, or custom URI schemes,
       reusing the OIDC Core rule.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). Native
+      application redirect rules live in the oauth_native_apps
+      feature.
 
   - id: CIMD-DISC-01
     severity: P0
@@ -281,14 +370,20 @@ rows:
     behaviour: |
       OP discovery advertises
       client_id_metadata_document_supported: true.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01); the discovery flag
+      stays absent.
 
   - id: CIMD-DISC-02
     severity: P1
     spec: draft §7
     behaviour: |
       When the feature is disabled the discovery flag is omitted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01); the flag is
+      structurally absent.
 
   - id: CIMD-CACHE-01
     severity: P1
@@ -296,7 +391,9 @@ rows:
     behaviour: |
       Cache keys are normalised URL strings (lower-case scheme and
       host, port included).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-CACHE-02
     severity: P2
@@ -304,7 +401,9 @@ rows:
     behaviour: |
       It is desirable to suppress concurrent fetches of the same URL
       across OP instances using singleflight semantics.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-CACHE-03
     severity: P2
@@ -312,7 +411,9 @@ rows:
     behaviour: |
       Cache entries strictly expire once max-age elapses; the OP
       does not implement stale-while-revalidate by default.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-FLOW-01
     severity: P0
@@ -320,7 +421,10 @@ rows:
     behaviour: |
       When /authorize receives a URL-form client_id, the OP first
       consults static records and only then attempts a CIMD fetch.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). /authorize treats
+      every client_id as an opaque registry key.
 
   - id: CIMD-FLOW-02
     severity: P0
@@ -328,7 +432,9 @@ rows:
     behaviour: |
       A fetched client is treated as ephemeral; the OP does not
       issue a registration_access_token for it.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-FLOW-03
     severity: P0
@@ -336,14 +442,20 @@ rows:
     behaviour: |
       redirect_uri matching follows the standard rules (strict
       equality or the OP's registration policy).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01). redirect_uri
+      matching for registered clients lives in the
+      authorization_code feature.
 
   - id: CIMD-FLOW-04
     severity: P1
     spec: RFC 9126 / draft §4
     behaviour: |
       /par accepts CIMD clients on the same terms as /authorize.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).
 
   - id: CIMD-FLOW-05
     severity: P0
@@ -352,4 +464,6 @@ rows:
       The token endpoint also performs CIMD resolution during client
       authentication, since CIMD clients are not present in static
       storage.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: |
+      CIMD is not implemented (see CIMD-URL-01).

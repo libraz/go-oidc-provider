@@ -26,6 +26,15 @@ rows:
     behaviour: |
       Normal claims are embedded directly into id_token / userinfo as
       <name>: <value> JSON pairs without any wrapping.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Normal claim emission is the OP's only supported claim type and
+      is covered by the claims and id_token_claims features
+      (claims.yaml, id_token_claims.yaml). This catalog tracks Normal
+      vs Aggregated/Distributed distinctions; with Aggregated and
+      Distributed permanently out of scope (see CT-10..CT-62), the
+      Normal-only rows here become a duplicate axis and are folded
+      into the dedicated id_token_claims / claims rows.
 
   - id: CT-02
     severity: P0
@@ -34,6 +43,13 @@ rows:
       Scope-based projection that covers only Normal claims is the
       baseline behaviour and works without any aggregated/distributed
       machinery.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Same rationale as CT-01: scope-based projection of Normal
+      claims is covered by the claims and id_token_claims features.
+      With Aggregated and Distributed permanently out of scope, the
+      Normal-only baseline rows in this catalog are a duplicate of
+      the dedicated coverage there.
 
   - id: CT-03
     severity: P1
@@ -43,6 +59,15 @@ rows:
       Aggregated/Distributed entry, the Normal value wins; the
       _claim_names map MUST NOT carry a name that is already emitted
       as a direct value.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented: production adoption is near
+      zero and external claim sources (third-party signing keys,
+      fetched endpoints) expand the OP's trust surface without
+      serving any in-scope use case. FAPI 2.0 does not use them
+      either. The OP only emits Normal claims, so a Normal vs
+      Aggregated/Distributed conflict cannot arise.
 
   - id: CT-10
     severity: P0
@@ -50,6 +75,11 @@ rows:
     behaviour: |
       _claim_names is a JSON object whose entries map a claim name to
       a source identifier: { <claim_name>: <source_id> }.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The OP never emits
+      _claim_names so its structure is moot.
 
   - id: CT-11
     severity: P0
@@ -58,6 +88,11 @@ rows:
       _claim_sources is a JSON object whose entries map a source
       identifier to its source descriptor: { <source_id>:
       <descriptor> }.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The OP never emits
+      _claim_sources so its structure is moot.
 
   - id: CT-12
     severity: P0
@@ -65,6 +100,10 @@ rows:
     behaviour: |
       Every source_id referenced from _claim_names MUST exist as a
       key in _claim_sources; dangling references are forbidden.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-13
     severity: P0
@@ -72,6 +111,10 @@ rows:
     behaviour: |
       _claim_names and _claim_sources MUST be emitted as a pair;
       emitting only one of the two is forbidden.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-14
     severity: P1
@@ -80,6 +123,10 @@ rows:
       _claim_names / _claim_sources entries for claims that were not
       requested (via scope or the claims parameter) MUST NOT be
       emitted; the OP does not introduce noise.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-15
     severity: P1
@@ -88,6 +135,12 @@ rows:
       When no requested claim is Aggregated or Distributed, the OP
       omits the _claim_names and _claim_sources fields entirely from
       the id_token / userinfo response.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The OP never emits
+      _claim_names or _claim_sources, so the omission rule is
+      automatic and has no observable behaviour to bind.
 
   - id: CT-16
     severity: P2
@@ -95,6 +148,10 @@ rows:
     behaviour: |
       The same source_id MAY be reused for multiple claims (e.g.
       _claim_names = {given_name: src1, family_name: src1}).
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-20
     severity: P0
@@ -102,6 +159,10 @@ rows:
     behaviour: |
       An Aggregated source descriptor takes the form
       { "JWT": "<compact JWS / JWE>" }.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-21
     severity: P1
@@ -110,6 +171,10 @@ rows:
       The OP relays Aggregated JWTs verbatim and does not re-expand
       the contents; verifying the inner JWT is the receiver's
       responsibility.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-22
     severity: P1
@@ -117,6 +182,10 @@ rows:
     behaviour: |
       The Aggregated descriptor's JWT is expected to be a signed JWT;
       unsigned tokens are rejected by clients.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-23
     severity: P2
@@ -124,6 +193,10 @@ rows:
     behaviour: |
       The OP MAY optionally pre-validate the inner JWT (signature,
       iss) before relaying — the spec leaves this as MAY.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-30
     severity: P0
@@ -132,6 +205,10 @@ rows:
       A Distributed source descriptor takes the form
       { "endpoint": "<URL>", "access_token": "<token>" }, where
       access_token is OPTIONAL.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-31
     severity: P0
@@ -139,6 +216,10 @@ rows:
     behaviour: |
       The Distributed endpoint MUST use the HTTPS scheme to preserve
       the trust boundary.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-32
     severity: P1
@@ -147,6 +228,10 @@ rows:
       The OP relays the Distributed access_token verbatim; the
       receiver presents it as a Bearer token to the endpoint to
       retrieve the claims.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-33
     severity: P2
@@ -154,6 +239,10 @@ rows:
     behaviour: |
       The OP itself does not fetch the Distributed endpoint;
       retrieval is the receiver's responsibility.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-40
     severity: P1
@@ -162,6 +251,11 @@ rows:
       When the embedder's Account.Claims() hook returns
       _claim_names / _claim_sources, the OP relays them through to
       the corresponding section of id_token / userinfo.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The Account.Claims
+      hook surface does not relay _claim_names / _claim_sources.
 
   - id: CT-41
     severity: P1
@@ -170,6 +264,10 @@ rows:
       When the hook returns the same claim name as both Normal and
       under _claim_names, the OP emits the Normal value (consistent
       with CT-03).
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-42
     severity: P2
@@ -177,6 +275,10 @@ rows:
     behaviour: |
       A _claim_names entry whose source_id is missing from
       _claim_sources is dropped silently rather than emitted.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-43
     severity: P2
@@ -184,6 +286,10 @@ rows:
     behaviour: |
       A source descriptor that contains neither endpoint nor JWT is
       dropped; only well-formed descriptors are emitted.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-50
     severity: P0
@@ -191,6 +297,11 @@ rows:
     behaviour: |
       The id_token's _claim_names section references only claims
       requested via scope or via claims.id_token.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The OP never emits
+      _claim_names, so its scoping rules are moot.
 
   - id: CT-51
     severity: P0
@@ -199,6 +310,11 @@ rows:
       The userinfo response's _claim_names section references only
       claims that the access_token's scope and claims.userinfo
       requested.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The OP never emits
+      _claim_names, so its scoping rules are moot.
 
   - id: CT-52
     severity: P1
@@ -207,6 +323,11 @@ rows:
       When nothing beyond scope=openid is requested, neither
       _claim_names nor _claim_sources sections are emitted (mirrors
       CT-15).
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The omission is
+      automatic.
 
   - id: CT-60
     severity: P0
@@ -215,6 +336,12 @@ rows:
       Any access_token embedded in a Distributed source descriptor
       should be short-lived and scope-limited; emitting long-lived
       broad-scope tokens is discouraged.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). The OP never emits
+      a Distributed descriptor, so embedded-token guidance does not
+      apply.
 
   - id: CT-61
     severity: P0
@@ -223,6 +350,10 @@ rows:
       The OP does not blindly embed user-supplied endpoint URLs in
       Distributed descriptors; the store layer validates them
       (alongside the HTTPS check from CT-31).
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03).
 
   - id: CT-62
     severity: P1
@@ -231,3 +362,8 @@ rows:
       The OP exposes a feature flag that lets an embedder fully
       disable Aggregated and Distributed claim handling, narrowing
       the attack surface.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Aggregated and Distributed claim types (OIDC Core §5.6.2) are
+      intentionally not implemented (see CT-03). A disable flag is
+      unnecessary because the feature is structurally absent.
