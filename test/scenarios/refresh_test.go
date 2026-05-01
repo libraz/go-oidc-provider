@@ -848,9 +848,116 @@ func TestScenario_REF_015_RotationNarrowedScopeRetainsOriginal(t *testing.T) {
 	t.Skip("pending: REF-015")
 }
 
+// TestScenario_REF_016_RotationReplayRevokesGrantChain pins the
+// RFC 9700 §4.13 replay defence: the library always rotates refresh
+// tokens, so once a refresh_token has been redeemed, presenting the
+// same value again MUST be rejected with 400 invalid_grant. The
+// replay also revokes the entire chain — a subsequent attempt to
+// redeem the rotated descendant (the refresh_token issued by the
+// successful first call) MUST also be rejected with 400
+// invalid_grant. Sequential redemption is sufficient to drive the
+// detection because the exchanger walks the rotation chain
+// synchronously on ErrTokenReplayed; parallel race conditions are
+// not required for the wire-side assertion to hold.
+//
+// Spec: RFC 9700 §4.13.
 func TestScenario_REF_016_RotationReplayRevokesGrantChain(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-016")
+
+	const (
+		clientID = "rp-ref-016"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ref-016-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	// WithRefreshGracePeriod(0) disables the RFC 9700 §2.2.2 retry
+	// window so any replay is treated as theft immediately. The default
+	// 60s window would absorb the second redemption as a parallel-retry
+	// (InGrace=true) and not exercise the chain-revoke path.
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithStrictOfflineAccess(),
+		op.WithRefreshGracePeriod(0),
+	))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid offline_access",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	first := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if first.StatusCode != http.StatusOK || first.RefreshToken == "" {
+		t.Fatalf("first /token must return refresh_token: status=%d body=%v", first.StatusCode, first.Raw)
+	}
+	originalRefresh := first.RefreshToken
+
+	// First redemption: rotates and mints a new refresh_token distinct
+	// from the original.
+	rotated := postRefreshToken(t, tk, originalRefresh, rp.ID, clientSecret)
+	if rotated.StatusCode != http.StatusOK {
+		t.Fatalf("first rotation /token status=%d body=%v want 200",
+			rotated.StatusCode, rotated.Raw)
+	}
+	if rotated.RefreshToken == "" {
+		t.Fatal("first rotation missing refresh_token")
+	}
+	if rotated.RefreshToken == originalRefresh {
+		t.Fatalf("first rotation refresh_token must differ from original; got %q == %q",
+			rotated.RefreshToken, originalRefresh)
+	}
+
+	// Replay: presenting the original refresh_token a second time MUST
+	// be rejected (rotation defence). RFC 9700 §4.13 wire code is
+	// invalid_grant.
+	replay := postRefreshToken(t, tk, originalRefresh, rp.ID, clientSecret)
+	if replay.StatusCode != http.StatusBadRequest {
+		t.Fatalf("replay status=%d want 400 body=%v", replay.StatusCode, replay.Raw)
+	}
+	if got, _ := replay.Raw["error"].(string); got != "invalid_grant" {
+		t.Errorf("replay error=%q want invalid_grant (raw=%v)", got, replay.Raw)
+	}
+	if replay.AccessToken != "" || replay.RefreshToken != "" {
+		t.Errorf("replay must not mint tokens: %+v", replay.Raw)
+	}
+
+	// Chain revocation: the descendant refresh_token issued by the
+	// successful first rotation MUST also be rejected after the replay
+	// detection cascades through RevokeChain.
+	descendant := postRefreshToken(t, tk, rotated.RefreshToken, rp.ID, clientSecret)
+	if descendant.StatusCode != http.StatusBadRequest {
+		t.Fatalf("descendant after chain revoke status=%d want 400 body=%v",
+			descendant.StatusCode, descendant.Raw)
+	}
+	if got, _ := descendant.Raw["error"].(string); got != "invalid_grant" {
+		t.Errorf("descendant error=%q want invalid_grant (raw=%v)", got, descendant.Raw)
+	}
+	if descendant.AccessToken != "" || descendant.RefreshToken != "" {
+		t.Errorf("descendant must not mint tokens after chain revocation: %+v", descendant.Raw)
+	}
 }
 
 func TestScenario_REF_017_PredicateTrueRotationEntities(t *testing.T) {

@@ -54,14 +54,16 @@ rows:
       When discovery construction throws a known OAuth error
       (e.g. invalid_request from pathFor) the handler returns
       400 application/json with the error envelope.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a public hook to inject pathFor / construction errors at /.well-known/openid-configuration; the discovery document is precomputed at op.New (internal/discovery/handler.go marshals once and serves from a closure-captured byte slice), so the error path is exercised at construction time only, before HTTP serving begins. A known-error JSON envelope on the wire is therefore not reachable from black-box scenarios.
 
   - id: DIS-011
     severity: P0
     spec: implementation observability
     behaviour: |
       The OP emits a discovery.error audit event on known error paths.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's discovery handler does not emit a discovery.error audit event because the document is precomputed at op.New (internal/discovery/handler.go) and there is no runtime error path that would call audit.Emitter. Construction-time validation surfaces via op.New's returned error rather than the audit chain. Same root cause as DIS-010 OOS."
 
   - id: DIS-012
     severity: P0
@@ -70,14 +72,16 @@ rows:
       When discovery construction throws an unknown exception the
       handler returns 500 application/json
       {"error":"server_error","error_description":"oops! something went wrong"}.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not produce the literal 'oops! something went wrong' error_description (a panva-specific wire string). The discovery handler in v1.0 does not have a runtime exception path because the document is precomputed at construction time and cached for the lifetime of the handler; any pathFor / construction error fails op.New before HTTP serving begins."
 
   - id: DIS-013
     severity: P0
     spec: implementation observability
     behaviour: |
       The OP emits a server_error audit event on uncaught exceptions.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's discovery document is precomputed at op.New construction and cached in the handler closure (internal/discovery/handler.go); there is no runtime exception path on /.well-known/openid-configuration that would emit a server_error audit event. Construction-time validation surfaces errors via op.New's returned error, not via audit."
 
   - id: DIS-020
     severity: P0
@@ -137,7 +141,8 @@ rows:
       userinfo_encryption_enc_values_supported,
       introspection_encryption_alg_values_supported,
       introspection_encryption_enc_values_supported.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not ship encryption (encryption.yaml is 100% out-of-scope); the *_encryption_alg_values_supported / *_encryption_enc_values_supported metadata fields are not advertised at /.well-known/openid-configuration. Reconsider when JWE support lands.
     cross_refs:
       - encryption#ENC-010
 
@@ -184,19 +189,27 @@ rows:
 
   - id: DIS-036
     severity: P0
-    spec: OIDC Core §16.2
+    spec: RFC 9101 §10.1 / OIDC Core §16.2
     behaviour: |
-      require_signed_request_object, request_parameter_supported,
-      request_uri_parameter_supported, require_request_uri_registration
-      MUST be advertised consistently with feature enablement.
-    status: pending
+      The JAR-related discovery fields MUST be advertised consistently
+      with feature enablement. With feature.JAR ON the document MUST
+      report request_parameter_supported=true,
+      request_uri_parameter_supported=true,
+      require_request_uri_registration=true (FAPI 2.0 Message Signing
+      posture: every request_uri must be preregistered), and a non-empty
+      request_object_signing_alg_values_supported list. With feature.JAR
+      OFF, request_parameter_supported=false,
+      request_uri_parameter_supported=false, and the
+      request_object_signing_alg_values_supported / require_request_uri_registration
+      fields are omitted entirely.
+    status: active
 
   - id: DIS-040
     severity: P0
     spec: Fetch CORS / OIDC Discovery §5
     behaviour: |
       Both well-known endpoints MUST be CORS-open for any origin.
-    status: pending
+    status: active
     cross_refs:
       - cors#COR-001
       - cors#COR-002

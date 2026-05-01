@@ -522,9 +522,115 @@ func assertRefreshTokenIntrospectActiveWithHint(t *testing.T, clientID, hint str
 	}
 }
 
+// TestScenario_INT_010_ClientCredentialsIntrospectNoHint mints an
+// access token via grant_type=client_credentials, then introspects it
+// without a token_type_hint and asserts active=true with at least the
+// client_id present. The grant has no end-user resource owner, so
+// v1.0 sets sub=client_id (RFC 9068 §2.2 / FAPI 2.0 baseline,
+// internal/tokenendpoint/clientcred.go); the test pins this shape
+// because RPs can rely on it to distinguish a cc token from a
+// user-bound token without reading the access token format.
+//
+// Spec: RFC 7662 §2.2 / RFC 6749 §4.4.
 func TestScenario_INT_010_ClientCredentialsIntrospectNoHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-010")
+
+	const clientID = "rp-int-010"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-010-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithFeature(feature.Introspect),
+			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+		),
+	)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		Scopes:                  []string{"api"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"client_credentials"},
+	})
+
+	// Mint a client_credentials access token.
+	tokenForm := url.Values{
+		"grant_type": {"client_credentials"},
+		"scope":      {"api"},
+	}
+	tokenReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(tokenForm.Encode()))
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenReq.SetBasicAuth(rp.ID, clientSecret)
+
+	tokenResp, err := tk.HTTPClient(nil).Do(tokenReq)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	tokenBody, _ := io.ReadAll(tokenResp.Body)
+	_ = tokenResp.Body.Close()
+	if tokenResp.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d want 200 body=%s", tokenResp.StatusCode, tokenBody)
+	}
+	var tokenEnv map[string]any
+	if err := json.Unmarshal(tokenBody, &tokenEnv); err != nil {
+		t.Fatalf("/token body is not JSON: %v (raw=%s)", err, tokenBody)
+	}
+	at, _ := tokenEnv["access_token"].(string)
+	if at == "" {
+		t.Fatalf("/token missing access_token: %s", tokenBody)
+	}
+
+	// Introspect without a hint.
+	introForm := url.Values{"token": {at}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(introForm.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); !active {
+		t.Fatalf("active=%v want true; body=%s", env["active"], string(body))
+	}
+	if got, _ := env["client_id"].(string); got != rp.ID {
+		t.Errorf("client_id=%v want %q", env["client_id"], rp.ID)
+	}
+	// v1.0 contract: cc grants set sub=client_id since there is no
+	// end user. This pins the projection so RPs can rely on it.
+	if got, _ := env["sub"].(string); got != rp.ID {
+		t.Errorf("sub=%v want %q (cc grant: sub=client_id)", env["sub"], rp.ID)
+	}
+	if got, _ := env["token_type"].(string); got != "Bearer" {
+		t.Errorf("token_type=%v want Bearer", env["token_type"])
+	}
 }
 
 func TestScenario_INT_011_ClientCredentialsIntrospectCorrectHint(t *testing.T) {

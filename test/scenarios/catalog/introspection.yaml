@@ -105,7 +105,7 @@ rows:
       Introspecting a client_credentials access token without a hint
       returns active=true and at least client_id (sub is not required
       because there is no end user).
-    status: pending
+    status: active
 
   - id: INT-011
     severity: P1
@@ -141,7 +141,8 @@ rows:
       A pairwise client introspecting its own refresh token receives a
       sub that is the pairwise subject (different from the raw account
       id).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Pairwise subject types are a v1.0 placeholder (op/op.go PairwiseEnabled=false); pairwise.yaml has discovery-side rows but the introspection-side pairwise sub projection is not implemented. Reconsider when WithPairwiseSubject lands.
 
   - id: INT-015
     severity: P1

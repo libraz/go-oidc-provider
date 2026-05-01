@@ -506,14 +506,117 @@ func TestScenario_DIS_035_PAREndpointAdvertisedWhenPAROn(t *testing.T) {
 	}
 }
 
+// TestScenario_DIS_036_RequestObjectMetadataConsistent pins the
+// JAR-related discovery fields to feature.JAR enablement. With JAR
+// off, the OP MUST advertise request_parameter_supported=false and
+// request_uri_parameter_supported=false; the
+// request_object_signing_alg_values_supported and
+// require_request_uri_registration fields are omitted entirely
+// because there is no request-object verification chain to advertise.
+// With JAR on, both *_supported booleans flip to true, the OP
+// advertises a non-empty request_object_signing_alg_values_supported
+// (RFC 9101 §10.1), and require_request_uri_registration=true
+// reflects the FAPI 2.0 Message Signing posture that every
+// request_uri MUST be preregistered.
+//
+// Spec: RFC 9101 §10.1 / OIDC Core §16.2.
 func TestScenario_DIS_036_RequestObjectMetadataConsistent(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-036")
+
+	t.Run("JAR off", func(t *testing.T) {
+		t.Parallel()
+		p := testkit.NewProvider(t)
+		_, _, doc := fetchDiscovery(t, p.Server.URL)
+
+		if got, _ := doc["request_parameter_supported"].(bool); got {
+			t.Errorf("request_parameter_supported=%v want false (JAR off)", got)
+		}
+		if got, _ := doc["request_uri_parameter_supported"].(bool); got {
+			t.Errorf("request_uri_parameter_supported=%v want false (JAR off)", got)
+		}
+		if _, present := doc["request_object_signing_alg_values_supported"]; present {
+			t.Errorf("request_object_signing_alg_values_supported must be omitted when JAR is off; doc[%q]=%v",
+				"request_object_signing_alg_values_supported",
+				doc["request_object_signing_alg_values_supported"])
+		}
+		if _, present := doc["require_request_uri_registration"]; present {
+			t.Errorf("require_request_uri_registration must be omitted when JAR is off; doc[%q]=%v",
+				"require_request_uri_registration",
+				doc["require_request_uri_registration"])
+		}
+	})
+
+	t.Run("JAR on", func(t *testing.T) {
+		t.Parallel()
+		p := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JAR)))
+		_, _, doc := fetchDiscovery(t, p.Server.URL)
+
+		reqParam, ok := doc["request_parameter_supported"].(bool)
+		if !ok || !reqParam {
+			t.Errorf("request_parameter_supported=%v want true (JAR on)", doc["request_parameter_supported"])
+		}
+		reqURI, ok := doc["request_uri_parameter_supported"].(bool)
+		if !ok || !reqURI {
+			t.Errorf("request_uri_parameter_supported=%v want true (JAR on)", doc["request_uri_parameter_supported"])
+		}
+		reqReg, ok := doc["require_request_uri_registration"].(bool)
+		if !ok || !reqReg {
+			t.Errorf("require_request_uri_registration=%v want true (JAR on, FAPI 2.0 Message Signing posture)",
+				doc["require_request_uri_registration"])
+		}
+		algs, _ := doc["request_object_signing_alg_values_supported"].([]any)
+		if len(algs) == 0 {
+			t.Errorf("request_object_signing_alg_values_supported missing/empty when JAR is on: %v",
+				doc["request_object_signing_alg_values_supported"])
+		}
+	})
 }
 
+// TestScenario_DIS_040_DiscoveryEndpointsAreCORSOpen verifies that
+// the well-known discovery endpoint is CORS-open: a GET from any
+// Origin receives Access-Control-Allow-Origin (echoed or "*") with
+// Vary: Origin, and a preflight OPTIONS allows GET. The OP MUST
+// expose the document to any RP regardless of allowlist
+// configuration, because RPs and library tooling fetch it before any
+// trust relationship has been established. The cors_test.go
+// COR-001 / COR-002 rows pin the same surface; this row reasserts it
+// from the discovery feature so a regression in the discovery mount
+// is caught on the discovery side too.
+//
+// Spec: OIDC Discovery §5 / Fetch CORS.
 func TestScenario_DIS_040_DiscoveryEndpointsAreCORSOpen(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-040")
+
+	p := testkit.NewProvider(t)
+	const probeOrigin = "https://random.invalid"
+
+	// Actual GET: response must echo (or wildcard) the Origin and
+	// stamp Vary: Origin so a shared cache cannot conflate origins.
+	getStatus, getHeaders := corsRequestFrom(t, http.MethodGet,
+		p.Server.URL+wellKnownOIDC, probeOrigin, http.MethodGet)
+	if getStatus != http.StatusOK {
+		t.Fatalf("GET status=%d want 200", getStatus)
+	}
+	allow := getHeaders.Get("Access-Control-Allow-Origin")
+	if allow != probeOrigin && allow != "*" {
+		t.Errorf("GET Access-Control-Allow-Origin=%q want %q or *", allow, probeOrigin)
+	}
+	if vary := getHeaders.Get("Vary"); !strings.Contains(vary, "Origin") {
+		t.Errorf("GET Vary=%q must include Origin", vary)
+	}
+
+	// Preflight OPTIONS: must succeed and advertise GET.
+	optStatus, optHeaders := corsRequestFrom(t, http.MethodOptions,
+		p.Server.URL+wellKnownOIDC, probeOrigin, http.MethodGet)
+	if optStatus != http.StatusNoContent && optStatus != http.StatusOK {
+		t.Fatalf("preflight status=%d want 204 or 200", optStatus)
+	}
+	if methods := optHeaders.Get("Access-Control-Allow-Methods"); !strings.Contains(methods, http.MethodGet) {
+		t.Errorf("preflight Access-Control-Allow-Methods=%q must allow GET", methods)
+	}
+	if optHeaders.Get("Access-Control-Allow-Origin") == "" {
+		t.Errorf("preflight missing Access-Control-Allow-Origin")
+	}
 }
 
 func TestScenario_DIS_041_OAuthMirrorMatchesOIDCConfig(t *testing.T) {

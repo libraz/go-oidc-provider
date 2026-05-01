@@ -169,11 +169,17 @@ rows:
     severity: P0
     spec: RFC 9700 §4.13 (refresh token replay -> revoke whole chain)
     behaviour: |
-      With rotateRefreshToken=true, redeeming the old refresh_token
-      twice in parallel causes one call to fail; the entire grant is
-      revoked (grant.revoked emitted once) and previously issued
-      refresh tokens are destroyed (refresh_token.destroyed emitted).
-    status: pending
+      Refresh-token rotation is the v1.0 default (the library always
+      rotates; see internal/tokenendpoint/refresh.go). With the RFC
+      9700 §2.2.2 retry window disabled via
+      op.WithRefreshGracePeriod(0), redeeming the same refresh_token
+      a second time after a successful rotation MUST fail with 400
+      invalid_grant, and the chain MUST be revoked so a later attempt
+      to use the rotated descendant is also rejected with 400
+      invalid_grant. Sequential redemption is sufficient to drive the
+      replay defence; parallel redemption is not required for the
+      assertion to hold.
+    status: active
 
   - id: REF-017
     severity: P2
@@ -219,7 +225,8 @@ rows:
       With a predicate that returns true, a parallel reuse of the old
       token rejects one call, revokes the entire grant, and emits
       refresh_token.destroyed.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a runtime per-request revokeGrantPolicy predicate (panva-specific hook). Refresh-token rotation cascade is determined structurally by client policy + DPoP binding; REF-016 covers the canonical replay revocation path.
 
   - id: REF-022
     severity: P1
