@@ -6,6 +6,8 @@ package op
 // faster, narrower fixture than rendering an HTML interaction page.
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/i18n"
@@ -141,5 +143,79 @@ func TestBuildLocaleResolver_NewLocaleRegisteredAsIs(t *testing.T) {
 	// resolver's job at request time, not buildLocaleResolver's.
 	if _, ok := fr.Get("consent.title", nil); ok {
 		t.Errorf("fr bundle accidentally inherited seed en consent.title")
+	}
+}
+
+// fakePreferredLocaleStore returns a fixed locale or a fixed error,
+// letting the resolver tests exercise the head of the §L.2 chain
+// without standing up a real user store.
+type fakePreferredLocaleStore struct {
+	tag Locale
+	err error
+}
+
+func (f fakePreferredLocaleStore) PreferredLocale(_ context.Context, _ string) (Locale, error) {
+	return f.tag, f.err
+}
+
+// TestWithPreferredLocaleStore_RejectsNil pins that callers cannot
+// silently disable the resolver chain by passing nil. Returning the
+// next-layer fall-through on a misconfigured option would make the
+// chain best-effort to a fault: a typo "WithPreferredLocaleStore(nil)"
+// would skip the head of the chain without any signal to the embedder.
+func TestWithPreferredLocaleStore_RejectsNil(t *testing.T) {
+	t.Parallel()
+
+	c := &config{}
+	if err := WithPreferredLocaleStore(nil).apply(c); err == nil {
+		t.Fatalf("WithPreferredLocaleStore(nil) returned nil, want error")
+	}
+}
+
+// TestBuildLocaleResolver_PreferredStoreWiresChainHead verifies the
+// store reaches the resolver and is consulted at the top of the
+// §L.2 chain. The fake returns "ja" so only the preferred-store
+// branch could explain the resolved tag — none of the other inputs
+// hint at Japanese.
+func TestBuildLocaleResolver_PreferredStoreWiresChainHead(t *testing.T) {
+	t.Parallel()
+
+	c := &config{
+		defaultLocale:        LocaleEnglish,
+		preferredLocaleStore: fakePreferredLocaleStore{tag: LocaleJapanese},
+	}
+	resolver, err := buildLocaleResolver(c)
+	if err != nil {
+		t.Fatalf("buildLocaleResolver: %v", err)
+	}
+	got := resolver.Resolve(context.Background(), i18n.Request{Subject: "user-1"})
+	if got != i18n.Tag(LocaleJapanese) {
+		t.Errorf("resolver picked %q, want %q (preferred store should win)", got, LocaleJapanese)
+	}
+}
+
+// TestBuildLocaleResolver_PreferredStoreErrorTreatedAsNoPreference
+// pins design 002 §L.2: the store is best-effort, so a backend
+// failure must not fail the resolve — instead the chain falls
+// through to the next layer. Without this, an outage on the
+// preferred-store backend (Redis / LDAP) would block every login
+// with a 500.
+func TestBuildLocaleResolver_PreferredStoreErrorTreatedAsNoPreference(t *testing.T) {
+	t.Parallel()
+
+	c := &config{
+		defaultLocale:        LocaleEnglish,
+		preferredLocaleStore: fakePreferredLocaleStore{err: errors.New("backend down")},
+	}
+	resolver, err := buildLocaleResolver(c)
+	if err != nil {
+		t.Fatalf("buildLocaleResolver: %v", err)
+	}
+	got := resolver.Resolve(context.Background(), i18n.Request{
+		Subject:   "user-1",
+		UILocales: []string{"ja"},
+	})
+	if got != i18n.Tag(LocaleJapanese) {
+		t.Errorf("resolver picked %q despite ui_locales=ja, want %q", got, LocaleJapanese)
 	}
 }

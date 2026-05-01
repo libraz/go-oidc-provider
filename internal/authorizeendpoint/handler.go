@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -318,6 +319,15 @@ type Deps struct {
 	// the legacy wire shape (the aggregator's acr / amr flow through
 	// unchanged).
 	ACRResolver ACRResolver
+
+	// LocaleResolver, when non-nil, walks the §L.2 priority chain
+	// (PreferredLocaleStore → ui_locales → __Host-oidc_locale cookie
+	// → Accept-Language → default) and stamps the result onto every
+	// rendered [interaction.Prompt] (Locale / UILocalesHint /
+	// LocalesAvailable). A nil value leaves the prompt's locale
+	// fields empty — useful for unit tests that drive the handler
+	// directly without an i18n subsystem.
+	LocaleResolver *i18n.Resolver
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

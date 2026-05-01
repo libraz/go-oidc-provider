@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -185,6 +186,7 @@ func dispatchTick(
 	// field; the POST handler accepts both routes, so the choice is
 	// the driver's.
 	prompt.CSRFToken = token
+	stampPromptLocale(r, deps, &prompt, next, state)
 	if err := deps.Driver.Render(w, r, prompt); err != nil {
 		// Render's own headers may already be partially written;
 		// surfacing a JSON error after that is unsafe so we just
@@ -634,4 +636,38 @@ func encodeAuthnState(s authn.State) (json.RawMessage, error) {
 		return nil, fmt.Errorf("authorizeendpoint: encode authn state: %w", err)
 	}
 	return out, nil
+}
+
+// stampPromptLocale walks the §L.2 priority chain through the
+// configured [i18n.Resolver] and stamps the result onto prompt.
+// A nil resolver leaves the locale fields empty so direct callers
+// (unit tests, embedders that do not need i18n) keep the legacy
+// shape. The cookie is read from the request unparsed; the resolver
+// performs the BCP 47 normalisation.
+func stampPromptLocale(r *http.Request, deps resolved, prompt *interaction.Prompt, st authn.State, reqState authorize.RequestState) {
+	if deps.LocaleResolver == nil || prompt == nil {
+		return
+	}
+	cookieVal := ""
+	if c, err := r.Cookie(cookie.LocaleProfile.Name); err == nil {
+		cookieVal = c.Value
+	}
+	tag := deps.LocaleResolver.Resolve(r.Context(), i18n.Request{
+		Subject:        st.Subject,
+		UILocales:      reqState.Library.UILocales,
+		Cookie:         cookieVal,
+		AcceptLanguage: r.Header.Get("Accept-Language"),
+	})
+	prompt.Locale = string(tag)
+	if len(reqState.Library.UILocales) > 0 {
+		prompt.UILocalesHint = slices.Clone(reqState.Library.UILocales)
+	}
+	available := deps.LocaleResolver.Available()
+	if len(available) > 0 {
+		out := make([]string, len(available))
+		for i, t := range available {
+			out[i] = string(t)
+		}
+		prompt.LocalesAvailable = out
+	}
 }

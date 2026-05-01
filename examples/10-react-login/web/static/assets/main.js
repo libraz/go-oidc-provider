@@ -45,6 +45,7 @@ function renderPrompt(prompt) {
   formEl.replaceChildren();
   formEl.hidden = false;
   statusEl.textContent = titleFor(prompt.type);
+  applyLocale(prompt);
 
   if (prompt.type === "consent.scope") {
     renderConsent(prompt);
@@ -281,4 +282,18 @@ function fail(msg) {
   statusEl.dataset.error = "1";
   statusEl.textContent = msg;
   formEl.hidden = true;
+}
+
+// applyLocale stamps the OP-resolved locale onto <html lang> so the
+// browser picks the right hyphenation / spell-check rules and any
+// downstream Intl API observes the active language. The OP runs the
+// §L.2 priority chain (PreferredLocaleStore → ui_locales → cookie →
+// Accept-Language → default) before [Driver.Render]; the SPA never
+// re-runs the chain. Embedders that want to override the OP's pick
+// consult prompt.ui_locales_hint (the RP's raw list) instead.
+function applyLocale(prompt) {
+  const locale = prompt && prompt.locale;
+  if (typeof locale === "string" && locale !== "") {
+    document.documentElement.lang = locale;
+  }
 }

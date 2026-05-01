@@ -87,6 +87,20 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.handler.ServeHTTP(w, r)
 }
 
+// LocaleResolver returns the locale [Resolver] the Provider built
+// from [WithLocale] / [WithDefaultLocale] / [WithPreferredLocaleStore].
+// Embedders use it to render emails, server-rendered admin pages, or
+// other out-of-band surfaces in the same locale the OP picks for
+// /authorize prompts. The resolver is safe for concurrent use.
+//
+// Stable since v0.1.
+func (p *Provider) LocaleResolver() *Resolver {
+	if p == nil || p.locales == nil {
+		return nil
+	}
+	return &Resolver{inner: p.locales}
+}
+
 // New constructs a [Provider] from the supplied options. It validates that
 // every required option is present and that the combination of enabled
 // grants, features, and profiles is internally consistent.
@@ -130,7 +144,7 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	mux, err := buildRouter(cfg, keySet, scopes)
+	mux, err := buildRouter(cfg, keySet, scopes, locales)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +298,30 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 	for _, t := range order {
 		merged = append(merged, bundles[t])
 	}
-	return i18n.NewResolver(i18n.Tag(cfg.defaultLocale), merged...)
+	resolver, err := i18n.NewResolver(i18n.Tag(cfg.defaultLocale), merged...)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.preferredLocaleStore != nil {
+		resolver.WithPreferredLocaleStore(preferredLocaleStoreAdapter{store: cfg.preferredLocaleStore})
+	}
+	return resolver, nil
+}
+
+// preferredLocaleStoreAdapter bridges the public [PreferredLocaleStore]
+// (which speaks [Locale]) to the internal contract (which speaks
+// [i18n.Tag]). The adapter is internal-only; the public interface
+// stays free of the internal type so embedders never import it.
+type preferredLocaleStoreAdapter struct {
+	store PreferredLocaleStore
+}
+
+func (a preferredLocaleStoreAdapter) PreferredLocale(ctx context.Context, sub string) (i18n.Tag, error) {
+	loc, err := a.store.PreferredLocale(ctx, sub)
+	if err != nil {
+		return "", err
+	}
+	return i18n.Tag(loc), nil
 }
 
 // toScopeEntries projects the public [Scope] values onto the internal
@@ -322,7 +359,7 @@ func toKeyEntries(ks Keyset) []keys.Entry {
 // handlers, plus the optional endpoints (PAR, introspect, revoke,
 // /register, /end_session) gated on the configured features and
 // grants.
-func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) (*http.ServeMux, error) {
+func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry, locales *i18n.Resolver) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
 	doc := discovery.Build(buildDiscoveryInput(cfg, scopes))
 	discHandler, err := discovery.Handler(doc)
@@ -407,7 +444,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 			Audit:                          cfg.effectiveAuditEmitter(),
 		})),
 	)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, originAllow, strictCORS)
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
 	}
@@ -1197,6 +1234,7 @@ func mountAuthorizeHandlers(
 	keySet *keys.Set,
 	allow *csrf.Allowlist,
 	strictCORS *cors.Strict,
+	locales *i18n.Resolver,
 ) (*sessions.Manager, error) {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
@@ -1258,6 +1296,7 @@ func mountAuthorizeHandlers(
 		OpenIDScopeOptional:     cfg.openIDScopeOptional,
 		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
 		ACRResolver:             newACRResolver(cfg),
+		LocaleResolver:          locales,
 	})
 	// /authorize is a top-level redirect navigation and never receives
 	// a cross-origin fetch, so the CORS layer is intentionally omitted.

@@ -47,20 +47,21 @@ func (f optionFunc) apply(c *config) error { return f(c) }
 // that callers can only build it through [Option] values, which lets us
 // preserve invariants (no zero-value Provider, type-driven enums, etc.).
 type config struct {
-	issuer        string
-	store         store.Store
-	clock         Clock
-	logger        *slog.Logger
-	auditLogger   *slog.Logger
-	keyset        Keyset
-	defaultLocale Locale
-	localeBundles []LocaleBundle
-	mountPrefix   string
-	endpoints     Endpoints
-	grants        []grant.Type
-	features      []feature.Flag
-	profiles      []profile.Profile
-	interactionD  interaction.Driver
+	issuer               string
+	store                store.Store
+	clock                Clock
+	logger               *slog.Logger
+	auditLogger          *slog.Logger
+	keyset               Keyset
+	defaultLocale        Locale
+	localeBundles        []LocaleBundle
+	preferredLocaleStore PreferredLocaleStore
+	mountPrefix          string
+	endpoints            Endpoints
+	grants               []grant.Type
+	features             []feature.Flag
+	profiles             []profile.Profile
+	interactionD         interaction.Driver
 
 	// cookieKeys carries the AES-256-GCM keys used by the Cookie codec.
 	// The first entry is the active encryption key; the remainder are

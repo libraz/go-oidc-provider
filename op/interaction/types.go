@@ -90,6 +90,31 @@ type Prompt struct {
 	// or, more commonly, take the cookie's value from the prompt
 	// envelope and echo it back in the X-CSRF-Token header.
 	CSRFToken string `json:"csrf_token,omitempty"`
+
+	// Locale is the BCP 47 tag the OP resolved for this prompt
+	// through the §L.2 priority chain (PreferredLocaleStore →
+	// ui_locales → __Host-oidc_locale cookie → Accept-Language →
+	// default). The orchestrator stamps it before [Driver.Render]
+	// so SPAs can set <html lang="..."> and pick translation
+	// bundles without re-running the chain. The chain always
+	// terminates at the configured default, so the field is
+	// populated whenever the resolver is wired; an empty value
+	// means the orchestrator was constructed without a resolver
+	// (e.g. unit tests).
+	Locale string `json:"locale,omitempty"`
+
+	// UILocalesHint is the RP's `ui_locales` request parameter,
+	// split on whitespace. Empty when the RP did not supply one.
+	// SPAs that override the resolver consult this list directly;
+	// most SPAs ignore it and use [Locale] instead.
+	UILocalesHint []string `json:"ui_locales_hint,omitempty"`
+
+	// LocalesAvailable is the registered locale list, equal to the
+	// discovery `ui_locales_supported` value at construction time.
+	// SPAs use it to build a language picker without re-fetching
+	// discovery on every prompt. Empty when the orchestrator was
+	// constructed without a resolver.
+	LocalesAvailable []string `json:"locales_available,omitempty"`
 }
 
 // Step is the discriminated union an [op.Authenticator] /

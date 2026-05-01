@@ -1,6 +1,7 @@
 package op
 
 import (
+	"context"
 	"errors"
 
 	"github.com/libraz/go-oidc-provider/internal/i18n"
@@ -80,6 +81,125 @@ func WithDefaultLocale(locale Locale) Option {
 		c.defaultLocale = locale
 		return nil
 	})
+}
+
+// PreferredLocaleStore is the embedder hook the locale resolver
+// consults at the head of the §L.2 priority chain (before the
+// authorize ui_locales parameter, the __Host-oidc_locale cookie, the
+// Accept-Language header, and the default locale). Implementations
+// return the saved locale for the supplied subject; an empty Locale
+// or a non-nil error is treated as "no preference" so the chain
+// continues with the next layer.
+//
+// Lookup MUST be cheap — the resolver consults it on every authorize
+// hit. Backends that need to issue a remote call SHOULD cache the
+// result locally; a slow PreferredLocale call adds latency to every
+// login screen render.
+//
+// Stable since v0.1.
+type PreferredLocaleStore interface {
+	PreferredLocale(ctx context.Context, sub string) (Locale, error)
+}
+
+// WithPreferredLocaleStore registers store as the source of per-user
+// preferred locales. The store is consulted at the head of the
+// resolver chain so a logged-in user's saved locale wins over the
+// authorize ui_locales parameter, the cookie, and the Accept-Language
+// header.
+//
+// The option is purely additive: passing a nil store is rejected at
+// construction time so a misconfigured option does not silently
+// disable the chain. Embedders that want to opt out simply omit the
+// option — the resolver falls back to the next layer in the chain.
+//
+// Stable since v0.1.
+func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
+	return optionFunc(func(c *config) error {
+		if store == nil {
+			return errors.New("op: WithPreferredLocaleStore requires a non-nil store")
+		}
+		c.preferredLocaleStore = store
+		return nil
+	})
+}
+
+// Resolver is the public view of the locale resolver the Provider
+// built from [WithLocale] / [WithDefaultLocale] /
+// [WithPreferredLocaleStore]. Embedders fetch it through
+// [Provider.LocaleResolver] when they want to render emails, server-
+// rendered pages, or out-of-band UIs in the same locale the OP picks
+// for /authorize prompts.
+//
+// Resolver is safe for concurrent use; the Provider builds it once at
+// startup and never replaces it.
+type Resolver struct {
+	inner *i18n.Resolver
+}
+
+// ResolveRequest bundles the per-call signals [Resolver.Resolve]
+// consults. An embedder rendering an out-of-band surface (email,
+// server-rendered admin page) populates the fields it has and leaves
+// the rest at their zero values. The resolver walks the chain in
+// §L.2 order regardless.
+type ResolveRequest struct {
+	// Subject is the OP-internal subject identifier for the
+	// authenticated user. Empty when the request is unauthenticated;
+	// the resolver skips the [PreferredLocaleStore] step in that
+	// case.
+	Subject string
+
+	// UILocales is the parsed `ui_locales` request parameter. Order
+	// is preserved — the resolver tries entries in caller-supplied
+	// order.
+	UILocales []string
+
+	// Cookie is the value of the __Host-oidc_locale cookie, or empty
+	// when absent.
+	Cookie string
+
+	// AcceptLanguage is the raw Accept-Language header. The resolver
+	// parses q-values internally.
+	AcceptLanguage string
+}
+
+// Resolve walks the §L.2 priority chain and returns the first
+// matching locale. The return value is guaranteed to be a registered
+// locale; the chain always terminates at the configured default.
+func (r *Resolver) Resolve(ctx context.Context, in ResolveRequest) Locale {
+	if r == nil || r.inner == nil {
+		return ""
+	}
+	tag := r.inner.Resolve(ctx, i18n.Request{
+		Subject:        in.Subject,
+		UILocales:      in.UILocales,
+		Cookie:         in.Cookie,
+		AcceptLanguage: in.AcceptLanguage,
+	})
+	return Locale(tag)
+}
+
+// Default returns the locale the resolver falls back to when no
+// signal in the chain matches. Always populated.
+func (r *Resolver) Default() Locale {
+	if r == nil || r.inner == nil {
+		return ""
+	}
+	return Locale(r.inner.Default())
+}
+
+// Available returns the registered locales in registration order
+// (seed bundles first, then [WithLocale] additions). The slice is a
+// fresh copy; mutating it does not affect the Resolver.
+func (r *Resolver) Available() []Locale {
+	if r == nil || r.inner == nil {
+		return nil
+	}
+	tags := r.inner.Available()
+	out := make([]Locale, len(tags))
+	for i, t := range tags {
+		out[i] = Locale(t)
+	}
+	return out
 }
 
 // WithLocale registers a [LocaleBundle] for the given locale. The

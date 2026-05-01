@@ -1,0 +1,130 @@
+# yaml-language-server: $schema=./schema.json
+feature: i18n
+prefix: I18N
+title: Locale resolution and SPA exposure
+specs:
+  - OpenID Connect Core 1.0 §3.1.2.1 — ui_locales request parameter
+  - OpenID Connect Discovery 1.0 §3 — ui_locales_supported metadata
+  - design 002 §L.2 — Locale resolution priority chain
+  - design 002 §L.6 — SPA prompt envelope (Locale / UILocalesHint / LocalesAvailable)
+
+description: |
+  The OP resolves the rendered locale through a five-layer priority
+  chain (PreferredLocaleStore → ui_locales → __Host-oidc_locale cookie
+  → Accept-Language → default) and stamps the result onto every
+  rendered prompt envelope so SPAs can set <html lang> and pick
+  bundles without re-running the chain. Rows pin both the chain
+  ordering and the envelope shape; covered tests live under
+  test/scenarios/i18n_test.go and the integration probe in
+  internal/authorizeendpoint/interaction_locale_test.go.
+
+rows:
+  - id: I18N-001
+    severity: P0
+    spec: design 002 §L.2 (rule 1)
+    behaviour: |
+      When op.WithPreferredLocaleStore returns a registered locale
+      for the authenticated subject, the OP MUST resolve to that
+      locale even when the request also carries ui_locales / cookie /
+      Accept-Language with a different value.
+    status: active
+
+  - id: I18N-002
+    severity: P0
+    spec: design 002 §L.2 (rule 2) / OIDC Core §3.1.2.1
+    behaviour: |
+      When the request carries an OIDC ui_locales parameter, the OP
+      MUST honour the first registered locale in the list, ignoring
+      cookie / Accept-Language. The list order is preserved.
+    status: active
+
+  - id: I18N-003
+    severity: P0
+    spec: design 002 §L.2 (rule 3)
+    behaviour: |
+      When the request carries the __Host-oidc_locale cookie and no
+      ui_locales parameter, the OP MUST honour the cookie value
+      ahead of Accept-Language and the default locale.
+    status: active
+
+  - id: I18N-004
+    severity: P0
+    spec: design 002 §L.2 (rule 4)
+    behaviour: |
+      Accept-Language is consulted only when no higher-priority
+      signal matches a registered locale. The OP MUST honour
+      q-value-descending order and fall back to the language
+      sub-tag when the full tag is unregistered (e.g. "ja-JP" hits
+      a registered "ja" bundle).
+    status: active
+
+  - id: I18N-005
+    severity: P0
+    spec: design 002 §L.2 (rule 5)
+    behaviour: |
+      When no signal in the chain matches a registered locale, the
+      OP MUST fall back to op.WithDefaultLocale (or "en" when the
+      option is not supplied). The fall-back is deterministic — the
+      resolver never returns an unregistered tag.
+    status: active
+
+  - id: I18N-010
+    severity: P0
+    spec: design 002 §L.6
+    behaviour: |
+      The interaction prompt envelope MUST carry the OP-resolved
+      locale on the `locale` JSON field so SPAs can select bundles
+      and stamp <html lang> without re-running the chain.
+    status: active
+
+  - id: I18N-011
+    severity: P1
+    spec: design 002 §L.6
+    behaviour: |
+      When the RP supplied a ui_locales parameter, the OP MUST echo
+      the parsed list back to the SPA on `ui_locales_hint` in
+      caller-supplied order so SPAs that override the resolver can
+      consult the RP's hint directly.
+    status: active
+
+  - id: I18N-012
+    severity: P1
+    spec: design 002 §L.6 / OIDC Discovery §3
+    behaviour: |
+      The interaction prompt envelope MUST list every registered
+      locale on `locales_available` so SPAs can build a language
+      picker without re-fetching /.well-known/openid-configuration.
+      The list MUST equal the discovery `ui_locales_supported`
+      value.
+    status: active
+
+  - id: I18N-013
+    severity: P1
+    spec: design 002 §L.6
+    behaviour: |
+      The locale envelope fields (`locale` / `ui_locales_hint` /
+      `locales_available`) MUST be omitted from the wire when the
+      OP was constructed without a resolver, preserving backward
+      compatibility with SPAs that pre-date the fields.
+    status: active
+
+  - id: I18N-020
+    severity: P1
+    spec: design 002 §L.9
+    behaviour: |
+      The cookie write endpoint POST /oidc/session/locale persists
+      the SPA-selected locale into the __Host-oidc_locale cookie
+      (1y MaxAge, Lax, __Host- prefix) so subsequent authorize hits
+      pick it up at chain layer 3.
+    status: pending
+    notes: deferred to follow-up plan; resolver currently reads the cookie but no write endpoint exists.
+
+  - id: I18N-030
+    severity: P1
+    spec: design 002 §L.6
+    behaviour: |
+      The OP serves resolved locale bundle JSON at GET /oidc/i18n/{locale}
+      so SPAs can fetch the same translations the OP would render
+      server-side, avoiding two-tier translation drift.
+    status: pending
+    notes: deferred to follow-up plan; embedder SPAs ship their own bundles in the meantime.
