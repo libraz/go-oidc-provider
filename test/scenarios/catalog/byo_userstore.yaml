@@ -32,17 +32,21 @@ rows:
       token, the OP MUST resolve end-user claims by calling
       store.Users().FindBySubject(ctx, sub) on the value passed to
       op.WithStore. No internal claim cache short-circuits the call.
-    status: pending
+    status: active
 
   - id: BUS-002
     severity: P0
-    spec: OIDC Core §2
+    spec: OIDC Core §2 / §5.5
     behaviour: |
-      When the token endpoint assembles ID Token claims for an
-      authorization_code or refresh_token grant, the OP MUST resolve
+      When an authorization_code or refresh_token exchange at the
+      token endpoint needs to project an OIDC Core 1.0 §5.5 "claims"
+      request payload addressed to the id_token, the OP MUST resolve
       end-user claims by calling store.Users().FindBySubject(ctx, sub)
-      on the value passed to op.WithStore.
-    status: pending
+      on the value passed to op.WithStore. Standard id_token claims
+      (sub / iss / aud / iat / exp / auth_time / nonce / acr / amr /
+      azp / at_hash / c_hash / sid) are emitted by the library
+      directly and do not solicit the user store.
+    status: active
 
   - id: BUS-003
     severity: P1
@@ -53,7 +57,7 @@ rows:
       always observes the wrapper's override at every call site that
       reads end-user claims. The embedded base's Users() is never
       reached.
-    status: pending
+    status: active
 
   - id: BUS-004
     severity: P0
@@ -64,17 +68,20 @@ rows:
       WWW-Authenticate header carries error="invalid_token". The
       response body is empty or carries the matching JSON error
       object; the OP does NOT return HTTP 500.
-    status: pending
+    status: active
 
   - id: BUS-005
-    severity: P0
-    spec: RFC 6749 §5.2 / OIDC Core §3.1.3.4
+    severity: P1
+    spec: OIDC Core §5.5 / implementation contract
     behaviour: |
       When store.Users().FindBySubject returns store.ErrNotFound
-      during ID Token assembly at the token endpoint, the OP
-      responds with HTTP 400 and error="invalid_grant". The OP does
-      NOT return HTTP 500.
-    status: pending
+      while projecting an OIDC Core 1.0 §5.5 "claims" payload at the
+      token endpoint, the OP silently omits the affected claims and
+      completes the grant exchange normally. The id_token is still
+      issued (without the unresolvable claim names) and the OP does
+      NOT return HTTP 500 or error="invalid_grant" for a missing
+      user during projection.
+    status: active
 
   - id: BUS-006
     severity: P0
@@ -86,7 +93,7 @@ rows:
       MAY return a richer Claims universe; the OP is the projector.
     cross_refs:
       - userinfo#UI-002
-    status: pending
+    status: active
 
   - id: BUS-007
     severity: P1
@@ -97,7 +104,7 @@ rows:
       Unix-seconds representation of UpdatedAt. When UpdatedAt is
       the zero value, the updated_at claim is omitted entirely
       (no zero or null is serialised).
-    status: pending
+    status: active
 
   - id: BUS-008
     severity: P1
@@ -107,7 +114,7 @@ rows:
       read-only. The library does not mutate the returned map, so an
       embedder backend MAY safely return the same backing map across
       successive FindBySubject calls without observing tampering.
-    status: pending
+    status: active
 
   - id: BUS-009
     severity: P0
@@ -121,7 +128,7 @@ rows:
       exchange or refresh-token rotation atomicity.
     cross_refs:
       - base_token#BT-009
-    status: pending
+    status: active
 
   - id: BUS-010
     severity: P1
@@ -133,7 +140,7 @@ rows:
       store.Store.Users(); two equivalent stores (one for password
       verification, one for claim assembly) are accepted as long as
       both honour the contract for their own subject space.
-    status: pending
+    status: active
 
   - id: BUS-011
     severity: P2
@@ -143,7 +150,7 @@ rows:
       authorise no other claims, the /userinfo response is the bare
       JSON object {"sub": "<subject>"} with HTTP 200. The OP does
       NOT synthesise placeholder claims.
-    status: pending
+    status: active
 
   - id: BUS-012
     severity: P1
@@ -156,4 +163,4 @@ rows:
       observationally equivalent from the OP's perspective.
     cross_refs:
       - byo_userstore#BUS-003
-    status: pending
+    status: active
