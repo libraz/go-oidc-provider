@@ -290,9 +290,93 @@ func TestScenario_ISS_021_NoneResponseTypeErrorCarriesIss(t *testing.T) {
 	t.Skip("pending: ISS-021")
 }
 
+// TestScenario_ISS_022_JARMErrorQueryCarriesIss checks that an
+// authorize error on a response_mode=jwt request resolves to query
+// delivery (because response_type=code is the only response_type the
+// OP supports), the redirect carries a single "response" query
+// parameter holding the JARM error JWT, and the JWT payload embeds
+// iss / error / state. RFC 9207 §2 requires `iss` on every
+// authorization response — JARM §4.1 dictates that under
+// response_mode=jwt the iss travels as a claim inside the response
+// JWT rather than as a bare query parameter.
+//
+// Spec: RFC 9207 §2 + JARM §4.1.
 func TestScenario_ISS_022_JARMErrorQueryCarriesIss(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ISS-022")
+
+	const (
+		clientID = "rp-iss-022"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-iss-022-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JARM)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		ResponseTypes:           []string{"code"},
+		GrantTypes:              []string{"authorization_code"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		// "billing:write" is outside the client's registered scope set,
+		// so the OP rejects with invalid_scope after redirect_uri has
+		// been validated — exactly the post-redirect-URI error path
+		// RFC 9207 §2 requires `iss` on, and JARM §4.1 requires the
+		// JWT envelope on.
+		Scope: "openid billing:write",
+		PKCE:  pkce,
+		Extra: url.Values{"response_mode": {"jwt"}},
+	})
+
+	if flow.Location == nil {
+		t.Fatal("captured callback Location is nil")
+	}
+	if flow.Location.RawFragment != "" || flow.Location.Fragment != "" {
+		t.Errorf("response_type=code with response_mode=jwt must resolve to query delivery; got fragment=%q in %s",
+			flow.Location.Fragment, flow.Location.String())
+	}
+	if got := flow.Location.Query().Get("iss"); got != "" {
+		t.Errorf("response_mode=jwt must not stamp a bare iss query parameter (iss travels inside the JWT); got %q", got)
+	}
+	if got := flow.Location.Query().Get("error"); got != "" {
+		t.Errorf("response_mode=jwt must not stamp a bare error query parameter (error travels inside the JWT); got %q", got)
+	}
+
+	rawJWT := flow.Location.Query().Get("response")
+	if rawJWT == "" {
+		t.Fatalf("'response' parameter missing from JARM error callback: %s", flow.Location.String())
+	}
+
+	claims := decodeScenarioJWTClaims(t, rawJWT)
+	iss, _ := claims["iss"].(string)
+	if iss == "" {
+		t.Fatalf("iss claim missing from JARM error payload: %v", claims)
+	}
+	if iss != tk.Issuer {
+		t.Errorf("iss=%q want %q", iss, tk.Issuer)
+	}
+	if got, _ := claims["error"].(string); got != "invalid_scope" {
+		t.Errorf("error=%q want invalid_scope (claims=%v)", got, claims)
+	}
+	if got, _ := claims["state"].(string); got != scenariokit.DefaultState {
+		t.Errorf("state=%q want %q", got, scenariokit.DefaultState)
+	}
+	if got := claims["aud"]; got != rp.ID {
+		t.Errorf("aud=%v want %q", got, rp.ID)
+	}
 }
 
 func TestScenario_ISS_023_JARMHybridErrorFragmentCarriesIss(t *testing.T) {

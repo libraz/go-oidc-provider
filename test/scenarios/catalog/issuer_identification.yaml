@@ -155,7 +155,7 @@ rows:
     behaviour: |
       A response_mode=jwt error redirects back with the response
       JWT (which carries iss) as a query parameter.
-    status: pending
+    status: active
 
   - id: ISS-023
     severity: P0
