@@ -1,15 +1,12 @@
 name: conformance
 
 # OFCS (OpenID Foundation Conformance Suite) baseline run.
-# Runs on tag pushes for release sign-off and on manual dispatch for
-# release-candidate spot checks. Never on PR or branch push: OFCS is
-# expensive (~15-30 min) and version-fragile, and the harness is not
-# safe to run twice on the same machine in parallel — see the
-# concurrency block below.
+# Manual dispatch only. OFCS is expensive (~30-45 min), version-fragile,
+# and the harness is not safe to run twice on the same machine in
+# parallel — see the concurrency block below. The pre-tag baseline is
+# captured locally; this workflow exists to reproduce a baseline on a
+# clean runner when an immutable artifact is wanted.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       label:
