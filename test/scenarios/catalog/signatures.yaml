@@ -35,7 +35,8 @@ rows:
       An HS256-signed id_token MUST be accepted as id_token_hint at
       /authorize?prompt=none for the same client; the flow returns
       code + state.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HS256 (and the broader HS* family) is intentionally not supported in v1.0: docs/plans/002-product-design.md §J.5 (line 2248) pins ES256 as the sole issuance alg, and §non-goals (line 2159) excludes the symmetric-key model. Already-OOS rows in this same feature (SIG-001 / SIG-010 / SIG-011 / SIG-012) cite the same product policy. The id_token_hint acceptance path described by SIG-002 has no caller because the OP never issues an HS256 id_token to begin with; if v1.x ever ships symmetric signing, a paired SIG-001 + SIG-002 bind can revisit this."
 
   - id: SIG-010
     severity: P0
@@ -71,7 +72,8 @@ rows:
     behaviour: |
       For EdDSA, at_hash and c_hash are the left 256 bits of SHA-512
       (base64url, 43 chars).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "EdDSA / Ed25519 issuance is intentionally not supported in v1.0: docs/plans/002-product-design.md §J.5 (line 2248) pins ES256 as the sole issuance alg. The hash-claim length rules (left-256 bits of SHA-512 for both EdDSA and Ed25519 id_tokens) only apply when the OP actually mints those id_token shapes; with ES256-only issuance there is no caller. Verification-side acceptance is explicitly wider per line 2255 but that is governed by id_token_hint / userinfo verification rows in other features, not by SIG-013/014's signing-side claims."
 
   - id: SIG-014
     severity: P1
@@ -79,7 +81,8 @@ rows:
     behaviour: |
       For Ed25519, at_hash and c_hash are the left 256 bits of
       SHA-512 (base64url, 43 chars).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "EdDSA / Ed25519 issuance is intentionally not supported in v1.0: docs/plans/002-product-design.md §J.5 (line 2248) pins ES256 as the sole issuance alg. The hash-claim length rules (left-256 bits of SHA-512 for both EdDSA and Ed25519 id_tokens) only apply when the OP actually mints those id_token shapes; with ES256-only issuance there is no caller. Verification-side acceptance is explicitly wider per line 2255 but that is governed by id_token_hint / userinfo verification rows in other features, not by SIG-013/014's signing-side claims."
 
   - id: SIG-015
     severity: P2
@@ -99,7 +102,7 @@ rows:
       The OP signs with the alg from the client's
       id_token_signed_response_alg and selects the matching key from
       the OP keystore (with kid in the JWS header).
-    status: pending
+    status: active
 
   - id: SIG-021
     severity: P1

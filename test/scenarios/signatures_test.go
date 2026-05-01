@@ -8,9 +8,15 @@ package scenarios_test
 //   - RFC 9700 §2 / FAPI 1.0 / FAPI 2.0 (alg policy)
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"strings"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // TestScenario_SIG_022_NoneAlgNotAdvertised verifies that the
@@ -75,9 +81,106 @@ func TestScenario_SIG_014_Ed25519AtHashLength(t *testing.T) {
 	t.Skip("pending: SIG-014")
 }
 
+// TestScenario_SIG_020_AlgFromClientMetadataAndKidInHeader confirms
+// the OIDC Core §3.1.3.7 contract: the id_token returned from /token
+// is a compact JWS whose header's alg matches the client's
+// id_token_signed_response_alg and whose kid identifies which key in
+// the OP keystore signed it. v1.0 issues ES256 only, so we register a
+// client without a custom alg (taking the default) and assert the
+// header carries alg=ES256 and a non-empty kid that matches one of
+// the kids advertised at /jwks.
+//
+// Spec: OIDC Core §3.1.3.7 / RFC 7515.
 func TestScenario_SIG_020_AlgFromClientMetadataAndKidInHeader(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-020")
+
+	const (
+		clientID = "rp-sig-020"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-sig-020-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	if tok.IDToken == "" {
+		t.Fatalf("id_token missing from /token response: %v", tok.Raw)
+	}
+
+	dot := strings.IndexByte(tok.IDToken, '.')
+	if dot <= 0 {
+		t.Fatalf("id_token is not a compact JWS: %q", tok.IDToken)
+	}
+	hdrBytes, err := base64.RawURLEncoding.DecodeString(tok.IDToken[:dot])
+	if err != nil {
+		t.Fatalf("decode JWS header: %v", err)
+	}
+	var hdr map[string]any
+	if err := json.Unmarshal(hdrBytes, &hdr); err != nil {
+		t.Fatalf("unmarshal JWS header: %v (raw=%q)", err, hdrBytes)
+	}
+
+	alg, _ := hdr["alg"].(string)
+	if alg != "ES256" {
+		t.Errorf("id_token JWS header alg=%q, want ES256 (v1.0 issues ES256 only)", alg)
+	}
+	kid, _ := hdr["kid"].(string)
+	if kid == "" {
+		t.Fatalf("id_token JWS header is missing kid; OIDC Core §3.1.3.7 requires the OP to identify the signing key")
+	}
+
+	_, _, jwksDoc := fetchJWKS(t, tk.Server.URL)
+	keys, _ := jwksDoc["keys"].([]any)
+	if len(keys) == 0 {
+		t.Fatalf("/jwks returned no keys: %v", jwksDoc)
+	}
+	matched := false
+	for _, raw := range keys {
+		entry, _ := raw.(map[string]any)
+		if entry == nil {
+			continue
+		}
+		if id, _ := entry["kid"].(string); id == kid {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		t.Errorf("id_token JWS kid=%q not found in /jwks key set %v", kid, keys)
+	}
 }
 
 // TestScenario_SIG_021_AlgValuesAdvertisedInDiscovery verifies that
