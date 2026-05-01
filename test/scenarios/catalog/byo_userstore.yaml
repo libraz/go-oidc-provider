@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=./schema.json
+feature: byo_userstore
+prefix: BUS
+title: Bring-your-own UserStore contract
+specs:
+  - OIDC Core 1.0 §5.3 — UserInfo Endpoint
+  - OIDC Core 1.0 §5.4 — Requesting Claims using Scope Values
+  - OIDC Core 1.0 §2 — ID Token
+  - RFC 6750 §3 — Bearer Token error responses
+  - implementation contract — store.UserStore / store.UserPasswordStore consumed by the OP
+
+description: |
+  Contract the OP guarantees toward an embedder-supplied
+  store.UserStore (or store.UserPasswordStore) that projects an
+  existing user table. The rows pin which call sites the library uses
+  to reach the store, how lookup failures propagate, how the returned
+  User struct flows into UserInfo and ID Token claims, and the
+  transactional-cluster isolation that lets the store be routed
+  independently of authorization-code / refresh-token storage.
+
+  The contract makes the embedding pattern (a wrapper struct that
+  embeds a base store.Store and overrides Users()) and the composite
+  pattern (composite.With(Users, ...)) interchangeable from the OP's
+  perspective.
+
+rows:
+  - id: BUS-001
+    severity: P0
+    spec: OIDC Core §5.3
+    behaviour: |
+      When a request hits the UserInfo endpoint with a valid bearer
+      token, the OP MUST resolve end-user claims by calling
+      store.Users().FindBySubject(ctx, sub) on the value passed to
+      op.WithStore. No internal claim cache short-circuits the call.
+    status: pending
+
+  - id: BUS-002
+    severity: P0
+    spec: OIDC Core §2
+    behaviour: |
+      When the token endpoint assembles ID Token claims for an
+      authorization_code or refresh_token grant, the OP MUST resolve
+      end-user claims by calling store.Users().FindBySubject(ctx, sub)
+      on the value passed to op.WithStore.
+    status: pending
+
+  - id: BUS-003
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      When a wrapper struct embeds a base store.Store implementation
+      and defines its own Users() store.UserStore method, the OP
+      always observes the wrapper's override at every call site that
+      reads end-user claims. The embedded base's Users() is never
+      reached.
+    status: pending
+
+  - id: BUS-004
+    severity: P0
+    spec: RFC 6750 §3.1 / OIDC Core §5.3
+    behaviour: |
+      When store.Users().FindBySubject returns store.ErrNotFound at
+      the UserInfo endpoint, the OP responds with HTTP 401 and the
+      WWW-Authenticate header carries error="invalid_token". The
+      response body is empty or carries the matching JSON error
+      object; the OP does NOT return HTTP 500.
+    status: pending
+
+  - id: BUS-005
+    severity: P0
+    spec: RFC 6749 §5.2 / OIDC Core §3.1.3.4
+    behaviour: |
+      When store.Users().FindBySubject returns store.ErrNotFound
+      during ID Token assembly at the token endpoint, the OP
+      responds with HTTP 400 and error="invalid_grant". The OP does
+      NOT return HTTP 500.
+    status: pending
+
+  - id: BUS-006
+    severity: P0
+    spec: OIDC Core §5.4
+    behaviour: |
+      Claim names returned in User.Claims that are NOT authorised by
+      the granted scopes MUST be filtered out by the OP before they
+      appear in the /userinfo response or the ID Token. Embedders
+      MAY return a richer Claims universe; the OP is the projector.
+    cross_refs:
+      - userinfo#UI-002
+    status: pending
+
+  - id: BUS-007
+    severity: P1
+    spec: OIDC Core §5.1 / §5.4
+    behaviour: |
+      When the granted scopes include "profile" and User.UpdatedAt
+      is non-zero, the OP MUST emit the updated_at claim as the
+      Unix-seconds representation of UpdatedAt. When UpdatedAt is
+      the zero value, the updated_at claim is omitted entirely
+      (no zero or null is serialised).
+    status: pending
+
+  - id: BUS-008
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      The OP treats the User.Claims map returned by the store as
+      read-only. The library does not mutate the returned map, so an
+      embedder backend MAY safely return the same backing map across
+      successive FindBySubject calls without observing tampering.
+    status: pending
+
+  - id: BUS-009
+    severity: P0
+    spec: implementation contract
+    behaviour: |
+      The transactional store.Tx interface does NOT expose a
+      Users() accessor; the OP cannot solicit a UserStore inside a
+      token-endpoint transaction. Consequently embedders MAY route
+      Users to a backend that does not implement
+      store.Transactional without breaking authorization-code
+      exchange or refresh-token rotation atomicity.
+    cross_refs:
+      - base_token#BT-009
+    status: pending
+
+  - id: BUS-010
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      The PrimaryPassword Step receives its store.UserPasswordStore
+      directly via op.PrimaryPassword{Store: ...}. The library does
+      NOT require this value to be the same instance as
+      store.Store.Users(); two equivalent stores (one for password
+      verification, one for claim assembly) are accepted as long as
+      both honour the contract for their own subject space.
+    status: pending
+
+  - id: BUS-011
+    severity: P2
+    spec: OIDC Core §5.3
+    behaviour: |
+      When User.Claims is nil or empty and the granted scopes
+      authorise no other claims, the /userinfo response is the bare
+      JSON object {"sub": "<subject>"} with HTTP 200. The OP does
+      NOT synthesise placeholder claims.
+    status: pending
+
+  - id: BUS-012
+    severity: P1
+    spec: implementation contract
+    behaviour: |
+      When the embedder routes Users via composite.With(Users, b)
+      where b implements store.Store, the OP reads end-user claims
+      from b.Users() at every call site listed in BUS-001 / BUS-002.
+      Composite routing and the embedding-wrapper pattern are
+      observationally equivalent from the OP's perspective.
+    cross_refs:
+      - byo_userstore#BUS-003
+    status: pending
