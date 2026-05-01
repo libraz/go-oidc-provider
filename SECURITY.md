@@ -22,12 +22,13 @@ mitigation timeline within 14 days for confirmed issues.
 
 ## Supported Versions
 
-`go-oidc-provider` is in pre-v1.0 development. Only the latest minor release
-receives security fixes.
+`go-oidc-provider` is in pre-v1.0 development; `v0.9.0` is the initial
+public release. Only the latest minor release receives security fixes
+during the `v0.9.x` series.
 
 | Version | Supported |
 |---------|-----------|
-| v0.x    | latest minor only |
+| v0.9.x  | latest minor only |
 | v1.x    | latest minor + previous minor (planned, post-v1.0) |
 
 ## Disclosure

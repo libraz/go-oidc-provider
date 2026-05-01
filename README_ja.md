@@ -13,20 +13,24 @@ Go 製の OpenID Connect Provider（Authorization Server）ライブラリ。
 > リファレンスはすべて docs サイトに集約。本 README はソースツリーの地図と
 > サンプルインベントリ。
 
-> **ステータス: pre-v1.0。** v1.0.0 までは minor リリースで public API が
-> 変更され得る。タグ付きリリースはまだ存在せず、
-> [`CHANGELOG.md`](CHANGELOG.md) は最初のリリース（`v0.1.0`）以降の変更を
-> トラックする。
+> **ステータス: pre-v1.0。** `v0.9.0` が初の公開リリース。`v1.0.0` までは
+> minor リリースで public API が変更され得る。
+> [`CHANGELOG.md`](CHANGELOG.md) は `v0.9.0` 以降の変更をトラックする。
 
 ## インストール
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@latest
+go get github.com/libraz/go-oidc-provider/op@v0.9.0
 ```
 
 Go 1.23+（`go.mod` の宣言に一致）。DB / Redis ドライバを引き込むストア
 アダプタはサブモジュールとして公開しており、依存は opt-in するまで
-利用者の `go.sum` に入らない。
+利用者の `go.sum` に入らない:
+
+```sh
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
+```
 
 ## クイックスタート
 
@@ -111,57 +115,15 @@ DynamoDB アダプタは v1.x で追加サブモジュールとして予定。�
 
 ## サンプル
 
-すべて `example` build tag の下にあり、`go test ./...` および本番の
-`go.sum` から除外される:
+動作デモは [`examples/`](examples/README.md) 配下にあり、目的別表・番号
+帯・`07-mysql-store` / `09-redis-volatile` の docker スタック手順は
+そちらの index（English）に集約。各行は docs サイトの
+[/ja/use-cases](https://go-oidc-provider.libraz.net/ja/use-cases/) 配下の
+ユースケースページに対応する。
 
 ```sh
 go run -tags example ./examples/01-minimal
 ```
-
-### やりたいこと別
-
-| やりたいこと | 起点 |
-|---|---|
-| 最小構成の OP を立てる | [`01-minimal`](examples/01-minimal/main.go) |
-| 典型的な embedder が触る全オプションを見る | [`02-bundle`](examples/02-bundle/main.go) |
-| FAPI 2.0 Baseline OP を起動（PAR + JAR + DPoP） | [`03-fapi2`](examples/03-fapi2/main.go), [`50-fapi-tls-jwks`](examples/50-fapi-tls-jwks/main.go) |
-| バックエンドサービス向けにトークンを発行（エンドユーザ無し） | [`05-client-credentials`](examples/05-client-credentials/main.go) |
-| OIDC と並んで素の OAuth 2.0 を提供 | [`15-oauth2-only`](examples/15-oauth2-only/main.go) |
-| 実 DB に永続化（SQLite / MySQL） | [`06-sql-store`](examples/06-sql-store/main.go), [`07-mysql-store`](examples/07-mysql-store/main.go) |
-| 揮発状態と耐久状態を hot/cold 分離 | [`08-composite-hot-cold`](examples/08-composite-hot-cold/main.go), [`09-redis-volatile`](examples/09-redis-volatile/main.go) |
-| 既定の HTML driver を JSON に差し替える | [`04-custom-interaction`](examples/04-custom-interaction/main.go) |
-| login / consent / logout を SPA から駆動 | [`10-react-login`](examples/10-react-login/main.go) |
-| consent 画面をカスタマイズ | [`11-custom-consent-ui`](examples/11-custom-consent-ui/main.go) |
-| `prompt=select_account`（マルチアカウント）に対応 | [`13-multi-account`](examples/13-multi-account/main.go) |
-| 別オリジンの SPA を提供（CORS） | [`14-cors-spa`](examples/14-cors-spa/main.go) |
-| プロンプトを多言語化（i18n） | [`16-i18n-locale`](examples/16-i18n-locale/main.go) |
-| public-discoverable と internal-only でスコープを分割 | [`12-scopes-public-private`](examples/12-scopes-public-private/main.go) |
-| OIDC §5.5 の `claims` リクエストパラメータに対応 | [`17-claims-request`](examples/17-claims-request/main.go) |
-| TOTP / リスクベース MFA / captcha / step-up を要求 | [`20-mfa-totp`](examples/20-mfa-totp/main.go), [`21-risk-based-mfa`](examples/21-risk-based-mfa/main.go), [`22-login-captcha`](examples/22-login-captcha/main.go), [`23-step-up`](examples/23-step-up/main.go) |
-| ファーストパーティクライアントの consent をスキップ | [`40-first-party-skip-consent`](examples/40-first-party-skip-consent/main.go) |
-| RP に自己登録させる（Dynamic Client Registration） | [`41-dynamic-registration`](examples/41-dynamic-registration/main.go) |
-| セッション終了を RP に通知（Back-Channel Logout） | [`42-back-channel-logout`](examples/42-back-channel-logout/main.go) |
-| RFC 9449 §8 DPoP nonce フローを動かす | [`51-dpop-nonce`](examples/51-dpop-nonce/main.go) |
-| Prometheus メトリクスを公開 | [`52-prometheus-metrics`](examples/52-prometheus-metrics/main.go) |
-
-各行は docs サイトの
-[/ja/use-cases](https://go-oidc-provider.libraz.net/ja/use-cases/) 配下に
-本番形のユースケースページが対応している。
-
-### 番号体系
-
-example の番号は時系列ではなくトピック分類で、空き帯は in-flight または
-v1.x 向けの予約:
-
-| 帯 | トピック |
-|---|---|
-| 00–09 | ブートストラップ、grant 種別、ストレージアダプタ |
-| 10–19 | UI、スコープ、SPA、ロケール、claims リクエスト、CORS |
-| 20–29 | MFA と認証ルール（TOTP / リスク / captcha / step-up） |
-| 30–39 | アイデンティティ連携（予約 — v1.x） |
-| 40–49 | ガバナンス: first-party、DCR、Back-Channel Logout |
-| 50–59 | 運用: FAPI ヘルパ、メトリクス、トレーシング、DPoP nonce |
-| 60–69 | コンプライアンス（予約 — v1.x 後期） |
 
 ## コミュニティ
 
