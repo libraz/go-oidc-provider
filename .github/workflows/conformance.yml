@@ -1,0 +1,134 @@
+name: conformance
+
+# OFCS (OpenID Foundation Conformance Suite) baseline run.
+# Runs on tag pushes for release sign-off and on manual dispatch for
+# release-candidate spot checks. Never on PR or branch push: OFCS is
+# expensive (~15-30 min) and version-fragile, and the harness is not
+# safe to run twice on the same machine in parallel — see the
+# concurrency block below.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Snapshot label (default: <ref>-<short-sha>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# Single global slot. OFCS containers, op-demo listeners and the
+# conformance/ working tree are shared state on the runner; running
+# two baselines at once corrupts both. Queue rather than cancel so
+# in-flight tag runs always complete.
+concurrency:
+  group: conformance
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  baseline:
+    name: OFCS baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so committed baselines are present and
+          # `git ls-files` finds them for the diff step.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/scenariotool/go.sum
+
+      - name: Set snapshot label
+        id: label
+        env:
+          INPUT_LABEL: ${{ inputs.label }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_LABEL" ]; then
+            raw="$INPUT_LABEL"
+          else
+            raw="${REF_NAME:-manual}-${SHA:0:8}"
+          fi
+          # Slug-safe: keep [A-Za-z0-9._-], collapse runs of '-'.
+          safe=$(printf '%s' "$raw" | tr -c 'A-Za-z0-9._-' '-' | sed 's/--*/-/g; s/^-//; s/-$//')
+          echo "label=$safe" >> "$GITHUB_OUTPUT"
+          echo "[label] using $safe"
+
+      - name: Pre-pull OFCS images
+        # Pull as a discrete step so a registry hiccup surfaces here
+        # instead of as a `make conformance-up` timeout.
+        run: docker compose -f conformance/docker-compose.yml pull
+
+      - name: Bring up OFCS + op-demo + seed plans
+        run: make conformance-up
+
+      - name: Run baseline
+        env:
+          LABEL: ${{ steps.label.outputs.label }}
+        run: |
+          set -euo pipefail
+          echo "[prev committed baselines]"
+          git ls-files 'conformance/baselines/*.json' | sort | tail -3 | sed 's/^/  /'
+
+          make conformance-baseline LABEL="$LABEL"
+
+          new=$(ls -1 conformance/baselines/*-"$LABEL".json | tail -n 1)
+          echo "BASELINE_NEW=$new" >> "$GITHUB_ENV"
+          echo "[new] $new"
+
+      - name: Diff against last committed baseline
+        # The new baseline is uncommitted; `git ls-files` lists only
+        # committed snapshots. Compare against the most recent of those
+        # — that file represents the last human-reviewed state.
+        run: |
+          set -euo pipefail
+          new="$BASELINE_NEW"
+          prev=$(git ls-files 'conformance/baselines/*.json' | sort | tail -n 1 || true)
+          if [ -z "$prev" ]; then
+            echo "::warning::no committed baseline found; skipping diff"
+            exit 0
+          fi
+          echo "[diff] old=$prev"
+          echo "[diff] new=$new"
+          make conformance-baseline-diff BASELINE_OLD="$prev" BASELINE_NEW="$new"
+
+      - name: Collect Docker logs
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p ofcs-logs
+          for svc in server nginx mongodb; do
+            docker compose -f conformance/docker-compose.yml \
+              logs --no-color "$svc" > "ofcs-logs/$svc.log" 2>&1 || true
+          done
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofcs-baseline-${{ steps.label.outputs.label }}
+          path: |
+            conformance/baselines/*.json
+            conformance/op-demo.log
+            conformance/render/
+            ofcs-logs/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Tear down
+        if: always()
+        run: make conformance-down || true
