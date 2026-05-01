@@ -1,17 +1,22 @@
 # go-oidc-provider
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/libraz/go-oidc-provider/ci.yml?branch=main&label=CI)](https://github.com/libraz/go-oidc-provider/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/libraz/go-oidc-provider/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/go-oidc-provider)
+[![Release](https://img.shields.io/github/v/release/libraz/go-oidc-provider?include_prereleases&sort=semver&display_name=tag&label=release)](https://github.com/libraz/go-oidc-provider/releases)
 [![Go Reference](https://pkg.go.dev/badge/github.com/libraz/go-oidc-provider/op.svg)](https://pkg.go.dev/github.com/libraz/go-oidc-provider/op)
+[![Go Report Card](https://goreportcard.com/badge/github.com/libraz/go-oidc-provider)](https://goreportcard.com/report/github.com/libraz/go-oidc-provider)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-libraz.net-blue?logo=readthedocs&logoColor=white)](https://go-oidc-provider.libraz.net)
 
 OpenID Connect Provider (Authorization Server) library for Go. `op.New(...)`
 returns a standard `http.Handler` you mount on `net/http`, `chi`, `gin`, or any
 router — no framework lock-in, no global state. Targets FAPI 2.0 Baseline /
 Message Signing.
 
-> **Documentation:** [go-oidc-provider.libraz.net](https://go-oidc-provider.libraz.net)
-> — concepts, use cases, security posture, conformance results, and the full
-> options reference live there. This README is the source-tree map and the
-> example inventory.
+> 📘 **[Documentation site](https://go-oidc-provider.libraz.net)** — concepts,
+> use cases, security posture, conformance scoreboard, and the full options
+> reference live there. This README is the source-tree map and example
+> inventory.
 
 > **Status: pre-v1.0.** `v0.9.0` is the initial public release; the public API
 > may change in any minor release until `v1.0.0`.
@@ -93,9 +98,9 @@ Practices (RFC 9700); PKCE (RFC 7636), DPoP (RFC 9449), PAR (RFC 9126), JAR
 (RFC 9101), JARM, mTLS (RFC 8705); FAPI 2.0 Baseline / Message Signing.
 
 Each release is regressed against the OpenID Foundation conformance suite —
-the live scoreboard is on
-[the docs site](https://go-oidc-provider.libraz.net/compliance/ofcs). A
-per-RFC matrix is at
+the live scoreboard is on the
+[conformance results page](https://go-oidc-provider.libraz.net/compliance/ofcs).
+A per-RFC matrix is at
 [Compliance — RFC matrix](https://go-oidc-provider.libraz.net/compliance/rfc-matrix).
 
 ## Storage
@@ -119,7 +124,7 @@ Runnable demos live under [`examples/`](examples/README.md) — see that index
 for the full goal-oriented table, the numeric topic bands, and the docker
 stacks shipped with `07-mysql-store` and `09-redis-volatile`. Each row also
 maps to a use-case page on the docs site under
-[/use-cases](https://go-oidc-provider.libraz.net/use-cases/).
+[Use cases](https://go-oidc-provider.libraz.net/use-cases/).
 
 ```sh
 go run -tags example ./examples/01-minimal
