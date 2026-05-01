@@ -27,6 +27,7 @@ rows:
       Discovery's subject_types_supported MUST enumerate every
       identifier type the implementation actually supports
       (including at least public).
+    status: active
 
   - id: PW-02
     severity: P0
@@ -34,6 +35,7 @@ rows:
     behaviour: |
       When client metadata omits subject_type, the OP falls back to
       its default (public).
+    status: active
 
   - id: PW-03
     severity: P0
@@ -42,6 +44,7 @@ rows:
       A client requesting subject_type=pairwise registration is
       rejected with a metadata error when the OP's pairwise feature
       is disabled.
+    status: active
 
   - id: PW-04
     severity: P0
@@ -49,6 +52,7 @@ rows:
     behaviour: |
       When the OP does not implement pairwise at all, registering
       subject_type=pairwise yields invalid_client_metadata.
+    status: active
 
   - id: PW-10
     severity: P0

@@ -8,26 +8,197 @@ package scenarios_test
 //   - OIDC Device Authorization 1.0 §6
 //   - RFC 7662 — OAuth 2.0 Token Introspection
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"slices"
+	"strings"
+	"testing"
 
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/testkit"
+)
+
+// postPairwiseRegistration drives the public /oidc/register endpoint for
+// the PW-02..PW-04 rows. The helper centralises the IAT issuance, JSON
+// body marshalling, bearer header, and response decoding so the
+// per-row tests can focus on the assertion that distinguishes them.
+// Returns the HTTP status code and decoded response body (which may be
+// either a successful client-information response or an error envelope
+// per RFC 7591 §3.2).
+func postPairwiseRegistration(tb testing.TB, tk *testkit.Provider, body map[string]any) (int, map[string]any) {
+	tb.Helper()
+
+	issued, err := tk.OP.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		tb.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+
+	raw, err := json.Marshal(body)
+	if err != nil {
+		tb.Fatalf("marshal body: %v", err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/register", bytes.NewReader(raw))
+	if err != nil {
+		tb.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issued.Value)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		tb.Fatalf("POST /oidc/register: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		tb.Fatalf("read body: %v", err)
+	}
+	var decoded map[string]any
+	if len(bytes.TrimSpace(respBytes)) > 0 {
+		if err := json.Unmarshal(respBytes, &decoded); err != nil {
+			tb.Fatalf("body is not JSON: %v (raw=%q)", err, string(respBytes))
+		}
+	}
+	return resp.StatusCode, decoded
+}
+
+// TestScenario_PW_01_DiscoveryEnumeratesSupportedTypes asserts that the
+// OP's discovery document advertises the exact set of subject identifier
+// types it implements. With pairwise pinned OFF in v1.0
+// (PairwiseEnabled=false; no public WithPairwiseSubject option ships)
+// the published list MUST be exactly ["public"]. Advertising "pairwise"
+// here without serving it would mislead RPs into requesting a
+// subject_type the OP cannot honour.
+//
+// Spec: OIDC Core 1.0 §8 (subject_types_supported is REQUIRED metadata).
 func TestScenario_PW_01_DiscoveryEnumeratesSupportedTypes(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-01")
+
+	p := testkit.NewProvider(t)
+
+	_, _, doc := fetchDiscovery(t, p.Server.URL)
+
+	raw, ok := doc["subject_types_supported"].([]any)
+	if !ok {
+		t.Fatalf("subject_types_supported missing or wrong type: %T", doc["subject_types_supported"])
+	}
+	got := make([]string, 0, len(raw))
+	for i, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("subject_types_supported[%d]=%v not a string", i, v)
+		}
+		got = append(got, s)
+	}
+	slices.Sort(got)
+	want := []string{"public"}
+	if !slices.Equal(got, want) {
+		t.Errorf("subject_types_supported=%v want %v (pairwise is OFF in v1.0)", got, want)
+	}
 }
 
+// TestScenario_PW_02_MissingSubjectTypeFallsBackToPublic drives the
+// public /oidc/register endpoint with a metadata payload that omits
+// subject_type and asserts the success response echoes
+// "subject_type": "public" — the OP's documented default. Verified on
+// the wire (registration response body) so the assertion covers the
+// public surface rather than internal fields.
+//
+// Spec: OIDC Core 1.0 §8 / OIDC Dynamic Client Registration 1.0 §2
+// (subject_type is OPTIONAL; omitted means the OP's default).
 func TestScenario_PW_02_MissingSubjectTypeFallsBackToPublic(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-02")
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+	)
+
+	body := map[string]any{
+		"redirect_uris": []string{"https://rp.example.com/cb"},
+		// subject_type intentionally omitted.
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusCreated {
+		t.Fatalf("status=%d want 201 body=%v", status, resp)
+	}
+	got, _ := resp["subject_type"].(string)
+	if got != "public" {
+		t.Errorf("subject_type=%q want %q (default when omitted)", got, "public")
+	}
 }
 
+// TestScenario_PW_03_PairwiseRequestRejectedWhenFeatureOff drives the
+// public /oidc/register endpoint with subject_type=pairwise against an
+// OP whose pairwise feature is disabled (the v1.0 default; no public
+// WithPairwiseSubject option ships). The OP MUST refuse the
+// registration with 400 invalid_client_metadata so the RP cannot
+// silently receive a public sub when it asked for a pairwise one. The
+// internal validator (validateSubjectType) phrases this as
+// "subject_type pairwise requires WithPairwiseSubject"; this test asserts
+// only the wire-stable error code and that the description names the
+// offending field.
+//
+// Spec: OIDC Core 1.0 §8 / RFC 7591 §3.2.2 (invalid_client_metadata).
 func TestScenario_PW_03_PairwiseRequestRejectedWhenFeatureOff(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-03")
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+	)
+
+	body := map[string]any{
+		"redirect_uris": []string{"https://rp.example.com/cb"},
+		"subject_type":  "pairwise",
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, resp)
+	}
+	if got, _ := resp["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata (body=%v)", got, resp)
+	}
+	desc, _ := resp["error_description"].(string)
+	if !strings.Contains(desc, "subject_type") {
+		t.Errorf("error_description=%q must name the subject_type field", desc)
+	}
 }
 
+// TestScenario_PW_04_PairwiseUnimplementedRejectsRegistration captures
+// the framing of OIDC Dynamic Client Registration 1.0 §2 from the
+// perspective of an OP that does not implement pairwise at all (as
+// opposed to PW-03's "feature is wired but disabled at this OP"
+// framing). On v1.0 of this Go OP the two collapse to the same wire
+// behaviour because no implementation path for pairwise ships, but
+// keeping the row separate preserves the catalog's spec-level
+// distinction so a future minor that implements pairwise still has a
+// dedicated test for the "implementation absent" case.
+//
+// Spec: OIDC Dynamic Client Registration 1.0 §2 (subject_type values
+// the OP does not support yield invalid_client_metadata).
 func TestScenario_PW_04_PairwiseUnimplementedRejectsRegistration(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PW-04")
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(op.WithDynamicRegistration(op.RegistrationOption{})),
+	)
+
+	body := map[string]any{
+		"redirect_uris": []string{"https://rp.example.com/cb"},
+		"subject_type":  "pairwise",
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, resp)
+	}
+	if got, _ := resp["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata (body=%v)", got, resp)
+	}
 }
 
 func TestScenario_PW_10_SingleHostRedirectURIsAdoptHostAsSector(t *testing.T) {
