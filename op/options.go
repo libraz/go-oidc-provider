@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"html/template"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -2082,71 +2083,75 @@ func WithDiscoveryMetadata(meta DiscoveryMetadata) Option {
 				Description: "WithDiscoveryMetadata was supplied more than once",
 			}
 		}
-		denied := opControlledKeySet()
-		// Reject the four named fields appearing under Extra; they
-		// already have typed slots on DiscoveryMetadata and a duplicate
-		// here would create two sources of truth.
-		for key := range meta.Extra {
-			if key == "" {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithDiscoveryMetadata: Extra contains an empty key",
-				}
-			}
-			if _, blocked := denied[key]; blocked {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithDiscoveryMetadata: Extra key " + key + " collides with an OP-controlled discovery field",
-				}
-			}
+		if err := validateDiscoveryMetadataExtra(meta.Extra); err != nil {
+			return err
 		}
-		c.discoveryMetadata = DiscoveryMetadata{
-			ServiceDocumentation: meta.ServiceDocumentation,
-			OPPolicyURI:          meta.OPPolicyURI,
-			OPTermsOfServiceURI:  meta.OPTermsOfServiceURI,
-			UILocalesSupported:   slices.Clone(meta.UILocalesSupported),
-		}
-		if len(meta.MTLSEndpointAliases) > 0 {
-			c.discoveryMetadata.MTLSEndpointAliases = make(map[string]string,
-				len(meta.MTLSEndpointAliases))
-			for k, v := range meta.MTLSEndpointAliases {
-				c.discoveryMetadata.MTLSEndpointAliases[k] = v
-			}
-		}
-		if len(meta.Extra) > 0 {
-			c.discoveryMetadata.Extra = make(map[string]any, len(meta.Extra))
-			for k, v := range meta.Extra {
-				c.discoveryMetadata.Extra[k] = v
-			}
-		}
+		c.discoveryMetadata = cloneDiscoveryMetadata(meta)
 		c.discoveryMetadataSet = true
 		return nil
 	})
 }
 
-// opControlledKeySet returns the set of discovery JSON keys the OP
-// itself populates. The set is computed once from
-// [discovery.OPControlledFieldNames] and cached on the package so the
-// override-deny check on every [WithDiscoveryMetadata] call is O(1)
-// per Extra key.
-func opControlledKeySet() map[string]struct{} {
-	if opControlledKeyCache != nil {
-		return opControlledKeyCache
+// validateDiscoveryMetadataExtra rejects empty Extra keys and any key
+// that collides with an OP-controlled discovery field. The four named
+// fields appearing under Extra are blocked because they already have
+// typed slots on [DiscoveryMetadata]; a duplicate would create two
+// sources of truth.
+func validateDiscoveryMetadataExtra(extra map[string]any) error {
+	if len(extra) == 0 {
+		return nil
 	}
+	denied := opControlledKeySet()
+	for key := range extra {
+		if key == "" {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDiscoveryMetadata: Extra contains an empty key",
+			}
+		}
+		if _, blocked := denied[key]; blocked {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDiscoveryMetadata: Extra key " + key + " collides with an OP-controlled discovery field",
+			}
+		}
+	}
+	return nil
+}
+
+// cloneDiscoveryMetadata copies meta into a fresh [DiscoveryMetadata]
+// so the option does not retain a reference to the embedder's slices /
+// maps. The maps are cloned only when populated to keep the wire shape
+// (omitempty) stable across nil and empty inputs.
+func cloneDiscoveryMetadata(meta DiscoveryMetadata) DiscoveryMetadata {
+	out := DiscoveryMetadata{
+		ServiceDocumentation: meta.ServiceDocumentation,
+		OPPolicyURI:          meta.OPPolicyURI,
+		OPTermsOfServiceURI:  meta.OPTermsOfServiceURI,
+		UILocalesSupported:   slices.Clone(meta.UILocalesSupported),
+	}
+	if len(meta.MTLSEndpointAliases) > 0 {
+		out.MTLSEndpointAliases = maps.Clone(meta.MTLSEndpointAliases)
+	}
+	if len(meta.Extra) > 0 {
+		out.Extra = maps.Clone(meta.Extra)
+	}
+	return out
+}
+
+// opControlledKeySet returns the set of discovery JSON keys the OP
+// itself populates. The set is recomputed on every call from
+// [discovery.OPControlledFieldNames]; the override-deny check runs only
+// at op.New construction time, so the per-call cost is negligible and
+// a package-level cache is unnecessary.
+func opControlledKeySet() map[string]struct{} {
 	names := discovery.OPControlledFieldNames()
 	out := make(map[string]struct{}, len(names))
 	for _, n := range names {
 		out[n] = struct{}{}
 	}
-	opControlledKeyCache = out
 	return out
 }
-
-// opControlledKeyCache caches the [opControlledKeySet] result. The
-// cache is safe under concurrent reads because the slice returned by
-// [discovery.OPControlledFieldNames] is computed at package init and
-// never mutated; the first option-application wins the cache write.
-var opControlledKeyCache map[string]struct{}
 
 // WithOpenIDScopeOptional lifts the OpenID Connect Core 1.0 §3.1.2.1
 // requirement that every authorization request include the "openid"

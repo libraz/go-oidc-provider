@@ -3,6 +3,7 @@ package discovery
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"reflect"
@@ -231,7 +232,36 @@ func isLoopbackHost(host string) bool {
 // wiring runs the validator in [op.New] so a misconfigured issuer
 // surfaces at construction time, not the first /.well-known fetch.
 func Build(in Input) Document {
-	doc := Document{
+	doc := newBaseDocument(in)
+	applyFeatureEndpoints(in, &doc)
+	applyJARFeature(in, &doc)
+	applyDPoPFeature(in, &doc)
+	applyMTLSFeature(in, &doc)
+	applyProfileNarrowing(in, &doc)
+	applyDynamicRegistration(in, &doc)
+	applyJARMFeature(in, &doc)
+	applyEndpointAuthMirrors(in, &doc)
+	// RFC 9207: every authorization response (success and error)
+	// carries an "iss" parameter set to the OP's issuer. The library
+	// emits it unconditionally — it is defense-in-depth against
+	// mix-up attacks and is mandated by FAPI 2.0 §5.3.2.2.
+	doc.AuthorizationResponseIssParameterSupported = true
+	// OIDC Core 1.0 §5.5: advertise "claims" support when the OP has
+	// not opted out. The library default is true (the parser is
+	// always wired); op.WithClaimsParameterSupported(false) flips
+	// this to false so the field is dropped from the wire and the
+	// authorize / par parsers ignore the parameter.
+	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
+	applyClaimsSupported(in, &doc)
+	applyStaticMetadata(in, &doc)
+	return doc
+}
+
+// newBaseDocument seeds the document with the fields that do not depend
+// on feature toggles. Subsequent helpers layer feature-conditional
+// fields on top.
+func newBaseDocument(in Input) Document {
+	return Document{
 		Issuer:                            in.Issuer,
 		AuthorizationEndpoint:             join(in.Issuer, in.MountPrefix, in.Endpoints.Authorize),
 		TokenEndpoint:                     join(in.Issuer, in.MountPrefix, in.Endpoints.Token),
@@ -248,6 +278,13 @@ func Build(in Input) Document {
 		BackchannelLogoutSupported:        true,
 		BackchannelLogoutSessionSupported: true,
 	}
+}
+
+// applyFeatureEndpoints publishes the per-feature endpoint URLs
+// (PAR / introspection / revocation). Each URL is gated on its feature
+// flag so a deployment that does not advertise the feature keeps the
+// field absent from the wire.
+func applyFeatureEndpoints(in Input, doc *Document) {
 	if in.Features.PAR {
 		doc.PushedAuthorizationRequestEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.PAR)
 	}
@@ -257,92 +294,123 @@ func Build(in Input) Document {
 	if in.Features.Revoke {
 		doc.RevocationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Revoke)
 	}
-	if in.Features.JAR {
-		doc.RequestParameterSupported = true
-		doc.RequestURIParameterSupported = true
-		// RFC 9101 §5.2.2 leaves the registration policy to the OP;
-		// the library is strict (FAPI 2.0 Message Signing posture)
-		// and refuses any request_uri the client has not preregistered.
-		doc.RequireRequestURIRegistration = true
-		// RFC 9101 §10.1: advertise the JWS alg values the verifier
-		// accepts on request objects. The list mirrors the project-
-		// wide allow-list ([internal/jose]); operators that want to
-		// pin a narrower set per-client use
-		// [op/store.Client.RequestObjectSigningAlg].
-		doc.RequestObjectSigningAlgValuesSupported = []string{
-			"RS256", "PS256", "ES256", "EdDSA",
-		}
+}
+
+// applyJARFeature publishes the RFC 9101 request-object metadata when
+// JAR is enabled.
+func applyJARFeature(in Input, doc *Document) {
+	if !in.Features.JAR {
+		return
 	}
-	if in.Features.DPoP {
-		// RFC 9449 §5.1: emit the alg values the OP accepts on
-		// proof JWTs. The list mirrors [internal/dpop] allowed
-		// algorithms; ES256 / EdDSA / PS256 covers FAPI 2.0
-		// baseline plus the FAPI-recommended RSA-PSS scheme.
-		doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA", "PS256"}
+	doc.RequestParameterSupported = true
+	doc.RequestURIParameterSupported = true
+	// RFC 9101 §5.2.2 leaves the registration policy to the OP;
+	// the library is strict (FAPI 2.0 Message Signing posture)
+	// and refuses any request_uri the client has not preregistered.
+	doc.RequireRequestURIRegistration = true
+	// RFC 9101 §10.1: advertise the JWS alg values the verifier
+	// accepts on request objects. The list mirrors the project-
+	// wide allow-list ([internal/jose]); operators that want to
+	// pin a narrower set per-client use
+	// [op/store.Client.RequestObjectSigningAlg].
+	doc.RequestObjectSigningAlgValuesSupported = []string{
+		"RS256", "PS256", "ES256", "EdDSA",
 	}
-	if in.Features.MTLS {
-		// RFC 8705 §3.3: the OP signals that it issues
-		// certificate-bound access tokens. The flag covers both
-		// the §2 client-authentication path and the §3 binding
-		// path; clients use it to decide whether to present a
-		// certificate at /token in the first place.
-		doc.TLSClientCertificateBoundAccessTokens = true
-		// Append the §2 auth methods so a client can discover
-		// whether tls_client_auth / self_signed_tls_client_auth
-		// are accepted at /token without trial-and-error.
-		doc.TokenEndpointAuthMethodsSupported = appendUnique(
-			doc.TokenEndpointAuthMethodsSupported,
-			"tls_client_auth",
-			"self_signed_tls_client_auth",
-		)
-		// RFC 8705 §5: an OP that serves separate hostnames for its
-		// mTLS-required endpoints publishes the alternative URLs
-		// here. The field is published only when the embedder
-		// supplied at least one alias; an MTLS-enabled deployment
-		// that fronts a single hostname keeps this absent (the
-		// canonical *_endpoint values are already mTLS-capable).
-		if len(in.Metadata.MTLSEndpointAliases) > 0 {
-			doc.MTLSEndpointAliases = make(map[string]string,
-				len(in.Metadata.MTLSEndpointAliases))
-			for k, v := range in.Metadata.MTLSEndpointAliases {
-				doc.MTLSEndpointAliases[k] = v
-			}
-		}
+}
+
+// applyDPoPFeature publishes the RFC 9449 §5.1 alg list when DPoP is
+// enabled. ES256 / EdDSA / PS256 covers FAPI 2.0 baseline plus the
+// FAPI-recommended RSA-PSS scheme.
+func applyDPoPFeature(in Input, doc *Document) {
+	if !in.Features.DPoP {
+		return
 	}
-	// FAPI 2.0 §3.1.3 narrowing: when an active profile constrains the
-	// token-endpoint auth methods, intersect the advertised list with
-	// the profile's allow-list before downstream fields (introspect /
-	// revoke) take their copy. Filtering here keeps the three lists in
-	// lock-step under a single toggle.
-	if len(in.ProfileAllowedAuthMethods) > 0 {
-		doc.TokenEndpointAuthMethodsSupported = intersect(
-			doc.TokenEndpointAuthMethodsSupported,
-			in.ProfileAllowedAuthMethods,
-		)
+	doc.DPoPSigningAlgValuesSupported = []string{"ES256", "EdDSA", "PS256"}
+}
+
+// applyMTLSFeature publishes the RFC 8705 binding signal, the §2 auth
+// methods, and (when supplied) the §5 endpoint aliases. Aliases stay
+// absent when MTLS itself is disabled even if the embedder pre-staged
+// the option, so a feature toggle never leaks the alias map.
+func applyMTLSFeature(in Input, doc *Document) {
+	if !in.Features.MTLS {
+		return
 	}
-	if in.Features.DynamicRegistration {
-		doc.RegistrationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Register)
-		doc.RegistrationEndpointAuthMethodsSupported = []string{"initial_access_token"}
+	// RFC 8705 §3.3: the OP signals that it issues certificate-bound
+	// access tokens. The flag covers both the §2 client-authentication
+	// path and the §3 binding path; clients use it to decide whether
+	// to present a certificate at /token in the first place.
+	doc.TLSClientCertificateBoundAccessTokens = true
+	// Append the §2 auth methods so a client can discover whether
+	// tls_client_auth / self_signed_tls_client_auth are accepted at
+	// /token without trial-and-error.
+	doc.TokenEndpointAuthMethodsSupported = appendUnique(
+		doc.TokenEndpointAuthMethodsSupported,
+		"tls_client_auth",
+		"self_signed_tls_client_auth",
+	)
+	// RFC 8705 §5: an OP that serves separate hostnames for its
+	// mTLS-required endpoints publishes the alternative URLs here.
+	// The field is published only when the embedder supplied at least
+	// one alias; an MTLS-enabled deployment that fronts a single
+	// hostname keeps this absent (the canonical *_endpoint values are
+	// already mTLS-capable).
+	if len(in.Metadata.MTLSEndpointAliases) > 0 {
+		doc.MTLSEndpointAliases = maps.Clone(in.Metadata.MTLSEndpointAliases)
 	}
-	if in.Features.JARM {
-		// JARM (OpenID FAPI WG): advertise the four *.jwt response
-		// modes alongside the legacy "query" / "form_post" so clients
-		// can discover the protection without trial-and-error.
-		doc.ResponseModesSupported = []string{
-			"query", "form_post",
-			"query.jwt", "fragment.jwt", "form_post.jwt", "jwt",
-		}
-		// v1.0 signs with ES256 only; keep the field single-valued so
-		// embedders that grow the algorithm list see a stable shape.
-		doc.AuthorizationSigningAlgValuesSupported = []string{"ES256"}
+}
+
+// applyProfileNarrowing intersects the token-endpoint auth methods
+// against the active profile's allow-list (FAPI 2.0 §3.1.3). The
+// narrowing runs before the introspect / revoke mirrors so a single
+// toggle keeps the three lists in lock-step.
+func applyProfileNarrowing(in Input, doc *Document) {
+	if len(in.ProfileAllowedAuthMethods) == 0 {
+		return
 	}
-	// RFC 8414 §2: the introspection endpoint advertises its client
-	// authentication methods separately from the token endpoint. v1.0
-	// reuses the same client-auth machinery at both, so the list
-	// mirrors token_endpoint_auth_methods_supported. The copy happens
-	// AFTER every feature-driven extension (mTLS appends
-	// tls_client_auth / self_signed_tls_client_auth above) so the two
-	// fields stay in lock-step on a single toggle of either feature.
+	doc.TokenEndpointAuthMethodsSupported = intersect(
+		doc.TokenEndpointAuthMethodsSupported,
+		in.ProfileAllowedAuthMethods,
+	)
+}
+
+// applyDynamicRegistration publishes the registration endpoint and the
+// initial-access-token auth method when RFC 7591 dynamic registration
+// is enabled.
+func applyDynamicRegistration(in Input, doc *Document) {
+	if !in.Features.DynamicRegistration {
+		return
+	}
+	doc.RegistrationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Register)
+	doc.RegistrationEndpointAuthMethodsSupported = []string{"initial_access_token"}
+}
+
+// applyJARMFeature publishes the four *.jwt response modes plus the
+// signing-alg list (ES256 only, mirroring the rest of the OP's posture)
+// when JARM is enabled.
+func applyJARMFeature(in Input, doc *Document) {
+	if !in.Features.JARM {
+		return
+	}
+	// JARM (OpenID FAPI WG): advertise the four *.jwt response modes
+	// alongside the legacy "query" / "form_post" so clients can
+	// discover the protection without trial-and-error.
+	doc.ResponseModesSupported = []string{
+		"query", "form_post",
+		"query.jwt", "fragment.jwt", "form_post.jwt", "jwt",
+	}
+	// v1.0 signs with ES256 only; keep the field single-valued so
+	// embedders that grow the algorithm list see a stable shape.
+	doc.AuthorizationSigningAlgValuesSupported = []string{"ES256"}
+}
+
+// applyEndpointAuthMirrors copies the token-endpoint auth methods onto
+// the introspection / revocation endpoints (RFC 8414 §2) and emits the
+// assertion-bearing alg list (FAPI 2.0 §5.4 / OIDC Core §9) when one of
+// those methods survives profile narrowing. The mirrors run AFTER every
+// feature-driven extension so a single toggle of either feature keeps
+// the lists in lock-step.
+func applyEndpointAuthMirrors(in Input, doc *Document) {
 	if in.Features.Introspect {
 		doc.IntrospectionEndpointAuthMethodsSupported = append([]string(nil),
 			doc.TokenEndpointAuthMethodsSupported...)
@@ -352,61 +420,36 @@ func Build(in Input) Document {
 		// signing key is shared.
 		doc.IntrospectionSigningAlgValuesSupported = []string{"ES256"}
 	}
-	// RFC 8414 §2: the revocation endpoint advertises its client
-	// authentication methods separately from the token endpoint. v1.0
-	// reuses the same client-auth machinery at both, so the list
-	// mirrors token_endpoint_auth_methods_supported. The copy happens
-	// AFTER every feature-driven extension so the two fields stay in
-	// lock-step on a single toggle of either feature.
 	if in.Features.Revoke {
 		doc.RevocationEndpointAuthMethodsSupported = append([]string(nil),
 			doc.TokenEndpointAuthMethodsSupported...)
 	}
-	// FAPI 2.0 §5.4 / OIDC Core 1.0 §9: when the OP advertises an
-	// assertion-bearing client authentication method (private_key_jwt
-	// or client_secret_jwt) at /token, it MUST advertise the JWS alg
-	// values it accepts on the assertion. v1.0 enforces the same
-	// allow-list as the JAR / private_key_jwt verifier
-	// ([internal/jose] + [internal/clientauth]), so the field's
-	// content mirrors the request-object alg list that already gates
-	// JAR. Emit the field whenever an assertion-bearing method made
-	// it through the post-profile filter above.
 	if containsAssertionBearingMethod(doc.TokenEndpointAuthMethodsSupported) {
 		doc.TokenEndpointAuthSigningAlgValuesSupported = []string{
 			"RS256", "PS256", "ES256", "EdDSA",
 		}
 	}
-	// RFC 9207: every authorization response (success and error)
-	// carries an "iss" parameter set to the OP's issuer. The library
-	// emits it unconditionally — it is defense-in-depth against
-	// mix-up attacks and is mandated by FAPI 2.0 §5.3.2.2.
-	doc.AuthorizationResponseIssParameterSupported = true
-	// OIDC Core 1.0 §5.5: advertise "claims" support when the OP has
-	// not opted out. The library default is true (the parser is
-	// always wired); op.WithClaimsParameterSupported(false) flips
-	// this to false so the field is dropped from the wire and the
-	// authorize / par parsers ignore the parameter.
-	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
-	// OIDC Discovery 1.0 §3: claims_supported is RECOMMENDED. The
-	// library does not enumerate the standard claim universe by
-	// default because what an embedder actually emits depends on the
-	// user store; op.WithClaimsSupported(...) lets the embedder
-	// publish the closed list. Nil keeps the field omitted (the
-	// json:"omitempty" tag covers both nil and empty), so a
-	// configuration that has not opted in keeps the legacy wire shape.
-	if in.ClaimsSupported != nil {
-		// Use slices.Clone so a non-nil empty slice round-trips as
-		// a non-nil empty slice (an embedder who explicitly opted in
-		// with an empty list keeps that signal); the omitempty JSON
-		// tag drops both shapes from the wire identically.
-		doc.ClaimsSupported = slices.Clone(in.ClaimsSupported)
+}
+
+// applyClaimsSupported copies the embedder-supplied claims_supported
+// list onto the document. Nil keeps the field omitted (the json
+// omitempty tag covers both nil and empty slices) so the legacy wire
+// shape is preserved when the option is not set; a non-nil empty slice
+// round-trips as a non-nil empty slice through slices.Clone.
+func applyClaimsSupported(in Input, doc *Document) {
+	if in.ClaimsSupported == nil {
+		return
 	}
-	// RFC 8414 §2: copy the static metadata the embedder supplied
-	// through op.WithDiscoveryMetadata. The op layer has already
-	// rejected any Metadata.Extra key that collides with an
-	// OP-controlled field name, so the builder copies values
-	// verbatim. Empty strings and nil/empty slices stay omitted by
-	// virtue of the json:",omitempty" tag.
+	doc.ClaimsSupported = slices.Clone(in.ClaimsSupported)
+}
+
+// applyStaticMetadata copies the static RFC 8414 §2 metadata the
+// embedder supplied through op.WithDiscoveryMetadata. The op layer has
+// already rejected any Metadata.Extra key that collides with an
+// OP-controlled field name, so the builder copies values verbatim.
+// Empty strings and nil / empty slices stay omitted by virtue of the
+// json:",omitempty" tag.
+func applyStaticMetadata(in Input, doc *Document) {
 	doc.ServiceDocumentation = in.Metadata.ServiceDocumentation
 	doc.OPPolicyURI = in.Metadata.OPPolicyURI
 	doc.OPTermsOfServiceURI = in.Metadata.OPTermsOfServiceURI
@@ -414,12 +457,8 @@ func Build(in Input) Document {
 		doc.UILocalesSupported = slices.Clone(in.Metadata.UILocalesSupported)
 	}
 	if len(in.Metadata.Extra) > 0 {
-		doc.Extra = make(map[string]any, len(in.Metadata.Extra))
-		for k, v := range in.Metadata.Extra {
-			doc.Extra[k] = v
-		}
+		doc.Extra = maps.Clone(in.Metadata.Extra)
 	}
-	return doc
 }
 
 // OPControlledFieldNames returns the JSON tag names of every field on
@@ -429,9 +468,12 @@ func Build(in Input) Document {
 // op.New rather than silently dropping or overwriting the embedder's
 // value at marshal time.
 //
-// The list is computed once via reflection over the [Document] struct
-// tags so it stays in lock-step with the wire shape: adding a new
-// field to [Document] automatically extends the deny-list.
+// The list is recomputed via reflection over the [Document] struct
+// tags on every call so it stays in lock-step with the wire shape:
+// adding a new field to [Document] automatically extends the
+// deny-list. The reflection walk runs at op.New construction time
+// only, so the per-call cost is negligible and a package-level cache
+// is unnecessary.
 //
 // The four typed metadata fields ([Document.ServiceDocumentation] etc.)
 // ARE included in the deny-list because the embedder supplies them
@@ -439,20 +481,6 @@ func Build(in Input) Document {
 // Extra entry whose key is "service_documentation" would create two
 // sources of truth.
 func OPControlledFieldNames() []string {
-	return slices.Clone(opControlledFieldNames)
-}
-
-// opControlledFieldNames is the precomputed list of JSON tag names the
-// builder claims for OP-controlled output. The list is populated at
-// package-init via reflection over [Document]; see [OPControlledFieldNames].
-var opControlledFieldNames = computeOPControlledFieldNames()
-
-// computeOPControlledFieldNames walks every exported field of [Document]
-// and extracts the JSON tag's name segment (the part before the first
-// comma). Fields tagged json:"-" are skipped because they are not
-// emitted on the wire. The returned slice is sorted so the deny-list
-// is stable across builds.
-func computeOPControlledFieldNames() []string {
 	t := reflect.TypeOf(Document{})
 	out := make([]string, 0, t.NumField())
 	for i := range t.NumField() {
