@@ -7,7 +7,7 @@
 // github.com/coreos/go-oidc/v3) stay out of the host module's go.sum.
 module github.com/libraz/go-oidc-provider/examples/22-login-captcha
 
-go 1.23.0
+go 1.25.0
 
 require (
 	github.com/libraz/go-oidc-provider v0.0.0-00010101000000-000000000000

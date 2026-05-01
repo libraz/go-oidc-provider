@@ -30,9 +30,9 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリ。
 go get github.com/libraz/go-oidc-provider/op@v0.9.0
 ```
 
-Go 1.23+（`go.mod` の宣言と一致）。DB / Redis ドライバを引き込むストア
-アダプタはサブモジュールとして公開しているため、明示的に取り込むまで
-利用者の `go.sum` に依存は入らない。
+Go 1.25+。DB / Redis ドライバを引き込むストアアダプタはサブモジュール
+として公開しているため、明示的に取り込むまで利用者の `go.sum` に
+依存は入らない。
 
 ```sh
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
