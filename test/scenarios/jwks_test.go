@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -484,9 +485,47 @@ func publishedKIDs(keys []any) map[string]struct{} {
 	return out
 }
 
+// TestScenario_JWKS_042_RotationIssuesNewKid asserts that the OP
+// refuses to construct a Keyset whose entries reuse a kid. RFC 7517
+// §4.5 makes kid an identifier — a rotation that re-publishes the
+// same kid for a different key would silently invalidate every
+// in-flight token that pinned the old material to that name.
+//
+// The wire-level evidence here is structural: op.New rejects a
+// duplicate-kid Keyset at construction time, so by the time /jwks is
+// reachable every published kid is necessarily unique. The test
+// constructs the OP through op.New directly because testkit.NewProvider
+// surfaces construction errors via tb.Fatalf.
+//
+// Spec: RFC 7517 §4.5.
 func TestScenario_JWKS_042_RotationIssuesNewKid(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-042")
+
+	dupA := newScenarioSigningKey(t, "scenario-jwks-042-dup")
+	dupB := newScenarioSigningKey(t, "scenario-jwks-042-dup")
+
+	_, err := op.New(
+		op.WithIssuer("https://op.testkit.invalid"),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(op.Keyset{dupA, dupB}),
+		op.WithCookieKey(newJWKSCookieKey(t)),
+	)
+	if err == nil {
+		t.Fatal("op.New accepted a duplicate-kid Keyset; rotation MUST mint a fresh kid")
+	}
+}
+
+// newJWKSCookieKey returns a fresh 32-byte cookie key for op.WithCookieKey.
+// The helper is local to the JWKS file because JWKS-042 is the only row
+// in the suite that constructs op.New without going through testkit,
+// and the BUS file already owns its own cookie-key helper.
+func newJWKSCookieKey(tb testing.TB) []byte {
+	tb.Helper()
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		tb.Fatalf("generate cookie key: %v", err)
+	}
+	return key
 }
 
 // TestScenario_JWKS_050_CacheControlAdvisedShortTTL verifies that the

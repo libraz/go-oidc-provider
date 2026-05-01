@@ -149,7 +149,7 @@ rows:
     spec: RFC 7517 §4.5
     behaviour: |
       Each rotation MUST issue a new kid.
-    status: pending
+    status: active
 
   - id: JWKS-050
     severity: P1
