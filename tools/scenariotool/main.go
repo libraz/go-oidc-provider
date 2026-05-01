@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // usage prints the top-level help text and exits with the supplied
@@ -27,11 +28,13 @@ Subcommands:
   next [feature]                 Print the next pending row(s) to pick up.
   flip <id> <status>             Update a row's status to active|pending|out-of-scope.
   coverage [--strict|--yaml-only] Diff catalog rows against Test_<PREFIX>_<NNN>_ Go tests.
+  advisories [--check|--json]    Cross-reference _advisories.yaml with '// Tracks: <id>' comments.
 
 Flags:
   -dir <path>        Catalog directory (default: test/scenarios/catalog).
   -tests <pkg>       Go test package whose Test_* functions are listed (default: ./test/scenarios/...).
   -test-root <path>  Directory holding <feature>_test.go files (default: test/scenarios).
+  -source <list>     Comma-separated source roots scanned for '// Tracks:' (advisories; default: internal,op,test).
   -severity P0|P1|P2 Filter (next).
   -count <N>         Cap (next, default 1).
   -reason <text>     Required when flipping to out-of-scope.`)
@@ -151,9 +154,47 @@ func dispatch(cmd string, args []string) error {
 		}
 		return runCoverage(*dir, *tests, *cwd, *strict, *yamlOnly)
 
+	case "advisories":
+		fs := flag.NewFlagSet("advisories", flag.ContinueOnError)
+		dir := fs.String("dir", "test/scenarios/catalog", "catalog directory")
+		cwd := fs.String("cwd", "", "working directory used to resolve -source roots (defaults to current directory)")
+		source := fs.String("source", "internal,op,test", "comma-separated source roots scanned for `// Tracks:` comments")
+		check := fs.Bool("check", false, "exit non-zero on drift / orphan / wrong-status")
+		asJSON := fs.Bool("json", false, "emit machine-readable JSON instead of the dashboard")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		roots := splitNonEmpty(*source, ",")
+		if len(roots) == 0 {
+			return fmt.Errorf("advisories: -source must list at least one root")
+		}
+		base := *cwd
+		if base == "" {
+			wd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("advisories: getwd: %w", err)
+			}
+			base = wd
+		}
+		return runAdvisories(*dir, base, roots, *check, *asJSON)
+
 	default:
 		return fmt.Errorf("unknown subcommand %q (run scenariotool help)", cmd)
 	}
+}
+
+// splitNonEmpty splits s on sep and drops empty / whitespace-only
+// fragments. Used by the `advisories` -source flag.
+func splitNonEmpty(s, sep string) []string {
+	parts := strings.Split(s, sep)
+	out := parts[:0]
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // resolveTestRoot returns testRoot anchored under cwd when both are

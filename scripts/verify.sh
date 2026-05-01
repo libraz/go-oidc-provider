@@ -49,6 +49,9 @@ done < <(public_modules)
 
 "$SCRIPT_DIR/test.sh" --race
 
+log "scenariotool advisories --check"
+"$SCRIPT_DIR/scenario.sh" advisories --check >/dev/null
+
 "$SCRIPT_DIR/verify_examples.sh"
 
 log "verify OK"

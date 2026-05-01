@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 
 .PHONY: tools fmt lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
-        scenario-coverage-yaml-only scenario-stats \
+        scenario-coverage-yaml-only scenario-stats scenario-advisories scenario-advisories-strict \
         example-01 example-03 example-17 example-41 example-51 \
         conformance-certs conformance-up conformance-down \
         conformance-ofcs-up conformance-ofcs-down conformance-ofcs-status \
@@ -94,6 +94,17 @@ scenario-coverage-yaml-only:
 # to narrow to one file.
 scenario-stats:
 	@scripts/scenario.sh stats $(feature)
+
+# CVE / GHSA advisory inventory ↔ `// Tracks: <id>` comment audit.
+# Source of truth: test/scenarios/catalog/_advisories.yaml + the Go
+# source itself. The strict variant fails the build on drift, orphan
+# references, or stale `tracking` entries that have since been
+# annotated.
+scenario-advisories:
+	@scripts/scenario.sh advisories
+
+scenario-advisories-strict:
+	@scripts/scenario.sh advisories --check
 
 clean:
 	go clean -testcache

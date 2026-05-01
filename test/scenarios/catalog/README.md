@@ -100,3 +100,50 @@ the script gate is preferred for consistency.
 function. `pending` rows MAY have a `t.Skip("pending: <ID>")`
 placeholder. `out-of-scope` rows MUST NOT have a Go function and are
 allowlisted in the coverage diff.
+
+## Catalog-adjacent inventories
+
+Files starting with `_` share this directory but do **not** follow the
+feature-file shape — they are auxiliary inventories owned by their
+own subcommand. The validator skips them.
+
+### `_advisories.yaml` — CVE / GHSA queue
+
+Schema: `_advisories.schema.json`. Pairs the `// Tracks: <id>`
+comments scattered through `internal/<feature>/*_test.go` (and any
+other Go source under `internal/`, `op/`, `test/`) with their queue
+metadata: severity, source URL, threat category (`T-NN`), and status
+(`covered` / `tracking` / `out-of-scope`).
+
+The Go source is the source of truth for binding (which test asserts
+the structural mitigation). This file is the queue.
+
+```sh
+scripts/scenario.sh advisories          # human dashboard
+scripts/scenario.sh advisories --check  # exit non-zero on drift / orphan / wrong-status
+scripts/scenario.sh advisories --json   # machine-readable
+make scenario-advisories                # make wrappers
+make scenario-advisories-strict         # --check, also wired into `make verify`
+```
+
+Status semantics (enforced by `--check`):
+
+| status | meaning | gate |
+|--------|---------|------|
+| `covered`      | At least one `// Tracks: <id>` exists in Go source | MUST find ≥1 occurrence; missing → drift |
+| `tracking`     | Queued but not yet annotated                      | MUST find 0 occurrences; presence → flip to covered |
+| `out-of-scope` | Intentional exclusion (embedder-owned, not OP)    | `out_of_scope_reason` required; presence is allowed |
+
+Orphan detection: a `// Tracks: <id>` that does not have an entry in
+this file fails the gate. This forces every advisory reference in the
+codebase to be reviewed and categorised.
+
+Workflow when a new advisory lands:
+
+1. Add a row to `_advisories.yaml` with `status: tracking`, plus
+   `severity` / `source` / `threat`.
+2. Decide whether the structural mitigation already exists.
+3. If yes: append `// Tracks: <id>` to the leading comment of the
+   relevant `*_test.go` function and flip `status: covered`.
+4. If no: write the test first, then 3.
+5. Run `make scenario-advisories-strict` to confirm the gate is clean.

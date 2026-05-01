@@ -68,6 +68,13 @@ func loadCatalog(dir string) (*Catalog, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
+		// Files starting with `_` are reserved for catalog-adjacent
+		// inventories that share the directory but not the FeatureFile
+		// shape (e.g. `_advisories.yaml`). They are loaded by their
+		// owning subcommand directly.
+		if strings.HasPrefix(e.Name(), "_") {
+			continue
+		}
 		path := filepath.Join(dir, e.Name())
 		ff, err := loadFeatureFile(path)
 		if err != nil {

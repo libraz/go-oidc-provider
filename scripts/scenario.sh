@@ -43,7 +43,7 @@ case "$cmd" in
       extra+=( -tests "./test/scenarios/..." )
     fi
     ;;
-  lookup|next)
+  lookup|next|advisories)
     extra+=( -cwd "$REPO_ROOT" )
     ;;
 esac

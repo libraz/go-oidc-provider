@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/libraz/go-oidc-provider/test/scenarios/catalog/_advisories.schema.json",
+  "title": "Spec Scenario Advisory Inventory",
+  "description": "Schema for test/scenarios/catalog/_advisories.yaml. Pairs the `// Tracks: <id>` comments scattered through *_test.go files with their queue metadata (severity, source, threat category, status). The Go source is the source of truth for binding; this file is the queue.",
+  "type": "object",
+  "required": ["schema_version", "advisories"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Bump on incompatible schema changes."
+    },
+    "description": {
+      "type": "string"
+    },
+    "advisories": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/advisory" }
+    }
+  },
+  "$defs": {
+    "advisory": {
+      "type": "object",
+      "required": ["id", "severity", "source", "threat", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^(CVE-[0-9]{4}-[0-9]{4,8}|GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4})$",
+          "description": "CVE-YYYY-NNNN or GHSA-xxxx-xxxx-xxxx."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2"],
+          "description": "P0 = security/spec compliance, P1 = correctness/interop, P2 = error shape/observability. Mirrors the row severity scheme."
+        },
+        "source": {
+          "type": "string",
+          "format": "uri",
+          "description": "Canonical advisory URL (NVD, GHSA, vendor disclosure)."
+        },
+        "threat": {
+          "type": "string",
+          "pattern": "^T-[0-9]+$",
+          "description": "Threat category from docs/research/07-cve-and-threats.md (T-01..T-23)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["covered", "tracking", "out-of-scope"],
+          "description": "covered = `// Tracks:` present in the Go source. tracking = queued but not yet annotated. out-of-scope = intentional exclusion."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Freeform context for reviewers (root cause, expected mitigation, blocked-on)."
+        },
+        "out_of_scope_reason": {
+          "type": "string",
+          "description": "Required when status == out-of-scope. Brief justification, may reference CLAUDE.md or an ADR."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "out-of-scope" } } },
+          "then": { "required": ["out_of_scope_reason"] }
+        }
+      ]
+    }
+  }
+}

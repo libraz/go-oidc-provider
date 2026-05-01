@@ -1,0 +1,360 @@
+# yaml-language-server: $schema=./_advisories.schema.json
+schema_version: 1
+
+description: |
+  Advisory queue paired with the `// Tracks: <id>` comments scattered
+  through *_test.go files. The Go source is the source of truth for
+  binding (which test asserts the structural mitigation); this file
+  carries the queue metadata (severity, source URL, threat category,
+  status) so we can audit "what did we promise to track, and is it
+  still tracked?" without scraping doc tables.
+
+  Drift gate (run by `scripts/scenario.sh advisories --check`):
+   - status=covered      → MUST appear in at least one `// Tracks:` line.
+   - status=tracking     → MUST NOT appear in source yet (it's queued).
+   - status=out-of-scope → out_of_scope_reason required; presence in
+                           source is allowed (a tag may explain why).
+   - source IDs not in this file → orphan, fail the gate.
+
+advisories:
+  # --- T-01 Redirect URI matching -----------------------------------
+  - id: CVE-2020-15234
+    severity: P0
+    source: https://github.com/ory/fosite/security/advisories/GHSA-grfp-q2mm-hfp6
+    threat: T-01
+    status: covered
+    notes: fosite case-variant redirect_uri match.
+  - id: GHSA-rfq3-w54c-f9q5
+    severity: P0
+    source: https://github.com/ory/fosite/security/advisories/GHSA-rfq3-w54c-f9q5
+    threat: T-01
+    status: covered
+    notes: fosite loopback rule ignored query / host components.
+  - id: CVE-2024-8883
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2024-8883
+    threat: T-01
+    status: covered
+    notes: Keycloak wildcard / suffix bypass.
+  - id: CVE-2023-6134
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2023-6134
+    threat: T-01
+    status: covered
+    notes: Keycloak redirect_uri pre-JARM bypass.
+
+  # --- T-02 State / nonce / PKCE required ---------------------------
+  - id: CVE-2024-10318
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2024-10318
+    threat: T-02
+    status: covered
+    notes: NGINX OIDC reference module; nonce never validated.
+
+  # --- T-03 Mix-up / code-injection ---------------------------------
+  - id: CVE-2024-23647
+    severity: P0
+    source: https://docs.goauthentik.io/security/cves/CVE-2024-23647/
+    threat: T-03
+    status: covered
+    notes: authentik PKCE downgrade (challenge-absent path).
+  - id: CVE-2025-4144
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2025-4144
+    threat: T-03
+    status: covered
+    notes: Cloudflare workers-oauth-provider code interception.
+  - id: GHSA-vh7g-p26c-j2cw
+    severity: P0
+    source: https://github.com/dexidp/dex/security/advisories/GHSA-vh7g-p26c-j2cw
+    threat: T-03
+    status: covered
+    notes: |
+      dex back-channel ID-token retrieval after authorization-code
+      interception. The (code, client_id, redirect_uri, code_verifier)
+      tuple match in internal/grants/authcode prevents the bypass;
+      TestExchange_RejectsClientMismatch pins the client_id half.
+
+  # --- T-04 Audience confusion --------------------------------------
+  - id: CVE-2025-27370
+    severity: P0
+    source: https://openid.net/specs/openid-connect-core-1_0.html
+    threat: T-04
+    status: covered
+    notes: OIDF/IETF coordinated disclosure — private_key_jwt aud (OIDC).
+  - id: CVE-2025-27371
+    severity: P0
+    source: https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc7523bis/
+    threat: T-04
+    status: covered
+    notes: OIDF/IETF coordinated disclosure — private_key_jwt aud (OAuth/RFC 7523bis).
+  - id: CVE-2026-33322
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-33322
+    threat: T-04
+    status: covered
+    notes: MinIO OIDC alg-confusion + aud confusion.
+
+  # --- T-05 Algorithm downgrade -------------------------------------
+  - id: CVE-2015-2951
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2015-2951
+    threat: T-05
+    status: covered
+    notes: jose4j alg=none family.
+  - id: CVE-2015-9235
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2015-9235
+    threat: T-05
+    status: covered
+    notes: jsonwebtoken alg=none / alg-confusion (root case).
+  - id: CVE-2016-10555
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2016-10555
+    threat: T-05
+    status: covered
+    notes: jwt-simple alg-confusion.
+  - id: CVE-2024-54150
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2024-54150
+    threat: T-05
+    status: covered
+    notes: cjwt alg-confusion.
+  - id: CVE-2026-22817
+    severity: P0
+    source: https://github.com/honojs/hono/security/advisories
+    threat: T-05
+    status: covered
+    notes: Hono JWT case-variant alg=NONE bypass (2026 cluster).
+  - id: CVE-2026-23552
+    severity: P0
+    source: https://github.com/honojs/hono/security/advisories
+    threat: T-05
+    status: covered
+    notes: Hono JWT alg=none bypass (2026 cluster).
+  - id: CVE-2026-27804
+    severity: P0
+    source: https://github.com/honojs/hono/security/advisories
+    threat: T-05
+    status: covered
+    notes: Hono JWT alg=none bypass (2026 cluster).
+
+  # --- T-06 JOSE structural anomalies -------------------------------
+  - id: CVE-2017-11424
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2017-11424
+    threat: T-06
+    status: covered
+    notes: python-jose-style libraries resolved jku from header.
+  - id: CVE-2018-0114
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2018-0114
+    threat: T-06
+    status: covered
+    notes: Cisco / node-jose; jwk header trusted for verification.
+  - id: CVE-2018-1000531
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2018-1000531
+    threat: T-06
+    status: covered
+    notes: inversoft prime-jwt alg downgrade + jwk-trusting verify.
+  - id: CVE-2019-7644
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2019-7644
+    threat: T-06
+    status: covered
+    notes: Auth0 jsonwebtoken-koa trusted jwk header.
+  - id: CVE-2024-29371
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2024-29371
+    threat: T-06
+    status: covered
+    notes: jose4j JWE decompression bomb (CVSS 7.5).
+  - id: CVE-2025-59420
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2025-59420
+    threat: T-06
+    status: covered
+    notes: Authlib `crit` claim not enforced.
+  - id: CVE-2026-32597
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-32597
+    threat: T-06
+    status: covered
+    notes: PyJWT `crit` not enforced (same defect, different ecosystem).
+  - id: GHSA-78h2-9frx-2jm8
+    severity: P1
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-78h2-9frx-2jm8
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose JWE decryption panic. Class-covered by FuzzJOSEParse:
+      ParseSigned is JWS-only and panic-immune.
+  - id: GHSA-c6gw-w398-hv78
+    severity: P2
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-c6gw-w398-hv78
+    threat: T-06
+    status: covered
+    notes: go-jose parse DoS. Class-covered by FuzzJOSEParse no-panic contract.
+  - id: GHSA-c5q2-7r4c-mv6g
+    severity: P1
+    source: https://github.com/go-jose/go-jose/security/advisories/GHSA-c5q2-7r4c-mv6g
+    threat: T-06
+    status: covered
+    notes: |
+      go-jose compression amplification (CVE-2024-29371 cluster).
+      Class-covered: compact JWS only, no compression path.
+  - id: GHSA-pvcr-v8j8-j5q3
+    severity: P1
+    source: https://github.com/lestrrat-go/jwx/security/advisories/GHSA-pvcr-v8j8-j5q3
+    threat: T-06
+    status: covered
+    notes: jwx JSON-form parse panic. Class-covered by compact-only contract.
+  - id: GHSA-hj3v-m684-v259
+    severity: P1
+    source: https://github.com/lestrrat-go/jwx/security/advisories/GHSA-hj3v-m684-v259
+    threat: T-06
+    status: covered
+    notes: jwx JWE compression DoS. Class-covered by compact-only contract.
+  - id: GHSA-7f9x-gw85-8grf
+    severity: P1
+    source: https://github.com/lestrrat-go/jwx/security/advisories/GHSA-7f9x-gw85-8grf
+    threat: T-06
+    status: covered
+    notes: jwx malicious JWE params DoS. Class-covered by compact-only contract.
+  - id: GHSA-rm8v-mxj3-5rmq
+    severity: P1
+    source: https://github.com/lestrrat-go/jwx/security/advisories/GHSA-rm8v-mxj3-5rmq
+    threat: T-06
+    status: covered
+    notes: |
+      jwx padding oracle possibility (CBC-mode JWE). Class-covered:
+      JWS-only allowlist excludes every CBC-mode JWE alg.
+
+  # --- T-07 Replay --------------------------------------------------
+  - id: CVE-2020-15222
+    severity: P0
+    source: https://github.com/ory/fosite/security/advisories/GHSA-mh3m-8c74-74xh
+    threat: T-07
+    status: covered
+    notes: fosite < 0.31.0 PAR replay / DoS.
+  - id: GHSA-mh3m-8c74-74xh
+    severity: P0
+    source: https://github.com/ory/fosite/security/advisories/GHSA-mh3m-8c74-74xh
+    threat: T-07
+    status: covered
+    notes: GHSA pair of CVE-2020-15222.
+  - id: GHSA-v3q9-2p3m-7g43
+    severity: P0
+    source: https://github.com/ory/fosite/security/advisories/GHSA-v3q9-2p3m-7g43
+    threat: T-07
+    status: covered
+    notes: |
+      fosite private_key_jwt jti replay (2020).
+      TestPrivateKeyJWTVerifier_JTIReplay_Rejected pins the per-jti
+      single-use contract that blocks the replay.
+
+  # --- T-09 Token / sensitive-info leak paths ----------------------
+  - id: GHSA-7mqr-2v3q-v2wm
+    severity: P1
+    source: https://github.com/ory/fosite/security/advisories/GHSA-7mqr-2v3q-v2wm
+    threat: T-09
+    status: covered
+    notes: |
+      fosite revoke silently swallowed storage errors. The library
+      keeps the wire 200 (RFC 7009 §2.2) but emits the
+      "token.revoke_failed" audit event on every non-NotFound store
+      fault so SOC tooling can detect the silent-failure class.
+      TestHandler_RefreshToken_StoreFault_EmitsAudit pins the contract.
+
+  # --- T-11 Open redirect on error ---------------------------------
+  - id: CVE-2023-6927
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2023-6927
+    threat: T-11
+    status: covered
+    notes: Keycloak JARM form_post.jwt open redirect.
+  - id: GHSA-27gc-wj6x-9w55
+    severity: P1
+    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-27gc-wj6x-9w55
+    threat: T-11
+    status: covered
+    notes: |
+      Keycloak error_description injection on error pages → phishing.
+      Two-layer mitigation:
+        - error_description values are a closed catalogue of hardcoded
+          sentinels (internal/authorize/errors.go); RP-supplied bytes
+          never reach the field directly.
+        - On the redirect surface url.Values.Encode percent-encodes
+          every value; on the form_post surface html.EscapeString
+          escapes both action= and value=. Pinned by
+          TestBuildRedirectError_EncodesHostileBytes_NoXSS,
+          TestBuildRedirectError_StripsControlBytes, and
+          TestWriteFormPost_EscapesRedirectAndJWT.
+
+  # --- T-12 Session fixation ---------------------------------------
+  - id: GHSA-xhpr-465j-7p9q
+    severity: P1
+    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-xhpr-465j-7p9q
+    threat: T-12
+    status: covered
+    notes: |
+      Keycloak first-login phishing via email verification step. The
+      session manager exposes a Rotate primitive that issues a fresh
+      ID and invalidates the old, while preserving CreatedAt so an
+      attacker cannot extend lifetime by triggering rotation.
+      TestManager_Rotate_IssuesFreshIDPreservingChooserGroup +
+      TestManager_Rotate_PreservesCreatedAt pin both halves.
+
+  # --- T-15 TOTP / RFC 6238 ----------------------------------------
+  - id: GHSA-9r3w-4j8q-pw98
+    severity: P0
+    source: https://github.com/calcom/cal.com/security/advisories/GHSA-9r3w-4j8q-pw98
+    threat: T-15
+    status: covered
+    notes: |
+      cal.com TOTP bypass — providing a TOTP code skipped the password
+      check entirely. Two-layer mitigation:
+        - authn.TestLoginFlowTOTPRequiresPrimary pins the orchestrator
+          invariant (TOTP step is unreachable until Primary completes).
+        - totp.TestAuthenticator_BeginRequiresSubject /
+          TestAuthenticator_ContinueRequiresSubject pin the adapter-
+          side gate (TOTP rejects empty Subject).
+  - id: GHSA-5jfq-x6xp-7rw2
+    severity: P0
+    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-5jfq-x6xp-7rw2
+    threat: T-15
+    status: covered
+    notes: |
+      Keycloak two-factor authentication bypass. Same structural
+      property as 9r3w — covered by the same two-layer mitigation
+      (orchestrator step ordering + adapter subject-required gate).
+
+  # --- Out-of-scope (not OP responsibility) ------------------------
+  - id: GHSA-gr79-9v6v-gc9r
+    severity: P1
+    source: https://github.com/dexidp/dex/security/advisories/GHSA-gr79-9v6v-gc9r
+    threat: T-14
+    status: out-of-scope
+    out_of_scope_reason: |
+      TLSConfig was discarded and TLS 1.0/1.1 served. The library does
+      not own its HTTP server; embedder configures TLS. CLAUDE.md
+      "library posture" §observability and §TLS state this explicitly.
+  - id: GHSA-q8hq-4h99-fj7x
+    severity: P1
+    source: https://github.com/keycloak/keycloak/security/advisories/GHSA-q8hq-4h99-fj7x
+    threat: T-14
+    status: out-of-scope
+    out_of_scope_reason: |
+      Keycloak TLS client-initiated renegotiation DoS. TLS layer is
+      embedder-owned per CLAUDE.md; library does not configure
+      `tls.Config.Renegotiation`.
+  - id: GHSA-m9hp-7r99-94h5
+    severity: P0
+    source: https://github.com/dexidp/dex/security/advisories/GHSA-m9hp-7r99-94h5
+    threat: T-06
+    status: out-of-scope
+    out_of_scope_reason: |
+      dex SAML XML self-rolled parser bug. SAML is not implemented in
+      go-oidc-provider (CLAUDE.md "ライブラリ性の核": OP only). Listed
+      here so future contributors know it was reviewed and excluded.
