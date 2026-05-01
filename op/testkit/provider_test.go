@@ -111,6 +111,7 @@ func TestRegisterClient_JWKsRoundTrip(t *testing.T) {
 
 	tk := testkit.NewProvider(t)
 	const raw = `{"keys":[{"kty":"EC","crv":"P-256","x":"AAA","y":"BBB","kid":"k-1"}]}`
+	//nolint:gosec // G101 false positive: "private_key_jwt" is the OIDC auth-method name, not a credential.
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      "fixture-jwks",
 		TokenEndpointAuthMethod: "private_key_jwt",

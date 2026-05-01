@@ -36,7 +36,7 @@ func newPKCEClient(t *testing.T, suffix string) (*testkit.Provider, pkceClientFi
 	t.Helper()
 	fix := pkceClientFixture{
 		clientID:     "rp-pkce-" + suffix,
-		clientSecret: "rp-pkce-" + suffix + "-secret", //nolint:gosec // test fixture: not a real credential.
+		clientSecret: "rp-pkce-" + suffix + "-secret",
 		callback:     "https://rp.testkit.invalid/callback",
 	}
 	hash, err := op.HashClientSecret(fix.clientSecret)
@@ -85,7 +85,7 @@ func runAuthorizeRedirectError(
 			return http.ErrUseLastResponse
 		},
 	}
-	req, err := http.NewRequest(http.MethodGet, tk.Server.URL+"/oidc/auth?"+canonical.Encode(), http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, tk.Server.URL+"/oidc/auth?"+canonical.Encode(), http.NoBody)
 	if err != nil {
 		t.Fatalf("build /authorize: %v", err)
 	}
