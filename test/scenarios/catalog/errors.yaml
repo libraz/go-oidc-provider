@@ -42,7 +42,7 @@ rows:
       (e.g. text/html,application/xhtml+xml,application/xml;q=0.9,
       image/webp,*/*;q=0.8) the OP renders an HTML error page
       instead of JSON.
-    status: pending
+    status: active
 
   - id: ERR-010
     severity: P0

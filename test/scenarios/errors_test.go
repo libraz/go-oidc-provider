@@ -124,9 +124,61 @@ func TestScenario_ERR_002_AcceptStarSlashStarProducesJSON(t *testing.T) {
 	}
 }
 
+// TestScenario_ERR_003_BrowserAcceptProducesHTML verifies that an
+// /authorize request whose Accept advertises text/html with browser-
+// preamble priority receives an HTML error page (not a JSON envelope)
+// when the request fails preflight validation. The trigger here is an
+// unknown client_id, which fails before any redirect_uri can be
+// resolved, so the OP renders a self-contained error page rather than
+// bouncing the error through a query-string redirect.
+//
+// The OP is built with [interaction.HTMLDriver] (the testkit default
+// driver only renders JSON prompts and intentionally does not satisfy
+// [interaction.ErrorRenderer]; an embedder that wants the HTML error
+// surface MUST install an ErrorRenderer-implementing driver, which is
+// the production default).
+//
+// Spec: RFC 7231 §5.3.2 / OWASP (HTML output for browser navigations).
 func TestScenario_ERR_003_BrowserAcceptProducesHTML(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ERR-003")
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithInteraction(interaction.HTMLDriver{}),
+	))
+	httpClient := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/oidc/auth?client_id=unknown-rp&response_type=code&redirect_uri=https%3A%2F%2Frp.invalid%2Fcb&scope=openid",
+		http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET /authorize: %v", err)
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /authorize: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Fatalf("Content-Type=%q want text/html", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	rendered := string(body)
+	if !strings.Contains(rendered, `data-code="invalid_request"`) {
+		t.Errorf("HTML body missing data-code attribute\n%s", rendered)
+	}
 }
 
 // TestScenario_ERR_010_JSONErrorBodyHasErrorCode verifies that the
