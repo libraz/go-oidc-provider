@@ -1241,9 +1241,95 @@ func TestScenario_INT_023_ConsumedRefreshTokenReturnsActiveFalse(t *testing.T) {
 	}
 }
 
+// TestScenario_INT_024_AdapterTypeMismatchHandledSafely posts a fresh
+// authorization code to /introspect with token_type_hint=refresh_token,
+// forcing the resolver to enter the refresh-token branch first. Codes
+// and refresh tokens live in different substores; if the storage
+// adapter were to mistakenly resolve a code under a refresh-token
+// lookup the response would leak refresh-token-shaped claims (sub,
+// scope, client_id, ...). The endpoint MUST instead surface the
+// canonical {"active": false} envelope and avoid any type confusion
+// between grant artefacts. INT-021 covers the default-hint path; this
+// row pins down the explicit refresh-hint variant.
+//
+// Spec: RFC 7662 §2.2 (only access / refresh tokens are introspectable).
 func TestScenario_INT_024_AdapterTypeMismatchHandledSafely(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-024")
+
+	const (
+		clientID = "rp-int-024"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-int-024-secret"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.Introspect)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	// Submit the still-unredeemed authorization code as if it were a
+	// refresh token. token_type_hint forces the resolver to try the
+	// refresh-token (opaque) branch first per RFC 7662 §2.1.
+	form := url.Values{
+		"token":           {flow.Code},
+		"token_type_hint": {"refresh_token"},
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); active {
+		t.Fatalf("active=true for authorization code under hint=refresh_token; "+
+			"resolver may have type-confused a code as a refresh token. body=%s", string(body))
+	}
+	for _, leak := range []string{"sub", "client_id", "scope", "iat", "exp", "iss", "token_type", "aud", "jti"} {
+		if _, present := env[leak]; present {
+			t.Errorf("inactive code-as-refresh response leaked %q: %v", leak, env)
+		}
+	}
 }
 
 func TestScenario_INT_025_AccessTokenSuccessRegistersEntities(t *testing.T) {
