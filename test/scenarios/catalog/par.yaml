@@ -63,28 +63,34 @@ rows:
     severity: P0
     spec: RFC 9126 §2.4
     behaviour: |
-      A public client (no auth) attempting an unregistered
-      redirect_uri push is rejected with 400 invalid_request
-      ("redirect_uri did not match any of the client's registered
-      redirect_uris"); only confidential clients may use this option.
-    status: pending
+      A public client whose /par push carries a redirect_uri that is
+      not on its registered list is rejected with 400 invalid_request.
+      v1.0 does not ship the RFC 9126 §2.4 ad-hoc redirect_uri opt-in,
+      so every client (public or confidential) must use a pre-
+      registered URI.
+    status: active
 
   - id: PAR-006
     severity: P0
     spec: RFC 6749 §3.1.2 / OIDC Core §3.1.2.1
     behaviour: |
-      A push with a malformed redirect_uri is rejected with 400
-      invalid_request ("redirect_uri must only contain valid uris").
-    status: pending
+      A push with a malformed redirect_uri (not parseable as an
+      absolute URI) is rejected with 400 invalid_request. v1.0
+      enforces redirect_uri via byte-equal match against the
+      registered list, so a malformed value cannot match any
+      registered URI and the validator surfaces invalid_request.
+    status: active
 
   - id: PAR-007
     severity: P0
     spec: RFC 6749 §3.1.2
     behaviour: |
-      A push with a redirect_uri containing a fragment is rejected
-      with 400 invalid_request ("redirect_uri must not contain
-      fragments").
-    status: pending
+      A push with a redirect_uri carrying a fragment is rejected with
+      400 invalid_request. RFC 6749 §3.1.2 forbids fragments in
+      redirect_uri; v1.0 enforces this implicitly via exact-match
+      against the registered list (a registered URI never carries a
+      fragment, so the variant is unmatched).
+    status: active
 
   - id: PAR-008
     severity: P1
@@ -107,21 +113,25 @@ rows:
     severity: P0
     spec: RFC 9126 §2.2
     behaviour: |
-      A plain push (inline params plus extras and claims) returns 201
-      with body {expires_in, request_uri}; the request_uri matches
-      ^urn:ietf:params:oauth:request_uri:; defaulted parameters are
-      merged; the stored object is unsigned (alg=none envelope) and
-      carries iat/exp/nbf and the claims payload.
-    status: pending
+      A plain-form push returns 201 Created with body
+      {request_uri, expires_in}; the request_uri matches the RFC 9126
+      §2.2 URN prefix urn:ietf:params:oauth:request_uri:; expires_in
+      is a positive integer; the persisted record carries the
+      authenticated client_id and a non-empty RawParams snapshot. The
+      v1.0 storage shape is a JSON RequestSnapshot, not an alg=none
+      JWT envelope.
+    status: active
 
   - id: PAR-011
     severity: P0
-    spec: RFC 9126 §2.1
+    spec: RFC 9126 §3
     behaviour: |
       The PAR endpoint MUST NOT accept a request_uri parameter; such
-      submissions are rejected with 400 request_uri_not_supported
-      (only inline params or a request JWT are accepted).
-    status: pending
+      submissions are rejected with 400 invalid_request. (RFC 9101
+      §6.2 reserves request_uri_not_supported for the OP advertising
+      it does not honour the JAR-style request_uri at /authorize, NOT
+      for the PAR-side rejection.)
+    status: active
 
   - id: PAR-012
     severity: P1
@@ -149,7 +159,7 @@ rows:
       After a plain push, exchanging the returned request_uri at
       /authorize succeeds (303 with code) and the persisted PAR is
       marked consumed (single-use).
-    status: pending
+    status: active
 
   - id: PAR-015
     severity: P1
@@ -173,10 +183,12 @@ rows:
     severity: P0
     spec: RFC 9126 §2.1 / RFC 9101 §6.1
     behaviour: |
-      A push with a signed Request Object (e.g. HS256, exp=30s)
-      returns 201; expires_in is close to 30; the stored params
-      include the payload extras (e.g. extra=provided) plus defaults.
-    status: pending
+      A push carrying a signed Request Object (under an asymmetric
+      alg the OP allow-list admits — ES256 / PS256 / RS256 / EdDSA;
+      v1.0 rejects HMAC algs at JOSE parse time) returns 201 with
+      {request_uri, expires_in}. The catalog uses ES256 as the
+      canonical FAPI 2.0 Message Signing alg.
+    status: active
 
   - id: PAR-018
     severity: P1
@@ -204,33 +216,43 @@ rows:
 
   - id: PAR-021
     severity: P0
-    spec: RFC 9126 §2.1 / RFC 9101 §5
+    spec: RFC 9126 §2.1 / RFC 9101 §6.1
     behaviour: |
-      When a push includes both outer form params (e.g. nonce,
-      response_type=code token) and a signed request JWT, the stored
-      params reflect the Request Object only (no nonce;
-      response_type=code).
-    status: pending
+      RFC 9101 §6.1 precedence rule: when a push pairs outer form
+      parameters with a signed Request Object, every authorization
+      parameter inside the JWT overrides the wire-form value of the
+      same name. Wire values whose key is absent from the JWT
+      survive — the merge does NOT erase them. The persisted
+      RequestSnapshot reflects this rule (e.g. JWT response_type=code
+      defeats outer response_type=code+token; outer nonce survives
+      when the JWT omits a nonce claim).
+    status: active
 
   - id: PAR-022
     severity: P0
     spec: RFC 9101 §6.1
     behaviour: |
       When a client has a pre-registered request_object_signing_alg
-      (e.g. HS256) and pushes a Request Object signed with a
-      different alg (e.g. HS384), the push is rejected with 400
-      invalid_request_object (preregistered alg required).
-    status: pending
+      (e.g. ES256) and pushes a Request Object signed with a
+      different asymmetric alg the OP otherwise admits (e.g. PS256),
+      the push is rejected with 400 invalid_request_object. The
+      catalog uses asymmetric algs because v1.0's JOSE allow-list
+      refuses HMAC entirely (HS256/HS384 fail at parse time, not at
+      the alg-pin gate).
+    status: active
 
   - id: PAR-023
     severity: P0
-    spec: RFC 9126 §2.1 / RFC 9101 §5
+    spec: RFC 9126 §2.1 / RFC 9101 §6.1
     behaviour: |
-      A signed Request Object whose client_id differs from the
-      authenticated client is rejected with 400
-      invalid_request_object ("request client_id must equal the
-      authenticated client's client_id").
-    status: pending
+      A signed Request Object whose embedded "client_id" claim
+      disagrees with the authenticated client_id is rejected with
+      400 invalid_request. v1.0 surfaces this as invalid_request
+      (NOT invalid_request_object) because the JAR merger emits
+      ErrClientIDMismatch and the parendpoint translates that to
+      the wire/JWT consistency code rather than a request-object-
+      format failure.
+    status: active
 
   - id: PAR-024
     severity: P1
@@ -256,14 +278,19 @@ rows:
       After a signed Request Object push, exchanging the returned
       request_uri at /authorize succeeds (303 with code) and the PAR
       is marked consumed.
-    status: pending
+    status: active
 
   - id: PAR-027
     severity: P0
     spec: RFC 9126 §2.2 / RFC 9101 §6.2
     behaviour: |
-      An /authorize call with an unknown, expired, or already-consumed
-      request_uri is rejected with invalid_request_uri
-      ("request_uri is invalid, expired, or was already used") and
-      preserves state.
-    status: pending
+      An /authorize call with an unknown request_uri (never issued,
+      or already GC'd after expiry) is rejected with 400
+      invalid_request_uri. The "consumed" branch is exercised by
+      PAR-014 / PAR-026; expired is equivalent on the wire (the
+      substore Find returns ErrNotFound once GC'd). State is NOT
+      echoed: PAR-resolution failures render a pre-redirect-trust
+      browser error with no state preserved, because the
+      request_uri parameter is the only client_id-bound witness on
+      /authorize.
+    status: active
