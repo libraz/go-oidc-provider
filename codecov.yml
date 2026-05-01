@@ -1,0 +1,53 @@
+# Codecov project config. Coverage profiles are uploaded by
+# .github/workflows/ci.yml from the test job; this file controls how
+# Codecov interprets and reports them.
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    # Wait until at least one coverage upload from the test job lands.
+    after_n_builds: 1
+
+coverage:
+  precision: 2
+  round: down
+  range: "60...90"
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        # Pre-v1.0: surface coverage trend without blocking PRs.
+        informational: true
+    patch:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+
+# Paths that are intentionally outside the public Go API surface, or
+# are demo/test scaffolding. Exclude them so the coverage percentage
+# tracks library code only. (Codecov already excludes *_test.go.)
+ignore:
+  - "examples/**"
+  - "test/**"
+  - "tools/**"
+  - "cmd/**"
+  - "conformance/**"
+  - "docs/**"
+  - "scripts/**"
+  - "internal/testkit/**"
+  - "**/testdata/**"
+  - "**/*_mock.go"
+  - "**/zz_generated_*.go"
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true
+
+flags:
+  unit:
+    paths:
+      - "**"
+    carryforward: false

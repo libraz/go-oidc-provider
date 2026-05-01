@@ -1,0 +1,192 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The repository pins its own toolchain via go.mod / tools/go.mod;
+  # disable GOTOOLCHAIN auto-download so CI uses the runner's Go exactly.
+  GOTOOLCHAIN: local
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Lint, govulncheck and the gofumpt/goimports binaries live in
+      # tools/go.mod; that module pins the highest Go version in the
+      # repository, so use it as the source of truth for this job.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+            tools/scenariotool/go.sum
+            op/storeadapter/sql/go.sum
+            op/storeadapter/redis/go.sum
+
+      - name: Cache pinned tool binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: go-tools-${{ runner.os }}-${{ hashFiles('tools/go.mod', 'tools/go.sum', 'tools/tools.go') }}
+          restore-keys: |
+            go-tools-${{ runner.os }}-
+
+      - name: Install pinned tools
+        run: make tools
+
+      - name: gofumpt + goimports check
+        run: |
+          set -euo pipefail
+          gobin="$(go env GOBIN)"
+          if [ -z "$gobin" ]; then
+            gobin="$(go env GOPATH)/bin"
+          fi
+
+          fumpt_diff="$("$gobin/gofumpt" -l -extra .)"
+          if [ -n "$fumpt_diff" ]; then
+            echo "::error::gofumpt would reformat the files below; run 'make fmt'"
+            printf '%s\n' "$fumpt_diff"
+            exit 1
+          fi
+
+          imports_diff="$("$gobin/goimports" -l -local github.com/libraz/go-oidc-provider .)"
+          if [ -n "$imports_diff" ]; then
+            echo "::error::goimports would reformat the files below; run 'make fmt'"
+            printf '%s\n' "$imports_diff"
+            exit 1
+          fi
+
+      - name: go vet
+        run: make vet
+
+      - name: golangci-lint
+        run: make lint
+
+      - name: scenario advisories (strict)
+        run: make scenario-advisories-strict
+
+  test:
+    name: test (Go ${{ matrix.go }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.23.x = the floor declared by go.mod, 1.25.x = the ceiling
+        # used by tools/. Coverage is uploaded only from the ceiling.
+        go: ["1.23.x", "1.25.x"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: |
+            go.sum
+            op/storeadapter/sql/go.sum
+            op/storeadapter/redis/go.sum
+
+      - name: Test root module (race + coverage)
+        run: |
+          go test -race \
+            -coverprofile="$GITHUB_WORKSPACE/cover.root.out" \
+            -covermode=atomic \
+            -count=1 -timeout=5m \
+            ./...
+
+      - name: Test op/storeadapter/sql (race + coverage)
+        working-directory: op/storeadapter/sql
+        run: |
+          go test -race \
+            -coverprofile="$GITHUB_WORKSPACE/cover.sql.out" \
+            -covermode=atomic \
+            -count=1 -timeout=5m \
+            ./...
+
+      - name: Test op/storeadapter/redis (race + coverage)
+        working-directory: op/storeadapter/redis
+        run: |
+          go test -race \
+            -coverprofile="$GITHUB_WORKSPACE/cover.redis.out" \
+            -covermode=atomic \
+            -count=1 -timeout=5m \
+            ./...
+
+      - name: Test example sub-modules (race only)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for ex in examples/*/go.mod; do
+            d=$(dirname "$ex")
+            echo "::group::go test $d"
+            (cd "$d" && go test -race -tags=example -count=1 -timeout=5m ./...)
+            echo "::endgroup::"
+          done
+
+      - name: Upload coverage to Codecov
+        if: matrix.go == '1.25.x'
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: cover.root.out,cover.sql.out,cover.redis.out
+          flags: unit
+          fail_ci_if_error: false
+          disable_search: true
+
+  examples:
+    name: examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            op/storeadapter/sql/go.sum
+            op/storeadapter/redis/go.sum
+
+      - name: make verify-examples
+        run: make verify-examples
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Cache pinned tool binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin
+          key: go-tools-${{ runner.os }}-${{ hashFiles('tools/go.mod', 'tools/go.sum', 'tools/tools.go') }}
+          restore-keys: |
+            go-tools-${{ runner.os }}-
+
+      - name: Install pinned tools
+        run: make tools
+
+      - name: make govulncheck
+        run: make govulncheck
