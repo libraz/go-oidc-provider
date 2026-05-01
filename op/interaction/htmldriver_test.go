@@ -341,6 +341,67 @@ func TestHTMLDriver_ParseSubmissionRejectsMissingStateRef(t *testing.T) {
 	}
 }
 
+// TestHTMLDriver_ResolvesLibraryLabelKeys pins the fallback that turns
+// the i18n keys library-shipped authenticators emit into short English
+// strings. Without this, a zero-config OP renders password forms with
+// raw "auth.password.username" / "auth.password.password" labels —
+// distracting in the demo and the default zero-config UI.
+func TestHTMLDriver_ResolvesLibraryLabelKeys(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		labelKey string
+		want     string
+	}{
+		{"auth.password.username", "Username"},
+		{"auth.password.password", "Password"},
+		{"auth.totp.code", "Authenticator code"},
+		{"auth.email_otp.email", "Email address"},
+		{"auth.email_otp.code", "Email code"},
+		{"auth.recovery_code.code", "Recovery code"},
+		{"auth.passkey.response", "Passkey response"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.labelKey, func(t *testing.T) {
+			t.Parallel()
+			out := renderToString(t, interaction.Prompt{
+				Type: "auth.password",
+				Data: interaction.PasswordPromptData{},
+				Inputs: []interaction.FieldSpec{
+					{Name: "field", Kind: interaction.FieldText, Label: tc.labelKey, Required: true},
+				},
+				StateRef: "ref",
+			})
+			if !strings.Contains(out, "<label>"+tc.want+"<br>") {
+				t.Errorf("rendered HTML does not contain <label>%s<br>; got:\n%s", tc.want, out)
+			}
+			if strings.Contains(out, tc.labelKey) {
+				t.Errorf("rendered HTML still echoes raw i18n key %q; got:\n%s", tc.labelKey, out)
+			}
+		})
+	}
+}
+
+// TestHTMLDriver_PreservesUnknownLabels confirms the fallback is
+// strictly additive: an embedder-defined key (or a literal English
+// label) flows through untouched so embedders shipping their own
+// catalog stay in control of the displayed text.
+func TestHTMLDriver_PreservesUnknownLabels(t *testing.T) {
+	t.Parallel()
+
+	out := renderToString(t, interaction.Prompt{
+		Type: "auth.password",
+		Data: interaction.PasswordPromptData{},
+		Inputs: []interaction.FieldSpec{
+			{Name: "f", Kind: interaction.FieldText, Label: "embedder.custom.key", Required: true},
+		},
+		StateRef: "ref",
+	})
+	if !strings.Contains(out, "<label>embedder.custom.key<br>") {
+		t.Errorf("custom label was rewritten; got:\n%s", out)
+	}
+}
+
 func renderToString(t *testing.T, prompt interaction.Prompt) string {
 	t.Helper()
 	rec := httptest.NewRecorder()

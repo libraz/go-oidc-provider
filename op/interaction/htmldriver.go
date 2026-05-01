@@ -276,7 +276,7 @@ func writeFieldInput(b *strings.Builder, in FieldSpec) {
 		return
 	}
 	b.WriteString(`<p><label>`)
-	b.WriteString(html.EscapeString(in.Label))
+	b.WriteString(html.EscapeString(htmlLabelFor(in.Label)))
 	b.WriteString(`<br><input name="`)
 	b.WriteString(html.EscapeString(in.Name))
 	b.WriteString(`" type="`)
@@ -335,6 +335,34 @@ func htmlInputType(k FieldKind) string {
 		return "text"
 	default:
 		return "text"
+	}
+}
+
+// htmlLabelFor maps the i18n keys library-shipped factors emit on
+// FieldSpec.Label back to short English strings. The driver echoes
+// unknown keys verbatim so embedder-defined factors (and embedders
+// shipping their own client-side i18n table) keep working without
+// modification.
+func htmlLabelFor(labelKey string) string {
+	switch labelKey {
+	case "auth.password.username":
+		return "Username"
+	case "auth.password.password":
+		return "Password"
+	case "auth.totp.code":
+		return "Authenticator code"
+	case "auth.email_otp.email":
+		return "Email address"
+	case "auth.email_otp.code":
+		return "Email code"
+	case "auth.recovery_code.code":
+		return "Recovery code"
+	case "auth.passkey.response":
+		return "Passkey response"
+	case "auth.captcha.token":
+		return "Verification token"
+	default:
+		return labelKey
 	}
 }
 
