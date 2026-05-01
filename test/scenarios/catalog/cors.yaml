@@ -52,7 +52,8 @@ rows:
       Access-Control-Allow-Origin only when the embedder's
       clientBasedCORS(ctx, client) returns true; the preflight is
       always open with GET, POST.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The OP gates CORS on credentialed endpoints with a static allowlist (op.WithCORSOrigins) per plan 002 §F.4, not a per-client clientBasedCORS(ctx, client) hook. Adding the dynamic hook would expand the per-client config surface and the middleware decision branch for a rare deployment shape: most embedders register a small set of trusted SPA origins once at boot. Revisit if multi-tenant SaaS embedders need per-tenant CORS gating."
 
   - id: COR-011
     severity: P0
@@ -61,7 +62,8 @@ rows:
       /token: actual response carries Access-Control-Allow-Origin
       iff clientBasedCORS returns true; preflight always open with
       POST.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as COR-010: per-client clientBasedCORS hook is intentionally not implemented. The static allowlist set by op.WithCORSOrigins gates /token (covered by COR-050 / COR-051 / COR-052 in their Strict-CORS form)."
 
   - id: COR-012
     severity: P0
@@ -71,7 +73,8 @@ rows:
       emit CORS headers so the browser can read the error body. Once
       the client is identified and clientBasedCORS=false, late errors
       do NOT emit Access-Control-Allow-Origin.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as COR-010: depends on the per-client clientBasedCORS hook the OP does not implement. Pre-client-identification token errors are covered by the static-allowlist Strict-CORS path (the wrapper stamps headers before the handler decides)."
 
   - id: COR-013
     severity: P0
@@ -95,7 +98,8 @@ rows:
     behaviour: |
       /device/auth behaves identically to /token (gated actual,
       always-open preflight).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Device authorization flow (RFC 8628) is not implemented; the catalog feature device_code is fully pending and does not have a near-term implementation plan. Revisit when /device/auth lands.
     notes: device flow not implemented yet.
 
   - id: COR-020
@@ -108,7 +112,8 @@ rows:
       Access-Control-Allow-Methods, and any
       Access-Control-Request-Headers mirrored in
       Access-Control-Allow-Headers.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as COR-010: this row describes the always-open preflight contract for client-gated endpoints. The OP's current model gates preflights on the static allowlist (covered by COR-051), not a per-client policy that always returns 204. Revisit alongside COR-010."
 
   - id: COR-030
     severity: P0
@@ -118,7 +123,8 @@ rows:
       with 500 server_error WITH CORS headers
       (Access-Control-Allow-Origin, Access-Control-Expose-Headers:
       WWW-Authenticate) so the browser can read the error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as COR-010: validates a non-boolean return path of the clientBasedCORS hook the OP does not implement."
 
   - id: COR-040
     severity: P1
