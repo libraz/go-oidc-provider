@@ -42,20 +42,23 @@ rows:
       An end_session call carrying an `id_token_hint` whose `exp` is
       in the past, alongside a registered `post_logout_redirect_uri`,
       MUST be accepted: the OP MUST NOT reject the ID Token solely
-      because it has expired. Signature, issuer, and audience are
-      still validated, and `postLogoutRedirectUri` is stored on the
-      session for the later redirect.
-    status: pending
+      because it has expired. The hint exists to identify the
+      requesting client; v1.0 deliberately bypasses exp / iat on the
+      logout path so a stale tab can still sign out (signature,
+      issuer, and audience remain enforced). The OP responds with
+      302 to the registered post_logout_redirect_uri.
+    status: active
 
   - id: ES-004
     severity: P1
     spec: OIDC RP-Initiated Logout §2
     behaviour: |
       An end_session call with a valid `id_token_hint` and a
-      registered `post_logout_redirect_uri` renders the confirmation
-      page; `session.state` captures the `postLogoutRedirectUri` for
-      the confirm phase.
-    status: pending
+      registered `post_logout_redirect_uri` is admitted directly:
+      the hint proves possession of an OP-signed token for the
+      requesting client, so v1.0 skips the CSRF interstitial and
+      responds with 302 to the registered `post_logout_redirect_uri`.
+    status: active
 
   - id: ES-005
     severity: P1
@@ -63,36 +66,45 @@ rows:
     behaviour: |
       An end_session call with a `client_id` parameter (no
       `id_token_hint`) and a registered `post_logout_redirect_uri`
-      behaves identically to the id_token_hint path: the client_id
-      alone resolves the client and validates the redirect URI.
-    status: pending
+      resolves the client by `client_id` and validates the redirect
+      URI against its allowlist. Because the request lacks a hint,
+      v1.0 enforces the CSRF interstitial: GET renders the
+      double-submit confirmation form (200 HTML) and only a POST
+      that presents the matching `__Host-oidc_logout_csrf` cookie
+      and `logout_csrf` form field proceeds to the 302 redirect.
+    status: active
 
   - id: ES-006
     severity: P1
     spec: OIDC RP-Initiated Logout §2
     behaviour: |
-      When both `id_token_hint` and `client_id` are supplied and
-      consistent, the confirmation page is rendered and
-      `postLogoutRedirectUri` is stored.
-    status: pending
+      When both `id_token_hint` and `client_id` are supplied and the
+      `client_id` parameter equals the hint's `aud`, v1.0 admits the
+      request and responds with 302 to the registered
+      `post_logout_redirect_uri`.
+    status: active
 
   - id: ES-007
     severity: P0
     spec: OIDC RP-Initiated Logout §2
     behaviour: |
       When the `client_id` parameter differs from the `aud` of the
-      supplied `id_token_hint`, the OP MUST reject with
-      `invalid_request` ("client_id does not match the provided
-      id_token_hint"), respond with HTML 400, and emit an error event.
-    status: pending
+      supplied `id_token_hint`, the OP MUST reject with HTML 400 and
+      the static error description "client_id and id_token_hint
+      disagree". v1.0 emits the closed-list error page at
+      /end_session, not a JSON `invalid_request` envelope.
+    status: active
 
   - id: ES-008
     severity: P0
     spec: OIDC Core §3.1.2.2 / RFC 6749 §5.2
     behaviour: |
-      When the `client_id` parameter references a non-existent
-      client, the OP MUST reject with `invalid_client` (HTML 400).
-    status: pending
+      When the `client_id` parameter references no registered client,
+      the OP rejects with HTML 400 and the static error description
+      "invalid client". v1.0 conflates the unknown-client wire shape
+      onto the same 400 HTML envelope as id-token-hint failures so
+      the response is not an existence oracle for client identifiers.
+    status: active
 
   - id: ES-009
     severity: P0
@@ -102,7 +114,8 @@ rows:
       `client_secret_expires_at` has passed, the OP MUST reject with
       `invalid_client` ("client secret is expired - cannot validate
       ID Token Hint").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 issues only ES256 ID tokens (per-client id_token_signed_response_alg is not implemented; see signatures.yaml SIG-001/002 pending). HMAC-signed id_token_hint at /end_session has no v1.0 path; client_secret_expires_at does not gate id_token_hint validation. Reconsider when HS256 issuance + per-client alg pinning ship.
 
   - id: ES-010
     severity: P2
@@ -118,10 +131,11 @@ rows:
     severity: P1
     spec: OIDC RP-Initiated Logout §2 (`state`)
     behaviour: |
-      An end_session call with a `state` parameter preserves the
-      value on `session.state` and returns it on the post-logout
-      redirect.
-    status: pending
+      An end_session call with a `state` parameter is echoed verbatim
+      onto the post-logout 302 redirect's query (`?state=<value>`).
+      v1.0 carries no per-request session state across the redirect;
+      the value is replayed straight from the request parameter.
+    status: active
 
   - id: ES-012
     severity: P2
@@ -141,7 +155,8 @@ rows:
       with a `post_logout_redirect_uri` MUST silently ignore the
       unverified URI (it is not reflected). The confirmation page
       still renders without a redirect target.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 deliberately rejects post_logout_redirect_uri without a resolvable client (id_token_hint or client_id) with HTML 400 'post_logout_redirect_uri requires a client'; silently ignoring an unverified redirect URI would normalise an attacker probing for endpoint exposure. The hardened path is the right v1.0 default."
 
   - id: ES-014
     severity: P0
@@ -149,38 +164,46 @@ rows:
     behaviour: |
       When the `id_token_hint` identifies a client but the supplied
       `post_logout_redirect_uri` is not in that client's registered
-      list, the OP MUST reject with `invalid_request`
-      ("post_logout_redirect_uri not registered") and respond with
-      HTML 400.
-    status: pending
+      `PostLogoutRedirectURIs` allowlist, the OP MUST reject with
+      HTML 400 and the static error description
+      "post_logout_redirect_uri is not registered".
+    status: active
 
   - id: ES-015
     severity: P0
     spec: RFC 7519 §7.2 / OIDC RP-Initiated Logout §2
     behaviour: |
-      When `id_token_hint` is not a parseable JWT, the OP MUST reject
-      with `invalid_request` ("could not decode id_token_hint") and
-      respond with HTML 400.
-    status: pending
+      When `id_token_hint` is not a parseable JWT, the OP MUST
+      reject with HTML 400 and the static error description
+      "invalid id_token_hint". v1.0 conflates parse / kid / signature
+      failures onto a single description intentionally so the
+      response is not an oracle for the sub-cause.
+    status: active
 
   - id: ES-016
     severity: P0
     spec: OIDC Core §3.1.3.7
     behaviour: |
-      When `id_token_hint` has valid JWT structure but its `aud` is
-      not a registered client, the OP MUST reject with
-      `invalid_client` ("unrecognized id_token_hint audience") and
-      respond with HTML 400.
-    status: pending
+      When `id_token_hint` is a valid JWT signed by the OP but its
+      `aud` is not a registered client, v1.0 returns HTML 400 with
+      the static description "invalid client" (handler.go:329:
+      verifyIDTokenHint succeeds, the resolved aud is then handed to
+      resolveByClientID which collapses ErrNotFound and any transport
+      fault onto descClientNotFound). The same description is reused
+      for an unknown `client_id` parameter (ES-008), so the wire
+      surface is not an existence oracle either way.
+    status: active
 
   - id: ES-017
     severity: P0
     spec: OIDC Core §3.1.3.7 / RFC 7515 §5.2
     behaviour: |
-      When `id_token_hint` is signed with the wrong key or secret,
-      the OP MUST reject with `invalid_request` ("could not validate
-      id_token_hint") and respond with HTML 400.
-    status: pending
+      When `id_token_hint` is signed with a key that does not match
+      the OP keyset (wrong key, unknown kid, or signature byte
+      mismatch), the OP MUST reject with HTML 400 and the static
+      error description "invalid id_token_hint". The conflated
+      description shields the sub-cause from the wire response.
+    status: active
 
   - id: ES-018
     severity: P0
@@ -189,7 +212,8 @@ rows:
       A POST to `/session/end/confirm` while `session.state` is unset
       MUST be rejected with `invalid_request` ("could not find logout
       details") and respond with HTML 400.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: /session/end/confirm and session.state are panva-specific. v1.0 does CSRF on POST /end_session (no separate confirm route) via the __Host-oidc_logout_csrf double-submit cookie + form field + Origin/Referer gate.
 
   - id: ES-019
     severity: P0
@@ -198,7 +222,8 @@ rows:
       A POST to `/session/end/confirm` whose `xsrf` does not match
       `session.state.secret` MUST be rejected with `invalid_request`
       ("xsrf token invalid") and respond with HTML 400.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "xsrf token / session.state.secret is panva-specific. v1.0 emits the conflated 'logout request rejected' description on any CSRF failure mode (cookie missing, form-field mismatch, foreign Origin/Referer); it deliberately does not surface a sub-cause to avoid being a CSRF probe oracle."
 
   - id: ES-020
     severity: P2
@@ -218,7 +243,8 @@ rows:
       (no `upsert`), revoke grant-bound artifacts (e.g. authorization
       codes) via `revokeByGrantId` for each affected grant, and 303
       redirect to the post-logout target without a `client_id` query.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Internal store-call assertions (destroy / revokeByGrantId) are not observable at v1.0's public wire. ES-022 already pins post-logout 303 + state echoing under hint+post_logout_redirect_uri; duplicating it under panva's internal-API framing adds no new coverage."
 
   - id: ES-022
     severity: P0
@@ -230,7 +256,8 @@ rows:
       destroyed and a new session id is issued (rotation).
       Grant-bound revocation MUST NOT be performed and the redirect
       omits `client_id`.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Panva-specific 'logout=yes' / per-client-authorization-removal / session-id rotation model. v1.0 does not multiplex multiple client authorizations on one session — /end_session terminates the session unconditionally and there is no 'remove just this client' shape. The wire-observable redirect (303 to a registered post_logout_redirect_uri after a successful end-session) is bound by ES-004 and ES-024."
 
   - id: ES-023
     severity: P1
@@ -240,16 +267,20 @@ rows:
       `postLogoutRedirectUri` performs the same per-client logout and
       session-id rotation as ES-022, but the 303 redirect points to
       the OP success endpoint and includes the `client_id` query.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Per-client logout + session-id rotation + separate /session/end/success endpoint with client_id query are panva-specific. v1.0 has no per-client logout mode (the session is single-client / single-subject) and no /session/end/success route; on no-post_logout_redirect_uri the handler renders a static 'Signed out' page directly from /end_session. The wire-observable static success page is bound implicitly by ES-012."
 
   - id: ES-024
     severity: P1
     spec: OIDC RP-Initiated Logout §2 (`state`)
     behaviour: |
-      A confirm POST with `logout=yes` after a request that supplied
-      `state=foobar` MUST 303 redirect to
-      `<post_logout_redirect_uri>?state=foobar`.
-    status: pending
+      An end_session call that supplies both a registered
+      `post_logout_redirect_uri` and `state=foobar` (alongside a
+      valid `id_token_hint` so the CSRF interstitial is bypassed)
+      MUST 302 redirect to `<post_logout_redirect_uri>?state=foobar`.
+      v1.0 emits 302 (Found), not the panva 303; the state value is
+      not URL-mangled.
+    status: active
 
   - id: ES-025
     severity: P2
@@ -284,4 +315,5 @@ rows:
     behaviour: |
       GET `/session/end/success?client_id=<unknown>` MUST be rejected
       with `invalid_client` (HTML 400).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no /session/end/success route; the post-logout success page is rendered inline by /end_session when no post_logout_redirect_uri is supplied (see ES-012). There is no client_id-bearing success URL to query, so 'unknown client_id at /session/end/success' has no v1.0 path."
