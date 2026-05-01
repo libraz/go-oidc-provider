@@ -24,22 +24,33 @@ rows:
     behaviour: |
       When the request omits the claims parameter, the OP treats it as
       absent (nil) and applies no per-claim projection rules.
+    status: active
 
   - id: CL-02
     severity: P0
     spec: OIDC Core §5.5
     behaviour: |
       When the claims parameter is present but its JSON value is not a
-      top-level object, the OP rejects the request with invalid_request
-      ("claims parameter should be a JSON object").
+      top-level object, the OP rejects the request with HTTP 400 and a
+      JSON envelope carrying error=invalid_request. Because the claims
+      parser fires before redirect_uri validation in v1.0, the failure
+      is rendered as a self-contained 400 (writeAuthorizeParseError)
+      rather than as a redirect with the OAuth error parameters; v1.0
+      also collapses every claims-parser failure mode onto the single
+      ErrClaimsRequestInvalid sentinel ("claims parameter is not valid
+      JSON").
+    status: active
 
   - id: CL-03
     severity: P0
     spec: OIDC Core §5.5
     behaviour: |
-      When the claims parameter cannot be JSON-parsed at all, the OP
-      rejects the request with invalid_request ("could not parse the
-      claims parameter JSON").
+      When the claims parameter cannot be JSON-parsed at all (truncated
+      or malformed bytes), the OP rejects the request with HTTP 400 +
+      error=invalid_request, sharing the same ErrClaimsRequestInvalid
+      sentinel as CL-02 / CL-05 (v1.0 does not differentiate per-shape
+      error_descriptions).
+    status: active
 
   - id: CL-04
     severity: P1
@@ -56,8 +67,11 @@ rows:
     behaviour: |
       When the value of id_token or userinfo is not an object (e.g. a
       string, array, or non-null scalar), the OP rejects the request
-      with invalid_request (e.g. "claims.id_token should be an
-      object").
+      with HTTP 400 + error=invalid_request, on the same wire path as
+      CL-02 / CL-03. v1.0 surfaces every claims-parser failure mode
+      through the single ErrClaimsRequestInvalid sentinel rather than
+      a granular per-shape message.
+    status: active
 
   - id: CL-06
     severity: P1
@@ -90,6 +104,8 @@ rows:
       endpoint feature is disabled, the OP rejects the request with
       invalid_request ("claims.userinfo should not be used since
       userinfo endpoint is not supported").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not expose an option to disable the /userinfo endpoint — Discovery always advertises it and the handler is unconditionally mounted. The 'userinfo endpoint disabled' precondition this row asserts on is therefore unreachable; the v1.0 contract is 'userinfo is always available, embedders that wish to expose only /token must front the OP with a reverse proxy that drops /oidc/userinfo'. Revisit if op.WithUserInfoEndpointEnabled(false) ships."
 
   - id: CL-10
     severity: P0
@@ -99,6 +115,8 @@ rows:
       an access token (e.g. response_type=id_token alone), the OP
       rejects the request with invalid_request ("claims.userinfo
       should not be used if access_token is not issued").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 only supports response_type=code (see internal/authorize/request.go validateResponseType — every value other than the literal 'code' is rejected with ErrResponseTypeUnsupported). The 'flow that does not issue an access token' precondition this row asserts on (response_type=id_token alone, hybrid id_token only) is unreachable: the response_type guard fires before the claims projection layer is consulted, so claims.userinfo without a paired access_token is structurally impossible. Revisit if implicit / hybrid response_types are reintroduced."
 
   - id: CL-20
     severity: P0
@@ -106,6 +124,7 @@ rows:
     behaviour: |
       When the value of an individual claim entry is null, the OP
       accepts it as a voluntary request.
+    status: active
 
   - id: CL-21
     severity: P0
@@ -113,6 +132,7 @@ rows:
     behaviour: |
       When the value of an individual claim entry is an empty object,
       the OP accepts it as a voluntary request (equivalent to null).
+    status: active
 
   - id: CL-22
     severity: P1
@@ -122,6 +142,7 @@ rows:
       no value for it, the OP omits the claim from the response rather
       than raising an error (the spec mandates "MUST attempt", not
       "MUST succeed").
+    status: active
 
   - id: CL-23
     severity: P0
@@ -130,6 +151,7 @@ rows:
       When a claim is requested with a value constraint that the
       source value does not match, the OP omits the claim from the
       response.
+    status: active
 
   - id: CL-24
     severity: P0
@@ -138,6 +160,7 @@ rows:
       When a claim is requested with a values array, the OP releases
       the claim if the source matches any element and omits it
       otherwise.
+    status: active
 
   - id: CL-25
     severity: P1
@@ -169,6 +192,7 @@ rows:
     behaviour: |
       A claim listed under id_token that the source provides is
       embedded directly in the id_token regardless of scope.
+    status: active
 
   - id: CL-31
     severity: P0
@@ -176,6 +200,7 @@ rows:
     behaviour: |
       A claim listed under userinfo is included only in the
       /userinfo response and never leaks into the id_token.
+    status: active
 
   - id: CL-32
     severity: P0
@@ -184,6 +209,7 @@ rows:
       When the same claim is requested under both id_token and
       userinfo, the OP projects it independently into each location
       without cross-contamination.
+    status: active
 
   - id: CL-33
     severity: P1
