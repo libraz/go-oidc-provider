@@ -117,7 +117,7 @@ rows:
       A signing-only key MAY be published without use and alg so it
       can serve multiple algs; embedders SHOULD prefer pinning
       per-purpose for clarity.
-    status: pending
+    status: active
 
   - id: JWKS-030
     severity: P0

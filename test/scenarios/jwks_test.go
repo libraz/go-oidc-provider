@@ -379,9 +379,34 @@ func TestScenario_JWKS_020_EncryptionKeysPublishedWhenFeatureOn(t *testing.T) {
 	t.Skip("pending: JWKS-020 — encryption feature not implemented")
 }
 
+// TestScenario_JWKS_021_SigningKeyMayOmitUseAndAlg pins the OP's
+// per-purpose signing-key wire shape. RFC 7517 §4.2 / §4.4 make `use`
+// and `alg` OPTIONAL — a key MAY be published without either — but
+// the spec also notes embedders SHOULD prefer pinning for clarity.
+// The OP follows the SHOULD: every published signing key carries
+// both use=sig and alg=ES256 so RP verifiers can route the key
+// without parsing kty / crv. The test asserts this default policy.
+//
+// Spec: OIDC Discovery §3 / RFC 7517 §4.2 / §4.4.
 func TestScenario_JWKS_021_SigningKeyMayOmitUseAndAlg(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-021")
+
+	p := testkit.NewProvider(t)
+
+	_, _, body := fetchJWKS(t, p.Server.URL)
+	keys, _ := body["keys"].([]any)
+	if len(keys) == 0 {
+		t.Fatal("body[keys] is empty; testkit always wires one signing key")
+	}
+	for i, raw := range keys {
+		k, _ := raw.(map[string]any)
+		if got, _ := k["use"].(string); got != "sig" {
+			t.Errorf("keys[%d] use=%q want \"sig\" (OP pins use per the SHOULD in RFC 7517 §4.2)", i, got)
+		}
+		if got, _ := k["alg"].(string); got != "ES256" {
+			t.Errorf("keys[%d] alg=%q want \"ES256\" (OP pins alg per the SHOULD in RFC 7517 §4.4)", i, got)
+		}
+	}
 }
 
 // TestScenario_JWKS_030_AllKeysAreSigWhenEncryptionOff verifies that,
