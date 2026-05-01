@@ -23,7 +23,8 @@ rows:
     behaviour: |
       When the resource server pins jwt.sign.alg=PS256, saving an
       access token produces a JWS whose header alg is PS256.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
 
   - id: TFJ-002
     severity: P1
@@ -31,7 +32,8 @@ rows:
     behaviour: |
       When accessTokenFormat=jwt is selected without a jwt block, the
       OP defaults to alg=RS256 and selects a kid from its own keystore.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
 
   - id: TFJ-003
     severity: P2
@@ -40,7 +42,8 @@ rows:
       An empty jwt={} object on the resource server resolves to the
       same defaults as omitting the block entirely (alg=RS256, kid
       drawn from the keystore).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
 
   - id: TFJ-004
     severity: P1
@@ -49,7 +52,8 @@ rows:
       HS256 signing with a raw 32-byte secret produces a JWS with
       alg=HS256 and no kid header (HMAC keys are not addressable in
       the public JWKS).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HMAC client authentication and HS* token signing are out of scope for v1.0 (CA-DISC-04); the OP's keyset accepts asymmetric signers only"
 
   - id: TFJ-005
     severity: P2
@@ -57,7 +61,8 @@ rows:
     behaviour: |
       HS256 signing accepts a WebCrypto HMAC key handle and emits the
       same alg=HS256 / no-kid envelope as the raw-secret case.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HMAC client authentication and HS* token signing are out of scope for v1.0 (CA-DISC-04); the OP's keyset accepts asymmetric signers only"
 
   - id: TFJ-006
     severity: P2
@@ -65,7 +70,8 @@ rows:
     behaviour: |
       HS256 signing accepts a runtime SecretKey object and emits the
       same alg=HS256 / no-kid envelope as the raw-secret case.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HMAC client authentication and HS* token signing are out of scope for v1.0 (CA-DISC-04); the OP's keyset accepts asymmetric signers only"
 
   - id: TFJ-007
     severity: P1
@@ -74,7 +80,8 @@ rows:
       A non-string jwt.sign.kid value (e.g. number 200) is rejected at
       save time with a clear "jwt.sign.kid must be a string when
       provided" configuration error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Per-resource-server jwt={alg,kid,key,encrypt} configuration block is a JS oidc-provider concept; the Go API uses op.WithAccessTokenFormat plus audience routing only
 
   - id: TFJ-008
     severity: P1
@@ -83,7 +90,8 @@ rows:
       A non-string jwt.encrypt.kid value (e.g. number 200) is rejected
       at save time with a clear "jwt.encrypt.kid must be a string when
       provided" configuration error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Per-resource-server jwt={alg,kid,key,encrypt} configuration block is a JS oidc-provider concept; the Go API uses op.WithAccessTokenFormat plus audience routing only
 
   - id: TFJ-009
     severity: P2
@@ -91,7 +99,8 @@ rows:
     behaviour: |
       An HS256 signer that pins kid="feb-2020" emits a JWS whose header
       kid is the configured string.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HMAC client authentication and HS* token signing are out of scope for v1.0 (CA-DISC-04); the OP's keyset accepts asymmetric signers only"
 
   - id: TFJ-010
     severity: P0
@@ -100,7 +109,8 @@ rows:
       A pure-encrypted JWT access token (sign:false plus
       encrypt:dir/A128GCM) emits a JWE with alg=dir, enc=A128GCM,
       typ=at+jwt, an iss claim, aud=foo, and no kid header.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-011
     severity: P1
@@ -109,7 +119,8 @@ rows:
       The dir/A128GCM encryption configuration accepts a runtime
       KeyObject handle and emits the same envelope as the raw-secret
       case.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-012
     severity: P2
@@ -117,7 +128,8 @@ rows:
     behaviour: |
       The dir/A128GCM encryption configuration accepts a WebCrypto AES
       key and emits the same envelope as the raw-secret case.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-013
     severity: P2
@@ -125,7 +137,8 @@ rows:
     behaviour: |
       A pure-encrypted JWT pinned to kid="feb-2020" emits a JWE whose
       header kid matches the configured value.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-014
     severity: P0
@@ -134,7 +147,8 @@ rows:
       A nested JWT (sign=PS256 plus encrypt=ECDH-ES/A128GCM) emits a
       JWE wrapping a JWS; the outer header carries alg=ECDH-ES,
       enc=A128GCM, cty=at+jwt, an iss claim, aud=foo, and no kid.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-015
     severity: P2
@@ -142,7 +156,8 @@ rows:
     behaviour: |
       A nested JWT pinned to encrypt.kid="feb-2020" emits a JWE whose
       outer header kid matches the configured value.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Per-resource-server jwt={alg,kid,key,encrypt} configuration block is a JS oidc-provider concept; the Go API uses op.WithAccessTokenFormat plus audience routing only
 
   - id: TFJ-016
     severity: P1
@@ -151,7 +166,8 @@ rows:
       A nested JWT with sign={} (no explicit alg) plus an encrypt
       block emits a nested envelope whose cty=at+jwt and whose inner
       JWS uses an alg drawn from the issuer keystore default.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-017
     severity: P0
@@ -159,7 +175,8 @@ rows:
     behaviour: |
       Configuring jwt.sign.alg=none is rejected at save time with
       "JWT Access Tokens may not use JWS algorithm \"none\"".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "alg=none has no caller surface: op.WithKeyset accepts asymmetric crypto.Signer entries only (ES256), so an alg=none JWS cannot be reached at runtime; the rejection is structural rather than a runtime save-time error"
 
   - id: TFJ-018
     severity: P0
@@ -167,7 +184,8 @@ rows:
     behaviour: |
       Configuring HS256 without a jwt.sign.key is rejected at save
       time with "missing jwt.sign.key Resource Server configuration".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HMAC client authentication and HS* token signing are out of scope for v1.0 (CA-DISC-04); the OP's keyset accepts asymmetric signers only"
 
   - id: TFJ-019
     severity: P0
@@ -176,7 +194,8 @@ rows:
       Configuring HS256 with an asymmetric public key is rejected at
       save time with "jwt.sign.key Resource Server configuration must
       be a secret (symmetric) key".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HMAC client authentication and HS* token signing are out of scope for v1.0 (CA-DISC-04); the OP's keyset accepts asymmetric signers only"
 
   - id: TFJ-020
     severity: P0
@@ -185,7 +204,8 @@ rows:
       Configuring HS256 with an asymmetric private key is rejected at
       save time with the same "must be a secret (symmetric) key"
       message used for the public-key variant.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "HMAC client authentication and HS* token signing are out of scope for v1.0 (CA-DISC-04); the OP's keyset accepts asymmetric signers only"
 
   - id: TFJ-021
     severity: P0
@@ -195,7 +215,8 @@ rows:
       provider keystore has no matching key is rejected at save time
       with "resolved Resource Server jwt configuration has no
       corresponding key in the provider's keystore".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Go OP issues ES256 only; per-resource alt signing alg pinning (PS256/RS256/ES512) is not on the v1.0 surface
 
   - id: TFJ-022
     severity: P0
@@ -204,7 +225,8 @@ rows:
       Configuring dir/A128GCM with an asymmetric private key is
       rejected at save time with "jwt.encrypt.key Resource Server
       configuration must be a secret (symmetric) or a public key".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-023
     severity: P0
@@ -213,7 +235,8 @@ rows:
       Configuring asymmetric encryption (e.g. ECDH-ES) without a sign
       block is rejected at save time with "missing jwt.sign Resource
       Server configuration"; nested JWTs require an inner signature.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-024
     severity: P1
@@ -221,7 +244,8 @@ rows:
     behaviour: |
       Removing alg from the encrypt block is rejected at save time
       with "missing jwt.encrypt.alg Resource Server configuration".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-025
     severity: P1
@@ -229,7 +253,8 @@ rows:
     behaviour: |
       Removing enc from the encrypt block is rejected at save time
       with "missing jwt.encrypt.enc Resource Server configuration".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-026
     severity: P1
@@ -237,7 +262,8 @@ rows:
     behaviour: |
       Removing key from the encrypt block is rejected at save time
       with "missing jwt.encrypt.key Resource Server configuration".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: JWE / encrypted / nested JWT access tokens are out of scope for v1.0 (encryption feature OOS; see encryption.yaml)
 
   - id: TFJ-027
     severity: P1
@@ -246,17 +272,19 @@ rows:
       Saving a JWT access token MUST NOT call adapter.upsert; the
       JWT-formatted access token is self-contained and is never
       persisted server-side.
-    status: pending
+    status: active
 
   - id: TFJ-028
     severity: P0
     spec: RFC 9068 §2 / RFC 8705 / RFC 9449
     behaviour: |
-      A standard JWT access token sets header typ=at+jwt and a payload
-      containing iss, sub=accountId, client_id, aud=foo, scope, jti,
-      iat, exp, cnf with both x5t#S256 and jkt confirmation values,
-      plus any embedder-supplied extra claims.
-    status: pending
+      A standard bearer JWT access token sets header typ=at+jwt,
+      alg=ES256, and a kid pointing at the active signing key, with a
+      payload containing iss, sub, client_id, aud, scope, jti, iat,
+      and exp. The cnf claim is absent on the bearer default; it
+      appears only when the token is sender-constrained (DPoP jkt or
+      mTLS x5t#S256, covered by the dpop / mtls catalogs).
+    status: active
 
   - id: TFJ-029
     severity: P0
@@ -265,16 +293,19 @@ rows:
       For a pairwise client, the JWT access token sub claim is the
       pairwise subject identifier (not the raw account id); all other
       payload fields match the standard non-pairwise case.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Pairwise subject identifiers are not implemented (PairwiseEnabled=false placeholder); JWT AT sub is always the raw account id
 
   - id: TFJ-030
     severity: P0
     spec: RFC 9068 §2.2
     behaviour: |
       A client_credentials JWT access token sets typ=at+jwt and a
-      payload of sub=client_id, aud=foo, scope, jti, iat, exp, and a
-      cnf object (no end-user sub).
-    status: pending
+      payload of iss, sub=client_id, client_id, aud, scope, jti, iat,
+      and exp (no end-user sub). The cnf claim is absent on the
+      bearer default; it appears only when the token is sender-
+      constrained (DPoP jkt or mTLS x5t#S256).
+    status: active
 
   - id: TFJ-031
     severity: P2
@@ -282,7 +313,8 @@ rows:
     behaviour: |
       Saving a JWT access token emits an access_token.issued audit
       event whose jti matches the JWT's own jti claim.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "No public observability hook for this: the OP emits token.issued only when a refresh token is minted, not on every access-token issuance, and there is no client_credentials.issued event"
 
   - id: TFJ-032
     severity: P2
@@ -291,7 +323,8 @@ rows:
       Saving a client_credentials JWT access token emits a
       client_credentials.issued audit event whose jti matches the
       JWT's own jti claim.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "No public observability hook for this: the OP emits token.issued only when a refresh token is minted, not on every access-token issuance, and there is no client_credentials.issued event"
 
   - id: TFJ-033
     severity: P1
@@ -300,4 +333,5 @@ rows:
       The formats.customizers.jwt hook receives the JWT header and
       payload before signing and may rewrite typ, iss, or any custom
       claim; the emitted JWT reflects the customizer's mutations.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "No formats.customizers.jwt hook on the public API: the Go OP does not expose a per-resource JWT claim mutator; embedders that need extra claims attach them through the user/grant data path, not a token customizer"
