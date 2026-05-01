@@ -24,7 +24,8 @@ rows:
       A legacy structured token whose adapter record carries a stray
       jwt property is treated as unresolvable; find returns nothing
       rather than attempting to interpret the legacy envelope.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-002
     severity: P0
@@ -32,7 +33,8 @@ rows:
     behaviour: |
       A refresh token whose adapter record reports exp=0 is treated
       as expired; RefreshToken.find returns nothing.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-003
     severity: P0
@@ -41,7 +43,8 @@ rows:
       Passing non-string inputs (true, Boolean, 1, Infinity, {}, [],
       a Set) to find returns nothing for every variant without
       panicking or raising a type error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-004
     severity: P0
@@ -50,7 +53,8 @@ rows:
       When the adapter record carries consumed=true, the value
       survives the round-trip and find returns a token whose consumed
       property is true.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-005
     severity: P1
@@ -58,7 +62,8 @@ rows:
     behaviour: |
       Saving a refresh token without an explicit expiresIn causes
       adapter.upsert to receive the global default TTL of 14 days.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-006
     severity: P1
@@ -66,7 +71,8 @@ rows:
     behaviour: |
       Saving a refresh token with expiresIn=60 causes adapter.upsert
       to receive a TTL of 60 seconds.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-007
     severity: P0
@@ -75,7 +81,8 @@ rows:
       After save, advancing the clock 60 seconds, find, and resave,
       the second adapter.upsert receives a TTL of approximately
       14 days minus 60 seconds (within one second of tolerance).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-008
     severity: P1
@@ -84,7 +91,8 @@ rows:
       Across save / find / mutate / save / find / mutate / save, the
       jti returned by save remains the same value for the same token
       instance.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-009
     severity: P0
@@ -93,7 +101,8 @@ rows:
       For a token with expiresWithSession=true, when Session.findByUid
       throws, RefreshToken.find rejects with the same underlying
       error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-010
     severity: P1
@@ -101,7 +110,8 @@ rows:
     behaviour: |
       Saving an authorization code with consumed=true and reading it
       back via find returns a code whose consumed property is true.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
 
   - id: BT-011
     severity: P0
@@ -109,4 +119,5 @@ rows:
     behaviour: |
       When adapter.findByUserCode throws, DeviceCode.findByUserCode
       rejects with the same underlying error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Every BT-NNN row in this feature describes storage adapter contract semantics — refresh-token TTL accounting, consumed-flag round-trip through Save/Find, exception propagation through Session.findByUid / DeviceCode.findByUserCode, and JS-flavoured shapes (`stray jwt property`, `non-string inputs`, `save returns jti`) that don't map onto Go's typed Store interface at all. In go-oidc-provider these guarantees live on the substore interfaces in op/store/{refresh,authcode,session,device}.go and are validated by the reusable contract harness at op/store/contract/ (which every adapter — inmem, sql, redis — runs against). The test/scenarios/ suite is intentionally black-box and wire-level: it drives /authorize, /token, /introspect, /userinfo over httptest and asserts on responses and audit events, not on internal Store call graphs. The wire-level expressions of the BT behaviours (expired refresh → /token invalid_grant; consumed refresh → invalid_grant + chain revoke; consumed code → invalid_grant) are already exercised in refresh.yaml and authorization_code.yaml under their feature-specific IDs."
