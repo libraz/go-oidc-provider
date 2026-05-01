@@ -12,6 +12,7 @@ package scenarios_test
 //   - draft-ietf-oauth-attestation-based-client-auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -19,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -33,6 +35,65 @@ import (
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
+
+// scenarioAuditCapture wraps a slog logger that emits audit events
+// as JSON records into a bytes.Buffer. Tests that assert on emitted
+// audit events build a Provider through this capture so the wire
+// layout observed by an embedder's slog handler is what the test
+// sees. Mirrors the helper in [internal/tokenendpoint/audit_test.go]
+// so a reader who knows that suite can navigate here without
+// re-learning the capture surface.
+type scenarioAuditCapture struct {
+	mu  sync.Mutex
+	buf *bytes.Buffer
+}
+
+func newScenarioAuditCapture() *scenarioAuditCapture {
+	return &scenarioAuditCapture{buf: &bytes.Buffer{}}
+}
+
+func (c *scenarioAuditCapture) logger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(&lockedWriter{c: c}, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+func (c *scenarioAuditCapture) findEvents(name string) []map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []map[string]any
+	dec := json.NewDecoder(strings.NewReader(c.buf.String()))
+	for dec.More() {
+		var rec map[string]any
+		if err := dec.Decode(&rec); err != nil {
+			return out
+		}
+		if rec["audit"] != "true" {
+			continue
+		}
+		if rec["event"] == name {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+func (c *scenarioAuditCapture) dump() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+// lockedWriter serialises slog writes against scenarioAuditCapture's
+// buffer so concurrent emissions during table-driven sub-tests do not
+// produce interleaved JSON lines.
+type lockedWriter struct {
+	c *scenarioAuditCapture
+}
+
+func (w *lockedWriter) Write(p []byte) (int, error) {
+	w.c.mu.Lock()
+	defer w.c.mu.Unlock()
+	return w.c.buf.Write(p)
+}
 
 // caTokenResponse captures the wire shape every CA-* assertion needs:
 // HTTP status, the parsed JSON envelope, and the WWW-Authenticate
@@ -695,9 +756,95 @@ func TestScenario_CA_BASIC_03_BasicAcceptedForPostRegisteredClient(t *testing.T)
 	t.Skip("pending: CA-BASIC-03")
 }
 
+// TestScenario_CA_BASIC_04_AppendixBFormURLEncoding pins the Appendix B
+// encoding rule on HTTP Basic credentials: client_id and client_secret
+// MUST be application/x-www-form-urlencoded before being joined with
+// ":" and base64-encoded. Credentials containing %, &, +, and space
+// authenticate successfully under that encoding because the OP
+// form-url-decodes each side after the base64 split. A registry value
+// that contains a literal "+" arrives at the OP encoded as "%2B"; an
+// untransformed "+" decodes to a space, so the wire shape and the
+// stored shape differ unless the client encoded properly.
+//
+// Spec: RFC 6749 §2.3.1 / Appendix B.
 func TestScenario_CA_BASIC_04_AppendixBFormURLEncoding(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-BASIC-04")
+
+	cases := []struct {
+		name     string
+		clientID string
+		secret   string
+	}{
+		{
+			name:     "SpaceInSecret",
+			clientID: "ca-basic-04-space",
+			secret:   "secret with space",
+		},
+		{
+			name:     "AmpersandInSecret",
+			clientID: "ca-basic-04-amp",
+			secret:   "secret&with&amp",
+		},
+		{
+			name:     "PercentInSecret",
+			clientID: "ca-basic-04-pct",
+			secret:   "secret%with%pct",
+		},
+		{
+			name:     "PlusInSecret",
+			clientID: "ca-basic-04-plus",
+			secret:   "secret+with+plus",
+		},
+		{
+			name:     "SpaceAndPlusInClientID",
+			clientID: "ca-basic 04+id",
+			secret:   "ca-basic-04-secret",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tk := testkit.NewProvider(t)
+			registerCASecretClient(t, tk, tc.clientID, tc.secret, "client_secret_basic")
+
+			form := url.Values{
+				"grant_type":    {"refresh_token"},
+				"refresh_token": {"opaque-refresh-token-never-reached"},
+			}
+			// req.SetBasicAuth applies application/x-www-form-urlencoded
+			// to neither side; manually encode per Appendix B so the OP
+			// receives the canonical RFC 6749 §2.3.1 wire shape.
+			encodedID := url.QueryEscape(tc.clientID)
+			encodedSecret := url.QueryEscape(tc.secret)
+			cred := encodedID + ":" + encodedSecret
+			authValue := "Basic " + base64.StdEncoding.EncodeToString([]byte(cred))
+
+			resp := postTokenForm(t, tk, form, func(req *http.Request) {
+				req.Header.Set("Authorization", authValue)
+			})
+
+			// Authentication succeeds → the request reaches the
+			// refresh-token resolution path, where the bogus token
+			// fails with 400 invalid_grant. The wire signal that
+			// authentication PASSED is "the response is NOT
+			// invalid_client". An Appendix-B-broken decoder would
+			// instead fail with 401 invalid_client because the
+			// secret would not match.
+			gotErr, _ := resp.Body["error"].(string)
+			if gotErr == "invalid_client" {
+				t.Fatalf("authentication failed with invalid_client (status=%d, body=%v); credentials of shape %q/%q must succeed under Appendix B form-url-decoding",
+					resp.StatusCode, resp.Body, tc.clientID, tc.secret)
+			}
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status=%d want 400 invalid_grant (auth passed, refresh token bogus); body=%v",
+					resp.StatusCode, resp.Body)
+			}
+			if gotErr != "invalid_grant" {
+				t.Errorf("error=%q want invalid_grant (auth passed); body=%v", gotErr, resp.Body)
+			}
+		})
+	}
 }
 
 // TestScenario_CA_BASIC_05_BasicHeaderBodyClientIDMismatch presents
@@ -2017,13 +2164,109 @@ func TestScenario_CA_DISC_06_RevocationIntrospectionMethodsParity(t *testing.T) 
 	}
 }
 
+// TestScenario_CA_DISC_07_MTLSEndpointAliasesGated verifies the
+// feature-gated emission of mtls_endpoint_aliases (RFC 8705 §5):
+// without MTLS the field is structurally absent; with MTLS but no
+// embedder-supplied alias map the field stays absent (the canonical
+// *_endpoint values are reachable over mTLS at a single hostname);
+// with MTLS plus an alias map the field carries exactly the
+// embedder-supplied URLs. The wire shape never invents alias entries
+// the embedder did not declare, so a deployment that fronts a single
+// hostname keeps the field omitted.
+//
+// Spec: RFC 8705 §5.
 func TestScenario_CA_DISC_07_MTLSEndpointAliasesGated(t *testing.T) {
 	t.Parallel()
-	// internal/discovery/document.go does not yet model the
-	// mtls_endpoint_aliases field, so neither the off-state nor the
-	// on-state of the row can be exercised. Leave pending until the
-	// mTLS feature wires the alias map into the discovery builder.
-	t.Skip("pending: CA-DISC-07")
+
+	t.Run("DefaultOpHasNoMTLSAliases", func(t *testing.T) {
+		t.Parallel()
+		tk := testkit.NewProvider(t)
+		doc := caFetchDiscovery(t, tk)
+		if _, ok := doc["mtls_endpoint_aliases"]; ok {
+			t.Errorf("mtls_endpoint_aliases must be absent when MTLS is disabled; got %v",
+				doc["mtls_endpoint_aliases"])
+		}
+	})
+
+	t.Run("MTLSEnabledWithoutEmbedderAliasesStaysAbsent", func(t *testing.T) {
+		t.Parallel()
+		tk := testkit.NewProvider(t,
+			testkit.WithOptions(op.WithFeature(feature.MTLS)),
+		)
+		doc := caFetchDiscovery(t, tk)
+		if _, ok := doc["mtls_endpoint_aliases"]; ok {
+			t.Errorf("mtls_endpoint_aliases must be absent when no aliases were supplied; got %v",
+				doc["mtls_endpoint_aliases"])
+		}
+		if got, _ := doc["tls_client_certificate_bound_access_tokens"].(bool); !got {
+			t.Errorf("tls_client_certificate_bound_access_tokens=false want true (MTLS enabled)")
+		}
+	})
+
+	t.Run("MTLSEnabledWithAliasesEmits", func(t *testing.T) {
+		t.Parallel()
+		aliases := map[string]string{
+			"token_endpoint":         "https://mtls.op.testkit.invalid/oidc/token",
+			"introspection_endpoint": "https://mtls.op.testkit.invalid/oidc/introspect",
+			"revocation_endpoint":    "https://mtls.op.testkit.invalid/oidc/revoke",
+			"userinfo_endpoint":      "https://mtls.op.testkit.invalid/oidc/userinfo",
+			"registration_endpoint":  "https://mtls.op.testkit.invalid/oidc/register",
+		}
+		tk := testkit.NewProvider(t,
+			testkit.WithOptions(
+				op.WithFeature(feature.MTLS),
+				op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+					MTLSEndpointAliases: aliases,
+				}),
+			),
+		)
+		doc := caFetchDiscovery(t, tk)
+		raw, ok := doc["mtls_endpoint_aliases"]
+		if !ok {
+			t.Fatalf("mtls_endpoint_aliases missing from discovery; doc=%v", doc)
+		}
+		got, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("mtls_endpoint_aliases is %T, want map[string]any", raw)
+		}
+		if len(got) != len(aliases) {
+			t.Errorf("mtls_endpoint_aliases has %d entries, want %d (got=%v)",
+				len(got), len(aliases), got)
+		}
+		for k, want := range aliases {
+			gotVal, present := got[k]
+			if !present {
+				t.Errorf("mtls_endpoint_aliases missing key %q (got=%v)", k, got)
+				continue
+			}
+			if gotStr, _ := gotVal.(string); gotStr != want {
+				t.Errorf("mtls_endpoint_aliases[%q]=%v want %q", k, gotVal, want)
+			}
+		}
+	})
+
+	t.Run("AliasesWithoutMTLSStayAbsent", func(t *testing.T) {
+		t.Parallel()
+		// The option carries aliases but MTLS is off; the discovery
+		// builder structurally drops the map so the field never lands
+		// on the wire. This keeps the option safe to leave in place
+		// across feature toggles without an extra branch in embedder
+		// configuration.
+		tk := testkit.NewProvider(t,
+			testkit.WithOptions(
+				op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+					MTLSEndpointAliases: map[string]string{
+						"token_endpoint": "https://mtls.op.testkit.invalid/oidc/token",
+					},
+				}),
+			),
+		)
+		doc := caFetchDiscovery(t, tk)
+		if _, ok := doc["mtls_endpoint_aliases"]; ok {
+			t.Errorf("mtls_endpoint_aliases must be absent when MTLS feature is disabled; got %v",
+				doc["mtls_endpoint_aliases"])
+		}
+	})
 }
 
 // TestScenario_CA_ERR_01_InvalidClient401WithConditionalChallenge drives
@@ -2120,7 +2363,113 @@ func TestScenario_CA_ERR_04_AuthFlowRateLimitOPScoped(t *testing.T) {
 	t.Skip("pending: CA-ERR-04")
 }
 
+// TestScenario_CA_ERR_05_ClientAuthnFailureAuditEvent pins the
+// post-failure audit signal: every pre-issuance client authentication
+// failure at /token raises a "client_authn.failure" audit event
+// carrying the auth method (when known), a short reason code, and the
+// failing client_id (when known). The wire response stays at the
+// canonical RFC 6749 §5.2 invalid_client envelope, so the audit stream
+// is the only place SOC tooling can spot probing patterns the wire
+// response deliberately hides.
+//
+// Spec: RFC 6749 §5.2; structured-event practice from RFC 8417
+// (Security Event Token).
 func TestScenario_CA_ERR_05_ClientAuthnFailureAuditEvent(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ERR-05")
+
+	cases := []struct {
+		name         string
+		clientID     string // empty means do not register a client
+		registerOnly bool
+		decorate     func(req *http.Request)
+		wantClientID string
+		wantMethod   string
+		wantReason   string
+	}{
+		{
+			name:         "BadSecret",
+			clientID:     "rp-ca-err-05-bad-secret",
+			registerOnly: true,
+			decorate: func(req *http.Request) {
+				req.SetBasicAuth("rp-ca-err-05-bad-secret", "wrong-secret")
+			},
+			wantClientID: "rp-ca-err-05-bad-secret",
+			wantMethod:   "client_secret_basic",
+			wantReason:   "invalid_client_credentials",
+		},
+		{
+			name:     "UnknownClient",
+			clientID: "",
+			decorate: func(req *http.Request) {
+				req.SetBasicAuth("rp-ca-err-05-not-registered", "any-secret")
+			},
+			wantClientID: "rp-ca-err-05-not-registered",
+			wantMethod:   "client_secret_basic",
+			// lookupClient maps store.ErrNotFound onto
+			// clientauth.ErrCredentialsInvalid to keep the wire
+			// response indistinguishable from "wrong secret".
+			wantReason: "invalid_client_credentials",
+		},
+		{
+			name:         "NoCredentials",
+			clientID:     "",
+			decorate:     nil,
+			wantClientID: "",
+			wantMethod:   "",
+			wantReason:   "no_credentials",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			capture := newScenarioAuditCapture()
+			tk := testkit.NewProvider(t,
+				testkit.WithOptions(op.WithAuditLogger(capture.logger())),
+			)
+			if tc.registerOnly {
+				registerCASecretClient(t, tk, tc.clientID,
+					"rp-ca-err-05-correct-secret", "client_secret_basic")
+			}
+
+			form := url.Values{
+				"grant_type":    {"refresh_token"},
+				"refresh_token": {"opaque-refresh-token-never-reached"},
+			}
+			resp := postTokenForm(t, tk, form, tc.decorate)
+			if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status=%d want 400 or 401, body=%v", resp.StatusCode, resp.Body)
+			}
+			if got, _ := resp.Body["error"].(string); got == "" {
+				t.Fatalf("error field missing on failure response: %v", resp.Body)
+			}
+
+			events := capture.findEvents(string(op.AuditClientAuthnFailure))
+			if len(events) != 1 {
+				t.Fatalf("got %d client_authn.failure events, want exactly 1; capture=%s",
+					len(events), capture.dump())
+			}
+			rec := events[0]
+			gotID, _ := rec["client_id"].(string)
+			if gotID != tc.wantClientID {
+				t.Errorf("client_id=%q want %q", gotID, tc.wantClientID)
+			}
+			extras, _ := rec["extras"].(map[string]any)
+			if extras == nil {
+				t.Fatalf("extras missing on client_authn.failure: %v", rec)
+			}
+			if got, _ := extras["reason"].(string); got != tc.wantReason {
+				t.Errorf("extras.reason=%q want %q", got, tc.wantReason)
+			}
+			if tc.wantMethod == "" {
+				if _, present := extras["method"]; present {
+					t.Errorf("extras.method present (=%v) but credentials were unparseable; want absent",
+						extras["method"])
+				}
+			} else if got, _ := extras["method"].(string); got != tc.wantMethod {
+				t.Errorf("extras.method=%q want %q", got, tc.wantMethod)
+			}
+		})
+	}
 }

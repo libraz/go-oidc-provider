@@ -151,6 +151,7 @@ rows:
       application/x-www-form-urlencoded before being joined with ":"
       and base64-encoded. Credentials containing %, &, +, and space
       MUST authenticate successfully under that encoding.
+    status: active
 
   - id: CA-BASIC-05
     severity: P0
@@ -218,6 +219,18 @@ rows:
       When the client's client_secret_expires_at is in the past, the
       OP returns 400 invalid_client with description
       "secret is expired".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_expires_at-driven secret rotation is out of
+      scope: the OP has no rotation policy, the
+      [op/store.Client] surface does not carry the expiry field,
+      and production deployments rotate via re-registration / DCR
+      rather than by aging an in-place secret. Adding an expiry
+      column on every Storage adapter (sql, redis, in-memory)
+      without a real use case expands the public Storage surface
+      for a feature no embedder has asked for; pair with CA-POST-05
+      (the same rule on client_secret_post). Will be revisited if
+      an embedder requests the rotation policy.
 
   - id: CA-POST-01
     severity: P0
@@ -262,6 +275,13 @@ rows:
     behaviour: |
       When client_secret_expires_at is in the past, the OP returns
       400 invalid_client with description "secret is expired".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_expires_at-driven secret rotation is out of
+      scope (see CA-BASIC-10 for the full rationale). Same rule
+      stated for the client_secret_post path; the OP rotates
+      secrets via re-registration / DCR rather than by aging an
+      in-place secret.
 
   - id: CA-POST-06
     severity: P2
@@ -1181,6 +1201,7 @@ rows:
     behaviour: |
       mtls_endpoint_aliases is published only when mTLS is enabled,
       so the cert-binding endpoint family is advertised separately.
+    status: active
 
   - id: CA-ERR-01
     severity: P0
@@ -1237,3 +1258,4 @@ rows:
       An audit event client_authn.failure is emitted on every
       failure (carrying method, reason, and client_id only when the
       client_id is known).
+    status: active
