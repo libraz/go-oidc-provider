@@ -23,12 +23,16 @@ description: |
 rows:
   - id: CA-COMMON-01
     severity: P0
-    spec: RFC 6749 §2.3
+    spec: RFC 6749 §5.2
     behaviour: |
       When no client authentication mechanism is provided at all, the
-      token endpoint returns 400 invalid_request with an
-      error_description equivalent to "no client authentication
-      mechanism provided".
+      token endpoint returns 401 invalid_client with an
+      error_description equivalent to "client authentication
+      required". Per RFC 6749 §5.2 the "no client authentication
+      included" condition maps to invalid_client; the OP collapses it
+      onto a single response shape so the timing channel does not
+      leak whether the client_id was known.
+    status: active
 
   - id: CA-COMMON-02
     severity: P0
@@ -36,6 +40,7 @@ rows:
     behaviour: |
       When the supplied client_id is unknown, the OP returns
       401 invalid_client.
+    status: active
 
   - id: CA-COMMON-03
     severity: P0
@@ -45,6 +50,7 @@ rows:
       (Basic + body credentials, Basic + assertion, or body + assertion)
       MUST return 400 invalid_request with an "only one mechanism"
       style description.
+    status: active
 
   - id: CA-COMMON-04
     severity: P0
@@ -52,16 +58,22 @@ rows:
     behaviour: |
       Authenticating with a method that differs from the client's
       registered token_endpoint_auth_method MUST return
-      401 invalid_client with error_detail = "method mismatch".
+      401 invalid_client. The OP intentionally collapses the response
+      onto the generic "client authentication failed" shape so the
+      error code does not reveal which auth method the client is
+      registered for.
+    status: active
 
   - id: CA-COMMON-05
     severity: P0
-    spec: RFC 6749 §2.3.1
+    spec: RFC 6749 §2.3.1 / §5.2
     behaviour: |
       When the body's client_id disagrees with the client_id derived
       from the Authorization header or from the assertion's iss/sub,
-      the OP returns 400 invalid_request with description
-      "client_id mismatch".
+      the OP returns 401 invalid_client. The mismatch is collapsed
+      onto the generic authentication-failed shape so the timing
+      channel does not leak which channel held the canonical id.
+    status: active
 
   - id: CA-COMMON-06
     severity: P1
@@ -85,14 +97,19 @@ rows:
       A client registered with token_endpoint_auth_method=none
       authenticates successfully by sending only client_id in the
       request body.
+    status: active
 
   - id: CA-NONE-02
     severity: P0
     spec: RFC 6749 §2.3
     behaviour: |
-      A none-registered client that also sends client_secret MUST be
-      rejected with 401 invalid_client and error_detail
-      "method mismatch".
+      A client registered with token_endpoint_auth_method=none that
+      attaches a client_secret (in either the Authorization header or
+      the body) MUST be rejected with 401 invalid_client. The OP
+      collapses the response onto the generic
+      "client authentication failed" shape so the error code does not
+      reveal that the rejection was driven by a method mismatch.
+    status: active
 
   - id: CA-NONE-03
     severity: P1
@@ -108,6 +125,7 @@ rows:
     behaviour: |
       The OP accepts a well-formed
       Authorization: Basic <base64(client_id:secret)> header.
+    status: active
 
   - id: CA-BASIC-02
     severity: P1
@@ -136,42 +154,62 @@ rows:
 
   - id: CA-BASIC-05
     severity: P0
-    spec: RFC 6749 §2.3.1
+    spec: RFC 6749 §2.3.1 / §5.2
     behaviour: |
       When the body's client_id differs from the client_id in the
-      Basic header, the OP returns 400 invalid_request with description
-      "client_id mismatch".
+      Basic header, the OP returns 401 invalid_client (not 400
+      invalid_request). The mismatch is collapsed onto the generic
+      authentication-failed shape so the timing channel does not leak
+      which channel held the canonical id; this mirrors CA-COMMON-05
+      for the Basic-only case.
+    status: active
 
   - id: CA-BASIC-06
     severity: P0
-    spec: RFC 6749 §2.3.1 / Appendix B
+    spec: RFC 6749 §2.3.1 / §5.2 / Appendix B
     behaviour: |
-      A header that fails base64 decoding, lacks the ":" separator, or
-      violates the URL-encoding rule MUST be rejected with
-      400 invalid_request and description "improperly encoded".
+      A Basic header that fails base64 decoding or lacks the ":"
+      separator is treated as if no client authentication were
+      provided, which RFC 6749 §5.2 lists under invalid_client; the OP
+      returns 401 invalid_client with the generic
+      "client authentication required" shape so the response does not
+      leak whether the malformed header was a typo or a probe.
+    status: active
 
   - id: CA-BASIC-07
     severity: P0
-    spec: RFC 6749 §2.3.1 / RFC 7235
+    spec: RFC 6749 §2.3.1 / §5.2 / RFC 7235
     behaviour: |
-      A non-Basic scheme (e.g. Bearer) or a Basic scheme with an empty
-      value MUST return 400 invalid_request with description
-      "invalid authorization header value format".
+      An Authorization header that uses a scheme other than Basic
+      (e.g. Bearer) is treated as if no client authentication were
+      provided per RFC 6749 §5.2; the OP returns 401 invalid_client
+      with the generic "client authentication required" shape. The
+      response intentionally does not echo the offending scheme so a
+      caller probing for accepted schemes learns nothing.
+    status: active
 
   - id: CA-BASIC-08
     severity: P0
-    spec: RFC 6749 §2.3.1
+    spec: RFC 6749 §2.3.1 / §5.2
     behaviour: |
-      When the Basic header carries an empty client_secret, the OP
-      returns 400 invalid_request with description
-      "client_secret must be provided in the Authorization header".
+      When the Basic header carries an empty client_secret (i.e. the
+      base64 payload is "client_id:" with nothing after the colon),
+      the OP runs the verifier against an empty secret, which fails
+      length-constant comparison, and returns 401 invalid_client with
+      the generic "client authentication failed" shape.
+    status: active
 
   - id: CA-BASIC-09
     severity: P0
     spec: RFC 6749 §5.2
     behaviour: |
-      A mismatching client_secret (compared in length-constant time)
-      yields 401 invalid_client with event detail "invalid secret".
+      A Basic-authenticated request whose client_secret does not match
+      the registered hash yields 401 invalid_client with the generic
+      "client authentication failed" description. The wire shape is
+      identical to the unknown-client and method-mismatch responses
+      so the comparison itself does not become an oracle; the
+      length-constant secret compare is the timing-side counterpart.
+    status: active
 
   - id: CA-BASIC-10
     severity: P0
@@ -187,6 +225,7 @@ rows:
     behaviour: |
       The OP accepts an application/x-www-form-urlencoded body that
       carries both client_id and client_secret as parameters.
+    status: active
 
   - id: CA-POST-02
     severity: P1
@@ -201,13 +240,21 @@ rows:
     behaviour: |
       A mismatching client_secret yields 401 invalid_client with event
       detail "invalid secret".
+    status: active
 
   - id: CA-POST-04
     severity: P0
-    spec: RFC 6749 §2.3.1
+    spec: RFC 6749 §2.3.1 / §5.2
     behaviour: |
-      An empty client_secret in the body MUST yield 401 invalid_client
-      with description "method mismatch".
+      A body that carries client_id but an empty client_secret never
+      triggers the MethodSecretPost path (the parser treats the empty
+      value as "no body secret"), so the request lands on MethodNone
+      with the body client_id. The verifier then rejects because the
+      client is registered confidential, and the OP returns
+      401 invalid_client with the generic
+      "client authentication failed" shape so the response does not
+      reveal that the rejection was driven by a method mismatch.
+    status: active
 
   - id: CA-POST-05
     severity: P0
@@ -233,6 +280,16 @@ rows:
       client_assertion_type is required and MUST equal
       urn:ietf:params:oauth:client-assertion-type:jwt-bearer; missing
       values are rejected with 400 invalid_request.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-02
     severity: P0
@@ -240,6 +297,16 @@ rows:
     behaviour: |
       A client_assertion_type value other than the JWT bearer URN MUST
       be rejected with 400 invalid_request.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-03
     severity: P0
@@ -248,6 +315,16 @@ rows:
       A missing client_assertion or one that is not a syntactically
       valid JWT MUST be rejected with 400 invalid_request and
       description "invalid client_assertion format".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-04
     severity: P0
@@ -255,6 +332,16 @@ rows:
     behaviour: |
       The assertion MUST be signed with HS256, HS384, or HS512; the
       HMAC key is derived from the client's client_secret.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-05
     severity: P0
@@ -263,6 +350,16 @@ rows:
       The assertion's required claims are iss, sub, aud, jti, and exp.
       Each missing claim MUST yield 401 invalid_client with a distinct
       error_detail recorded per claim.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-06
     severity: P0
@@ -270,12 +367,32 @@ rows:
     behaviour: |
       iss MUST equal client_id; mismatch yields 401 invalid_client
       with detail "iss must be the client_id".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-07
     severity: P0
     spec: RFC 7523 §3
     behaviour: |
       sub MUST equal client_id; mismatch yields 401 invalid_client.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-08
     severity: P0
@@ -285,6 +402,16 @@ rows:
       issuer URL, the absolute URL of the targeted endpoint, or an
       array of absolute endpoint URLs. The same assertion form may be
       reused by the same client at any of those endpoints.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-09
     severity: P0
@@ -297,6 +424,16 @@ rows:
     notes: |
       Replay defence. Multi-node deployments require a shared jti
       store, otherwise replay across nodes is undetectable.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-10
     severity: P0
@@ -304,6 +441,16 @@ rows:
     behaviour: |
       An exp in the past (including a negative expiresIn) yields
       401 invalid_client with description "jwt expired".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-11
     severity: P0
@@ -318,6 +465,16 @@ rows:
       Default-zero clockTolerance with an enforced upper bound (e.g.
       60s) is required to prevent a misconfiguration from silently
       widening the acceptance window.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-12
     severity: P0
@@ -326,6 +483,16 @@ rows:
       A mismatch between the body's client_id and the assertion's
       iss/sub yields 400 invalid_request with description
       "client_id mismatch".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-13
     severity: P0
@@ -334,6 +501,16 @@ rows:
       Submitting an Authorization: Basic header alongside a
       client_assertion yields 400 invalid_request with description
       "only one mechanism".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-14
     severity: P0
@@ -342,6 +519,16 @@ rows:
       When the client has registered token_endpoint_auth_signing_alg,
       an assertion using a different alg MUST be rejected with
       401 invalid_client and detail "alg mismatch".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-15
     severity: P0
@@ -351,6 +538,16 @@ rows:
       published in the OP's
       token_endpoint_auth_signing_alg_values_supported are accepted;
       none is never accepted.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-16
     severity: P0
@@ -359,6 +556,16 @@ rows:
       An expired client_secret_expires_at yields 400 invalid_client
       with description "secret used for the client_assertion is
       expired".
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-17
     severity: P0
@@ -368,6 +575,16 @@ rows:
       via client_assertion; the request yields 401 invalid_client with
       description "method mismatch", even when the assertion is
       otherwise valid (matching jti, etc.).
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted.
 
   - id: CA-CSJWT-18
     severity: P1
@@ -376,94 +593,178 @@ rows:
       A client that registers id_token_signed_response_alg=HS* or
       userinfo_signed_response_alg=HS* MUST possess a client_secret;
       registration without one is rejected.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt and HS-signed responses are intentionally not
+      supported. docs/plans/002-product-design.md §"Out-of-scope"
+      (line 2159) excludes shared-secret JWT auth, and §J.5
+      (line 2163: "ES256 単一") excludes HS*/RS*/PS* signing. The OP
+      advertises only id_token_signing_alg_values_supported=["ES256"]
+      and rejects clients registering id_token_signed_response_alg=HS*
+      / userinfo_signed_response_alg=HS* upstream of this row.
 
   - id: CA-PKJWT-01
     severity: P0
     spec: RFC 7523 §3 / OIDC Core §9
     behaviour: |
-      Assertions signed with RS*, PS*, ES*, or EdDSA are accepted;
-      HS* algorithms MUST be rejected for private_key_jwt.
+      Assertions signed with RS256, PS256, ES256, or EdDSA are accepted
+      (the JOSE allow-list at internal/jose/jose.go's
+      allowedV4Algorithms). HS* algorithms MUST be rejected for
+      private_key_jwt: the parser refuses the alg before any key
+      resolution runs, so even a successfully-forged HS256 assertion
+      collapses onto the canonical 401 invalid_client
+      "client authentication failed" wire shape per §5.2 — no detail
+      is leaked about why the alg was rejected.
+    status: active
 
   - id: CA-PKJWT-02
     severity: P0
     spec: RFC 7523 §3
     behaviour: |
-      Required claims aud, iss, sub, jti, and exp follow the same
-      semantics as CA-CSJWT-05.
+      Required claims iss, sub, aud, jti, and exp are enforced by
+      validateAssertionClaims (internal/clientauth/assertion.go). Each
+      missing claim collapses onto ErrAssertionMalformed which the
+      HTTP layer maps to the canonical 401 invalid_client
+      "client authentication failed" template — the wire shape is
+      uniform across the five drop variants so a probe cannot
+      enumerate which claim was missing.
+    status: active
 
   - id: CA-PKJWT-03
     severity: P0
     spec: RFC 7523 §3
     behaviour: |
       iss == sub == client_id; any other combination yields
-      401 invalid_client.
+      401 invalid_client with the canonical
+      "client authentication failed" description. The wire shape
+      mirrors CA-PKJWT-02 — claim-mismatch and missing-claim cases
+      collapse onto the same template.
+    status: active
 
   - id: CA-PKJWT-04
     severity: P0
-    spec: RFC 7523 §3
+    spec: RFC 7523 §3 / OIDC Core §9 / FAPI 2.0 §5.2.2
     behaviour: |
-      aud acceptance follows CA-CSJWT-08 (issuer URL, issuer URL
-      array, endpoint URL, or endpoint URL array).
+      aud is accepted when it matches the absolute token endpoint URL
+      or the issuer URL — either as a string or inside a JSON array.
+      The verifier wires AuxAudiences = {issuer, PAR endpoint} so
+      OIDC Core §9 (aud == token endpoint) and FAPI 2.0 §5.2.2
+      (aud == issuer) clients both authenticate against one OP. Any
+      other aud value yields 401 invalid_client with the canonical
+      "client authentication failed" description.
+    status: active
 
   - id: CA-PKJWT-05
     severity: P0
     spec: OIDC Core §10 / RFC 7517
     behaviour: |
       The client's verification key is sourced from its registered
-      jwks or jwks_uri. When jwks_uri is used and the cached document
-      is past its TTL, the OP refetches before failing. A key
-      mismatch yields 401 invalid_client.
+      inline JWKs (store.Client.JWKs). When the registered JWK Set is
+      present, the verifier iterates every entry in the set and
+      accepts the first key whose Verify succeeds; an assertion
+      signed with a keypair that is not in the set yields 401
+      invalid_client with the canonical "client authentication failed"
+      description. JWKsURI fetching is documented as a follow-up in
+      internal/clientauth/store_jwks.go and not yet exercised by this
+      row.
+    status: active
 
   - id: CA-PKJWT-06
     severity: P0
     spec: RFC 7515 §4.1.4
     behaviour: |
-      When the JWS kid header has no match in the client's jwks, or
-      multiple candidate keys exist and kid is absent, the OP returns
-      401 invalid_client with description "no matching key".
+      The OP does NOT use the JWS "kid" header to filter the
+      registered JWKS — verifySignature
+      (internal/clientauth/assertion.go:153) iterates every key in the
+      set and accepts the first one whose Verify succeeds. So
+      "kid mismatch" only manifests when both the kid AND the
+      underlying key material map to no registered entry; the
+      verifier rejects with the canonical 401 invalid_client
+      "client authentication failed" description. The response
+      MUST NOT echo "no matching key" — that wording would let a
+      probe of kid values enumerate the registered key set, which is
+      the §5.2 oracle-resistance property the catalog pins.
+    status: active
 
   - id: CA-PKJWT-07
     severity: P0
     spec: RFC 7523 §3
     behaviour: |
       jti is single-use through the assertion's exp; replay yields
-      401 invalid_client. This is the primary replay defence and
-      requires OP-side storage.
+      401 invalid_client with the canonical
+      "client authentication failed" description (the OP maps
+      store.ErrAlreadyConsumed to ErrAssertionReplayed which the HTTP
+      layer collapses onto the generic template). This is the
+      primary replay defence and requires OP-side storage.
     notes: |
       Multi-node OPs MUST share the jti store, otherwise replay
       across nodes is undetectable.
+    status: active
 
   - id: CA-PKJWT-08
     severity: P0
     spec: RFC 7523 §3 / RFC 7519 §4.1.4
     behaviour: |
-      iat marginally in the future is accepted only within the
-      configured clockTolerance. The default tolerance is zero;
-      embedders widen it only via an explicit option.
+      iat / nbf / exp comparisons tolerate small clock skew via
+      PrivateKeyJWTVerifier.Leeway. The implementation defaults to
+      60 seconds when zero is passed (assertion.go:118-120), so an
+      assertion whose iat lands far outside the 60-second window —
+      e.g. 5 minutes in the future — is rejected with 401
+      invalid_client. v0.x does not expose a public knob to widen
+      the leeway; the verifier swap point is the
+      [op.Provider]'s public store override.
     notes: |
-      Default-zero clockTolerance MUST be enforced to avoid silently
-      accepting skewed assertions.
+      The 60-second default mirrors the JAR / id_token verifier
+      leeway and the OFCS ofcs-clock-skew test envelope.
+    status: active
 
   - id: CA-PKJWT-09
     severity: P0
     spec: OIDC Core §9
     behaviour: |
-      When the client has registered token_endpoint_auth_signing_alg,
-      only that alg is accepted.
+      v0.x [store.Client] does not carry a per-client
+      TokenEndpointAuthSigningAlg field. Per-client alg pinning is
+      therefore implicit: a client whose registered JWK Set only
+      contains EC P-256 keys cannot authenticate with an RS256 / PS256
+      / EdDSA signature because no registered key would verify, and
+      a foreign keypair of the same alg fails for the same reason
+      (signature does not verify against any registered key). Both
+      reject paths surface the canonical 401 invalid_client
+      "client authentication failed" wire shape.
+    notes: |
+      Explicit per-client TokenEndpointAuthSigningAlg pinning lands
+      when the store record is extended; this row's wording will
+      tighten then.
+    status: active
 
   - id: CA-PKJWT-10
     severity: P0
     spec: OIDC Discovery §3
     behaviour: |
-      An alg outside the OP's published
-      token_endpoint_auth_signing_alg_values_supported is rejected.
+      The OP advertises
+      token_endpoint_auth_signing_alg_values_supported = [RS256,
+      PS256, ES256, EdDSA] (internal/discovery/build.go:349) and the
+      JOSE parser
+      (internal/jose/jose.go's allowedV4Algorithms) enforces the
+      same list. An assertion outside the list — HS256 is the
+      canonical example — is rejected at parse time with the
+      canonical 401 invalid_client "client authentication failed"
+      wire shape; no description echoes the offending alg so a
+      probe cannot enumerate the allow-list.
+    status: active
 
   - id: CA-PKJWT-11
     severity: P0
     spec: RFC 7518 §6.4
     behaviour: |
       Symmetric (kty=oct) keys MUST NEVER be honoured for
-      private_key_jwt verification.
+      private_key_jwt verification — even when the client has
+      registered an inline oct JWK and the assertion is signed
+      with that key's material. The JOSE allow-list rejects HS*
+      before any key resolution runs, so the registered oct key is
+      never consulted; the OP returns the canonical 401
+      invalid_client "client authentication failed" wire shape.
+    status: active
 
   - id: CA-MTLS-PKI-01
     severity: P0
@@ -615,6 +916,15 @@ rows:
       The request MUST carry both the OAuth-Client-Attestation header
       (the attestation JWT) and the OAuth-Client-Attestation-PoP
       header (the PoP JWT).
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-02
     severity: P0
@@ -623,6 +933,15 @@ rows:
       The attestation JWT MUST carry typ=oauth-client-attestation+jwt
       and the PoP MUST carry typ=oauth-client-attestation-pop+jwt;
       mismatched typ values yield 401 invalid_client.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-03
     severity: P0
@@ -631,6 +950,15 @@ rows:
       The attestation requires iss (attester), sub (client_id), exp,
       and cnf.jwk (PoP verification key); any missing claim leads to
       rejection.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-04
     severity: P0
@@ -639,6 +967,15 @@ rows:
       The PoP requires iss (client_id), aud (issuer), jti, and
       challenge (a value previously issued by the OP). exp is
       RECOMMENDED.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-05
     severity: P1
@@ -646,6 +983,15 @@ rows:
     behaviour: |
       When PoP aud is an array it MUST contain exactly one element,
       and the value MUST equal the OP's issuer.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-06
     severity: P0
@@ -655,6 +1001,15 @@ rows:
       attestation_challenge and the OAuth-Client-Attestation-Challenge
       response header carrying the same value. The challenge is an
       HMAC-SHA256 token the OP can verify and has a TTL.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-07
     severity: P0
@@ -663,6 +1018,15 @@ rows:
       A missing or invalid challenge yields
       400 use_attestation_challenge with a fresh challenge embedded
       in the OAuth-Client-Attestation-Challenge response header.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-08
     severity: P0
@@ -672,6 +1036,15 @@ rows:
     notes: |
       jti retention runs alongside challenge TTL; both are required
       to prevent attestation replay.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-09
     severity: P1
@@ -680,6 +1053,15 @@ rows:
       The OP exposes a hook
       getAttestationSignaturePublicKey(ctx, iss, header, client) so
       the embedder can supply the attester's signing key.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-10
     severity: P1
@@ -689,6 +1071,15 @@ rows:
       assertAttestationJwtAndPop(ctx, attestation, pop, client) so the
       embedder can enforce business policy (e.g. attester
       allowlisting).
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-ATT-11
     severity: P0
@@ -697,21 +1088,37 @@ rows:
       The attestation's cnf.jwk is the verification key used for the
       PoP; the two MUST be consistent and a missing cnf yields
       rejection.
+    status: out-of-scope
+    out_of_scope_reason: |
+      Attestation-based client authentication
+      (draft-ietf-oauth-attestation-based-client-auth) is intentionally
+      not implemented in v1.0. The spec is an IETF draft, has no entry
+      in docs/plans/002-product-design.md, and duplicates the threat
+      model already covered by private_key_jwt for the in-scope use
+      cases. Revisit when the draft is promoted to RFC and embedder
+      demand surfaces.
 
   - id: CA-DISC-01
     severity: P0
     spec: OIDC Discovery §3
     behaviour: |
       Only authentication methods that are actually enabled are
-      published in token_endpoint_auth_methods_supported.
+      published in token_endpoint_auth_methods_supported. The default
+      v1.0 list is client_secret_basic, client_secret_post, and
+      private_key_jwt; client_secret_jwt and attestation-based methods
+      are intentionally absent (both are out-of-scope per
+      docs/plans/002-product-design.md line 2159).
 
   - id: CA-DISC-02
     severity: P0
     spec: OIDC Discovery §3
     behaviour: |
       token_endpoint_auth_signing_alg_values_supported is published
-      iff at least one of client_secret_jwt or private_key_jwt is
-      enabled.
+      whenever an assertion-bearing client authentication method is
+      enabled. v1.0 supports private_key_jwt only (client_secret_jwt
+      is out-of-scope per docs/plans/002-product-design.md line
+      2159), so the field is published whenever private_key_jwt
+      remains in token_endpoint_auth_methods_supported.
 
   - id: CA-DISC-03
     severity: P0
@@ -721,14 +1128,27 @@ rows:
       HS384, HS512) appear in
       token_endpoint_auth_signing_alg_values_supported. When HMAC is
       excluded from enabledJWA, client_secret_jwt itself is disabled.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. Only private_key_jwt and the
+      secret-derived client_secret_basic / client_secret_post are
+      accepted, so the HMAC-only alg advertisement this row describes
+      never appears on the wire.
 
   - id: CA-DISC-04
     severity: P0
     spec: OIDC Core §9
     behaviour: |
       When private_key_jwt is enabled, only asymmetric algs (RS, PS,
-      ES, EdDSA, ML-DSA-* if supported) are published; if no
-      asymmetric alg is enabled, private_key_jwt is disabled.
+      ES, EdDSA) are published in
+      token_endpoint_auth_signing_alg_values_supported; HMAC algs
+      (HS256/384/512) MUST NOT appear because client_secret_jwt is
+      out-of-scope per docs/plans/002-product-design.md line 2159.
 
   - id: CA-DISC-05
     severity: P1
@@ -736,6 +1156,16 @@ rows:
     behaviour: |
       When both client_secret_jwt and private_key_jwt are enabled,
       the union of HMAC and asymmetric algs is published.
+    status: out-of-scope
+    out_of_scope_reason: |
+      client_secret_jwt is intentionally not supported.
+      docs/plans/002-product-design.md §"Out-of-scope" (line 2159)
+      records the policy: shared-secret JWT auth (HS256/384/512)
+      broadens the blast radius of a leaked secret without offering
+      anything private_key_jwt does not, and is incompatible with the
+      §J.5 ES256 single-policy. With csjwt out of the picture there
+      is no "union of HMAC and asymmetric algs" wire shape to assert;
+      the asymmetric-only advertisement is covered by CA-DISC-04.
 
   - id: CA-DISC-06
     severity: P1
@@ -785,6 +1215,20 @@ rows:
       consecutive failure throttling) belongs to the OP; general HTTP
       rate limiting is delegated to the embedder's reverse proxy or
       gateway.
+    status: out-of-scope
+    out_of_scope_reason: |
+      The OP only ships authentication-flow (user-login) brute-force
+      gating in v1.0; client-authentication-flow throttling is not
+      implemented. CLAUDE.md "ライブラリ性の核" pins the rate-limit
+      scope: "OP は authentication-flow brute-force gate のみ"
+      ("the OP owns the authentication-flow brute-force gate only").
+      No op/store.Client field tracks consecutive failure counters,
+      no internal rate-limiter sits on the token endpoint's
+      client-authentication path, and no embedder demand has surfaced
+      to justify the bookkeeping. Revisiting requires both a demand
+      signal from an embedder and a design ADR (the policy choice
+      between per-IP vs per-client_id, the lockout window, and the
+      rate-limit-bypass override are non-trivial).
 
   - id: CA-ERR-05
     severity: P1
