@@ -343,6 +343,14 @@ type config struct {
 	// registers collectors; the registry's lifecycle is the embedder's.
 	promRegistry *prometheus.Registry
 
+	// jwksRotationActive is the predicate the JWKS handler consults on
+	// every request to decide whether to advertise the shortened
+	// rotation Cache-Control header. Nil leaves the handler in
+	// long-cache mode for every response. The predicate runs on the
+	// request hot path, so embedders MUST keep it cheap and
+	// concurrency-safe; see [WithJWKSRotationActive].
+	jwksRotationActive func() bool
+
 	// metricsCollector is the metric-handle bundle the audit bridge
 	// updates from the OP's emission chain. It is populated by
 	// [op.New] when promRegistry is non-nil; nil otherwise. Stored on
@@ -1434,6 +1442,31 @@ func WithPrometheus(registry *prometheus.Registry) Option {
 			}
 		}
 		c.promRegistry = registry
+		return nil
+	})
+}
+
+// WithJWKSRotationActive registers a predicate the JWKS endpoint
+// consults on every request to decide whether to advertise the
+// shortened rotation Cache-Control. When the predicate returns
+// true, responses carry "public, max-age=300, must-revalidate";
+// otherwise the standard long cache applies.
+//
+// The predicate runs on the request hot path, so it MUST be cheap
+// and concurrency-safe. Passing nil (or omitting the option)
+// leaves the handler permanently in long-cache mode.
+//
+// The option only forwards the embedder's predicate; the rotation
+// lifecycle (when to flip from idle to rotating, when to flip back)
+// remains the embedder's responsibility.
+//
+// Repeated calls are last-wins so a supervisor can swap predicates
+// without rebuilding earlier option lists.
+//
+// Stable since v0.x.
+func WithJWKSRotationActive(predicate func() bool) Option {
+	return optionFunc(func(c *config) error {
+		c.jwksRotationActive = predicate
 		return nil
 	})
 }

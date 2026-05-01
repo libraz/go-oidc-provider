@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -1819,5 +1821,89 @@ func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {
 		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
 	)...); err != nil {
 		t.Fatalf("op.New with WithSPAUI: %v", err)
+	}
+}
+
+// TestWithJWKSRotationActive_FlipsCacheControl pins the wiring from
+// op.WithJWKSRotationActive through op.New to the JWKS handler's
+// rotation-aware Cache-Control branch. The predicate's return value
+// flips between calls and the response header MUST track it: long
+// cache while idle, short cache while rotating, long cache again
+// once the predicate returns false.
+func TestWithJWKSRotationActive_FlipsCacheControl(t *testing.T) {
+	t.Parallel()
+
+	var rotating atomic.Bool
+	provider, err := op.New(append(validBaseOpts(t),
+		op.WithJWKSRotationActive(rotating.Load),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	srv := httptest.NewServer(provider)
+	defer srv.Close()
+
+	get := func() string {
+		req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/oidc/jwks", http.NoBody)
+		if reqErr != nil {
+			t.Fatalf("NewRequest: %v", reqErr)
+		}
+		resp, doErr := srv.Client().Do(req)
+		if doErr != nil {
+			t.Fatalf("GET /oidc/jwks: %v", doErr)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status=%d want 200", resp.StatusCode)
+		}
+		return resp.Header.Get("Cache-Control")
+	}
+
+	if got := get(); got != jwks.CacheControl {
+		t.Errorf("idle Cache-Control=%q want %q", got, jwks.CacheControl)
+	}
+
+	rotating.Store(true)
+	if got := get(); got != jwks.CacheControlRotating {
+		t.Errorf("rotating Cache-Control=%q want %q", got, jwks.CacheControlRotating)
+	}
+
+	rotating.Store(false)
+	if got := get(); got != jwks.CacheControl {
+		t.Errorf("post-rotation Cache-Control=%q want %q", got, jwks.CacheControl)
+	}
+}
+
+// TestWithJWKSRotationActive_NilLeavesLongCache documents that
+// passing a nil predicate (or omitting the option entirely) leaves
+// the JWKS handler in long-cache mode for every response. The test
+// exercises the explicit-nil path because the omitted-option path is
+// already covered by every other op_test case that hits /jwks.
+func TestWithJWKSRotationActive_NilLeavesLongCache(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOpts(t),
+		op.WithJWKSRotationActive(nil),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	srv := httptest.NewServer(provider)
+	defer srv.Close()
+
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/oidc/jwks", http.NoBody)
+	if reqErr != nil {
+		t.Fatalf("NewRequest: %v", reqErr)
+	}
+	resp, doErr := srv.Client().Do(req)
+	if doErr != nil {
+		t.Fatalf("GET /oidc/jwks: %v", doErr)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != jwks.CacheControl {
+		t.Errorf("Cache-Control=%q want %q (nil predicate must leave long cache)", got, jwks.CacheControl)
 	}
 }

@@ -352,7 +352,12 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry) 
 	publicCORS := cors.NewPublic()
 	strictCORS := cors.NewStrict(originAllow)
 	mux.Handle(cfg.endpoints.Discovery, publicCORS.Handler(discHandler))
-	mux.Handle(joinPath(cfg.mountPrefix, cfg.endpoints.JWKS), publicCORS.Handler(jwks.Handler(keySet)))
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.JWKS),
+		publicCORS.Handler(jwks.HandlerWithOptions(keySet, jwks.HandlerOptions{
+			RotationActive: cfg.jwksRotationActive,
+		})),
+	)
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.UserInfo),
 		strictCORS.Handler(userinfo.Handler(userinfo.HandlerDeps{
