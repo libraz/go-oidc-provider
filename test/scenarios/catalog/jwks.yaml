@@ -56,7 +56,7 @@ rows:
     behaviour: |
       RSA keys publish n and e (public modulus and exponent).
     status: out-of-scope
-    out_of_scope_reason: v1.0 supports ES256 (ECDSA P-256) signing keys only. WithKeyset rejects RSA at construction time, so the OP cannot publish n / e parameters in JWKS. Reintroducing RSA support would require an alg negotiation surface the project deliberately omitted to keep the signing posture predictable; revisit if RS256 graduates from optional to required for an embedder we care about.
+    out_of_scope_reason: "v1.0 supports ES256 (ECDSA P-256) signing keys only. WithKeyset rejects RSA at construction time, so the OP cannot publish n / e parameters in JWKS. Reintroducing RSA support would require an alg negotiation surface the project deliberately omitted to keep the signing posture predictable; revisit if RS256 graduates from optional to required for an embedder we care about. The reject path is regression-pinned by op/options_test.go TestWithKeyset_RejectsNonES256Key (op.New rejects an RSA Signer at construction) and internal/keys/keys_test.go TestNewSet_RejectsBadShape \"non-p256\" (keys.NewSet rejects a non-P-256 Signer with ErrInvalidKey)."
     notes: testkit currently wires EC keys only; revisit after RSA fixture lands.
 
   - id: JWKS-013
@@ -72,7 +72,7 @@ rows:
     behaviour: |
       OKP keys publish crv and x; never publish d.
     status: out-of-scope
-    out_of_scope_reason: v1.0 supports ES256 (ECDSA P-256) signing keys only. WithKeyset rejects OKP / Ed25519 at construction time, so the OP cannot publish crv / x parameters from an OKP key. Revisit if EdDSA graduates to required for an embedder we care about.
+    out_of_scope_reason: "v1.0 supports ES256 (ECDSA P-256) signing keys only. WithKeyset rejects OKP / Ed25519 at construction time, so the OP cannot publish crv / x parameters from an OKP key. Revisit if EdDSA graduates to required for an embedder we care about. The reject gate is the same generic non-P-256 path covered by op/options_test.go TestWithKeyset_RejectsNonES256Key and internal/keys/keys_test.go TestNewSet_RejectsBadShape \"non-p256\" (any Signer whose Public() is not *ecdsa.PublicKey on P-256 returns ErrInvalidKey)."
     notes: testkit currently wires EC keys only; revisit after OKP fixture lands.
 
   - id: JWKS-015

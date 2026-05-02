@@ -279,14 +279,16 @@ func TestScenario_JWKS_003_HandlerDoesNotBindEntities(t *testing.T) {
 	}
 }
 
+// TestScenario_JWKS_012_RSAKeyPublishesNAndE is OOS — see catalog out_of_scope_reason.
 func TestScenario_JWKS_012_RSAKeyPublishesNAndE(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-012 — testkit wires EC only; revisit after RSA fixture lands")
+	t.Skip("out-of-scope: JWKS-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JWKS_014_OKPKeyPublishesCrvAndX is OOS — see catalog out_of_scope_reason.
 func TestScenario_JWKS_014_OKPKeyPublishesCrvAndX(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-014 — testkit wires EC only; revisit after OKP fixture lands")
+	t.Skip("out-of-scope: JWKS-014 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JWKS_015_UseFieldIsSigOrEnc verifies that every JWK
@@ -374,9 +376,10 @@ func TestScenario_JWKS_016_AlgFieldIsRegisteredJWA(t *testing.T) {
 	}
 }
 
+// TestScenario_JWKS_020_EncryptionKeysPublishedWhenFeatureOn is OOS — see catalog out_of_scope_reason.
 func TestScenario_JWKS_020_EncryptionKeysPublishedWhenFeatureOn(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JWKS-020 — encryption feature not implemented")
+	t.Skip("out-of-scope: JWKS-020 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JWKS_021_SigningKeyMayOmitUseAndAlg pins the OP's

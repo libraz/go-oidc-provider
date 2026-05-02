@@ -57,14 +57,16 @@ func TestScenario_NA_001_MalformedRedirectURIRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_NA_002_LocalhostWithRegisteredPortAllowsAnyPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_002_LocalhostWithRegisteredPortAllowsAnyPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-002")
+	t.Skip("out-of-scope: NA-002 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_NA_003_LocalhostWithoutPortAllowsAnyPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_003_LocalhostWithoutPortAllowsAnyPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-003")
+	t.Skip("out-of-scope: NA-003 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_NA_004_IPv4LoopbackWithRegisteredPortAllowsAnyPort(t *testing.T) {

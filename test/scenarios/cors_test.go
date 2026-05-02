@@ -134,9 +134,10 @@ func TestScenario_COR_003_JWKSAllowsAnyOrigin(t *testing.T) {
 
 // --- Pending bindings --------------------------------------------------
 
+// TestScenario_COR_010_UserinfoCORSGatedByClientPolicy is OOS — see catalog out_of_scope_reason.
 func TestScenario_COR_010_UserinfoCORSGatedByClientPolicy(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-010 — needs client-based-CORS hook coverage")
+	t.Skip("out-of-scope: COR-010 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_COR_011_TokenCORSGatedByClientPolicy is OOS — see catalog out_of_scope_reason.
@@ -253,14 +254,16 @@ func assertStrictCORSGatedEndpoint(tb testing.TB, p *testkit.Provider, path, act
 	}
 }
 
+// TestScenario_COR_015_DeviceAuthorizationCORSGatedByClientPolicy is OOS — see catalog out_of_scope_reason.
 func TestScenario_COR_015_DeviceAuthorizationCORSGatedByClientPolicy(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-015 — device flow not implemented yet")
+	t.Skip("out-of-scope: COR-015 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_COR_020_PreflightAlwaysSucceedsForClientGatedEndpoints is OOS — see catalog out_of_scope_reason.
 func TestScenario_COR_020_PreflightAlwaysSucceedsForClientGatedEndpoints(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-020 — needs clientBasedCORS hook wiring (testkit default uses strict-allowlist gating, not the client-based path this row exercises)")
+	t.Skip("out-of-scope: COR-020 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_COR_030_NonBooleanPolicyReturns500WithCORS is OOS — see catalog out_of_scope_reason.

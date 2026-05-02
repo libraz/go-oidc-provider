@@ -46,9 +46,10 @@ func TestScenario_SIG_022_NoneAlgNotAdvertised(t *testing.T) {
 
 // --- Pending bindings --------------------------------------------------
 
+// TestScenario_SIG_001_HS256IDTokenIssuance is OOS — see catalog out_of_scope_reason.
 func TestScenario_SIG_001_HS256IDTokenIssuance(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-001 — needs RP simulator + per-client alg pinning")
+	t.Skip("out-of-scope: SIG-001 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_SIG_002_HS256IDTokenAcceptedAsHint is OOS — see catalog out_of_scope_reason.
@@ -57,9 +58,10 @@ func TestScenario_SIG_002_HS256IDTokenAcceptedAsHint(t *testing.T) {
 	t.Skip("out-of-scope: SIG-002 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SIG_010_AtHashLengthSHA256 is OOS — see catalog out_of_scope_reason.
 func TestScenario_SIG_010_AtHashLengthSHA256(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SIG-010 — needs hybrid response_type wiring")
+	t.Skip("out-of-scope: SIG-010 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_SIG_011_AtHashLengthSHA384 is OOS — see catalog out_of_scope_reason.
