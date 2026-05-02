@@ -70,7 +70,7 @@ func main() {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		// The single option that flips the OIDC default. With it
 		// absent, the second client below would fail at /authorize
 		// with invalid_scope (missing openid).

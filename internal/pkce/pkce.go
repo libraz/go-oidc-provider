@@ -85,10 +85,21 @@ func ValidateChallenge(challenge, method string) error {
 // The comparison runs in constant time to avoid leaking information about
 // the stored challenge through timing.
 //
-// challengeMethod is accepted for symmetry with the authorization endpoint
-// flow but must always be [Method]; any other value returns
-// [ErrChallengeMethodUnsupported].
+// challengeMethod is the parsed code_challenge_method the caller persisted
+// alongside the authorization request. It is threaded through the
+// signature so the token endpoint commits to a single invariant — "the
+// method the request used MUST still be acceptable at exchange time" —
+// rather than re-parsing the request a second time. The only accepted
+// value is [Method] ("S256"); any other value (notably the legacy
+// "plain") returns [ErrChallengeMethodUnsupported]. Passing "plain"
+// here is structurally rejected even though "plain" would map to a
+// no-op transform: OAuth 2.1 / FAPI 2.0 forbid "plain", and the
+// rejection lives next to the transform so a future audit finds the
+// rule at a single site.
 func Verify(challenge, challengeMethod, verifier string) error {
+	// invariant: caller passes the parsed code_challenge_method the
+	// authorization endpoint persisted; "plain" is rejected here even
+	// though it would map to the identity transform.
 	if challengeMethod != Method {
 		return ErrChallengeMethodUnsupported
 	}

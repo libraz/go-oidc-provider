@@ -7,12 +7,35 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 )
+
+// syncBuffer is a thread-safe wrapper around bytes.Buffer so the
+// rotation goroutine's slog.Handler.Write and the test's String()
+// read do not race when the test reads after ctx cancel — the
+// goroutine may still complete one final tick before observing
+// ctx.Done.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
 
 func TestNewInMemoryDPoPNonceSource_RejectsNonPositiveRotation(t *testing.T) {
 	t.Parallel()
@@ -167,8 +190,8 @@ func (r *flakyReader) Read(p []byte) (int, error) {
 func TestNewInMemoryDPoPNonceSource_LogsAndCountsRotationFailures(t *testing.T) {
 	t.Parallel()
 
-	var buf bytes.Buffer
-	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	buf := &syncBuffer{}
+	handler := slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})
 	logger := slog.New(handler)
 	reader := &flakyReader{}
 

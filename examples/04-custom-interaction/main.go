@@ -27,10 +27,11 @@
 //	go run -tags example ./examples/04-custom-interaction
 //
 // PRODUCTION CAVEATS:
-//   - Keys: ephemeral; load from a vault / KMS in production.
-//   - Store: in-memory; use op/storeadapter/sql or composite.
+//   - Keys: this example uses an ephemeral signing key from devkeys.MustEphemeral; production deployments MUST supply a persistent KMS-backed signing key via op.WithKeyset.
+//   - Store: the in-memory store loses all state on restart; use op/storeadapter/sql or composite for production.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - Driver choice: does not relax orchestrator CSRF / state-ref guarantees — those run before Render / ParseSubmission and protect every Driver equally.
+//   - Custom Driver: the custom interaction.Driver here demonstrates the seam; production embedders should harden CSRF, rate limit submissions, and validate user input against XSS.
 package main
 
 import (
@@ -72,8 +73,8 @@ func main() {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
-		op.WithInteraction(localeAwareDriver{}),
+		op.WithCookieKeys(keys.CookieKey),
+		op.WithInteractionDriver(localeAwareDriver{}),
 	)
 	if err != nil {
 		log.Fatalf("op.New: %v", err)

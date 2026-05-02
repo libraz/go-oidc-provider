@@ -70,6 +70,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/seedkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
@@ -175,30 +176,28 @@ func run() error {
 
 	printSeedBanner(seed)
 
-	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: st.UserPasswords()},
-		Risk:    acrRiskAssessor{},
-		Rules: []op.Rule{
-			// TOTP fires when the assessor scores RiskScoreHigh or
-			// above. Rule order matters: TOTP wins on High because
-			// it appears first.
-			op.RuleRisk(op.RiskScoreHigh, op.StepTOTP{
-				Store:         st.TOTPs(),
-				EncryptionKey: keys.TOTPKey,
-			}),
-			// Captcha fires from RiskScoreMedium upward. The Medium
-			// branch hits this rule because TOTP gates on High.
-			op.RuleRisk(op.RiskScoreMedium, op.StepCaptcha{
-				Verifier: stubCaptchaVerifier{},
-			}),
-		},
-	}
+	flow := opkit.DefaultLoginFlow(st.UserPasswords())
+	flow.Risk = acrRiskAssessor{}
+	flow = opkit.WithMFARules(flow,
+		// TOTP fires when the assessor scores RiskScoreHigh or above.
+		// Rule order matters: TOTP wins on High because it appears
+		// first.
+		op.RuleRisk(op.RiskScoreHigh, op.StepTOTP{
+			Store:         st.TOTPs(),
+			EncryptionKey: keys.TOTPKey,
+		}),
+		// Captcha fires from RiskScoreMedium upward. The Medium
+		// branch hits this rule because TOTP gates on High.
+		op.RuleRisk(op.RiskScoreMedium, op.StepCaptcha{
+			Verifier: stubCaptchaVerifier{},
+		}),
+	)
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),
 		op.WithSPAUI(op.SPAUI{
 			LoginMount: "/login",

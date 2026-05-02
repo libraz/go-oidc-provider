@@ -46,7 +46,7 @@ func (c dpopFixedClock) Now() time.Time { return c.t }
 
 // dpopAnchor is the canonical "now" value DPoP scenarios pin the OP
 // clock to. Mid-day UTC keeps ±60s offsets well clear of day boundaries.
-var dpopAnchor = time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC) //nolint:gochecknoglobals // test-only fixed anchor.
+var dpopAnchor = time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 
 // dpopKey bundles a freshly-generated ECDSA P-256 signer with its
 // JOSE-formatted public JWK and the SHA-256 thumbprint downstream code
@@ -165,7 +165,8 @@ type dpopFixture struct {
 func newDPoPFixture(t *testing.T, extraOpts ...op.Option) *dpopFixture {
 	t.Helper()
 	clock := dpopFixedClock{t: dpopAnchor}
-	opts := []op.Option{op.WithFeature(feature.DPoP)}
+	opts := make([]op.Option, 0, 1+len(extraOpts))
+	opts = append(opts, op.WithFeature(feature.DPoP))
 	opts = append(opts, extraOpts...)
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
@@ -201,7 +202,7 @@ func (f *dpopFixture) tokenURL() string { return f.tk.Server.URL + "/oidc/token"
 // authorization code together with the PKCE verifier scenariokit minted
 // inline. Callers exchange the code at /token with their preferred
 // DPoP proof shape.
-func (f *dpopFixture) runFlow(t *testing.T) (code string, verifier string) {
+func (f *dpopFixture) runFlow(t *testing.T) (code, verifier string) {
 	t.Helper()
 	pkce := scenariokit.NewPKCEPair("")
 	res := scenariokit.RunCodeFlow(t, f.tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
@@ -218,7 +219,7 @@ func (f *dpopFixture) runFlow(t *testing.T) (code string, verifier string) {
 // runFlowWithExtra drives the authorize step with extra wire parameters
 // (e.g. dpop_jkt). It mirrors [runFlow] but lets the caller commit to a
 // DPoP key thumbprint at the authorize step.
-func (f *dpopFixture) runFlowWithExtra(t *testing.T, extra url.Values) (code string, verifier string) {
+func (f *dpopFixture) runFlowWithExtra(t *testing.T, extra url.Values) (code, verifier string) {
 	t.Helper()
 	pkce := scenariokit.NewPKCEPair("")
 	res := scenariokit.RunCodeFlow(t, f.tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
@@ -427,6 +428,7 @@ func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp := f.postToken(t, form, proof)
+	defer func() { _ = resp.Body.Close() }()
 	expectTokenError(t, resp, "invalid_request")
 }
 
@@ -505,6 +507,7 @@ func TestScenario_DPOP_012_ProofRequiresJtiClaim(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp := f.postToken(t, form, proof)
+	defer func() { _ = resp.Body.Close() }()
 	expectTokenError(t, resp, "invalid_request")
 }
 
@@ -533,6 +536,7 @@ func TestScenario_DPOP_013_ProofHtmMustMatchMethod(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp := f.postToken(t, form, proof)
+	defer func() { _ = resp.Body.Close() }()
 	expectTokenError(t, resp, "invalid_request")
 }
 
@@ -560,6 +564,7 @@ func TestScenario_DPOP_014_ProofHtuMustMatchURI(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp := f.postToken(t, form, proof)
+	defer func() { _ = resp.Body.Close() }()
 	expectTokenError(t, resp, "invalid_request")
 }
 
@@ -665,6 +670,7 @@ func TestScenario_DPOP_017_ProofReplayDetected(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp2 := f.postToken(t, replayForm, proof)
+	defer func() { _ = resp2.Body.Close() }()
 	body := expectTokenError(t, resp2, "invalid_request")
 	if desc, _ := body["error_description"].(string); !strings.Contains(strings.ToLower(desc), "replay") {
 		t.Errorf("error_description=%q want replay mention", desc)
@@ -750,6 +756,7 @@ func TestScenario_DPOP_022_MalformedHeaderAtTokenRejected(t *testing.T) {
 	// nor signature decode; the verifier returns ErrProofMalformed
 	// before any signature work is attempted.
 	resp := f.postToken(t, form, "not.a.jwt")
+	defer func() { _ = resp.Body.Close() }()
 	body := expectTokenError(t, resp, "invalid_request")
 	if desc, _ := body["error_description"].(string); !strings.Contains(strings.ToLower(desc), "malformed") {
 		t.Errorf("error_description=%q want malformed mention", desc)
@@ -1149,6 +1156,7 @@ func TestScenario_DPOP_040_CodeGrantKeyMismatch(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp := f.postToken(t, form, proof)
+	defer func() { _ = resp.Body.Close() }()
 	expectTokenError(t, resp, "invalid_grant")
 }
 
@@ -1172,6 +1180,7 @@ func TestScenario_DPOP_041_CodeGrantRequiresProofWhenJktSet(t *testing.T) {
 		"code_verifier": {verifier},
 	}
 	resp := f.postToken(t, form, "") // no DPoP header.
+	defer func() { _ = resp.Body.Close() }()
 	expectTokenError(t, resp, "invalid_grant")
 }
 

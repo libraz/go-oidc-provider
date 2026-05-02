@@ -59,7 +59,7 @@ func main() {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
 	)
 	if err != nil {

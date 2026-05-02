@@ -15,6 +15,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
+	httptestutil "github.com/libraz/go-oidc-provider/internal/testutil/httptest"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
 
@@ -29,27 +30,7 @@ const jwtAccept = "application/token-introspection+jwt"
 // the JWT-path tests need a knob the JSON-path helper does not expose.
 func (f *fixture) postWithAccept(tb testing.TB, form url.Values, basicID, basicSecret, accept string) *http.Response {
 	tb.Helper()
-	req, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodPost,
-		f.endpoint,
-		strings.NewReader(form.Encode()),
-	)
-	if err != nil {
-		tb.Fatalf("NewRequest: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if accept != "" {
-		req.Header.Set("Accept", accept)
-	}
-	if basicID != "" {
-		req.SetBasicAuth(basicID, basicSecret)
-	}
-	resp, err := f.prov.HTTPClient(nil).Do(req)
-	if err != nil {
-		tb.Fatalf("Do: %v", err)
-	}
-	return resp
+	return httptestutil.PostFormWithAccept(tb, f.prov.HTTPClient(nil), f.endpoint, form, basicID, basicSecret, accept)
 }
 
 // verifyIntrospectionJWT parses raw as the RFC 9701 §4 envelope,

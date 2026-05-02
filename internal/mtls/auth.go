@@ -43,8 +43,20 @@ type ClientMatcher struct {
 
 	// SANEmail is the rfc822Name expected in
 	// [x509.Certificate.EmailAddresses]. Comparison is case-
-	// insensitive on the local-part (matching the standard library's
-	// [mail.ParseAddress] behaviour) and the domain (DNS).
+	// insensitive across the entire address (both local-part and
+	// domain) via [strings.EqualFold].
+	//
+	// RFC 5280 §3.4.4 and RFC 5321 §2.4 make only the domain part
+	// canonically case-insensitive; the local-part is implementation-
+	// defined and RFC 5321 deprecates relying on its case. The
+	// matcher takes the conservative "fold everything" stance so a
+	// mailbox registered with one casing still authenticates the
+	// owner when the cert encodes a different casing — at the cost
+	// of admitting two operationally distinct local-parts on a
+	// hypothetical mail system that genuinely treats them as
+	// distinct (none in modern deployments). The looser-than-RFC
+	// stance is intentional and documented here so a future audit
+	// finds the rationale next to the implementation.
 	SANEmail string
 }
 
@@ -115,8 +127,10 @@ func matchSAN(cert *x509.Certificate, m ClientMatcher) bool {
 }
 
 // containsFold reports whether haystack contains needle under ASCII
-// case folding. DNS names and email addresses are case-insensitive
-// per RFC 5280 §7.2 / §3.4.4.
+// case folding. DNS names are case-insensitive per RFC 5280 §7.2,
+// and email addresses are folded across the whole address per the
+// matcher policy documented on [ClientMatcher.SANEmail] (more
+// permissive than RFC 5280 §3.4.4 / RFC 5321 §2.4 strictly require).
 func containsFold(haystack []string, needle string) bool {
 	for _, v := range haystack {
 		if strings.EqualFold(v, needle) {

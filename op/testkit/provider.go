@@ -38,6 +38,18 @@ func ensureTrust(srv *httptest.Server) {
 		if !ok {
 			return
 		}
+		// Force net/http's internal nextProtoOnce to fire before we
+		// mutate TLSClientConfig. CloseIdleConnections triggers
+		// http2configureTransports through that once, which itself
+		// writes TLSClientConfig.NextProtos. Without this nudge, a
+		// parallel httptest.Server.Close (which also calls
+		// http.DefaultTransport.CloseIdleConnections) can race with
+		// the trust install: both code paths mutate the same struct
+		// without a shared happens-before edge. Running the once
+		// inside trustOnce.Do establishes that edge so all subsequent
+		// CloseIdleConnections calls observe the same NextProtos
+		// state and skip the inner once.
+		rt.CloseIdleConnections()
 		if rt.TLSClientConfig == nil {
 			rt.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
@@ -167,8 +179,8 @@ func NewProvider(tb testing.TB, opts ...Option) *Provider {
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(store),
 		op.WithKeyset(op.Keyset{signKey}),
-		op.WithCookieKey(generateCookieKey(tb)),
-		op.WithInteraction(AutoConsentDriver{}),
+		op.WithCookieKeys(generateCookieKey(tb)),
+		op.WithInteractionDriver(AutoConsentDriver{}),
 		op.WithAuthenticators(SubjectAuthenticator{}),
 	}
 	if cfg.clock != nil {
@@ -234,7 +246,7 @@ func generateSigningKey(tb testing.TB, kid string) op.SigningKey {
 }
 
 // generateCookieKey returns a fresh 32-byte cookie key suitable for
-// satisfying [op.WithCookieKey]. The key is generated per [NewProvider]
+// satisfying [op.WithCookieKeys]. The key is generated per [NewProvider]
 // call so parallel tests do not share secret material.
 func generateCookieKey(tb testing.TB) []byte {
 	tb.Helper()

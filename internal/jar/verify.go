@@ -138,6 +138,14 @@ type VerifierConfig struct {
 	// (that pre-date the §10.8 strengthening) opt in here. The
 	// flag is also honoured when [JTIs] is nil so JAR can be wired
 	// in test setups without a JTI store.
+	//
+	// Profile interaction: under any FAPI-family profile
+	// (FAPI2Baseline, FAPI2MessageSigning, FAPICIBA) the [op.New]
+	// wiring layer hard-codes this field to false so the §10.8
+	// reading is enforced uniformly. There is intentionally no
+	// embedder-facing option to flip it back: the FAPI MUST is
+	// add-only, and any opt-out would have to live next to the
+	// profile-activation site rather than as a verifier-level knob.
 	AllowMissingJTI bool
 
 	// MaxLifetime, when positive, caps how far "exp" may lie in the

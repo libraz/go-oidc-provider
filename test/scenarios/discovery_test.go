@@ -261,7 +261,7 @@ func TestScenario_DIS_004_EmbedderCannotOverrideOPControlledFields(t *testing.T)
 		op.WithIssuer("https://idp.testkit.invalid"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{{KeyID: "dis-004-sig", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithCookieKeys(cookieKey),
 		op.WithDiscoveryMetadata(op.DiscoveryMetadata{
 			Extra: map[string]any{
 				offending: "https://attacker.example.com/auth",

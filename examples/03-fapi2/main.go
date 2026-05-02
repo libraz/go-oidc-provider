@@ -116,7 +116,7 @@ func run() error {
 		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),
 		// WithProfile(FAPI2Baseline) caps client-auth methods at
 		// private_key_jwt and forces sender-constrained access tokens.

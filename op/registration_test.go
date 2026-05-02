@@ -91,7 +91,7 @@ func dcrBaseOpts(tb testing.TB, s store.Store, clock op.Clock) []op.Option {
 		op.WithIssuer(validIssuer),
 		op.WithStore(s),
 		op.WithKeyset(validKeyset(tb)),
-		op.WithCookieKey(newRandomCookieKey(tb)),
+		op.WithCookieKeys(newRandomCookieKey(tb)),
 		op.WithClock(clock),
 	}
 }

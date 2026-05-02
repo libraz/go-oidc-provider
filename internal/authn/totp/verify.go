@@ -159,6 +159,17 @@ type Verifier struct {
 //     LockedUntil per the threshold table. Return OutcomeWrongCode or
 //     OutcomeResetRequired.
 //
+// Replay defence: the [store.TOTPRecord.LastAcceptedStep] guard rejects
+// a code whose step value has already been accepted. The defence is
+// only effective when every OP replica that handles a TOTP submission
+// observes the same record — i.e. when the configured [store.TOTPStore]
+// is shared across replicas (a transactional row in a relational
+// engine, a Redis HSET, …). A process-local store leaves each replica
+// with its own LastAcceptedStep, so a code accepted on replica A can
+// be replayed against replica B inside the same step window. Multi-
+// replica deployments MUST route TOTPStore to a shared backend; the
+// library does not detect the misconfiguration at runtime.
+//
 // The function never panics on a nil rec; it returns a non-nil error.
 // The ctx parameter is accepted for symmetry with the storage API and
 // future cancellation but is not consulted today.

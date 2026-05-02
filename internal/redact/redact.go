@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+
+	internallog "github.com/libraz/go-oidc-provider/internal/log"
 )
 
 // Sentinel is the fixed string that replaces a redacted attribute
@@ -165,30 +167,20 @@ func ReplaceAttr(_ []string, a slog.Attr) slog.Attr {
 // idempotent: wrapping an already-wrapped handler is safe and the
 // inner copy short-circuits the second pass.
 //
-// A nil next collapses to [discardHandler] so the redactor cannot
-// be the cause of a downstream nil-deref. Embedders that pass a nil
-// handler get a silent logger; that is preferable to a panic from a
-// library that should never be the failure mode of an HTTP path.
+// A nil next collapses to [internallog.DiscardHandler] so the redactor
+// cannot be the cause of a downstream nil-deref. Embedders that pass
+// a nil handler get a silent logger; that is preferable to a panic
+// from a library that should never be the failure mode of an HTTP
+// path.
 func WrapHandler(next slog.Handler) slog.Handler {
 	if next == nil {
-		next = discardHandler{}
+		next = internallog.DiscardHandler{}
 	}
 	if _, ok := next.(*handler); ok {
 		return next
 	}
 	return &handler{next: next}
 }
-
-// discardHandler drops every record. It is the fall-back used when
-// [WrapHandler] is called with nil so a programmer bug surfaces as
-// silence rather than a runtime panic. The type is unexported so the
-// fall-back is the only path that constructs it.
-type discardHandler struct{}
-
-func (discardHandler) Enabled(_ context.Context, _ slog.Level) bool  { return false }
-func (discardHandler) Handle(_ context.Context, _ slog.Record) error { return nil }
-func (d discardHandler) WithAttrs(_ []slog.Attr) slog.Handler        { return d }
-func (d discardHandler) WithGroup(_ string) slog.Handler             { return d }
 
 // handler is the slog.Handler shim. The struct is intentionally
 // minimal — the heavy lifting is in redactRecord — so adding a new

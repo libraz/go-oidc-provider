@@ -101,7 +101,7 @@ func run() error {
 		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),
 		op.WithSPAUI(op.SPAUI{
 			LoginMount: "/login",

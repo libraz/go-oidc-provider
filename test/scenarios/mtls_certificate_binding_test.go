@@ -245,7 +245,7 @@ func mtlsRunCodeFlow(t *testing.T, tk *testkit.Provider, client *store.Client) (
 // scenarios that bypass the [httptest.Server] (and dispatch directly
 // through [op.Provider.ServeHTTP]) still hit the routed endpoint.
 func mtlsTokenURL(tk *testkit.Provider) string {
-	return tk.Issuer + "/oidc/token" //nolint:gosec // not a credential — endpoint URL.
+	return tk.Issuer + "/oidc/token"
 }
 
 func mtlsUserInfoURL(tk *testkit.Provider) string {

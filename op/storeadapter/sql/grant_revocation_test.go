@@ -18,7 +18,14 @@ import (
 // revocation case stays focused on the contract under test.
 func openGrantRevocationStore(t *testing.T) *oidcsql.Store {
 	t.Helper()
-	db, err := databasesql.Open("sqlite", ":memory:")
+	// SQLite ":memory:" gives every database/sql connection its own
+	// private database. Migrate creates the table on connection A, but
+	// the parallel subtests below pick up connection B from the pool
+	// and find the schema empty. A file-backed database under TempDir
+	// shares state across connections (the test framework cleans the
+	// directory automatically).
+	dsn := "file:" + t.TempDir() + "/oidc.db?_pragma=busy_timeout(5000)"
+	db, err := databasesql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

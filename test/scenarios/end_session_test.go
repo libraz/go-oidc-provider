@@ -235,6 +235,7 @@ func TestScenario_ES_005_RedirectViaClientID(t *testing.T) {
 		"client_id":                {esClientID},
 		"post_logout_redirect_uri": {esPostLogout},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	body := readESBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET status=%d want 200; body=%s", resp.StatusCode, body)
@@ -324,6 +325,7 @@ func TestScenario_ES_007_ClientIDMismatchWithIDTokenHintRejected(t *testing.T) {
 		"id_token_hint": {hint},
 		"client_id":     {"some-other-client"},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	body := readESBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
@@ -351,6 +353,7 @@ func TestScenario_ES_008_UnknownClientIDRejected(t *testing.T) {
 	resp := esGet(t, tk, url.Values{
 		"client_id": {"client-does-not-exist"},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	body := readESBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
@@ -440,6 +443,7 @@ func TestScenario_ES_014_UnregisteredPostLogoutRedirectURIRejected(t *testing.T)
 		"id_token_hint":            {hint},
 		"post_logout_redirect_uri": {"https://attacker.example.com/post-logout"},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	body := readESBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
@@ -463,6 +467,7 @@ func TestScenario_ES_015_MalformedIDTokenHintRejected(t *testing.T) {
 	resp := esGet(t, tk, url.Values{
 		"id_token_hint": {"this.is.not-a-valid-jwt"},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	body := readESBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
@@ -492,6 +497,7 @@ func TestScenario_ES_016_IDTokenHintAudienceUnknownRejected(t *testing.T) {
 	resp := esGet(t, tk, url.Values{
 		"id_token_hint": {hint},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	body := readESBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
@@ -521,6 +527,7 @@ func TestScenario_ES_017_IDTokenHintSignatureInvalidRejected(t *testing.T) {
 	resp := esGet(t, tk, url.Values{
 		"id_token_hint": {hint},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	body := readESBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)

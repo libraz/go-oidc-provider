@@ -112,7 +112,7 @@ func main() {
 		op.WithIssuer("http://127.0.0.1:8080"),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(op.LoginFlow{
 			Primary: op.PrimaryPassword{Store: st.UserPasswords()},
 		}),
@@ -121,7 +121,7 @@ func main() {
 		// server-rendered UI replace this with their own
 		// [interaction.Driver]; the locale field rides on the
 		// [interaction.Prompt] regardless of driver shape.
-		op.WithInteraction(interaction.JSONDriver{}),
+		op.WithInteractionDriver(interaction.JSONDriver{}),
 		// Register the French bundle on top of the seed en / ja
 		// bundles, then make French the fallback when no signal in
 		// the priority chain matches a registered locale.

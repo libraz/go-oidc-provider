@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // sessionStore implements [store.SessionStore] against Redis. Records
@@ -121,7 +122,7 @@ func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, err
 	if err != nil {
 		return nil, err
 	}
-	if !rec.ExpiresAt.IsZero() && !rec.ExpiresAt.After(s.parent.clock.Now()) {
+	if patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now()) {
 		return nil, store.ErrNotFound
 	}
 	return decode(rec), nil
@@ -138,7 +139,7 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 	if err != nil {
 		return err
 	}
-	if !rec.ExpiresAt.IsZero() && !rec.ExpiresAt.After(s.parent.clock.Now()) {
+	if patterns.IsExpiredInclusive(rec.ExpiresAt, s.parent.clock.Now()) {
 		return store.ErrNotFound
 	}
 	rec.ExpiresAt = expiresAt
@@ -241,7 +242,7 @@ func (s *sessionStore) partitionLiveAndStale(
 	now := s.parent.clock.Now()
 	for i, raw := range rawValues {
 		rec, ok := decodeSessionRaw(raw)
-		if !ok || (!rec.ExpiresAt.IsZero() && !rec.ExpiresAt.After(now)) {
+		if !ok || patterns.IsExpiredInclusive(rec.ExpiresAt, now) {
 			stale = append(stale, ids[i])
 			continue
 		}

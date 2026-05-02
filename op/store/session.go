@@ -71,6 +71,22 @@ type Session struct {
 // Embedders MAY route SessionStore to a fast cache (Redis, Memcached) via
 // [op/storeadapter/composite] without violating any library invariant.
 //
+// # Rotation is not atomic
+//
+// The library's session-fixation defence rotates a session ID by issuing
+// a fresh record (Save) and then removing the prior record (Delete).
+// SessionStore implementations are NOT required to make the pair atomic:
+// embedders MUST tolerate a transient interval where two distinct session
+// IDs reference the same Subject / ChooserGroupID until the Delete lands.
+// Concurrent rotations of the same prior session ID MUST resolve
+// deterministically — either every Save succeeds with a distinct new ID
+// (and the prior record is eventually deleted by one of the racers, with
+// repeat Deletes returning [ErrNotFound]) or one Save wins and the others
+// surface a wrapped store error. Backends MUST NOT silently produce two
+// new IDs that point at a single underlying record, and MUST NOT leave
+// the prior record live indefinitely after at least one rotation has
+// committed Save.
+//
 // # Back-channel logout delivery integrity
 //
 // Embedders who require OIDC Back-Channel Logout 1.0 delivery

@@ -203,6 +203,14 @@ func parseRemoteAddr(remote string) (netip.Addr, bool) {
 // attacker who could inject "junk, <client>" into XFF would cause every
 // downstream lookup to fall back to the proxy IP. Skip-on-error preserves
 // the well-formed entries to the left of the bad token.
+//
+// IPv6 normalisation: tokens may arrive bare ("2001:db8::1"), bracketed
+// ("[::1]"), or bracketed-with-port ("[2001:db8::1]:443") because RFC
+// 7239 §4 permits the latter and several reverse proxies emit it
+// verbatim into XFF. The walker funnels bracketed / port-suffixed
+// tokens through [parseForwardedToken] (the same SplitHostPort path
+// [parseRemoteAddr] uses) so the three representations resolve to the
+// same [netip.Addr] value and a single CIDR rule covers them all.
 func walkForwardedFor(values []string, t *Trust) (netip.Addr, bool) {
 	for i := len(values) - 1; i >= 0; i-- {
 		for j := len(values[i]); j > 0; {
@@ -212,19 +220,43 @@ func walkForwardedFor(values []string, t *Trust) (netip.Addr, bool) {
 			if token == "" {
 				continue
 			}
-			addr, err := netip.ParseAddr(token)
-			if err != nil {
+			addr, ok := parseForwardedToken(token)
+			if !ok {
 				// Skip the malformed token and continue — preserve any
 				// well-formed entry to the left.
 				continue
 			}
-			addr = addr.Unmap()
 			if !t.Contains(addr) {
 				return addr, true
 			}
 		}
 	}
 	return netip.Addr{}, false
+}
+
+// parseForwardedToken normalises a single XFF token to a [netip.Addr],
+// accepting bare IPs, bracketed IPv6 literals, and IPv6 literals with a
+// trailing port. The helper mirrors [parseRemoteAddr] so XFF and
+// RemoteAddr share the same parsing surface; centralising the logic
+// guarantees a token like "[2001:db8::1]:443" resolves to the same
+// address regardless of which header it arrived through.
+func parseForwardedToken(token string) (netip.Addr, bool) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return netip.Addr{}, false
+	}
+	if host, _, err := net.SplitHostPort(token); err == nil {
+		token = host
+	} else if strings.HasPrefix(token, "[") && strings.HasSuffix(token, "]") {
+		// SplitHostPort rejects bracketed-without-port literals; strip
+		// the brackets manually so [::1] resolves the same as ::1.
+		token = token[1 : len(token)-1]
+	}
+	addr, err := netip.ParseAddr(strings.TrimSpace(token))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
 }
 
 // requestScheme derives the scheme directly from the request, ignoring any

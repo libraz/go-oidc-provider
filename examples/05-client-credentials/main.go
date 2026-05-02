@@ -21,10 +21,11 @@
 // ("api:read") for the access-token claims to carry.
 //
 // PRODUCTION CAVEATS:
-//   - Keys: ephemeral; load from a vault / KMS in production.
+//   - Keys: ephemeral as in 04; production requires persistent keyset rotation backed by a vault / KMS.
 //   - Store: in-memory; use op/storeadapter/sql or composite.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
-//   - Client secret: hardcoded for the demo; rotate confidential secrets through the embedder's secret manager.
+//   - Client secret: client_credentials grant has no end-user, so ensure the client secret is high-entropy and stored encrypted at rest; rotate confidential secrets through the embedder's secret manager.
+//   - Resource indicator: RFC 8707 resource is not enforced here; FAPI 2.0 deployments MUST set Audiences explicitly so issued access tokens are bound to a specific resource server.
 package main
 
 import (
@@ -45,7 +46,7 @@ func main() {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		// The default grant set is {authorization_code, refresh_token};
 		// adding ClientCredentials extends it. Embedders that ONLY
 		// need machine-to-machine tokens can pass just the one grant.

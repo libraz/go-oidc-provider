@@ -25,6 +25,18 @@ var sessionCases = []subtest{
 	{"Expired", sessionExpired},
 	{"ListByChooserGroup", sessionListByChooserGroup},
 	{"ListByChooserGroupSkipsExpired", sessionListByChooserGroupSkipsExpired},
+	{"ConcurrentRotate", sessionConcurrentRotate},
+}
+
+// sessionConcurrentRotate is a thin adapter that funnels the harness's
+// [Factory] / [Backend] pair into the free-standing
+// [AssertConcurrentRotate] helper so the contract suite drives the
+// rotation post-condition automatically. Adapter authors may also call
+// AssertConcurrentRotate directly when they want to exercise the
+// SessionStore in isolation (e.g. a Redis-only deployment).
+func sessionConcurrentRotate(t *testing.T, f Factory) {
+	b := f(t)
+	AssertConcurrentRotate(t, b.Store.Sessions(), b.Now())
 }
 
 func sessionSaveFind(t *testing.T, f Factory) {

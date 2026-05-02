@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	httptestutil "github.com/libraz/go-oidc-provider/internal/testutil/httptest"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -114,45 +114,17 @@ func goodAuthorizeForm(clientID, redirectURI string) url.Values {
 }
 
 // post issues a POST application/x-www-form-urlencoded request with the
-// supplied form values. The optional Basic auth pair is set when both id
-// and secret are non-empty.
+// supplied form values. Delegates to [httptestutil.PostForm] so the
+// wire shape is documented in one place.
 func (f *fixture) post(tb testing.TB, form url.Values, basicID, basicSecret string) *http.Response {
 	tb.Helper()
-	req, err := http.NewRequestWithContext(
-		context.Background(),
-		http.MethodPost,
-		f.endpoint,
-		strings.NewReader(form.Encode()),
-	)
-	if err != nil {
-		tb.Fatalf("NewRequest: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if basicID != "" {
-		req.SetBasicAuth(basicID, basicSecret)
-	}
-	resp, err := f.prov.HTTPClient(nil).Do(req)
-	if err != nil {
-		tb.Fatalf("Do: %v", err)
-	}
-	return resp
+	return httptestutil.PostForm(tb, f.prov.HTTPClient(nil), f.endpoint, form, basicID, basicSecret)
 }
 
-// decodeJSON parses resp.Body as a JSON object.
+// decodeJSON parses resp.Body as a JSON object via the shared helper.
 func decodeJSON(tb testing.TB, resp *http.Response) map[string]any {
 	tb.Helper()
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		tb.Fatalf("ReadAll: %v", err)
-	}
-	out := map[string]any{}
-	if len(raw) == 0 {
-		return out
-	}
-	if err := json.Unmarshal(raw, &out); err != nil {
-		tb.Fatalf("Unmarshal(%s): %v", raw, err)
-	}
-	return out
+	return httptestutil.DecodeJSON(tb, resp)
 }
 
 // assertCacheControl fails the test if the response is missing the

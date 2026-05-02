@@ -37,7 +37,25 @@ type Profile struct {
 	// — [Build] does not encrypt for you; the caller passes the already
 	// sealed string.
 	Encrypted bool
+
+	// Insecure opts out of the Secure attribute on the rendered cookie.
+	// The zero value (false) keeps Secure=true, which is the only RFC
+	// 6265bis-compliant configuration for [SameSiteNoneMode] and the
+	// only safe configuration for any cookie carrying authentication
+	// material. Embedders MAY set Insecure=true for non-confidential
+	// cookies on plain-HTTP development origins; [validate] rejects the
+	// combination Insecure=true + SameSite=None (RFC 6265bis §4.1.2.7).
+	Insecure bool
 }
+
+// errSameSiteNoneRequiresSecure is returned when a Profile combines
+// [http.SameSiteNoneMode] with Insecure=true. RFC 6265bis §4.1.2.7
+// makes Secure mandatory whenever SameSite=None is used; the package
+// rejects the combination at construction time so a misconfigured
+// profile cannot escape into a response.
+var errSameSiteNoneRequiresSecure = errors.New(
+	"cookie: SameSite=None requires Secure (RFC 6265bis §4.1.2.7); set Insecure=false",
+)
 
 // errSameSiteRequired is returned when a Profile would emit a cookie without
 // an explicit SameSite mode. The browser default is Lax for new cookies but
@@ -62,6 +80,14 @@ var errEmptyName = errors.New("cookie: Name must not be empty")
 // must hold before a cookie is rendered onto the wire. SameSite zero value
 // (unset) and SameSiteDefaultMode are both rejected because the package
 // requires an explicit Lax / Strict / None choice.
+//
+// validate also rejects the unsafe combination SameSite=None + Insecure
+// per RFC 6265bis §4.1.2.7: SameSite=None makes the cookie a target for
+// cross-site request inclusion, and shipping it without Secure exposes
+// it to network attackers. [Build] honours [Profile.Insecure] for
+// non-confidential dev cookies (e.g. plain-HTTP locale preference);
+// the validate() guard ensures Insecure cannot apply to SameSite=None
+// regardless of how the profile is composed.
 func (p Profile) validate() error {
 	if p.Name == "" {
 		return errEmptyName
@@ -71,6 +97,9 @@ func (p Profile) validate() error {
 		// ok
 	default:
 		return errSameSiteRequired
+	}
+	if p.SameSite == http.SameSiteNoneMode && p.Insecure {
+		return errSameSiteNoneRequiresSecure
 	}
 	if p.MaxAge < 0 {
 		return errNegativeMaxAge

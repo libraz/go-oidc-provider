@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -284,8 +284,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 
 // authenticate resolves the client credentials carried by the request,
 // looks the client up in the registry, and verifies the credentials.
-// Mirrors the helper in [internal/parendpoint] so the two surfaces share
-// an identical authentication contract.
+// Delegates to [endpointsupport.AuthenticateClient] so the wire
+// contract stays identical to the token / par / revoke endpoints.
 //
 // The function emits its own response on every failure path so the
 // caller only checks the bool: false means "stop, response written".
@@ -298,34 +298,24 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	creds, err := clientauth.Parse(r)
-	usedBasic := r.Header.Get("Authorization") != ""
-	if err != nil {
-		emitIntrospectionError(ctx, deps, "", reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if creds.Method == clientauth.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
-		emitIntrospectionError(ctx, deps, creds.ClientID, "private_key_jwt_disabled")
-		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
-		return nil, nil, false
-	}
-	client, err := lookupClient(ctx, deps.Clients, creds.ClientID)
-	if err != nil {
-		emitIntrospectionError(ctx, deps, creds.ClientID, reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
-		SecretVerifier:    deps.SecretVerifier,
-		AssertionVerifier: deps.AssertionVerifier,
-		AllowedMethods:    deps.AllowedClientAuthMethods,
-	}); err != nil {
-		emitIntrospectionError(ctx, deps, creds.ClientID, reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	return client, creds, true
+	return endpointsupport.AuthenticateClient(ctx, w, r,
+		endpointsupport.AuthenticateOpts{
+			Clients:           deps.Clients,
+			SecretVerifier:    deps.SecretVerifier,
+			AssertionVerifier: deps.AssertionVerifier,
+			AllowedMethods:    deps.AllowedClientAuthMethods,
+		},
+		func(creds *clientauth.Credentials, err error) {
+			clientID := ""
+			if creds != nil {
+				clientID = creds.ClientID
+			}
+			endpointsupport.EmitAuthnFailure(ctx, deps.auditEmitter(),
+				auditIntrospectionError,
+				"introspection client authentication failed",
+				clientID, err)
+		},
+	)
 }
 
 // auditEmitter returns the configured audit sink, or a [audit.Discard]
@@ -337,101 +327,12 @@ func (d *Deps) auditEmitter() audit.Emitter {
 	return d.Audit
 }
 
-// emitIntrospectionError raises [audit.Event] for a pre-authentication
-// failure on /introspect. The event carries the attempted client_id
-// (when known) and a short reason code so SOC tooling can distinguish
-// "wrong secret" from "unknown client" probing patterns. The wire
-// response is unchanged — RFC 6749 §5.2 mandates the generic
-// "invalid_client" envelope — but the audit stream surfaces the
-// failing client_id which the wire response deliberately omits.
-func emitIntrospectionError(ctx context.Context, deps Deps, clientID, reason string) {
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     auditIntrospectionError,
-		Level:    audit.LevelWarn,
-		Message:  "introspection client authentication failed",
-		ClientID: clientID,
-		Extras: map[string]any{
-			"reason": reason,
-		},
-	})
-}
-
-// reasonForAuthnError maps a clientauth sentinel onto the short reason
-// code emitted on the audit event. The codes match the clientauth
-// error names so a reader can grep from audit line back to the failing
-// branch in the verifier.
-func reasonForAuthnError(err error) string {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		return "no_credentials"
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials):
-		return "ambiguous_credentials"
-	case errors.Is(err, clientauth.ErrUnsupportedMethod):
-		return "unsupported_method"
-	case errors.Is(err, clientauth.ErrClientMismatch):
-		return "client_mismatch"
-	case errors.Is(err, clientauth.ErrCredentialsInvalid):
-		return "invalid_client_credentials"
-	case errors.Is(err, clientauth.ErrAssertionMalformed):
-		return "assertion_malformed"
-	case errors.Is(err, clientauth.ErrAssertionReplayed):
-		return "assertion_replayed"
-	default:
-		return "server_error"
-	}
-}
-
-// lookupClient resolves the registered client for id, mapping
-// [store.ErrNotFound] to [clientauth.ErrCredentialsInvalid] so the
-// caller cannot tell "unknown client" apart from "wrong secret" through
-// the error surface.
-func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*store.Client, error) {
-	if id == "" {
-		return nil, clientauth.ErrCredentialsInvalid
-	}
-	c, err := clients.GetClient(ctx, id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, clientauth.ErrCredentialsInvalid
-		}
-		return nil, err
-	}
-	return c, nil
-}
-
-// writeAuthnError maps an authentication error onto the wire response.
-// The mapping is the canonical RFC 6749 §5.2 table augmented by this
-// library's sentinel discrimination, identical to the token / PAR
-// endpoints.
-func writeAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		writeInvalidClient(w, usedBasic, "client authentication required")
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials),
-		errors.Is(err, clientauth.ErrUnsupportedMethod):
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
-			"client authentication parameters are malformed")
-	case errors.Is(err, clientauth.ErrClientMismatch),
-		errors.Is(err, clientauth.ErrCredentialsInvalid),
-		errors.Is(err, clientauth.ErrAssertionMalformed),
-		errors.Is(err, clientauth.ErrAssertionReplayed):
-		writeInvalidClient(w, usedBasic, "client authentication failed")
-	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-	}
-}
-
 // isFormContent reports whether ct is application/x-www-form-urlencoded.
-// Parameters (charset, boundary, etc.) are tolerated. Mirrors the helper
-// in the sibling endpoints so the form-content contract stays uniform.
+// Parameters (charset, boundary, etc.) are tolerated. Delegates to
+// [endpointsupport.IsFormContent] so the form-content contract stays
+// uniform across endpoints.
 func isFormContent(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
+	return endpointsupport.IsFormContent(ct)
 }
 
 // looksLikeJWT reports whether token has the structural shape of a

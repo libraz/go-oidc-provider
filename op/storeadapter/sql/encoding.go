@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // encodeStrings serialises a []string column. The adapter stores
@@ -101,14 +103,13 @@ func int64PtrToTimePtr(n *int64) *time.Time {
 
 // isExpired reports whether t is strictly before clock.Now(). The
 // zero time is treated as "no expiry" so records may opt out of
-// expiry by leaving the field unset. The semantic mirrors the inmem
-// reference adapter byte-for-byte so the contract harness stays
-// behavioural-equivalent.
+// expiry by leaving the field unset. The body delegates to
+// [patterns.IsExpiredStrict] so the strict-less-than boundary
+// semantic stays byte-equivalent with the inmem reference adapter
+// — the contract harness pins the equivalence and the shared helper
+// guarantees a single call site can never drift.
 func isExpired(t time.Time, clock Clock) bool {
-	if t.IsZero() {
-		return false
-	}
-	return t.Before(clock.Now())
+	return patterns.IsExpiredStrict(t, clock.Now())
 }
 
 // boolToInt64 maps a Go bool to the integer 0/1 the schema stores.

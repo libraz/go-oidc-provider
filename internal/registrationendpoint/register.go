@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -154,7 +155,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		JWKsURI:                  m.JWKsURI,
 		JWKs:                     append(json.RawMessage(nil), m.JWKs...),
 		Contacts:                 slices.Clone(m.Contacts),
-		DefaultMaxAge:            cloneInt64Ptr(m.DefaultMaxAge),
+		DefaultMaxAge:            clone.Int64Ptr(m.DefaultMaxAge),
 		RequireAuthTime:          m.RequireAuthTime,
 		DefaultACRValues:         slices.Clone(m.DefaultACRValues),
 		InitiateLoginURI:         m.InitiateLoginURI,
@@ -212,7 +213,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		TosURI:                  m.TosURI,
 		JWKsURI:                 m.JWKsURI,
 		Contacts:                m.Contacts,
-		DefaultMaxAge:           cloneInt64Ptr(m.DefaultMaxAge),
+		DefaultMaxAge:           clone.Int64Ptr(m.DefaultMaxAge),
 		RequireAuthTime:         m.RequireAuthTime,
 		DefaultACRValues:        m.DefaultACRValues,
 		InitiateLoginURI:        m.InitiateLoginURI,

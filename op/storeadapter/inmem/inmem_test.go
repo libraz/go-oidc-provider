@@ -581,6 +581,52 @@ func TestIATStore_GetByHash_FastPath(t *testing.T) {
 	}
 }
 
+// TestSessionStore_ConcurrentRotate pins the SessionStore rotation
+// contract directly against the in-memory adapter. The free-standing
+// helper is also wired into [contract.Run] but the explicit call here
+// documents the contract for backends that embed AssertConcurrentRotate
+// without taking the full aggregate.
+func TestSessionStore_ConcurrentRotate(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	contract.AssertConcurrentRotate(t, s.Sessions(), now)
+}
+
+// TestSessionStore_ExpiredReturnsNotFound pins the expired-session
+// contract via the shared [contract.AssertExpiredSessionReturnsNotFound]
+// helper. The same helper runs against the SQL and Redis adapters so
+// the strict-less-than expiry boundary semantic is checked once and
+// observed identically across every backend.
+func TestSessionStore_ExpiredReturnsNotFound(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	contract.AssertExpiredSessionReturnsNotFound(t, s.Sessions(), now)
+}
+
+// TestSessionStore_NotFoundOnMissing pins the absent-ID contract via
+// the shared [contract.AssertSessionNotFoundOnMissing] helper.
+func TestSessionStore_NotFoundOnMissing(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	contract.AssertSessionNotFoundOnMissing(t, s.Sessions(), now)
+}
+
+// TestSessionStore_BatchListMatches pins the chooser-group batch
+// lookup contract via the shared [contract.AssertSessionBatchListMatches]
+// helper. The harness inserts a small batch (16 records) so the
+// helper completes well inside the unit-test budget while still
+// surfacing dedup / aliasing bugs that single-record cases would
+// miss.
+func TestSessionStore_BatchListMatches(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	contract.AssertSessionBatchListMatches(t, s.Sessions(), 16, now)
+}
+
 // TestTx_Rollback_ClearsStaging pins F-11: Rollback drops every
 // staged record so a buggy caller cannot mutate the freed staging
 // pointers into the next transaction. The test races several

@@ -471,7 +471,6 @@ func TestScenario_DCR_SEC_05_SecretBasedAuthMethodIssuesSecret(t *testing.T) {
 	t.Parallel()
 
 	for _, method := range []string{"client_secret_basic", "client_secret_post"} {
-		method := method
 		t.Run(method, func(t *testing.T) {
 			t.Parallel()
 			f := newDCRFixture(t)
@@ -1132,7 +1131,6 @@ func TestScenario_DCR_ERR_01_ErrorCodesLimitedSet(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			resp := f.post(t, tc.bearer, tc.contentType, tc.body)

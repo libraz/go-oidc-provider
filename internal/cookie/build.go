@@ -20,7 +20,7 @@ func Build(p Profile, value string) (*http.Cookie, error) {
 		Name:     p.Name,
 		Value:    value,
 		Path:     "/",
-		Secure:   true,
+		Secure:   !p.Insecure,
 		HttpOnly: true,
 		SameSite: p.SameSite,
 	}
@@ -41,7 +41,7 @@ func Clear(p Profile) (*http.Cookie, error) {
 		Name:     p.Name,
 		Value:    "",
 		Path:     "/",
-		Secure:   true,
+		Secure:   !p.Insecure,
 		HttpOnly: true,
 		SameSite: p.SameSite,
 		MaxAge:   -1,

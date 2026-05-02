@@ -27,17 +27,13 @@ import (
 // trustedCIDRs slice rejects the option at construction time so a
 // misconfiguration cannot silently widen the allow-list.
 //
-// Experimental — partial wiring: as of this revision, [New] validates
-// the option and the mTLS verifier package honours the resulting
-// allow-list when callers construct it directly through
-// [internal/mtls.NewVerifier]. The op.go wiring layer that ships in
-// the same release path will pick the recorded value up via
-// [MTLSProxyConfig] in a follow-up; until that lands, embedders who
-// need the runtime header path should construct the mtls.Verifier
-// themselves and pass the recorded [mtls.ProxyConfig].
+// Wiring: [New] validates the option and threads the resulting
+// allow-list into the OP's mTLS verifier so the reverse-proxy header
+// path is honoured for every request handled by the [Provider].
+// Embedders who construct an [internal/mtls.Verifier] themselves can
+// still pass the recorded value via [MTLSProxyConfig].
 //
-// Stable since v0.x (the input-validation surface; the wiring is
-// experimental until the follow-up).
+// Stable since v0.x.
 func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
 	return optionFunc(func(c *config) error {
 		if headerName == "" {
@@ -74,14 +70,25 @@ func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
 // the embedder treats that as "header path disabled" and the
 // verifier consults TLS-handshake certs only.
 //
-// The function is exported so an embedder running the partial-wiring
-// transition can build the mtls.Verifier themselves and pass the
-// recorded state forward.
+// The function is exported so embedders that construct an
+// [internal/mtls.Verifier] themselves (e.g., for an out-of-band
+// introspection endpoint) can reuse the same allow-list configured
+// for the [Provider].
 func MTLSProxyConfig(p *Provider) mtls.ProxyConfig {
 	if p == nil {
 		return mtls.ProxyConfig{}
 	}
-	v, ok := mtlsProxyStore.Load(p.cfg)
+	return loadMTLSProxyConfig(p.cfg)
+}
+
+// loadMTLSProxyConfig reads the [WithMTLSProxy] state recorded on cfg
+// and projects it into a fresh [mtls.ProxyConfig]. Returns the zero
+// value when [WithMTLSProxy] was not called.
+func loadMTLSProxyConfig(cfg *config) mtls.ProxyConfig {
+	if cfg == nil {
+		return mtls.ProxyConfig{}
+	}
+	v, ok := mtlsProxyStore.Load(cfg)
 	if !ok {
 		return mtls.ProxyConfig{}
 	}

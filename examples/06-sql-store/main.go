@@ -18,8 +18,9 @@
 // the database where it belongs.
 //
 // PRODUCTION CAVEATS:
-//   - Keys: ephemeral; load from a vault / KMS in production.
-//   - Store: SQLite via op/storeadapter/sql; production runs schema migrations through the embedder's tooling and persists the database where it belongs.
+//   - Keys: key derivation uses a hardcoded ephemeral value for the demo; production must derive the signing key from a vault / KMS.
+//   - Store: the sqlite DSN here uses a local file; production uses Postgres / MySQL via op/storeadapter/sql, runs schema migrations through the embedder's tooling, and persists the database where it belongs.
+//   - DSN: the DSN string contains credentials; production should source it from a secret manager (Vault / AWS Secrets Manager / GCP Secret Manager) rather than hard-coding it next to the binary.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 package main
 
@@ -70,7 +71,7 @@ func run() error {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(storage),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://rp.example.com/cb"},

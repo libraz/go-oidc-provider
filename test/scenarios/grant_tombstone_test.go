@@ -370,7 +370,7 @@ func TestScenario_GTM_006_FAPIRejectsRevocationStrategyNone(t *testing.T) {
 		op.WithIssuer("https://idp.testkit.invalid"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{{KeyID: "gtm-sig-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithCookieKeys(cookieKey),
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.DPoP),
 		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyNone),

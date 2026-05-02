@@ -64,3 +64,44 @@ func TestSQLite_Contract(t *testing.T) {
 	t.Parallel()
 	contract.Run(t, newSQLiteFactory(t))
 }
+
+// TestSQLite_SessionStore_ConcurrentRotate pins the rotation
+// post-condition declared on [store.SessionStore] directly against the
+// SQL adapter. The free-standing helper is also exercised via
+// [contract.Run] -> sessionCases; the explicit call documents the
+// contract a sessions-only embedder is expected to honour.
+func TestSQLite_SessionStore_ConcurrentRotate(t *testing.T) {
+	t.Parallel()
+	b := newSQLiteFactory(t)(t)
+	contract.AssertConcurrentRotate(t, b.Store.Sessions(), b.Now())
+}
+
+// TestSQLite_SessionStore_ExpiredReturnsNotFound pins the
+// expired-session contract against the SQL adapter via the shared
+// [contract.AssertExpiredSessionReturnsNotFound] helper. The strict-
+// less-than expiry boundary is checked at one source site
+// (op/storeadapter/patterns.IsExpiredStrict) and observed identically
+// across every backend.
+func TestSQLite_SessionStore_ExpiredReturnsNotFound(t *testing.T) {
+	t.Parallel()
+	b := newSQLiteFactory(t)(t)
+	contract.AssertExpiredSessionReturnsNotFound(t, b.Store.Sessions(), b.Now())
+}
+
+// TestSQLite_SessionStore_NotFoundOnMissing pins the absent-ID
+// contract against the SQL adapter via the shared
+// [contract.AssertSessionNotFoundOnMissing] helper.
+func TestSQLite_SessionStore_NotFoundOnMissing(t *testing.T) {
+	t.Parallel()
+	b := newSQLiteFactory(t)(t)
+	contract.AssertSessionNotFoundOnMissing(t, b.Store.Sessions(), b.Now())
+}
+
+// TestSQLite_SessionStore_BatchListMatches pins the chooser-group
+// batch lookup contract against the SQL adapter via the shared
+// [contract.AssertSessionBatchListMatches] helper.
+func TestSQLite_SessionStore_BatchListMatches(t *testing.T) {
+	t.Parallel()
+	b := newSQLiteFactory(t)(t)
+	contract.AssertSessionBatchListMatches(t, b.Store.Sessions(), 16, b.Now())
+}

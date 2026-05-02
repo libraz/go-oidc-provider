@@ -6,9 +6,12 @@ import "errors"
 // that cross the public API boundary. It carries an OAuth/OIDC-style code,
 // a short description suitable for logging, and an optional wrapped cause.
 //
-// Construct Error values through the package-level helpers (e.g.
-// [errInvalidRequest]) rather than instantiating this struct directly so
-// that the catalog stays the single source of truth.
+// Construct Error values through the package-level helpers
+// ([newConfigurationError]; future code-class helpers SHOULD follow the
+// same shape) rather than instantiating this struct directly so that
+// the catalog stays the single source of truth. New code-class factories
+// MUST live in this file so the closed catalog of error codes stays
+// auditable from one location.
 type Error struct {
 	// Code is the OAuth-style machine-readable error code (e.g.
 	// "invalid_request"). It MUST come from the catalog defined in this
@@ -145,14 +148,14 @@ var ErrKeysetRequired = &Error{
 	Description: "WithKeyset is required",
 }
 
-// ErrCookieKeysRequired is returned by [New] when [WithCookieKey] /
-// [WithCookieKeys] was not supplied but a configured grant requires the
-// authorize endpoint to set encrypted cookies (e.g. AuthorizationCode).
-// The default grant set includes AuthorizationCode, so the typical caller
-// MUST supply at least one cookie key.
+// ErrCookieKeysRequired is returned by [New] when [WithCookieKeys] was
+// not supplied but a configured grant requires the authorize endpoint
+// to set encrypted cookies (e.g. AuthorizationCode). The default grant
+// set includes AuthorizationCode, so the typical caller MUST supply at
+// least one cookie key.
 var ErrCookieKeysRequired = &Error{
 	Code:        codeConfiguration,
-	Description: "WithCookieKey/WithCookieKeys is required when the authorization_code grant is enabled",
+	Description: "WithCookieKeys is required when the authorization_code grant is enabled",
 }
 
 // ErrDynamicRegistrationDisabled is returned by
@@ -164,4 +167,20 @@ var ErrCookieKeysRequired = &Error{
 var ErrDynamicRegistrationDisabled = &Error{
 	Code:        codeConfiguration,
 	Description: "WithDynamicRegistration is not configured",
+}
+
+// newConfigurationError returns a fresh configuration_error wrapping
+// the supplied description and (optional) cause. The factory exists so
+// option-site code does not have to repeat the literal struct shape on
+// every error path; new configuration errors SHOULD route through it
+// rather than instantiating [Error] directly. Future code-class
+// factories (e.g. for invalid_request / invalid_grant when option- or
+// parser-side code starts emitting them) SHOULD live alongside this
+// helper so the catalog stays single-source.
+func newConfigurationError(description string, cause error) *Error {
+	return &Error{
+		Code:        codeConfiguration,
+		Description: description,
+		Cause:       cause,
+	}
 }

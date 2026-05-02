@@ -143,7 +143,7 @@ func TestScenario_ERR_003_BrowserAcceptProducesHTML(t *testing.T) {
 	t.Parallel()
 
 	tk := testkit.NewProvider(t, testkit.WithOptions(
-		op.WithInteraction(interaction.HTMLDriver{}),
+		op.WithInteractionDriver(interaction.HTMLDriver{}),
 	))
 	httpClient := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {

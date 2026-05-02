@@ -140,7 +140,7 @@ func run() error {
 		op.WithIssuer(issuer),
 		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),
 		op.WithProfile(profile.FAPI2Baseline),
 		op.WithFeature(feature.DPoP),

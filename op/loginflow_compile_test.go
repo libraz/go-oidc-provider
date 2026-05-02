@@ -179,7 +179,7 @@ func TestProjectStepToFlow_BuiltinSteps_RejectMissingDeps(t *testing.T) {
 					Then: op.StepTOTP{Store: st.TOTPs()},
 				}}}
 			},
-			wantSubstr: "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKey at the Provider level)",
+			wantSubstr: "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKeys at the Provider level)",
 		},
 		{
 			name: "StepEmailOTP/nil-mailer",
@@ -287,9 +287,8 @@ func TestProjectStepToFlow_PrimaryPassword_RejectsNilStore(t *testing.T) {
 
 // TestProjectStepToFlow_StepTOTP_FallsBackToProviderKey pins the
 // Provider-level fallback contract: when [op.StepTOTP.EncryptionKey]
-// is empty the builder consults the
-// [op.WithMFAEncryptionKey] / [op.WithMFAEncryptionKeys] surface and
-// op.New constructs successfully.
+// is empty the builder consults the [op.WithMFAEncryptionKeys] surface
+// and op.New constructs successfully.
 func TestProjectStepToFlow_StepTOTP_FallsBackToProviderKey(t *testing.T) {
 	t.Parallel()
 	st := inmem.New()
@@ -298,7 +297,7 @@ func TestProjectStepToFlow_StepTOTP_FallsBackToProviderKey(t *testing.T) {
 		Then: op.StepTOTP{Store: st.TOTPs()},
 	}}}
 	opts := append(validBaseOptsWithStore(t, st),
-		op.WithMFAEncryptionKey(bytes32("global-mfa-key-32-bytes-padding-")),
+		op.WithMFAEncryptionKeys(bytes32("global-mfa-key-32-bytes-padding-")),
 		op.WithLoginFlow(flow),
 	)
 	if _, err := op.New(opts...); err != nil {
@@ -322,7 +321,7 @@ func TestProjectStepToFlow_StepTOTP_RejectsMissingKeyAndFallback(t *testing.T) {
 	if err == nil {
 		t.Fatalf("op.New: expected error when neither per-step nor global key is set")
 	}
-	want := "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKey at the Provider level)"
+	want := "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKeys at the Provider level)"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("op.New: error %q does not contain %q", err.Error(), want)
 	}
@@ -346,7 +345,7 @@ func validBaseOptsWithStore(tb testing.TB, st *inmem.Store) []op.Option {
 		op.WithIssuer(validIssuer),
 		op.WithStore(st),
 		op.WithKeyset(validKeyset(tb)),
-		op.WithCookieKey(newRandomCookieKey(tb)),
+		op.WithCookieKeys(newRandomCookieKey(tb)),
 	}
 }
 

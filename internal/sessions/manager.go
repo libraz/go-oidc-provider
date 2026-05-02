@@ -268,10 +268,15 @@ func (m *Manager) Touch(ctx context.Context, sessionID string) error {
 // proves identity again so any pre-fixation cookie value the attacker may
 // have planted becomes useless.
 //
-// The rotation is implemented as Save(new) + Delete(old) without a
-// dedicated store contract, so any [store.SessionStore] implementation
-// works. A concurrent Rotate on the same oldSessionID either succeeds with
-// distinct new IDs (both records exist briefly until the old is deleted)
+// Atomicity: the rotation is implemented as Save(new) + Delete(old)
+// without a dedicated store contract, so any [store.SessionStore]
+// implementation works. The pair is NOT atomic — between Save(new) and
+// Delete(old) two records reference the same Subject / ChooserGroupID,
+// and embedders MUST tolerate that transient dual-active window
+// (documented on [store.SessionStore]). A concurrent Rotate on the same
+// oldSessionID either succeeds with distinct new IDs (both records exist
+// briefly until the old is deleted by whichever racer reaches Delete
+// first; subsequent Deletes surface [store.ErrNotFound] and are absorbed)
 // or fails with a wrapped store error; the function never silently
 // produces two cookies pointing at the same SessionID.
 //
@@ -562,7 +567,12 @@ func mostRecent(sessions []*store.Session) *store.Session {
 }
 
 // newID generates a base64url-encoded random identifier of [IDLength]
-// bytes, suitable for chooser_group_id / session_id values.
+// bytes, suitable for chooser_group_id / session_id values. A
+// [crypto/rand] read failure propagates to the caller so the
+// in-flight transaction fails closed rather than admitting a
+// predictable identifier; see the entropy-failure policy on
+// [github.com/libraz/go-oidc-provider/internal/keys] for the central
+// rule.
 func newID() (string, error) {
 	buf := make([]byte, IDLength)
 	if _, err := rand.Read(buf); err != nil {

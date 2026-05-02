@@ -129,9 +129,7 @@ func (a captchaStepAdapter) Continue(ctx context.Context, in authn.ContinueInput
 // that drives the [PrimaryPassword] step. The builder validates the
 // store dependency up-front so a misconfigured PrimaryPassword
 // surfaces at op.New time rather than at the first authorize request.
-//
-//nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) {
+func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) { //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -146,9 +144,7 @@ func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) {
 // builder validates RP-side configuration up-front so a misconfigured
 // PrimaryPasskey surfaces at op.New time rather than at the first
 // authorize request.
-//
-//nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) {
+func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -178,9 +174,7 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) {
 // configured through [WithMFAEncryptionKey] / [WithMFAEncryptionKeys].
 // A non-empty per-step key always wins (more-specific-wins). The
 // library never retains the bytes beyond the codec instance.
-//
-//nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (authn.Authenticator, error) {
+func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (authn.Authenticator, error) { //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -191,7 +185,7 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (a
 	if len(current) == 0 {
 		return nil, &Error{
 			Code:        codeConfiguration,
-			Description: "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKey at the Provider level)",
+			Description: "StepTOTP.EncryptionKey is required (or configure WithMFAEncryptionKeys at the Provider level)",
 		}
 	}
 	codec, err := totp.NewCodec(current, prev...)

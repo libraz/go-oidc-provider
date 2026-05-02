@@ -162,7 +162,7 @@ func run() error {
 		op.WithIssuer(issuer),
 		op.WithStore(storage),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),
 		op.WithStaticClients(op.PublicClient{
 			ID:           clientID,

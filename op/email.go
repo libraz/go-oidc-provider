@@ -124,9 +124,7 @@ const DefaultEmailOTPCodeTTL = emailotp.DefaultCodeTTL
 //   - Single-use: the persisted record is deleted on a successful
 //     verify so a replay of the code (e.g., from a leaked SPA log)
 //     is rejected on the next attempt.
-//
-//nolint:ireturn // returns the public Authenticator interface so embedders can pass the result to WithAuthenticators without a concrete-type leak.
-func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) {
+func NewEmailOTPAuthenticator(cfg EmailOTPConfig) (Authenticator, error) { //nolint:ireturn // returns the public Authenticator interface so embedders can pass the result to WithAuthenticators without a concrete-type leak.
 	// The internal NewAuthenticator nil-checks its own Mailer, but
 	// the public Mailer is wrapped through emailMailerAdapter — a
 	// non-nil struct value with a nil internal field — so the

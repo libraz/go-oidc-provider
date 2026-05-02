@@ -221,6 +221,13 @@ func constantTimeStringEqual(a, b string) int {
 //     supplied) emits a WARN line tagged with the running counter,
 //   - the rotation goroutine continues to tick so a subsequent
 //     successful read still rotates the value.
+//
+// The graceful-degrade posture is the non-critical branch of the
+// project-wide entropy-failure policy documented on
+// [github.com/libraz/go-oidc-provider/internal/keys]: nonce rotation
+// can safely keep serving the previous value for a bounded window,
+// whereas critical mints (session / chooser-group IDs) fail closed
+// instead.
 func (s *InMemoryDPoPNonceSource) run(ctx context.Context, rotate time.Duration) {
 	t := time.NewTicker(rotate)
 	defer t.Stop()

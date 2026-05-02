@@ -40,8 +40,6 @@ func (c jarFixedClock) Now() time.Time { return c.t }
 // jarAnchor is the canonical "now" the JAR scenarios pin the OP clock
 // to. The 5-minute exp / 60s skew defaults compose cleanly around this
 // anchor without bumping into JTI store edge cases.
-//
-//nolint:gochecknoglobals // test-only fixed anchor.
 var jarAnchor = time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
 
 // jarFixture bundles a JAR-enabled testkit Provider with a
@@ -371,6 +369,7 @@ func TestScenario_JAR_003_RequestObjectOverridesOuterParams(t *testing.T) {
 		"request":       {signed},
 	}
 	resp := f.authorizeGet(t, values)
+	defer func() { _ = resp.Body.Close() }()
 	expectInteractionRedirect(t, resp)
 }
 
@@ -440,6 +439,7 @@ func TestScenario_JAR_011_NestedRequestParameterForbidden(t *testing.T) {
 		"client_id": {f.clientID},
 		"request":   {signed},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	expectJARError(t, resp, "invalid_request_object")
 }
 
@@ -460,6 +460,7 @@ func TestScenario_JAR_012_NestedRequestUriForbidden(t *testing.T) {
 		"client_id": {f.clientID},
 		"request":   {signed},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	expectJARError(t, resp, "invalid_request_object")
 }
 
@@ -535,6 +536,7 @@ func TestScenario_JAR_018_MalformedJWTRejected(t *testing.T) {
 		"client_id": {f.clientID},
 		"request":   {"definitely.notsigned.jwt"},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	expectJARError(t, resp, "invalid_request_object")
 }
 
@@ -562,6 +564,7 @@ func TestScenario_JAR_019_PreregisteredAlgEnforced(t *testing.T) {
 		"client_id": {f.clientID},
 		"request":   {signed},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	expectJARError(t, resp, "invalid_request_object")
 }
 
@@ -587,6 +590,7 @@ func TestScenario_JAR_020_UnsupportedAlgRejected(t *testing.T) {
 		"client_id": {f.clientID},
 		"request":   {noneJWT},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	expectJARError(t, resp, "invalid_request_object")
 }
 
@@ -624,6 +628,7 @@ func TestScenario_JAR_021_SignatureVerificationFails(t *testing.T) {
 		"client_id": {f.clientID},
 		"request":   {signed},
 	})
+	defer func() { _ = resp.Body.Close() }()
 	expectJARError(t, resp, "invalid_request_object")
 }
 
@@ -642,6 +647,4 @@ func TestScenario_JAR_023_UnknownMembersIgnored(t *testing.T) {
 // so jarPKCEVerifier is documented above next to its challenge but
 // not exercised on the wire. A future code-redemption JAR scenario
 // would consume it.
-//
-//nolint:gochecknoglobals // sentinel anchored to jarPKCEVerifier, see comment.
 var _ = jarPKCEVerifier

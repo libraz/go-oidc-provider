@@ -253,7 +253,7 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, priv *ecd
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(st),
 		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
-		op.WithCookieKey(cookieKey),
+		op.WithCookieKeys(cookieKey),
 		op.WithMountPrefix(cfg.mount),
 		op.WithLogger(logger),
 		op.WithStaticClients(seeds...),

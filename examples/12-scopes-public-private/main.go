@@ -55,7 +55,7 @@ func main() {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		op.WithScope(op.PublicScope("profile", "Access your basic profile")),
 		op.WithScope(op.PublicScope("billing.read", "Read your billing data")),
 		op.WithScope(op.InternalScope("internal:audit")),

@@ -142,7 +142,10 @@ func consumeIAT(ctx context.Context, w http.ResponseWriter, deps Deps, ver iatVe
 // bearerFromHeader extracts the Bearer credential from the
 // Authorization header value, case-insensitively matching the scheme
 // per RFC 6750 §2.1. The second return reports whether a Bearer
-// credential was present at all.
+// credential was present at all. The registration endpoint accepts
+// only the "Bearer" scheme — IAT and RAT credentials never carry the
+// DPoP binding the userinfo path uses — so this helper deliberately
+// stays narrower than [endpointsupport.BearerFromHeader].
 func bearerFromHeader(value string) (string, bool) {
 	const prefix = "Bearer "
 	if len(value) <= len(prefix) {

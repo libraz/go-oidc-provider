@@ -25,6 +25,7 @@ allowed=(
   "/oidc/end_session"
   "/oidc/register"
   "/oidc/backchannel-logout"
+  "/oidc/interaction"
 )
 
 # Build a regex that matches any /oidc/ path reference in the

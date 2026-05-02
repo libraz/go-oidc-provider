@@ -79,13 +79,13 @@ func main() {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(memStore),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		// JSONDriver renders prompts (chooser, consent, factor) as JSON
 		// envelopes a SPA can consume directly. A server-rendered
 		// embedder swaps to interaction.HTMLDriver and supplies a
 		// chooser template via op.WithChooserUI; the orchestrator-side
 		// flow is identical.
-		op.WithInteraction(interaction.JSONDriver{}),
+		op.WithInteractionDriver(interaction.JSONDriver{}),
 		op.WithStaticClients(
 			op.ConfidentialClient{
 				ID:           "demo-rp",

@@ -42,7 +42,7 @@ func TestWithStaticClients_AcceptsCompositeStore(t *testing.T) {
 		op.WithIssuer(validIssuer),
 		op.WithStore(storage),
 		op.WithKeyset(validKeyset(t)),
-		op.WithCookieKey(newRandomCookieKey(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://app.example.com/cb"},
@@ -87,7 +87,7 @@ func TestWithStaticClients_RejectsCompositeWithReadOnlyClients(t *testing.T) {
 		op.WithIssuer(validIssuer),
 		op.WithStore(storage),
 		op.WithKeyset(validKeyset(t)),
-		op.WithCookieKey(newRandomCookieKey(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
 		op.WithStaticClients(op.PublicClient{
 			ID:           "demo-spa",
 			RedirectURIs: []string{"https://app.example.com/cb"},

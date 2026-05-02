@@ -614,7 +614,7 @@ func TestScenario_BUS_010_PrimaryPasswordStoreIndependentOfUsers(t *testing.T) {
 		op.WithIssuer(testkit.DefaultIssuer),
 		op.WithStore(hybrid),
 		op.WithKeyset(op.Keyset{signKey}),
-		op.WithCookieKey(cookieKey),
+		op.WithCookieKeys(cookieKey),
 		op.WithLoginFlow(op.LoginFlow{
 			Primary: op.PrimaryPassword{Store: primaryStore.UserPasswords()},
 		}),

@@ -122,6 +122,20 @@ type VerifierConfig struct {
 	// for proof-substitution across endpoints whose method differs
 	// only in case (none in HTTP today, but the RFC keeps the
 	// distinction structural for forward-compatibility).
+	//
+	// Operational guidance: keep the default (strict, byte-equal)
+	// in every greenfield deployment. RFC 9110 §9.1 pins HTTP
+	// methods to canonical upper-case ("GET", "POST", …), and
+	// RFC 9449 §4.3 inherits the byte-equal compare from there;
+	// any RP that submits a lower-case "htm" is buggy under both
+	// RFCs. Only flip this on after observing an interoperability
+	// failure that traces to a specific RP library — and even
+	// then, treat the loose mode as a temporary bridge while the
+	// RP team ships the fix. Leaving the flag on indefinitely
+	// silently accepts non-conforming proofs from every client,
+	// not just the one that prompted the change. The library does
+	// not log a warning when loose mode is active, so an audit
+	// has to grep for the option site to surface it.
 	AllowLooseMethodCase bool
 }
 

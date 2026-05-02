@@ -147,6 +147,45 @@ func TestVerifyTLSClientAuth_SANEmail(t *testing.T) {
 	}
 }
 
+// TestVerifyTLSClientAuth_SANEmailCaseFold pins the
+// looser-than-RFC-5280 stance documented on
+// [mtls.ClientMatcher.SANEmail]: the matcher folds the entire
+// address (local-part included) so a mailbox registered with one
+// casing authenticates the owner even when the cert encodes a
+// different local-part casing. RFC 5280 §3.4.4 / RFC 5321 §2.4
+// only require the domain part to fold; the matcher trades the
+// stricter local-part posture for operational stability across
+// mail systems whose semantics ignore the local-part case. The
+// test covers both local-part and domain differences plus a
+// fully-mixed case so a regression that narrowed the fold to the
+// domain trips the assertion.
+func TestVerifyTLSClientAuth_SANEmailCaseFold(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		certEmail string
+		matcher   string
+	}{
+		{"local_part_case", "Client@example.org", "client@example.org"},
+		{"domain_case", "client@Example.ORG", "client@example.org"},
+		{"mixed_case", "ClIeNt@ExAmPlE.OrG", "client@example.org"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cert := generateLeafWith(t, func(c *x509.Certificate) {
+				c.EmailAddresses = []string{tc.certEmail}
+			})
+			if err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{
+				SANEmail: tc.matcher,
+			}); err != nil {
+				t.Errorf("VerifyTLSClientAuth(%q vs %q): %v", tc.certEmail, tc.matcher, err)
+			}
+		})
+	}
+}
+
 // TestVerifyTLSClientAuth_SubjectFallsThroughToSAN proves that a
 // non-matching subject does not short-circuit the SAN attempts: the
 // matcher considers any non-empty field a viable hit.

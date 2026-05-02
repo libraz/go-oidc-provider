@@ -292,6 +292,73 @@ func TestResolve_TrustedRemote_XFHAllowlistStripsPort(t *testing.T) {
 	}
 }
 
+func TestResolve_TrustedRemote_XFFIPv6Forms(t *testing.T) {
+	t.Parallel()
+
+	// RFC 7239 §4 allows IPv6 literals to appear bare, bracketed, or
+	// bracketed-with-port inside X-Forwarded-For. The proxy walker must
+	// normalise the three representations to the same netip.Addr so a
+	// single CIDR rule covers a fronting proxy regardless of which
+	// concrete syntax it emits.
+	tr, err := proxy.NewTrust([]string{"2400:cb00::/32"})
+	if err != nil {
+		t.Fatalf("NewTrust: %v", err)
+	}
+	want := netip.MustParseAddr("2001:db8::1")
+	cases := map[string]string{
+		"bare":              "2001:db8::1",
+		"bracketed":         "[2001:db8::1]",
+		"bracketed_w_port":  "[2001:db8::1]:443",
+		"loopback_brackets": "[::1]",
+	}
+	wants := map[string]netip.Addr{
+		"bare":              want,
+		"bracketed":         want,
+		"bracketed_w_port":  want,
+		"loopback_brackets": netip.MustParseAddr("::1"),
+	}
+	for name, xff := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			req := newRequest(t, "http://op.example.com/x")
+			req.RemoteAddr = "[2400:cb00::1]:443"
+			req.Header.Set("X-Forwarded-For", xff)
+
+			got := proxy.Resolve(req, tr)
+			if !got.Trusted {
+				t.Fatal("Trusted must be true (proxy IP inside trusted CIDR)")
+			}
+			if got.ClientIP != wants[name] {
+				t.Errorf("ClientIP=%v want %v (xff=%q)", got.ClientIP, wants[name], xff)
+			}
+		})
+	}
+}
+
+func TestResolve_TrustedRemote_XFFIPv6Mixed(t *testing.T) {
+	t.Parallel()
+
+	// A multi-hop XFF chain that mixes IPv6 representations resolves the
+	// first non-trusted hop regardless of which syntax it uses.
+	tr, err := proxy.NewTrust([]string{"2400:cb00::/32"})
+	if err != nil {
+		t.Fatalf("NewTrust: %v", err)
+	}
+	req := newRequest(t, "http://op.example.com/x")
+	req.RemoteAddr = "[2400:cb00::1]:443"
+	// Client-on-the-left, two trusted hops on the right; the right-most
+	// hop arrives bracketed-with-port.
+	req.Header.Set("X-Forwarded-For", "2001:db8::42, [2400:cb00::5], [2400:cb00::6]:443")
+
+	got := proxy.Resolve(req, tr)
+	if !got.Trusted {
+		t.Fatal("Trusted must be true")
+	}
+	if got.ClientIP != netip.MustParseAddr("2001:db8::42") {
+		t.Errorf("ClientIP=%v want 2001:db8::42 (first non-trusted hop)", got.ClientIP)
+	}
+}
+
 func TestResolve_HTTPSDerivedFromTLS(t *testing.T) {
 	t.Parallel()
 

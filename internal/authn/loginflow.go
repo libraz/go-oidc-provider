@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn/risk"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -325,34 +326,17 @@ func (o *Orchestrator) runRiskOnceForLoginFlow(ctx context.Context, st State, fl
 	if st.RiskScoreCached != RiskScoreNone {
 		return st, false, nil
 	}
-	out, err := flow.risk.Assess(ctx, RiskInput{
-		Stage:     RiskAuthorizeEntry,
-		Subject:   st.Subject,
-		ClientID:  st.ClientID,
-		RemoteIP:  st.RemoteIP,
-		UserAgent: st.UserAgent,
-		AMRSoFar:  collectAMR(st.Factors),
-		ACRValues: append([]string(nil), st.ACRValues...),
-		AuthTime:  st.AuthTime,
-	})
+	in := buildRiskInput(st, "")
+	in.AuthTime = st.AuthTime
+	res, err := risk.RunOnceForLoginFlow(ctx, wrapRiskAssessor(flow.risk), in)
 	if err != nil {
 		return st, false, err
 	}
-	switch out.Decision {
-	case RiskDeny:
+	if res.Denied {
 		return st, true, nil
-	case RiskRequire:
-		if out.Score != RiskScoreNone {
-			st.RiskScoreCached = out.Score
-		} else {
-			st.RiskScoreCached = RiskScoreHigh
-		}
-	case RiskAllow:
-		if out.Score != RiskScoreNone {
-			st.RiskScoreCached = out.Score
-		} else {
-			st.RiskScoreCached = RiskScoreLow
-		}
+	}
+	if res.Score != risk.ScoreNone {
+		st.RiskScoreCached = riskScoreFromPkg(res.Score)
 	}
 	return st, false, nil
 }

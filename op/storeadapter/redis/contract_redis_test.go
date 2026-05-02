@@ -118,3 +118,49 @@ func TestRedis_Sessions(t *testing.T) {
 	t.Parallel()
 	contract.RunSessions(t, newRedisFactory(t))
 }
+
+// TestRedis_SessionStore_ConcurrentRotate pins the rotation
+// post-condition declared on [store.SessionStore] directly against the
+// Redis adapter. The helper is also exercised via [contract.RunSessions]
+// -> sessionCases; the explicit call documents the contract a
+// volatile-tier sessions-only embedder is expected to honour.
+func TestRedis_SessionStore_ConcurrentRotate(t *testing.T) {
+	t.Parallel()
+	b := newRedisFactory(t)(t)
+	contract.AssertConcurrentRotate(t, b.Store.Sessions(), b.Now())
+}
+
+// TestRedis_SessionStore_ExpiredReturnsNotFound pins the expired-
+// session contract against the Redis adapter via the shared
+// [contract.AssertExpiredSessionReturnsNotFound] helper. Redis evicts
+// the parent key via TTL when ExpiresAt is past-dated; the helper
+// tolerates Save dropping the write because the post-condition
+// observers (Find / Touch / ListByChooserGroup) all report ErrNotFound
+// either way.
+func TestRedis_SessionStore_ExpiredReturnsNotFound(t *testing.T) {
+	t.Parallel()
+	b := newRedisFactory(t)(t)
+	contract.AssertExpiredSessionReturnsNotFound(t, b.Store.Sessions(), b.Now())
+}
+
+// TestRedis_SessionStore_NotFoundOnMissing pins the absent-ID
+// contract against the Redis adapter via the shared
+// [contract.AssertSessionNotFoundOnMissing] helper.
+func TestRedis_SessionStore_NotFoundOnMissing(t *testing.T) {
+	t.Parallel()
+	b := newRedisFactory(t)(t)
+	contract.AssertSessionNotFoundOnMissing(t, b.Store.Sessions(), b.Now())
+}
+
+// TestRedis_SessionStore_BatchListMatches pins the chooser-group
+// batch lookup contract against the Redis adapter via the shared
+// [contract.AssertSessionBatchListMatches] helper. The Redis
+// implementation backs the lookup with a SET secondary index plus an
+// MGET parent fetch; the helper exercises that path against 16
+// records to surface dedup / aliasing bugs the single-record cases
+// in [contract.RunSessions] would miss.
+func TestRedis_SessionStore_BatchListMatches(t *testing.T) {
+	t.Parallel()
+	b := newRedisFactory(t)(t)
+	contract.AssertSessionBatchListMatches(t, b.Store.Sessions(), 16, b.Now())
+}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -161,7 +162,7 @@ func rotateAndUpdate(
 		JWKsURI:                  m.JWKsURI,
 		JWKs:                     append(json.RawMessage(nil), m.JWKs...),
 		Contacts:                 slices.Clone(m.Contacts),
-		DefaultMaxAge:            cloneInt64Ptr(m.DefaultMaxAge),
+		DefaultMaxAge:            clone.Int64Ptr(m.DefaultMaxAge),
 		RequireAuthTime:          m.RequireAuthTime,
 		DefaultACRValues:         slices.Clone(m.DefaultACRValues),
 		InitiateLoginURI:         m.InitiateLoginURI,
@@ -332,7 +333,7 @@ func clientToResponse(c *store.Client, deps Deps, rotatedRAT, rawSecret string) 
 		TosURI:                  c.TosURI,
 		JWKsURI:                 c.JWKsURI,
 		Contacts:                slices.Clone(c.Contacts),
-		DefaultMaxAge:           cloneInt64Ptr(c.DefaultMaxAge),
+		DefaultMaxAge:           clone.Int64Ptr(c.DefaultMaxAge),
 		RequireAuthTime:         c.RequireAuthTime,
 		DefaultACRValues:        slices.Clone(c.DefaultACRValues),
 		InitiateLoginURI:        c.InitiateLoginURI,

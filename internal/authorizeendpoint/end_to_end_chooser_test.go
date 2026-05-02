@@ -40,7 +40,7 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	cookieKey := []byte(chooserCookieKey)
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithCookieKey(cookieKey)),
+		testkit.WithOptions(op.WithCookieKeys(cookieKey)),
 	)
 	const secret = "rp-secret"
 	hasher := clientauth.Argon2id{}
@@ -262,7 +262,7 @@ func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
 	cookieKey := []byte(chooserCookieKey)
 	tk := testkit.NewProvider(t,
 		testkit.WithClock(clock),
-		testkit.WithOptions(op.WithCookieKey(cookieKey)),
+		testkit.WithOptions(op.WithCookieKeys(cookieKey)),
 	)
 	const secret = "rp-secret"
 	hasher := clientauth.Argon2id{}

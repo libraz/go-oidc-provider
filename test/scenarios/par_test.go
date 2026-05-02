@@ -176,7 +176,7 @@ func newPARJARFixture(t *testing.T) *parJARFixture {
 	if err != nil {
 		t.Fatalf("Marshal JWKS: %v", err)
 	}
-	const secret = "rp-par-jar-secret"
+	const secret = "rp-par-jar-secret" //nolint:gosec // test fixture client secret, not a credential.
 	hash, err := op.HashClientSecret(secret)
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)

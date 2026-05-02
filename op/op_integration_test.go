@@ -337,7 +337,7 @@ func TestIntegration_Discovery_DCREnabled_AdvertisesRegistrationEndpoint(t *test
 		op.WithIssuer(validIssuer),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(validKeyset(t)),
-		op.WithCookieKey(newRandomCookieKey(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
 		op.WithDynamicRegistration(op.RegistrationOption{}),
 	)
 	if err != nil {

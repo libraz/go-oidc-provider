@@ -154,6 +154,99 @@ func TestBuild_SessionCookieHasZeroMaxAge(t *testing.T) {
 	}
 }
 
+func TestBuild_RejectsSameSiteNoneWithInsecure(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		profile cookie.Profile
+		wantErr bool
+	}{
+		"none_insecure_rejected": {
+			profile: cookie.Profile{
+				Name:       "__Host-x",
+				HostPrefix: true,
+				SameSite:   http.SameSiteNoneMode,
+				Insecure:   true,
+			},
+			wantErr: true,
+		},
+		"none_secure_accepted": {
+			profile: cookie.Profile{
+				Name:       "__Host-x",
+				HostPrefix: true,
+				SameSite:   http.SameSiteNoneMode,
+				Insecure:   false,
+			},
+			wantErr: false,
+		},
+		"lax_insecure_accepted": {
+			// Lax + Insecure is structurally permitted (e.g. dev origin
+			// over plain HTTP); only SameSite=None gates Insecure per
+			// RFC 6265bis §4.1.2.7.
+			profile: cookie.Profile{
+				Name:       "x",
+				HostPrefix: false,
+				SameSite:   http.SameSiteLaxMode,
+				Insecure:   true,
+			},
+			wantErr: false,
+		},
+		"strict_insecure_accepted": {
+			profile: cookie.Profile{
+				Name:       "x",
+				HostPrefix: false,
+				SameSite:   http.SameSiteStrictMode,
+				Insecure:   true,
+			},
+			wantErr: false,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, err := cookie.Build(tc.profile, "v")
+			switch {
+			case tc.wantErr && err == nil:
+				t.Errorf("Build accepted SameSite=None+Insecure profile: %+v", c)
+			case !tc.wantErr && err != nil:
+				t.Errorf("Build rejected valid profile: %v", err)
+			}
+		})
+	}
+}
+
+func TestBuild_InsecureSetsSecureFalse(t *testing.T) {
+	t.Parallel()
+
+	p := cookie.Profile{
+		Name:       "dev_session",
+		SameSite:   http.SameSiteLaxMode,
+		HostPrefix: false,
+		Insecure:   true,
+	}
+	c, err := cookie.Build(p, "v")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if c.Secure {
+		t.Error("Build did not honour Insecure=true: Secure=true")
+	}
+}
+
+func TestClear_RejectsSameSiteNoneWithInsecure(t *testing.T) {
+	t.Parallel()
+
+	p := cookie.Profile{
+		Name:       "__Host-x",
+		HostPrefix: true,
+		SameSite:   http.SameSiteNoneMode,
+		Insecure:   true,
+	}
+	if _, err := cookie.Clear(p); err == nil {
+		t.Error("Clear accepted SameSite=None+Insecure profile")
+	}
+}
+
 func TestClear_EmitsExpiringCookie(t *testing.T) {
 	t.Parallel()
 

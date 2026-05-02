@@ -59,7 +59,7 @@ func main() {
 		op.WithIssuer("https://op.example.com"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKey(keys.CookieKey),
+		op.WithCookieKeys(keys.CookieKey),
 		// WithProfile(FAPI2Baseline) auto-enables PAR / JAR / DPoP.
 		op.WithProfile(profile.FAPI2Baseline),
 	)

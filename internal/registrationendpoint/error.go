@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 )
 
 // RFC 7591 §3.2.2 / RFC 6749 §5.2 wire codes the handler emits. The
@@ -59,8 +61,7 @@ func writeInvalidToken(w http.ResponseWriter, issuer, description string) {
 // §A.12.9 mandate on every registration response, success or failure.
 // Splitting the helper keeps the success and error paths from drifting.
 func stampNoStore(w http.ResponseWriter) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Pragma", "no-cache")
+	endpointsupport.StampNoStore(w)
 }
 
 // sanitizeDescription scrubs an embedder-supplied error string so it is

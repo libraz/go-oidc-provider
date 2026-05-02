@@ -536,7 +536,7 @@ func TestScenario_JWKS_042_RotationIssuesNewKid(t *testing.T) {
 		op.WithIssuer("https://op.testkit.invalid"),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(op.Keyset{dupA, dupB}),
-		op.WithCookieKey(newJWKSCookieKey(t)),
+		op.WithCookieKeys(newJWKSCookieKey(t)),
 	)
 	if err == nil {
 		t.Fatal("op.New accepted a duplicate-kid Keyset; rotation MUST mint a fresh kid")
