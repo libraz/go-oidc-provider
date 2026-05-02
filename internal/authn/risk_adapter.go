@@ -43,7 +43,7 @@ func (a riskAssessorAdapter) Assess(ctx context.Context, in risk.Input) (risk.Ou
 // if a is nil. Storing the wrapper once on the orchestrator avoids
 // rebuilding it on every Tick.
 //
-//nolint:ireturn // adapter intentionally returns the package-internal interface.
+//nolint:ireturn,nolintlint // adapter intentionally returns the package-internal interface.
 func wrapRiskAssessor(a RiskAssessor) risk.Assessor {
 	if a == nil {
 		return nil

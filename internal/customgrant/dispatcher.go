@@ -259,6 +259,8 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Response, 
 
 // lookup returns the handler registered for grantType, or nil when
 // no match exists.
+//
+//nolint:ireturn,nolintlint // dispatcher intentionally returns the public Handler interface.
 func (d *Dispatcher) lookup(grantType string) Handler {
 	for _, h := range d.handlers {
 		if h.Name() == grantType {

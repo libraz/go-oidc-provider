@@ -265,7 +265,7 @@ func recoverPredicate(logger *slog.Logger, idx int, pred func(LoginFlowContext) 
 // drives the chain. Returning Pass on panic (rather than Deny) is the
 // minimum-surprise default: a failed adaptive-auth lookup should fall
 // through to declarative rules instead of denying every login.
-func recoverDecider(ctx context.Context, logger *slog.Logger, decider LoginFlowDecider, lc LoginFlowContext) (decision LoginFlowDecision) { //nolint:ireturn // sealed-sum LoginFlowDecision is the contract; concrete dispatch happens at the call site.
+func recoverDecider(ctx context.Context, logger *slog.Logger, decider LoginFlowDecider, lc LoginFlowContext) (decision LoginFlowDecision) { //nolint:ireturn,nolintlint // sealed-sum LoginFlowDecision is the contract; concrete dispatch happens at the call site.
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("authn: decider panicked",

@@ -2,7 +2,6 @@ package tokenendpoint
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -93,7 +92,7 @@ func resolveCustomGrantIDToken(deps Deps, client *store.Client, resp customgrant
 		return "", nil
 	}
 	if resp.Subject == "" {
-		return "", fmt.Errorf("custom_grant: openid-scoped response has empty Subject")
+		return "", errors.New("custom_grant: openid-scoped response has empty Subject")
 	}
 	now := deps.clockFunc()()
 	claims := tokens.IDTokenClaims{
