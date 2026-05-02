@@ -44,7 +44,7 @@ rows:
       Request Object claims override outer query/form parameters at
       both the authorization and device authorization endpoints; the
       OP honours only the Request Object values.
-    status: pending
+    status: active
 
   - id: JAR-004
     severity: P2
@@ -105,7 +105,8 @@ rows:
       A Request Object signed with an HMAC key whose backing client
       secret has expired is rejected with invalid_request_object
       indicating an expired secret.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 rejects HMAC algorithms (HS256/HS384/HS512) at parse time via internal/jose Algorithm.IsAllowed; the expired-secret sub-state cannot be reached because no HMAC-signed request object reaches the verifier.
 
   - id: JAR-011
     severity: P0
@@ -114,7 +115,7 @@ rows:
       A Request Object that nests a request parameter is rejected
       with invalid_request_object; Request Objects MUST NOT contain
       request or request_uri.
-    status: pending
+    status: active
 
   - id: JAR-012
     severity: P0
@@ -122,7 +123,7 @@ rows:
     behaviour: |
       A Request Object that nests a request_uri parameter is rejected
       with invalid_request_object.
-    status: pending
+    status: active
 
   - id: JAR-013
     severity: P1
@@ -149,7 +150,8 @@ rows:
       When the outer response_type differs from the Request Object
       claim at the authorization endpoint, the request is rejected
       with invalid_request_object (response_type mismatch).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's RFC 9101 §6.1 contract is silent JWT-over-outer override (internal/jar Merge); there is no response_type-mismatch gate. PAR-021 already exercises override-wins precedence."
 
   - id: JAR-016
     severity: P1
@@ -168,7 +170,8 @@ rows:
       client_id at either the authorization or device authorization
       endpoint, the request is rejected with invalid_request_object
       (client_id mismatch).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 emits invalid_request (not invalid_request_object) for wire-vs-JWT client_id mismatch (writeJAREnvelopeError treats it as a wire consistency violation); the /authorize side shares the gate with PAR-023. The catalog's device_authorization_endpoint half has no v1.0 surface (no feature.DeviceFlow)."
 
   - id: JAR-018
     severity: P0
@@ -177,7 +180,7 @@ rows:
       An outer request parameter that is not a JWT (e.g.
       "definitely.notsigned.jwt") is rejected with
       invalid_request_object and a parse-failure description.
-    status: pending
+    status: active
 
   - id: JAR-019
     severity: P0
@@ -186,7 +189,7 @@ rows:
       A Request Object signed with an alg different from the client's
       pre-registered request_object_signing_alg is rejected with
       invalid_request_object (the pre-registered alg MUST be used).
-    status: pending
+    status: active
 
   - id: JAR-020
     severity: P0
@@ -195,7 +198,7 @@ rows:
       A Request Object signed with an alg outside the server's
       configured supported list is rejected with
       invalid_request_object (unsupported signed request alg).
-    status: pending
+    status: active
 
   - id: JAR-021
     severity: P0
@@ -204,7 +207,7 @@ rows:
       A Request Object signed with the wrong key/secret is rejected
       with invalid_request_object and a validation-failure
       description.
-    status: pending
+    status: active
 
   - id: JAR-022
     severity: P1
