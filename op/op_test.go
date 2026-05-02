@@ -62,6 +62,11 @@ func (stubStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil 
 // fires.
 func (stubStore) GrantRevocations() store.GrantRevocationStore { return nil }
 
+// Metadata returns nil; construction tests skip the pairwise
+// immutability gate, and the library tolerates a nil substore by
+// emitting a startup warning and skipping the marker bookkeeping.
+func (stubStore) Metadata() store.MetadataStore { return nil }
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }
@@ -210,6 +215,8 @@ func (stubGrantStore) ListBySubject(context.Context, string) ([]*store.Grant, er
 func (stubGrantStore) Delete(context.Context, string) error {
 	return store.ErrNotFound
 }
+
+func (stubGrantStore) HasAny(context.Context) (bool, error) { return false, nil }
 
 const validIssuer = "https://idp.example.com"
 

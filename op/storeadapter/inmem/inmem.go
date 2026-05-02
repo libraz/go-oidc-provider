@@ -105,6 +105,7 @@ type Store struct {
 	accessTokens       *accessTokenStore
 	opaqueAccessTokens *opaqueAccessTokenStore
 	grantRevocations   *grantRevocationStore
+	metadata           *metadataStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -135,6 +136,7 @@ func New(opts ...Option) *Store {
 	s.accessTokens = newAccessTokenStore()
 	s.opaqueAccessTokens = newOpaqueAccessTokenStore()
 	s.grantRevocations = newGrantRevocationStore()
+	s.metadata = newMetadataStore()
 	return s
 }
 
@@ -191,6 +193,13 @@ func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return s.opa
 // plain strings -- GrantID is internal and JTI is a non-secret claim,
 // so no hash-on-store contract applies.
 func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRevocations }
+
+// Metadata implements [store.Store]. The reference implementation
+// keeps a single map under one mutex; the substore is consulted by
+// the pairwise immutability gate at op.New and by no other code path
+// in v0.9.1, so a simple key/value map satisfies every documented
+// access pattern.
+func (s *Store) Metadata() store.MetadataStore { return s.metadata }
 
 // TOTPs returns the [store.TOTPStore] backed by this Store. The
 // substore is not part of the aggregate [store.Store] interface (the
@@ -562,6 +571,12 @@ func (s *grantStore) ListBySubject(_ context.Context, subject string) ([]*store.
 		out = append(out, cloneGrant(rec))
 	}
 	return out, nil
+}
+
+func (s *grantStore) HasAny(_ context.Context) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.m) > 0, nil
 }
 
 func (s *grantStore) Delete(_ context.Context, id string) error {
@@ -1094,4 +1109,32 @@ func cloneRAT(t *store.RegistrationAccessToken) *store.RegistrationAccessToken {
 	}
 	out := *t
 	return &out
+}
+
+// --- MetadataStore -----------------------------------------------------------
+
+type metadataStore struct {
+	mu sync.RWMutex
+	m  map[string]string
+}
+
+func newMetadataStore() *metadataStore {
+	return &metadataStore{m: make(map[string]string)}
+}
+
+func (s *metadataStore) Get(_ context.Context, key string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	v, ok := s.m[key]
+	if !ok {
+		return "", store.ErrNotFound
+	}
+	return v, nil
+}
+
+func (s *metadataStore) Set(_ context.Context, key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[key] = value
+	return nil
 }

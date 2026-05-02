@@ -647,6 +647,31 @@ func (g *txGrants) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// HasAny mirrors [grantStore.HasAny] in the transactional view: a
+// staged add counts even before commit, and a staged delete is
+// honoured for parent rows that have not yet been flushed.
+func (g *txGrants) HasAny(ctx context.Context) (bool, error) {
+	if g.tx.closed.Load() {
+		return false, errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	st := g.tx.grStaging
+	if len(st.added) > 0 {
+		return true, nil
+	}
+	st.parent.mu.RLock()
+	defer st.parent.mu.RUnlock()
+	for id := range st.parent.m {
+		if _, deleted := st.deleted[id]; deleted {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 // --- staging: PAR ------------------------------------------------------------
 
 type parStaging struct {

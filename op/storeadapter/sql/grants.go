@@ -74,6 +74,18 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 	return out, nil
 }
 
+func (s *grantStore) HasAny(ctx context.Context) (bool, error) {
+	var probe int
+	err := s.runner().QueryRowContext(ctx, s.parent.queries.grantHasAny).Scan(&probe)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, wrapErr("grants.HasAny", err)
+	}
+	return true, nil
+}
+
 func (s *grantStore) Delete(ctx context.Context, id string) error {
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.grantDelete, id)
 	if err != nil {

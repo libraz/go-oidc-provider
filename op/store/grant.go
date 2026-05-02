@@ -106,4 +106,19 @@ type GrantStore interface {
 	// hard-delete; the library only requires that subsequent Find and
 	// FindBySubjectClient calls treat the grant as absent.
 	Delete(ctx context.Context, id string) error
+
+	// HasAny reports whether the substore contains at least one
+	// persisted grant record. The library calls it once at op.New as
+	// part of the pairwise immutability gate: switching the active
+	// subject-issuance strategy on a non-empty grant store would
+	// reassign already-issued "sub" values, breaking the OIDC Core
+	// 1.0 §5.7 stability promise. Backends MAY implement it as a
+	// bounded query (SELECT 1 ... LIMIT 1) rather than a full count
+	// because the library only branches on the boolean.
+	//
+	// Implementations that soft-delete revoked grants SHOULD include
+	// soft-deleted rows in the count: the gate cares about whether
+	// the OP has ever issued a sub, not whether the grant is still
+	// valid.
+	HasAny(ctx context.Context) (bool, error)
 }

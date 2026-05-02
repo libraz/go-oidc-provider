@@ -123,6 +123,9 @@ func New(opts ...Option) (*Provider, error) {
 	if err := seedStaticClients(cfg); err != nil {
 		return nil, err
 	}
+	if err := cfg.enforceSubjectModeGate(context.Background()); err != nil {
+		return nil, err
+	}
 	if err := buildMetricsCollector(cfg); err != nil {
 		return nil, err
 	}

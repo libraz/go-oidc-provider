@@ -412,7 +412,8 @@ type config struct {
 	// At most one of [WithSubjectGenerator] and [WithPairwiseSubject]
 	// may be supplied; option-site validation rejects the second
 	// invocation. Switching the active generator after grants have
-	// been issued is rejected at construction time per ADR 0029.
+	// been issued is rejected at construction time by the subject-mode
+	// immutability gate.
 	subjectGenerator SubjectGenerator
 
 	// subjectGeneratorSource records which option produced the
@@ -2487,7 +2488,7 @@ func WithSubjectGenerator(g SubjectGenerator) Option {
 // rotating the salt invalidates every previously-issued sub. The
 // library does not support migration between salts and refuses to
 // boot when grants exist that were issued under a different salt
-// (the construction-time gate is documented in ADR 0029).
+// (enforced by the construction-time subject-mode immutability gate).
 //
 // # Migration semantics
 //

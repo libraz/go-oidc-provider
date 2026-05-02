@@ -72,6 +72,7 @@ type queries struct {
 	grantFindBySubjectClient string
 	grantListBySubject       string
 	grantDelete              string
+	grantHasAny              string
 
 	// sessions
 	sessionSave               string
@@ -263,6 +264,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" FROM " + n.grants + " WHERE subject = ?"),
 		grantDelete: d.rebind(
 			"DELETE FROM " + n.grants + " WHERE id = ?"),
+		grantHasAny: "SELECT 1 FROM " + n.grants + " LIMIT 1",
 
 		// sessions (upsert keyed on id)
 		sessionSave: d.rebind(

@@ -107,6 +107,10 @@ func (fakeGrantStore) Delete(_ context.Context, _ string) error {
 	return store.ErrNotFound
 }
 
+func (fakeGrantStore) HasAny(_ context.Context) (bool, error) {
+	return false, nil
+}
+
 var _ store.GrantStore = (*fakeGrantStore)(nil)
 
 // --- SessionStore ------------------------------------------------------------------
@@ -249,7 +253,19 @@ func (fakeStore) GrantRevocations() store.GrantRevocationStore {
 	return fakeGrantRevocationStore{}
 }
 
+func (fakeStore) Metadata() store.MetadataStore { return fakeMetadataStore{} }
+
 var _ store.Store = (*fakeStore)(nil)
+
+type fakeMetadataStore struct{}
+
+func (fakeMetadataStore) Get(context.Context, string) (string, error) {
+	return "", store.ErrNotFound
+}
+
+func (fakeMetadataStore) Set(context.Context, string, string) error { return nil }
+
+var _ store.MetadataStore = (*fakeMetadataStore)(nil)
 
 type fakeGrantRevocationStore struct{}
 

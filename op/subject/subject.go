@@ -44,8 +44,8 @@ func (f FederatedSubject) IsZero() bool { return f.Provider == "" && f.ExternalI
 // at grant-creation time and persists the result on the
 // [store.Grant]; subsequent token issuance under the same grant
 // reuses the persisted value verbatim. Switching the active Generator
-// after grants have been issued is rejected at construction time per
-// ADR 0029.
+// after grants have been issued is rejected at construction time by
+// the subject-mode immutability gate.
 //
 // The package ships two reference implementations: [UUIDv7] (the v0.x
 // default; passes InternalUserID through verbatim) and [Pairwise]

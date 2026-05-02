@@ -337,6 +337,13 @@ func (s *Store) RefreshTokens() store.RefreshTokenStore { panic(unimplemented("R
 //nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
 func (s *Store) Grants() store.GrantStore { panic(unimplemented("Grants")) }
 
+// Metadata returns nil; the Redis adapter has not yet implemented
+// [store.MetadataStore]. The library's pairwise immutability gate
+// detects the nil at op.New and skips the gate with a startup
+// warning so the OP boots regardless. A future adapter pass will
+// land a real implementation; CHANGELOG calls out the gap.
+func (s *Store) Metadata() store.MetadataStore { return nil }
+
 // Sessions returns the [store.SessionStore] handle. Sessions are an
 // in-scope substore for the Redis adapter: the OP does not
 // coordinate Session writes with token-endpoint commits, so a volatile

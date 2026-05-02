@@ -138,6 +138,11 @@ const (
 	// refresh-token write so a partially-committed cascade cannot
 	// leave a still-redeemable grant next to its tombstone.
 	GrantRevocations
+
+	// Metadata routes [store.MetadataStore] calls. Outside the
+	// transactional cluster: the substore is consulted only by the
+	// op.New construction-time pairwise immutability gate.
+	Metadata
 )
 
 // kindNames maps each [Kind] to its unqualified name. Indexed by Kind value
@@ -160,6 +165,7 @@ var kindNames = map[Kind]string{
 	AccessTokens:             "AccessTokens",
 	OpaqueAccessTokens:       "OpaqueAccessTokens",
 	GrantRevocations:         "GrantRevocations",
+	Metadata:                 "Metadata",
 }
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -191,6 +197,7 @@ var allKinds = []Kind{
 	AccessTokens,
 	OpaqueAccessTokens,
 	GrantRevocations,
+	Metadata,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -491,6 +498,14 @@ func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 // substore is missing.
 func (s *Store) GrantRevocations() store.GrantRevocationStore {
 	return s.routes[GrantRevocations].GrantRevocations()
+}
+
+// Metadata implements [store.Store]. The composite passes the call
+// through to the routed backend; nil from the backend surfaces as
+// nil here so the op.New pairwise-immutability gate can fall back
+// to its skip-with-warning posture without further plumbing.
+func (s *Store) Metadata() store.MetadataStore {
+	return s.routes[Metadata].Metadata()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

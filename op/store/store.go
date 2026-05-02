@@ -97,4 +97,13 @@ type Store interface {
 	// cascade so a partially-committed revocation cannot leave a
 	// tombstone next to a still-redeemable grant.
 	GrantRevocations() GrantRevocationStore
+
+	// Metadata returns the [MetadataStore] for OP-internal key/value
+	// state that is neither user data nor token material — currently
+	// the subject_mode marker the pairwise immutability gate consults
+	// at construction time. Backends that have not yet provisioned
+	// the substore MAY return nil; the library detects nil at op.New
+	// and skips the immutability gate with a startup warning so the
+	// process still boots. Outside the transactional cluster.
+	Metadata() MetadataStore
 }
