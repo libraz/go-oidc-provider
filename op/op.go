@@ -807,7 +807,7 @@ type deciderAdapter struct {
 // dynamic-compile path is intentionally absent: a Decider that needs
 // to introduce a previously-unregistered Step must register it on the
 // LoginFlow up front).
-func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn // sealed-sum LoginFlowDecision is the contract.
+func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn,nolintlint // sealed-sum LoginFlowDecision is the contract.
 	d := a.inner.Decide(ctx, toPublicLoginContext(lc))
 	switch v := d.(type) {
 	case Allow:

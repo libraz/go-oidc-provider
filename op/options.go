@@ -431,7 +431,7 @@ func (c *config) formatForAudience(resource string) store.AccessTokenFormat {
 // policy or are we using the default", so the authorize wiring and
 // any future seam (id_token re-resolution at refresh time, custom
 // /authorize tests) read the same value.
-func (c *config) effectiveACRPolicy() ACRPolicy { //nolint:ireturn // sealed-sum interface return is the contract.
+func (c *config) effectiveACRPolicy() ACRPolicy { //nolint:ireturn,nolintlint // sealed-sum interface return is the contract.
 	if c.acrPolicy == nil {
 		return DefaultACRPolicy{}
 	}
