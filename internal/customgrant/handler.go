@@ -112,9 +112,23 @@ type Response struct {
 
 	// IDToken, when non-empty, is treated as embedder-signed and
 	// returned verbatim. When empty and Scope contains "openid", the
-	// dispatcher signs a fresh id_token from ExtraClaims merged with
+	// wire layer signs a fresh id_token from ExtraClaims merged with
 	// the standard claim set.
 	IDToken string
+
+	// Subject is the value the wire layer writes into the id_token
+	// "sub" claim when [IDToken] is empty and Scope contains "openid".
+	// Empty is permitted for delegation-style grants that do not
+	// represent an end user (token-exchange impersonation,
+	// client_credentials-style flows); the wire layer rejects an
+	// openid-scoped response that returns an empty Subject because
+	// id_token "sub" is REQUIRED per OIDC Core 1.0 §2.
+	Subject string
+
+	// AuthTime is the wall-clock time the subject most recently
+	// authenticated; the wire layer threads it onto the issued
+	// id_token's auth_time claim. Zero omits the claim.
+	AuthTime time.Time
 
 	// Scope is the issued scope set; intersected with
 	// Client.Scopes by the dispatcher before issuance.
@@ -124,9 +138,9 @@ type Response struct {
 	// Client.Resources by the dispatcher before issuance.
 	Audience []string
 
-	// ExtraClaims are merged into the id_token the dispatcher signs
+	// ExtraClaims are merged into the id_token the wire layer signs
 	// when IDToken is empty. Standard JWT claim names are reserved
-	// and silently dropped.
+	// and rejected by [tokens.SignIDToken].
 	ExtraClaims map[string]any
 }
 

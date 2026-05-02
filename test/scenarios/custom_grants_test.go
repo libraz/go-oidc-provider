@@ -9,6 +9,7 @@ package scenarios_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -372,4 +374,136 @@ func TestScenario_CG_008_ClientOptInExecutesHandler(t *testing.T) {
 func TestScenario_CG_009_HandlerReceivesClientEntityOnly(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: CG-009 (see catalog out_of_scope_reason)")
+}
+
+// TestCustomGrant_IDTokenSigning_FromExtraClaims confirms the OP signs
+// a fresh id_token from the response Subject + AuthTime + ExtraClaims
+// when the handler returns an empty IDToken and Scope contains "openid".
+// The row is not in the spec catalogue: it pins the OP-side enhancement
+// the dispatcher's contract documents (no embedder-side signing key
+// required for the openid case).
+func TestCustomGrant_IDTokenSigning_FromExtraClaims(t *testing.T) {
+	t.Parallel()
+	const grantURN = "urn:example:grant-type:cg-idt-extra"
+	const subject = "user-cg-idt-1"
+	authTime := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	handler := &recordingCustomGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{ //nolint:gosec // G101 false positive: AccessToken is a fixed-string test fixture, not a credential.
+			AccessToken:    "issued-cg-idt-1",
+			AccessTokenTTL: 60 * time.Second,
+			Subject:        subject,
+			AuthTime:       authTime,
+			Scope:          []string{"openid"},
+			ExtraClaims: map[string]any{
+				"role":     "operator",
+				"team_ref": "ops-42",
+			},
+		},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	status, body := postCustomGrant(t, tk, url.Values{
+		"grant_type": []string{grantURN},
+	}, rp.ID, cgClientSecret)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", status, body)
+	}
+	idToken, _ := body["id_token"].(string)
+	if idToken == "" {
+		t.Fatalf("id_token absent or empty: body=%v", body)
+	}
+	claims := decodeCGJWTClaims(t, idToken)
+	if claims["iss"] != tk.Issuer {
+		t.Errorf("iss=%v want %q", claims["iss"], tk.Issuer)
+	}
+	if claims["sub"] != subject {
+		t.Errorf("sub=%v want %q", claims["sub"], subject)
+	}
+	if claims["aud"] != rp.ID {
+		t.Errorf("aud=%v want %q (single-aud bare string per RFC 7519 §4.1.3)", claims["aud"], rp.ID)
+	}
+	if got, _ := claims["auth_time"].(float64); int64(got) != authTime.Unix() {
+		t.Errorf("auth_time=%v want %d", claims["auth_time"], authTime.Unix())
+	}
+	if claims["role"] != "operator" {
+		t.Errorf("role=%v want operator", claims["role"])
+	}
+	if claims["team_ref"] != "ops-42" {
+		t.Errorf("team_ref=%v want ops-42", claims["team_ref"])
+	}
+}
+
+// TestCustomGrant_IDTokenSigning_RejectsOpenIDWithoutSubject confirms
+// the OP rejects a handler response that pairs Scope=["openid"] with an
+// empty Subject — the id_token "sub" claim is REQUIRED per OIDC Core
+// 1.0 §2 and silently dropping it would mint a malformed token.
+func TestCustomGrant_IDTokenSigning_RejectsOpenIDWithoutSubject(t *testing.T) {
+	t.Parallel()
+	const grantURN = "urn:example:grant-type:cg-idt-nosub"
+	handler := &recordingCustomGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{ //nolint:gosec // G101 false positive: AccessToken is a fixed-string test fixture, not a credential.
+			AccessToken:    "issued-cg-idt-2",
+			AccessTokenTTL: 60 * time.Second,
+			Scope:          []string{"openid"},
+		},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	status, body := postCustomGrant(t, tk, url.Values{
+		"grant_type": []string{grantURN},
+	}, rp.ID, cgClientSecret)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500, body=%v", status, body)
+	}
+	if got := body["error"]; got != "server_error" {
+		t.Errorf("error=%v want server_error", got)
+	}
+}
+
+// TestCustomGrant_IDTokenPassthrough confirms a non-empty handler
+// IDToken flows through verbatim; the OP does not re-sign or
+// re-format it.
+func TestCustomGrant_IDTokenPassthrough(t *testing.T) {
+	t.Parallel()
+	const grantURN = "urn:example:grant-type:cg-idt-pass"
+	const preset = "header.payload.signature"
+	handler := &recordingCustomGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{ //nolint:gosec // G101 false positive: AccessToken is a fixed-string test fixture, not a credential.
+			AccessToken:    "issued-cg-idt-3",
+			AccessTokenTTL: 60 * time.Second,
+			IDToken:        preset,
+			Scope:          []string{"openid"},
+		},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	status, body := postCustomGrant(t, tk, url.Values{
+		"grant_type": []string{grantURN},
+	}, rp.ID, cgClientSecret)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", status, body)
+	}
+	if got := body["id_token"]; got != preset {
+		t.Errorf("id_token=%v want %q (verbatim passthrough)", got, preset)
+	}
+}
+
+// decodeCGJWTClaims pulls the payload claims out of a JWS Compact
+// Serialisation without verifying the signature. Verifying would
+// re-test JWS framing, which the IDT-suite already covers.
+func decodeCGJWTClaims(tb testing.TB, jws string) map[string]any {
+	tb.Helper()
+	parts := strings.Split(jws, ".")
+	if len(parts) != 3 {
+		tb.Fatalf("jwt parts=%d want 3 (value=%q)", len(parts), jws)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		tb.Fatalf("decode payload: %v", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		tb.Fatalf("unmarshal claims: %v", err)
+	}
+	return claims
 }

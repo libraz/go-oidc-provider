@@ -2,10 +2,14 @@ package tokenendpoint
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // handleCustomGrant routes the request to the dispatcher the OP
@@ -58,14 +62,52 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		writeCustomGrantError(w, err)
 		return
 	}
+	idToken, err := resolveCustomGrantIDToken(deps, client, resp)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	writeSuccess(w, successResponse{
 		AccessToken:  resp.AccessToken,
 		TokenType:    binding.tokenTypeFor(),
 		ExpiresIn:    int64(resp.AccessTokenTTL.Seconds()),
 		RefreshToken: resp.RefreshToken,
-		IDToken:      resp.IDToken,
+		IDToken:      idToken,
 		Scope:        joinScope(resp.Scope),
 	})
+}
+
+// resolveCustomGrantIDToken returns the id_token to surface on the wire.
+// The handler-supplied [customgrant.Response.IDToken] is preferred and
+// passes through verbatim — the embedder may have signed it with an
+// out-of-band key (HSM, federated AS) the OP does not know about. When
+// the field is empty AND the response Scope contains "openid" the OP
+// signs a fresh token from the response Subject, AuthTime, and
+// ExtraClaims; an empty Subject on this path is a handler bug because
+// id_token "sub" is REQUIRED per OIDC Core 1.0 §2.
+func resolveCustomGrantIDToken(deps Deps, client *store.Client, resp customgrant.Response) (string, error) {
+	if resp.IDToken != "" {
+		return resp.IDToken, nil
+	}
+	if !slices.Contains(resp.Scope, "openid") {
+		return "", nil
+	}
+	if resp.Subject == "" {
+		return "", fmt.Errorf("custom_grant: openid-scoped response has empty Subject")
+	}
+	now := deps.clockFunc()()
+	claims := tokens.IDTokenClaims{
+		Issuer:    deps.Issuer,
+		Subject:   resp.Subject,
+		Audience:  []string{client.ID},
+		IssuedAt:  now.Unix(),
+		ExpiresAt: tokens.ExpiresIn(now, deps.IDTokenTTL),
+		Extra:     resp.ExtraClaims,
+	}
+	if !resp.AuthTime.IsZero() {
+		claims.AuthTime = resp.AuthTime.Unix()
+	}
+	return tokens.SignIDToken(activeSigningKey(deps), claims)
 }
 
 // writeCustomGrantError translates the dispatcher's typed sentinels

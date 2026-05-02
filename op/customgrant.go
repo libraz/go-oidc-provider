@@ -182,8 +182,11 @@ type CustomGrantRequest struct {
 //   - When [IDToken] is empty and [Scope] contains "openid", the OP
 //     signs a fresh id_token from [ExtraClaims] merged with the
 //     standard claim set (iss / sub / aud / iat / exp / auth_time).
-//     A non-empty [IDToken] is treated as embedder-signed and copied
-//     to the response verbatim.
+//     [Subject] supplies the "sub" claim; an empty Subject in this
+//     case yields server_error because OIDC Core 1.0 §2 requires the
+//     claim. A non-empty [IDToken] is treated as embedder-signed and
+//     copied to the response verbatim — [Subject] / [AuthTime] /
+//     [ExtraClaims] are ignored on that path.
 //
 // Stable since v0.9.1.
 type CustomGrantResponse struct {
@@ -207,6 +210,21 @@ type CustomGrantResponse struct {
 	// the OP signs a fresh id_token from [ExtraClaims].
 	IDToken string
 
+	// Subject is the OP-internal "sub" claim value the OP writes
+	// into the id_token it signs when [IDToken] is empty and Scope
+	// contains "openid". Required on that path; the empty value
+	// yields server_error so a delegation-style grant that should
+	// not advertise an end-user sub MUST omit "openid" from Scope.
+	// Ignored when [IDToken] is non-empty (the embedder-signed
+	// token already carries its own "sub").
+	Subject Subject
+
+	// AuthTime is the wall-clock time the subject most recently
+	// authenticated. Threaded onto the id_token "auth_time" claim
+	// when [IDToken] is empty; zero omits the claim. Ignored when
+	// [IDToken] is non-empty.
+	AuthTime time.Time
+
 	// Scope is the issued scope set; the wire response folds it
 	// into a space-separated string. The slice is intersected with
 	// the client's allowed scopes by the OP; entries outside that
@@ -219,10 +237,12 @@ type CustomGrantResponse struct {
 	Audience []string
 
 	// ExtraClaims are merged into the id_token the OP signs when
-	// [IDToken] is empty. The names are unrestricted; the OP
-	// reserves the standard JWT set (iss / sub / aud / iat / exp /
-	// auth_time / nonce / acr / amr / azp / at_hash / c_hash) and
-	// silently drops attempts to override them.
+	// [IDToken] is empty. The names MUST NOT collide with the
+	// standard JWT set the OP manages itself (iss / sub / aud /
+	// iat / exp / auth_time / nonce / acr / amr / azp / at_hash /
+	// c_hash / sid); a colliding name yields server_error so the
+	// handler bug surfaces in the audit record rather than silently
+	// shipping a malformed token.
 	ExtraClaims map[string]any
 }
 
@@ -300,6 +320,8 @@ func (a customGrantAdapter) Handle(ctx context.Context, req customgrant.Request)
 		AccessTokenTTL: resp.AccessTokenTTL,
 		RefreshToken:   resp.RefreshToken,
 		IDToken:        resp.IDToken,
+		Subject:        string(resp.Subject),
+		AuthTime:       resp.AuthTime,
 		Scope:          append([]string(nil), resp.Scope...),
 		Audience:       append([]string(nil), resp.Audience...),
 		ExtraClaims:    cloneClaims(resp.ExtraClaims),
