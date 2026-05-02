@@ -25,7 +25,7 @@ rows:
       The provider MUST expose a registerGrantType(name, handler,
       paramNames) hook; once called, the grant_type MUST appear in
       the supported grant types registry.
-    status: pending
+    status: active
 
   - id: CG-002
     severity: P2
@@ -33,7 +33,7 @@ rows:
     behaviour: |
       Calling registerGrantType without a paramNames argument MUST
       succeed.
-    status: pending
+    status: active
 
   - id: CG-003
     severity: P2
@@ -42,7 +42,7 @@ rows:
       registerGrantType MUST accept both null and a single-string
       paramNames specification; in both cases the grant type is
       registered.
-    status: pending
+    status: active
 
   - id: CG-004
     severity: P0
@@ -53,8 +53,7 @@ rows:
       name=John&name=FooBar) MUST be rejected with 400 invalid_request
       and the description "'name' parameter must not be provided
       twice".
-    status: out-of-scope
-    out_of_scope_reason: "Custom-grant registration is not part of v1.0's public surface (op/grant/grant.go enumerates a closed set: AuthorizationCode, RefreshToken, ClientCredentials, DeviceCode); op/options.go exposes only WithGrants (selects from that set), with no registerGrantType hook. v1.0's /token also does not surface the vendor-specific 'parameter must not be provided twice' wire-form error: r.PostForm.Get is used to read fields, which silently picks the first value, and there is no per-parameter duplicate-detection middleware. The scenario as written is not exercisable at v1.0's wire."
+    status: active
 
   - id: CG-005
     severity: P1
@@ -64,7 +63,7 @@ rows:
       including a parameter, the request MUST succeed with 200 OK
       and the handler MUST receive that parameter as an array of all
       submitted values, preserving order.
-    status: pending
+    status: active
 
   - id: CG-006
     severity: P1
@@ -74,7 +73,7 @@ rows:
       request that duplicates the non-exempt parameter MUST be
       rejected with 400 invalid_request and the description
       "'<other>' parameter must not be provided twice".
-    status: pending
+    status: active
 
   - id: CG-007
     severity: P0
@@ -85,8 +84,7 @@ rows:
       invalid_request and the description "'grant_type' parameter
       must not be provided twice", regardless of any exemption
       configuration.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0's /token reads grant_type via r.PostForm.Get (internal/tokenendpoint/handler.go), which silently picks the first value when a key is duplicated; there is no per-parameter duplicate-detection layer that emits a vendor-specific 'must not be provided twice' wire error. The 'exemption configuration' the row references presupposes the registerGrantType paramNames carve-out, which is itself not part of v1.0 (see CG-004 OOS reason). Without the carve-out machinery, the universal-rejection guarantee the row asserts has nothing to gate against."
+    status: active
 
   - id: CG-008
     severity: P1
@@ -95,7 +93,7 @@ rows:
       A registered custom grant invoked by a client whose metadata
       grant_types includes it MUST execute the handler and return
       200 OK with a body matching the handler's ctx.body.
-    status: pending
+    status: active
 
   - id: CG-009
     severity: P2
@@ -105,4 +103,5 @@ rows:
       ctx.oidc.entities MUST resolve the Client only; Account and
       token entities MUST NOT be present unless the handler creates
       them.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "The 'ctx.oidc.entities' Account/Session/AccessToken graph is an upstream-specific middleware shape this library does not adopt; the projected handler surface (op.CustomGrantRequest with Client + Subject + Form + DPoP/MTLS) carries only the values the handler is expected to read, so there is no ambient entity bag for the row's negative assertion to gate against."

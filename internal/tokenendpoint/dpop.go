@@ -17,6 +17,12 @@ type dpopOutcome struct {
 	// when no proof was presented.
 	JKT string
 
+	// JTI is the proof's "jti" claim. Already marked consumed by the
+	// time the caller observes the value; exposed so downstream
+	// consumers (e.g. custom-grant dispatch) can include the value in
+	// audit emission without re-parsing the proof.
+	JTI string
+
 	// Presented reports whether the request carried a DPoP header at
 	// all. Useful for refresh-token enforcement: a chain bound to a
 	// jkt requires a proof to be presented even if the verifier is
@@ -43,7 +49,7 @@ func verifyTokenDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (*dpopOu
 		writeDPoPError(w, deps, err)
 		return nil, false
 	}
-	return &dpopOutcome{JKT: res.JKT, Presented: true}, true
+	return &dpopOutcome{JKT: res.JKT, JTI: res.JTI, Presented: true}, true
 }
 
 // requireDPoPMatch is the refresh-time variant of [verifyTokenDPoP].
@@ -85,7 +91,7 @@ func requireDPoPMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundJK
 			"DPoP proof key does not match the bound thumbprint")
 		return nil, false
 	}
-	return &dpopOutcome{JKT: res.JKT, Presented: true}, true
+	return &dpopOutcome{JKT: res.JKT, JTI: res.JTI, Presented: true}, true
 }
 
 // writeDPoPError translates a [dpop.Err*] sentinel onto the wire form.

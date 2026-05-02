@@ -154,6 +154,29 @@ func WithOptions(opts ...op.Option) Option {
 	}
 }
 
+// MinimalOptions returns the smallest [op.Option] slice that satisfies
+// the constructor's required-field gates (Issuer / Store / Keyset /
+// CookieKeys / InteractionDriver / Authenticators) plus any extras the
+// caller appends. The helper is the construction-time analog of
+// [NewProvider] for tests that exercise [op.New]'s rejection paths
+// directly: pass a deliberately invalid extra and assert the returned
+// error type. The signing key is generated freshly on every call so
+// parallel tests do not share secret material.
+func MinimalOptions(tb testing.TB, extra ...op.Option) []op.Option {
+	tb.Helper()
+	signKey := generateSigningKey(tb, DefaultKeyID)
+	out := make([]op.Option, 0, 6+len(extra))
+	out = append(out,
+		op.WithIssuer(DefaultIssuer),
+		op.WithStore(inmem.New()),
+		op.WithKeyset(op.Keyset{signKey}),
+		op.WithCookieKeys(generateCookieKey(tb)),
+		op.WithInteractionDriver(AutoConsentDriver{}),
+		op.WithAuthenticators(SubjectAuthenticator{}),
+	)
+	return append(out, extra...)
+}
+
 // NewProvider builds a fully wired [Provider] for use in tests. It registers
 // a cleanup that closes the underlying [httptest.Server] when the test
 // finishes. The returned Provider is non-nil; failures fail the test via

@@ -588,10 +588,16 @@ func buildBuiltInInteractions(cfg *config, sessMgr *sessions.Manager) []Interact
 // buildDiscoveryInput converts the public [config] to the internal
 // [discovery.Input] the discovery builder consumes.
 func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.Input {
-	grantStrings := make([]string, 0, len(cfg.grants))
+	customNames := customGrantNamesFor(cfg)
+	grantStrings := make([]string, 0, len(cfg.grants)+len(customNames))
 	for _, g := range cfg.grants {
 		grantStrings = append(grantStrings, g.String())
 	}
+	// Custom grant_types follow the built-ins so RFC 8414 §2 ordering
+	// preserves the spec-defined wires at the head of the list. The
+	// dispatcher rejected built-in collisions at registration time so
+	// the append cannot create a duplicate entry.
+	grantStrings = append(grantStrings, customNames...)
 	return discovery.Input{
 		Issuer:      cfg.issuer,
 		MountPrefix: cfg.mountPrefix,

@@ -7,53 +7,369 @@ package scenarios_test
 //   - RFC 6749 §5.2 — Error Response
 //   - RFC 8693 — OAuth 2.0 Token Exchange (informative)
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
 
+	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/testkit"
+)
+
+// cgClientSecret is the deterministic confidential-client secret the
+// CG-suite reuses across rows. The catalogue requires fixed fixtures
+// (no randomness) so a failure trace can be replayed without seeding.
+const cgClientSecret = "cg-client-secret"
+
+// recordingCustomGrant captures the request the dispatcher hands the
+// handler so the test can pin the parsed-form shape, and replies with
+// a fixed response body so the test can pin the wire envelope.
+type recordingCustomGrant struct {
+	name     string
+	policy   op.ParamPolicy
+	response op.CustomGrantResponse
+
+	mu      sync.Mutex
+	gotForm map[string][]string
+	gotKid  string
+}
+
+func (g *recordingCustomGrant) Name() string                { return g.name }
+func (g *recordingCustomGrant) ParamPolicy() op.ParamPolicy { return g.policy }
+func (g *recordingCustomGrant) Handle(_ context.Context, req op.CustomGrantRequest) (op.CustomGrantResponse, error) {
+	g.mu.Lock()
+	g.gotForm = cloneFormValues(req.Form)
+	if req.Client != nil {
+		g.gotKid = req.Client.ID
+	}
+	g.mu.Unlock()
+	return g.response, nil
+}
+
+func cloneFormValues(in map[string][]string) map[string][]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[k] = slices.Clone(v)
+	}
+	return out
+}
+
+// newCGProvider builds a testkit.Provider that wires the supplied
+// custom-grant handler and a confidential client whose GrantTypes
+// allow it. The function is the per-row analog of newOpaqueProvider /
+// newJARProvider patterns in this suite.
+func newCGProvider(t *testing.T, handler op.CustomGrantHandler, scopes, resources []string) (*testkit.Provider, *store.Client) {
+	t.Helper()
+	hash, err := op.HashClientSecret(cgClientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "cg-rp",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{handler.Name()},
+		Scopes:                  scopes,
+		Resources:               resources,
+	})
+	return tk, rp
+}
+
+// postCustomGrant submits a token-endpoint request with HTTP Basic
+// auth and returns the (status, decoded body) pair. The helper parses
+// the wire body once so each row asserts on the JSON shape directly.
+func postCustomGrant(t *testing.T, tk *testkit.Provider, form url.Values, clientID, secret string) (int, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, secret)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /oidc/token: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var decoded map[string]any
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &decoded); err != nil {
+			t.Fatalf("unmarshal body=%q: %v", body, err)
+		}
+	}
+	return resp.StatusCode, decoded
+}
+
+// TestScenario_CG_001_RegisterGrantTypeAddsToRegistry confirms that a
+// grant_type registered through op.WithCustomGrant appears in the
+// /.well-known/openid-configuration grant_types_supported field. The
+// row is the registration-side counterpart to CG-008's invocation
+// path.
+//
+// Spec: RFC 6749 §4.5 / RFC 8414 §2.
 func TestScenario_CG_001_RegisterGrantTypeAddsToRegistry(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-001")
+	const grantURN = "urn:example:grant-type:cg-001"
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithCustomGrant(&recordingCustomGrant{name: grantURN}),
+	))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/.well-known/openid-configuration", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET discovery: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	raw, ok := doc["grant_types_supported"].([]any)
+	if !ok {
+		t.Fatalf("grant_types_supported not an array: %T (%v)",
+			doc["grant_types_supported"], doc["grant_types_supported"])
+	}
+	for _, v := range raw {
+		if s, _ := v.(string); s == grantURN {
+			return
+		}
+	}
+	t.Fatalf("grant_types_supported does not contain %q (got %v)", grantURN, raw)
 }
 
+// TestScenario_CG_002_RegisterGrantTypeWithoutParamNames confirms that
+// op.WithCustomGrant accepts a handler whose ParamPolicy is the zero
+// value (no Allowed list). The dispatcher then admits only the
+// implicit shared parameters (grant_type / client_id / ...).
+//
+// Spec: RFC 6749 §4.5 (extension grants — no per-grant parameter
+// requirement).
 func TestScenario_CG_002_RegisterGrantTypeWithoutParamNames(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-002")
+	const grantURN = "urn:example:grant-type:cg-002"
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithCustomGrant(&recordingCustomGrant{
+			name:     grantURN,
+			response: op.CustomGrantResponse{AccessToken: "ok-002"},
+		}),
+	))
+	if tk.Server == nil {
+		t.Fatal("provider server is nil")
+	}
 }
 
+// TestScenario_CG_003_RegisterGrantTypeAcceptsNullOrString confirms a
+// handler with a single-element Allowed list (the moral equivalent of
+// the panva "null OR single-string" admission rule) is accepted.
+//
+// Spec: RFC 6749 §4.5.
 func TestScenario_CG_003_RegisterGrantTypeAcceptsNullOrString(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-003")
+	const grantURN = "urn:example:grant-type:cg-003"
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithCustomGrant(&recordingCustomGrant{
+			name:     grantURN,
+			policy:   op.ParamPolicy{Allowed: []string{"resource"}},
+			response: op.CustomGrantResponse{AccessToken: "ok-003"},
+		}),
+	))
+	if tk.Server == nil {
+		t.Fatal("provider server is nil")
+	}
 }
 
-// TestScenario_CG_004_DuplicateParameterRejectedByDefault is OOS — see
-// catalog out_of_scope_reason.
+// TestScenario_CG_004_DuplicateParameterRejectedByDefault confirms a
+// duplicated handler-allowed parameter (NOT in DupesAllowed) yields
+// 400 invalid_request. The dispatcher's wire envelope follows
+// RFC 6749 §5.2 — the failure description is sanitised to the failure
+// family (the per-parameter detail rides on the audit emission).
+//
+// Spec: RFC 6749 §3.2 (parameters MUST NOT be duplicated).
 func TestScenario_CG_004_DuplicateParameterRejectedByDefault(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CG-004 (see catalog out_of_scope_reason)")
+	const grantURN = "urn:example:grant-type:cg-004"
+	handler := &recordingCustomGrant{
+		name:     grantURN,
+		policy:   op.ParamPolicy{Allowed: []string{"name"}},
+		response: op.CustomGrantResponse{AccessToken: "ok-004"},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	form := url.Values{
+		"grant_type": []string{grantURN},
+		"name":       []string{"John", "FooBar"},
+	}
+	status, body := postCustomGrant(t, tk, form, rp.ID, cgClientSecret)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", status, body)
+	}
+	if got := body["error"]; got != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", got)
+	}
 }
 
+// TestScenario_CG_005_WhitelistedParameterMayRepeat confirms a
+// parameter listed under DupesAllowed is delivered to the handler as
+// an ordered slice of all submitted values.
+//
+// Spec: RFC 6749 §3.2 / RFC 8693 §2 (resource as a repeatable
+// parameter, informative).
 func TestScenario_CG_005_WhitelistedParameterMayRepeat(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-005")
+	const grantURN = "urn:example:grant-type:cg-005"
+	handler := &recordingCustomGrant{
+		name: grantURN,
+		policy: op.ParamPolicy{
+			Allowed:      []string{"resource"},
+			DupesAllowed: []string{"resource"},
+		},
+		response: op.CustomGrantResponse{AccessToken: "ok-005"},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	form := url.Values{
+		"grant_type": []string{grantURN},
+		"resource":   []string{"https://api.first.example/", "https://api.second.example/"},
+	}
+	status, body := postCustomGrant(t, tk, form, rp.ID, cgClientSecret)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", status, body)
+	}
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	got := handler.gotForm["resource"]
+	want := []string{"https://api.first.example/", "https://api.second.example/"}
+	if !slices.Equal(got, want) {
+		t.Errorf("handler.Form[resource]=%v want %v (order preserved)", got, want)
+	}
 }
 
+// TestScenario_CG_006_PartialExemptionStillRejectsOthers confirms that
+// when a handler exempts only one of two declared parameters, the
+// non-exempt parameter is still subject to the duplicate-rejection
+// rule — duplicating it yields 400 invalid_request even though the
+// other parameter freely repeats.
+//
+// Spec: RFC 6749 §3.2.
 func TestScenario_CG_006_PartialExemptionStillRejectsOthers(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-006")
+	const grantURN = "urn:example:grant-type:cg-006"
+	handler := &recordingCustomGrant{
+		name: grantURN,
+		policy: op.ParamPolicy{
+			Allowed:      []string{"audience", "name"},
+			DupesAllowed: []string{"audience"},
+		},
+		response: op.CustomGrantResponse{AccessToken: "ok-006"},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	form := url.Values{
+		"grant_type": []string{grantURN},
+		"audience":   []string{"https://api.example/"},
+		"name":       []string{"a", "b"},
+	}
+	status, body := postCustomGrant(t, tk, form, rp.ID, cgClientSecret)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", status, body)
+	}
+	if got := body["error"]; got != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", got)
+	}
 }
 
-// TestScenario_CG_007_GrantTypeCannotBeExempted is OOS — see catalog
-// out_of_scope_reason.
+// TestScenario_CG_007_GrantTypeCannotBeExempted confirms the OP
+// refuses to register a custom grant whose ParamPolicy.DupesAllowed
+// names "grant_type". The protection lives at registration time
+// (op.WithCustomGrant returns ErrCustomGrantSecretLikeExempt) so a
+// misconfigured handler cannot reach the dispatcher in the first
+// place — the security guarantee the row requires.
+//
+// Spec: RFC 6749 §3.2 (grant_type is a security-sensitive parameter
+// and cannot be exempted from the duplication rule).
 func TestScenario_CG_007_GrantTypeCannotBeExempted(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: CG-007 (see catalog out_of_scope_reason)")
+	handler := &recordingCustomGrant{
+		name: "urn:example:grant-type:cg-007",
+		policy: op.ParamPolicy{
+			Allowed:      []string{"grant_type"},
+			DupesAllowed: []string{"grant_type"},
+		},
+	}
+	_, err := op.New(testkit.MinimalOptions(t, op.WithCustomGrant(handler))...)
+	if !errors.Is(err, op.ErrCustomGrantSecretLikeExempt) {
+		t.Fatalf("op.New err = %v, want %v", err, op.ErrCustomGrantSecretLikeExempt)
+	}
 }
 
+// TestScenario_CG_008_ClientOptInExecutesHandler confirms that a
+// client whose registered grant_types includes the custom URN can
+// invoke it: the handler runs and the wire envelope mirrors the
+// access_token / token_type / expires_in shape RFC 6749 §5.1
+// requires.
+//
+// Spec: RFC 6749 §4.5 / RFC 7591 §2 (client metadata advertises the
+// allowed grant types).
 func TestScenario_CG_008_ClientOptInExecutesHandler(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-008")
+	const grantURN = "urn:example:grant-type:cg-008"
+	handler := &recordingCustomGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{ //nolint:gosec // G101 false positive: AccessToken is a fixed-string test fixture, not a credential.
+			AccessToken:    "issued-cg-008",
+			AccessTokenTTL: 60_000_000_000, // 60 seconds
+		},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	status, body := postCustomGrant(t, tk, url.Values{
+		"grant_type": []string{grantURN},
+	}, rp.ID, cgClientSecret)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", status, body)
+	}
+	if got := body["access_token"]; got != "issued-cg-008" {
+		t.Errorf("access_token=%v want issued-cg-008", got)
+	}
+	if got := body["token_type"]; got != "Bearer" {
+		t.Errorf("token_type=%v want Bearer", got)
+	}
+	if got, _ := body["expires_in"].(float64); got != 60 {
+		t.Errorf("expires_in=%v want 60", got)
+	}
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.gotKid != rp.ID {
+		t.Errorf("handler observed client.ID=%q, want %q", handler.gotKid, rp.ID)
+	}
 }
 
+// TestScenario_CG_009_HandlerReceivesClientEntityOnly is OOS — the
+// "ctx.oidc.entities" model the row presupposes is a vendor-specific
+// shape (panva/node-oidc-provider) the library does not adopt.
+// CustomGrantRequest already projects only the data the handler
+// needs (Client + Subject + Form + DPoP/MTLS) — no ambient entity
+// graph exists to leak.
 func TestScenario_CG_009_HandlerReceivesClientEntityOnly(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CG-009")
+	t.Skip("out-of-scope: CG-009 (see catalog out_of_scope_reason)")
 }

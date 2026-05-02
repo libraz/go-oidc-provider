@@ -1,6 +1,7 @@
 package tokenendpoint
 
 import (
+	"crypto/x509"
 	"errors"
 	"net/http"
 
@@ -18,6 +19,14 @@ type mtlsOutcome struct {
 	// Thumbprint is the RFC 8705 §3.1 thumbprint of the leaf cert.
 	// Empty when no cert was presented.
 	Thumbprint string
+
+	// Cert is the parsed leaf certificate the verifier extracted
+	// from the request. Nil when no cert was presented or when the
+	// caller skipped the mTLS lookup (DPoP-bound path). Exposed so
+	// downstream consumers (e.g. custom-grant dispatch) can include
+	// the certificate in audit emission without re-parsing the
+	// request.
+	Cert *x509.Certificate
 
 	// Presented reports whether the request carried a client cert
 	// at all. Useful for refresh-token enforcement: a chain bound
@@ -46,7 +55,7 @@ func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps, dpopJKT 
 		// the mTLS lookup avoids a redundant cert read too.
 		return &mtlsOutcome{}, true
 	}
-	thumb, err := deps.MTLS.ThumbprintFromRequest(r)
+	cert, err := deps.MTLS.CertificateFromRequest(r)
 	if err != nil {
 		if errors.Is(err, mtls.ErrNoClientCert) {
 			// Bearer path: the request did not present a cert and
@@ -56,10 +65,10 @@ func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps, dpopJKT 
 		writeMTLSError(w, err)
 		return nil, false
 	}
-	if thumb == "" {
+	if cert == nil {
 		return &mtlsOutcome{}, true
 	}
-	return &mtlsOutcome{Thumbprint: thumb, Presented: true}, true
+	return &mtlsOutcome{Thumbprint: mtls.Thumbprint(cert), Cert: cert, Presented: true}, true
 }
 
 // requireMTLSMatch is the refresh-time variant of [verifyTokenMTLS].

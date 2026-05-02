@@ -13,6 +13,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
@@ -304,6 +305,14 @@ type Deps struct {
 	// distinguish the long-lived OIDC Core 1.0 §11 bucket from the
 	// conventional rotation cadence.
 	Audit audit.Emitter
+
+	// CustomGrants is the dispatcher the handler consults when the
+	// request's grant_type matches none of the built-in cases. A
+	// nil value disables the surface entirely; the request is
+	// rejected with unsupported_grant_type. The op layer constructs
+	// the dispatcher from the [op.WithCustomGrant] registrations
+	// at provider build time.
+	CustomGrants *customgrant.Dispatcher
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.
@@ -337,7 +346,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
-	switch r.PostForm.Get("grant_type") {
+	grantType := r.PostForm.Get("grant_type")
+	switch grantType {
 	case "":
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_type is required")
 	case "authorization_code":
@@ -347,6 +357,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	case "client_credentials":
 		handleClientCredentials(w, r, deps)
 	default:
+		if deps.CustomGrants != nil && deps.CustomGrants.HasHandler(grantType) {
+			handleCustomGrant(w, r, deps, grantType)
+			return
+		}
 		writeError(w, http.StatusBadRequest, errUnsupportedGrantType,
 			"grant_type is not supported")
 	}

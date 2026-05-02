@@ -214,6 +214,62 @@ var ErrPairwiseSectorUnresolved = &Error{
 	Description: "pairwise subject requires sector_identifier_uri or a single redirect_uri host",
 }
 
+// ErrCustomGrantNil is returned when [WithCustomGrant] is called with
+// a nil [CustomGrantHandler]. The OP rejects nil at construction time
+// because a nil dispatcher would silently fall through to the
+// unsupported_grant_type response on every request the caller meant
+// to handle, masking the misconfiguration.
+var ErrCustomGrantNil = &Error{
+	Code:        codeConfiguration,
+	Description: "WithCustomGrant requires a non-nil CustomGrantHandler",
+}
+
+// ErrCustomGrantNameEmpty is returned when [WithCustomGrant] is given
+// a handler whose [CustomGrantHandler.Name] returns the empty string.
+// An empty grant_type cannot be matched against a request, so the OP
+// refuses the registration rather than silently accepting a handler
+// that never fires.
+var ErrCustomGrantNameEmpty = &Error{
+	Code:        codeConfiguration,
+	Description: "CustomGrantHandler.Name must return a non-empty grant_type URN",
+}
+
+// ErrCustomGrantBuiltinCollision is returned when [WithCustomGrant]
+// is given a handler whose [CustomGrantHandler.Name] equals one of
+// the built-in grant_type strings the OP routes natively
+// (authorization_code / refresh_token / client_credentials /
+// urn:ietf:params:oauth:grant-type:device_code). The OP refuses the
+// override because the handler would shadow built-in security
+// invariants (PKCE, refresh-token rotation, device-code polling).
+var ErrCustomGrantBuiltinCollision = &Error{
+	Code:        codeConfiguration,
+	Description: "CustomGrantHandler.Name collides with a built-in grant_type",
+}
+
+// ErrCustomGrantDuplicate is returned when [WithCustomGrant] is
+// called twice with the same [CustomGrantHandler.Name]. The OP
+// requires unique URNs so the dispatch table has a single owner per
+// grant_type; reordering the option calls would otherwise shadow
+// earlier registrations silently.
+var ErrCustomGrantDuplicate = &Error{
+	Code:        codeConfiguration,
+	Description: "CustomGrantHandler.Name was already registered by an earlier WithCustomGrant call",
+}
+
+// ErrCustomGrantSecretLikeExempt is returned when a registered
+// [CustomGrantHandler]'s [ParamPolicy.DupesAllowed] list names a
+// security-sensitive parameter (grant_type / client_id /
+// client_secret / code / code_verifier / refresh_token /
+// subject_token / actor_token / password / client_assertion /
+// client_assertion_type). The OP refuses the registration because
+// admitting duplicates of a credential parameter would let a
+// misconfigured handler ratchet the OP's authentication or
+// PKCE / refresh-token surface down to the weakest of the values.
+var ErrCustomGrantSecretLikeExempt = &Error{
+	Code:        codeConfiguration,
+	Description: "ParamPolicy.DupesAllowed names a security-sensitive parameter that cannot be exempted",
+}
+
 // newConfigurationError returns a fresh configuration_error wrapping
 // the supplied description and (optional) cause. The factory exists so
 // option-site code does not have to repeat the literal struct shape on
