@@ -1,6 +1,7 @@
 package op
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 // buildMetricsCollector populates [config.metricsCollector] when
@@ -620,6 +622,31 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 			MTLSEndpointAliases:  cfg.discoveryMetadata.MTLSEndpointAliases,
 			Extra:                cfg.discoveryMetadata.Extra,
 		},
+	}
+}
+
+// buildSubjectProjector returns the closure the authorize handler
+// invokes at code emission to convert the post-authentication subject
+// into the value persisted onto [store.Grant.Subject] /
+// [store.AuthorizationCode.Subject]. The closure adapts the
+// [SubjectGenerator] surface to the function-typed callback the
+// handler receives so the internal package does not import op.
+//
+// A v0.x default install (UUIDv7 passthrough) returns the raw subject
+// verbatim, preserving the legacy wire shape; a pairwise install
+// derives the sector from [store.Client.SectorIdentifierURI] /
+// [store.Client.RedirectURIs] before hashing.
+func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
+	gen := cfg.effectiveSubjectGenerator()
+	return func(ctx context.Context, raw string, client *store.Client) (string, error) {
+		sub, err := gen.Generate(ctx, SubjectGeneratorInput{
+			InternalUserID: raw,
+			Client:         client,
+		})
+		if err != nil {
+			return "", err
+		}
+		return string(sub), nil
 	}
 }
 

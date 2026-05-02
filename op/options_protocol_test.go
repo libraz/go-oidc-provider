@@ -45,3 +45,23 @@ func TestBackchannelAllowsPrivateNetwork_Unconfigured(t *testing.T) {
 		t.Error("default must be deny (false)")
 	}
 }
+
+// TestWithAllowPrivateNetworkSector confirms the option flips the
+// underlying config field. The runtime SSRF behaviour itself is
+// covered in internal/sector/resolver_test.go; this test pins the
+// option-to-config wiring so a future refactor that drops the
+// allowPrivateNetworkSector field is caught at the option layer.
+func TestWithAllowPrivateNetworkSector(t *testing.T) {
+	t.Parallel()
+
+	c := &config{}
+	if c.allowPrivateNetworkSector {
+		t.Fatal("default must be deny (false)")
+	}
+	if err := WithAllowPrivateNetworkSector().apply(c); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !c.allowPrivateNetworkSector {
+		t.Error("WithAllowPrivateNetworkSector did not flip allowPrivateNetworkSector")
+	}
+}

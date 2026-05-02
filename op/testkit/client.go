@@ -35,6 +35,14 @@ type ClientFixture struct {
 	SecretHash              string
 	PublicClient            bool
 
+	// SectorIdentifierURI is the optional pairwise sector identifier
+	// per OIDC Core 1.0 §8.1. The value is forwarded verbatim to
+	// [store.Client.SectorIdentifierURI]; tests that exercise the
+	// pairwise issuance path supply it so the OP's SubjectGenerator
+	// derives the sector host from this field rather than from the
+	// (single-host) redirect URIs.
+	SectorIdentifierURI string
+
 	// JWKs is the raw JWK Set the client publishes for private_key_jwt /
 	// request-object verification. The testkit stores the bytes verbatim
 	// onto [store.Client.JWKs]; consumers parse them lazily. Leave nil
@@ -71,6 +79,7 @@ func buildClient(fix ClientFixture) *store.Client {
 		TokenEndpointAuthMethod: fix.TokenEndpointAuthMethod,
 		SecretHash:              fix.SecretHash,
 		PublicClient:            fix.PublicClient,
+		SectorIdentifierURI:     fix.SectorIdentifierURI,
 		JWKs:                    append(json.RawMessage(nil), fix.JWKs...),
 	}
 	if len(out.RedirectURIs) == 0 {

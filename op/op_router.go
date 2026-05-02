@@ -19,6 +19,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
+	"github.com/libraz/go-oidc-provider/internal/sector"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokenendpoint"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -170,8 +171,9 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		Open:                     cfg.dcr.Open,
 		AllowedGrantTypes:        append([]string(nil), cfg.dcr.AllowedGrantTypes...),
 		AllowedResponseTypes:     append([]string(nil), cfg.dcr.AllowedResponseTypes...),
-		PairwiseEnabled:          false, // WithPairwiseSubject not yet implemented; v1.0 placeholder.
+		PairwiseEnabled:          cfg.pairwiseEnabled(),
 		AllowLocalhostLoopback:   cfg.allowLocalhostLoopback,
+		SectorResolver:           buildSectorResolver(cfg),
 		ValidateMetadata:         wrapValidateMetadata(cfg.dcr.ValidateMetadata),
 		Logger:                   cfg.logger,
 		Audit:                    cfg.effectiveAuditEmitter(),
@@ -366,6 +368,7 @@ func mountAuthorizeHandlers(
 		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
 		ACRResolver:             newACRResolver(cfg),
 		LocaleResolver:          locales,
+		SubjectProjector:        buildSubjectProjector(cfg),
 	})
 	mux.Handle(authorizePath, handler)
 	if spaLoginMount == "" {
@@ -418,4 +421,21 @@ func joinPath(mountPrefix, endpoint string) string {
 		return endpoint
 	}
 	return mountPrefix + endpoint
+}
+
+// buildSectorResolver constructs the [sector.Resolver] the DCR
+// validator drives at registration time. The resolver inherits the
+// embedder clock so a frozen-clock test fixture sees deterministic
+// cache TTL bookkeeping, and honours the
+// [WithAllowPrivateNetworkSector] opt-in for embedders that host
+// their RPs on a private network. Construction is unconditional —
+// even DCR registrations that omit sector_identifier_uri pay only
+// the resolver allocation, and the validator short-circuits on the
+// empty value.
+func buildSectorResolver(cfg *config) *sector.Resolver {
+	opts := []sector.Option{sector.WithClock(cfg.clock)}
+	if cfg.allowPrivateNetworkSector {
+		opts = append(opts, sector.AllowPrivateNetwork())
+	}
+	return sector.New(opts...)
 }

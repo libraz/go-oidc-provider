@@ -328,6 +328,21 @@ type Deps struct {
 	// fields empty — useful for unit tests that drive the handler
 	// directly without an i18n subsystem.
 	LocaleResolver *i18n.Resolver
+
+	// SubjectProjector, when non-nil, projects the raw post-
+	// authentication subject through the configured op.SubjectGenerator
+	// before the handler persists the grant and the authorization
+	// code. The function is invoked once per code emission with the
+	// authenticated client so a pairwise generator can derive the
+	// sector from the client's [store.Client.SectorIdentifierURI] /
+	// [store.Client.RedirectURIs]. The session record continues to
+	// carry the raw (pre-projection) subject because sessions are
+	// user-scoped, not client-scoped.
+	//
+	// A nil value preserves the pre-projection wire shape (the v0.x
+	// default UUIDv7 passthrough); the wiring layer leaves it nil for
+	// tests that exercise the handler directly without an op.Provider.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

@@ -169,6 +169,51 @@ var ErrDynamicRegistrationDisabled = &Error{
 	Description: "WithDynamicRegistration is not configured",
 }
 
+// ErrPairwiseSaltTooShort is returned by [New] when [WithPairwiseSubject]
+// receives a salt shorter than the documented minimum (32 bytes / 256
+// bits). The library refuses to derive subject identifiers from a salt
+// that does not provide adequate resistance to precomputation; the
+// validator runs at construction time so the failure mode is build-up
+// rather than a runtime surprise.
+var ErrPairwiseSaltTooShort = &Error{
+	Code:        codeConfiguration,
+	Description: "WithPairwiseSubject salt must be at least 32 bytes",
+}
+
+// ErrSubjectGeneratorRequired is returned by [New] when
+// [WithSubjectGenerator] receives a nil generator. The library does not
+// silently fall back to the UUIDv7 default in that case because a nil
+// generator usually signals a wiring bug (for example, a builder
+// returning the zero value of an interface) and silently masking it
+// would let pairwise-intended deployments emit public-style subjects.
+var ErrSubjectGeneratorRequired = &Error{
+	Code:        codeConfiguration,
+	Description: "WithSubjectGenerator requires a non-nil SubjectGenerator",
+}
+
+// ErrSubjectInputEmpty is returned by [SubjectGenerator] implementations
+// when both [SubjectGeneratorInput.InternalUserID] and
+// [SubjectGeneratorInput.Federated] are zero. The library treats it as
+// a server-side configuration error: the issuance pipeline is expected
+// to populate exactly one of the two fields before invoking the
+// generator.
+var ErrSubjectInputEmpty = &Error{
+	Code:        codeServerError,
+	Description: "subject generator input has no InternalUserID and no Federated identifier",
+}
+
+// ErrPairwiseSectorUnresolved is returned by the pairwise
+// [SubjectGenerator] when the requesting client carries no
+// sector_identifier_uri AND has more than one (or zero) registered
+// redirect_uri host from which a sector can be derived. OIDC Core 1.0
+// §5 requires a single sector for stable pairwise output; the library
+// refuses to invent one because two RPs sharing the OP would otherwise
+// collide on subject values.
+var ErrPairwiseSectorUnresolved = &Error{
+	Code:        codeServerError,
+	Description: "pairwise subject requires sector_identifier_uri or a single redirect_uri host",
+}
+
 // newConfigurationError returns a fresh configuration_error wrapping
 // the supplied description and (optional) cause. The factory exists so
 // option-site code does not have to repeat the literal struct shape on

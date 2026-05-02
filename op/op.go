@@ -66,6 +66,22 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.handler.ServeHTTP(w, r)
 }
 
+// SubjectGenerator returns the [SubjectGenerator] the Provider was
+// constructed with. The returned value is the embedder-supplied
+// generator from [WithSubjectGenerator] or [WithPairwiseSubject], or
+// the package default UUIDv7 passthrough when neither option was
+// supplied. Embedders calling this from out-of-band code paths
+// (admin tooling, audit reports) get the same instance the issuance
+// pipeline runs against.
+//
+// Stable since v0.9.1.
+func (p *Provider) SubjectGenerator() SubjectGenerator { //nolint:ireturn,nolintlint // sealed-sum interface return is the contract.
+	if p == nil || p.cfg == nil {
+		return nil
+	}
+	return p.cfg.effectiveSubjectGenerator()
+}
+
 // LocaleResolver returns the locale [Resolver] the Provider built
 // from [WithLocale] / [WithDefaultLocale] / [WithPreferredLocaleStore].
 // Embedders use it to render emails, server-rendered admin pages, or

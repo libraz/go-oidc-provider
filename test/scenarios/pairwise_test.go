@@ -11,6 +11,7 @@ package scenarios_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,8 +20,111 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
+
+// pwPairwiseSalt is the deterministic 32-byte salt the PW issuance
+// rows wire through op.WithPairwiseSubject. The catalogue requires
+// fixed fixtures so a failing trace replays identically across runs.
+var pwPairwiseSalt = []byte("pw-pairwise-fixed-salt-32b!_v0.9")
+
+// pwClientSecret is the deterministic confidential-client secret the
+// PW issuance rows reuse. It mirrors the cgClientSecret pattern in
+// custom_grants_test.go so the constant is local to the suite.
+const pwClientSecret = "pw-client-secret"
+
+// newPairwiseProvider constructs a testkit Provider that derives the
+// "sub" claim through op.WithPairwiseSubject. Tests assemble their
+// own clients via tk.RegisterClient because per-row sector setups
+// vary (different redirect-host pairs, shared sector_identifier_uri,
+// etc.).
+func newPairwiseProvider(t *testing.T) *testkit.Provider {
+	t.Helper()
+	return testkit.NewProvider(t, testkit.WithOptions(
+		op.WithPairwiseSubject(pwPairwiseSalt),
+	))
+}
+
+// pairwiseClient seeds a confidential client whose redirect_uri host
+// will be picked up as the sector by the pairwise generator (sector
+// resolution falls back to the single redirect host when
+// SectorIdentifierURI is empty). Returns the registered store.Client
+// and the plaintext secret so the test can drive HTTP Basic auth.
+func pairwiseClient(t *testing.T, tk *testkit.Provider, id, redirectURI string) *store.Client {
+	t.Helper()
+	hash, err := op.HashClientSecret(pwClientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	return tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      id,
+		SecretHash:              hash,
+		RedirectURIs:            []string{redirectURI},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+}
+
+// runPairwiseFlow drives a complete /authorize → /interaction →
+// /token round-trip for the given client and returns the id_token
+// "sub" claim. The subject submitted to the testkit
+// SubjectAuthenticator is fixed (DefaultSubject) so tests can compare
+// "sub" output across clients without per-call subject jitter.
+func runPairwiseFlow(t *testing.T, tk *testkit.Provider, c *store.Client, redirectURI string) string {
+	t.Helper()
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    c.ID,
+		RedirectURI: redirectURI,
+		Scope:       "openid",
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  redirectURI,
+		Verifier:     pkce.Verifier,
+		ClientID:     c.ID,
+		ClientSecret: pwClientSecret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	if tok.IDToken == "" {
+		t.Fatalf("/token did not return id_token (raw=%v)", tok.Raw)
+	}
+	claims := decodePWJWTClaims(t, tok.IDToken)
+	sub, _ := claims["sub"].(string)
+	if sub == "" {
+		t.Fatalf("id_token claims missing sub: %v", claims)
+	}
+	return sub
+}
+
+// decodePWJWTClaims pulls the payload claims out of a JWS Compact
+// Serialisation without verifying the signature. The PW issuance
+// rows compare "sub" values across flows; verifying the signature
+// would re-test JWS framing, which the IDT-suite already covers.
+func decodePWJWTClaims(tb testing.TB, jws string) map[string]any {
+	tb.Helper()
+	parts := strings.Split(jws, ".")
+	if len(parts) != 3 {
+		tb.Fatalf("jwt parts=%d want 3 (value=%q)", len(parts), jws)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		tb.Fatalf("decode payload: %v", err)
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		tb.Fatalf("unmarshal claims: %v", err)
+	}
+	return claims
+}
 
 // postPairwiseRegistration drives the public /oidc/register endpoint for
 // the PW-02..PW-04 rows. The helper centralises the IAT issuance, JSON
@@ -291,10 +395,24 @@ func TestScenario_PW_32_NoRedirectClientsUseJwksAsSectorAnchor(t *testing.T) {
 	t.Skip("out-of-scope: PW-32 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_PW_40_PairwiseSubIsDeterministic is OOS — see catalog out_of_scope_reason.
+// TestScenario_PW_40_PairwiseSubIsDeterministic confirms the
+// pairwise transform is deterministic at issuance: two independent
+// authorize → /token round-trips through the same client for the
+// same internal subject MUST produce the same id_token "sub". The
+// determinism contract is the basis of the (sector, subject)
+// grouping every other PW-40 series row depends on.
+//
+// Spec: OIDC Core 1.0 §8.1.
 func TestScenario_PW_40_PairwiseSubIsDeterministic(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: PW-40 (see catalog out_of_scope_reason)")
+	tk := newPairwiseProvider(t)
+	c := pairwiseClient(t, tk, "rp-pw-40", "https://rp.example.com/cb")
+
+	sub1 := runPairwiseFlow(t, tk, c, "https://rp.example.com/cb")
+	sub2 := runPairwiseFlow(t, tk, c, "https://rp.example.com/cb")
+	if sub1 != sub2 {
+		t.Errorf("pairwise sub drifted across two flows: %q vs %q", sub1, sub2)
+	}
 }
 
 // TestScenario_PW_41_SaltIsSensitiveOPSecret is OOS — see catalog out_of_scope_reason.
@@ -309,16 +427,49 @@ func TestScenario_PW_42_DefaultAlgorithmShape(t *testing.T) {
 	t.Skip("out-of-scope: PW-42 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_PW_43_DifferentSectorsProduceDifferentSubs is OOS — see catalog out_of_scope_reason.
+// TestScenario_PW_43_DifferentSectorsProduceDifferentSubs confirms
+// that two clients whose sector_identifier hosts differ receive
+// different "sub" values for the same internal subject. The two
+// clients here register single redirect URIs on disjoint hosts
+// (alpha.example vs beta.example); the OIDC Core §8.1 sector
+// resolution falls back to the redirect host when
+// sector_identifier_uri is absent, so the two flows derive the
+// pairwise sub against different sectors.
+//
+// Spec: OIDC Core 1.0 §8.1 (sector grouping enforces disjoint
+// pseudonyms across sector boundaries).
 func TestScenario_PW_43_DifferentSectorsProduceDifferentSubs(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: PW-43 (see catalog out_of_scope_reason)")
+	tk := newPairwiseProvider(t)
+	alpha := pairwiseClient(t, tk, "rp-pw-43-alpha", "https://alpha.example/cb")
+	beta := pairwiseClient(t, tk, "rp-pw-43-beta", "https://beta.example/cb")
+
+	subAlpha := runPairwiseFlow(t, tk, alpha, "https://alpha.example/cb")
+	subBeta := runPairwiseFlow(t, tk, beta, "https://beta.example/cb")
+	if subAlpha == subBeta {
+		t.Errorf("pairwise subs collided across sectors (%q == %q)", subAlpha, subBeta)
+	}
 }
 
-// TestScenario_PW_44_SameSectorProducesSameSub is OOS — see catalog out_of_scope_reason.
+// TestScenario_PW_44_SameSectorProducesSameSub confirms the
+// converse of PW-43: two clients that resolve to the same sector
+// (here, the same redirect host) receive the same pairwise "sub"
+// for the same internal subject. The grouping is the whole point
+// of the sector concept — applications a user owns under one
+// brand share an identity even when the OAuth client_id differs.
+//
+// Spec: OIDC Core 1.0 §8.1.
 func TestScenario_PW_44_SameSectorProducesSameSub(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: PW-44 (see catalog out_of_scope_reason)")
+	tk := newPairwiseProvider(t)
+	first := pairwiseClient(t, tk, "rp-pw-44-first", "https://shared.example/cb")
+	second := pairwiseClient(t, tk, "rp-pw-44-second", "https://shared.example/cb")
+
+	subFirst := runPairwiseFlow(t, tk, first, "https://shared.example/cb")
+	subSecond := runPairwiseFlow(t, tk, second, "https://shared.example/cb")
+	if subFirst != subSecond {
+		t.Errorf("pairwise subs diverged within shared sector (%q != %q)", subFirst, subSecond)
+	}
 }
 
 // TestScenario_PW_45_PublicClientUsesLocalAccountID is OOS — see catalog out_of_scope_reason.

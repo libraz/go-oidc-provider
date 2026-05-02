@@ -61,8 +61,7 @@ rows:
       When sector_identifier_uri is absent and all redirect_uris
       share a single host, the OP adopts that host as the sector
       identifier.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-11
     severity: P0
@@ -71,8 +70,7 @@ rows:
       When redirect_uris span multiple hosts and
       sector_identifier_uri is absent, the OP rejects registration
       ("sector_identifier_uri is mandatory property").
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-12
     severity: P1
@@ -80,8 +78,7 @@ rows:
     behaviour: |
       Multiple redirect_uris that differ only by path on a shared
       host pass the single-host check; only the host has to match.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-13
     severity: P1
@@ -90,8 +87,7 @@ rows:
       Clients without redirect_uris (CIBA, device flow) using
       pairwise rely on jwks_uri as the sole basis for the sector
       identifier (see PW-30 series).
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-20
     severity: P0
@@ -100,8 +96,7 @@ rows:
       sector_identifier_uri MUST use the HTTPS scheme; other
       schemes are rejected ("sector_identifier_uri must be a https
       uri").
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-21
     severity: P0
@@ -109,8 +104,7 @@ rows:
     behaviour: |
       At registration time the OP fetches sector_identifier_uri and
       retrieves a JSON array of redirect_uris.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-22
     severity: P0
@@ -119,8 +113,7 @@ rows:
       A non-200 response status from sector_identifier_uri (500 /
       201 / 302 / etc.) fails registration ("unexpected
       sector_identifier_uri response status code").
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-23
     severity: P0
@@ -128,8 +121,7 @@ rows:
     behaviour: |
       A response that is not parseable as JSON fails registration
       ("failed to parse sector_identifier_uri JSON response").
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-24
     severity: P0
@@ -138,8 +130,7 @@ rows:
       A response whose top-level shape is not a JSON array (string,
       object, etc.) fails registration ("sector_identifier_uri must
       return single JSON array").
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-25
     severity: P0
@@ -148,8 +139,7 @@ rows:
       Registration fails when the response array does not contain
       every redirect_uri the client registered ("all registered
       redirect_uris must be included").
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-26
     severity: P1
@@ -158,8 +148,7 @@ rows:
       A subject_type=public client that supplies
       sector_identifier_uri still has its host recorded so that a
       later switch to pairwise (or audit) has the value already.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-27
     severity: P1
@@ -167,8 +156,7 @@ rows:
     behaviour: |
       The sector identifier is derived from the URL host
       (lowercased); port and path are discarded.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: pending
 
   - id: PW-30
     severity: P0
@@ -178,7 +166,7 @@ rows:
       have its jwks_uri included in the response array
       ("client's jwks_uri must be included").
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-31
     severity: P0
@@ -188,7 +176,7 @@ rows:
       sector_identifier_uri MUST have its jwks_uri included in the
       response array.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-32
     severity: P1
@@ -198,7 +186,7 @@ rows:
       jwks_uri serves as the safe sector-binding anchor (consistent
       with the spec's intent for those client types).
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-40
     severity: P0
@@ -207,8 +195,7 @@ rows:
       The pairwise sub is a deterministic function of
       (sector_identifier, local_account_id, salt); the same triple
       always produces the same sub.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: active
 
   - id: PW-41
     severity: P0
@@ -218,7 +205,7 @@ rows:
       MUST be treated as sensitive because reusing the same salt
       across environments makes pairwise subs predictable.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-42
     severity: P0
@@ -229,7 +216,7 @@ rows:
       16 bytes and rendered as a UUIDv5-shaped 128-bit value; the
       spec does not mandate one specific shape.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-43
     severity: P0
@@ -237,8 +224,7 @@ rows:
     behaviour: |
       Different sector identifiers MUST produce different pairwise
       subs for the same local account at the same OP.
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: active
 
   - id: PW-44
     severity: P0
@@ -247,8 +233,7 @@ rows:
       Clients that share a sector identifier MUST receive the same
       pairwise sub for the same local account (the sector grouping
       is the whole point).
-    status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    status: active
 
   - id: PW-45
     severity: P0
@@ -257,7 +242,7 @@ rows:
       A subject_type=public client receives the local account id
       verbatim as the sub; the pairwise transform does not run.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-46
     severity: P0
@@ -266,7 +251,7 @@ rows:
       The pairwise sub stays within 255 characters as the spec
       recommends.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-50
     severity: P0
@@ -275,7 +260,7 @@ rows:
       The id_token sub follows the client's subject_type (public ->
       local id, pairwise -> pairwise sub).
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-51
     severity: P0
@@ -284,7 +269,7 @@ rows:
       The /userinfo response sub follows the same rule as the
       id_token sub.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-52
     severity: P1
@@ -293,7 +278,7 @@ rows:
       The introspection response sub follows the access_token's
       issuing client's subject_type (pairwise where applicable).
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-53
     severity: P0
@@ -303,7 +288,7 @@ rows:
       that matches the client's subject_type (consistent with
       claims#CL-61 / claims#CL-63).
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-54
     severity: P0
@@ -313,7 +298,7 @@ rows:
       requested value MUST match the pairwise sub or the OP returns
       login_required (consistent with claims#CL-51 / claims#CL-53).
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-60
     severity: P0
@@ -323,7 +308,7 @@ rows:
       across all clients; embedder documentation MUST flag this
       consequence.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-61
     severity: P0
@@ -333,7 +318,7 @@ rows:
       or audit event payloads delivered to a pairwise client; only
       the pairwise sub is exposed.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-62
     severity: P1
@@ -343,7 +328,7 @@ rows:
       subject_types_supported advertises pairwise so clients know
       they may select it.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-63
     severity: P2
@@ -353,7 +338,7 @@ rows:
       that lets the embedder supply per-environment salt and hash
       function.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-64
     severity: P1
@@ -363,7 +348,7 @@ rows:
       registration request lifetime and uses a bounded HTTP
       timeout.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
 
   - id: PW-65
     severity: P2
@@ -373,4 +358,4 @@ rows:
       detection is the OP's responsibility; the spec does not
       mandate a particular freshness policy.
     status: out-of-scope
-    out_of_scope_reason: "The pairwise subject identifier feature is not implemented in v1.0: op/op.go pins PairwiseEnabled=false with the comment 'WithPairwiseSubject not yet implemented; v1.0 placeholder', and op/registration.go documents 'v1.0 only accepts pairwise when WithPairwiseSubject is configured' (no such option ships). Rows PW-10..PW-65 all assume pairwise is enabled (sector_identifier_uri fetch, deterministic sub generation, salt rotation, CIBA/Device jwks_uri rules, projection through id_token / userinfo / introspection); none of these are testable on the v1.0 surface. The pairwise-OFF defaults — discovery advertises only 'public', missing subject_type defaults to public, registration with subject_type=pairwise is rejected as invalid_client_metadata — remain testable and are tracked separately under PW-01..PW-04 (bindable, not OOS). When pairwise lands as a real public option, this feature should be re-opened and rebuilt against the resulting WithPairwiseSubject API."
+    out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."

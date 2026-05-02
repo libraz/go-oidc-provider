@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
+	"github.com/libraz/go-oidc-provider/internal/sector"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -113,14 +114,15 @@ type Deps struct {
 	// [op.WithAllowLocalhostLoopback] at construction.
 	AllowLocalhostLoopback bool
 
-	// SectorIdentifierClient is an optional HTTP client used to fetch
-	// sector_identifier_uri documents during registration validation
-	// (OIDC Core §8.1). A nil value applies a package-default client
-	// with a 5 s timeout and standard TLS verification. The field is
-	// not part of the public op.RegistrationOption surface in v1.0;
-	// it exists so internal tests can substitute a TLS client trusting
-	// the httptest test root.
-	SectorIdentifierClient *http.Client
+	// SectorResolver is the SSRF-defended sector_identifier_uri fetcher
+	// the validator drives at registration time (OIDC Core 1.0 §5 /
+	// §8.1). A nil value falls back to a zero-config [sector.Resolver]
+	// so internal tests that exercise the validator without going
+	// through op.New still see the production posture; the op layer
+	// always supplies an explicit resolver pre-wired with the embedder
+	// configuration (clock, AllowPrivateNetwork opt-in, custom HTTP
+	// client for testkit fronting).
+	SectorResolver *sector.Resolver
 
 	// ValidateMetadata is the embedder hook invoked after structural
 	// validation passes and before the client is persisted. A non-nil
