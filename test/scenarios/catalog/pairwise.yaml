@@ -61,7 +61,7 @@ rows:
       When sector_identifier_uri is absent and all redirect_uris
       share a single host, the OP adopts that host as the sector
       identifier.
-    status: pending
+    status: active
 
   - id: PW-11
     severity: P0
@@ -70,7 +70,7 @@ rows:
       When redirect_uris span multiple hosts and
       sector_identifier_uri is absent, the OP rejects registration
       ("sector_identifier_uri is mandatory property").
-    status: pending
+    status: active
 
   - id: PW-12
     severity: P1
@@ -78,7 +78,7 @@ rows:
     behaviour: |
       Multiple redirect_uris that differ only by path on a shared
       host pass the single-host check; only the host has to match.
-    status: pending
+    status: active
 
   - id: PW-13
     severity: P1
@@ -87,7 +87,8 @@ rows:
       Clients without redirect_uris (CIBA, device flow) using
       pairwise rely on jwks_uri as the sole basis for the sector
       identifier (see PW-30 series).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Pairwise sector resolution for clients without redirect_uris (CIBA / Device flow) depends on PW-30..PW-32 which are themselves OOS until the OP grows CIBA / Device-flow handlers. PW-13 cannot stand alone: when the dependent flows ship, this row should flip back to pending and bind alongside them."
 
   - id: PW-20
     severity: P0
@@ -96,7 +97,7 @@ rows:
       sector_identifier_uri MUST use the HTTPS scheme; other
       schemes are rejected ("sector_identifier_uri must be a https
       uri").
-    status: pending
+    status: active
 
   - id: PW-21
     severity: P0
@@ -104,7 +105,8 @@ rows:
     behaviour: |
       At registration time the OP fetches sector_identifier_uri and
       retrieves a JSON array of redirect_uris.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-22
     severity: P0
@@ -113,7 +115,8 @@ rows:
       A non-200 response status from sector_identifier_uri (500 /
       201 / 302 / etc.) fails registration ("unexpected
       sector_identifier_uri response status code").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-23
     severity: P0
@@ -121,7 +124,8 @@ rows:
     behaviour: |
       A response that is not parseable as JSON fails registration
       ("failed to parse sector_identifier_uri JSON response").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-24
     severity: P0
@@ -130,7 +134,8 @@ rows:
       A response whose top-level shape is not a JSON array (string,
       object, etc.) fails registration ("sector_identifier_uri must
       return single JSON array").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-25
     severity: P0
@@ -139,7 +144,8 @@ rows:
       Registration fails when the response array does not contain
       every redirect_uri the client registered ("all registered
       redirect_uris must be included").
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-26
     severity: P1
@@ -148,7 +154,8 @@ rows:
       A subject_type=public client that supplies
       sector_identifier_uri still has its host recorded so that a
       later switch to pairwise (or audit) has the value already.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-27
     severity: P1
@@ -156,7 +163,8 @@ rows:
     behaviour: |
       The sector identifier is derived from the URL host
       (lowercased); port and path are discarded.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: The sector_identifier_uri fetch wire path is exhaustively covered at the resolver-internal level by internal/sector/resolver_test.go (status / JSON shape / subset / cache / SSRF / redirect / hash) and at the registration validator wrapper level by internal/registrationendpoint/sector_identifier_test.go. The wire-flow scenario binding additionally requires the OP-level http.Client used by the resolver to trust an httptest TLS certificate; the v0.x op surface does not expose a WithSectorHTTPClient option (the symmetric WithBackchannelLogoutHTTPClient exists for BCL because BCL pushes outbound to the RP, while sector_identifier_uri is pulled from the RP, and adding the option for tests alone would constitute a test-only public-API leak). PW-20 (the URL-parse https-only check) binds at the wire level because it short-circuits before any HTTP I/O. When the OP grows a public sector-resolver injection point — most likely as a side effect of an embedder asking for it — these rows should flip back to pending and bind alongside the new option.
 
   - id: PW-30
     severity: P0

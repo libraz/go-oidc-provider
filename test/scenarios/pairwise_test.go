@@ -47,6 +47,18 @@ func newPairwiseProvider(t *testing.T) *testkit.Provider {
 	))
 }
 
+// newPairwiseDCRProvider mirrors [newPairwiseProvider] but also enables
+// Dynamic Client Registration so the registration-time validation rows
+// (PW-10..PW-12, PW-20) can drive POST /oidc/register through the
+// public wire. Static-client tests stay on [newPairwiseProvider].
+func newPairwiseDCRProvider(t *testing.T) *testkit.Provider {
+	t.Helper()
+	return testkit.NewProvider(t, testkit.WithOptions(
+		op.WithPairwiseSubject(pwPairwiseSalt),
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+	))
+}
+
 // pairwiseClient seeds a confidential client whose redirect_uri host
 // will be picked up as the sector by the pairwise generator (sector
 // resolution falls back to the single redirect host when
@@ -305,22 +317,93 @@ func TestScenario_PW_04_PairwiseUnimplementedRejectsRegistration(t *testing.T) {
 	}
 }
 
-// TestScenario_PW_10_SingleHostRedirectURIsAdoptHostAsSector is OOS — see catalog out_of_scope_reason.
+// TestScenario_PW_10_SingleHostRedirectURIsAdoptHostAsSector confirms
+// a pairwise client may register without sector_identifier_uri when
+// every redirect_uri shares one host. The OP accepts the registration
+// (the host then serves as the sector at issuance time, see PW-43 /
+// PW-44 for the issuance-side determinism); a 400 here would force
+// every single-host pairwise RP to host a sector document needlessly.
+//
+// Spec: OIDC Core 1.0 §8.1 (single-host pairwise needs no sector
+// document; the redirect host is sufficient).
 func TestScenario_PW_10_SingleHostRedirectURIsAdoptHostAsSector(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: PW-10 (see catalog out_of_scope_reason)")
+
+	tk := newPairwiseDCRProvider(t)
+	body := map[string]any{
+		"redirect_uris": []string{
+			"https://rp.example.com/cb1",
+			"https://rp.example.com/cb2",
+		},
+		"subject_type": "pairwise",
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusCreated {
+		t.Fatalf("status=%d want 201 body=%v", status, resp)
+	}
+	got, _ := resp["subject_type"].(string)
+	if got != "pairwise" {
+		t.Errorf("subject_type=%q want pairwise (body=%v)", got, resp)
+	}
 }
 
-// TestScenario_PW_11_MultiHostRequiresSectorURI is OOS — see catalog out_of_scope_reason.
+// TestScenario_PW_11_MultiHostRequiresSectorURI asserts a pairwise
+// client whose redirect_uris span more than one host and omits
+// sector_identifier_uri is rejected with invalid_client_metadata.
+// Without an explicit sector document the OP cannot decide which
+// host scopes the pairwise hash — admitting the registration would
+// silently bind subs to whichever redirect arrived first.
+//
+// Spec: OIDC Core 1.0 §8.1 / RFC 7591 §3.2.2.
 func TestScenario_PW_11_MultiHostRequiresSectorURI(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: PW-11 (see catalog out_of_scope_reason)")
+
+	tk := newPairwiseDCRProvider(t)
+	body := map[string]any{
+		"redirect_uris": []string{
+			"https://alpha.example/cb",
+			"https://beta.example/cb",
+		},
+		"subject_type": "pairwise",
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, resp)
+	}
+	if got, _ := resp["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata (body=%v)", got, resp)
+	}
+	desc, _ := resp["error_description"].(string)
+	if !strings.Contains(desc, "sector_identifier_uri") {
+		t.Errorf("error_description=%q must name the sector_identifier_uri requirement", desc)
+	}
 }
 
-// TestScenario_PW_12_PathDifferenceOnSameHostAllowed is OOS — see catalog out_of_scope_reason.
+// TestScenario_PW_12_PathDifferenceOnSameHostAllowed pins that the
+// single-host check looks only at the URL host: two redirect_uris
+// that share a host but differ in path register without a sector
+// document. The OAuth redirect_uri matching is byte-exact at runtime,
+// but the §8.1 sector grouping is host-only by design.
+//
+// Spec: OIDC Core 1.0 §8.1.
 func TestScenario_PW_12_PathDifferenceOnSameHostAllowed(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: PW-12 (see catalog out_of_scope_reason)")
+
+	tk := newPairwiseDCRProvider(t)
+	body := map[string]any{
+		"redirect_uris": []string{
+			"https://rp.example.com/app/cb",
+			"https://rp.example.com/admin/cb",
+		},
+		"subject_type": "pairwise",
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusCreated {
+		t.Fatalf("status=%d want 201 body=%v", status, resp)
+	}
+	if got, _ := resp["subject_type"].(string); got != "pairwise" {
+		t.Errorf("subject_type=%q want pairwise (body=%v)", got, resp)
+	}
 }
 
 // TestScenario_PW_13_NoRedirectURIsRelyOnJwksHost is OOS — see catalog out_of_scope_reason.
@@ -329,10 +412,30 @@ func TestScenario_PW_13_NoRedirectURIsRelyOnJwksHost(t *testing.T) {
 	t.Skip("out-of-scope: PW-13 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_PW_20_SectorURIMustBeHTTPS is OOS — see catalog out_of_scope_reason.
+// TestScenario_PW_20_SectorURIMustBeHTTPS confirms the OP refuses a
+// sector_identifier_uri whose scheme is not https. The check fires at
+// URL parse time before any outbound I/O so an attacker cannot use
+// the OP to probe an http upstream from a known network position.
+// DCR-VAL-06 covers the same wire shape from the DCR catalog; this
+// row pins the binding from the pairwise catalog.
+//
+// Spec: OIDC Core 1.0 §8.1 (sector_identifier_uri MUST be https).
 func TestScenario_PW_20_SectorURIMustBeHTTPS(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: PW-20 (see catalog out_of_scope_reason)")
+
+	tk := newPairwiseDCRProvider(t)
+	body := map[string]any{
+		"redirect_uris":         []string{"https://rp.example.com/cb"},
+		"subject_type":          "pairwise",
+		"sector_identifier_uri": "http://rp.example.com/sector.json",
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, resp)
+	}
+	if got, _ := resp["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata (body=%v)", got, resp)
+	}
 }
 
 // TestScenario_PW_21_SectorURIFetchedAtRegistration is OOS — see catalog out_of_scope_reason.
