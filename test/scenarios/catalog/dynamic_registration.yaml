@@ -23,7 +23,7 @@ rows:
     behaviour: |
       A successful POST /reg returns 201 Created with the registered
       client metadata as a JSON body and Cache-Control: no-store.
-    status: pending
+    status: active
 
   - id: DCR-EP-02
     severity: P0
@@ -32,7 +32,7 @@ rows:
       Only application/json is accepted as the request Content-Type.
       Other media types (e.g. application/x-www-form-urlencoded) are
       rejected with 400 invalid_request.
-    status: pending
+    status: active
 
   - id: DCR-EP-03
     severity: P0
@@ -41,7 +41,7 @@ rows:
       A request missing redirect_uris is rejected with 400
       invalid_redirect_uri ("redirect_uris is mandatory property"),
       because OIDC requires it.
-    status: pending
+    status: active
 
   - id: DCR-EP-04
     severity: P0
@@ -50,7 +50,7 @@ rows:
       Invalid enum values (e.g. an unknown grant_type) are rejected
       with 400 invalid_client_metadata and a description naming the
       offending field.
-    status: pending
+    status: active
 
   - id: DCR-EP-05
     severity: P1
@@ -73,7 +73,7 @@ rows:
     spec: OIDC DCR §2
     behaviour: |
       When application_type is omitted, the OP defaults it to "web".
-    status: pending
+    status: active
 
   - id: DCR-DEF-02
     severity: P0
@@ -81,7 +81,8 @@ rows:
     behaviour: |
       When id_token_signed_response_alg is omitted, the OP defaults it
       to "RS256".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 ships ES256-only id_token signing (internal/registrationendpoint/metadata.go validateIDTokenAlg accepts only ES256, defaultIDTokenAlg = ES256). RS256 is not on the v1.0 surface — it would be rejected with invalid_client_metadata, not silently defaulted. The 'defaults to RS256' contract is panva-residue."
 
   - id: DCR-DEF-03
     severity: P0
@@ -89,7 +90,7 @@ rows:
     behaviour: |
       When token_endpoint_auth_method is omitted, the OP defaults it
       to "client_secret_basic".
-    status: pending
+    status: active
 
   - id: DCR-DEF-04
     severity: P1
@@ -104,14 +105,14 @@ rows:
     behaviour: |
       When grant_types is omitted, the OP defaults it to
       ["authorization_code"].
-    status: pending
+    status: active
 
   - id: DCR-DEF-06
     severity: P0
     spec: OIDC DCR §2
     behaviour: |
       When response_types is omitted, the OP defaults it to ["code"].
-    status: pending
+    status: active
 
   - id: DCR-DEF-07
     severity: P0
@@ -119,7 +120,7 @@ rows:
     behaviour: |
       The OP generates client_id; the value MUST be unique and MUST
       NOT collide with any existing client.
-    status: pending
+    status: active
 
   - id: DCR-DEF-08
     severity: P0
@@ -127,7 +128,7 @@ rows:
     behaviour: |
       A response containing client_secret_expires_at: 0 means the
       secret never expires.
-    status: pending
+    status: active
 
   - id: DCR-DEF-09
     severity: P1
@@ -144,7 +145,7 @@ rows:
       When token_endpoint_auth_method=none and the client does not
       request any HMAC alg, no client_secret is issued and the field
       itself is omitted from the response.
-    status: pending
+    status: active
 
   - id: DCR-SEC-02
     severity: P0
@@ -153,7 +154,7 @@ rows:
       In the DCR-SEC-01 case, even if the request body carries
       client_secret or client_secret_expires_at the OP MUST ignore
       them and never persist them to the store.
-    status: pending
+    status: active
 
   - id: DCR-SEC-03
     severity: P0
@@ -161,7 +162,8 @@ rows:
     behaviour: |
       When id_token_signed_response_alg requests an HS* algorithm, the
       OP issues a client_secret because an HMAC key is required.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 enforces id_token_signed_response_alg = ES256 only (internal/registrationendpoint/metadata.go validateIDTokenAlg). HS-family algorithms are rejected with invalid_client_metadata before reaching any client_secret-issuance branch; the 'HS* alg forces a secret' coupling has no v1.0 wire path. The contract is panva-residue (its OP supported HS256/HS384/HS512 for clients and minted secrets to back the HMAC key)."
 
   - id: DCR-SEC-04
     severity: P0
@@ -170,7 +172,8 @@ rows:
       When userinfo_signed_response_alg or request_object_signing_alg
       requests an HS* algorithm, the OP issues a client_secret on the
       same grounds as DCR-SEC-03.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same root cause as DCR-SEC-03: v1.0 rejects HS* algorithms across the JWA surface. userinfo_signed_response_alg is not exposed in op.ClientMetadata or registrationendpoint.ClientMetadata, and request_object_signing_alg is gated by validateRequestObjectSigningAlg to {RS256, PS256, ES256, EdDSA} — HS variants never reach the secret-issuance fork. The 'HS forces secret' contract is panva-residue."
 
   - id: DCR-SEC-05
     severity: P0
@@ -179,7 +182,7 @@ rows:
       When token_endpoint_auth_method is client_secret_basic,
       client_secret_post, or client_secret_jwt, the OP issues a
       client_secret.
-    status: pending
+    status: active
 
   - id: DCR-SEC-06
     severity: P0
@@ -188,7 +191,7 @@ rows:
       Generated client_secret values MUST carry at least 256 bits of
       entropy and MUST be drawn from crypto/rand only; math/rand is
       forbidden.
-    status: pending
+    status: active
 
   - id: DCR-SEC-07
     severity: P1
@@ -205,7 +208,8 @@ rows:
       With OP setting initialAccessToken set to a fixed string, the
       client MUST present it via Authorization: Bearer <token>; an
       access_token field in the request body is not honoured.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "panva-residue: 'initialAccessToken set to a fixed string' is panva's adminRegistration shortcut (a single hard-coded string in OP config grants registration). v1.0 has no fixed-string IAT mode — every IAT is adapter-managed via Provider.IssueInitialAccessToken (op/registration.go:453); RegistrationOption has no string-shaped IAT field. The wire shape this row asserts is not exercisable at v1.0's surface."
 
   - id: DCR-IAT-02
     severity: P0
@@ -214,7 +218,8 @@ rows:
       With OP setting initialAccessToken set to true, the OP requires
       adapter-managed Initial Access Token entities (model
       InitialAccessToken).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "panva-residue: 'initialAccessToken set to true' is panva's toggle that enables adapter-managed IATs; v1.0 has no such toggle — calling op.WithDynamicRegistration always wires adapter-managed IATs via store.InitialAccessTokenStore. There is no 'string vs bool' configuration switch to test against; the boolean-toggle row has no v1.0 wire equivalent (the adapter-managed path itself is exercised by DCR-IAT-04 / DCR-IAT-07)."
 
   - id: DCR-IAT-03
     severity: P1
@@ -232,7 +237,7 @@ rows:
       A missing or invalid IAT yields 401 invalid_token with
       description "no access token provided" or "invalid token
       provided".
-    status: pending
+    status: active
 
   - id: DCR-IAT-05
     severity: P1
@@ -257,7 +262,7 @@ rows:
     behaviour: |
       A manipulated IAT (e.g. truncated tail) yields 401
       invalid_token.
-    status: pending
+    status: active
 
   - id: DCR-RAT-01
     severity: P0
@@ -266,7 +271,7 @@ rows:
       By default, the OP issues a Registration Access Token and
       returns registration_access_token together with
       registration_client_uri in the response.
-    status: pending
+    status: active
 
   - id: DCR-RAT-02
     severity: P1
@@ -292,7 +297,7 @@ rows:
       A RAT is bound to its issuing client_id; using it under another
       client_id yields 401 (covered in detail by the registration
       management catalog).
-    status: pending
+    status: active
 
   - id: DCR-CTX-01
     severity: P1
@@ -325,7 +330,7 @@ rows:
       Adapter.find("Client", id) returns static and DCR-issued records
       indistinguishably; the only difference between them is their
       metadata.
-    status: pending
+    status: active
 
   - id: DCR-STATIC-02
     severity: P0
@@ -334,7 +339,7 @@ rows:
       Static clients never receive a RAT; read, update, and delete
       against them is rejected (see RM-01-FORBID in the registration
       management catalog).
-    status: pending
+    status: active
 
   - id: DCR-GET-01
     severity: P0
@@ -343,7 +348,7 @@ rows:
       GET /reg/:id requires the RAT to be presented via Authorization:
       Bearer; passing access_token in the query string is not
       accepted.
-    status: pending
+    status: active
 
   - id: DCR-GET-02
     severity: P0
@@ -352,7 +357,7 @@ rows:
       The 200 response carries every non-secret metadata field;
       client_secret is included only when the registered authentication
       method requires it.
-    status: pending
+    status: active
 
   - id: DCR-GET-03
     severity: P1
@@ -368,14 +373,15 @@ rows:
       Presenting a RAT bound to a different client_id yields 401, the
       mis-used RAT is destroyed automatically, and the OP emits a
       registration_access_token.destroyed event.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "panva-residue: panva's RFC 7592 hardening auto-destroys the mis-used RAT and emits a 'registration_access_token.destroyed' event on cross-client replay. v1.0's verifyRAT (internal/registrationendpoint/rat.go) only emits dcr.rat.invalid and returns 401; it deliberately does NOT cascade-delete the RAT (auto-destroy on first detection is itself a DoS vector — an attacker who learns a valid RAT could replay it cross-client to nuke the legitimate owner's RAT). The auto-destroy + named-event contract is panva-specific and intentionally not implemented; the 401 wire shape is exercised by DCR-RAT-04."
 
   - id: DCR-GET-05
     severity: P0
     spec: RFC 6750 §3.1
     behaviour: |
       A manipulated RAT yields 401 invalid_token.
-    status: pending
+    status: active
 
   - id: DCR-GET-06
     severity: P0
@@ -384,7 +390,8 @@ rows:
       Accessing a static client's record (even with an adapter-minted
       RAT) yields 403 invalid_request with description "client does
       not have permission to read its record".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "panva-residue: panva returns 403 invalid_request 'client does not have permission to read its record' when a static client's record is read with an adapter-minted RAT, distinguishing 'wrong-shape client' from 'wrong RAT'. v1.0's verifyRAT folds the static-client case into the same 401 invalid_token 'registration access token is invalid' response as every other RAT-validation failure (defence in depth: enumeration must not distinguish 'static client exists but is not RFC 7592 manageable' from 'RAT does not match'). The 403 + wording the row asserts is panva-specific; v1.0 returns 401 with a stable description as the security-hardened equivalent."
 
   - id: DCR-VAL-01
     severity: P0
@@ -392,7 +399,7 @@ rows:
     behaviour: |
       redirect_uris MUST be an array with at least one entry; each
       value MUST be a registrable URI (no fragment, etc.).
-    status: pending
+    status: active
 
   - id: DCR-VAL-02
     severity: P0
@@ -401,7 +408,7 @@ rows:
       For application_type=web, every redirect_uri MUST use https.
       For application_type=native, only loopback http and custom URI
       schemes are allowed.
-    status: pending
+    status: active
 
   - id: DCR-VAL-03
     severity: P0
@@ -409,7 +416,7 @@ rows:
     behaviour: |
       grant_types values MUST be members of the OP's supported set;
       unsupported values are rejected with 400 invalid_client_metadata.
-    status: pending
+    status: active
 
   - id: DCR-VAL-04
     severity: P0
@@ -418,14 +425,15 @@ rows:
       response_types MUST be consistent with grant_types
       (authorization_code <-> code, implicit <-> id_token / token,
       hybrid <-> code id_token, etc.).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's WithDynamicRegistration AllowedResponseTypes accepts only {'code'} (op/registration.go validateRegistrationOption); any other value is rejected at construction time. AllowedGrantTypes accepts only {authorization_code, refresh_token} via registrationGrantAllowed. The grant/response_type consistency rule (validateGrantResponseTypeConsistency) cannot be exercised through the public surface — every input combination that would trip the consistency rule (implicit / hybrid / token-only response_types) is rejected earlier by the AllowedResponseTypes whitelist with the same invalid_client_metadata code. No public seam to drive the consistency-rule branch."
 
   - id: DCR-VAL-05
     severity: P0
     spec: OIDC Core §16.5
     behaviour: |
       jwks and jwks_uri MUST NOT be supplied simultaneously.
-    status: pending
+    status: active
 
   - id: DCR-VAL-06
     severity: P0
@@ -433,7 +441,7 @@ rows:
     behaviour: |
       sector_identifier_uri MUST use https, MUST return a JSON array,
       and the array MUST contain every entry from redirect_uris.
-    status: pending
+    status: active
 
   - id: DCR-VAL-07
     severity: P0
@@ -441,7 +449,8 @@ rows:
     behaviour: |
       For subject_type=pairwise without sector_identifier_uri, all
       redirect_uris MUST share the same host.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not yet implement op.WithPairwiseSubject (op/op.go:757 hard-codes PairwiseEnabled = false). Every subject_type=pairwise registration is rejected at validateSubjectType with invalid_client_metadata 'subject_type pairwise requires WithPairwiseSubject'; the per-host homogeneity rule (validatePairwiseMetadata) is unreachable through public configuration. Re-bind once WithPairwiseSubject ships."
 
   - id: DCR-VAL-08
     severity: P0
@@ -450,7 +459,8 @@ rows:
       tls_client_auth_* fields are only meaningful with
       token_endpoint_auth_method=tls_client_auth, and exactly one of
       them MUST be supplied.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not implement RFC 8705 tls_client_auth / self_signed_tls_client_auth; validateAuthMethod (internal/registrationendpoint/metadata.go) admits only client_secret_basic, client_secret_post, private_key_jwt, and none. tls_client_auth_subject_dn / _san_dns / _san_uri / _san_ip / _san_email metadata fields are not on op.ClientMetadata. The exclusivity rule the row asserts has no v1.0 wire to validate against.
 
   - id: DCR-VAL-09
     severity: P0
@@ -459,7 +469,8 @@ rows:
       Encryption-related alg fields (e.g.
       id_token_encrypted_response_alg) MUST be members of the OP's
       enabledJWA set.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not expose id_token_encrypted_response_alg / userinfo_encrypted_response_alg / request_object_encryption_alg metadata fields — op.ClientMetadata and registrationendpoint.ClientMetadata carry no encryption alg fields, and the JOSE pipeline (internal/jose) does not implement encrypted-response shaping. The 'encryption-related alg fields bounded by enabledJWA' rule has no v1.0 wire path; encryption negotiation itself is OOS pending the JWE encrypter surface."
 
   - id: DCR-VAL-10
     severity: P1
@@ -483,7 +494,7 @@ rows:
       Error codes are limited to invalid_redirect_uri,
       invalid_client_metadata, invalid_request, and invalid_token; no
       other code is emitted.
-    status: pending
+    status: active
 
   - id: DCR-ERR-02
     severity: P1
