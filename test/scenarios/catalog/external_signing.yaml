@@ -25,7 +25,8 @@ rows:
       binding) MUST continue to receive locally-signed ID tokens; an
       /authorize?response_type=id_token request for that client returns
       303 fragment with a valid id_token and state.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-002
     severity: P0
@@ -35,7 +36,8 @@ rows:
       token signed by the external signer, and the OP MUST publish the
       external public key in /jwks so RPs can verify locally without
       round-tripping the OP.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-003
     severity: P0
@@ -44,7 +46,8 @@ rows:
       An externally-signed ID token verifies against a remote JWK set
       fetched from jwks_uri — the public-key material in /jwks
       corresponds to the private key held by the external signer.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-010
     severity: P1
@@ -55,7 +58,8 @@ rows:
       the OP MUST verify it locally (decrypt plus signature check via
       its own key material registry) without re-calling the external
       KMS for verification.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-020
     severity: P0
@@ -65,7 +69,8 @@ rows:
       (alg, kid, payload) and returns the JWS signature; in-process
       and external implementations MUST be interchangeable behind that
       contract.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-021
     severity: P0
@@ -74,7 +79,8 @@ rows:
       Calls to the external signer MUST be context-aware so embedder
       cancellation and deadline propagation surface as OP errors
       (server_error mapped from the upstream cancel).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-022
     severity: P1
@@ -83,7 +89,8 @@ rows:
       External key lifecycle (rotate, revoke) MUST integrate with the
       JWKS publication pipeline so the published set always reflects
       the externally held material.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-023
     severity: P1
@@ -92,7 +99,8 @@ rows:
       The OP MUST NOT attempt to extract or copy private key material
       from the external backend — HSMs reject by design. All signing
       operations are remote-call only.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-030
     severity: P0
@@ -101,7 +109,8 @@ rows:
       An external signer call timeout or 5xx MUST surface as
       server_error with no token issued; an audit event captures the
       underlying cause.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-031
     severity: P0
@@ -110,7 +119,8 @@ rows:
       An external signer permission denial (for example KMS IAM)
       MUST surface as server_error and the OP MUST NOT leak the
       backend error message to the client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
 
   - id: ESK-040
     severity: P1
@@ -119,4 +129,5 @@ rows:
       Test fixtures MUST allow toggling per-client between in-process
       and external signing, including controlled network access to the
       simulated external endpoint during the test.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 already exposes external signing via op.SigningKey.Signer (any crypto.Signer — KMS/HSM-backed signers wrap themselves in this interface). The catalog rows describe a panva-style external-signer test surface (per-client signer selection, alg/kid/payload-shaped Signer interface, KMS timeout/IAM denial taxonomy, response_type=id_token implicit flows) that has no v1.0 wire seam. v1.0 advertises only response_type=code, exposes a single global Keyset (no per-client selection knob), and relies on the embedder to plumb context-aware signing into their crypto.Signer wrapper. JWKS publication / rotation is covered by the discovery + jwks scenarios (DIS / JWKS) and op/keyset_test.go.
