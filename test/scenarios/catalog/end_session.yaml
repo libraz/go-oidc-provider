@@ -213,7 +213,7 @@ rows:
       MUST be rejected with `invalid_request` ("could not find logout
       details") and respond with HTML 400.
     status: out-of-scope
-    out_of_scope_reason: /session/end/confirm and session.state are panva-specific. v1.0 does CSRF on POST /end_session (no separate confirm route) via the __Host-oidc_logout_csrf double-submit cookie + form field + Origin/Referer gate.
+    out_of_scope_reason: /session/end/confirm and session.state are vendor-specific. v1.0 does CSRF on POST /end_session (no separate confirm route) via the __Host-oidc_logout_csrf double-submit cookie + form field + Origin/Referer gate.
 
   - id: ES-019
     severity: P0
@@ -223,7 +223,7 @@ rows:
       `session.state.secret` MUST be rejected with `invalid_request`
       ("xsrf token invalid") and respond with HTML 400.
     status: out-of-scope
-    out_of_scope_reason: "xsrf token / session.state.secret is panva-specific. v1.0 emits the conflated 'logout request rejected' description on any CSRF failure mode (cookie missing, form-field mismatch, foreign Origin/Referer); it deliberately does not surface a sub-cause to avoid being a CSRF probe oracle."
+    out_of_scope_reason: "xsrf token / session.state.secret is vendor-specific. v1.0 emits the conflated 'logout request rejected' description on any CSRF failure mode (cookie missing, form-field mismatch, foreign Origin/Referer); it deliberately does not surface a sub-cause to avoid being a CSRF probe oracle."
 
   - id: ES-020
     severity: P2
@@ -244,7 +244,7 @@ rows:
       codes) via `revokeByGrantId` for each affected grant, and 303
       redirect to the post-logout target without a `client_id` query.
     status: out-of-scope
-    out_of_scope_reason: "Internal store-call assertions (destroy / revokeByGrantId) are not observable at v1.0's public wire. ES-022 already pins post-logout 303 + state echoing under hint+post_logout_redirect_uri; duplicating it under panva's internal-API framing adds no new coverage."
+    out_of_scope_reason: "Internal store-call assertions (destroy / revokeByGrantId) are not observable at v1.0's public wire. ES-022 already pins post-logout 303 + state echoing under hint+post_logout_redirect_uri; duplicating it under an upstream's internal-API framing adds no new coverage."
 
   - id: ES-022
     severity: P0
@@ -257,7 +257,7 @@ rows:
       Grant-bound revocation MUST NOT be performed and the redirect
       omits `client_id`.
     status: out-of-scope
-    out_of_scope_reason: "Panva-specific 'logout=yes' / per-client-authorization-removal / session-id rotation model. v1.0 does not multiplex multiple client authorizations on one session — /end_session terminates the session unconditionally and there is no 'remove just this client' shape. The wire-observable redirect (303 to a registered post_logout_redirect_uri after a successful end-session) is bound by ES-004 and ES-024."
+    out_of_scope_reason: "Vendor-specific 'logout=yes' / per-client-authorization-removal / session-id rotation model. v1.0 does not multiplex multiple client authorizations on one session — /end_session terminates the session unconditionally and there is no 'remove just this client' shape. The wire-observable redirect (303 to a registered post_logout_redirect_uri after a successful end-session) is bound by ES-004 and ES-024."
 
   - id: ES-023
     severity: P1
@@ -268,7 +268,7 @@ rows:
       session-id rotation as ES-022, but the 303 redirect points to
       the OP success endpoint and includes the `client_id` query.
     status: out-of-scope
-    out_of_scope_reason: "Per-client logout + session-id rotation + separate /session/end/success endpoint with client_id query are panva-specific. v1.0 has no per-client logout mode (the session is single-client / single-subject) and no /session/end/success route; on no-post_logout_redirect_uri the handler renders a static 'Signed out' page directly from /end_session. The wire-observable static success page is bound implicitly by ES-012."
+    out_of_scope_reason: "Per-client logout + session-id rotation + separate /session/end/success endpoint with client_id query are vendor-specific. v1.0 has no per-client logout mode (the session is single-client / single-subject) and no /session/end/success route; on no-post_logout_redirect_uri the handler renders a static 'Signed out' page directly from /end_session. The wire-observable static success page is bound implicitly by ES-012."
 
   - id: ES-024
     severity: P1
@@ -278,7 +278,7 @@ rows:
       `post_logout_redirect_uri` and `state=foobar` (alongside a
       valid `id_token_hint` so the CSRF interstitial is bypassed)
       MUST 302 redirect to `<post_logout_redirect_uri>?state=foobar`.
-      v1.0 emits 302 (Found), not the panva 303; the state value is
+      v1.0 emits 302 (Found), not the upstream 303; the state value is
       not URL-mangled.
     status: active
 

@@ -46,7 +46,7 @@ rows:
       With revokeGrantPolicy=true, revoking an access token returns
       200 and destroys both the access token and its grant.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 explicitly does NOT cascade single-AT revocation to grant tombstone (ADR 0025 Alternatives). The runtime 'revokeGrantPolicy' flag is panva-specific. Grant cascade in v1.0 is triggered by refresh-token revocation, not access-token revocation. Reconsider when grant-revocation-on-AT-revoke becomes a v1.x option."
+    out_of_scope_reason: "v1.0 explicitly does NOT cascade single-AT revocation to grant tombstone (ADR 0025 Alternatives). The runtime 'revokeGrantPolicy' flag is vendor-specific. Grant cascade in v1.0 is triggered by refresh-token revocation, not access-token revocation. Reconsider when grant-revocation-on-AT-revoke becomes a v1.x option."
 
   - id: REV-004
     severity: P1
@@ -80,7 +80,7 @@ rows:
       If adapter.find throws while resolving the token, the request
       fails with 500 server_error.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 collapses adapter errors onto silent 200 per RFC 7009 §2.2 ('invalid tokens do not cause an error response'); a token.revoke_failed audit event is emitted instead. The panva 'adapter exception → 500 server_error' shape leaks the failure mode through HTTP, contradicting RFC 7009 §2.2."
+    out_of_scope_reason: "v1.0 collapses adapter errors onto silent 200 per RFC 7009 §2.2 ('invalid tokens do not cause an error response'); a token.revoke_failed audit event is emitted instead. The upstream 'adapter exception → 500 server_error' shape leaks the failure mode through HTTP, contradicting RFC 7009 §2.2."
 
   - id: REV-008
     severity: P0
@@ -170,7 +170,7 @@ rows:
       "Structured JWT Tokens cannot be revoked via the
       revocation_endpoint".
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does NOT emit unsupported_token_type at /revoke. RFC 9068 §6 says JWT access tokens are revocable via the revocation endpoint, and v1.0 implements this by writing a JTI denylist row (ADR 0025 GrantTombstone). The panva 'JWT cannot be revoked, return 400 unsupported_token_type' shape is the opposite of what v1.0 does. Reconsider only if the OP is reconfigured to RevocationStrategyNone, in which case the current silent-200 path is still correct, never 400."
+    out_of_scope_reason: "v1.0 does NOT emit unsupported_token_type at /revoke. RFC 9068 §6 says JWT access tokens are revocable via the revocation endpoint, and v1.0 implements this by writing a JTI denylist row (ADR 0025 GrantTombstone). The upstream 'JWT cannot be revoked, return 400 unsupported_token_type' shape is the opposite of what v1.0 does. Reconsider only if the OP is reconfigured to RevocationStrategyNone, in which case the current silent-200 path is still correct, never 400."
 
   - id: REV-018
     severity: P0
@@ -210,7 +210,7 @@ rows:
       revocation lookup, the endpoint silently returns 200 without
       invoking destroy on the unrevocable kind.
     status: out-of-scope
-    out_of_scope_reason: "v1.0's revokeOpaque branches consult OpaqueAccessTokenStore and RefreshTokenStore only; there is no 'auth code' substore at /revoke. The panva 'adapter returns auth-code record' shape is unobservable at v1.0's wire — an authorization code as a /revoke token simply collapses onto the silent-200 path REV-016 already covers."
+    out_of_scope_reason: "v1.0's revokeOpaque branches consult OpaqueAccessTokenStore and RefreshTokenStore only; there is no 'auth code' substore at /revoke. The upstream 'adapter returns auth-code record' shape is unobservable at v1.0's wire — an authorization code as a /revoke token simply collapses onto the silent-200 path REV-016 already covers."
 
   - id: REV-022
     severity: P2

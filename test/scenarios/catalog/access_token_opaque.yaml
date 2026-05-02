@@ -26,7 +26,7 @@ description: |
 
   The contract these rows assert against is the Go-shaped
   [store.OpaqueAccessToken] record persisted through
-  [store.OpaqueAccessTokenStore] — NOT the panva-style
+  [store.OpaqueAccessTokenStore] — NOT the vendor-specific
   adapter.upsert payload contract enumerated in the deprecated TFO
   catalog. Backends MUST hash the raw bearer id before storage; the
   reference inmem implementation pins that contract and the rows

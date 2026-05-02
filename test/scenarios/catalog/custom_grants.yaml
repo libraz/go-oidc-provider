@@ -54,7 +54,7 @@ rows:
       and the description "'name' parameter must not be provided
       twice".
     status: out-of-scope
-    out_of_scope_reason: "Custom-grant registration is not part of v1.0's public surface (op/grant/grant.go enumerates a closed set: AuthorizationCode, RefreshToken, ClientCredentials, DeviceCode); op/options.go exposes only WithGrants (selects from that set), with no registerGrantType hook. v1.0's /token also does not surface the panva-style 'parameter must not be provided twice' wire-form error: r.PostForm.Get is used to read fields, which silently picks the first value, and there is no per-parameter duplicate-detection middleware. The scenario as written is not exercisable at v1.0's wire."
+    out_of_scope_reason: "Custom-grant registration is not part of v1.0's public surface (op/grant/grant.go enumerates a closed set: AuthorizationCode, RefreshToken, ClientCredentials, DeviceCode); op/options.go exposes only WithGrants (selects from that set), with no registerGrantType hook. v1.0's /token also does not surface the vendor-specific 'parameter must not be provided twice' wire-form error: r.PostForm.Get is used to read fields, which silently picks the first value, and there is no per-parameter duplicate-detection middleware. The scenario as written is not exercisable at v1.0's wire."
 
   - id: CG-005
     severity: P1
@@ -86,7 +86,7 @@ rows:
       must not be provided twice", regardless of any exemption
       configuration.
     status: out-of-scope
-    out_of_scope_reason: "v1.0's /token reads grant_type via r.PostForm.Get (internal/tokenendpoint/handler.go), which silently picks the first value when a key is duplicated; there is no per-parameter duplicate-detection layer that emits a panva-style 'must not be provided twice' wire error. The 'exemption configuration' the row references presupposes the registerGrantType paramNames carve-out, which is itself not part of v1.0 (see CG-004 OOS reason). Without the carve-out machinery, the universal-rejection guarantee the row asserts has nothing to gate against."
+    out_of_scope_reason: "v1.0's /token reads grant_type via r.PostForm.Get (internal/tokenendpoint/handler.go), which silently picks the first value when a key is duplicated; there is no per-parameter duplicate-detection layer that emits a vendor-specific 'must not be provided twice' wire error. The 'exemption configuration' the row references presupposes the registerGrantType paramNames carve-out, which is itself not part of v1.0 (see CG-004 OOS reason). Without the carve-out machinery, the universal-rejection guarantee the row asserts has nothing to gate against."
 
   - id: CG-008
     severity: P1

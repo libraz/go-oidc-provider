@@ -48,7 +48,7 @@ rows:
       WWW-Authenticate challenge uses scheme DPoP and advertises the
       allowed algs.
     status: out-of-scope
-    out_of_scope_reason: Catalog WWW-Authenticate algs= attribute is panva-residue; v1.0 emits the bare DPoP scheme + error_description per internal/userinfo/handler.go.
+    out_of_scope_reason: Catalog WWW-Authenticate algs= attribute is non-spec residue; v1.0 emits the bare DPoP scheme + error_description per internal/userinfo/handler.go.
 
   - id: DPOP-004
     severity: P0
@@ -59,7 +59,7 @@ rows:
       ("DPoP header not provided"); WWW-Authenticate uses scheme DPoP
       with the advertised algs.
     status: out-of-scope
-    out_of_scope_reason: Catalog wire shape (400 invalid_request) is panva-specific; v1.0 emits 401 invalid_token with DPoP challenge per internal/userinfo/handler.go enforceDPoPCnf.
+    out_of_scope_reason: Catalog wire shape (400 invalid_request) is vendor-specific; v1.0 emits 401 invalid_token with DPoP challenge per internal/userinfo/handler.go enforceDPoPCnf.
 
   - id: DPOP-005
     severity: P0
@@ -69,7 +69,7 @@ rows:
       A POST /userinfo carrying access_token in the form body together
       with a DPoP header is rejected with 400 invalid_request.
     status: out-of-scope
-    out_of_scope_reason: Catalog DPoP-scheme challenge is panva-residue; v1.0 rejects two-channel access_token submissions with bare Bearer error=invalid_request.
+    out_of_scope_reason: Catalog DPoP-scheme challenge is non-spec residue; v1.0 rejects two-channel access_token submissions with bare Bearer error=invalid_request.
 
   - id: DPOP-006
     severity: P0
@@ -100,7 +100,7 @@ rows:
       unsupported algs, missing alg, or non-string alg are rejected
       with 401 invalid_dpop_proof.
     status: out-of-scope
-    out_of_scope_reason: Driving alg=none / alg=HS256 requires forging JOSE header bytes (go-jose refuses to issue them). Defensive coverage exists in internal/dpop/proof_test.go; catalog wire code is panva-residue.
+    out_of_scope_reason: Driving alg=none / alg=HS256 requires forging JOSE header bytes (go-jose refuses to issue them). Defensive coverage exists in internal/dpop/proof_test.go; catalog wire code is non-spec residue.
 
   - id: DPOP-009
     severity: P0
@@ -111,7 +111,7 @@ rows:
       array) are rejected with 401 invalid_dpop_proof "jwk header
       parameter must be a JSON object".
     status: out-of-scope
-    out_of_scope_reason: "Catalog error_description is panva-residue. Rule (jwk MUST be JSON object) is enforced by internal/dpop/proof.go; v1.0 collapses to 400 invalid_request 'DPoP proof malformed'."
+    out_of_scope_reason: "Catalog error_description is non-spec residue. Rule (jwk MUST be JSON object) is enforced by internal/dpop/proof.go; v1.0 collapses to 400 invalid_request 'DPoP proof malformed'."
 
   - id: DPOP-010
     severity: P0
@@ -121,7 +121,7 @@ rows:
       Any private key parameters in the jwk are rejected with 401
       invalid_dpop_proof "jwk header parameter must be a public key".
     status: out-of-scope
-    out_of_scope_reason: Catalog error_description is panva-residue. Rule (jwk MUST be public) is enforced by internal/dpop/proof.go !jwk.IsPublic(); wire shape diverges.
+    out_of_scope_reason: Catalog error_description is non-spec residue. Rule (jwk MUST be public) is enforced by internal/dpop/proof.go !jwk.IsPublic(); wire shape diverges.
 
   - id: DPOP-011
     severity: P0
@@ -131,7 +131,7 @@ rows:
       oct kty is rejected with 401 invalid_dpop_proof "jwk header
       parameter must be a public key".
     status: out-of-scope
-    out_of_scope_reason: Catalog error_description is panva-residue. Rule (oct kty rejected) is enforced by internal/dpop/proof.go assertSupportedKeyType; wire shape diverges.
+    out_of_scope_reason: Catalog error_description is non-spec residue. Rule (oct kty rejected) is enforced by internal/dpop/proof.go assertSupportedKeyType; wire shape diverges.
 
   - id: DPOP-012
     severity: P0
@@ -179,7 +179,7 @@ rows:
       DPoP-Nonce response header so the client can retry with the
       issued nonce.
     status: out-of-scope
-    out_of_scope_reason: v1.0 verifier orders iat check ahead of nonce check (internal/dpop/verify.go). Out-of-window proof always surfaces as invalid_request irrespective of nonce source. Coupling is panva-specific.
+    out_of_scope_reason: v1.0 verifier orders iat check ahead of nonce check (internal/dpop/verify.go). Out-of-window proof always surfaces as invalid_request irrespective of nonce source. Coupling is vendor-specific.
 
   - id: DPOP-017
     severity: P0
@@ -198,7 +198,7 @@ rows:
       a proof signed by a different keypair than the binding key is
       rejected with 401 invalid_token "failed jkt verification".
     status: out-of-scope
-    out_of_scope_reason: "Catalog error_description 'failed jkt verification' is panva wording; v1.0 emits 'DPoP proof key does not match the bound thumbprint'. Wire code matches; behaviour covered by internal/dpop/end_to_end_test.go TestE2E_DPoP_FullFlow."
+    out_of_scope_reason: "Catalog error_description 'failed jkt verification' is vendor wording; v1.0 emits 'DPoP proof key does not match the bound thumbprint'. Wire code matches; behaviour covered by internal/dpop/end_to_end_test.go TestE2E_DPoP_FullFlow."
 
   - id: DPOP-019
     severity: P0
@@ -228,7 +228,7 @@ rows:
       ath claim; its absence is rejected with 401
       invalid_dpop_proof.
     status: out-of-scope
-    out_of_scope_reason: "Same as DPOP-020: v1.0 emits 401 invalid_token; ath-required enforcement is in place but description differs from catalog's panva-quoted invalid_dpop_proof."
+    out_of_scope_reason: "Same as DPOP-020: v1.0 emits 401 invalid_token; ath-required enforcement is in place but description differs from catalog's vendor-quoted invalid_dpop_proof."
 
   - id: DPOP-022
     severity: P0
@@ -246,7 +246,7 @@ rows:
       /userinfo is answered with 401 use_dpop_nonce "invalid nonce in
       DPoP proof" and a fresh DPoP-Nonce response header.
     status: out-of-scope
-    out_of_scope_reason: "Catalog error_description 'invalid nonce in DPoP proof' is panva-residue. v1.0 emits the use_dpop_nonce challenge with a generic description (internal/userinfo/handler.go respondUseDPoPNonce). Behaviour covered by internal/dpop/verify_nonce_test.go."
+    out_of_scope_reason: "Catalog error_description 'invalid nonce in DPoP proof' is non-spec residue. v1.0 emits the use_dpop_nonce challenge with a generic description (internal/userinfo/handler.go respondUseDPoPNonce). Behaviour covered by internal/dpop/verify_nonce_test.go."
 
   - id: DPOP-024
     severity: P0
@@ -256,7 +256,7 @@ rows:
       /token is answered with 400 use_dpop_nonce "invalid nonce in
       DPoP proof" and a fresh DPoP-Nonce response header.
     status: out-of-scope
-    out_of_scope_reason: "Same as DPOP-023: v1.0 emits use_dpop_nonce at /token (internal/tokenendpoint/dpop.go writeUseDPoPNonce) but description is generic. Wire code matches; description is panva-residue."
+    out_of_scope_reason: "Same as DPOP-023: v1.0 emits use_dpop_nonce at /token (internal/tokenendpoint/dpop.go writeUseDPoPNonce) but description is generic. Wire code matches; description is non-spec residue."
 
   - id: DPOP-025
     severity: P0
@@ -266,7 +266,7 @@ rows:
       nonce at PAR is answered with 400 use_dpop_nonce "nonce is
       required in the DPoP proof" and a DPoP-Nonce response header.
     status: out-of-scope
-    out_of_scope_reason: "Catalog error_description 'nonce is required in the DPoP proof' is panva-residue. nonce-required policy is implemented (DPoPNonceSource gates verifier) but description differs. Behaviour covered by parendpoint white-box tests."
+    out_of_scope_reason: "Catalog error_description 'nonce is required in the DPoP proof' is non-spec residue. nonce-required policy is implemented (DPoPNonceSource gates verifier) but description differs. Behaviour covered by parendpoint white-box tests."
 
   - id: DPOP-026
     severity: P0
@@ -276,7 +276,7 @@ rows:
       nonce at /userinfo is answered with 401 use_dpop_nonce "nonce is
       required in the DPoP proof" and a DPoP-Nonce response header.
     status: out-of-scope
-    out_of_scope_reason: "Same as DPOP-025: nonce-required at /userinfo is implemented; description is panva-residue. Behaviour covered by userinfo white-box tests."
+    out_of_scope_reason: "Same as DPOP-025: nonce-required at /userinfo is implemented; description is non-spec residue. Behaviour covered by userinfo white-box tests."
 
   - id: DPOP-027
     severity: P0
@@ -286,7 +286,7 @@ rows:
       nonce at /token is answered with 400 use_dpop_nonce "nonce is
       required in the DPoP proof" and a DPoP-Nonce response header.
     status: out-of-scope
-    out_of_scope_reason: "Same as DPOP-025/026: nonce-required at /token is implemented; description is panva-residue. Behaviour covered by tokenendpoint white-box tests."
+    out_of_scope_reason: "Same as DPOP-025/026: nonce-required at /token is implemented; description is non-spec residue. Behaviour covered by tokenendpoint white-box tests."
 
   - id: DPOP-028
     severity: P1

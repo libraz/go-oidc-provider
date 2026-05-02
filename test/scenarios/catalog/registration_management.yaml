@@ -27,7 +27,7 @@ rows:
       therefore no error path for "registrationManagement enabled
       without registration".
     status: out-of-scope
-    out_of_scope_reason: "v1.0 has no separate registrationManagement toggle: the management routes (PUT/GET/DELETE /register/{client_id}) ride along with op.WithDynamicRegistration unconditionally. The panva-style 'registrationManagement enabled without registration' construction error has no v1.0 equivalent."
+    out_of_scope_reason: "v1.0 has no separate registrationManagement toggle: the management routes (PUT/GET/DELETE /register/{client_id}) ride along with op.WithDynamicRegistration unconditionally. The vendor-specific 'registrationManagement enabled without registration' construction error has no v1.0 equivalent."
 
   - id: RM-FF-02
     severity: P1
@@ -155,12 +155,12 @@ rows:
     severity: P1
     spec: OP design
     behaviour: |
-      v1.0 has no panva-style ctx.oidc.entities request-context
+      v1.0 has no vendor-specific ctx.oidc.entities request-context
       surface; rotation observability is provided through audit
       events (see RM-EVT-01) rather than a per-request entities
       bundle.
     status: out-of-scope
-    out_of_scope_reason: v1.0 has no panva-style ctx.oidc.entities request-context surface; rotation observability lives in the audit stream (see RM-EVT-01) instead of a per-request entities bundle.
+    out_of_scope_reason: v1.0 has no vendor-specific ctx.oidc.entities request-context surface; rotation observability lives in the audit stream (see RM-EVT-01) instead of a per-request entities bundle.
 
   - id: RM-PUT-14
     severity: P1
@@ -262,12 +262,12 @@ rows:
     severity: P1
     spec: OP design
     behaviour: |
-      v1.0 does not expose a panva-style ctx.oidc.entities
+      v1.0 does not expose a vendor-specific ctx.oidc.entities
       request-context bundle. The client and RAT records the handler
       operates on are internal request-scoped state, not a
       wire-visible artifact.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not expose a panva-style ctx.oidc.entities bundle; the client and RAT records the handler operates on are internal request-scoped state, not a wire-visible artifact.
+    out_of_scope_reason: v1.0 does not expose a vendor-specific ctx.oidc.entities bundle; the client and RAT records the handler operates on are internal request-scoped state, not a wire-visible artifact.
 
   - id: RM-EVT-01
     severity: P1

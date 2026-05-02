@@ -73,7 +73,7 @@ rows:
       handler returns 500 application/json
       {"error":"server_error","error_description":"oops! something went wrong"}.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does not produce the literal 'oops! something went wrong' error_description (a panva-specific wire string). The discovery handler in v1.0 does not have a runtime exception path because the document is precomputed at construction time and cached for the lifetime of the handler; any pathFor / construction error fails op.New before HTTP serving begins."
+    out_of_scope_reason: "v1.0 does not produce the literal 'oops! something went wrong' error_description (a vendor-specific wire string). The discovery handler in v1.0 does not have a runtime exception path because the document is precomputed at construction time and cached for the lifetime of the handler; any pathFor / construction error fails op.New before HTTP serving begins."
 
   - id: DIS-013
     severity: P0

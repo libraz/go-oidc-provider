@@ -23,7 +23,7 @@ rows:
       with encodeURIComponent semantics so that ":", "/", "?", "#",
       "%", "&", "=", and "+" are all percent-encoded.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding (URL-safe [A-Za-z0-9_-]); no character ever needs percent-encoding. registrationendpoint/secret.go:39 hard-wires newOpaqueID(16) → base64url. The OP does not expose a configuration knob for URL-form client_ids. The 'encodeURIComponent semantics' contract is a panva-ism imported wholesale; not part of v1.0 surface."
+    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding (URL-safe [A-Za-z0-9_-]); no character ever needs percent-encoding. registrationendpoint/secret.go:39 hard-wires newOpaqueID(16) → base64url. The OP does not expose a configuration knob for URL-form client_ids. The 'encodeURIComponent semantics' contract is a vendor-ism imported wholesale; not part of v1.0 surface."
 
   - id: CIDU-02
     severity: P0
@@ -32,7 +32,7 @@ rows:
       The constructed URL MUST NOT carry a query string; everything
       after "?" is empty.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding; no '?' character ever appears so the 'no query string' contract holds trivially. The 'no query string' framing assumes a panva-style configurable URL-form client_id. registrationClientURI() at registrationendpoint/handler.go:309 simply concatenates issuer+prefix+registerPath+'/'+clientID; no query is ever attached."
+    out_of_scope_reason: "v1.0 mints client_ids via base64.RawURLEncoding; no '?' character ever appears so the 'no query string' contract holds trivially. The 'no query string' framing assumes a vendor-specific configurable URL-form client_id. registrationClientURI() at registrationendpoint/handler.go:309 simply concatenates issuer+prefix+registerPath+'/'+clientID; no query is ever attached."
 
   - id: CIDU-03
     severity: P0

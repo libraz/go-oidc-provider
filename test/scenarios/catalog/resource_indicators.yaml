@@ -276,7 +276,7 @@ rows:
       Unsupported scopes are silently dropped from the issued token's
       scope; the supported subset is honoured.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 client_credentials does not silently drop unsupported scopes; it rejects with invalid_scope (clientcred.ErrScopeForbidden in internal/grants/clientcred/clientcred.go: 'requested scope is not permitted for client'). The strict-rejection posture is documented on ErrScopeForbidden's godoc as a deliberate library posture vs the §3.3 'MAY narrow' permission. The silent-drop behaviour this row asserts is panva-specific; rebinding it would require us to adopt that posture, which docs/plans/002 declines."
+    out_of_scope_reason: "v1.0 client_credentials does not silently drop unsupported scopes; it rejects with invalid_scope (clientcred.ErrScopeForbidden in internal/grants/clientcred/clientcred.go: 'requested scope is not permitted for client'). The strict-rejection posture is documented on ErrScopeForbidden's godoc as a deliberate library posture vs the §3.3 'MAY narrow' permission. The silent-drop behaviour this row asserts is vendor-specific; rebinding it would require us to adopt that posture, which docs/plans/002 declines."
 
   - id: RI-062
     severity: P0

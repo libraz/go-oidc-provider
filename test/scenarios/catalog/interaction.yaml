@@ -28,7 +28,7 @@ rows:
       `{name: 'SessionNotFound', error_description: 'interaction
       session id cookie not found'}`.
     status: out-of-scope
-    out_of_scope_reason: "Panva-specific 'SessionNotFound' JSON envelope (name + error_description shape) is not v1.0 wire. v1.0's serveInteractionGet (internal/authorizeendpoint/interaction.go) returns 404 when the __Host-oidc_interaction cookie is missing — surfacing 'session known to OP' as 400 vs 404 would let an unauthenticated client probe live UIDs. The 404 closure is the correct v1.0 default; ITX-040 covers the user-facing cancel observable instead."
+    out_of_scope_reason: "Vendor-specific 'SessionNotFound' JSON envelope (name + error_description shape) is not v1.0 wire. v1.0's serveInteractionGet (internal/authorizeendpoint/interaction.go) returns 404 when the __Host-oidc_interaction cookie is missing — surfacing 'session known to OP' as 400 vs 404 would let an unauthenticated client probe live UIDs. The 404 closure is the correct v1.0 default; ITX-040 covers the user-facing cancel observable instead."
 
   - id: ITX-002
     severity: P0
@@ -39,7 +39,7 @@ rows:
       MUST return 400 `SessionNotFound` with description
       "interaction session not found".
     status: out-of-scope
-    out_of_scope_reason: "Same panva 'SessionNotFound' envelope as ITX-001. v1.0 returns 404 (http.NotFound) when verifyInteractionCookie fails or loadInteraction returns store.ErrNotFound — the wire deliberately collapses 'cookie missing' and 'record gone' into one 404 to avoid the same UID-existence oracle ITX-001 documents."
+    out_of_scope_reason: "Same upstream 'SessionNotFound' envelope as ITX-001. v1.0 returns 404 (http.NotFound) when verifyInteractionCookie fails or loadInteraction returns store.ErrNotFound — the wire deliberately collapses 'cookie missing' and 'record gone' into one 404 to avoid the same UID-existence oracle ITX-001 documents."
 
   - id: ITX-010
     severity: P0
@@ -51,7 +51,7 @@ rows:
       `action="{issuer}{interaction_url}"`, a hidden input
       `prompt=login`, and a Sign-in label.
     status: out-of-scope
-    out_of_scope_reason: "Panva-specific HTML form rendering with hidden 'prompt=login' input and Sign-in label. v1.0's default Driver (interaction.JSONDriver) returns a JSON Prompt envelope ({type, data, inputs[], state_ref, csrf_token}); embedders ship their own SSR/HTML driver via op.WithInteraction. The 303-to-interaction-URL hop is observable and verified end-to-end by ITX-012 (RunCodeFlow); the panva HTML form shape is not v1.0 wire."
+    out_of_scope_reason: "Vendor-specific HTML form rendering with hidden 'prompt=login' input and Sign-in label. v1.0's default Driver (interaction.JSONDriver) returns a JSON Prompt envelope ({type, data, inputs[], state_ref, csrf_token}); embedders ship their own SSR/HTML driver via op.WithInteraction. The 303-to-interaction-URL hop is observable and verified end-to-end by ITX-012 (RunCodeFlow); the upstream HTML form shape is not v1.0 wire."
 
   - id: ITX-011
     severity: P0
@@ -62,7 +62,7 @@ rows:
       example `state=<img src=x onerror=alert(1)>` MUST appear as
       `&lt;img src=x ...&gt;` and never as raw markup.
     status: out-of-scope
-    out_of_scope_reason: "Panva renders RP-supplied authorize parameters (state, login_hint, etc.) into a 'debug section' of the SSR interaction page; OWASP XSS guidance applies because the values are HTML-escaped. v1.0's default JSONDriver does not echo authorize parameters into the prompt envelope — the SPA reads its own URL/cookie state, and the orchestrator only stamps Prompt.Type / Inputs / StateRef / CSRFToken / Locale. Without an HTML echo surface there is nothing to XSS-escape; embedders that ship an SSR driver own escaping in their template layer."
+    out_of_scope_reason: "An upstream reference OP renders RP-supplied authorize parameters (state, login_hint, etc.) into a 'debug section' of the SSR interaction page; OWASP XSS guidance applies because the values are HTML-escaped. v1.0's default JSONDriver does not echo authorize parameters into the prompt envelope — the SPA reads its own URL/cookie state, and the orchestrator only stamps Prompt.Type / Inputs / StateRef / CSRFToken / Locale. Without an HTML echo surface there is nothing to XSS-escape; embedders that ship an SSR driver own escaping in their template layer."
 
   - id: ITX-012
     severity: P0
@@ -82,7 +82,7 @@ rows:
       `TypeError "accountId must be a non-empty string, got: string"`.
       Defensive validation lives in the OP, not in the embedder UI.
     status: out-of-scope
-    out_of_scope_reason: "Panva surfaces a literal 'TypeError accountId must be a non-empty string, got: string' through the resume flow when login.accountId is empty. v1.0 has no /auth/resume endpoint and no panva 'login.accountId' field — testkit.SubjectAuthenticator.Continue returns ErrSubjectMissing on empty subject, which the orchestrator translates into a generic 500 server_error JSON envelope ('orchestrator failed'); the panva TypeError text is not part of v1.0's error catalog."
+    out_of_scope_reason: "An upstream reference OP surfaces a literal 'TypeError accountId must be a non-empty string, got: string' through the resume flow when login.accountId is empty. v1.0 has no /auth/resume endpoint and no upstream 'login.accountId' field — testkit.SubjectAuthenticator.Continue returns ErrSubjectMissing on empty subject, which the orchestrator translates into a generic 500 server_error JSON envelope ('orchestrator failed'); the upstream TypeError text is not part of v1.0's error catalog."
 
   - id: ITX-020
     severity: P0
@@ -92,7 +92,7 @@ rows:
       consent form whose hidden input is `prompt=consent` and whose
       submit label reads Authorize.
     status: out-of-scope
-    out_of_scope_reason: "Panva renders an HTML consent form with hidden 'prompt=consent' input and Authorize submit label. v1.0's default JSONDriver returns a JSON envelope {type: 'consent.scope', data: {Scopes: [...]}, inputs: [{name: approved_scopes, ...}], state_ref, csrf_token}; the wire-observable consent-completion path is bound by ITX-023 (RunCodeFlow drives consent approval and asserts the final RP redirect carries code+state). The panva HTML form shape does not exist in v1.0."
+    out_of_scope_reason: "An upstream reference OP renders an HTML consent form with hidden 'prompt=consent' input and Authorize submit label. v1.0's default JSONDriver returns a JSON envelope {type: 'consent.scope', data: {Scopes: [...]}, inputs: [{name: approved_scopes, ...}], state_ref, csrf_token}; the wire-observable consent-completion path is bound by ITX-023 (RunCodeFlow drives consent approval and asserts the final RP redirect carries code+state). The upstream HTML form shape does not exist in v1.0."
 
   - id: ITX-021
     severity: P0
@@ -102,7 +102,7 @@ rows:
       consent render and POST, the OP MUST return 400 `text/html`
       with a body matching `/session not found/`.
     status: out-of-scope
-    out_of_scope_reason: "Panva-specific 'session destroyed between consent render and POST' failure path that returns 400 text/html matching /session not found/. v1.0's interaction lifecycle does not expose a separate render-vs-POST authentication-session check — the session is established at terminateInteraction, not before consent POST. The /interaction record gone branch returns 404 (ITX-002 OOS); 'authentication session destroyed mid-flow' is a panva render-then-revoke wire that v1.0 does not have."
+    out_of_scope_reason: "Vendor-specific 'session destroyed between consent render and POST' failure path that returns 400 text/html matching /session not found/. v1.0's interaction lifecycle does not expose a separate render-vs-POST authentication-session check — the session is established at terminateInteraction, not before consent POST. The /interaction record gone branch returns 404 (ITX-002 OOS); 'authentication session destroyed mid-flow' is an upstream render-then-revoke wire that v1.0 does not have."
 
   - id: ITX-022
     severity: P0
@@ -112,7 +112,7 @@ rows:
       between consent render and POST, the OP MUST return 400
       `text/html` matching `/session principal changed/`.
     status: out-of-scope
-    out_of_scope_reason: "Panva 'session principal changed between consent render and POST' surface returning /session principal changed/ HTML. v1.0 has no separate consent-render vs consent-POST principal-comparison step — the orchestrator does not load and re-validate the authentication session subject between those two interaction ticks. The principal-mismatch path that does exist (chooser-driven session switch) is wired through interaction.chooser PromptData and bound under chooser scenarios, not this panva mid-flow check."
+    out_of_scope_reason: "An upstream reference OP 'session principal changed between consent render and POST' surface returning /session principal changed/ HTML. v1.0 has no separate consent-render vs consent-POST principal-comparison step — the orchestrator does not load and re-validate the authentication session subject between those two interaction ticks. The principal-mismatch path that does exist (chooser-driven session switch) is wired through interaction.chooser PromptData and bound under chooser scenarios, not this upstream mid-flow check."
 
   - id: ITX-023
     severity: P0
@@ -131,7 +131,7 @@ rows:
       `text/html` matching
       `/interaction session and authentication session mismatch/`.
     status: out-of-scope
-    out_of_scope_reason: "Panva 'interaction session and authentication session mismatch' text/html error after consent POST when the auth session is destroyed before resume runs. v1.0 has no /auth/resume endpoint — terminateInteraction (internal/authorizeendpoint/interaction.go) runs in the same handler as the consent POST, calling sessions.Manager.Issue/Switch/AddAccount synchronously. There is no resume gap and no panva 'mismatch' error string."
+    out_of_scope_reason: "An upstream reference OP 'interaction session and authentication session mismatch' text/html error after consent POST when the auth session is destroyed before resume runs. v1.0 has no /auth/resume endpoint — terminateInteraction (internal/authorizeendpoint/interaction.go) runs in the same handler as the consent POST, calling sessions.Manager.Issue/Switch/AddAccount synchronously. There is no resume gap and no upstream 'mismatch' error string."
 
   - id: ITX-025
     severity: P0
@@ -142,7 +142,7 @@ rows:
       `interaction session and authentication session mismatch`
       error as ITX-024.
     status: out-of-scope
-    out_of_scope_reason: "Same panva resume-mismatch wire as ITX-024 but with a fresh login between consent POST and /auth/resume. v1.0 has no resume endpoint and runs terminateInteraction synchronously; a parallel new login cannot interleave between consent POST and code emission on the same handler. The 'mismatch' text is not part of v1.0's error catalog."
+    out_of_scope_reason: "Same upstream resume-mismatch wire as ITX-024 but with a fresh login between consent POST and /auth/resume. v1.0 has no resume endpoint and runs terminateInteraction synchronously; a parallel new login cannot interleave between consent POST and code emission on the same handler. The 'mismatch' text is not part of v1.0's error catalog."
 
   - id: ITX-030
     severity: P1
@@ -172,7 +172,7 @@ rows:
       return 400 with a rendered error matching
       `/authorization request has expired/`.
     status: out-of-scope
-    out_of_scope_reason: "Panva /auth/resume endpoint with _interaction_resume cookie. v1.0 has no resume route — the orchestrator condenses the consent/login POST and redirect-back-to-RP into one terminateInteraction call. Without a /auth/resume there is no 'authorization request has expired' rendered error and no _interaction_resume cookie. The closest v1.0 surface (interaction record gone) returns 404 (ITX-002 OOS)."
+    out_of_scope_reason: "An upstream reference OP /auth/resume endpoint with _interaction_resume cookie. v1.0 has no resume route — the orchestrator condenses the consent/login POST and redirect-back-to-RP into one terminateInteraction call. Without a /auth/resume there is no 'authorization request has expired' rendered error and no _interaction_resume cookie. The closest v1.0 surface (interaction record gone) returns 404 (ITX-002 OOS)."
 
   - id: ITX-051
     severity: P0
@@ -182,7 +182,7 @@ rows:
       but no resolvable Interaction record MUST return 400 with a
       rendered error matching `/interaction session not found/`.
     status: out-of-scope
-    out_of_scope_reason: "Same panva /auth/resume + _interaction_resume cookie shape as ITX-050. v1.0 has no resume endpoint; the rendered 'interaction session not found' text does not exist in v1.0's error catalog. Missing-record on the /interaction surface returns 404 (covered by ITX-002 OOS)."
+    out_of_scope_reason: "Same upstream /auth/resume + _interaction_resume cookie shape as ITX-050. v1.0 has no resume endpoint; the rendered 'interaction session not found' text does not exist in v1.0's error catalog. Missing-record on the /interaction surface returns 404 (covered by ITX-002 OOS)."
 
   - id: ITX-052
     severity: P0
@@ -192,7 +192,7 @@ rows:
       yield a permanent session cookie (the `expires` attribute is
       set). `getSession()` MUST be non-`transient`.
     status: out-of-scope
-    out_of_scope_reason: "Panva-specific 'remember' flag on the login result that toggles permanent vs transient session cookie semantics. v1.0 has no 'remember' input — sessions.Manager.Issue always emits a __Host-oidc_session cookie with the configured TTL, and the embedder's interaction.Driver does not negotiate remember-me at the orchestrator boundary. Add-remember-flag would require a public Authenticator.RememberMe() extension which is not in v1.0's API."
+    out_of_scope_reason: "Vendor-specific 'remember' flag on the login result that toggles permanent vs transient session cookie semantics. v1.0 has no 'remember' input — sessions.Manager.Issue always emits a __Host-oidc_session cookie with the configured TTL, and the embedder's interaction.Driver does not negotiate remember-me at the orchestrator boundary. Add-remember-flag would require a public Authenticator.RememberMe() extension which is not in v1.0's API."
 
   - id: ITX-053
     severity: P0
@@ -201,7 +201,7 @@ rows:
       A login result with `remember: true` MUST yield the same
       permanent cookie behaviour as ITX-052.
     status: out-of-scope
-    out_of_scope_reason: "Same panva 'remember: true' flag as ITX-052. v1.0 has no remember-me concept on the orchestrator wire; cookie expiry is determined by the configured session TTL, not a per-login boolean."
+    out_of_scope_reason: "Same upstream 'remember: true' flag as ITX-052. v1.0 has no remember-me concept on the orchestrator wire; cookie expiry is determined by the configured session TTL, not a per-login boolean."
 
   - id: ITX-054
     severity: P0
@@ -211,7 +211,7 @@ rows:
       `_session` cookie (no `expires` attribute) and the session
       MUST be reported as `transient`.
     status: out-of-scope
-    out_of_scope_reason: "Panva 'remember: false' branch yielding a transient session cookie (no Expires) plus a getSession().transient flag. v1.0 has no remember-me input and no 'transient' session marker — sessions.Manager treats every Issue as a single shape, with cookie TTL set by the embedder via op.WithSessionTTL."
+    out_of_scope_reason: "An upstream reference OP 'remember: false' branch yielding a transient session cookie (no Expires) plus a getSession().transient flag. v1.0 has no remember-me input and no 'transient' session marker — sessions.Manager treats every Issue as a single shape, with cookie TTL set by the embedder via op.WithSessionTTL."
 
   - id: ITX-055
     severity: P0
@@ -224,7 +224,7 @@ rows:
       After the user confirms with the XSRF secret, the next
       `/auth/resume` MUST succeed and 303 to the client.
     status: out-of-scope
-    out_of_scope_reason: Panva auto-submitting logout form rendered at /session/end/confirm with an XSRF secret as the bridge between an account-switch login result and the next /auth/resume. v1.0 has no /session/end/confirm route (end_session is a single-shot POST guarded by __Host-oidc_logout_csrf — see end_session.yaml ES-016 OOS) and the account-switch path runs through interaction.chooser PromptData, not an HTML auto-submit form. The wire-observable account chooser is bound under chooser scenarios; the panva auto-logout-form sequencing is not v1.0 wire.
+    out_of_scope_reason: An upstream reference OP auto-submitting logout form rendered at /session/end/confirm with an XSRF secret as the bridge between an account-switch login result and the next /auth/resume. v1.0 has no /session/end/confirm route (end_session is a single-shot POST guarded by __Host-oidc_logout_csrf — see end_session.yaml ES-016 OOS) and the account-switch path runs through interaction.chooser PromptData, not an HTML auto-submit form. The wire-observable account chooser is bound under chooser scenarios; the upstream auto-logout-form sequencing is not v1.0 wire.
 
   - id: ITX-060
     severity: P1
@@ -251,7 +251,7 @@ rows:
       A resume carrying `error: 'access_denied'` (no description)
       MUST 303 with `error=access_denied` and `state` preserved.
     status: out-of-scope
-    out_of_scope_reason: "Panva resume API where the embedder hands back {error: access_denied} (no description) through finishInteraction. v1.0 has no resume callback API — the wire-observable user-cancel path is DELETE on /oidc/interaction/{uid} which redirects with error=access_denied and a stable description ('user aborted the interaction'). ITX-040 covers that observable; the panva 'resume carrying error without description' API does not exist in v1.0."
+    out_of_scope_reason: "An upstream reference OP resume API where the embedder hands back {error: access_denied} (no description) through finishInteraction. v1.0 has no resume callback API — the wire-observable user-cancel path is DELETE on /oidc/interaction/{uid} which redirects with error=access_denied and a stable description ('user aborted the interaction'). ITX-040 covers that observable; the upstream 'resume carrying error without description' API does not exist in v1.0."
 
   - id: ITX-063
     severity: P0
@@ -260,7 +260,7 @@ rows:
       A resume carrying both `error: 'access_denied'` and
       `error_description: '...'` MUST 303 with both fields set.
     status: out-of-scope
-    out_of_scope_reason: "Same panva resume callback API as ITX-062 but with both error and error_description. v1.0 has no embedder-hands-error-back API — error redirects originate inside the orchestrator (DELETE -> access_denied + 'user aborted the interaction'; risk denial -> access_denied + 'risk policy denied the request'; etc.). The state-and-error-description round-trip property is bound by ITX-065."
+    out_of_scope_reason: "Same upstream resume callback API as ITX-062 but with both error and error_description. v1.0 has no embedder-hands-error-back API — error redirects originate inside the orchestrator (DELETE -> access_denied + 'user aborted the interaction'; risk denial -> access_denied + 'risk policy denied the request'; etc.). The state-and-error-description round-trip property is bound by ITX-065."
 
   - id: ITX-064
     severity: P1
@@ -306,4 +306,4 @@ rows:
       back to interaction. The loop continues until the prompt is
       satisfied or an external abort intervenes.
     status: out-of-scope
-    out_of_scope_reason: "Panva resume-loop semantic: an unsatisfied unrequestable prompt at /auth/resume time triggers another 303 back to /interaction. v1.0 has no /auth/resume endpoint and no 'unrequestable' prompt registration API at the public boundary — the orchestrator's loop is internal to a single dispatchTick and re-prompts the SPA with a fresh JSON envelope, not a 303 to a separate resume route. The looping observable (multi-step authenticator chain) is covered by mfa scenarios and the chain.go internal tests; the panva resume-redirect shape is not v1.0 wire."
+    out_of_scope_reason: "An upstream reference OP resume-loop semantic: an unsatisfied unrequestable prompt at /auth/resume time triggers another 303 back to /interaction. v1.0 has no /auth/resume endpoint and no 'unrequestable' prompt registration API at the public boundary — the orchestrator's loop is internal to a single dispatchTick and re-prompts the SPA with a fresh JSON envelope, not a 303 to a separate resume route. The looping observable (multi-step authenticator chain) is covered by mfa scenarios and the chain.go internal tests; the upstream resume-redirect shape is not v1.0 wire."

@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=./schema.json
-# DEPRECATED: this file enumerates the panva/node-oidc-provider
+# DEPRECATED: this file enumerates the upstream node.js reference OP
 # adapter.upsert payload contract (kind=AccessToken, kind=AuthorizationCode,
 # kind=DeviceCode, kind=BackchannelAuthenticationRequest, kind=RefreshToken,
 # kind=ClientCredentials, kind=InitialAccessToken, kind=RegistrationAccessToken,
@@ -15,7 +15,7 @@
 # by the catalog files that own those features.
 #
 # These TFO-NNN rows remain in the tree as historical traceability for
-# the panva-translation effort. They are NOT activated under v1.0 and
+# the upstream-translation effort. They are NOT activated under v1.0 and
 # the matching test/scenarios/token_formats_opaque_test.go functions
 # stay on t.Skip with a pointer to the superseding catalog.
 #
@@ -37,7 +37,7 @@ specs:
   - RFC 9449 — `jkt` / `dpopJkt` confirmation
 
 description: |
-  DEPRECATED — panva-style adapter.upsert payload contract.
+  DEPRECATED — vendor-specific adapter.upsert payload contract.
   go-oidc-provider v1.0 adopts a different shape (the
   [store.OpaqueAccessToken] Go struct under ADR 0024) and does not
   exercise the rows below. See
@@ -59,7 +59,7 @@ rows:
       grantId, gty, iat, jti, kind=AccessToken, scope, sid, x5t#S256,
       jkt, sessionUid, expiresWithSession, and extra.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-002
     severity: P1
@@ -69,7 +69,7 @@ rows:
       runs during save and the resulting token instance carries the
       configurator-supplied extra values.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-003
     severity: P0
@@ -82,7 +82,7 @@ rows:
       resource, scope, sid, sessionUid, expiresWithSession, and
       dpopJkt.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-004
     severity: P0
@@ -94,7 +94,7 @@ rows:
       jti, kind=DeviceCode, nonce, params, resource, scope, sid,
       userCode, sessionUid, expiresWithSession, and inFlight.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-005
     severity: P0
@@ -106,7 +106,7 @@ rows:
       exp, grantId, iat, jti, kind, nonce, params, resource, scope,
       sid, sessionUid, and expiresWithSession.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-006
     severity: P0
@@ -118,7 +118,7 @@ rows:
       kind=RefreshToken, nonce, resource, scope, sid, x5t#S256, jkt,
       sessionUid, and expiresWithSession.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-007
     severity: P0
@@ -129,7 +129,7 @@ rows:
       kind=ClientCredentials, scope, x5t#S256, jkt, and extra (no
       end-user fields).
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-008
     severity: P1
@@ -139,7 +139,7 @@ rows:
       extraTokenClaims hook fires during save and populates the
       resulting token instance's extra property.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-009
     severity: P1
@@ -149,7 +149,7 @@ rows:
       payload of exp, iat, jti, kind=InitialAccessToken, and policies
       only (no client binding).
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."
 
   - id: TFO-010
     severity: P1
@@ -158,4 +158,4 @@ rows:
       Saving a registration access token writes a payload of clientId,
       kind=RegistrationAccessToken, policies, jti, iat, and exp.
     status: out-of-scope
-    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED panva/node-oidc-provider adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the panva-translation effort and should never be activated under v1.0."
+    out_of_scope_reason: "The token_formats_opaque feature is documented in its own catalog header (lines 1-25) as DEPRECATED an upstream node.js reference OP adapter.upsert payload contract that go-oidc-provider v1.0 explicitly does NOT adopt. ADR 0024 (\"Opaque access-token format opt-in\") fixes the v1.0 wire bytes at 43-character base64url and persists a Go-shaped store.OpaqueAccessToken record (no kind tag, no params blob, no expiresWithSession bit) through the store.OpaqueAccessTokenStore substore. Other token kinds (authorization code, refresh token, device code, CIBA request, initial / registration access tokens) live in their own substores with Go-shaped records exercised by their feature-specific catalogs. The v1.0 deliverable for opaque access tokens is the ATO-NNN catalog at access_token_opaque.yaml. These TFO rows are retained only as historical traceability for the upstream-translation effort and should never be activated under v1.0."

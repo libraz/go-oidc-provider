@@ -226,7 +226,7 @@ rows:
       token rejects one call, revokes the entire grant, and emits
       refresh_token.destroyed.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not expose a runtime per-request revokeGrantPolicy predicate (panva-specific hook). Refresh-token rotation cascade is determined structurally by client policy + DPoP binding; REF-016 covers the canonical replay revocation path.
+    out_of_scope_reason: v1.0 does not expose a runtime per-request revokeGrantPolicy predicate (vendor-specific hook). Refresh-token rotation cascade is determined structurally by client policy + DPoP binding; REF-016 covers the canonical replay revocation path.
 
   - id: REF-022
     severity: P1
