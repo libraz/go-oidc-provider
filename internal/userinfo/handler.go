@@ -205,6 +205,9 @@ func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, 
 		respondInvalidToken(w, err)
 		return
 	}
+	if !enforceAudience(w, deps.Issuer, claims.Audience) {
+		return
+	}
 	if !enforceCnfBinding(w, r, deps, claims, raw) {
 		return
 	}
@@ -216,6 +219,34 @@ func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, 
 		return
 	}
 	writeJSON(w, out)
+}
+
+// enforceAudience refuses an access token whose "aud" claim is set but
+// does not contain the OP's issuer URL. The check keeps a token minted
+// for an external resource server (RFC 8707 §2.1, aud=<resource>) from
+// being usable at /userinfo even though it shares the OP's signing key.
+//
+// An empty Audience is accepted: aud is OPTIONAL on the OP-default
+// access token shape (and on legacy / external tokens that the
+// embedder may also accept), so an absent claim is the audience-less
+// path covered by RI-070.
+//
+// On rejection the response is the bare RFC 6750 §3.1 invalid_token
+// challenge — the description does not name the sub-cause, matching
+// the privacy posture every other userinfo failure path takes.
+func enforceAudience(w http.ResponseWriter, issuer string, audience []string) bool {
+	if issuer == "" || len(audience) == 0 {
+		return true
+	}
+	for _, a := range audience {
+		if a == issuer {
+			return true
+		}
+	}
+	w.Header().Set("WWW-Authenticate",
+		`Bearer error="invalid_token", error_description="The access token is invalid"`)
+	w.WriteHeader(http.StatusUnauthorized)
+	return false
 }
 
 // resolveOpaqueAccessTokenAt handles the ADR 0024 opaque-format path
@@ -253,10 +284,25 @@ func resolveOpaqueAccessTokenAt(
 		respondOpaqueInvalid(w, "The access token has expired")
 		return nil, false
 	}
+	if !enforceAudience(w, deps.Issuer, opaqueAudience(rec)) {
+		return nil, false
+	}
 	if !enforceOpaqueCnf(w, r, deps, rec, raw) {
 		return nil, false
 	}
 	return projectOpaqueAccessTokenClaims(rec), true
+}
+
+// opaqueAudience normalises the opaque-access-token record's audience
+// onto the []string shape [enforceAudience] consumes. The
+// [store.OpaqueAccessToken.Audience] field is a single string per the
+// substore schema, so the projection wraps it into a one-element slice
+// (or returns nil when the record has no audience pinned).
+func opaqueAudience(rec *store.OpaqueAccessToken) []string {
+	if rec.Audience == "" {
+		return nil
+	}
+	return []string{rec.Audience}
 }
 
 // userInfoNow returns the wall-clock reading the userinfo handler

@@ -95,12 +95,12 @@ type AccessTokenVerifier struct {
 // §4.1.3 allows.
 //
 // Verify intentionally does NOT validate the audience claim against an
-// expected value. Audience policy varies by caller — the /userinfo
-// handler validates that aud contains the issuer URL, while a resource
-// server validates that aud contains its own resource identifier — so
-// the check belongs to the layer that knows the answer. Callers that
-// want the assertion can compare claims.Audience after Verify returns
-// and surface [ErrAccessTokenAudienceMismatch] on failure.
+// expected value. Audience policy varies by caller and is enforced one
+// layer up: the /userinfo handler calls its own enforceAudience to
+// require aud-contains-issuer, while a downstream resource server
+// validates that aud contains its own resource identifier. Callers
+// that want the assertion compare claims.Audience after Verify
+// returns and surface [ErrAccessTokenAudienceMismatch] on failure.
 func (v *AccessTokenVerifier) Verify(raw string) (*AccessTokenClaims, string, error) {
 	jws, _, err := jose.ParseSigned(raw)
 	if err != nil {

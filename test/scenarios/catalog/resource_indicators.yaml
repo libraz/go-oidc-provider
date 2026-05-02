@@ -339,8 +339,7 @@ rows:
       invalid_token, the description "invalid token provided", and an
       error_detail of "token audience prevents accessing the userinfo
       endpoint".
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 /userinfo (internal/userinfo/handler.go: serveUserInfoJWT) does not enforce an audience constraint at all: the JWT verifier (internal/tokens/verify.go: AccessTokenVerifier.Verify) intentionally validates iss/exp/iat/sig but not aud, deferring audience policy to the caller, and the userinfo handler never checks claims.Audience. The behaviour this row asserts (resource-bound AT rejected at /userinfo) is the panva audience-gate; v1.0 takes the alternative posture of binding aud=Issuer for resource-less requests at mint time (internal/tokenendpoint/authcode.go: mintJWTAccessToken). Adopting an aud-gate at /userinfo is a feature-level decision that has not landed; tracked there, not as a resource-indicator scenario."
+    status: active
 
   - id: RI-072
     severity: P0
@@ -350,4 +349,4 @@ rows:
       /userinfo with the same error envelope; this defends against
       storage tampering.
     status: out-of-scope
-    out_of_scope_reason: "Same root cause as RI-071: v1.0 /userinfo does not parse 'aud' for policy purposes. The decode side (internal/tokens/verify.go: decodeAudience) accepts string and []string per RFC 7519 §4.1.3; non-string non-array shapes cause the JWT to fail decoding earlier in Verify, surfacing ErrAccessTokenMalformed (invalid_token) regardless of the userinfo audience policy this row asserts. There is no v1.0 wire seam where a 'token audience prevents accessing the userinfo endpoint' error_detail is emitted."
+    out_of_scope_reason: "RI-071 covers aud-contains-issuer enforcement at /userinfo (internal/userinfo/handler.go enforceAudience). The 'non-string aud values (object, false, number)' axis this row layers on top is structurally unreachable on the v1.0 wire: store-side records are typed (store.OpaqueAccessToken.Audience is string; tokens.AccessTokenClaims.Audience is []string) and the JWT decoder (internal/tokens/verify.go decodeAudience) only accepts string and []string per RFC 7519 §4.1.3. A wire-level 'non-string aud' submission already fails at access-token decode with ErrAccessTokenMalformed before any audience policy runs. The defence-in-depth this row asks for has no production code path that could regress without first introducing a typed-bypass bug in the substore, which the contract harness catches at the Save/Find boundary."

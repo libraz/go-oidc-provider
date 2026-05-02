@@ -664,10 +664,79 @@ func TestScenario_RI_070_UserInfoAcceptsAudienceLessTokens(t *testing.T) {
 	t.Skip("pending: RI-070")
 }
 
-// TestScenario_RI_071_UserInfoRejectsResourceBoundTokens is OOS — see catalog out_of_scope_reason.
+// TestScenario_RI_071_UserInfoRejectsResourceBoundTokens verifies that
+// an access token whose "aud" claim names a resource server (i.e. the
+// RFC 8707 §2.1 path where the RP requested resource=<URI>) cannot be
+// presented at /userinfo. The OP enforces aud-contains-issuer at the
+// userinfo handler so that a token minted for an external resource
+// cannot read end-user claims even though it shares the OP's signing
+// key.
+//
+// The wire shape diverges from panva's panva-residue framing: v1.0
+// emits the bare RFC 6750 §3.1 invalid_token challenge with no
+// "error_detail" extension. The privacy posture (do not name the
+// sub-cause) matches every other userinfo failure path.
+//
+// Spec: OIDC Core §5.3 + RFC 8707 §3 / RFC 6750 §3.1.
 func TestScenario_RI_071_UserInfoRejectsResourceBoundTokens(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: RI-071 (see catalog out_of_scope_reason)")
+
+	tk, rp, secret, callback := newResourceProvider(t)
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid profile",
+		PKCE:        pkce,
+		Extra: map[string][]string{
+			"resource": {"https://api.example.com"},
+		},
+	})
+	if flow.Error != "" {
+		t.Fatalf("authorize error=%s desc=%s", flow.Error, flow.ErrorDesc)
+	}
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: secret,
+	})
+	if tok.StatusCode != http.StatusOK || tok.AccessToken == "" {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	claims := decodeScenarioAccessTokenClaims(t, tok.AccessToken)
+	if got := claims["aud"]; got != "https://api.example.com" {
+		t.Fatalf("precondition: access_token aud=%v want https://api.example.com", got)
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/oidc/userinfo", http.NoBody)
+	if err != nil {
+		t.Fatalf("build /userinfo request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("GET /userinfo: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 401 body=%s", resp.StatusCode, body)
+	}
+	chall := resp.Header.Get("WWW-Authenticate")
+	if !strings.HasPrefix(chall, "Bearer ") {
+		t.Errorf("WWW-Authenticate=%q want Bearer challenge", chall)
+	}
+	if !strings.Contains(chall, `error="invalid_token"`) {
+		t.Errorf("WWW-Authenticate=%q missing error=invalid_token", chall)
+	}
 }
 
 // TestScenario_RI_072_UserInfoRejectsNonStringAudience is OOS — see catalog out_of_scope_reason.

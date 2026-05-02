@@ -64,7 +64,7 @@ func (f *userInfoFixture) signAccessToken(tb testing.TB, build func(*tokens.Acce
 	c := tokens.AccessTokenClaims{
 		Issuer:    f.prov.Issuer,
 		Subject:   "user-1",
-		Audience:  []string{"client-1"},
+		Audience:  []string{f.prov.Issuer},
 		ClientID:  "client-1",
 		IssuedAt:  f.clock.now.Unix(),
 		ExpiresAt: f.clock.now.Add(time.Hour).Unix(),
@@ -221,7 +221,7 @@ func TestHandler_BadToken_ReturnsInvalidToken(t *testing.T) {
 	jws, err := tokens.SignAccessToken(otherSigner, tokens.AccessTokenClaims{
 		Issuer:    f.prov.Issuer,
 		Subject:   "user-1",
-		Audience:  []string{"client-1"},
+		Audience:  []string{f.prov.Issuer},
 		ClientID:  "client-1",
 		IssuedAt:  f.clock.now.Unix(),
 		ExpiresAt: f.clock.now.Add(time.Hour).Unix(),
