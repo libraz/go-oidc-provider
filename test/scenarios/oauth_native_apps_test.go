@@ -89,34 +89,40 @@ func TestScenario_NA_007_IPv6LoopbackWithoutPortAllowsAnyPort(t *testing.T) {
 	assertNativeLoopbackAuthorize(t, "http://[::1]/op/callback", "http://[::1]:8888/op/callback")
 }
 
+// TestScenario_NA_008_PostLogoutLocalhostWithRegisteredPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_008_PostLogoutLocalhostWithRegisteredPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-008")
+	t.Skip("out-of-scope: NA-008 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_NA_009_PostLogoutLocalhostWithoutPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_009_PostLogoutLocalhostWithoutPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-009")
+	t.Skip("out-of-scope: NA-009 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_NA_010_PostLogoutIPv4WithRegisteredPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_010_PostLogoutIPv4WithRegisteredPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-010")
+	t.Skip("out-of-scope: NA-010 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_NA_011_PostLogoutIPv4WithoutPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_011_PostLogoutIPv4WithoutPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-011")
+	t.Skip("out-of-scope: NA-011 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_NA_012_PostLogoutIPv6WithRegisteredPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_012_PostLogoutIPv6WithRegisteredPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-012")
+	t.Skip("out-of-scope: NA-012 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_NA_013_PostLogoutIPv6WithoutPort is OOS — see catalog out_of_scope_reason.
 func TestScenario_NA_013_PostLogoutIPv6WithoutPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: NA-013")
+	t.Skip("out-of-scope: NA-013 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_NA_014_RegistrationRejectsNonLoopbackHTTPRedirect drives

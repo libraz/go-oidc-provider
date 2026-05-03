@@ -93,7 +93,8 @@ rows:
       http://localhost:2355/op/logout, postLogoutRedirectUriAllowed
       MUST return true for any port variant on localhost with the
       same path.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same RFC 8252 §7.3 'localhost is NOT RECOMMENDED' rationale as NA-002 / NA-003: v1.0 rejects the textual 'localhost' host and accepts only the IP literals (127.0.0.1 / ::1) the RFC actually recommends. Independently, v1.0's /end_session does byte-for-byte exact-match comparison on store.Client.PostLogoutRedirectURIs (internal/endsession/handler.go validatePostLogout) — there is no loopback-port-wildcard relaxation on the post-logout side; the IP-literal-port-wildcard semantics tested for redirect_uri (NA-004 / NA-005 / NA-006 / NA-007) live in the /authorize codepath only. Both reasons make this row non-spec residue against v1.0."
 
   - id: NA-009
     severity: P1
@@ -103,7 +104,8 @@ rows:
       a localhost URL without a port, postLogoutRedirectUriAllowed
       MUST return true for any port variant on the same host and
       path.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same dual rationale as NA-008: (1) RFC 8252 §7.3 'localhost is NOT RECOMMENDED' — v1.0 rejects the textual 'localhost' host (NA-002 / NA-003 OOS); (2) /end_session does byte-for-byte exact-match on store.Client.PostLogoutRedirectURIs, with no loopback-port-wildcard relaxation on the post-logout side."
 
   - id: NA-010
     severity: P1
@@ -113,7 +115,8 @@ rows:
       http://127.0.0.1:2355/op/logout, postLogoutRedirectUriAllowed
       MUST return true for any port variant on 127.0.0.1 with the
       same path.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's /end_session does byte-for-byte exact-match comparison on store.Client.PostLogoutRedirectURIs (internal/endsession/handler.go validatePostLogout) — there is no loopback-port-wildcard relaxation on the post-logout side. The IP-literal-port-wildcard semantics tested for redirect_uri (NA-004 / NA-005 / NA-006 / NA-007) live in the /authorize codepath only and reflect a deliberate scope split: at /authorize the OS-assigned ephemeral port is unknowable until the native app binds, but at /end_session the RP knows the exact post-logout URL it registered."
 
   - id: NA-011
     severity: P1
@@ -123,7 +126,8 @@ rows:
       http://127.0.0.1/op/logout, postLogoutRedirectUriAllowed MUST
       return true for any port variant on 127.0.0.1 with the same
       path.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same /end_session exact-match rationale as NA-010: store.Client.PostLogoutRedirectURIs comparison is byte-for-byte; loopback-port-wildcard semantics are scoped to /authorize only (NA-004 / NA-005 / NA-006 / NA-007)."
 
   - id: NA-012
     severity: P1
@@ -132,7 +136,8 @@ rows:
       For a native client whose post_logout_redirect_uris registers
       http://[::1]:2355/op/logout, postLogoutRedirectUriAllowed MUST
       return true for any port variant on [::1] with the same path.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same /end_session exact-match rationale as NA-010: v1.0 has no loopback-port-wildcard relaxation on the post-logout side for IPv6 [::1] either. /authorize-side IPv6 wildcard is bound by NA-006 / NA-007."
 
   - id: NA-013
     severity: P1
@@ -141,7 +146,8 @@ rows:
       For a native client whose post_logout_redirect_uris registers
       http://[::1]/op/logout, postLogoutRedirectUriAllowed MUST
       return true for any port variant on [::1] with the same path.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same /end_session exact-match rationale as NA-010 / NA-012: byte-for-byte comparison on store.Client.PostLogoutRedirectURIs, no IPv6 [::1] port-wildcard relaxation on the post-logout side."
 
   - id: NA-014
     severity: P0
