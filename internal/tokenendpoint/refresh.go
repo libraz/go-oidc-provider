@@ -269,6 +269,13 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
+	if idToken != "" {
+		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
+	}
 	var rotated string
 	if !exchanged.InGrace {
 		rotated, err = rotateRefreshToken(ctx, deps, client, exchanged, binding)

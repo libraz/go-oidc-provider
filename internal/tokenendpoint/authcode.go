@@ -349,6 +349,11 @@ func issueAuthCodeResponse(
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
+		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
 	}
 	refreshToken, err := maybeIssueRefreshToken(
 		ctx,
