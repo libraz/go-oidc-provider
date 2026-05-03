@@ -4,19 +4,29 @@ prefix: ENC
 title: Encryption (JWE) for tokens, request objects and responses
 specs:
   - RFC 7516 — JSON Web Encryption
+  - RFC 7517 §4.2 — use=sig / use=enc separation
   - RFC 7518 — JSON Web Algorithms (alg / enc)
   - RFC 7519 §11 — JWE-nested-JWT
   - RFC 8037 — CFRG curves
-  - OIDC Core 1.0 §3.1.3.7, §10.1, §16.7
+  - OIDC Core 1.0 §3.1.3.7, §10.1, §10.2, §16.7
   - OIDC Discovery 1.0 §3 (*_encryption_alg/enc_values_supported)
   - RFC 9101 — JWT-Secured Authorization Request (JAR)
   - RFC 9126 — Pushed Authorization Requests (PAR)
+  - RFC 9701 — JWT Response for OAuth Token Introspection
+  - FAPI 2.0 Message Signing §5.5 (JARM)
 
 description: |
   Token, response object and request object encryption (JWE) — covering
-  symmetric vs. asymmetric algorithms, discovery surface, encrypted
-  ID Token / UserInfo / Request Object payloads, key selection, and
-  client_secret-derived encryption paths.
+  asymmetric algorithms (RSA-OAEP-256, ECDH-ES family) negotiated via
+  per-client metadata, the discovery surface, encrypted ID Token /
+  UserInfo / JARM / introspection responses, and decryption of inbound
+  encrypted JAR / PAR request_object payloads.
+
+  v0.9.1 ships an asymmetric-only, closed-allow-list profile: the OP
+  rejects symmetric (alg=A*KW, dir) JWE at registration and decryption
+  time, only signs with ES256, and only emits userinfo signed with
+  ES256. Symmetric / HS256 / dir paths remain out-of-scope; revisit
+  if an embedder needs them.
 
 rows:
   - id: ENC-001
@@ -32,18 +42,12 @@ rows:
       client cannot validly derive the encryption key.
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      Symmetric JWE algorithms (A*KW, dir) are not in the v0.9.1
+      closed allow-list. The DCR validator rejects these alg values
+      at client registration before any "needsSecret" derivation runs,
+      so the public-client / client_secret-derived key path never
+      activates. Revisit if an embedder needs client_secret-derived
+      JWE.
 
   - id: ENC-002
     severity: P0
@@ -55,67 +59,37 @@ rows:
       (<alg>)") before any token is minted.
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      Symmetric JWE algorithms (A*KW, dir) are not in the v0.9.1
+      closed allow-list. With no client_secret-derived encryption
+      path, the expired-secret branch the row asserts never fires.
+      The error wording is also panva-specific and not part of our
+      wire format.
 
   - id: ENC-010
     severity: P1
     spec: OIDC Discovery §3
     behaviour: |
-      When the encryption feature is enabled, the discovery document
-      MUST list id_token_encryption_alg_values_supported,
+      When [op.WithEncryptionKeyset] is configured the discovery
+      document MUST emit the eight encryption-related arrays:
+      id_token_encryption_alg_values_supported,
       id_token_encryption_enc_values_supported,
       request_object_encryption_alg_values_supported,
       request_object_encryption_enc_values_supported,
       userinfo_encryption_alg_values_supported,
       userinfo_encryption_enc_values_supported,
-      introspection_encryption_alg_values_supported and
-      introspection_encryption_enc_values_supported.
-    status: out-of-scope
-    out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      authorization_encryption_alg_values_supported and
+      authorization_encryption_enc_values_supported. When the option
+      is omitted the same fields MUST be absent (omitempty).
 
   - id: ENC-020
     severity: P0
-    spec: RFC 7516 §3 / OIDC Core §10.2
+    spec: RFC 7516 §3 / OIDC Core §10.2 / RFC 7519 §5.2
     behaviour: |
       A nested JWE-of-signed-JWT MUST be a 5-part compact serialization
-      (header.cek.iv.ct.tag); decrypting yields a valid inner JWS.
-    status: out-of-scope
-    out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      (header.cek.iv.ct.tag); the protected header MUST carry
+      cty=JWT (RFC 7519 §5.2); decrypting the JWE yields a valid
+      compact JWS whose ES256 signature verifies under the OP's
+      published signing JWKS.
 
   - id: ENC-021
     severity: P1
@@ -126,18 +100,10 @@ rows:
       payload; the values match the OP issuer and client_id.
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      Duplicating iss / aud onto the JWE protected header is a
+      panva-specific extension. OIDC Core §16 leaves header iss / aud
+      as MAY-clauses; we route by kid alone. RPs needing the
+      duplicated headers can pre-process via a wrapper.
 
   - id: ENC-022
     severity: P0
@@ -148,18 +114,9 @@ rows:
       decrypted payload has an exp claim in the future.
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      The wire-shape half of this row (Content-Type, 5-part JWE,
+      decrypted body) is now exercised by ENC-110. The header iss /
+      aud duplication remains panva-specific (see ENC-021).
 
   - id: ENC-023
     severity: P0
@@ -171,18 +128,9 @@ rows:
       UserInfo response").
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      HS256-signed userinfo (symmetric signing) is not in the v0.9.1
+      profile; the OP signs all userinfo with ES256. The
+      client_secret-derived branch never activates.
 
   - id: ENC-024
     severity: P0
@@ -194,108 +142,49 @@ rows:
       JWT UserInfo response").
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      dir / symmetric JWE not in the v0.9.1 allow-list (see ENC-001).
 
   - id: ENC-030
     severity: P0
     spec: RFC 9101 §6.1 / OIDC Discovery
     behaviour: |
-      An unsupported alg on a Request Object (for example RSA-OAEP-512
-      when only RSA-OAEP is advertised) MUST trigger a redirect with
-      error=invalid_request_object and
-      error_description="could not decrypt request object".
-    status: out-of-scope
-    out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      An /authorize request whose request_object is JWE-encrypted
+      with an unsupported alg (for example RSA-OAEP-512 when only
+      RSA-OAEP-256 is in the allow-list) MUST trigger a redirect
+      whose query string carries error=invalid_request_object. The
+      exact error_description wording is implementation-defined and
+      not asserted.
 
   - id: ENC-031
     severity: P0
     spec: RFC 9101 §6.1
     behaviour: |
-      An unsupported enc on a Request Object (for example A192CBC-HS384
-      when not advertised) MUST trigger the same invalid_request_object
-      response with description "could not decrypt request object".
-    status: out-of-scope
-    out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      An /authorize request whose request_object is JWE-encrypted
+      with an unsupported enc (for example A192CBC-HS384, not in the
+      A128GCM / A256GCM allow-list) MUST trigger the same
+      error=invalid_request_object redirect as ENC-030.
 
   - id: ENC-032
     severity: P1
-    spec: OIDC Core §10.1
+    spec: OIDC Core §10.1 / OIDC Discovery §3
     behaviour: |
-      The default supported set is the JWE algorithms the OP keystore
-      can decrypt; the embedder controls inventory by configuring
-      which keys are loaded.
-    status: out-of-scope
-    out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      With [op.WithEncryptionKeyset] registered, the discovery
+      document's request_object_encryption_alg_values_supported MUST
+      be a subset of [op.SupportedEncryptionAlgs]; the embedder may
+      narrow it via [op.WithSupportedEncryptionAlgs] but MUST NOT
+      extend it. Without an encryption keyset all
+      *_encryption_*_values_supported arrays MUST be absent.
 
   - id: ENC-040
     severity: P0
     spec: RFC 9126 + RFC 9101
     behaviour: |
-      POST /request (PAR) accepts an encrypted-and-signed Request
-      Object, the OP returns a request_uri, and a subsequent
-      /authorize?request_uri=... MUST decrypt the object and produce a
-      code redirect to redirect_uri.
-    status: out-of-scope
-    out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      POST /par accepts a JWE-encrypted-and-signed request_object
+      addressed to one of the OP's encryption JWK kids and returns
+      a 201 with a request_uri; a subsequent
+      /authorize?request_uri=... drives the OP to decrypt the object,
+      verify the inner JWS, and emit a code redirect to the
+      registered redirect_uri.
 
   - id: ENC-041
     severity: P1
@@ -306,18 +195,7 @@ rows:
       (including symmetric paths such as HS256).
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      HS256 signing is not in the v0.9.1 profile (see ENC-023).
 
   - id: ENC-050
     severity: P0
@@ -329,18 +207,12 @@ rows:
       error_description="no suitable encryption key found (ECDH-ES)".
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      The exact error code and wording on the missing-EC-key path is
+      panva-specific. Our resolver surfaces ErrNoMatchingKey at id_token
+      issuance time as a fail-closed 500 / token-endpoint error rather
+      than a fragment redirect with invalid_client_metadata. The same
+      wire-level invariant (encryption-failure does not silently
+      downgrade) is asserted by ENC-141.
 
   - id: ENC-060
     severity: P1
@@ -351,18 +223,7 @@ rows:
       to 128 bits per OIDC Core §16.7).
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      Symmetric JWE not in the v0.9.1 allow-list (see ENC-001).
 
   - id: ENC-061
     severity: P0
@@ -374,18 +235,8 @@ rows:
       client secret used for its encryption is expired".
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      Symmetric JWE not in the v0.9.1 allow-list (see ENC-001); the
+      client_secret-derived branch never activates.
 
   - id: ENC-062
     severity: P1
@@ -395,18 +246,8 @@ rows:
       alg=A128KW, iss and aud.
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      Symmetric JWE not in the v0.9.1 allow-list (see ENC-001).
+      Header iss / aud duplication is panva-specific (see ENC-021).
 
   - id: ENC-070
     severity: P1
@@ -417,18 +258,7 @@ rows:
       for A128CBC-HS256 per OIDC Core §16.7) MUST be accepted.
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      dir JWE not in the v0.9.1 allow-list (see ENC-001).
 
   - id: ENC-071
     severity: P0
@@ -440,18 +270,7 @@ rows:
       client secret used for its encryption is expired".
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      dir JWE not in the v0.9.1 allow-list (see ENC-001).
 
   - id: ENC-072
     severity: P1
@@ -461,15 +280,111 @@ rows:
       enc=A128CBC-HS256, iss and aud.
     status: out-of-scope
     out_of_scope_reason: |
-      Token, response-object, and request-object encryption (JWE,
-      RFC 7516) is intentionally not implemented in v1.0. The OP
-      relies on TLS for transport confidentiality; embedders that
-      need claim-level confidentiality typically minimise the claim
-      set or front the OP with a layer that performs JWE
-      independently. Reintroducing JWE here would expand the
-      key-management surface (encryption keysets, alg / enc
-      negotiation, symmetric-from-secret derivation) for a feature
-      with low production adoption — FAPI 2.0 does not require it
-      either. Revisit if an embedder we care about needs encrypted
-      ID Tokens / Request Objects and is willing to fund the
-      operational cost.
+      dir JWE not in the v0.9.1 allow-list (see ENC-001).
+      Header iss / aud duplication is panva-specific (see ENC-021).
+
+  - id: ENC-100
+    severity: P0
+    spec: OIDC Core §10.2 / RFC 7519 §5.2
+    behaviour: |
+      When a confidential client registers
+      id_token_encrypted_response_alg + id_token_encrypted_response_enc
+      and the OP holds the matching public encryption key in the
+      registered client JWKS, the authorization_code grant MUST emit
+      the id_token field as a 5-part nested JWE (cty=JWT) addressed
+      to the client's enc-use key. Decryption + inner JWS
+      verification yields the same claim set the unencrypted path
+      would have emitted (iss, aud, sub, exp, iat, nonce when
+      requested).
+
+  - id: ENC-101
+    severity: P0
+    spec: OIDC Core §12 / RFC 6749 §6
+    behaviour: |
+      A refresh_token grant against the same encryption-enrolled
+      client MUST emit the rotated id_token field as a JWE addressed
+      to the client's enc-use key. The unencrypted-id_token branch
+      MUST NOT be exercised on refresh when the client registered
+      id_token_encrypted_response_alg.
+
+  - id: ENC-110
+    severity: P0
+    spec: OIDC Core §5.3.2
+    behaviour: |
+      When the client registers
+      userinfo_encrypted_response_alg + userinfo_encrypted_response_enc
+      and the request carries Accept: application/jwt, GET /userinfo
+      MUST respond with Content-Type: application/jwt and a 5-part
+      JWE compact serialisation. Decryption + inner JWS verification
+      yields the same claim set the JSON shape would emit, plus iss
+      and aud stamped onto the signed body so the RP can satisfy
+      OIDC Core §5.3.2's MUST clauses.
+
+  - id: ENC-111
+    severity: P1
+    spec: OIDC Core §5.3.2
+    behaviour: |
+      A request whose Accept header omits application/jwt MUST
+      receive the legacy JSON userinfo response (Content-Type
+      application/json) even when the client registered
+      userinfo_encrypted_response_alg. Encryption negotiation is
+      gated on the explicit JWT-shape opt-in.
+
+  - id: ENC-120
+    severity: P0
+    spec: FAPI 2.0 Message Signing §5.5
+    behaviour: |
+      When the client registers
+      authorization_encrypted_response_alg +
+      authorization_encrypted_response_enc and uses a JARM response
+      mode (jwt / query.jwt / fragment.jwt / form_post.jwt),
+      /authorize success responses MUST deliver a 5-part JWE
+      addressed to the client's enc-use key in the resolved JARM
+      response_mode parameter ("response="). Decryption + inner JWS
+      verification yields a JARM payload whose iss, aud, code and
+      state match the request.
+
+  - id: ENC-121
+    severity: P1
+    spec: FAPI 2.0 Message Signing §5.5
+    behaviour: |
+      JARM error responses MUST stay deterministic when JWE wrap
+      fails: an error response (which carries no token material)
+      falls back to the signed-only JARM payload rather than
+      collapsing onto a server_error redirect. Authenticity is
+      preserved at the cost of error-code confidentiality.
+
+  - id: ENC-130
+    severity: P0
+    spec: RFC 9701 §4
+    behaviour: |
+      When the client registers
+      introspection_encrypted_response_alg +
+      introspection_encrypted_response_enc and the
+      /introspection request carries Accept:
+      application/token-introspection+jwt, the response MUST be a
+      5-part JWE wrapping the signed introspection JWT. Decryption +
+      inner JWS verification yields the standard introspection
+      claim set (active, scope, sub, exp, ...).
+
+  - id: ENC-140
+    severity: P1
+    spec: RFC 7517 §4.2
+    behaviour: |
+      [op.New] MUST reject configurations where a kid appears in
+      both the signing keyset (use=sig) and the encryption keyset
+      (use=enc). The two keysets MUST advertise disjoint kids in the
+      published JWKS so an RP can route by kid alone.
+
+  - id: ENC-141
+    severity: P0
+    spec: ADR 0030 §S.5 (fail-closed)
+    behaviour: |
+      When the encryption-enrolled client's registered enc-use key
+      cannot be resolved at id_token / userinfo / JARM /
+      introspection issuance time (key rotated out, JWKS unreachable,
+      alg/enc mismatch), the OP MUST fail closed: the unencrypted
+      JWS form is NEVER emitted as a silent downgrade. id_token /
+      userinfo / introspection paths surface the failure as a 5xx
+      to the RP; the JARM success path emits a server_error redirect
+      so the user is not stranded mid-flow.
