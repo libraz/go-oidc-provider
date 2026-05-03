@@ -27,7 +27,7 @@ func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDep
 	if !ok {
 		return
 	}
-	writeJSON(w, out)
+	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out)
 }
 
 // resolveOpaqueAccessTokenAt handles the ADR 0024 opaque-format path

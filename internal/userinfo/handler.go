@@ -222,7 +222,43 @@ func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, 
 	if !ok {
 		return
 	}
-	writeJSON(w, out)
+	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out)
+}
+
+// dispatchUserInfoResponse picks the response shape based on the
+// request's Accept header and the configured client metadata. The
+// default OIDC Core 1.0 §5.3.1.1 shape is application/json; the
+// JWT-shape (signed-only or signed-then-encrypted) fires only when
+// the request opts into it via Accept: application/jwt.
+//
+// On the JWT-shape path the handler MUST resolve the AT-bound client
+// before signing so a deleted client surfaces as invalid_token rather
+// than a body the RP cannot route. A nil [HandlerDeps.Clients] (the
+// embedder did not wire a client store, e.g. legacy tests) collapses
+// onto the JSON shape because there is no metadata to consult.
+func dispatchUserInfoResponse(
+	r *http.Request,
+	w http.ResponseWriter,
+	deps HandlerDeps,
+	clientID string,
+	body map[string]any,
+) {
+	if !wantsJWTShape(r) {
+		writeJSON(w, body)
+		return
+	}
+	// JWT-shape path requires the client metadata. Without it the
+	// handler cannot decide whether to wrap the JWS in a JWE; the
+	// nil-store / empty-client_id case collapses onto signed-only
+	// (maybeEncryptUserInfo will short-circuit on
+	// ErrNoEncryptionConfigured).
+	if _, ok := resolveClient(r.Context(), deps, clientID); !ok {
+		// Client was deleted between AT issuance and the userinfo call.
+		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "subject unknown"))
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	writeUserInfoJWT(r.Context(), w, deps, clientID, body)
 }
 
 // enforceAudience refuses an access token whose "aud" claim is set but
