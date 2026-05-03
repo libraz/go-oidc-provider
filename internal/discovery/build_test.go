@@ -496,3 +496,42 @@ func TestOPControlledFieldNames_CoversCriticalFields(t *testing.T) {
 		}
 	}
 }
+
+// TestBuild_SubjectTypes_PublicOnlyByDefault confirms the discovery
+// document advertises only "public" in subject_types_supported when
+// the OP is not configured for pairwise.
+//
+// Spec: OIDC Core 1.0 §8 / OIDC Discovery 1.0 §3.
+func TestBuild_SubjectTypes_PublicOnlyByDefault(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(baseInput())
+	want := []string{"public"}
+	if len(doc.SubjectTypesSupported) != len(want) || doc.SubjectTypesSupported[0] != want[0] {
+		t.Errorf("subject_types_supported = %v, want %v", doc.SubjectTypesSupported, want)
+	}
+}
+
+// TestBuild_SubjectTypes_PairwiseAdvertisedWhenEnabled confirms that
+// PairwiseEnabled appends "pairwise" so RPs and OIDC conformance
+// tooling discover the OP's per-RP subject capability. Without this
+// the OP would issue pairwise subs at /token while telling RPs it
+// only supports public, breaking the §8 contract.
+//
+// Spec: OIDC Core 1.0 §8 / OIDC Discovery 1.0 §3.
+func TestBuild_SubjectTypes_PairwiseAdvertisedWhenEnabled(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.PairwiseEnabled = true
+	doc := discovery.Build(in)
+	want := []string{"public", "pairwise"}
+	if len(doc.SubjectTypesSupported) != len(want) {
+		t.Fatalf("subject_types_supported = %v, want %v", doc.SubjectTypesSupported, want)
+	}
+	for i, w := range want {
+		if doc.SubjectTypesSupported[i] != w {
+			t.Errorf("subject_types_supported[%d] = %q, want %q", i, doc.SubjectTypesSupported[i], w)
+		}
+	}
+}

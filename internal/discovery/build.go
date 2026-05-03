@@ -69,6 +69,14 @@ type Input struct {
 	// supply false via op.WithClaimsParameterSupported(false).
 	ClaimsParameterSupported bool
 
+	// PairwiseEnabled reports whether the OP can issue pairwise
+	// subject identifiers (i.e. op.WithPairwiseSubject is configured
+	// or a custom op.WithSubjectGenerator returned a pairwise mode).
+	// When true the discovery document advertises "pairwise" in
+	// subject_types_supported alongside "public"; when false only
+	// "public" is advertised.
+	PairwiseEnabled bool
+
 	// ClaimsSupported carries the explicit claim-name enumeration the
 	// embedder supplied through op.WithClaimsSupported. Nil leaves
 	// the discovery document's claims_supported field omitted, which
@@ -270,7 +278,7 @@ func newBaseDocument(in Input) Document {
 		EndSessionEndpoint:                join(in.Issuer, in.MountPrefix, in.Endpoints.EndSession),
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               in.GrantsSupported,
-		SubjectTypesSupported:             []string{"public"},
+		SubjectTypesSupported:             subjectTypesFor(in.PairwiseEnabled),
 		IDTokenSigningAlgValuesSupported:  []string{"ES256"},
 		ScopesSupported:                   append([]string(nil), in.ScopesSupported...),
 		CodeChallengeMethodsSupported:     []string{"S256"},
@@ -278,6 +286,18 @@ func newBaseDocument(in Input) Document {
 		BackchannelLogoutSupported:        true,
 		BackchannelLogoutSessionSupported: true,
 	}
+}
+
+// subjectTypesFor returns the subject_types_supported slice. OIDC Core
+// 1.0 §8 lists "public" as always-supported and adds "pairwise" only
+// when the OP can actually issue per-RP subject identifiers; an OP
+// that advertises pairwise without the wire-side capability would lie
+// to RPs and be skipped by conformance tooling.
+func subjectTypesFor(pairwiseEnabled bool) []string {
+	if pairwiseEnabled {
+		return []string{"public", "pairwise"}
+	}
+	return []string{"public"}
 }
 
 // applyFeatureEndpoints publishes the per-feature endpoint URLs

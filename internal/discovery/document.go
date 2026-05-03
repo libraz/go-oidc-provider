@@ -93,7 +93,9 @@ type Document struct {
 	GrantTypesSupported []string `json:"grant_types_supported"`
 
 	// SubjectTypesSupported lists the subject_type values the OP can
-	// produce. v1.0 ships with "public"; pairwise lands later.
+	// produce. The slice always contains "public"; "pairwise" is
+	// appended when the OP is configured with op.WithPairwiseSubject
+	// or a custom op.WithSubjectGenerator that emits pairwise subs.
 	SubjectTypesSupported []string `json:"subject_types_supported"`
 
 	// IDTokenSigningAlgValuesSupported lists the alg values the OP uses
