@@ -32,7 +32,8 @@ rows:
       "access tokens must not be provided via query parameter".
       Authorization header (Bearer) and form-encoded access_token body
       remain valid.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: catalog asserts a 400 invalid_request envelope with the panva-style description 'access tokens must not be provided via query parameter'; v1.0 instead follows RFC 9700 §2.4 by silently dropping URL query credentials at /userinfo (internal/userinfo/handler.go extractBearer never consults r.URL.Query()), so an ?access_token=X request resolves to the bare 'missing access token' 401 challenge with no leaked detail. The defensive posture is the stronger one — the query channel is unreachable rather than rejected — but it does not produce the catalog's specific 400 envelope."
 
   - id: FAPI-002
     severity: P1
@@ -41,7 +42,8 @@ rows:
       The authorization endpoint MUST reject FAPI requests whose
       response_mode does not match the FAPI profile's allowed set for
       that response_type.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: catalog asserts a FAPI-conditional response_mode allow-list whose violation surfaces as invalid_request; v1.0 has no per-profile response_mode allow-list (internal/authorize/validation.go validateResponseMode admits the same closed set {'', query, form_post, query.jwt, fragment.jwt, form_post.jwt, jwt} regardless of WithProfile). Unknown values still collapse onto unsupported_response_mode (RMO-001 binds that path), but the FAPI-only allow-list narrowing the catalog implies is not implemented."
 
   - id: FAPI-V1-010
     severity: P1
@@ -135,7 +137,7 @@ rows:
       error=invalid_request and
       error_description="Authorization Server policy requires PKCE to
       be used for this request".
-    status: pending
+    status: active
 
   - id: FAPI-V2-021
     severity: P0
@@ -145,7 +147,8 @@ rows:
       identifier URL (NOT the token or PAR endpoint URL); a mismatch
       yields 401 invalid_client with error_detail
       "audience (aud) must equal the issuer identifier url".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue (divergent posture): catalog asserts a strict aud == issuer rule for private_key_jwt at FAPI 2.0; v1.0 instead accepts both the issuer URL AND the absolute token / PAR endpoint URL as valid aud values via clientauth.PrivateKeyJWTVerifier.AuxAudiences (op/op_builders.go buildAssertionVerifier). The dual posture lets a single OP serve OIDC Core (aud == token endpoint URL per OIDC Core §9) and FAPI 2.0 (aud == issuer per §5.2.2) clients without forcing a per-profile verifier swap; the OFCS PAR audience module that uses aud == PAR endpoint also relies on this. A spec-strict embedder who wants the narrower posture swaps the verifier through the public store seam."
 
   - id: FAPI-V2-022
     severity: P0
@@ -156,7 +159,7 @@ rows:
       MUST be ignored under FAPI 2; missing redirect_uri yields a
       rendered (not redirected) 400 invalid_request with description
       "missing required parameter 'redirect_uri'".
-    status: pending
+    status: active
 
   - id: FAPI-V2-023
     severity: P0
@@ -165,7 +168,7 @@ rows:
       A Request Object on FAPI 2 MUST carry both exp and nbf; missing
       either yields the same invalid_request_object envelope as
       FAPI 1.
-    status: pending
+    status: active
 
   - id: FAPI-V2-024
     severity: P0
@@ -173,7 +176,7 @@ rows:
     behaviour: |
       The same nbf <= exp <= nbf + 3600 constraint as FAPI 1.0 applies;
       an exp claim too far from nbf yields invalid_request_object.
-    status: pending
+    status: active
 
   - id: FAPI-V2-025
     severity: P1
@@ -182,7 +185,7 @@ rows:
       A valid FAPI 2 Request Object with code plus PKCE produces code
       (and state if the RP sent one) in the redirect query — NOT in
       the fragment, NOT JARM by default.
-    status: pending
+    status: active
 
   - id: FAPI-030
     severity: P0
@@ -192,7 +195,8 @@ rows:
       enforced as authorization-server policy regardless of client
       metadata; the OP error rendering MUST emit iss per RFC 9207
       even on policy rejections.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: catalog asserts the OP MUST emit RFC 9207 iss on every policy rejection, including the rendered (no trusted redirect target) error envelope. RFC 9207 §2.4 itself only mandates iss on responses sent to the redirect_uri; rendered errors carry no redirect target by definition, so v1.0's wire shape (iss on redirect-channel errors via internal/authorizeendpoint/error.go buildRedirectError; no iss on rendered JSON envelopes) matches the spec's actual scope. The 'enforced regardless of client metadata' half is exercised by every other FAPI-V2 binding in this file: every FAPI-active rejection in v1.0 fires from the op-level wiring, not from per-client knobs (the registered client has no PKCE / redirect_uri / nbf required flags, yet the rejections still fire)."
 
   - id: FAPI-031
     severity: P1
@@ -201,4 +205,5 @@ rows:
       Detached-signature path: with response_type=code id_token, the
       id_token carries s_hash (state hash) AND c_hash, as implied by
       the response_mode policy decision tree.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: catalog asserts the detached-signature path (response_type=code id_token, hybrid flow) carries s_hash and c_hash on the front-channel id_token. v1.0 advertises only response_type=code (docs/plans/002-product-design.md OAuth 2.1 / FAPI 2.0 code-only stance); hybrid is intentionally not shipped. With no hybrid surface there is no front-channel id_token, so the s_hash / c_hash claims have no emission path to assert. Mirrors the blanket OOS already applied to the FAPI-V1-010..017 hybrid rows in this file."
