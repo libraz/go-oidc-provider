@@ -166,7 +166,8 @@ rows:
     behaviour: |
       When web_message is ON, response_modes_supported includes
       web_message.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a Web Message response mode feature flag (op.feature.Flag enumerates only PKCE / PAR / JAR / JARM / DPoP / MTLS / Introspect / Revoke / DynamicRegistration). With no feature toggle to turn web_message on, response_modes_supported never contains the value, and the discovery wire path the row asserts on is unreachable from public configuration.
     cross_refs:
       - response_modes#RMO-020
 
@@ -176,7 +177,8 @@ rows:
     behaviour: |
       When device flow is ON, discovery advertises
       device_authorization_endpoint.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a device-flow feature flag and does not mount /device_authorization. grant.DeviceCode is a stub constant for option-signature stability; no /device/auth endpoint is routable. discovery never advertises device_authorization_endpoint because the underlying handler is absent. No public surface to drive this row.
 
   - id: DIS-035
     severity: P1
@@ -222,4 +224,5 @@ rows:
       /.well-known/oauth-authorization-server is the OAuth-only mirror
       of /.well-known/openid-configuration and SHOULD return the same
       payload (modulo OAuth-only vs OIDC-only fields).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 mounts /.well-known/openid-configuration only; the RFC 8414 OAuth-only mirror /.well-known/oauth-authorization-server is not routed (op_router.go binds a single discovery handler to op.Endpoints.Discovery). Re-bind once the OAuth-mirror endpoint ships.

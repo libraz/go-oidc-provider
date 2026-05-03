@@ -468,14 +468,16 @@ func TestScenario_DIS_032_JARMMetadataAdvertisedWhenFeatureOn(t *testing.T) {
 	}
 }
 
+// TestScenario_DIS_033_WebMessageResponseModeAdvertisedWhenOn is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_033_WebMessageResponseModeAdvertisedWhenOn(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-033")
+	t.Skip("out-of-scope: DIS-033 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DIS_034_DeviceAuthorizationEndpointWhenDeviceOn is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_034_DeviceAuthorizationEndpointWhenDeviceOn(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-034")
+	t.Skip("out-of-scope: DIS-034 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_DIS_035_PAREndpointAdvertisedWhenPAROn verifies that
@@ -624,7 +626,8 @@ func TestScenario_DIS_040_DiscoveryEndpointsAreCORSOpen(t *testing.T) {
 	}
 }
 
+// TestScenario_DIS_041_OAuthMirrorMatchesOIDCConfig is OOS — see catalog out_of_scope_reason.
 func TestScenario_DIS_041_OAuthMirrorMatchesOIDCConfig(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DIS-041")
+	t.Skip("out-of-scope: DIS-041 (see catalog out_of_scope_reason)")
 }
