@@ -52,6 +52,7 @@ rows:
     behaviour: |
       The nonce from the authorization request is mirrored into the
       id_token verbatim when present and omitted otherwise.
+    status: active
 
   - id: IDT-05
     severity: P1
@@ -59,6 +60,7 @@ rows:
     behaviour: |
       auth_time is included when claims.id_token.auth_time has
       essential=true or when max_age was supplied on the request.
+    status: active
 
   - id: IDT-06
     severity: P1
@@ -67,6 +69,7 @@ rows:
       acr is emitted when requested via the claims parameter or when
       the client carries default_acr_values; it is voluntary
       otherwise.
+    status: active
 
   - id: IDT-07
     severity: P2
@@ -74,6 +77,7 @@ rows:
     behaviour: |
       amr is voluntary; it is emitted when the authentication method
       can supply a meaningful value.
+    status: active
 
   - id: IDT-08
     severity: P0
@@ -91,6 +95,7 @@ rows:
       access_token (e.g. response_type=code) MUST NOT carry
       scope-derived claims in the id_token; clients fetch them from
       /userinfo instead.
+    status: active
 
   - id: IDT-11
     severity: P0
@@ -129,6 +134,7 @@ rows:
     behaviour: |
       Claims requested explicitly via claims.id_token are always
       embedded in the id_token regardless of the conform mode.
+    status: active
 
   - id: IDT-15
     severity: P1
@@ -136,6 +142,7 @@ rows:
     behaviour: |
       An id_token re-issued through the refresh token grant uses the
       same composition mode as the original.
+    status: active
 
   - id: IDT-16
     severity: P1
@@ -143,6 +150,7 @@ rows:
     behaviour: |
       An id_token issued at the token endpoint uses the same
       composition mode as the original.
+    status: active
 
   - id: IDT-17
     severity: P1
@@ -151,6 +159,8 @@ rows:
       Scope-derived claims that consent rejected (the rejectedClaims
       concept) are excluded from both id_token and userinfo
       projections.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no consent rejection / rejectedClaims plumbing; the consent endpoint accepts an approved-scopes set but does not surface a per-claim 'rejected' projection back into the issuer pipeline. The 'rejected claims excluded from id_token and userinfo' assertion has no v1.0 wire seam."
 
   - id: IDT-20
     severity: P0
@@ -169,6 +179,7 @@ rows:
       at_hash is computed by hashing the access_token with the
       id_token's signing-alg hash (e.g. RS256 -> SHA-256), taking the
       left-most half, and base64url-encoding the result.
+    status: active
 
   - id: IDT-22
     severity: P0
@@ -185,6 +196,7 @@ rows:
     behaviour: |
       c_hash is computed by the same procedure as at_hash, with the
       authorization code as the input instead of the access_token.
+    status: active
 
   - id: IDT-24
     severity: P1
@@ -193,6 +205,8 @@ rows:
       Implementations MAY include s_hash (computed identically over
       state) in the id_token under JARM (response_mode=jwt) to
       protect the state parameter.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not emit s_hash on id_tokens. The IDTokenClaims struct in internal/tokens/tokens.go ships no SHash field, JARM signing in internal/jarm produces the response JWT but does not add s_hash to the id_token, and no caller ever requests one. The 'MAY include s_hash' allowance is unexercised."
 
   - id: IDT-25
     severity: P0
@@ -201,6 +215,8 @@ rows:
       An id_token issued at the token endpoint via the
       authorization_code grant alone does NOT carry at_hash or
       c_hash; they are optional in that path and not required.
+    status: out-of-scope
+    out_of_scope_reason: "The premise contradicts v1.0's actual behaviour: internal/tokenendpoint/authcode.go's mintAuthCodeIDToken unconditionally populates AtHash and CHash for every authorization_code exchange (verified by IDT-21 / IDT-23, which both pass). v1.0 emits the hash claims on the token-endpoint id_token; the row's 'does NOT carry' assertion would fail against the real wire shape."
 
   - id: IDT-26
     severity: P0
@@ -209,6 +225,8 @@ rows:
       When the hash-input alg differs from the id_token signing alg,
       the hash function is selected from the signing alg (signing
       alg is the source of truth).
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 only emits ES256 id_tokens (internal/tokens/tokens.go's Hash hard-pins SHA-256 truncated, and internal/keys/generate.go ships GenerateES256 only). With no second signing alg available, the conditional 'alg differs from signing alg -> hash function follows signing' has no observable second branch."
 
   - id: IDT-27
     severity: P1
@@ -216,6 +234,8 @@ rows:
     behaviour: |
       When the id_token signing alg is none, hash claims are omitted
       because there is no underlying hash to compute.
+    status: out-of-scope
+    out_of_scope_reason: "The 'none' id_token signing alg is intentionally not supported. v1.0's internal/jose alg registry rejects 'none' and the keyset generator only produces ES256; no public option flips the OP into none-signing. The conditional this row exercises never triggers."
 
   - id: IDT-30
     severity: P0
@@ -241,6 +261,8 @@ rows:
     behaviour: |
       When aud has multiple values or when the OP adds additional
       audiences, azp MUST be set to the current client_id.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 never emits multi-audience id_tokens. internal/tokenendpoint/authcode.go and refresh.go both build IDTokenClaims with Audience: []string{in.ClientID} (single-aud only), and no public option lets the embedder add extra audiences to id_token aud. The azp-required conditional has no v1.0 trigger."
 
   - id: IDT-33
     severity: P1
@@ -249,6 +271,8 @@ rows:
       When a session is bound to the id_token for logout coordination,
       the OP carries a sid claim for front-channel and back-channel
       logout consumers.
+    status: out-of-scope
+    out_of_scope_reason: v1.0 never populates sid on id_tokens. internal/tokens/tokens.go declares the SID field with omitempty, but no caller in internal/tokenendpoint/{authcode,refresh,customgrant}.go writes it; sid is only consumed by the back-channel logout payload via internal/sessions, never minted into the id_token wire.
 
   - id: IDT-34
     severity: P1
@@ -257,6 +281,7 @@ rows:
       External resource audiences (i.e. access_token target
       audiences) MUST NOT be added to id_token's aud; the id_token
       aud is reserved for client-authentication audiences.
+    status: active
 
   - id: IDT-40
     severity: P0
@@ -286,6 +311,8 @@ rows:
     behaviour: |
       When id_token_encrypted_response_alg is configured, the OP
       signs first and then encrypts (nested JWE).
+    status: out-of-scope
+    out_of_scope_reason: id_token encryption (id_token_encrypted_response_alg / nested JWE) is intentionally not supported in v1.0. No public option installs an id_token JWE encrypter; the OP only signs with ES256 and never encrypts the resulting JWS.
 
   - id: IDT-43
     severity: P0
@@ -293,6 +320,8 @@ rows:
     behaviour: |
       Symmetric algorithms such as HS256 sign with a key derived
       from client_secret.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 only supports asymmetric ES256 signing. The internal/jose alg registry exposes RS256/PS256/ES256/EdDSA but the keyset generator (internal/keys/generate.go's GenerateES256) emits ES256 only, and no public option installs HS256 with a client_secret-derived HMAC key."
 
   - id: IDT-44
     severity: P1
@@ -301,6 +330,7 @@ rows:
       id_token and JWT access tokens carry distinct typ values
       (id_token uses JWT, access tokens use at+jwt) so the two are
       not confused.
+    status: active
 
   - id: IDT-50
     severity: P0
@@ -316,6 +346,7 @@ rows:
     behaviour: |
       claims.userinfo entries are released by /userinfo regardless
       of scope.
+    status: active
 
   - id: IDT-52
     severity: P0
@@ -324,6 +355,8 @@ rows:
       When userinfo_signed_response_alg is configured, /userinfo
       returns a signed JWT with content-type application/jwt instead
       of JSON.
+    status: out-of-scope
+    out_of_scope_reason: "userinfo_signed_response_alg is intentionally not honoured: /userinfo always returns application/json. The redact list namechecks the metadata field for storage hygiene, but no signer is wired into internal/userinfoendpoint and the response writer hard-codes JSON."
 
   - id: IDT-53
     severity: P1
@@ -331,6 +364,8 @@ rows:
     behaviour: |
       When userinfo_encrypted_response_alg is configured, the signed
       JWT is encrypted before delivery.
+    status: out-of-scope
+    out_of_scope_reason: "userinfo_encrypted_response_alg is not supported. v1.0's /userinfo response writer ships JSON only and there is no JWE encrypter for the userinfo channel, mirroring the same gap as IDT-52."
 
   - id: IDT-54
     severity: P0
@@ -354,6 +389,7 @@ rows:
       The OP never embeds passwords, secrets, or unsolicited
       high-PII material in the id_token; the claim set is
       deterministic and gated by request and scope.
+    status: active
 
   - id: IDT-61
     severity: P0
