@@ -16,9 +16,10 @@ func TestScenario_SES_001_ExpiredSessionForcesFreshLogin(t *testing.T) {
 	t.Skip("out-of-scope: SES-001 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_SES_002_ClockToleranceAcceptsWithinSkewSession is OOS — see catalog out_of_scope_reason.
 func TestScenario_SES_002_ClockToleranceAcceptsWithinSkewSession(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: SES-002")
+	t.Skip("out-of-scope: SES-002 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_SES_003_ClockToleranceRejectsBeyondSkewSession is OOS —

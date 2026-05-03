@@ -35,7 +35,8 @@ rows:
       expired only 5 seconds ago MUST be accepted as still valid. No
       session destroy is invoked and the request proceeds to issue an
       authorization code (303 with `code` and `state`).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's public surface does not expose a session clock-tolerance knob (no WithClockTolerance / WithSessionClockTolerance option). internal/sessions/manager.go's Resolve treats now>=ExpiresAt as expired with no leeway window, so the within-skew acceptance assertion this row makes has no wire seam to drive. The companion boundary-condition row SES-003 is OOS on the same grounds."
 
   - id: SES-003
     severity: P0
