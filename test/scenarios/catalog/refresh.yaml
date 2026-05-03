@@ -37,7 +37,8 @@ rows:
       AccessToken, and RefreshToken entities; the RefreshToken records
       gty=authorization_code while the AccessToken records
       gty="authorization_code refresh_token".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 audit emitter has no public 'observability context' / 'entity registration' primitive: audit.Event surfaces ActorID/ClientID/SessionID/RequestID/Tag/Extras only — no Entities []EntityRef field. Binding would require new public surface (EntityRef type + Entities slice + emission plumbing). Out of scope for v1.0."
 
   - id: REF-003
     severity: P0
@@ -134,7 +135,8 @@ rows:
       gty=authorization_code, the new RefreshToken records
       gty="authorization_code refresh_token", and the AccessToken
       records gty="authorization_code refresh_token".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 audit emitter has no public 'observability context' / 'entity registration' primitive (no Entities []EntityRef on audit.Event); rotation behaviour itself is covered on the wire by REF-013 (token.refreshed) and REF-016 (chain revoke on replay)."
 
   - id: REF-013
     severity: P0
@@ -154,7 +156,7 @@ rows:
       With rotateRefreshToken=true and a default-scope token request,
       the new refresh_token retains the original full scope so the
       consumed token's scope equals the new token's scope.
-    status: pending
+    status: active
 
   - id: REF-015
     severity: P1
@@ -163,7 +165,8 @@ rows:
       With rotateRefreshToken=true, a request that narrows scope still
       mints a new refresh_token carrying the original scope while the
       AccessToken returned reflects only the narrowed scope.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's refresh exchanger narrows the rotated refresh_token to the requested scope (internal/grants/refresh/refresh.go resolveScope returns slices.Clone(requested) when RequestedScope is non-empty). The 'narrowed AT but rotated RT carries the original full scope' shape is the JS oidc-provider model — not v1.0's. RFC 6749 §6 / OIDC Core §12 forbid widening but do not require the OP to retain pre-narrow scope on the rotated RT. The wire-side narrowing-on-AT half is covered by REF-007/REF-008."
 
   - id: REF-016
     severity: P0
@@ -189,7 +192,8 @@ rows:
       true, the predicate is invoked exactly once and the entity
       shape matches rotateRefreshToken=true (RotatedRefreshToken plus
       a new RefreshToken).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a runtime per-request rotateRefreshToken predicate option; refresh rotation is structural (the library always rotates and gates the second redemption via WithRefreshGracePeriod). Binding the predicate variant requires new public option WithRotateRefreshToken(func(...) bool); not on the v1.0 roadmap. Wire-level rotation is covered by REF-013/REF-014/REF-015/REF-016.
 
   - id: REF-018
     severity: P1
@@ -198,7 +202,8 @@ rows:
       With a predicate that returns true, the first redemption issues
       a new refresh_token distinct from the old one, preserves the ID
       Token nonce, and fires the consumed/saved audit events.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a runtime per-request rotateRefreshToken predicate option; refresh rotation is structural (the library always rotates and gates the second redemption via WithRefreshGracePeriod). Wire-level rotation is covered by REF-013/REF-016.
 
   - id: REF-019
     severity: P1
@@ -206,7 +211,8 @@ rows:
     behaviour: |
       With a predicate that returns true, consumed and saved
       refresh_tokens share the original scope.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a runtime per-request rotateRefreshToken predicate option; refresh rotation is structural. Scope inheritance under rotation is covered by REF-014.
 
   - id: REF-020
     severity: P1
@@ -216,7 +222,8 @@ rows:
       mints a new refresh_token retaining the original full scope
       while the AccessToken returned reflects only the narrowed
       scope.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a runtime per-request rotateRefreshToken predicate option; refresh rotation is structural. Narrowed-scope rotation is covered by REF-015.
 
   - id: REF-021
     severity: P0
@@ -236,4 +243,5 @@ rows:
       refresh_token is reused rather than rotated; the entities omit
       RotatedRefreshToken, the response body still includes a
       refresh_token, and the ID Token nonce is preserved.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not expose a runtime per-request rotateRefreshToken predicate option; the library always rotates refresh tokens. The 'predicate returns false → reuse refresh_token' shape is incompatible with v1.0's structural rotation policy."

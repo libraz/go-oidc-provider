@@ -109,9 +109,10 @@ func TestScenario_REF_001_NonRotatingRefreshSuccess(t *testing.T) {
 	}
 }
 
+// TestScenario_REF_002_NonRotatingRefreshEntities is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_002_NonRotatingRefreshEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-002")
+	t.Skip("out-of-scope: REF-002 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_REF_003_ExpiredRefreshTokenRejected verifies that a
@@ -728,9 +729,10 @@ func TestScenario_REF_011_UnknownRefreshTokenRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_REF_012_RotationEntitiesIncludeBothTokens is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_012_RotationEntitiesIncludeBothTokens(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-012")
+	t.Skip("out-of-scope: REF-012 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_REF_013_RotationFirstRedemptionMintsNewToken
@@ -839,14 +841,122 @@ func TestScenario_REF_013_RotationFirstRedemptionMintsNewToken(t *testing.T) {
 	}
 }
 
+// TestScenario_REF_014_RotationDefaultScopeInheritsOriginal verifies
+// that a default-scope rotation (no `scope` parameter on the
+// /token request) preserves the original grant's scope on the
+// rotated refresh_token: the response body's scope mirrors the
+// original, and the previous refresh_token can no longer be
+// redeemed.
+//
+// Spec: OIDC Core §12 (rotation MUST NOT widen scope).
 func TestScenario_REF_014_RotationDefaultScopeInheritsOriginal(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-014")
+
+	const (
+		clientID = "rp-ref-014"
+		callback = "https://rp.testkit.invalid/callback"
+	)
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "rp-ref-014-secret"
+	const originalScope = "openid email offline_access"
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithStrictOfflineAccess(),
+		op.WithRefreshGracePeriod(0),
+	))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+	})
+
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       originalScope,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	first := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if first.StatusCode != http.StatusOK || first.RefreshToken == "" {
+		t.Fatalf("first /token must return refresh_token: status=%d body=%v", first.StatusCode, first.Raw)
+	}
+	if first.Scope == "" {
+		t.Fatal("first exchange scope must be populated")
+	}
+
+	rotated := postRefreshToken(t, tk, first.RefreshToken, rp.ID, clientSecret)
+	if rotated.StatusCode != http.StatusOK {
+		t.Fatalf("rotated /token status=%d body=%v want 200", rotated.StatusCode, rotated.Raw)
+	}
+	if rotated.RefreshToken == "" {
+		t.Fatal("rotated /token missing refresh_token")
+	}
+	if rotated.RefreshToken == first.RefreshToken {
+		t.Fatalf("rotated refresh_token must differ from original; got %q == %q", rotated.RefreshToken, first.RefreshToken)
+	}
+
+	// Default-scope rotation must inherit the original scope.
+	if !sameScopeSet(rotated.Scope, first.Scope) {
+		t.Errorf("rotated scope=%q must equal original scope=%q (default-scope rotation)", rotated.Scope, first.Scope)
+	}
+
+	// Original refresh_token must no longer be redeemable (the
+	// rotation consumed it).
+	replay := postRefreshToken(t, tk, first.RefreshToken, rp.ID, clientSecret)
+	if replay.StatusCode != http.StatusBadRequest {
+		t.Fatalf("post-rotation replay /token status=%d body=%v want 400", replay.StatusCode, replay.Raw)
+	}
+	if got, _ := replay.Raw["error"].(string); got != "invalid_grant" {
+		t.Errorf("replay error=%q want invalid_grant", got)
+	}
 }
 
+// TestScenario_REF_015_RotationNarrowedScopeRetainsOriginal is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_015_RotationNarrowedScopeRetainsOriginal(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-015")
+	t.Skip("out-of-scope: REF-015 (see catalog out_of_scope_reason)")
+}
+
+// sameScopeSet compares two space-delimited scope strings as
+// unordered sets so assertions do not couple to the OP's internal
+// ordering.
+func sameScopeSet(a, b string) bool {
+	splitSet := func(s string) map[string]struct{} {
+		out := map[string]struct{}{}
+		for _, t := range strings.Fields(s) {
+			out[t] = struct{}{}
+		}
+		return out
+	}
+	as := splitSet(a)
+	bs := splitSet(b)
+	if len(as) != len(bs) {
+		return false
+	}
+	for k := range as {
+		if _, ok := bs[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // TestScenario_REF_016_RotationReplayRevokesGrantChain pins the
@@ -961,24 +1071,28 @@ func TestScenario_REF_016_RotationReplayRevokesGrantChain(t *testing.T) {
 	}
 }
 
+// TestScenario_REF_017_PredicateTrueRotationEntities is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_017_PredicateTrueRotationEntities(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-017")
+	t.Skip("out-of-scope: REF-017 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_REF_018_PredicateTrueFirstRedemption is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_018_PredicateTrueFirstRedemption(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-018")
+	t.Skip("out-of-scope: REF-018 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_REF_019_PredicateTrueScopeInheritance is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_019_PredicateTrueScopeInheritance(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-019")
+	t.Skip("out-of-scope: REF-019 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_REF_020_PredicateTrueNarrowedScopeRequest is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_020_PredicateTrueNarrowedScopeRequest(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-020")
+	t.Skip("out-of-scope: REF-020 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_REF_021_PredicateTrueReplayRevokesChain is OOS — see catalog out_of_scope_reason.
@@ -987,7 +1101,8 @@ func TestScenario_REF_021_PredicateTrueReplayRevokesChain(t *testing.T) {
 	t.Skip("out-of-scope: REF-021 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_REF_022_PredicateFalseReusesRefreshToken is OOS — see catalog out_of_scope_reason.
 func TestScenario_REF_022_PredicateFalseReusesRefreshToken(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: REF-022")
+	t.Skip("out-of-scope: REF-022 (see catalog out_of_scope_reason)")
 }
