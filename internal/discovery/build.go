@@ -147,17 +147,18 @@ type Metadata struct {
 
 // EndpointPaths mirrors op.Endpoints with internal-friendly types.
 type EndpointPaths struct {
-	JWKS        string
-	Authorize   string
-	Token       string
-	UserInfo    string
-	EndSession  string
-	Introspect  string
-	Revoke      string
-	PAR         string
-	Interaction string
-	Session     string
-	Register    string
+	JWKS                string
+	Authorize           string
+	Token               string
+	UserInfo            string
+	EndSession          string
+	Introspect          string
+	Revoke              string
+	PAR                 string
+	Interaction         string
+	Session             string
+	Register            string
+	DeviceAuthorization string
 }
 
 // Features carries the enable bits for optional protocol extensions.
@@ -170,6 +171,13 @@ type Features struct {
 	Introspect          bool
 	Revoke              bool
 	DynamicRegistration bool
+
+	// DeviceCodeGrant reports whether the OP is configured to accept
+	// the RFC 8628 device_code grant. The discovery builder uses the
+	// flag to gate emission of the device_authorization_endpoint
+	// field; the op layer wires it from the resolved grants list and
+	// substore presence.
+	DeviceCodeGrant bool
 }
 
 // ValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4
@@ -314,9 +322,9 @@ func subjectTypesFor(pairwiseEnabled bool) []string {
 }
 
 // applyFeatureEndpoints publishes the per-feature endpoint URLs
-// (PAR / introspection / revocation). Each URL is gated on its feature
-// flag so a deployment that does not advertise the feature keeps the
-// field absent from the wire.
+// (PAR / introspection / revocation / device_authorization). Each URL
+// is gated on its feature flag so a deployment that does not advertise
+// the feature keeps the field absent from the wire.
 func applyFeatureEndpoints(in Input, doc *Document) {
 	if in.Features.PAR {
 		doc.PushedAuthorizationRequestEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.PAR)
@@ -326,6 +334,9 @@ func applyFeatureEndpoints(in Input, doc *Document) {
 	}
 	if in.Features.Revoke {
 		doc.RevocationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Revoke)
+	}
+	if in.Features.DeviceCodeGrant {
+		doc.DeviceAuthorizationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.DeviceAuthorization)
 	}
 }
 

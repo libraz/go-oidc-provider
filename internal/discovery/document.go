@@ -84,6 +84,12 @@ type Document struct {
 	// "initial_access_token" only. Empty when the feature is disabled.
 	RegistrationEndpointAuthMethodsSupported []string `json:"registration_endpoint_auth_methods_supported,omitempty"`
 
+	// DeviceAuthorizationEndpoint is the absolute URL of the RFC 8628
+	// §3.1 device-authorization endpoint. Only emitted when the OP is
+	// configured to accept the device_code grant
+	// (urn:ietf:params:oauth:grant-type:device_code).
+	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint,omitempty"`
+
 	// ResponseTypesSupported lists the response_type values the OP
 	// accepts. v1.0 ships with "code" only (no implicit / hybrid).
 	ResponseTypesSupported []string `json:"response_types_supported"`

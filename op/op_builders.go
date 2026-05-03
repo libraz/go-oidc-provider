@@ -678,19 +678,20 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 		Issuer:      cfg.issuer,
 		MountPrefix: cfg.mountPrefix,
 		Endpoints: discovery.EndpointPaths{
-			JWKS:        cfg.endpoints.JWKS,
-			Authorize:   cfg.endpoints.Authorize,
-			Token:       cfg.endpoints.Token,
-			UserInfo:    cfg.endpoints.UserInfo,
-			EndSession:  cfg.endpoints.EndSession,
-			Introspect:  cfg.endpoints.Introspect,
-			Revoke:      cfg.endpoints.Revoke,
-			PAR:         cfg.endpoints.PAR,
-			Interaction: cfg.endpoints.Interaction,
-			Session:     cfg.endpoints.Session,
-			Register:    cfg.endpoints.Register,
+			JWKS:                cfg.endpoints.JWKS,
+			Authorize:           cfg.endpoints.Authorize,
+			Token:               cfg.endpoints.Token,
+			UserInfo:            cfg.endpoints.UserInfo,
+			EndSession:          cfg.endpoints.EndSession,
+			Introspect:          cfg.endpoints.Introspect,
+			Revoke:              cfg.endpoints.Revoke,
+			PAR:                 cfg.endpoints.PAR,
+			Interaction:         cfg.endpoints.Interaction,
+			Session:             cfg.endpoints.Session,
+			Register:            cfg.endpoints.Register,
+			DeviceAuthorization: cfg.endpoints.DeviceAuthorization,
 		},
-		Features:                  buildFeatures(cfg.features),
+		Features:                  buildDiscoveryFeatures(cfg),
 		GrantsSupported:           grantStrings,
 		ScopesSupported:           scopes.PublicNames(),
 		ProfileAllowedAuthMethods: cfg.profileAllowedAuthMethodNames(),
@@ -732,6 +733,20 @@ func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, cl
 		}
 		return string(sub), nil
 	}
+}
+
+// buildDiscoveryFeatures composes the discovery feature flags from
+// the configured [feature.Flag] set AND the cross-cutting fields that
+// do not flow through [feature.Flag] (e.g. the device_code grant,
+// gated on grant_types_supported and substore presence rather than a
+// dedicated feature flag). The function is the single source of
+// truth for "which optional surfaces does the OP advertise" so the
+// discovery builder, the router, and the option-layer validators stay
+// aligned.
+func buildDiscoveryFeatures(cfg *config) discovery.Features {
+	out := buildFeatures(cfg.features)
+	out.DeviceCodeGrant = cfg.deviceCodeGrantConfigured()
+	return out
 }
 
 // buildFeatures translates the configured feature flags into the

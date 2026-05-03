@@ -37,6 +37,7 @@ func (c *config) validate() error {
 		c.validateLoginFlow,
 		c.validateAccessTokenFormat,
 		c.validateAccessTokenRevocation,
+		c.validateDeviceCodeGrant,
 	} {
 		if err := fn(); err != nil {
 			return err

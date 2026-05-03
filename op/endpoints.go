@@ -57,6 +57,14 @@ type Endpoints struct {
 	// [WithDynamicRegistration]; the discovery document advertises
 	// "registration_endpoint" with the same gating.
 	Register string
+
+	// DeviceAuthorization overrides the RFC 8628 §3.1
+	// device-authorization endpoint. Default: "/device_authorization".
+	// Only mounted when the device_code grant is configured via
+	// [WithDeviceCodeGrant] (or by including [grant.DeviceCode] in
+	// [WithGrants]); the discovery document advertises
+	// "device_authorization_endpoint" with the same gating.
+	DeviceAuthorization string
 }
 
 // defaultEndpoints returns the endpoint paths the [Provider] uses when the
@@ -64,18 +72,19 @@ type Endpoints struct {
 // to the configured MountPrefix (default "/oidc").
 func defaultEndpoints() Endpoints {
 	return Endpoints{
-		Discovery:   "/.well-known/openid-configuration",
-		JWKS:        "/jwks",
-		Authorize:   "/auth",
-		Token:       "/token",
-		UserInfo:    "/userinfo",
-		EndSession:  "/end_session",
-		Introspect:  "/introspect",
-		Revoke:      "/revoke",
-		PAR:         "/par",
-		Interaction: "/interaction",
-		Session:     "/session",
-		Register:    "/register",
+		Discovery:           "/.well-known/openid-configuration",
+		JWKS:                "/jwks",
+		Authorize:           "/auth",
+		Token:               "/token",
+		UserInfo:            "/userinfo",
+		EndSession:          "/end_session",
+		Introspect:          "/introspect",
+		Revoke:              "/revoke",
+		PAR:                 "/par",
+		Interaction:         "/interaction",
+		Session:             "/session",
+		Register:            "/register",
+		DeviceAuthorization: "/device_authorization",
 	}
 }
 
@@ -118,6 +127,9 @@ func (e Endpoints) merge(override Endpoints) Endpoints {
 	}
 	if override.Register != "" {
 		out.Register = override.Register
+	}
+	if override.DeviceAuthorization != "" {
+		out.DeviceAuthorization = override.DeviceAuthorization
 	}
 	return out
 }

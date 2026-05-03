@@ -465,6 +465,21 @@ type config struct {
 	// hook. At most one policy may be registered; a second
 	// [RegisterTokenExchange] call yields [ErrTokenExchangeDuplicate].
 	tokenExchangePolicy TokenExchangePolicy
+
+	// deviceCodeGrantEnabled records the explicit
+	// [WithDeviceCodeGrant] opt-in. When true the construction-time
+	// validator requires the configured [store.Store] to expose a
+	// non-nil [store.DeviceCodeStore] substore; when false the
+	// device_code grant is enabled iff [grant.DeviceCode] appears in
+	// [config.grants], and the runtime path falls back to
+	// unsupported_grant_type if the substore is missing.
+	deviceCodeGrantEnabled bool
+
+	// deviceVerificationURI overrides the verification URI advertised
+	// to the device in the RFC 8628 §3.2 response. Empty falls back
+	// to `<issuer>/device`; a non-empty value is validated at the
+	// option site (absolute URL with a non-empty host).
+	deviceVerificationURI string
 }
 
 // claimsParameterSupported returns the effective discovery

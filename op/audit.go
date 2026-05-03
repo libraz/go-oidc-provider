@@ -202,6 +202,24 @@ const (
 	AuditDCRMetadataValidation    = AuditEvent("dcr.metadata.validation_failed")
 )
 
+// Device-flow events. Fire from the /device_authorization endpoint,
+// the verification ceremony, and the token-endpoint device_code grant.
+// The internal package cannot import op (one-way import graph), so the
+// values are duplicated as raw strings inside
+// internal/devicecode/audit.go and a mirror test (TestAuditEvent_DeviceCodeMirror)
+// pins them together.
+const (
+	AuditDeviceAuthorizationIssued          = AuditEvent("device_authorization.issued")
+	AuditDeviceAuthorizationRejected        = AuditEvent("device_authorization.rejected")
+	AuditDeviceAuthorizationUnboundRejected = AuditEvent("device_authorization.unbound_rejected")
+	AuditDeviceCodeVerificationApproved     = AuditEvent("device_code.verification.approved")
+	AuditDeviceCodeVerificationDenied       = AuditEvent("device_code.verification.denied")
+	AuditDeviceCodeUserCodeBruteForce       = AuditEvent("device_code.verification.user_code_brute_force")
+	AuditDeviceCodeTokenIssued              = AuditEvent("device_code.token.issued")
+	AuditDeviceCodeTokenRejected            = AuditEvent("device_code.token.rejected")
+	AuditDeviceCodeTokenSlowDown            = AuditEvent("device_code.token.slow_down")
+)
+
 // Token-exchange events. Fire from the in-tree RFC 8693 handler.
 // Every successful exchange emits Requested + Granted; rejections
 // emit Requested + one of the failure-class events depending on the

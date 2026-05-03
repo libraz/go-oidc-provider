@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/cors"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/devicecodeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endsession"
@@ -15,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
@@ -117,8 +119,10 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry, 
 			RevocationStrategy:             cfg.atRevocation,
 			Audit:                          cfg.effectiveAuditEmitter(),
 			CustomGrants:                   buildExtensionDispatcher(cfg, keySet),
+			DeviceCodes:                    deviceCodesFor(cfg),
 		})),
 	)
+	mountDeviceAuthorizationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
@@ -420,6 +424,67 @@ func mountEndSessionEndpoint(
 			RevocationStrategy: cfg.atRevocation,
 		})),
 	)
+}
+
+// mountDeviceAuthorizationEndpoint registers the
+// /device_authorization handler when the device_code grant is
+// configured (via [WithDeviceCodeGrant] or by including
+// [grant.DeviceCode] in [WithGrants]). The mount is gated on the
+// resolved grant configuration so a deployment that does not enable
+// the grant keeps the route absent — the discovery document advertises
+// the endpoint with the same gating, so the OP cannot tell clients the
+// endpoint exists while quietly serving 404.
+//
+// The substore is reached through [deviceCodesFor]; an embedder who
+// included [grant.DeviceCode] without wiring a substore reaches the
+// runtime nil-check in [internal/devicecodeendpoint.Handler] and
+// surfaces server_error for the inbound request, mirroring the
+// token-endpoint dispatch's unsupported_grant_type fallback.
+func mountDeviceAuthorizationEndpoint(
+	mux *http.ServeMux,
+	cfg *config,
+	dpopVerifier *dpop.Verifier,
+	mtlsVerifier *mtls.Verifier,
+	assertionVerifier clientauth.AssertionVerifier,
+	strictCORS *cors.Strict,
+) {
+	if !cfg.deviceCodeGrantConfigured() {
+		return
+	}
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.DeviceAuthorization),
+		strictCORS.Handler(devicecodeendpoint.Handler(devicecodeendpoint.Deps{
+			Issuer:                   cfg.issuer,
+			VerificationURI:          cfg.effectiveDeviceVerificationURI(),
+			Clients:                  cfg.store.Clients(),
+			DeviceCodes:              deviceCodesFor(cfg),
+			Clock:                    cfg.clock,
+			AssertionVerifier:        assertionVerifier,
+			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			DPoP:                     dpopVerifier,
+			DPoPNonces:               cfg.dpopNonces,
+			MTLS:                     mtlsVerifier,
+			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
+			AccessTokenTTL:           cfg.accessTokenTTL,
+			Audit:                    cfg.effectiveAuditEmitter(),
+		})),
+	)
+}
+
+// deviceCodesFor returns the [store.DeviceCodeStore] the device-flow
+// surfaces consume. The function exists so the token-endpoint mount
+// and the device-authorization mount share an identical resolution
+// path: a configured Store may legitimately return nil (the substore
+// is intentionally outside the transactional cluster, and a
+// deployment that does not opt into the grant via the dedicated
+// option may have wired only the cluster substores). Returning the
+// nil verbatim lets the runtime path emit unsupported_grant_type
+// rather than panic.
+func deviceCodesFor(cfg *config) store.DeviceCodeStore {
+	if cfg.store == nil {
+		return nil
+	}
+	return cfg.store.DeviceCodes()
 }
 
 // joinPath concatenates mountPrefix and endpoint into a full path, handling

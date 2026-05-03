@@ -87,6 +87,34 @@ func TestAuditEvent_IntrospectionMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_DeviceCodeMirror keeps the public
+// op.AuditDeviceAuthorization* / op.AuditDeviceCode* constants aligned
+// with the raw strings the device-flow surfaces emit. The internal
+// devicecode helpers (internal/devicecode/audit.go) and the
+// devicecodeendpoint / token-endpoint device_code handler all consume
+// the raw strings; the public constants are the SOC-facing API and
+// must agree byte-for-byte.
+func TestAuditEvent_DeviceCodeMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"device_authorization.issued":                    op.AuditDeviceAuthorizationIssued,
+		"device_authorization.rejected":                  op.AuditDeviceAuthorizationRejected,
+		"device_authorization.unbound_rejected":          op.AuditDeviceAuthorizationUnboundRejected,
+		"device_code.verification.approved":              op.AuditDeviceCodeVerificationApproved,
+		"device_code.verification.denied":                op.AuditDeviceCodeVerificationDenied,
+		"device_code.verification.user_code_brute_force": op.AuditDeviceCodeUserCodeBruteForce,
+		"device_code.token.issued":                       op.AuditDeviceCodeTokenIssued,
+		"device_code.token.rejected":                     op.AuditDeviceCodeTokenRejected,
+		"device_code.token.slow_down":                    op.AuditDeviceCodeTokenSlowDown,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_DPoPLooseMethodCaseMirror keeps the public
 // op.AuditDPoPLooseMethodCaseAdmitted constant aligned with the raw
 // string that the DPoP verifier emits when the
