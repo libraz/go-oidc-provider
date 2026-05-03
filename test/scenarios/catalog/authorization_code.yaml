@@ -39,7 +39,8 @@ rows:
       AccessToken records gty=authorization_code and the request
       context resolves the Account, Grant, Client, AuthorizationCode,
       and AccessToken entities.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 audit emitter has no public 'observability context' / 'entity registration' primitive: audit.Event surfaces ActorID/ClientID/SessionID/RequestID/Tag/Extras only — no Entities []EntityRef field. Binding would require new public surface (EntityRef type + Entities slice + emission plumbing through internal/tokenendpoint/authcode.go). The wire-level success envelope is already pinned by AC-001/AC-003."
 
   - id: AC-003
     severity: P1
@@ -299,4 +300,5 @@ rows:
       An unexpected exception thrown by a downstream Client.find call
       surfaces as 500 server_error with description "oops! something
       went wrong" and a server_error audit event is emitted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's token endpoint maps store-layer errors onto invalid_grant / server_error per the canonical RFC 6749 §5.2 envelope; the 'oops! something went wrong' literal description is the JS oidc-provider default error page wording, not a v1.0 emission. v1.0 also has no public injection seam to make a registered Client.find call panic (Store.Clients() returns the inmem implementation; Find returns ErrNotFound on missing rows, not arbitrary downstream exceptions). Reconsider when an embedder-supplied Store error envelope reaches the wire."

@@ -167,9 +167,10 @@ func TestScenario_AC_001_MultiURISuccessReturnsTokens(t *testing.T) {
 	}
 }
 
+// TestScenario_AC_002_NoOfflineAccessEntitiesResolved is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_002_NoOfflineAccessEntitiesResolved(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-002")
+	t.Skip("out-of-scope: AC-002 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_AC_003_OfflineAccessIssuesRefreshToken verifies that a
@@ -1148,7 +1149,8 @@ func TestScenario_AC_028_UnknownCodeRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_AC_029_DownstreamExceptionReturnsServerError is OOS — see catalog out_of_scope_reason.
 func TestScenario_AC_029_DownstreamExceptionReturnsServerError(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: AC-029")
+	t.Skip("out-of-scope: AC-029 (see catalog out_of_scope_reason)")
 }
