@@ -5,32 +5,35 @@ title: Device Authorization Grant
 specs:
   - RFC 8628 — OAuth 2.0 Device Authorization Grant
   - RFC 6749 §5.1 / §5.2 — Token response and error format
-  - OpenID Connect Core 1.0 §11 (Offline Access), §3.1.3
+  - RFC 8707 — OAuth 2.0 Resource Indicators
+  - OpenID Connect Core 1.0 §3.1.3 / §11 — ID Token issuance and Offline Access
   - RFC 8414 — Discovery (device_authorization_endpoint)
-  - RFC 8252 — OAuth 2.0 for Native Apps
-  - OWASP XSS / CSRF prevention guidance
 
 description: |
-  RFC 8628 device authorization endpoint (POST /device/auth), the
-  device-code grant at the token endpoint, the user-facing verification
-  flow (GET/POST /device), and the interaction-resume path
-  (GET /device/:uid). Covers content-type and parameter validation,
-  client authentication, response shape, persistence, expiry/replay
-  semantics, charset/mask configuration, and CSRF/XSS hardening of the
-  verification UI.
+  RFC 8628 device-authorization endpoint (POST /device_authorization)
+  and the device_code grant at the token endpoint
+  (urn:ietf:params:oauth:grant-type:device_code). v0.9.x ships an
+  HTTP-only OP: the user-facing /device verification UI, charset/mask
+  configuration, and per-flow consent ceremony are delegated to the
+  embedder via [interaction.Driver] (see CLAUDE.md §ライブラリ性の核).
+  The active rows pin the wire surface this OP owns; the OOS rows
+  enumerate vendor-specific behaviour inherited from a reference
+  catalogue that v0.9.x does NOT promise.
 
 rows:
+  # ---------------------------------------------------------------
+  # /device_authorization endpoint behaviour
+  # ---------------------------------------------------------------
   - id: DEV-001
     severity: P1
     spec: RFC 8628 §3.1 / RFC 6749 §3.2
     behaviour: |
-      POST /device/auth with a body whose Content-Type is not
-      application/x-www-form-urlencoded returns 400 invalid_request
-      with the description "only application/x-www-form-urlencoded
-      content-type bodies are supported on POST /device/auth" and
-      emits a device_authorization.error audit event.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      POST /device_authorization with a body whose Content-Type is
+      not application/x-www-form-urlencoded MUST be rejected with
+      400 invalid_request and a description that names the expected
+      content-type. Mirrors the same rule on /token and /par so the
+      three form-encoded endpoints share an identical envelope.
+    status: active
 
   - id: DEV-002
     severity: P0
@@ -38,206 +41,204 @@ rows:
     behaviour: |
       A client whose registered grant_types do not include
       urn:ietf:params:oauth:grant-type:device_code MUST be rejected
-      with 400 invalid_request and the description
-      "urn:ietf:params:oauth:grant-type:device_code is not allowed for
-      this client"; the OP emits device_authorization.error.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      at /device_authorization with 400 unauthorized_client; the OP
+      emits device_authorization.rejected with reason
+      "grant_type_not_permitted".
+    status: active
 
   - id: DEV-003
     severity: P0
-    spec: RFC 6749 §5.2
+    spec: RFC 6749 §5.2 / RFC 8628 §3.1
     behaviour: |
-      Unknown or unauthenticated clients calling /device/auth receive
-      401 invalid_client with the description "client authentication
-      failed"; the OP emits device_authorization.error.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      Unknown or unauthenticated clients calling /device_authorization
+      receive 401 invalid_client; the failure is emitted via the
+      shared client_authn.failure audit event. The body is the
+      RFC 6749 §5.2 envelope.
+    status: active
 
   - id: DEV-004
     severity: P1
     spec: OIDC Core §6.1
     behaviour: |
-      /device/auth requests carrying a request parameter MUST be
-      rejected with 400 request_not_supported; signed Request Objects
-      are not allowed at the device authorization endpoint.
+      /device_authorization rejects a request parameter (signed
+      Request Object) with 400 request_not_supported.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "RFC 8628 §3.1 enumerates the parameter set the device-authorization endpoint accepts; signed Request Objects (OIDC Core §6.1) are an authorization-endpoint construct and are neither defined nor expected here. v0.9.x's /device_authorization handler validates only the parameters it consumes (client auth, scope, resource) and ignores unknown form keys; it does not synthesise a request_not_supported rejection. Adding the rejection would create a vendor-specific gate that no OIDC profile requires at this endpoint. Revisit only if a future profile (e.g. FAPI Device-Authorization) mandates request-object support."
 
   - id: DEV-005
     severity: P1
     spec: OIDC Core §6.2
     behaviour: |
-      /device/auth requests carrying a request_uri parameter MUST be
-      rejected with 400 request_uri_not_supported.
+      /device_authorization rejects a request_uri parameter with
+      400 request_uri_not_supported.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same posture as DEV-004: request_uri (OIDC Core §6.2) is not in the RFC 8628 §3.1 parameter set, and v0.9.x's handler ignores unknown form keys rather than synthesising a request_uri_not_supported rejection."
 
   - id: DEV-006
     severity: P1
     spec: OIDC Core §7.2.1
     behaviour: |
-      /device/auth requests carrying a registration parameter MUST be
-      rejected with 400 registration_not_supported.
+      /device_authorization rejects a registration parameter with
+      400 registration_not_supported.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same posture as DEV-004 / DEV-005: the registration parameter (OIDC Core §7.2.1) is not in the RFC 8628 §3.1 parameter set; v0.9.x's handler ignores unknown form keys."
 
   - id: DEV-007
     severity: P0
     spec: RFC 8628 §3.2
     behaviour: |
-      A well-formed device authorization request (with scope, extra,
-      claims, PKCE) returns 200 application/json whose body has
-      exactly the keys device_code, user_code, verification_uri,
-      verification_uri_complete, expires_in.
-      verification_uri_complete equals
-      "${verification_uri}?user_code=${user_code}", verification_uri
-      ends with /device, and expires_in is approximately 600 seconds.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      A well-formed device-authorization request returns 200
+      application/json carrying device_code, user_code,
+      verification_uri, verification_uri_complete, expires_in, and
+      interval. verification_uri_complete equals
+      "${verification_uri}?user_code=${user_code}". expires_in and
+      interval are positive integers (seconds). user_code is the
+      Crockford Base32 canonical form documented in ADR 0031 §Q1.
+    status: active
 
   - id: DEV-008
     severity: P1
     spec: RFC 8628 §3.1
     behaviour: |
-      Successful device authorization persists a DeviceCode entity
-      bound to the requesting client, with a normalized user_code and
-      a params object containing client_id, scope, extra, and claims.
-      redirect_uri, response_type, state, and response_mode MUST be
-      stripped from the persisted params.
+      Successful device-authorization persists a DeviceCodeStore
+      record bound to the requesting client. The persisted record
+      carries client_id, scope, resource (RFC 8707 normalised), and
+      a Pending status. v0.9.x's handler accepts only the §3.1
+      parameter set, so there are no redirect_uri / response_type /
+      state values to strip.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "The 'strip redirect_uri / response_type / state / response_mode' assertion is vendor-specific: v0.9.x's /device_authorization handler reads only the parameters RFC 8628 §3.1 names (client auth, scope, resource) and never accepts the authorization-endpoint parameters in the first place, so there is nothing to strip. Persistence shape is covered indirectly by DEV-091 (approve→consume mints AT against the persisted record); a row that asserts the absence of an assignment that never happens is not load-bearing."
 
   - id: DEV-009
     severity: P1
     spec: RFC 9126 / RFC 8628
     behaviour: |
       A client with require_pushed_authorization_requests=true that
-      posts directly to /device/auth still receives 200 OK; PAR is not
-      enforced at the device authorization endpoint because the device
-      flow predates PAR.
+      posts directly to /device_authorization still receives 200 OK;
+      PAR is not enforced at the device-authorization endpoint
+      because the device flow predates PAR.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x does not surface the per-client require_pushed_authorization_requests setting on the /device_authorization handler — there is no PAR gate to bypass. The OP's PAR gate (RFC 9126) lives on /authorize only. Revisit if a profile begins requiring PAR-style enrolment for device flow (no spec text mandates it today)."
 
   - id: DEV-010
     severity: P2
     spec: RFC 6749 §2.3.1
     behaviour: |
-      Clients authenticating to /device/auth via HTTP Basic instead of
-      the client_id form parameter receive 200 OK with the full device
-      authorization response body.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      Confidential clients authenticating to /device_authorization
+      via HTTP Basic auth (Authorization: Basic ...) succeed with
+      200 OK; the endpoint shares the client_secret_basic /
+      client_secret_post / private_key_jwt authentication contract
+      with /token and /par.
+    status: active
 
   - id: DEV-011
     severity: P2
     spec: RFC 8628 §3.1
     behaviour: |
-      On the success path the request context resolves both the Client
-      and the DeviceCode entities for downstream observability.
+      On the success path the request context resolves both the
+      Client and the DeviceCode entities for downstream
+      observability.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "'Resolve entities into request context' is a vendor-framework idiom (request-scoped DI). v0.9.x emits structured audit events (device_authorization.issued / device_authorization.rejected) carrying client_id, scope, audience, and binding label; that is the OP's observability contract. Pinning a context-bag layout would lock embedders into a non-standard middleware shape this library does not provide."
 
+  # ---------------------------------------------------------------
+  # device_code grant at /token
+  # ---------------------------------------------------------------
   - id: DEV-020
     severity: P1
     spec: OIDC Core §5.4
     behaviour: |
-      With conformIdTokenClaims=false, redeeming a resolved DeviceCode
-      at the token endpoint returns 200 OK with access_token, id_token,
-      expires_in, token_type, scope, and refresh_token; the ID Token
-      includes profile claims such as given_name.
+      With a non-conforming id_token claims policy the device_code
+      redemption embeds profile claims (e.g. given_name) directly
+      in the id_token rather than gating them behind UserInfo.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x does not expose a 'conformIdTokenClaims' knob; the id_token issued on device_code redemption follows the canonical OIDC Core §3.1.3 / §5.4 shape (sub, aud, exp, iat, at_hash) without an embedder-toggleable profile-claim payload. Embedders that want extended claims attach them via the existing claim-source / claims_supported plumbing on the authorization-code path and reuse the same claim source here. Revisit if a profile mandates a per-grant id_token claim policy."
 
   - id: DEV-021
     severity: P1
     spec: OIDC Core §5.4
     behaviour: |
-      With conformIdTokenClaims=true (default), the token response
-      shape is identical but the ID Token MUST NOT include profile
-      claims; clients are expected to call UserInfo for those claims.
+      With the conforming id_token claims policy (the default), the
+      id_token issued on device_code redemption MUST NOT include
+      profile claims; clients call UserInfo for those.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-020: v0.9.x has no conformIdTokenClaims knob. The id_token shape is fixed and matches the conforming posture by construction; pinning a row that asserts 'a knob this OP does not expose is set to its default value' adds no signal."
 
   - id: DEV-022
     severity: P2
     spec: RFC 8628 §3.5
     behaviour: |
-      Successful device-code redemption without offline_access scope
-      resolves Account, Grant, Client, DeviceCode, and AccessToken
-      entities; AccessToken.gty equals device_code and the response
-      body MUST NOT include refresh_token.
+      Successful device_code redemption stamps gty=device_code on
+      the issued access token; without offline_access scope the
+      response MUST NOT include refresh_token.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x does not stamp a 'gty' claim on access tokens — RFC 9068 (JWT Profile for OAuth 2.0 Access Tokens) does not register that claim, and the OP follows the registered claim catalogue. The 'no refresh_token without offline_access' rule IS enforced (DEV-095 covers it); the gty assertion is the vendor-specific framing that must drop."
 
   - id: DEV-023
     severity: P2
     spec: OIDC Core §11
     behaviour: |
-      With offline_access scope, redemption additionally resolves a
-      RefreshToken entity; both AccessToken and RefreshToken carry
-      gty=device_code.
+      With offline_access scope the redemption issues both an
+      access_token and a refresh_token, both stamped gty=device_code.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-022: gty is not a v0.9.x claim. The 'refresh_token issued when offline_access is granted' positive case is pinned by DEV-095."
 
   - id: DEV-024
     severity: P1
     spec: RFC 8628 §3.4
     behaviour: |
-      Device-code token requests missing the device_code parameter
-      receive 400 application/json invalid_request with the
-      description "missing required parameter 'device_code'".
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      A device_code grant request missing the device_code form
+      parameter is rejected with 400 invalid_request and a
+      description naming the missing parameter.
+    status: active
 
   - id: DEV-025
     severity: P0
     spec: RFC 8628 §3.5 / RFC 6749 §5.2
     behaviour: |
-      A well-formed but non-existent device_code value yields 400
-      invalid_grant with the description "device code not found"; the
-      OP emits a grant.error audit event.
+      A well-formed but non-existent device_code value is rejected
+      with 400 invalid_grant ("device code not found").
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x maps a missing device_code (store.ErrNotFound on FindByDeviceCode) to expired_token rather than invalid_grant. RFC 8628 §3.5 reserves expired_token for 'device_code has expired or has been consumed', which is observationally indistinguishable from 'device_code never existed' to a polling client and avoids leaking a presence oracle to a bearer-secret guesser. The replay→expired_token framing is pinned by DEV-096; a row that asserts a different wire code on the same not-found state would conflict with that decision."
 
   - id: DEV-026
     severity: P0
     spec: RFC 6749 §5.2
     behaviour: |
-      When findAccount returns nothing for a resolved code, the
-      response is 400 invalid_grant with the description
-      "device code invalid (referenced account not found)" and a
-      grant.error audit event.
+      When the OP's findAccount hook returns nothing for the subject
+      a resolved DeviceCode names, the response is 400 invalid_grant
+      ("referenced account not found").
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x does not have a findAccount hook on the device_code redemption path: the substore record persists Subject at Approve time, and the token endpoint trusts that value verbatim. Embedders that need a post-Approve account-presence check enforce it on their interaction.Driver before calling Approve. Revisit only if the substore contract grows a 're-resolve subject at consume' phase."
 
   - id: DEV-027
     severity: P0
     spec: RFC 8628 §3.4
     behaviour: |
       A device_code originally issued for client A but presented by
-      client B MUST be rejected with 400 invalid_grant
-      ("client mismatch") and a grant.error audit event.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      client B is rejected with 400 invalid_grant; the OP emits a
+      device_code.token.rejected audit event.
+    status: active
 
   - id: DEV-028
     severity: P0
     spec: RFC 8628 §3.5 (expired_token)
     behaviour: |
-      A device_code older than the configured TTL yields 400
-      expired_token with the description "device code is expired".
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      A device_code whose ExpiresAt is in the past is rejected with
+      400 expired_token. The substore reports expired records as
+      not-found; the token endpoint maps not-found to expired_token
+      so an attacker cannot distinguish "expired" from "never
+      existed".
+    status: active
 
   - id: DEV-029
     severity: P0
     spec: RFC 8628 §3.5
     behaviour: |
-      The first valid token redemption persists the DeviceCode with a
-      consumed timestamp less than or equal to now.
+      The first valid token redemption persists the DeviceCode with
+      a consumed timestamp less than or equal to now.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x's substore models consumption as a status transition (Approved → Consumed) rather than as a 'consumed timestamp' column; the single-use guarantee comes from the atomic Consume CAS, not from a wall-clock value. The replay→expired_token assertion (DEV-096) covers the observable consequence; pinning the internal storage shape would constrain SQL/Redis adapter authors without serving a wire contract."
 
   - id: DEV-030
     severity: P0
@@ -247,238 +248,230 @@ rows:
       return 400 invalid_grant ("device code already consumed") and
       emit grant.error.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x maps Consume's ErrAlreadyConsumed to expired_token (not invalid_grant), per RFC 8628 §3.5's reservation of expired_token for 'already consumed'. The replay assertion is pinned with the actual wire code by DEV-096; this row's invalid_grant framing is the vendor-specific divergence."
 
   - id: DEV-031
     severity: P0
     spec: RFC 8628 §3.5
     behaviour: |
-      When a device_code exists but has no accountId yet (the user has
-      not interacted), the token endpoint returns 400
-      authorization_pending with the description "authorization
-      request is still pending as the end-user hasn't yet completed
-      the user interaction steps".
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      When a device_code exists with status Pending (the user has
+      not yet completed the verification ceremony), the token
+      endpoint returns 400 authorization_pending and emits a
+      device_code.token.rejected audit event with reason
+      authorization_pending.
+    status: active
 
   - id: DEV-032
     severity: P1
     spec: RFC 8628 §3.5
     behaviour: |
-      When a device_code resolves to a custom error and
-      errorDescription, the token endpoint returns 400 with the
-      resolved error code and description verbatim.
+      When a resolved device_code carries an embedder-supplied
+      custom error code and description, the token endpoint returns
+      400 with the resolved code and description verbatim.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x's substore exposes a closed lifecycle (Pending / Approved / Denied / Consumed) and a DenyReason string. There is no 'custom error / errorDescription' column on the record, and the token endpoint does not pass-through arbitrary embedder-supplied wire codes — that would let an embedder synthesise wire codes outside RFC 6749 §5.2 / RFC 8628 §3.5. The standard-error-on-Deny case is pinned by DEV-033."
 
   - id: DEV-033
     severity: P0
     spec: RFC 8628 §3.5
     behaviour: |
-      When a device_code resolves with a standard error such as
-      access_denied, the token endpoint returns 400 access_denied with
-      the description verbatim and emits grant.error.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      When a device_code is in the Denied state (the user denied
+      the request, or the user_code brute-force lockout fired), the
+      token endpoint returns 400 access_denied and emits a
+      device_code.token.rejected audit event with reason
+      access_denied.
+    status: active
 
+  # ---------------------------------------------------------------
+  # Charset / mask configuration
+  # ---------------------------------------------------------------
   - id: DEV-040
     severity: P2
     spec: RFC 8628 §6.1
     behaviour: |
-      Provider construction MUST accept charset="digits".
+      Provider construction accepts charset="digits".
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x fixes the user_code alphabet to Crockford Base32 (8 characters, 40 bits of entropy) per ADR 0031 §Q1. Configurable charsets ('digits', 'base-20') are a vendor extension; making the alphabet pluggable would weaken the brute-force margin on accidentally narrow alphabets and would force every storage backend to canonicalise dynamically. RFC 8628 §6.1 lists alphabet choice as a deployment concern, not a normative knob."
 
   - id: DEV-041
     severity: P2
     spec: RFC 8628 §6.1
     behaviour: |
-      Provider construction MUST accept charset="base-20".
+      Provider construction accepts charset="base-20".
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-040: v0.9.x's user_code alphabet is fixed Crockford Base32."
 
   - id: DEV-042
     severity: P1
     spec: RFC 8628 §6.1
     behaviour: |
-      Any charset other than "base-20" or "digits" MUST cause provider
-      construction to fail with the message
-      'only supported charsets are "base-20" and "digits"'.
+      Provider construction MUST reject any unknown charset value
+      with a configuration-time error.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-040 / DEV-041: there is no charset option to validate. The user_code generator (internal/devicecode.NewUserCode) is the single source of truth and cannot be parameterised by the embedder."
 
   - id: DEV-043
     severity: P2
     spec: RFC 8628 §6.1
     behaviour: |
-      Provider construction MUST accept the mask "*** *** ***".
+      Provider construction accepts the user_code mask "*** *** ***".
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x does not expose a user_code mask option. The wire user_code is always 8 unmasked Crockford Base32 characters; the verification UI (delegated to interaction.Driver) is free to format the displayed value however it wants. Pinning a server-side mask would constrain UI choices without affecting the wire contract."
 
   - id: DEV-044
     severity: P2
     spec: RFC 8628 §6.1
     behaviour: |
-      Provider construction MUST accept the mask "***-***-***".
+      Provider construction accepts the user_code mask "***-***-***".
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-043: no mask option."
 
   - id: DEV-045
     severity: P1
     spec: RFC 8628 §6.1
     behaviour: |
-      A mask containing characters other than asterisk, hyphen-minus,
-      or space (e.g. ".") MUST cause provider construction to fail
-      with the message 'mask can only contain asterisk("*"),
-      hyphen-minus("-") and space(" ") characters'.
+      Provider construction MUST reject a mask containing characters
+      outside {asterisk, hyphen-minus, space} with a configuration-
+      time error.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-043 / DEV-044: there is no mask option to validate."
 
+  # ---------------------------------------------------------------
+  # Discovery
+  # ---------------------------------------------------------------
   - id: DEV-046
     severity: P1
     spec: RFC 8414 / RFC 8628 §4
     behaviour: |
-      With the device flow feature enabled,
-      /.well-known/openid-configuration advertises
-      device_authorization_endpoint.
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+      With the device_code grant configured (op.WithDeviceCodeGrant
+      or grant.DeviceCode in WithGrants), the OP's discovery
+      document advertises device_authorization_endpoint pointing at
+      the configured endpoint path.
+    status: active
 
+  # ---------------------------------------------------------------
+  # User-facing /device verification UI
+  # ---------------------------------------------------------------
   - id: DEV-060
     severity: P1
-    spec: RFC 8628 §3.3 / OWASP CSRF
+    spec: RFC 8628 §3.3
     behaviour: |
-      GET /device with no user_code parameter (the verification_uri
-      target) returns 200 text/html, stores a CSRF secret in
-      session.state.secret, and renders the end-user input form whose
-      action posts to /device.
+      GET /device with no user_code parameter returns 200 text/html
+      and renders an end-user input form whose action posts to
+      /device with a CSRF secret stored on session.state.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x ships an HTTP-only OP and explicitly does NOT mount a /device verification page (CLAUDE.md §ライブラリ性の核: 'UI は interaction.Driver で完全に委譲可能'). Embedders own the verification ceremony — the form template, the CSRF cookie shape, the session storage, the displayed branding — through the interaction.Driver hook the OP exposes. Pinning the page's wire shape would force every embedder to ship the library's HTML, which the project's library posture rejects."
 
   - id: DEV-061
     severity: P1
     spec: RFC 8628 §3.3.1
     behaviour: |
-      GET /device?user_code=... (the verification_uri_complete target)
-      returns 200 text/html with an auto-submitting form bound to
-      DOMContentLoaded; the form contains a hidden xsrf input carrying
-      the session secret and a hidden user_code input carrying the
-      provided value.
+      GET /device?user_code=... renders an auto-submitting form
+      bound to DOMContentLoaded.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated to the embedder."
 
   - id: DEV-062
     severity: P0
     spec: OWASP XSS prevention
     behaviour: |
       GET /device?user_code values containing HTML-special characters
-      (&, <, >, ", ') MUST be HTML-escaped in the rendered output to
-      &amp; &lt; &gt; &quot; &#39; respectively.
+      MUST be HTML-escaped in the rendered output.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: v0.9.x does not render the /device page, so there is no XSS surface owned by the library. The embedder's interaction.Driver implementation is responsible for output-encoding (the OP recommends Go's html/template auto-escape posture in its docs)."
 
   - id: DEV-063
     severity: P1
     spec: RFC 8628 §3.3
     behaviour: |
-      POST /device with a valid xsrf and a user_code matching a
-      pending DeviceCode renders deviceConfirmForm with a single
-      invocation of userCodeConfirmSource carrying the resolved client
-      and deviceInfo.
+      POST /device with a valid xsrf and a matching user_code
+      renders the device-confirmation form.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated."
 
   - id: DEV-064
     severity: P2
     spec: RFC 8628 §3.3
     behaviour: |
       POST /device with a valid xsrf but no user_code re-renders
-      userCodeInputSource with NoCodeError ("The code you entered is
-      incorrect. Try again") and MUST NOT emit code_verification.error.
+      the input form with an inline error.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated."
 
   - id: DEV-065
     severity: P1
     spec: RFC 8628 §3.3
     behaviour: |
       POST /device with a valid xsrf and an unknown user_code
-      re-renders the input form with NotFoundError and MUST NOT emit
-      code_verification.error.
+      re-renders the input form with NotFoundError.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated."
 
   - id: DEV-066
     severity: P1
     spec: RFC 8628 §3.3 / §3.5
     behaviour: |
-      POST /device with a valid xsrf and a user_code whose DeviceCode
-      has expired re-renders the input form with ExpiredError and MUST
-      NOT emit code_verification.error.
+      POST /device with a valid xsrf and a user_code whose
+      DeviceCode has expired re-renders the input form with
+      ExpiredError.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated."
 
   - id: DEV-067
     severity: P0
     spec: RFC 8628 §3.3
     behaviour: |
-      POST /device with a user_code whose DeviceCode already has
-      accountId set re-renders the input form with AlreadyUsedError
-      and MUST NOT emit code_verification.error.
+      POST /device with a user_code whose DeviceCode is already
+      Approved re-renders the input form with AlreadyUsedError.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated."
 
   - id: DEV-068
     severity: P0
     spec: RFC 8628 §3.3 / RFC 6749 §5.2
     behaviour: |
       POST /device for a code whose client cannot be found returns
-      400 with InvalidClient surfaced via the input form and emits
-      code_verification.error exactly once.
+      400 with InvalidClient surfaced via the input form.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated."
 
   - id: DEV-069
     severity: P0
     spec: OWASP CSRF
     behaviour: |
       POST /device after session.state has been cleared returns 400
-      with InvalidRequest "could not find device form details" and
-      emits code_verification.error exactly once.
+      with InvalidRequest 'could not find device form details'.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-060: the /device page is delegated; CSRF state belongs to the embedder's session implementation."
 
   - id: DEV-070
     severity: P0
     spec: OWASP CSRF
     behaviour: |
-      POST /device with an xsrf token that does not match the session
-      secret returns 400 with InvalidRequest "xsrf token invalid" and
-      emits code_verification.error exactly once.
+      POST /device with an xsrf token that does not match the
+      session secret returns 400 with InvalidRequest 'xsrf token
+      invalid'.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-069: CSRF token validation lives in the embedder's verification page."
 
   - id: DEV-071
     severity: P0
     spec: RFC 8628 §3.3 / RFC 6749 §4.1.2.1
     behaviour: |
-      POST /device with confirm='' and abort=yes renders the
-      interrupted message; the persisted DeviceCode has no accountId,
-      error=access_denied, and errorDescription="End-User aborted
-      interaction".
+      POST /device with confirm='' and abort=yes records the
+      DeviceCode as Denied with reason "user_denied".
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "The DENY transition itself is part of the public substore contract (DeviceCodeStore.Deny with reason 'user_denied') and is consumed by DEV-033 (token endpoint returns access_denied on Denied). The HTML-form / abort-button surface that triggers Deny is delegated to the embedder per DEV-060."
 
   - id: DEV-072
     severity: P0
     spec: RFC 8628 §3.3 / OIDC Core §2
     behaviour: |
-      POST /device with confirm=yes and a matching code persists the
-      DeviceCode with accountId=session.accountId, authTime=
-      session.loginTs, and scope/claims drawn from params; sid is set
-      only when required.
+      POST /device with confirm=yes records Approved with
+      accountId, authTime, scope, and claims drawn from the
+      DeviceCode params.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "The APPROVE transition is part of the public substore contract (DeviceCodeStore.Approve with subject) and is consumed by DEV-091 (token endpoint mints tokens against an Approved record). The HTML-form / confirm-button surface that triggers Approve is delegated to the embedder per DEV-060. v0.9.x does not retain a separate auth_time column on the substore; the id_token's auth_time claim is omitted on the device_code path until the substore contract grows the column."
 
   - id: DEV-073
     severity: P1
@@ -487,138 +480,227 @@ rows:
       Confirming a code for a client whose backchannel logout
       configuration requires sid persists sid on the DeviceCode.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x's DeviceCode record does not carry a sid column. SID propagation is on the authorization-code path only; revisit when device_code interplay with backchannel logout is wired."
 
   - id: DEV-074
     severity: P1
     spec: OIDC Core §5.5
     behaviour: |
-      Confirming a code whose claims request asks for sid in id_token
-      persists sid on the DeviceCode.
+      Confirming a code whose claims request asks for sid in
+      id_token persists sid on the DeviceCode.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-073: device flow does not propagate sid in v0.9.x."
 
   - id: DEV-075
     severity: P1
     spec: RFC 8628 §6.1
     behaviour: |
-      User-friendly entry of user_code (e.g. "f o o b a r" matching
-      "FOOBAR") MUST be accepted: whitespace is stripped and lower-
-      case characters are upper-cased prior to lookup.
+      User-friendly user_code entry (whitespace stripped, lower-case
+      upper-cased) MUST normalise prior to lookup.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Normalisation IS implemented (internal/devicecode.NormaliseUserCode handles whitespace strip, separator strip, lower→upper, Crockford visual-confusion folding 0/O and 1/I/L). v0.9.x's normaliser is consumed by the embedder's /device page before calling FindByUserCode, and pure-function tests for the normaliser already live in internal/devicecode/usercode_test.go. A scenario row that re-tests the same pure helper through an HTTP surface this OP does not own would duplicate that coverage."
 
+  # ---------------------------------------------------------------
+  # /device/:uid resume / interaction-session paths
+  # ---------------------------------------------------------------
   - id: DEV-080
     severity: P0
     spec: RFC 8628 §3.3 / OWASP session management
     behaviour: |
       GET /device/:uid with a cleared _interaction_resume cookie
       returns 400 and re-renders userCodeInputSource with
-      SessionNotFound "authorization request has expired".
+      SessionNotFound.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "v0.9.x does not own /device/:uid — the resume URL shape is part of the embedder's verification flow (delegated per DEV-060). The library's interaction.Driver provides hooks the embedder calls when handling its own resume URL; the cookie / session/storage layer is entirely embedder-owned."
 
   - id: DEV-081
     severity: P1
     spec: RFC 8628 §3.3
     behaviour: |
-      When Interaction.find returns undefined on resume, the OP
-      returns 400 and surfaces SessionNotFound "interaction session
-      not found" via userCodeInputSource.
+      Resume with a missing interaction returns 400 and surfaces
+      SessionNotFound.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080."
 
   - id: DEV-082
     severity: P1
     spec: RFC 8628 §3.3
     behaviour: |
-      When DeviceCode.find returns undefined for a resumed
-      interaction, the OP returns 200 and invokes userCodeInputSource
-      with NotFoundError "the code was not found".
+      Resume with a missing DeviceCode renders userCodeInputSource
+      with NotFoundError.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080."
 
   - id: DEV-083
     severity: P1
     spec: RFC 8628 §3.3 / §3.5
     behaviour: |
-      When DeviceCode.find resolves with isExpired=true on resume,
-      the OP returns 200 and invokes userCodeInputSource with
-      ExpiredError "the code has expired".
+      Resume with an expired DeviceCode renders ExpiredError.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080."
 
   - id: DEV-084
     severity: P0
     spec: RFC 8628 §3.3
     behaviour: |
-      When the resumed DeviceCode already has accountId set, the OP
-      returns 200 and invokes userCodeInputSource with
-      AlreadyUsedError "code has already been used".
+      Resume with an Approved DeviceCode renders AlreadyUsedError.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080."
 
   - id: DEV-085
     severity: P0
     spec: RFC 8628 §3.3
     behaviour: |
-      When the resumed DeviceCode resolves with error=access_denied,
-      the OP returns 200 and invokes userCodeInputSource with
-      AlreadyUsedError "code has already been used".
+      Resume with a Denied DeviceCode renders AlreadyUsedError.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080."
 
   - id: DEV-086
     severity: P1
     spec: RFC 6749 §10.12
     behaviour: |
-      Resuming after a login result without an explicit remember flag
-      returns 200, sets a permanent session cookie carrying an expires
-      attribute, keeps the session non-transient, and assigns
-      accountId on the DeviceCode.
+      Resuming after a login result without an explicit remember
+      flag returns 200 and sets a permanent session cookie with an
+      expires attribute.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080: session-cookie semantics on the verification page are an embedder concern."
 
   - id: DEV-087
     severity: P1
     spec: RFC 6749 §10.12
     behaviour: |
-      Resuming after a login result with remember=true returns 200,
-      sets a permanent cookie, and keeps the session non-transient.
+      Resuming after a login result with remember=true returns 200
+      and sets a permanent cookie.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-086."
 
   - id: DEV-088
     severity: P1
     spec: OIDC Core §15.6
     behaviour: |
-      Resuming after a login result with remember=false returns 200,
-      marks the session transient, and assigns accountId on the
-      DeviceCode.
+      Resuming after a login result with remember=false marks the
+      session transient.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-086."
 
   - id: DEV-089
     severity: P0
     spec: OIDC RP-Initiated Logout §3 / OIDC Front-Channel Logout
     behaviour: |
-      When resume detects that the previous session subject differs
-      from the current login, the OP returns 200 and renders an
-      auto-submitting logout form posting to /session/end/confirm.
-      session.state carries clientId and a postLogoutRedirectUri
-      pointing back to the interaction; submitting confirm performs
-      the logout (303 to postLogoutRedirectUri) and the follow-up GET
-      succeeds with 200.
+      Resume with a subject change renders an auto-submitting
+      logout form posting to /session/end/confirm.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080: subject-change handling on a verification resume URL is part of the embedder's verification flow."
 
   - id: DEV-090
     severity: P1
     spec: RFC 6749 §4.1.2.1
     behaviour: |
-      Resuming after an interaction error result of
-      {error:'access_denied', error_description:'scope out of reach'}
-      renders the user-code input source with the message "the
-      interaction was aborted".
+      Resuming after an interaction error result of access_denied
+      renders the user-code input source with the message 'the
+      interaction was aborted'.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 device authorization grant is intentionally deferred to v1.x and not present in v1.0. internal/tokenendpoint/handler.go dispatches only authorization_code, refresh_token, and client_credentials; every other grant_type (including urn:ietf:params:oauth:grant-type:device_code) returns 400 unsupported_grant_type per internal/tokenendpoint/doc.go. op/grant/grant.go documents the DeviceCode constant as \"Implemented in v1.x; the constant exists so option signatures are stable across releases\", op/feature/feature.go ships no DeviceCode flag, and docs/plans/002-product-design.md §v1.x lists \"device_code grant (RFC 8628)\" as a post-v1.0 addition. The catalog text was inherited from a vendor-specific reference and asserts behaviour (device_authorization endpoint, /device verification UI, user_code/device_code persistence, authorization_pending/expired_token errors) that no v1.0 code path implements. Revisit when the device_code wave lands."
+    out_of_scope_reason: "Same as DEV-080."
+
+  # ---------------------------------------------------------------
+  # New v0.9.x behaviour rows (RFC 8628 wire surface this OP owns)
+  # ---------------------------------------------------------------
+  - id: DEV-091
+    severity: P0
+    spec: RFC 8628 §3.5 / OIDC Core §3.1.3
+    behaviour: |
+      The happy path: /device_authorization issues a (device_code,
+      user_code) pair; the embedder calls
+      DeviceCodeStore.Approve(device_code, subject); the next poll
+      at /token returns 200 with access_token, token_type=Bearer,
+      expires_in, scope. When the granted scope contains openid,
+      the response also carries an id_token whose iss / aud / sub
+      match the OP / client / approved subject.
+    status: active
+
+  - id: DEV-092
+    severity: P1
+    spec: RFC 8628 §3.1 / RFC 6749 §3.3
+    behaviour: |
+      A /device_authorization request whose scope parameter names a
+      value outside the client's registered Scopes MUST be rejected
+      with 400 invalid_scope. The handler does NOT silently narrow
+      to the intersection — out-of-set scopes always reject.
+    status: active
+
+  - id: DEV-093
+    severity: P1
+    spec: RFC 8707 §2 / RFC 8628 §3.1
+    behaviour: |
+      A /device_authorization request whose resource parameter is a
+      relative URI (no scheme or no host) MUST be rejected with 400
+      invalid_target. RFC 8707 §2 mandates absolute URIs; the
+      device-authorization handler enforces the same gate as /token
+      and /authorize.
+    status: active
+
+  - id: DEV-094
+    severity: P1
+    spec: OIDC Core §3.1.3.6
+    behaviour: |
+      The id_token issued on a successful device_code redemption
+      (when scope contains openid) MUST carry an at_hash claim
+      matching the issued access token. The id_token MUST NOT carry
+      c_hash (no authorization code in this flow) and MUST NOT
+      carry a nonce (the device cannot commit one across the
+      verification ceremony in v0.9.x).
+    status: active
+
+  - id: DEV-095
+    severity: P1
+    spec: OIDC Core §11 / RFC 6749 §6
+    behaviour: |
+      A /token response on the device_code grant MUST include
+      refresh_token only when both (a) the granted scope includes
+      offline_access, and (b) the client's registered grant_types
+      include refresh_token. Either condition missing suppresses
+      the refresh_token from the response.
+    status: pending
+
+  - id: DEV-096
+    severity: P0
+    spec: RFC 8628 §3.5 / RFC 6749 §10.5
+    behaviour: |
+      A second /token poll for an already-Consumed device_code MUST
+      return 400 expired_token. The CAS embedded in
+      DeviceCodeStore.Consume provides single-use; replays surface
+      as expired_token (RFC 8628 §3.5 reserves the code for both
+      'expired' and 'already consumed' so an attacker cannot
+      distinguish them on the wire).
+    status: active
+
+  - id: DEV-097
+    severity: P2
+    spec: RFC 8628 §3.1 / RFC 7231 §6.5.5
+    behaviour: |
+      A non-POST request to /device_authorization (e.g. GET) MUST
+      return 405 Method Not Allowed with an Allow header naming
+      POST. The endpoint is exclusively form-encoded POST per RFC
+      8628 §3.1.
+    status: active
+
+  - id: DEV-098
+    severity: P0
+    spec: RFC 8628 §3.5 (slow_down)
+    behaviour: |
+      A /token poll that arrives sooner than the advertised interval
+      after the previous poll MUST return 400 slow_down. The OP
+      doubles the effective interval on each slow_down hit
+      (internal/devicecode.DecidePoll's ladder) and emits a
+      device_code.token.slow_down audit event carrying the
+      effective and next intervals.
+    status: pending
+
+  - id: DEV-099
+    severity: P1
+    spec: RFC 8414 / RFC 8628 §4
+    behaviour: |
+      With the device_code grant configured, the discovery
+      document's grant_types_supported list contains
+      "urn:ietf:params:oauth:grant-type:device_code".
+    status: active
