@@ -33,6 +33,14 @@ type HandlerOptions struct {
 	// A nil predicate (the zero-value default) is treated as "rotation
 	// inactive" — the long-cache header is emitted.
 	RotationActive func() bool
+
+	// EncryptionSet, when non-nil, contributes the OP's use=enc public
+	// keys to the published JWKS. The keys appear after every signing
+	// key (use=sig) so RPs that scan in order encounter signing keys
+	// first. RFC 7517 §4.2 requires the same kid not to appear with
+	// both use=sig and use=enc; the op layer enforces the constraint
+	// at construction time so this handler can concatenate freely.
+	EncryptionSet *keys.EncryptionSet
 }
 
 // Handler returns an [http.Handler] that serves the public JWKS for set.
@@ -60,6 +68,10 @@ func HandlerWithOptions(set *keys.Set, opts HandlerOptions) http.Handler {
 			return
 		}
 		jwks := set.JWKS()
+		if opts.EncryptionSet != nil {
+			enc := opts.EncryptionSet.JWKS()
+			jwks.Keys = append(jwks.Keys, enc.Keys...)
+		}
 		body, err := json.Marshal(jwks)
 		if err != nil {
 			http.Error(w, "internal server error", http.StatusInternalServerError)

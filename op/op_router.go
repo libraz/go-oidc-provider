@@ -35,7 +35,7 @@ import (
 // handlers, plus the optional endpoints (PAR, introspect, revoke,
 // /register, /end_session) gated on the configured features and
 // grants.
-func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry, locales *i18n.Resolver) (*http.ServeMux, error) {
+func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
 	doc := discovery.Build(buildDiscoveryInput(cfg, scopes))
 	discHandler, err := discovery.Handler(doc)
@@ -69,6 +69,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry, 
 		joinPath(cfg.mountPrefix, cfg.endpoints.JWKS),
 		publicCORS.Handler(jwks.HandlerWithOptions(keySet, jwks.HandlerOptions{
 			RotationActive: cfg.jwksRotationActive,
+			EncryptionSet:  encSet,
 		})),
 	)
 	mux.Handle(

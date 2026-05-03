@@ -142,12 +142,16 @@ func New(opts ...Option) (*Provider, error) {
 			Cause:       err,
 		}
 	}
+	encSet, err := buildEncryptionSet(cfg)
+	if err != nil {
+		return nil, err
+	}
 	scopes := scoperegistry.New(toScopeEntries(cfg.scopes))
 	locales, err := buildLocaleResolver(cfg)
 	if err != nil {
 		return nil, err
 	}
-	mux, err := buildRouter(cfg, keySet, scopes, locales)
+	mux, err := buildRouter(cfg, keySet, encSet, scopes, locales)
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +267,47 @@ func toKeyEntries(ks Keyset) []keys.Entry {
 		out[i] = keys.Entry{KeyID: k.KeyID, Signer: k.Signer, NotAfter: k.NotAfter}
 	}
 	return out
+}
+
+// toEncryptionEntries mirrors [toKeyEntries] for the JWE encryption
+// keyset. The conversion is a one-to-one field map; type checking on
+// the supplied PrivateKey runs inside [keys.NewEncryptionSet].
+func toEncryptionEntries(ks EncryptionKeyset) []keys.EncryptionEntry {
+	out := make([]keys.EncryptionEntry, len(ks))
+	for i, k := range ks {
+		out[i] = keys.EncryptionEntry{
+			KeyID:      k.KeyID,
+			PrivateKey: k.PrivateKey,
+			Algorithm:  k.Algorithm,
+			NotAfter:   k.NotAfter,
+		}
+	}
+	return out
+}
+
+// buildEncryptionSet constructs the runtime [keys.EncryptionSet] from
+// the embedder-supplied [EncryptionKeyset]. Returns (nil, nil) when
+// no encryption keyset was registered — that is the documented "JWE
+// off" posture, not an error. A non-empty keyset that fails internal
+// validation is wrapped in a configuration error so the misconfigured
+// boot surfaces at op.New, not on first /authorize fetch.
+func buildEncryptionSet(cfg *config) (*keys.EncryptionSet, error) {
+	if len(cfg.encryptionKeyset) == 0 {
+		return nil, nil //nolint:nilnil // optional feature; nil is the off state, not a missing value.
+	}
+	set, err := keys.NewEncryptionSet(
+		toEncryptionEntries(cfg.encryptionKeyset),
+		keys.WithClock(keysetClock(cfg)),
+		keys.WithRetiredKidObserver(retiredKidObserver(cfg)),
+	)
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "WithEncryptionKeyset rejected by internal validator",
+			Cause:       err,
+		}
+	}
+	return set, nil
 }
 
 // keysetClock returns the wall-clock seam the [keys.Set] retirement

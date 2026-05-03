@@ -699,6 +699,8 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 		ClaimsSupported:           cfg.claimsSupported,
 		ACRValuesSupported:        cfg.acrValuesSupportedCopy(),
 		PairwiseEnabled:           cfg.pairwiseEnabled(),
+		EncryptionAlgsSupported:   cfg.effectiveEncryptionAlgs(),
+		EncryptionEncsSupported:   cfg.effectiveEncryptionEncs(),
 		Metadata: discovery.Metadata{
 			ServiceDocumentation: cfg.discoveryMetadata.ServiceDocumentation,
 			OPPolicyURI:          cfg.discoveryMetadata.OPPolicyURI,
@@ -746,6 +748,7 @@ func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, cl
 func buildDiscoveryFeatures(cfg *config) discovery.Features {
 	out := buildFeatures(cfg.features)
 	out.DeviceCodeGrant = cfg.deviceCodeGrantConfigured()
+	out.Encryption = cfg.encryptionEnabled()
 	return out
 }
 

@@ -480,6 +480,30 @@ type config struct {
 	// to `<issuer>/device`; a non-empty value is validated at the
 	// option site (absolute URL with a non-empty host).
 	deviceVerificationURI string
+
+	// encryptionKeyset carries the asymmetric private keys the OP
+	// uses to decrypt inbound JWE (request_object) and to encrypt
+	// outbound JWE addressed to RP keys (id_token / userinfo / JARM
+	// / introspection). Nil means JWE is not configured: discovery
+	// omits the *_encryption_*_values_supported arrays and inbound
+	// decryption attempts fail with invalid_request_object. RFC 7517
+	// §4.2 requires the keyset to be disjoint by kid from the signing
+	// keyset; the construction-time gate runs in
+	// [config.validateEncryptionKeyset].
+	encryptionKeyset EncryptionKeyset
+
+	// encryptionAlgsAllowed is the embedder-narrowed JWE alg
+	// allow-list. Empty (with the Set companion flag false) falls
+	// back to [SupportedEncryptionAlgs]; an empty (non-nil) slice
+	// with the flag true means "advertise no algs" — a deliberate
+	// disable-negotiation posture.
+	encryptionAlgsAllowed    []string
+	encryptionAlgsAllowedSet bool
+
+	// encryptionEncsAllowed mirrors encryptionAlgsAllowed for the JWE
+	// content-encryption advertisement.
+	encryptionEncsAllowed    []string
+	encryptionEncsAllowedSet bool
 }
 
 // claimsParameterSupported returns the effective discovery

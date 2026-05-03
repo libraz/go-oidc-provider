@@ -98,6 +98,18 @@ type Input struct {
 	// copied verbatim onto the wire.
 	ACRValuesSupported []string
 
+	// EncryptionAlgsSupported lists the JWE alg values the OP
+	// advertises across the *_encryption_alg_values_supported
+	// fields when [Features.Encryption] is true. The op layer
+	// supplies the closed v0.9.1 default
+	// (op.SupportedEncryptionAlgs) or the embedder's narrowed
+	// subset (op.WithSupportedEncryptionAlgs).
+	EncryptionAlgsSupported []string
+
+	// EncryptionEncsSupported mirrors EncryptionAlgsSupported for
+	// the *_encryption_enc_values_supported advertisement.
+	EncryptionEncsSupported []string
+
 	// Metadata carries the static RFC 8414 §2 metadata fields the
 	// embedder injects through op.WithDiscoveryMetadata. The op
 	// layer pre-validates the struct (override-deny check on
@@ -178,6 +190,15 @@ type Features struct {
 	// field; the op layer wires it from the resolved grants list and
 	// substore presence.
 	DeviceCodeGrant bool
+
+	// Encryption reports whether the OP has a JWE encryption keyset
+	// configured (op.WithEncryptionKeyset). When true the discovery
+	// builder emits the *_encryption_alg_values_supported and
+	// *_encryption_enc_values_supported arrays for the targets the
+	// OP serves: id_token / userinfo unconditionally,
+	// request_object only when JAR is also on, JARM only when JARM
+	// is also on, introspection only when Introspect is also on.
+	Encryption bool
 }
 
 // ValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4
@@ -282,8 +303,49 @@ func Build(in Input) Document {
 	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
 	applyClaimsSupported(in, &doc)
 	applyACRValuesSupported(in, &doc)
+	applyEncryptionFeature(in, &doc)
 	applyStaticMetadata(in, &doc)
 	return doc
+}
+
+// applyEncryptionFeature publishes the five
+// *_encryption_alg_values_supported and *_encryption_enc_values_supported
+// arrays when the OP has a JWE encryption keyset configured
+// (op.WithEncryptionKeyset). The id_token / userinfo arrays are
+// emitted unconditionally; the request_object / authorization (JARM)
+// / introspection arrays are gated on their respective protocol
+// features so a deployment that disables JAR / JARM / Introspect
+// keeps the field absent from the wire.
+//
+// The alg / enc lists are the embedder's narrowed subset (or the
+// closed v0.9.1 default when no narrowing was applied). Empty (but
+// non-nil) lists are explicitly emitted so embedders who deliberately
+// disable negotiation can advertise the empty array — not the same
+// as omitting the field entirely.
+func applyEncryptionFeature(in Input, doc *Document) {
+	if !in.Features.Encryption {
+		return
+	}
+	algs := append([]string(nil), in.EncryptionAlgsSupported...)
+	encs := append([]string(nil), in.EncryptionEncsSupported...)
+
+	doc.IDTokenEncryptionAlgValuesSupported = algs
+	doc.IDTokenEncryptionEncValuesSupported = encs
+	doc.UserInfoEncryptionAlgValuesSupported = algs
+	doc.UserInfoEncryptionEncValuesSupported = encs
+
+	if in.Features.JAR {
+		doc.RequestObjectEncryptionAlgValuesSupported = algs
+		doc.RequestObjectEncryptionEncValuesSupported = encs
+	}
+	if in.Features.JARM {
+		doc.AuthorizationEncryptionAlgValuesSupported = algs
+		doc.AuthorizationEncryptionEncValuesSupported = encs
+	}
+	if in.Features.Introspect {
+		doc.IntrospectionEncryptionAlgValuesSupported = algs
+		doc.IntrospectionEncryptionEncValuesSupported = encs
+	}
 }
 
 // newBaseDocument seeds the document with the fields that do not depend

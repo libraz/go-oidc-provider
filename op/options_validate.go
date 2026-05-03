@@ -38,6 +38,7 @@ func (c *config) validate() error {
 		c.validateAccessTokenFormat,
 		c.validateAccessTokenRevocation,
 		c.validateDeviceCodeGrant,
+		c.validateEncryptionKeyset,
 	} {
 		if err := fn(); err != nil {
 			return err

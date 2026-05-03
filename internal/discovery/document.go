@@ -206,6 +206,72 @@ type Document struct {
 	// always true when emitted (omitempty drops the false default).
 	AuthorizationResponseIssParameterSupported bool `json:"authorization_response_iss_parameter_supported,omitempty"`
 
+	// IDTokenEncryptionAlgValuesSupported lists the JWE alg values
+	// the OP can use to encrypt id_tokens for clients whose metadata
+	// requests encryption (OIDC Discovery 1.0 §3
+	// "id_token_encryption_alg_values_supported"). The list mirrors
+	// the OP's encryption keyset alg allow-list. Emitted only when
+	// op.WithEncryptionKeyset has been supplied.
+	IDTokenEncryptionAlgValuesSupported []string `json:"id_token_encryption_alg_values_supported,omitempty"`
+
+	// IDTokenEncryptionEncValuesSupported lists the JWE enc values
+	// the OP can use to encrypt id_tokens (OIDC Discovery 1.0 §3
+	// "id_token_encryption_enc_values_supported"). Emitted only
+	// when op.WithEncryptionKeyset has been supplied.
+	IDTokenEncryptionEncValuesSupported []string `json:"id_token_encryption_enc_values_supported,omitempty"`
+
+	// UserInfoEncryptionAlgValuesSupported lists the JWE alg values
+	// the OP can use to encrypt UserInfo responses (OIDC Discovery
+	// 1.0 §3 "userinfo_encryption_alg_values_supported"). Emitted
+	// only when op.WithEncryptionKeyset has been supplied.
+	UserInfoEncryptionAlgValuesSupported []string `json:"userinfo_encryption_alg_values_supported,omitempty"`
+
+	// UserInfoEncryptionEncValuesSupported lists the JWE enc values
+	// the OP can use to encrypt UserInfo responses (OIDC Discovery
+	// 1.0 §3 "userinfo_encryption_enc_values_supported"). Emitted
+	// only when op.WithEncryptionKeyset has been supplied.
+	UserInfoEncryptionEncValuesSupported []string `json:"userinfo_encryption_enc_values_supported,omitempty"`
+
+	// RequestObjectEncryptionAlgValuesSupported lists the JWE alg
+	// values the OP accepts on a JAR request object (OIDC Discovery
+	// 1.0 §3 "request_object_encryption_alg_values_supported", RFC
+	// 9101 §10.1). Emitted only when op.WithEncryptionKeyset has
+	// been supplied AND the JAR feature is enabled.
+	RequestObjectEncryptionAlgValuesSupported []string `json:"request_object_encryption_alg_values_supported,omitempty"`
+
+	// RequestObjectEncryptionEncValuesSupported lists the JWE enc
+	// values the OP accepts on a JAR request object (OIDC Discovery
+	// 1.0 §3 "request_object_encryption_enc_values_supported").
+	// Emitted only when op.WithEncryptionKeyset has been supplied
+	// AND the JAR feature is enabled.
+	RequestObjectEncryptionEncValuesSupported []string `json:"request_object_encryption_enc_values_supported,omitempty"`
+
+	// AuthorizationEncryptionAlgValuesSupported lists the JWE alg
+	// values the OP can use to encrypt JARM responses (OAuth 2.0
+	// JARM §10.1 "authorization_encryption_alg_values_supported").
+	// Emitted only when op.WithEncryptionKeyset has been supplied
+	// AND the JARM feature is enabled.
+	AuthorizationEncryptionAlgValuesSupported []string `json:"authorization_encryption_alg_values_supported,omitempty"`
+
+	// AuthorizationEncryptionEncValuesSupported lists the JWE enc
+	// values the OP can use to encrypt JARM responses. Emitted only
+	// when op.WithEncryptionKeyset has been supplied AND the JARM
+	// feature is enabled.
+	AuthorizationEncryptionEncValuesSupported []string `json:"authorization_encryption_enc_values_supported,omitempty"`
+
+	// IntrospectionEncryptionAlgValuesSupported lists the JWE alg
+	// values the OP can use to encrypt JWT-formatted introspection
+	// responses (RFC 9701 §6 + OIDC Discovery 1.0 §3 by analogy with
+	// id_token / userinfo). Emitted only when op.WithEncryptionKeyset
+	// has been supplied AND the Introspect feature is enabled.
+	IntrospectionEncryptionAlgValuesSupported []string `json:"introspection_encryption_alg_values_supported,omitempty"`
+
+	// IntrospectionEncryptionEncValuesSupported lists the JWE enc
+	// values the OP can use to encrypt introspection responses.
+	// Emitted only when op.WithEncryptionKeyset has been supplied
+	// AND the Introspect feature is enabled.
+	IntrospectionEncryptionEncValuesSupported []string `json:"introspection_encryption_enc_values_supported,omitempty"`
+
 	// ClaimsParameterSupported reports whether the OP honours the
 	// OIDC Core 1.0 §5.5 "claims" request parameter — i.e. parses the
 	// payload, persists it on the originating grant, and projects the
