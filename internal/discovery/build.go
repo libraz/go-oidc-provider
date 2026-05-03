@@ -86,6 +86,18 @@ type Input struct {
 	// copied verbatim onto the wire.
 	ClaimsSupported []string
 
+	// ACRValuesSupported carries the ACR class references the OP
+	// advertises in acr_values_supported. The values come from the
+	// OP's local trust framework or federation profile (RFC 8176
+	// authentication-method references, NIST SP 800-63 step-up
+	// labels, custom URNs); the library does not aggregate them
+	// from per-client default_acr_values metadata because a registry
+	// of N clients would grow the discovery document without bound.
+	// Nil leaves the discovery document's acr_values_supported field
+	// omitted, which is the library default. A non-nil slice is
+	// copied verbatim onto the wire.
+	ACRValuesSupported []string
+
 	// Metadata carries the static RFC 8414 §2 metadata fields the
 	// embedder injects through op.WithDiscoveryMetadata. The op
 	// layer pre-validates the struct (override-deny check on
@@ -261,6 +273,7 @@ func Build(in Input) Document {
 	// authorize / par parsers ignore the parameter.
 	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
 	applyClaimsSupported(in, &doc)
+	applyACRValuesSupported(in, &doc)
 	applyStaticMetadata(in, &doc)
 	return doc
 }
@@ -477,6 +490,18 @@ func applyClaimsSupported(in Input, doc *Document) {
 		return
 	}
 	doc.ClaimsSupported = slices.Clone(in.ClaimsSupported)
+}
+
+// applyACRValuesSupported publishes the OIDC Discovery 1.0 §3
+// "acr_values_supported" array when the embedder opted in through
+// op.WithACRValuesSupported. A non-nil slice is cloned so the wire
+// output cannot be mutated through the caller's backing array;
+// nil and empty are equivalent (the omitempty JSON tag drops both).
+func applyACRValuesSupported(in Input, doc *Document) {
+	if len(in.ACRValuesSupported) == 0 {
+		return
+	}
+	doc.ACRValuesSupported = slices.Clone(in.ACRValuesSupported)
 }
 
 // applyStaticMetadata copies the static RFC 8414 §2 metadata the

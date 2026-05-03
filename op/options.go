@@ -355,6 +355,15 @@ type config struct {
 	// caller's slice does not silently change the wire output.
 	claimsSupported []string
 
+	// acrValuesSupported carries the Authentication Context Class
+	// Reference values supplied through [WithACRValuesSupported].
+	// Nil means the option was not invoked and the discovery
+	// document omits acr_values_supported; a non-nil slice is
+	// published verbatim. The stored slice is a defensive copy so a
+	// later mutation of the caller's slice does not silently change
+	// the wire output.
+	acrValuesSupported []string
+
 	// acrPolicy carries the [ACRPolicy] supplied through
 	// [WithACRPolicy]. A nil value means "library default": the
 	// authorize endpoint installs [DefaultACRPolicy] which echoes the
@@ -469,6 +478,19 @@ func (c *config) claimsParameterSupported() bool {
 		return true
 	}
 	return !c.claimsParameterSupportedOff
+}
+
+// acrValuesSupportedCopy returns a defensive copy of the ACR class
+// references the embedder supplied through [WithACRValuesSupported],
+// or nil when the option was not invoked. The copy isolates the
+// discovery builder from a caller that retained a handle to the
+// original slice; the discovery builder also clones before publishing,
+// so the wire is double-protected against in-place mutation.
+func (c *config) acrValuesSupportedCopy() []string {
+	if c.acrValuesSupported == nil {
+		return nil
+	}
+	return slices.Clone(c.acrValuesSupported)
 }
 
 // formatForAudience returns the access-token format the OP issues for
@@ -1176,6 +1198,54 @@ func WithClaimsSupported(claims ...string) Option {
 			// changing the wire output (claims_supported uses
 			// omitempty).
 			c.claimsSupported = []string{}
+		}
+		return nil
+	})
+}
+
+// WithACRValuesSupported populates the discovery document's
+// acr_values_supported field with the supplied Authentication Context
+// Class Reference values. OIDC Discovery 1.0 §3 lists the field as
+// OPTIONAL — clients consult it to discover which acr_values the OP
+// recognises so they can request a specific authentication strength
+// up front instead of negotiating it after a failed flow.
+//
+// The values come from the OP's local trust framework or federation
+// profile: RFC 8176 authentication-method references
+// (e.g. "urn:mace:incommon:iap:silver"), NIST SP 800-63 step-up
+// labels, or custom URNs the deployment has standardised on. The
+// library does NOT aggregate the values from per-client
+// default_acr_values metadata because a registry of N clients would
+// grow the discovery document without bound; the embedder publishes
+// the closed list it actually supports instead.
+//
+// The supplied slice is copied defensively so a later mutation of the
+// caller's slice cannot silently change the wire output. Passing the
+// option with no arguments records "no values supported" — the
+// discovery document still omits the field via the omitempty JSON
+// tag, but the option-was-set signal is preserved. Each value MUST be
+// non-empty; an empty-string entry is rejected at construction time
+// because OIDC Discovery 1.0 §3 leaves the value format open but an
+// empty class reference cannot be matched against a request.
+//
+// Stable since v0.x.
+func WithACRValuesSupported(values ...string) Option {
+	return optionFunc(func(c *config) error {
+		for i, v := range values {
+			if v == "" {
+				return &Error{
+					Code:        codeConfiguration,
+					Description: "WithACRValuesSupported received an empty value at index " + strconv.Itoa(i),
+				}
+			}
+		}
+		c.acrValuesSupported = slices.Clone(values)
+		if c.acrValuesSupported == nil {
+			// slices.Clone(nil) returns nil; record an empty slice so
+			// the "option was supplied" signal is preserved without
+			// changing the wire output (acr_values_supported uses
+			// omitempty).
+			c.acrValuesSupported = []string{}
 		}
 		return nil
 	})

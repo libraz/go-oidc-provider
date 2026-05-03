@@ -363,6 +363,78 @@ func TestBuild_Metadata_NoneSupplied(t *testing.T) {
 	}
 }
 
+// TestBuild_ACRValues_OmittedByDefault confirms the JSON wire omits
+// acr_values_supported when Input.ACRValuesSupported is nil. OIDC
+// Discovery 1.0 §3 lists the field as OPTIONAL; an OP that has not
+// enumerated its trust framework MUST NOT advertise an empty array.
+//
+// Spec: OIDC Discovery 1.0 §3.
+func TestBuild_ACRValues_OmittedByDefault(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(baseInput())
+	if doc.ACRValuesSupported != nil {
+		t.Errorf("ACRValuesSupported = %v, want nil when WithACRValuesSupported is not configured", doc.ACRValuesSupported)
+	}
+	wire, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal discovery document: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(wire, &raw); err != nil {
+		t.Fatalf("unmarshal discovery document: %v", err)
+	}
+	if _, present := raw["acr_values_supported"]; present {
+		t.Errorf("wire JSON contains acr_values_supported key when no values configured: %s", wire)
+	}
+}
+
+// TestBuild_ACRValues_RoundTrips confirms that a configured slice is
+// echoed onto the wire in the supplied order. The order matters
+// because an OIDF federation profile may rank acr values from
+// strongest to weakest and clients honour the rank when they pick a
+// requested acr_values entry.
+//
+// Spec: OIDC Discovery 1.0 §3 / OIDC Core 1.0 §2.
+func TestBuild_ACRValues_RoundTrips(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		"urn:mace:incommon:iap:silver",
+		"urn:mace:incommon:iap:bronze",
+	}
+	in := baseInput()
+	in.ACRValuesSupported = want
+	doc := discovery.Build(in)
+	if len(doc.ACRValuesSupported) != len(want) {
+		t.Fatalf("ACRValuesSupported len=%d want %d (%v)", len(doc.ACRValuesSupported), len(want), doc.ACRValuesSupported)
+	}
+	for i, v := range want {
+		if doc.ACRValuesSupported[i] != v {
+			t.Errorf("ACRValuesSupported[%d]=%q want %q", i, doc.ACRValuesSupported[i], v)
+		}
+	}
+	// Confirm the wire JSON carries the values in the same order.
+	wire, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal discovery document: %v", err)
+	}
+	var raw struct {
+		ACRValuesSupported []string `json:"acr_values_supported"`
+	}
+	if err := json.Unmarshal(wire, &raw); err != nil {
+		t.Fatalf("unmarshal discovery document: %v", err)
+	}
+	if len(raw.ACRValuesSupported) != len(want) {
+		t.Fatalf("wire acr_values_supported len=%d want %d (%s)", len(raw.ACRValuesSupported), len(want), wire)
+	}
+	for i, v := range want {
+		if raw.ACRValuesSupported[i] != v {
+			t.Errorf("wire acr_values_supported[%d]=%q want %q", i, raw.ACRValuesSupported[i], v)
+		}
+	}
+}
+
 // TestBuild_Metadata_ServiceDocumentationRoundTrips confirms that the
 // embedder's "service_documentation" URL appears in the JSON exactly
 // once with the supplied value. RFC 8414 §2 lists the field as
@@ -533,5 +605,22 @@ func TestBuild_SubjectTypes_PairwiseAdvertisedWhenEnabled(t *testing.T) {
 		if doc.SubjectTypesSupported[i] != w {
 			t.Errorf("subject_types_supported[%d] = %q, want %q", i, doc.SubjectTypesSupported[i], w)
 		}
+	}
+}
+
+// TestBuild_ACRValues_DefensiveCopy confirms Build clones the input
+// slice so a mutation through the caller's backing array cannot
+// silently change the published wire. The discovery layer is the
+// last line of defence; the op layer also clones at intake.
+func TestBuild_ACRValues_DefensiveCopy(t *testing.T) {
+	t.Parallel()
+
+	want := []string{"urn:example:acr:high", "urn:example:acr:low"}
+	in := baseInput()
+	in.ACRValuesSupported = append([]string(nil), want...)
+	doc := discovery.Build(in)
+	in.ACRValuesSupported[0] = "MUTATED"
+	if doc.ACRValuesSupported[0] != want[0] {
+		t.Errorf("ACRValuesSupported[0] = %q, want it to be insulated from caller mutation", doc.ACRValuesSupported[0])
 	}
 }

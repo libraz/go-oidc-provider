@@ -220,6 +220,16 @@ type Document struct {
 	// op.WithClaimsSupported(...).
 	ClaimsSupported []string `json:"claims_supported,omitempty"`
 
+	// ACRValuesSupported lists the Authentication Context Class
+	// Reference values the OP advertises (OIDC Discovery 1.0 §3,
+	// "acr_values_supported", OPTIONAL). The values come from the
+	// OP's local trust framework or federation profile (RFC 8176
+	// authentication-method references, NIST SP 800-63 step-up
+	// labels, custom URNs); the library leaves the field unset by
+	// default. Embedders publish the closed list via
+	// op.WithACRValuesSupported(...).
+	ACRValuesSupported []string `json:"acr_values_supported,omitempty"`
+
 	// ServiceDocumentation is the URL of a human-readable page that
 	// documents the OP for developers. RFC 8414 §2 lists the field as
 	// RECOMMENDED. The library does not own the URL; the embedder

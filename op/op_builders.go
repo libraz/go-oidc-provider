@@ -696,6 +696,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 		ProfileAllowedAuthMethods: cfg.profileAllowedAuthMethodNames(),
 		ClaimsParameterSupported:  cfg.claimsParameterSupported(),
 		ClaimsSupported:           cfg.claimsSupported,
+		ACRValuesSupported:        cfg.acrValuesSupportedCopy(),
 		PairwiseEnabled:           cfg.pairwiseEnabled(),
 		Metadata: discovery.Metadata{
 			ServiceDocumentation: cfg.discoveryMetadata.ServiceDocumentation,

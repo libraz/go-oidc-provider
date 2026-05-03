@@ -1,6 +1,10 @@
 package op_test
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -523,4 +527,118 @@ func TestWithScope_AcceptsCustomWithAllowedClients(t *testing.T) {
 	)...); err != nil {
 		t.Fatalf("op.New rejected AllowedClients-restricted scope: %v", err)
 	}
+}
+
+// TestWithACRValuesSupported_OmittedByDefault confirms the discovery
+// document drops acr_values_supported when WithACRValuesSupported is
+// not invoked. OIDC Discovery 1.0 §3 lists the field as OPTIONAL; an
+// OP that has not declared a trust framework MUST NOT advertise an
+// empty list.
+func TestWithACRValuesSupported_OmittedByDefault(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(validBaseOptsWithInmem(t)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	doc := fetchDiscoveryRaw(t, provider)
+	if _, present := doc["acr_values_supported"]; present {
+		t.Errorf("discovery document carries acr_values_supported when option is unset: %v", doc["acr_values_supported"])
+	}
+}
+
+// TestWithACRValuesSupported_PublishesValuesInOrder confirms that the
+// supplied acr_values are echoed onto /.well-known/openid-configuration
+// in the embedder's order. The order is meaningful because trust
+// frameworks rank acr values from strongest to weakest and clients
+// honour the rank when picking a requested entry.
+func TestWithACRValuesSupported_PublishesValuesInOrder(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		"urn:mace:incommon:iap:silver",
+		"urn:mace:incommon:iap:bronze",
+	}
+	provider, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithACRValuesSupported(want...),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	doc := fetchDiscoveryRaw(t, provider)
+	raw, present := doc["acr_values_supported"]
+	if !present {
+		t.Fatalf("discovery document is missing acr_values_supported (doc=%v)", doc)
+	}
+	got, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("acr_values_supported = %T, want []any", raw)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("acr_values_supported len=%d want %d (%v)", len(got), len(want), got)
+	}
+	for i, v := range want {
+		if got[i] != v {
+			t.Errorf("acr_values_supported[%d]=%v want %q", i, got[i], v)
+		}
+	}
+}
+
+// TestWithACRValuesSupported_AcceptsEmptyAsExplicitOptIn confirms an
+// empty variadic call records the option-was-set signal but still
+// drops the field via omitempty so the wire shape stays compatible
+// with deployments that have not opted in.
+func TestWithACRValuesSupported_AcceptsEmptyAsExplicitOptIn(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithACRValuesSupported(),
+	)...)
+	if err != nil {
+		t.Fatalf("WithACRValuesSupported rejected empty invocation: %v", err)
+	}
+	doc := fetchDiscoveryRaw(t, provider)
+	if _, present := doc["acr_values_supported"]; present {
+		t.Errorf("empty WithACRValuesSupported still emitted acr_values_supported on the wire: %v", doc["acr_values_supported"])
+	}
+}
+
+// TestWithACRValuesSupported_RejectsEmptyValue confirms an empty
+// string in the value slice is rejected at construction time. OIDC
+// Discovery 1.0 §3 leaves the value format open, but an empty class
+// reference cannot be matched against a request and would silently
+// poison every discovery response.
+func TestWithACRValuesSupported_RejectsEmptyValue(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithACRValuesSupported("urn:example:high", ""),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for empty-string acr value, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty value") {
+		t.Errorf("err = %v, want empty-value diagnostic", err)
+	}
+}
+
+// fetchDiscoveryRaw issues a GET to /.well-known/openid-configuration
+// against the provided handler and decodes the response body into a
+// generic map so individual tests can probe presence / absence of
+// optional fields without coupling to the Document Go type. The
+// helper exists so option tests can verify the wire shape an embedder
+// actually sees rather than going through the unexported config.
+func fetchDiscoveryRaw(t *testing.T, handler http.Handler) map[string]any {
+	t.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/openid-configuration", http.NoBody)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("discovery status=%d want 200 (body=%q)", rec.Code, rec.Body.String())
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode discovery body: %v (body=%q)", err, rec.Body.String())
+	}
+	return doc
 }
