@@ -146,18 +146,16 @@ func readESBody(t *testing.T, resp *http.Response) string {
 	return string(b)
 }
 
-// TestScenario_ES_001_ConfirmationFormRenderedOnGetWithoutSession is
-// stubbed P2; deferred until the P0/P1 backlog is cleared.
+// TestScenario_ES_001_ConfirmationFormRenderedOnGetWithoutSession is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_001_ConfirmationFormRenderedOnGetWithoutSession(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-001")
+	t.Skip("out-of-scope: ES-001 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ES_002_ConfirmationFormRenderedOnPostWithoutSession is
-// stubbed P2; deferred until the P0/P1 backlog is cleared.
+// TestScenario_ES_002_ConfirmationFormRenderedOnPostWithoutSession is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_002_ConfirmationFormRenderedOnPostWithoutSession(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-002")
+	t.Skip("out-of-scope: ES-002 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ES_003_ExpiredIDTokenHintAcceptedForLogout pins the
@@ -370,10 +368,10 @@ func TestScenario_ES_009_HMACHintWithExpiredSecretRejected(t *testing.T) {
 	t.Skip("out-of-scope: ES-009 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ES_010_RequestEntitiesPopulated is stubbed P2; deferred.
+// TestScenario_ES_010_RequestEntitiesPopulated is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_010_RequestEntitiesPopulated(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-010")
+	t.Skip("out-of-scope: ES-010 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ES_011_StatePassthroughOnRequest pins the `state`
@@ -414,10 +412,10 @@ func TestScenario_ES_011_StatePassthroughOnRequest(t *testing.T) {
 	}
 }
 
-// TestScenario_ES_012_DefaultPostLogoutRedirect is stubbed P2; deferred.
+// TestScenario_ES_012_DefaultPostLogoutRedirect is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_012_DefaultPostLogoutRedirect(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-012")
+	t.Skip("out-of-scope: ES-012 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ES_013_UnverifiedPostLogoutRedirectURIDropped is OOS —
@@ -551,10 +549,10 @@ func TestScenario_ES_019_ConfirmXSRFMismatchRejected(t *testing.T) {
 	t.Skip("out-of-scope: ES-019 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ES_020_ConfirmEntitiesPopulated is stubbed P2; deferred.
+// TestScenario_ES_020_ConfirmEntitiesPopulated is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_020_ConfirmEntitiesPopulated(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-020")
+	t.Skip("out-of-scope: ES-020 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ES_021_FullSessionDestroyAndGrantRevocation is OOS —
@@ -615,24 +613,22 @@ func TestScenario_ES_024_StateForwardedToRP(t *testing.T) {
 	}
 }
 
-// TestScenario_ES_025_ConfirmWithoutPriorAuthorizations is stubbed P2;
-// deferred.
+// TestScenario_ES_025_ConfirmWithoutPriorAuthorizations is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_025_ConfirmWithoutPriorAuthorizations(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-025")
+	t.Skip("out-of-scope: ES-025 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ES_026_SuccessPageWithoutClient is stubbed P2; deferred.
+// TestScenario_ES_026_SuccessPageWithoutClient is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_026_SuccessPageWithoutClient(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-026")
+	t.Skip("out-of-scope: ES-026 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ES_027_SuccessPageWithKnownClient is stubbed P2;
-// deferred.
+// TestScenario_ES_027_SuccessPageWithKnownClient is OOS — see catalog out_of_scope_reason.
 func TestScenario_ES_027_SuccessPageWithKnownClient(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ES-027")
+	t.Skip("out-of-scope: ES-027 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ES_028_SuccessPageUnknownClientRejected is OOS — see

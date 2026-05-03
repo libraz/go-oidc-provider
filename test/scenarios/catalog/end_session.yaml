@@ -24,7 +24,8 @@ rows:
       exists renders the logout confirmation page that auto-submits to
       the confirm endpoint with an XSRF token bound to
       `session.state.secret`. `postLogoutRedirectUri` remains unset.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific upstream auto-submit confirmation form rendered when end_session is hit without an active session, with an XSRF token bound to session.state.secret. v1.0 has no separate /session/end/confirm route and no session.state.secret concept — POST /end_session is a single-shot flow guarded by the __Host-oidc_logout_csrf double-submit cookie + form field + Origin/Referer gate (covered by ES-005). No-active-session GET on v1.0's /end_session renders the static 'Signed out' confirmation when no post_logout_redirect_uri is supplied (covered implicitly by ES-012's OOS rationale)."
 
   - id: ES-002
     severity: P2
@@ -33,7 +34,8 @@ rows:
       A POST against the end_session endpoint while no active session
       exists behaves identically to the GET case (verb-agnostic
       confirmation rendering).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same vendor-specific auto-submit confirmation surface as ES-001, with the verb-equivalence claim bolted on. v1.0 distinguishes GET (renders the CSRF interstitial when no id_token_hint is present — see ES-005) from POST (which is the actual logout-confirm submission gated by __Host-oidc_logout_csrf); the upstream 'verb-agnostic confirmation rendering' shape with session.state.secret does not apply."
 
   - id: ES-003
     severity: P0
@@ -125,7 +127,8 @@ rows:
       `post_logout_redirect_uri` exposes `Client`, `IdTokenHint`, and
       `Session` entities on the request context for downstream hooks
       and audit consumers.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Internal request-context entity exposure (Client / IdTokenHint / Session) for downstream hooks and audit consumers is upstream-specific; v1.0's audit channel emits typed events (logout.requested / logout.completed) via op.WithAuditEmitter rather than projecting Go entities onto the request context. The wire-observable end_session redirect is bound by ES-004 (id_token_hint+post_logout_redirect_uri → 302) and ES-024 (state echoing); a typed-entity-on-context test would assert against an internal projection that v1.0 deliberately does not expose."
 
   - id: ES-011
     severity: P1
@@ -145,7 +148,8 @@ rows:
       `post_logout_redirect_uri` renders the confirmation page with
       no `postLogoutRedirectUri` set and falls back to the OP-default
       success page.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific 'fall back to the OP-default success page' wire when id_token_hint is supplied without a post_logout_redirect_uri. v1.0 does not have a separate /session/end/success success-page route — when no post_logout_redirect_uri is supplied the /end_session handler renders the static 'Signed out' page directly (200 text/html), with no embedder-overrideable success-source hook and no client_id query string. The OP-default-success indirection this row asserts has no v1.0 wire seam (covered structurally by ES-023 OOS for the per-client variant)."
 
   - id: ES-013
     severity: P0
@@ -232,7 +236,8 @@ rows:
       A valid POST to `/session/end/confirm` with xsrf,
       postLogoutRedirectUri, and clientId exposes `Client` and
       `Session` entities on the request context.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same vendor-specific request-context entity exposure as ES-010, against the upstream /session/end/confirm route this catalog already OOS'd at ES-018 / ES-019 / ES-021 / ES-022 / ES-023 / ES-028. v1.0 has no /session/end/confirm — the CSRF-gated logout submission is POST /end_session itself (covered by ES-005), and audit consumers receive typed events rather than request-context entities."
 
   - id: ES-021
     severity: P0
@@ -289,7 +294,8 @@ rows:
       A confirm POST with state but no `authorizations` map on the
       session MUST still complete with a 303 to the post-logout
       target without crashing.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific idempotency assertion against a session whose 'authorizations map' is empty when /session/end/confirm POSTs. v1.0 has no /session/end/confirm route and no per-client authorizations map — sessions.Manager is single-subject and end_session terminates the session unconditionally. The wire-observable post-logout 303 with state preserved on the no-prior-record path is structurally subsumed by ES-024 (state echoing under hint+post_logout_redirect_uri); the upstream 'authorizations map missing → still 303' shape has no v1.0 path."
 
   - id: ES-026
     severity: P2
@@ -298,7 +304,8 @@ rows:
       GET `/session/end/success` without a `client_id` query renders
       `postLogoutSuccessSource` (200) with the context client
       undefined.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no /session/end/success route — the post-logout success page is rendered inline by /end_session when no post_logout_redirect_uri is supplied (see ES-012 / ES-023 OOS). Without that route there is no 'GET success without client_id renders postLogoutSuccessSource with the context client undefined' wire to assert against; the closest v1.0 surface is the inline static 'Signed out' page on /end_session."
 
   - id: ES-027
     severity: P2
@@ -307,7 +314,8 @@ rows:
       GET `/session/end/success?client_id=<known>` renders the
       success page (200) and loads the client into context so the
       page can show RP branding.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same /session/end/success absence as ES-026 plus an upstream 'load the client into context so the page can show RP branding' assertion. v1.0 has no /session/end/success route, no postLogoutSuccessSource embedder hook, and no client-into-context projection on the post-logout page (the inline 'Signed out' page is intentionally minimal and does not surface RP branding to avoid being a client-existence oracle on the post-logout endpoint)."
 
   - id: ES-028
     severity: P1
