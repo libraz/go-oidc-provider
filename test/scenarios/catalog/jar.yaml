@@ -26,7 +26,7 @@ rows:
       /.well-known/openid-configuration advertises
       request_parameter_supported=true and does NOT include
       require_signed_request_object.
-    status: pending
+    status: active
 
   - id: JAR-002
     severity: P1
@@ -35,7 +35,8 @@ rows:
       When require_signed_request_object is toggled on, the discovery
       document advertises require_signed_request_object=true so RPs
       cannot rely on plaintext requests.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 discovery builder never assigns Document.RequireSignedRequestObject; the FAPI 2.0 Message Signing profile drives the runtime gate but does not surface as the require_signed_request_object metadata field.
 
   - id: JAR-003
     severity: P0
@@ -53,7 +54,7 @@ rows:
       Numeric Request Object claims (e.g. max_age) MUST be coerced to
       strings before downstream processing so all authorization
       parameters share a single representation.
-    status: pending
+    status: active
 
   - id: JAR-005
     severity: P1
@@ -62,7 +63,8 @@ rows:
       A Request Object that supplies scope as a JSON array (forcing
       duplicate semantics) is rejected with invalid_request and a
       message indicating scope cannot be supplied twice.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's stringifyClaim space-joins []string for shared keys (scope / acr_values / ui_locales); the catalog's duplicate-semantics rejection has no v1.0 gate."
 
   - id: JAR-006
     severity: P2
@@ -71,7 +73,8 @@ rows:
       A claims parameter delivered as a serialised JSON string in the
       Request Object is accepted and exposed verbatim to downstream
       params.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's JAR merger treats 'claims' as a JSON-encoded shape (mergeJSONClaims) and json.Marshal-wraps any value, so a string-valued claims claim becomes a JSON-string-of-a-string on the wire and the authorize parser rejects it as not-an-object. The catalog's verbatim-passthrough variant has no v1.0 path; JAR-007 covers the documented JSON-object form."
 
   - id: JAR-007
     severity: P2
@@ -80,7 +83,7 @@ rows:
       A claims parameter delivered as a JSON object in the Request
       Object is accepted and re-serialised back to a canonical JSON
       string.
-    status: pending
+    status: active
 
   - id: JAR-008
     severity: P2
@@ -88,7 +91,7 @@ rows:
     behaviour: |
       A Request Object whose iat is slightly in the future but within
       the configured clock-skew tolerance is accepted.
-    status: pending
+    status: active
 
   - id: JAR-009
     severity: P1
@@ -96,7 +99,8 @@ rows:
     behaviour: |
       A Request Object signed with HS256 by a client whose
       request_object_signing_alg=HS256 is accepted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 rejects HMAC algorithms (HS256/HS384/HS512) at parse time via the project-wide JOSE allow-list; an HS256-signed request object never reaches the per-client alg-pin gate, so the catalog's HS256-accepted variant has no reachable v1.0 path. Mirrors JAR-010."
 
   - id: JAR-010
     severity: P0
@@ -132,7 +136,8 @@ rows:
       When the Request Object specifies response_mode=fragment at the
       authorization endpoint, the OP applies fragment encoding for
       the response.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's authorize validator admits only {query, form_post, query.jwt, fragment.jwt, form_post.jwt, jwt}; bare 'fragment' is not on the allow-list because v1.0 ships response_type=code only. JAR-014 already covers the unsupported-mode rejection path."
 
   - id: JAR-014
     severity: P1
@@ -141,7 +146,7 @@ rows:
       A Request Object that carries an unsupported response_mode at
       the authorization endpoint is rejected with
       unsupported_response_mode.
-    status: pending
+    status: active
 
   - id: JAR-015
     severity: P0
@@ -160,7 +165,8 @@ rows:
       When a client_id mismatch error fires and the Request Object
       carried a state value, the authorization error response carries
       that state so the RP can correlate the failure.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 renders JAR verifier failures (including client_id mismatch) as a JSON envelope via writeJAREnvelopeError; there is no redirect-mode error response carrying state on this path.
 
   - id: JAR-017
     severity: P0
@@ -215,7 +221,8 @@ rows:
     behaviour: |
       A Request Object that carries a registration claim is rejected
       with registration_not_supported.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no registration_not_supported gate; the merger projects 'registration' onto the wire form and the authorize parser silently drops unknown keys (covered by JAR-023)."
 
   - id: JAR-023
     severity: P2
@@ -223,4 +230,4 @@ rows:
     behaviour: |
       A Request Object that includes unrecognised members is accepted
       and the unknown members are ignored per spec.
-    status: pending
+    status: active

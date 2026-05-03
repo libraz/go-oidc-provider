@@ -327,14 +327,43 @@ func expectInteractionRedirect(t *testing.T, resp *http.Response) *url.URL {
 	return loc
 }
 
+// TestScenario_JAR_001_DiscoveryRequestParameterSupported confirms
+// that with [feature.JAR] enabled (and no FAPI 2.0 Message Signing
+// profile asserting require_signed_request_object), the discovery
+// document advertises request_parameter_supported=true and does NOT
+// include the require_signed_request_object signal.
+//
+// Spec: RFC 9101 §10.5 / OIDC Discovery §3.
 func TestScenario_JAR_001_DiscoveryRequestParameterSupported(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-001")
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JAR)))
+	target := tk.Server.URL + "/.well-known/openid-configuration"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", target, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	doc := jarDecodeJSON(t, resp)
+	if got, _ := doc["request_parameter_supported"].(bool); !got {
+		t.Errorf("request_parameter_supported=%v want true", doc["request_parameter_supported"])
+	}
+	if _, ok := doc["require_signed_request_object"]; ok {
+		t.Errorf("require_signed_request_object should be absent without Message Signing profile (doc=%v)", doc)
+	}
 }
 
+// TestScenario_JAR_002_DiscoveryRequireSignedRequestObject is OOS — see catalog out_of_scope_reason.
 func TestScenario_JAR_002_DiscoveryRequireSignedRequestObject(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-002")
+	t.Skip("out-of-scope: JAR-002 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JAR_003_RequestObjectOverridesOuterParams confirms RFC 9101
@@ -373,34 +402,102 @@ func TestScenario_JAR_003_RequestObjectOverridesOuterParams(t *testing.T) {
 	expectInteractionRedirect(t, resp)
 }
 
+// TestScenario_JAR_004_NumericClaimsCoercedToString confirms numeric
+// request-object claims (canonical example: max_age) are coerced to
+// strings before downstream processing — the JAR merger lowers
+// numeric JSON values onto the wire url.Values shape so the authorize
+// parser sees a single string-keyed representation.
+//
+// The test drives the happy path through to /oidc/interaction; if the
+// coercion failed (e.g. the merger left max_age as a typed JSON
+// number that the authorize parser cannot consume), the request would
+// be rejected before the interaction redirect.
+//
+// Spec: OIDC Core §6.1 / RFC 9101 §6.1.
 func TestScenario_JAR_004_NumericClaimsCoercedToString(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-004")
+
+	f := newJARFixture(t)
+	claims := f.happyClaims()
+	claims["max_age"] = 60 // numeric JSON number; the merger MUST coerce.
+	signed := f.signES256(t, claims)
+	resp := f.authorizeGet(t, url.Values{
+		"client_id": {f.clientID},
+		"request":   {signed},
+	})
+	defer func() { _ = resp.Body.Close() }()
+	expectInteractionRedirect(t, resp)
 }
 
+// TestScenario_JAR_005_DuplicateScopeArrayRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_JAR_005_DuplicateScopeArrayRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-005")
+	t.Skip("out-of-scope: JAR-005 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JAR_006_ClaimsAsStringPassthrough is OOS — see catalog out_of_scope_reason.
 func TestScenario_JAR_006_ClaimsAsStringPassthrough(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-006")
+	t.Skip("out-of-scope: JAR-006 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JAR_007_ClaimsAsObjectReserialised confirms a "claims"
+// parameter delivered as a JSON object in the request object is
+// accepted and re-serialised back to a canonical JSON string before
+// being handed to the authorize parser. The merger's mergeJSONClaims
+// allow-list covers "claims" / "authorization_details"; both arrive
+// inside the JWT as decoded shapes and are re-encoded so the
+// downstream parser sees the bytes it would have on a plain wire.
+//
+// Spec: OIDC Core §5.5 / §6.1.
 func TestScenario_JAR_007_ClaimsAsObjectReserialised(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-007")
+
+	f := newJARFixture(t)
+	claims := f.happyClaims()
+	claims["claims"] = map[string]any{
+		"id_token": map[string]any{
+			"email": map[string]any{"essential": true},
+		},
+	}
+	signed := f.signES256(t, claims)
+	resp := f.authorizeGet(t, url.Values{
+		"client_id": {f.clientID},
+		"request":   {signed},
+	})
+	defer func() { _ = resp.Body.Close() }()
+	expectInteractionRedirect(t, resp)
 }
 
+// TestScenario_JAR_008_ClockSkewToleranceAccepted confirms that a
+// request object whose iat is slightly in the future but within the
+// configured clock-skew tolerance is accepted. The verifier defaults
+// to a 60-second future-skew window; the test moves iat 30 seconds
+// forward and asserts the /authorize redirect to /oidc/interaction
+// succeeds.
+//
+// Spec: RFC 9101 §10.8 / RFC 7519 §4.1.6.
 func TestScenario_JAR_008_ClockSkewToleranceAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-008")
+
+	f := newJARFixture(t)
+	claims := f.happyClaims()
+	now := f.clock.t
+	claims["iat"] = now.Add(30 * time.Second).Unix()
+	claims["nbf"] = now.Add(30 * time.Second).Unix()
+	signed := f.signES256(t, claims)
+	resp := f.authorizeGet(t, url.Values{
+		"client_id": {f.clientID},
+		"request":   {signed},
+	})
+	defer func() { _ = resp.Body.Close() }()
+	expectInteractionRedirect(t, resp)
 }
 
+// TestScenario_JAR_009_HS256AcceptedForRegisteredClient is OOS — see catalog out_of_scope_reason.
 func TestScenario_JAR_009_HS256AcceptedForRegisteredClient(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-009")
+	t.Skip("out-of-scope: JAR-009 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JAR_010_ExpiredSecretRejected is OUT-OF-SCOPE for v1.0.
@@ -464,14 +561,47 @@ func TestScenario_JAR_012_NestedRequestUriForbidden(t *testing.T) {
 	expectJARError(t, resp, "invalid_request_object")
 }
 
+// TestScenario_JAR_013_ResponseModeFragmentHonoured is OOS — see catalog out_of_scope_reason.
 func TestScenario_JAR_013_ResponseModeFragmentHonoured(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-013")
+	t.Skip("out-of-scope: JAR-013 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JAR_014_UnsupportedResponseModeRejected confirms a
+// request object that carries a response_mode the OP does not support
+// is rejected with unsupported_response_mode. v1.0's authorize
+// validator admits {"", "query", "form_post"} plus the four JARM
+// modes; any other value (here, "fragment", which v1.0 does NOT ship
+// because response_type=code is the only advertised type) is rejected.
+//
+// The error envelope shape is the legacy redirect-mode error envelope
+// because the request reached the authorize endpoint as code-flow:
+// the OP redirects to the registered redirect_uri with
+// error=unsupported_response_mode in the query.
+//
+// Spec: RFC 6749 §3.1.2 / OIDC Core §6.1.
 func TestScenario_JAR_014_UnsupportedResponseModeRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-014")
+
+	f := newJARFixture(t)
+	claims := f.happyClaims()
+	claims["response_mode"] = "fragment"
+	signed := f.signES256(t, claims)
+	resp := f.authorizeGet(t, url.Values{
+		"client_id": {f.clientID},
+		"request":   {signed},
+	})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302 (legacy redirect-mode error)", resp.StatusCode)
+	}
+	loc, err := resp.Location()
+	if err != nil {
+		t.Fatalf("Location: %v", err)
+	}
+	if got := loc.Query().Get("error"); got != "unsupported_response_mode" {
+		t.Errorf("error=%q want unsupported_response_mode (loc=%s)", got, loc.String())
+	}
 }
 
 // TestScenario_JAR_015_ResponseTypeMismatchRejected is OUT-OF-SCOPE
@@ -493,9 +623,10 @@ func TestScenario_JAR_015_ResponseTypeMismatchRejected(t *testing.T) {
 	t.Skip("out-of-scope: JAR-015 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JAR_016_StatePreservedOnError is OOS — see catalog out_of_scope_reason.
 func TestScenario_JAR_016_StatePreservedOnError(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-016")
+	t.Skip("out-of-scope: JAR-016 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_JAR_017_ClientIDMismatchRejected is OUT-OF-SCOPE for
@@ -632,14 +763,35 @@ func TestScenario_JAR_021_SignatureVerificationFails(t *testing.T) {
 	expectJARError(t, resp, "invalid_request_object")
 }
 
+// TestScenario_JAR_022_RegistrationClaimForbidden is OOS — see catalog out_of_scope_reason.
 func TestScenario_JAR_022_RegistrationClaimForbidden(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-022")
+	t.Skip("out-of-scope: JAR-022 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_JAR_023_UnknownMembersIgnored confirms that a request
+// object carrying claims the OP does not recognise is accepted and
+// the unknown members are silently ignored (RFC 9101 §6.1 leaves
+// unknown members "non-actionable"). The merger projects every
+// non-allow-listed claim onto the wire form via stringifyClaim; the
+// authorize parser then drops anything outside its own known-keys
+// set, so the redirect to /oidc/interaction proves the unknown member
+// did not derail the request.
+//
+// Spec: RFC 9101 §6.1 / OIDC Core §6.1.
 func TestScenario_JAR_023_UnknownMembersIgnored(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: JAR-023")
+
+	f := newJARFixture(t)
+	claims := f.happyClaims()
+	claims["x_vendor_extension"] = "ignored-by-spec"
+	signed := f.signES256(t, claims)
+	resp := f.authorizeGet(t, url.Values{
+		"client_id": {f.clientID},
+		"request":   {signed},
+	})
+	defer func() { _ = resp.Body.Close() }()
+	expectInteractionRedirect(t, resp)
 }
 
 // Suppress "unused" lint on the PKCE verifier constant: scenarios
