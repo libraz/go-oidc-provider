@@ -26,7 +26,8 @@ rows:
       The OP MUST expose a defaultResource(ctx, client, oneOf) hook.
       The default implementation returns undefined; when the caller
       passes a fallback list, the hook returns that list verbatim.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not expose a defaultResource(ctx, client, oneOf) hook — the only resource-policy surface is the per-client store.Client.Resources allowlist (covered by RI-021 / RI-031 / RI-032 / RI-033 / RI-060 / RI-062 / RI-063). Adding the hook would expand the OP's public surface for a dynamism the allowlist already expresses declaratively; docs/plans/002 favours declarative configuration over imperative hooks (the same rationale that puts the sibling getResourceServerInfo hook RI-002 out of scope)."
 
   - id: RI-002
     severity: P0
@@ -157,7 +158,8 @@ rows:
       A useGrantedResource hook MAY narrow or pin the resource at
       token-exchange time even when the request omits the resource
       parameter; the behaviour is driven by a per-call flag.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same useGrantedResource hook absence as RI-053 / RI-054 (both OOS): v1.0 does not expose a useGrantedResource hook at the token-exchange boundary. The AT minter unconditionally embeds the validated resource as aud (internal/tokenendpoint/authcode.go: mintJWTAccessToken) and falls back to aud=Issuer when resource is empty; there is no per-call narrow/pin policy decision. The wire-observable resource binding through code → AT is bound by RI-031 / RI-032; the per-call narrowing semantic this row asserts has no v1.0 surface."
 
   - id: RI-036
     severity: P1
@@ -166,7 +168,8 @@ rows:
       Token exchange MAY include an explicit resource parameter; the
       resulting access token's aud MUST match it, subject to that
       resource having been included on the underlying grant.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 binds the access-token aud at /authorize time (resource flows through the authorization code: RI-031 → RI-032 → RI-033). The /token authorization_code grant does NOT accept an explicit resource parameter that overrides the code's bound resource — internal/tokenendpoint/authcode.go reads code.Resource and stamps it onto the AT directly. RFC 8707 §2 permits but does not require AS support for the resource parameter at token exchange; v1.0 chose the simpler one-shot binding model where resource is locked at authorize time. Embedders that need token-exchange-time resource selection wire RFC 8693 token exchange (custom grant) instead."
 
   - id: RI-040
     severity: P0
@@ -195,7 +198,8 @@ rows:
     behaviour: |
       The default-resource path applies to the device flow as well,
       and refresh MUST preserve the resource.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not implement the OAuth 2.0 Device Authorization Grant (RFC 8628) — see RI-040 / RI-041 OOS reasons. The /token grant_type dispatcher does not handle urn:ietf:params:oauth:grant-type:device_code, and there is no /device/auth endpoint. The default-resource flow this row asserts on top of the device flow has no v1.0 path; tracked as a feature-level gap on device_code, not a resource-indicator gap. Independently, defaultResource is also OOS (RI-001)."
 
   - id: RI-043
     severity: P1
@@ -203,7 +207,8 @@ rows:
     behaviour: |
       useGrantedResource semantics MUST also apply to the device
       flow.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Two missing prerequisites: (1) no device flow in v1.0 (RI-040 / RI-041 / RI-042 OOS for the same feature gap); (2) no useGrantedResource hook (RI-035 / RI-053 / RI-054 OOS). The cross-product asserted here has no v1.0 surface on either axis."
 
   - id: RI-044
     severity: P1
@@ -211,7 +216,8 @@ rows:
     behaviour: |
       An explicit resource parameter at token exchange MUST be
       allowed and granted on the device flow.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same device-grant absence as RI-040 / RI-041 / RI-042: v1.0 does not implement RFC 8628 — no /device/auth endpoint, no urn:ietf:params:oauth:grant-type:device_code dispatch. Without an AT mint path bound to a device grant there is no surface on which to assert the explicit-resource-at-token-exchange semantic. Tracked as a feature-level gap."
 
   - id: RI-050
     severity: P0
@@ -239,7 +245,8 @@ rows:
     behaviour: |
       Refreshing the CIBA-issued refresh token MUST preserve the
       resource.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not implement OIDC CIBA (no /backchannel endpoint, no urn:openid:params:grant-type:ciba dispatch — see RI-050 / RI-051 / RI-054 OOS). Without a CIBA-issued refresh token there is no surface on which to assert refresh-time resource preservation specifically for that grant. The general 'refresh preserves resource' property for the authorization_code grant is bound by RI-033."
 
   - id: RI-053
     severity: P1
@@ -248,7 +255,8 @@ rows:
       The default resource flows through CIBA; with
       useGrantedResource=true, the issued tokens MUST carry the
       default resource.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Two missing prerequisites: (1) no CIBA grant in v1.0 (RI-050 / RI-051 / RI-052 / RI-054 OOS); (2) no defaultResource hook (RI-001 OOS) and no useGrantedResource hook (RI-035 / RI-054 OOS). The intersection asserted here has no v1.0 surface on any axis."
 
   - id: RI-054
     severity: P0
@@ -311,7 +319,8 @@ rows:
     behaviour: |
       The defaultResource hook applies to client_credentials when the
       client omits resource.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Depends on the defaultResource hook that is out of scope for v1.0 (see RI-001 OOS); without the hook the client_credentials path has no fallback that could pick up a default when resource is omitted. The only resource-policy surface is the per-client store.Client.Resources allowlist (covered by RI-060 / RI-062 / RI-063).
 
   - id: RI-066
     severity: P1
@@ -320,7 +329,8 @@ rows:
       The OP MAY support both opaque and JWT access token formats per
       resource (e.g. via a resource-scoped policy decision); both
       paths MUST accept a single resource parameter.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not expose a per-resource access-token format policy hook. The token format choice (opaque vs JWT) is global (op.WithJWTAccessTokens); there is no resource-scoped 'this resource gets opaque, that one gets JWT' policy decision at the /token boundary. Adding such a hook would need a new public option and a per-resource policy callback shape that docs/plans/002 has not enumerated. Embedders that need resource-scoped formats run a downstream gateway that re-projects opaque tokens to JWT (or vice versa) per the resource server's expectation."
 
   - id: RI-070
     severity: P1
@@ -328,7 +338,8 @@ rows:
     behaviour: |
       Audience-less access tokens (aud=undefined) MUST be accepted at
       /userinfo.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 cannot mint an audience-less access token: the AT minter unconditionally embeds the validated resource as aud and falls back to aud=Issuer when resource is empty (internal/tokenendpoint/authcode.go: mintJWTAccessToken; documented under RI-054 OOS). There is no v1.0 wire shape that produces aud=undefined, so the assertion 'audience-less ATs MUST be accepted at /userinfo' has no input that the OP can produce. The /userinfo audience policy v1.0 does enforce (aud-contains-issuer, with explicit rejection of resource-bound tokens) is bound by RI-071."
 
   - id: RI-071
     severity: P0
