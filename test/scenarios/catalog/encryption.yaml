@@ -80,6 +80,7 @@ rows:
       authorization_encryption_alg_values_supported and
       authorization_encryption_enc_values_supported. When the option
       is omitted the same fields MUST be absent (omitempty).
+    status: active
 
   - id: ENC-020
     severity: P0
@@ -90,6 +91,7 @@ rows:
       cty=JWT (RFC 7519 §5.2); decrypting the JWE yields a valid
       compact JWS whose ES256 signature verifies under the OP's
       published signing JWKS.
+    status: active
 
   - id: ENC-021
     severity: P1
@@ -296,6 +298,7 @@ rows:
       verification yields the same claim set the unencrypted path
       would have emitted (iss, aud, sub, exp, iat, nonce when
       requested).
+    status: active
 
   - id: ENC-101
     severity: P0
@@ -319,6 +322,7 @@ rows:
       yields the same claim set the JSON shape would emit, plus iss
       and aud stamped onto the signed body so the RP can satisfy
       OIDC Core §5.3.2's MUST clauses.
+    status: active
 
   - id: ENC-111
     severity: P1
@@ -343,6 +347,7 @@ rows:
       response_mode parameter ("response="). Decryption + inner JWS
       verification yields a JARM payload whose iss, aud, code and
       state match the request.
+    status: active
 
   - id: ENC-121
     severity: P1
@@ -366,6 +371,7 @@ rows:
       5-part JWE wrapping the signed introspection JWT. Decryption +
       inner JWS verification yields the standard introspection
       claim set (active, scope, sub, exp, ...).
+    status: active
 
   - id: ENC-140
     severity: P1
@@ -375,6 +381,7 @@ rows:
       both the signing keyset (use=sig) and the encryption keyset
       (use=enc). The two keysets MUST advertise disjoint kids in the
       published JWKS so an RP can route by kid alone.
+    status: active
 
   - id: ENC-141
     severity: P0

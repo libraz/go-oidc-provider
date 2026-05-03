@@ -268,6 +268,24 @@ func generateSigningKey(tb testing.TB, kid string) op.SigningKey {
 	return op.SigningKey{KeyID: entry.KeyID, Signer: entry.Signer}
 }
 
+// NewSigningKey returns a fresh ECDSA P-256 [op.SigningKey] stamped
+// with the supplied kid. Tests that build [op.New] option lists by
+// hand (for example, to drive [op.New]'s rejection paths with a
+// specific signing kid) call this instead of going through
+// [NewProvider]; the helper fails the test fast on key-generation
+// fault.
+func NewSigningKey(tb testing.TB, kid string) op.SigningKey {
+	return generateSigningKey(tb, kid)
+}
+
+// NewCookieKey returns a fresh 32-byte cookie key suitable for
+// [op.WithCookieKeys]. Mirrors [NewSigningKey]: tests assembling
+// option slices by hand use this to satisfy the cookie-key gate
+// without re-implementing the [crypto/rand] dance.
+func NewCookieKey(tb testing.TB) []byte {
+	return generateCookieKey(tb)
+}
+
 // generateCookieKey returns a fresh 32-byte cookie key suitable for
 // satisfying [op.WithCookieKeys]. The key is generated per [NewProvider]
 // call so parallel tests do not share secret material.

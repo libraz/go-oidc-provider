@@ -110,6 +110,7 @@ linters:
             - "!**/internal/clientauth/**"
             - "!**/internal/httpx/**"
             - "!**/op/testkit/**"
+            - "!**/test/scenarios/internal/scenariokit/**"
             - "!**/op/registration.go"
             - "!**/op/dpop_inmemory.go"
             - "!**/cmd/op-demo/**"

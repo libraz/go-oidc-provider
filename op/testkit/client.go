@@ -48,6 +48,41 @@ type ClientFixture struct {
 	// onto [store.Client.JWKs]; consumers parse them lazily. Leave nil
 	// for clients that authenticate via shared secret.
 	JWKs json.RawMessage
+
+	// IDTokenEncryptedResponseAlg is the JWE `alg` the client requests
+	// for issued ID tokens (OIDC Core 1.0 §10.2). Empty selects the
+	// plain signed-JWT id_token path.
+	IDTokenEncryptedResponseAlg string
+
+	// IDTokenEncryptedResponseEnc is the JWE `enc` paired with
+	// [IDTokenEncryptedResponseAlg].
+	IDTokenEncryptedResponseEnc string
+
+	// UserInfoEncryptedResponseAlg is the JWE `alg` the client
+	// requests for /userinfo responses when negotiating the
+	// application/jwt media type (OIDC Core 1.0 §5.3.4).
+	UserInfoEncryptedResponseAlg string
+
+	// UserInfoEncryptedResponseEnc is the JWE `enc` paired with
+	// [UserInfoEncryptedResponseAlg].
+	UserInfoEncryptedResponseEnc string
+
+	// AuthorizationEncryptedResponseAlg is the JWE `alg` the client
+	// requests for JARM authorization responses (FAPI 2.0 Message
+	// Signing §5.5).
+	AuthorizationEncryptedResponseAlg string
+
+	// AuthorizationEncryptedResponseEnc is the JWE `enc` paired with
+	// [AuthorizationEncryptedResponseAlg].
+	AuthorizationEncryptedResponseEnc string
+
+	// IntrospectionEncryptedResponseAlg is the JWE `alg` the client
+	// requests for JWT introspection responses (RFC 9701 §5).
+	IntrospectionEncryptedResponseAlg string
+
+	// IntrospectionEncryptedResponseEnc is the JWE `enc` paired with
+	// [IntrospectionEncryptedResponseAlg].
+	IntrospectionEncryptedResponseEnc string
 }
 
 // RegisterClient seeds the testkit's [inmem.Store] with a client built from
@@ -81,6 +116,15 @@ func buildClient(fix ClientFixture) *store.Client {
 		PublicClient:            fix.PublicClient,
 		SectorIdentifierURI:     fix.SectorIdentifierURI,
 		JWKs:                    append(json.RawMessage(nil), fix.JWKs...),
+
+		IDTokenEncryptedResponseAlg:       fix.IDTokenEncryptedResponseAlg,
+		IDTokenEncryptedResponseEnc:       fix.IDTokenEncryptedResponseEnc,
+		UserInfoEncryptedResponseAlg:      fix.UserInfoEncryptedResponseAlg,
+		UserInfoEncryptedResponseEnc:      fix.UserInfoEncryptedResponseEnc,
+		AuthorizationEncryptedResponseAlg: fix.AuthorizationEncryptedResponseAlg,
+		AuthorizationEncryptedResponseEnc: fix.AuthorizationEncryptedResponseEnc,
+		IntrospectionEncryptedResponseAlg: fix.IntrospectionEncryptedResponseAlg,
+		IntrospectionEncryptedResponseEnc: fix.IntrospectionEncryptedResponseEnc,
 	}
 	if len(out.RedirectURIs) == 0 {
 		out.RedirectURIs = []string{"https://rp.testkit.invalid/callback"}
