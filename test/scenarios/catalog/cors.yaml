@@ -134,7 +134,8 @@ rows:
       handler, the OP MUST NOT layer its own
       Access-Control-Max-Age / origin defaults on top — the embedder's
       policy wins for all paths (including discovery).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's CORS layer (internal/cors) unconditionally stamps Access-Control-Allow-Origin and Access-Control-Max-Age on the OP's CORS-aware endpoints — it does not inspect the response writer for pre-set headers from an outer middleware. The 'embedder-policy-wins' contract this row asserts would require a deferred-write or skip-if-set discipline at every point internal/cors writes to ResponseWriter; that fights v1.0's model where the OP's CORS posture (CORSOrigins-allowlisted + Strict-CORS preflight on credentialed endpoints, open Access-Control-Allow-Origin on discovery/jwks) is the source of truth. Embedders that want a different policy disable the OP's CORS surface (no WithCORSOrigins for credentialed; mount their own /.well-known proxy) rather than layering on top."
 
   - id: COR-050
     severity: P0

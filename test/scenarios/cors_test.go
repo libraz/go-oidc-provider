@@ -272,9 +272,10 @@ func TestScenario_COR_030_NonBooleanPolicyReturns500WithCORS(t *testing.T) {
 	t.Skip("out-of-scope: COR-030 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_COR_040_EmbedderCORSMiddlewareWins is OOS — see catalog out_of_scope_reason.
 func TestScenario_COR_040_EmbedderCORSMiddlewareWins(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: COR-040")
+	t.Skip("out-of-scope: COR-040 (see catalog out_of_scope_reason)")
 }
 
 // strictCORSEndpoints lists the credentialed paths the OP wraps with
