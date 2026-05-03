@@ -633,14 +633,121 @@ func TestScenario_INT_010_ClientCredentialsIntrospectNoHint(t *testing.T) {
 	}
 }
 
+// TestScenario_INT_011_ClientCredentialsIntrospectCorrectHint mints
+// a client_credentials access token (opaque format so /introspect
+// observes the substore) and asserts that introspecting it with
+// token_type_hint=access_token returns active=true and client_id.
+// The hint is the conventional one for an access token, so the
+// resolver short-circuits onto the access-token branch first.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_011_ClientCredentialsIntrospectCorrectHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-011")
+	runCCIntrospectionWithHint(t, "rp-int-011", "access_token")
 }
 
+// TestScenario_INT_012_ClientCredentialsIntrospectUnrecognisedHint
+// mints a client_credentials access token and asserts that an
+// arbitrary unknown token_type_hint is ignored — the resolver
+// surfaces active=true and client_id as if no hint had been
+// supplied.
+//
+// Spec: RFC 7662 §2.1.
 func TestScenario_INT_012_ClientCredentialsIntrospectUnrecognisedHint(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-012")
+	runCCIntrospectionWithHint(t, "rp-int-012", "foobar")
+}
+
+// runCCIntrospectionWithHint factors the INT-011/INT-012 setup so
+// the rows differ only by the hint they submit. The OP MUST
+// surface active=true plus client_id regardless of which hint
+// (correct, wrong, or arbitrary) the caller supplies — RFC 7662
+// §2.1 reserves token_type_hint as a lookup optimisation.
+func runCCIntrospectionWithHint(t *testing.T, idPrefix, hint string) {
+	t.Helper()
+	clientID := idPrefix
+	clientSecret := idPrefix + "-secret" //nolint:gosec // test fixture
+
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+
+	tk := testkit.NewProvider(t,
+		testkit.WithOptions(
+			op.WithFeature(feature.Introspect),
+			op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+		),
+	)
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		Scopes:                  []string{"api"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"client_credentials"},
+	})
+
+	// Mint a client_credentials access token.
+	tokenForm := url.Values{"grant_type": {"client_credentials"}, "scope": {"api"}}
+	tokenReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(tokenForm.Encode()))
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenReq.SetBasicAuth(rp.ID, clientSecret)
+
+	tokenResp, err := tk.HTTPClient(nil).Do(tokenReq)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	tokenBody, _ := io.ReadAll(tokenResp.Body)
+	_ = tokenResp.Body.Close()
+	if tokenResp.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d want 200 body=%s", tokenResp.StatusCode, tokenBody)
+	}
+	var tokenEnv map[string]any
+	if err := json.Unmarshal(tokenBody, &tokenEnv); err != nil {
+		t.Fatalf("/token body is not JSON: %v (raw=%s)", err, tokenBody)
+	}
+	at, _ := tokenEnv["access_token"].(string)
+	if at == "" {
+		t.Fatalf("/token missing access_token: %s", tokenBody)
+	}
+
+	form := url.Values{"token": {at}, "token_type_hint": {hint}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build /introspect request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(rp.ID, clientSecret)
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("body is not JSON: %v (raw=%q)", err, string(body))
+	}
+	if active, _ := env["active"].(bool); !active {
+		t.Fatalf("active=%v want true (hint=%q must not block resolution); body=%s", env["active"], hint, string(body))
+	}
+	if got, _ := env["client_id"].(string); got != rp.ID {
+		t.Errorf("client_id=%v want %q (hint=%q)", env["client_id"], rp.ID, hint)
+	}
 }
 
 // TestScenario_INT_013_StructuredJWTRejectedAtIntrospection is OOS — see catalog out_of_scope_reason.
@@ -655,9 +762,10 @@ func TestScenario_INT_014_PairwiseClientReceivesPairwiseSub(t *testing.T) {
 	t.Skip("out-of-scope: INT-014 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_INT_015_RSIntrospectionRespectsTokenSubjectType is OOS — see catalog out_of_scope_reason.
 func TestScenario_INT_015_RSIntrospectionRespectsTokenSubjectType(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: INT-015")
+	t.Skip("out-of-scope: INT-015 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_INT_016_ResponseCarriesNoStore confirms that every

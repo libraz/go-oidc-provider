@@ -113,7 +113,7 @@ rows:
     behaviour: |
       Introspecting a client_credentials access token with
       token_type_hint=access_token returns active=true and client_id.
-    status: pending
+    status: active
 
   - id: INT-012
     severity: P1
@@ -121,7 +121,7 @@ rows:
     behaviour: |
       An unrecognised hint when introspecting a client_credentials
       access token is ignored; the endpoint returns active=true.
-    status: pending
+    status: active
 
   - id: INT-013
     severity: P0
@@ -151,7 +151,8 @@ rows:
       A resource-server-style introspection client inspecting another
       pairwise client's token receives the original token's pairwise
       sub; the inspecting client's subject_type does not override it.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 collapses cross-client introspection onto {active:false} per the same-client-only policy (introspectendpoint/doc.go); a 'resource-server inspecting another client's pairwise token receives the original pairwise sub' shape requires cross-client metadata projection that the OP deliberately does not surface (RFC 7662 §2.2 single inactive envelope to avoid token-existence leaks). INT-019 / ATO-005 cover the canonical inactive collapse."
 
   - id: INT-016
     severity: P1
