@@ -169,40 +169,45 @@ func writeJARError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadRequest, errInvalidRequestObject, jarDescriptionFor(err))
 }
 
+// jarDescriptions is the sentinel-to-string catalogue [jarDescriptionFor]
+// walks. The order matters: every JAR sentinel may unwrap onto
+// [jar.ErrParse] (via [fmt.Errorf]), so the parse class lives at the
+// tail and a more specific cause wins when the wrapper chain reaches
+// it. Mirrors the authorize-endpoint table — duplicated rather than
+// shared because the parendpoint package does not import
+// authorizeendpoint.
+//
+//nolint:gochecknoglobals // immutable error-to-description catalogue.
+var jarDescriptions = []struct {
+	sentinel error
+	desc     string
+}{
+	{jar.ErrAlgNotAllowed, "request object alg is not allowed"},
+	{jar.ErrSigInvalid, "request object signature is invalid"},
+	{jar.ErrIssMismatch, "request object iss does not match client_id"},
+	{jar.ErrAudMismatch, "request object aud does not match issuer"},
+	{jar.ErrExpired, "request object is expired or too old"},
+	{jar.ErrNotYetValid, "request object is not yet valid"},
+	{jar.ErrNestedRequest, "request object must not contain nested request parameters"},
+	{jar.ErrJWKSFetch, "client jwks fetch failed"},
+	{jar.ErrNoMatchingJWK, "no matching client jwk"},
+	{jar.ErrJWKSConfigured, "client has no JWKs or JWKsURI"},
+	{jar.ErrJTIMissing, "request object missing jti"},
+	{jar.ErrJTIReplayed, "request object jti already consumed"},
+	{jar.ErrEncryptionUnsupported, "encrypted request objects are not supported"},
+	{jar.ErrEncryptionAlgNotAllowed, "request object encryption alg/enc is not allowed"},
+	{jar.ErrDecryptFailed, "request object could not be decrypted"},
+	{jar.ErrParse, "request object is malformed"},
+}
+
 // jarDescriptionFor returns a short description for a JAR sentinel.
-// The catalogue mirrors the authorize endpoint's helper; duplicated
-// here so the parendpoint package does not import authorizeendpoint.
 func jarDescriptionFor(err error) string {
-	switch {
-	case errors.Is(err, jar.ErrAlgNotAllowed):
-		return "request object alg is not allowed"
-	case errors.Is(err, jar.ErrSigInvalid):
-		return "request object signature is invalid"
-	case errors.Is(err, jar.ErrIssMismatch):
-		return "request object iss does not match client_id"
-	case errors.Is(err, jar.ErrAudMismatch):
-		return "request object aud does not match issuer"
-	case errors.Is(err, jar.ErrExpired):
-		return "request object is expired or too old"
-	case errors.Is(err, jar.ErrNotYetValid):
-		return "request object is not yet valid"
-	case errors.Is(err, jar.ErrNestedRequest):
-		return "request object must not contain nested request parameters"
-	case errors.Is(err, jar.ErrJWKSFetch):
-		return "client jwks fetch failed"
-	case errors.Is(err, jar.ErrNoMatchingJWK):
-		return "no matching client jwk"
-	case errors.Is(err, jar.ErrJWKSConfigured):
-		return "client has no JWKs or JWKsURI"
-	case errors.Is(err, jar.ErrJTIMissing):
-		return "request object missing jti"
-	case errors.Is(err, jar.ErrJTIReplayed):
-		return "request object jti already consumed"
-	case errors.Is(err, jar.ErrParse):
-		return "request object is malformed"
-	default:
-		return "request object verification failed"
+	for _, entry := range jarDescriptions {
+		if errors.Is(err, entry.sentinel) {
+			return entry.desc
+		}
 	}
+	return "request object verification failed"
 }
 
 // verifyDPoPProof verifies the optional DPoP header on the /par

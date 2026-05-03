@@ -60,6 +60,8 @@ var clientColumns = []string{
 	"initiate_login_uri",
 	"request_uris",
 	"request_object_signing_alg",
+	"request_object_encryption_alg",
+	"request_object_encryption_enc",
 }
 
 // clientArgs returns the bind arguments for an INSERT/UPDATE in the
@@ -107,6 +109,8 @@ func clientArgs(c *store.Client) []any {
 		c.InitiateLoginURI,
 		encodeStrings(c.RequestURIs),
 		c.RequestObjectSigningAlg,
+		c.RequestObjectEncryptionAlg,
+		c.RequestObjectEncryptionEnc,
 	}
 }
 
@@ -155,6 +159,8 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		&c.InitiateLoginURI,
 		&requestURIs,
 		&c.RequestObjectSigningAlg,
+		&c.RequestObjectEncryptionAlg,
+		&c.RequestObjectEncryptionEnc,
 	)
 	if err != nil {
 		return nil, err

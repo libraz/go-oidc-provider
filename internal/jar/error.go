@@ -90,4 +90,28 @@ var (
 	// attacker observing a replay attempt cannot distinguish it from
 	// a malformed object via the error code.
 	ErrJTIReplayed = errors.New("jar: request object jti already consumed")
+
+	// ErrEncryptionUnsupported signals that the wire raw is a JWE
+	// (5-segment compact form) but the verifier was constructed
+	// without an [EncryptionResolver]. The OP cannot decrypt the
+	// request object, so the only honest wire code is
+	// invalid_request_object — the client presented a shape the OP
+	// is not configured to accept.
+	ErrEncryptionUnsupported = errors.New("jar: encrypted request objects are not supported")
+
+	// ErrEncryptionAlgNotAllowed signals that the JWE protected
+	// header carries an `alg` or `enc` outside the OP allow-list
+	// (RFC 7518 §4 / §5 narrowed by the v0.9.1 ship list — see
+	// [internal/jose.AllowedJWEAlgs] / [internal/jose.AllowedJWEEncs]).
+	// The class is collapsed because an attacker probing for sub-
+	// causes through the wire response would learn nothing useful;
+	// log readers see the wrapped detail via [errors.Unwrap].
+	ErrEncryptionAlgNotAllowed = errors.New("jar: request object enc/alg not allowed")
+
+	// ErrDecryptFailed signals that JWE decryption failed for a
+	// reason the OP MUST NOT distinguish on the wire — wrong key,
+	// modified ciphertext, mismatched tag, or unknown kid all
+	// converge here so timing / oracle leaks cannot help an
+	// attacker enumerate the OP's encryption keyset (ADR 0030 §S.3).
+	ErrDecryptFailed = errors.New("jar: request object decryption failed")
 )

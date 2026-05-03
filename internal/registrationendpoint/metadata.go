@@ -23,30 +23,32 @@ const maxBodyBytes = 64 * 1024
 // intentionally carries the same shape so the conversion remains a
 // field-for-field copy.
 type ClientMetadata struct {
-	RedirectURIs             []string
-	GrantTypes               []string
-	ResponseTypes            []string
-	Scope                    string
-	TokenEndpointAuthMethod  string
-	ApplicationType          string
-	SubjectType              string
-	IDTokenSignedResponseAlg string
-	SectorIdentifierURI      string
-	ClientName               string
-	ClientURI                string
-	LogoURI                  string
-	PolicyURI                string
-	TosURI                   string
-	JWKsURI                  string
-	JWKs                     json.RawMessage
-	Contacts                 []string
-	DefaultMaxAge            *int64
-	RequireAuthTime          bool
-	DefaultACRValues         []string
-	InitiateLoginURI         string
-	RequestURIs              []string
-	RequestObjectSigningAlg  string
-	PostLogoutRedirectURIs   []string
+	RedirectURIs               []string
+	GrantTypes                 []string
+	ResponseTypes              []string
+	Scope                      string
+	TokenEndpointAuthMethod    string
+	ApplicationType            string
+	SubjectType                string
+	IDTokenSignedResponseAlg   string
+	SectorIdentifierURI        string
+	ClientName                 string
+	ClientURI                  string
+	LogoURI                    string
+	PolicyURI                  string
+	TosURI                     string
+	JWKsURI                    string
+	JWKs                       json.RawMessage
+	Contacts                   []string
+	DefaultMaxAge              *int64
+	RequireAuthTime            bool
+	DefaultACRValues           []string
+	InitiateLoginURI           string
+	RequestURIs                []string
+	RequestObjectSigningAlg    string
+	RequestObjectEncryptionAlg string
+	RequestObjectEncryptionEnc string
+	PostLogoutRedirectURIs     []string
 }
 
 // metadataWire is the JSON shape RFC 7591 §2 / OIDC Dynamic Client
@@ -54,30 +56,32 @@ type ClientMetadata struct {
 // because callers consume the parsed [ClientMetadata] only; the wire
 // shape is an implementation detail.
 type metadataWire struct {
-	RedirectURIs             []string        `json:"redirect_uris,omitempty"`
-	GrantTypes               []string        `json:"grant_types,omitempty"`
-	ResponseTypes            []string        `json:"response_types,omitempty"`
-	Scope                    string          `json:"scope,omitempty"`
-	TokenEndpointAuthMethod  string          `json:"token_endpoint_auth_method,omitempty"`
-	ApplicationType          string          `json:"application_type,omitempty"`
-	SubjectType              string          `json:"subject_type,omitempty"`
-	IDTokenSignedResponseAlg string          `json:"id_token_signed_response_alg,omitempty"`
-	SectorIdentifierURI      string          `json:"sector_identifier_uri,omitempty"`
-	ClientName               string          `json:"client_name,omitempty"`
-	ClientURI                string          `json:"client_uri,omitempty"`
-	LogoURI                  string          `json:"logo_uri,omitempty"`
-	PolicyURI                string          `json:"policy_uri,omitempty"`
-	TosURI                   string          `json:"tos_uri,omitempty"`
-	JWKsURI                  string          `json:"jwks_uri,omitempty"`
-	JWKs                     json.RawMessage `json:"jwks,omitempty"`
-	Contacts                 []string        `json:"contacts,omitempty"`
-	DefaultMaxAge            *int64          `json:"default_max_age,omitempty"`
-	RequireAuthTime          bool            `json:"require_auth_time,omitempty"`
-	DefaultACRValues         []string        `json:"default_acr_values,omitempty"`
-	InitiateLoginURI         string          `json:"initiate_login_uri,omitempty"`
-	RequestURIs              []string        `json:"request_uris,omitempty"`
-	RequestObjectSigningAlg  string          `json:"request_object_signing_alg,omitempty"`
-	PostLogoutRedirectURIs   []string        `json:"post_logout_redirect_uris,omitempty"`
+	RedirectURIs               []string        `json:"redirect_uris,omitempty"`
+	GrantTypes                 []string        `json:"grant_types,omitempty"`
+	ResponseTypes              []string        `json:"response_types,omitempty"`
+	Scope                      string          `json:"scope,omitempty"`
+	TokenEndpointAuthMethod    string          `json:"token_endpoint_auth_method,omitempty"`
+	ApplicationType            string          `json:"application_type,omitempty"`
+	SubjectType                string          `json:"subject_type,omitempty"`
+	IDTokenSignedResponseAlg   string          `json:"id_token_signed_response_alg,omitempty"`
+	SectorIdentifierURI        string          `json:"sector_identifier_uri,omitempty"`
+	ClientName                 string          `json:"client_name,omitempty"`
+	ClientURI                  string          `json:"client_uri,omitempty"`
+	LogoURI                    string          `json:"logo_uri,omitempty"`
+	PolicyURI                  string          `json:"policy_uri,omitempty"`
+	TosURI                     string          `json:"tos_uri,omitempty"`
+	JWKsURI                    string          `json:"jwks_uri,omitempty"`
+	JWKs                       json.RawMessage `json:"jwks,omitempty"`
+	Contacts                   []string        `json:"contacts,omitempty"`
+	DefaultMaxAge              *int64          `json:"default_max_age,omitempty"`
+	RequireAuthTime            bool            `json:"require_auth_time,omitempty"`
+	DefaultACRValues           []string        `json:"default_acr_values,omitempty"`
+	InitiateLoginURI           string          `json:"initiate_login_uri,omitempty"`
+	RequestURIs                []string        `json:"request_uris,omitempty"`
+	RequestObjectSigningAlg    string          `json:"request_object_signing_alg,omitempty"`
+	RequestObjectEncryptionAlg string          `json:"request_object_encryption_alg,omitempty"`
+	RequestObjectEncryptionEnc string          `json:"request_object_encryption_enc,omitempty"`
+	PostLogoutRedirectURIs     []string        `json:"post_logout_redirect_uris,omitempty"`
 
 	// SoftwareStatement is parsed only so the handler can detect its
 	// presence and reject with invalid_software_statement; v1.0 does
@@ -126,30 +130,32 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		return ClientMetadata{}, metadataExtras{}, fmt.Errorf("registrationendpoint: decode metadata: %w", err)
 	}
 	m := ClientMetadata{
-		RedirectURIs:             cloneStrings(w.RedirectURIs),
-		GrantTypes:               cloneStrings(w.GrantTypes),
-		ResponseTypes:            cloneStrings(w.ResponseTypes),
-		Scope:                    w.Scope,
-		TokenEndpointAuthMethod:  w.TokenEndpointAuthMethod,
-		ApplicationType:          w.ApplicationType,
-		SubjectType:              w.SubjectType,
-		IDTokenSignedResponseAlg: w.IDTokenSignedResponseAlg,
-		SectorIdentifierURI:      w.SectorIdentifierURI,
-		ClientName:               w.ClientName,
-		ClientURI:                w.ClientURI,
-		LogoURI:                  w.LogoURI,
-		PolicyURI:                w.PolicyURI,
-		TosURI:                   w.TosURI,
-		JWKsURI:                  w.JWKsURI,
-		JWKs:                     append(json.RawMessage(nil), w.JWKs...),
-		Contacts:                 cloneStrings(w.Contacts),
-		DefaultMaxAge:            clone.Int64Ptr(w.DefaultMaxAge),
-		RequireAuthTime:          w.RequireAuthTime,
-		DefaultACRValues:         cloneStrings(w.DefaultACRValues),
-		InitiateLoginURI:         w.InitiateLoginURI,
-		RequestURIs:              cloneStrings(w.RequestURIs),
-		RequestObjectSigningAlg:  w.RequestObjectSigningAlg,
-		PostLogoutRedirectURIs:   cloneStrings(w.PostLogoutRedirectURIs),
+		RedirectURIs:               cloneStrings(w.RedirectURIs),
+		GrantTypes:                 cloneStrings(w.GrantTypes),
+		ResponseTypes:              cloneStrings(w.ResponseTypes),
+		Scope:                      w.Scope,
+		TokenEndpointAuthMethod:    w.TokenEndpointAuthMethod,
+		ApplicationType:            w.ApplicationType,
+		SubjectType:                w.SubjectType,
+		IDTokenSignedResponseAlg:   w.IDTokenSignedResponseAlg,
+		SectorIdentifierURI:        w.SectorIdentifierURI,
+		ClientName:                 w.ClientName,
+		ClientURI:                  w.ClientURI,
+		LogoURI:                    w.LogoURI,
+		PolicyURI:                  w.PolicyURI,
+		TosURI:                     w.TosURI,
+		JWKsURI:                    w.JWKsURI,
+		JWKs:                       append(json.RawMessage(nil), w.JWKs...),
+		Contacts:                   cloneStrings(w.Contacts),
+		DefaultMaxAge:              clone.Int64Ptr(w.DefaultMaxAge),
+		RequireAuthTime:            w.RequireAuthTime,
+		DefaultACRValues:           cloneStrings(w.DefaultACRValues),
+		InitiateLoginURI:           w.InitiateLoginURI,
+		RequestURIs:                cloneStrings(w.RequestURIs),
+		RequestObjectSigningAlg:    w.RequestObjectSigningAlg,
+		RequestObjectEncryptionAlg: w.RequestObjectEncryptionAlg,
+		RequestObjectEncryptionEnc: w.RequestObjectEncryptionEnc,
+		PostLogoutRedirectURIs:     cloneStrings(w.PostLogoutRedirectURIs),
 	}
 	extras := metadataExtras{
 		SoftwareStatement: w.SoftwareStatement,

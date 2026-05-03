@@ -44,6 +44,80 @@ func TestValidatePolicy_RejectsUnsupportedRequestObjectSigningAlg(t *testing.T) 
 	}
 }
 
+// TestValidatePolicy_AcceptsRequestObjectEncryption pins the v0.9.1
+// allow-list for [request_object_encryption_alg / _enc]: every entry on
+// the JOSE wrapper's allow-list flows through the DCR validator
+// unchanged. The test fails closed if the allow-list grows past the
+// validator's hard-coded set without a corresponding update.
+func TestValidatePolicy_AcceptsRequestObjectEncryption(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		alg, enc string
+	}{
+		{alg: "RSA-OAEP-256", enc: "A256GCM"},
+		{alg: "ECDH-ES", enc: "A128GCM"},
+		{alg: "ECDH-ES+A128KW", enc: "A128GCM"},
+		{alg: "ECDH-ES+A256KW", enc: "A256GCM"},
+		{alg: "RSA-OAEP-256", enc: ""},
+		{alg: "", enc: "A256GCM"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.alg+"/"+tc.enc, func(t *testing.T) {
+			t.Parallel()
+			_, err := validatePolicy(ClientMetadata{
+				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
+				RequestObjectEncryptionAlg: tc.alg,
+				RequestObjectEncryptionEnc: tc.enc,
+			}, []string{"authorization_code"}, []string{"code"}, nil, nil, false, false)
+			if err != nil {
+				t.Fatalf("validatePolicy: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist pins
+// the negative half: any value outside the allow-list MUST surface
+// invalid_client_metadata so a registration probe cannot land an alg
+// the JAR verifier would later refuse as
+// [jar.ErrEncryptionAlgNotAllowed].
+func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name, alg, enc, want string
+	}{
+		{name: "alg-RSA1_5", alg: "RSA1_5", enc: "A256GCM", want: "request_object_encryption_alg"},
+		{name: "alg-A128KW", alg: "A128KW", enc: "A128GCM", want: "request_object_encryption_alg"},
+		{name: "enc-CBC", alg: "RSA-OAEP-256", enc: "A128CBC-HS256", want: "request_object_encryption_enc"},
+		{name: "enc-A192", alg: "RSA-OAEP-256", enc: "A192GCM", want: "request_object_encryption_enc"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := validatePolicy(ClientMetadata{
+				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
+				RequestObjectEncryptionAlg: tc.alg,
+				RequestObjectEncryptionEnc: tc.enc,
+			}, []string{"authorization_code"}, []string{"code"}, nil, nil, false, false)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			var ve *validationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("error %v is not *validationError", err)
+			}
+			if ve.code != codeInvalidClientMetadata {
+				t.Errorf("code = %q, want %q", ve.code, codeInvalidClientMetadata)
+			}
+			if !strings.Contains(ve.description, tc.want) {
+				t.Errorf("description %q must contain %q", ve.description, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidatePolicy_RejectsPairwiseMultiHostWithoutSectorIdentifier(t *testing.T) {
 	t.Parallel()
 

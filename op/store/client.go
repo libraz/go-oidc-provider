@@ -243,6 +243,27 @@ type Client struct {
 	// the OP allows for request objects." When non-empty the verifier
 	// rejects request objects whose header alg does not match.
 	RequestObjectSigningAlg string
+
+	// RequestObjectEncryptionAlg signals to the OP that the client
+	// intends to encrypt its authorization request objects (OIDC
+	// Dynamic Client Registration 1.0 §2). The value is the JWE `alg`
+	// the client uses; the OP advertises the field in DCR responses
+	// and discovery's request_object_encryption_alg_values_supported
+	// so RPs can detect which algorithms are honoured.
+	//
+	// The library does not enforce a per-client pin: the JAR verifier
+	// accepts any JWE whose protected header carries an `alg` from
+	// the OP allow-list and whose `kid` resolves through the
+	// configured encryption keyset. The field is recorded so the OP
+	// metadata round-trips faithfully and so a future hardening pass
+	// can tighten the alg check without a wire-shape change.
+	RequestObjectEncryptionAlg string
+
+	// RequestObjectEncryptionEnc mirrors [RequestObjectEncryptionAlg]
+	// for the JWE content-encryption (`enc`) advertisement. Empty
+	// means "no preference" — the OP still validates the inbound
+	// `enc` against the v0.9.1 allow-list (`A128GCM` / `A256GCM`).
+	RequestObjectEncryptionEnc string
 }
 
 // ClientStore is the read-only contract every OP backend MUST satisfy.

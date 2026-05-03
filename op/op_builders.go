@@ -289,7 +289,7 @@ func buildMTLSVerifier(cfg *config) (*mtls.Verifier, error) {
 // the inline value is absent.
 //
 //nolint:nilnil // (nil, nil) is the documented "JAR not enabled" signal.
-func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
+func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, error) {
 	if !featureEnabled(cfg.features, feature.JAR) {
 		return nil, nil
 	}
@@ -335,11 +335,12 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 		resolverOpts = append(resolverOpts, jar.AllowPrivateNetwork())
 	}
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:     cfg.issuer,
-		Resolver:   jar.NewDefaultResolver(cfg.clock, resolverOpts...),
-		Clock:      cfg.clock,
-		RequireNbf: requireNbf,
-		JTIs:       cfg.store.ConsumedJTIs(),
+		Issuer:             cfg.issuer,
+		Resolver:           jar.NewDefaultResolver(cfg.clock, resolverOpts...),
+		Clock:              cfg.clock,
+		RequireNbf:         requireNbf,
+		JTIs:               cfg.store.ConsumedJTIs(),
+		EncryptionResolver: jarEncryptionResolver(encSet),
 		// RFC 9101 §6.1 marks "jti" as OPTIONAL; without an active FAPI
 		// profile, rejecting JARs that omit it would refuse spec-
 		// conformant request objects (e.g. the ones the OpenID
@@ -362,6 +363,26 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 		}
 	}
 	return v, nil
+}
+
+// jarEncryptionResolver returns the [jar.EncryptionResolver] backing
+// the verifier's JWE seam. A nil [keys.EncryptionSet] yields a nil
+// resolver — the documented "JWE off" signal in
+// [jar.VerifierConfig.EncryptionResolver]; without
+// [WithEncryptionKeyset] no encrypted request object can be honoured
+// and the verifier surfaces [jar.ErrEncryptionUnsupported] uniformly.
+//
+// Returning the typed-nil interface from a typed-nil concrete value
+// would defeat the nil-check at the consumer (the verifier inspects
+// the interface against nil), so the wrapper compares the concrete
+// pointer first.
+//
+//nolint:ireturn // adapter that maps a typed-nil pointer to an untyped-nil interface for the verifier nil-check.
+func jarEncryptionResolver(encSet *keys.EncryptionSet) jar.EncryptionResolver {
+	if encSet == nil {
+		return nil
+	}
+	return encSet
 }
 
 // buildAssertionVerifier constructs the [clientauth.PrivateKeyJWTVerifier]

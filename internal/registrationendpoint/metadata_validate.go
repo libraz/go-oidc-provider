@@ -45,6 +45,9 @@ func validatePolicy(
 		func() error { return validateMetadataURIs(canonical) },
 		func() error { return validateJWKSConfiguration(canonical) },
 		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
+		func() error {
+			return validateRequestObjectEncryption(canonical.RequestObjectEncryptionAlg, canonical.RequestObjectEncryptionEnc)
+		},
 		func() error { return validatePairwiseMetadata(canonical) },
 		func() error { return validateDefaultMaxAge(canonical.DefaultMaxAge) },
 		func() error {
@@ -266,6 +269,38 @@ func validateRequestObjectSigningAlg(alg string) error {
 	default:
 		return errInvalidClientMetadata("request_object_signing_alg " + alg + " is not supported")
 	}
+}
+
+// validateRequestObjectEncryption pins the JWE alg/enc the client may
+// register against the v0.9.1 closed allow-list. The list mirrors
+// [internal/jose.AllowedJWEAlgs] / [AllowedJWEEncs] so DCR cannot
+// admit a value the verifier would later reject as
+// [jar.ErrEncryptionAlgNotAllowed]; an embedder that narrows the
+// advertised list via [op.WithSupportedEncryptionAlgs] is responsible
+// for the per-deployment hardening — the registration validator stays
+// at the v0.9.1 ceiling so a non-narrowing OP accepts every alg/enc
+// the JOSE wrapper can decrypt.
+//
+// Either field may be empty: registering only `alg` (or only `enc`) is
+// permitted because OIDC §6.1 lets the client commit to one half and
+// negotiate the other through the discovery list. An empty `alg` with a
+// non-empty `enc` is also accepted for the same reason.
+func validateRequestObjectEncryption(alg, enc string) error {
+	if alg != "" {
+		switch alg {
+		case "RSA-OAEP-256", "ECDH-ES", "ECDH-ES+A128KW", "ECDH-ES+A256KW":
+		default:
+			return errInvalidClientMetadata("request_object_encryption_alg " + alg + " is not supported")
+		}
+	}
+	if enc != "" {
+		switch enc {
+		case "A128GCM", "A256GCM":
+		default:
+			return errInvalidClientMetadata("request_object_encryption_enc " + enc + " is not supported")
+		}
+	}
+	return nil
 }
 
 func validatePairwiseMetadata(m ClientMetadata) error {

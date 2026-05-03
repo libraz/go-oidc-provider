@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
@@ -52,12 +53,20 @@ type JWKSResolver interface {
 	Resolve(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error)
 }
 
+// EncryptionResolver is the type alias the public verifier exposes for
+// the JWE decryption seam. It mirrors [jose.EncryptionKeyResolver] so
+// callers can plumb a [keys.EncryptionSet] (or any other resolver)
+// through [VerifierConfig.EncryptionResolver] without taking a direct
+// dependency on the JOSE wrapper.
+type EncryptionResolver = jose.EncryptionKeyResolver
+
 // Verifier is the request-scoped entry point. Construct it once at
 // startup with [NewVerifier]; the value is immutable and safe for
 // concurrent use.
 type Verifier struct {
 	clock         timex.Clock
 	resolver      JWKSResolver
+	decrypter     EncryptionResolver
 	issuer        string
 	allowedAlgs   map[jose.Algorithm]struct{}
 	maxFutureSkew time.Duration
@@ -159,6 +168,20 @@ type VerifierConfig struct {
 	// FAPI 2.0 Message Signing §5.6 mandates a 60-second window.
 	// Zero leaves the cap disabled (back-compat).
 	MaxLifetime time.Duration
+
+	// EncryptionResolver, when non-nil, enables JWE-shaped request
+	// objects (compact form with five base64url segments). The
+	// verifier decrypts the JWE through [internal/jose.Decrypt],
+	// expecting a nested JWS plaintext (`cty=JWT` or absent), and
+	// runs the rest of the pipeline against the decrypted JWS.
+	//
+	// A nil resolver leaves the verifier JWS-only: a JWE-shaped raw
+	// returns [ErrEncryptionUnsupported] so the wire layer can map
+	// the failure onto invalid_request_object. The OP-level wiring
+	// supplies a [*keys.EncryptionSet] when [op.WithEncryptionKeyset]
+	// is configured; without that option the field stays nil and
+	// the rest of the pipeline is unaffected.
+	EncryptionResolver EncryptionResolver
 }
 
 // NewVerifier builds a [*Verifier] from cfg. The function returns an
@@ -214,6 +237,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	return &Verifier{
 		clock:         clock,
 		resolver:      cfg.Resolver,
+		decrypter:     cfg.EncryptionResolver,
 		issuer:        cfg.Issuer,
 		allowedAlgs:   allowed,
 		maxFutureSkew: skew,
@@ -264,7 +288,11 @@ func (v *Verifier) Verify(ctx context.Context, raw, expectedClientID string, cli
 	if client == nil {
 		return nil, fmt.Errorf("%w: client is required", ErrJWKSConfigured)
 	}
-	parsed, err := Parse(raw)
+	innerJWS, err := v.maybeDecrypt(raw)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := Parse(innerJWS)
 	if err != nil {
 		return nil, err
 	}
@@ -303,6 +331,65 @@ func (v *Verifier) Verify(ctx context.Context, raw, expectedClientID string, cli
 		return nil, err
 	}
 	return parsed, nil
+}
+
+// maybeDecrypt detects a JWE-shaped raw (5-segment compact form per
+// RFC 7516 §3.1) and decrypts it through the configured
+// [EncryptionResolver]. The plaintext is expected to be a JWS the
+// downstream [Parse] consumes — OIDC §6.1 mandates a signed inner
+// payload, so a JWE wrapping plain JSON would fail at JWS parsing
+// regardless and the verifier does not special-case it.
+//
+// A 3-segment raw (compact JWS) is returned unchanged. Any other
+// segment count is left to [Parse] to reject as [ErrParse]; the
+// segment-count gate exists only so we do not call [jose.Decrypt]
+// against a JWS by mistake.
+//
+// JWE-shaped raw without a configured resolver returns
+// [ErrEncryptionUnsupported] (the OP cannot honour the request
+// object). With a resolver configured, the JOSE-level sentinels are
+// collapsed onto the JAR taxonomy:
+//
+//   - [jose.ErrJWEAlgNotAllowed] / [jose.ErrJWEEncNotAllowed] →
+//     [ErrEncryptionAlgNotAllowed].
+//   - [jose.ErrJWEKidUnknown] / [jose.ErrJWEDecryptFailed] →
+//     [ErrDecryptFailed] (kid-unknown is folded into the failure
+//     class so an attacker cannot enumerate the OP's encryption
+//     keyset through the wire response).
+//   - Every other JOSE sentinel maps to [ErrParse] so the wire layer
+//     surfaces invalid_request_object uniformly.
+func (v *Verifier) maybeDecrypt(raw string) (string, error) {
+	dotCount := strings.Count(raw, ".")
+	if dotCount != 4 {
+		return raw, nil
+	}
+	if v.decrypter == nil {
+		return "", ErrEncryptionUnsupported
+	}
+	out, err := jose.Decrypt(raw, v.decrypter)
+	if err != nil {
+		return "", mapJWEError(err)
+	}
+	return string(out.Plaintext), nil
+}
+
+// mapJWEError collapses the JOSE-level JWE sentinels onto the JAR
+// wire-error taxonomy. The mapping mirrors the doc on
+// [Verifier.maybeDecrypt] and lives in one place so a future audit
+// can verify the wire-error envelope is uniform across kid-unknown,
+// decrypt-failed, and decrypt-succeeded-but-malformed-plaintext
+// paths.
+func mapJWEError(err error) error {
+	switch {
+	case errors.Is(err, jose.ErrJWEAlgNotAllowed),
+		errors.Is(err, jose.ErrJWEEncNotAllowed):
+		return fmt.Errorf("%w: %w", ErrEncryptionAlgNotAllowed, err)
+	case errors.Is(err, jose.ErrJWEKidUnknown),
+		errors.Is(err, jose.ErrJWEDecryptFailed):
+		return fmt.Errorf("%w: %w", ErrDecryptFailed, err)
+	default:
+		return fmt.Errorf("%w: %w", ErrParse, err)
+	}
 }
 
 // consumeJTI enforces the RFC 9101 §10.8 replay-defence floor on the

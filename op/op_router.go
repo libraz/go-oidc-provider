@@ -124,11 +124,11 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		})),
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, originAllow, strictCORS, locales)
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encSet, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes, assertionVerifier, dpopVerifier, strictCORS); err != nil {
+	if err := mountPAREndpoint(mux, cfg, scopes, encSet, assertionVerifier, dpopVerifier, strictCORS); err != nil {
 		return nil, err
 	}
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, assertionVerifier, strictCORS)
@@ -201,6 +201,7 @@ func mountPAREndpoint(
 	mux *http.ServeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
+	encSet *keys.EncryptionSet,
 	assertionVerifier clientauth.AssertionVerifier,
 	dpopVerifier *dpop.Verifier,
 	strictCORS *cors.Strict,
@@ -208,7 +209,7 @@ func mountPAREndpoint(
 	if !featureEnabled(cfg.features, feature.PAR) {
 		return nil
 	}
-	jarVerifier, err := buildJARVerifier(cfg)
+	jarVerifier, err := buildJARVerifier(cfg, encSet)
 	if err != nil {
 		return err
 	}
@@ -311,6 +312,7 @@ func mountAuthorizeHandlers(
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
+	encSet *keys.EncryptionSet,
 	allow *csrf.Allowlist,
 	strictCORS *cors.Strict,
 	locales *i18n.Resolver,
@@ -322,7 +324,7 @@ func mountAuthorizeHandlers(
 	if err != nil {
 		return nil, err
 	}
-	jarVerifier, err := buildJARVerifier(cfg)
+	jarVerifier, err := buildJARVerifier(cfg, encSet)
 	if err != nil {
 		return nil, err
 	}

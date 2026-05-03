@@ -48,7 +48,9 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     default_acr_values JSON NOT NULL,
     initiate_login_uri TEXT NOT NULL,
     request_uris JSON NOT NULL,
-    request_object_signing_alg VARCHAR(16) NOT NULL DEFAULT ''
+    request_object_signing_alg VARCHAR(16) NOT NULL DEFAULT '',
+    request_object_encryption_alg VARCHAR(32) NOT NULL DEFAULT '',
+    request_object_encryption_enc VARCHAR(16) NOT NULL DEFAULT ''
 );
 
 -- oidc_authorization_codes.id stores the SHA-256 hex digest (64

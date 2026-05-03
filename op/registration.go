@@ -206,6 +206,25 @@ type ClientMetadata struct {
 	// to the OP's allow-list.
 	RequestObjectSigningAlg string
 
+	// RequestObjectEncryptionAlg, when non-empty, signals that the
+	// client encrypts its authorization request objects with the
+	// named JWE `alg` (OIDC Dynamic Client Registration 1.0 §2).
+	// The value must be on the OP allow-list (see
+	// [SupportedEncryptionAlgs]); the JAR verifier accepts any
+	// allow-listed alg whose `kid` resolves through the configured
+	// encryption keyset, so the registered value is recorded for the
+	// metadata round-trip rather than enforced per-client.
+	//
+	// Stable since v0.9.1.
+	RequestObjectEncryptionAlg string
+
+	// RequestObjectEncryptionEnc mirrors [RequestObjectEncryptionAlg]
+	// for the JWE content-encryption (`enc`) advertisement. Allowed
+	// values are listed by [SupportedEncryptionEncs].
+	//
+	// Stable since v0.9.1.
+	RequestObjectEncryptionEnc string
+
 	// PostLogoutRedirectURIs lists the candidate URIs the client wants
 	// to register for OpenID Connect RP-Initiated Logout 1.0 §3
 	// post_logout_redirect_uri matching. The library has already
