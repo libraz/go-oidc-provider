@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 type parStore struct {
@@ -19,9 +20,15 @@ func newParStore(s *Store, tx *databasesql.Tx) *parStore {
 
 func (s *parStore) runner() runner { return pickRunner(s.parent, s.tx) }
 
+// Save honours the hash-on-store contract documented on
+// [store.PushedAuthRequestStore.Save]: the raw [store.PushedAuthRequest.URI]
+// is the bearer secret the client presents at the authorization
+// endpoint, so the row is keyed on its SHA-256 digest (via
+// [patterns.Digest]) and the raw value never reaches the database.
 func (s *parStore) Save(ctx context.Context, par *store.PushedAuthRequest) error {
+	uriDigest := patterns.Digest(par.URI)
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.parSave,
-		par.URI, par.ClientID, par.RawParams,
+		uriDigest, par.ClientID, par.RawParams,
 		timeToInt64(par.ExpiresAt), timePtrToInt64Ptr(par.ConsumedAt), timeToInt64(par.CreatedAt))
 	if err != nil {
 		if isDuplicate(err) {
@@ -43,22 +50,34 @@ func (s *parStore) Find(ctx context.Context, uri string) (*store.PushedAuthReque
 	return rec, nil
 }
 
+// find resolves a row by hashing the presented uri and comparing in
+// constant time against the stored digest. The returned record's URI
+// is restored to the caller's raw value so call sites observe the
+// same opaque bearer URI they passed in; nothing outside this file
+// ever needs the raw value back, but the round-trip mirrors the
+// inmem reference and keeps the contract tests symmetrical.
 func (s *parStore) find(ctx context.Context, uri string) (*store.PushedAuthRequest, error) {
+	uriDigest := patterns.Digest(uri)
 	var (
 		rec      store.PushedAuthRequest
+		stored   string
 		raw      []byte
 		expires  int64
 		consumed *int64
 		created  int64
 	)
-	err := s.runner().QueryRowContext(ctx, s.parent.queries.parFind, uri).Scan(
-		&rec.URI, &rec.ClientID, &raw, &expires, &consumed, &created)
+	err := s.runner().QueryRowContext(ctx, s.parent.queries.parFind, uriDigest).Scan(
+		&stored, &rec.ClientID, &raw, &expires, &consumed, &created)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	if !patterns.ConstantTimeKeyMatch(stored, uriDigest) {
+		return nil, store.ErrNotFound
+	}
+	rec.URI = uri
 	rec.RawParams = append([]byte(nil), raw...)
 	rec.ExpiresAt = int64ToTime(expires)
 	rec.ConsumedAt = int64PtrToTimePtr(consumed)
@@ -78,7 +97,8 @@ func (s *parStore) Consume(ctx context.Context, uri string) (*store.PushedAuthRe
 		return nil, store.ErrAlreadyConsumed
 	}
 	now := s.parent.clock.Now()
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.parConsume, timeToInt64(now), uri)
+	uriDigest := patterns.Digest(uri)
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.parConsume, timeToInt64(now), uriDigest)
 	if err != nil {
 		return nil, wrapErr("par.Consume", err)
 	}

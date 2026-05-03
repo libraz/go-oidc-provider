@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/jar"
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -37,11 +37,6 @@ const (
 	// so 64 KiB is two orders of magnitude over the realistic upper
 	// bound while bounding memory use against a malicious peer.
 	defaultMaxBody = int64(64 * 1024)
-
-	// defaultTTL is the cache TTL applied to a successful fetch.
-	// 24 hours matches the OIDC Core informative recommendation; the
-	// hash check on refresh catches mid-day changes.
-	defaultTTL = 24 * time.Hour
 
 	// jsonContentType is the only Content-Type the resolver accepts.
 	// Sector documents are pure JSON arrays per OIDC Core 1.0 §5;
@@ -145,7 +140,7 @@ func WithMaxBody(n int64) Option {
 }
 
 // WithTTL overrides the cache TTL. Zero or negative leaves the
-// default [defaultTTL] in place.
+// default [timex.SectorURICacheTTLDefault] in place.
 func WithTTL(d time.Duration) Option {
 	return func(cfg *resolverConfig) {
 		if d > 0 {
@@ -189,7 +184,7 @@ func New(opts ...Option) *Resolver {
 		clock:   timex.SystemClock,
 		timeout: defaultTimeout,
 		maxBody: defaultMaxBody,
-		ttl:     defaultTTL,
+		ttl:     timex.SectorURICacheTTLDefault,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -198,7 +193,15 @@ func New(opts ...Option) *Resolver {
 		cfg.clock = timex.SystemClock
 	}
 	if cfg.httpClient == nil {
-		cfg.httpClient = &http.Client{Timeout: cfg.timeout}
+		cfg.httpClient = netsec.NewHTTPClient(netsec.Options{
+			Timeout:      cfg.timeout,
+			AllowPrivate: cfg.allowPrivate,
+			// Force HTTPS for the sector_identifier_uri scheme; the
+			// fetcher refuses http:// upstream of this point but
+			// pinning the scheme allow-list keeps the dial layer
+			// aligned with the syntactic gate.
+			AllowedSchemes: []string{"https"},
+		})
 	}
 	cfg.httpClient.CheckRedirect = refuseRedirect
 	return &Resolver{
@@ -293,60 +296,47 @@ func (r *Resolver) doFetch(ctx context.Context, sectorIdentifierURI string) ([]s
 // returns the canonical sector host (lower-cased) on success so the
 // caller does not have to re-parse the URL.
 //
-// The check is in two stages: a syntactic inspection of the URL
-// (https-only, non-empty host, IP literal not in deny-list), and —
-// when the host is a name — a DNS resolution that rejects any
-// resolved address that lands in the deny-list. The DNS-time check
-// uses [net.DefaultResolver.LookupIPAddr] (or the test hook) because
-// the project lint rule forbids the context-less [net.LookupIP].
+// The actual deny-list lives in [internal/netsec.AssertSafeURL]; this
+// wrapper translates the package-level error into the sector
+// taxonomy ([ErrSectorPrivateAddress] / [ErrSectorFetch]) so callers
+// can branch with [errors.Is] against the existing sentinels.
+//
+// The dial-time check installed by [netsec.NewHTTPClient] re-runs the
+// same deny-list against the kernel-resolved address, so a TOCTOU
+// rebinding between this gate and [http.Client.Do] cannot escape.
+// Cloud-metadata IPs (169.254.169.254 et al) remain rejected even
+// when [Option.AllowPrivateNetwork] is set.
 func (r *Resolver) assertSafeURL(ctx context.Context, raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("%w: parse url: %w", ErrSectorFetch, err)
 	}
-	if u.Scheme != "https" {
-		return "", fmt.Errorf("%w: scheme %q not allowed (https only)", ErrSectorFetch, u.Scheme)
-	}
 	host := u.Hostname()
-	if host == "" {
-		return "", fmt.Errorf("%w: missing host", ErrSectorFetch)
+	opts := netsec.Options{
+		AllowPrivate:   r.cfg.allowPrivate,
+		AllowedSchemes: []string{"https"},
+		Timeout:        r.cfg.timeout,
+		LookupHook:     r.cfg.resolverLookupHook,
 	}
-	if r.cfg.allowPrivate {
-		return strings.ToLower(host), nil
-	}
-	if jar.IsLocalHostname(host) {
-		return "", fmt.Errorf("%w: %w (host %q is loopback / localhost)", ErrSectorFetch, ErrSectorPrivateAddress, host)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if jar.IsPrivateIP(ip) {
-			return "", fmt.Errorf("%w: %w (host %q is loopback / link-local / private)", ErrSectorFetch, ErrSectorPrivateAddress, host)
-		}
-		return strings.ToLower(host), nil
-	}
-	if err := r.assertResolvedHostSafe(ctx, host); err != nil {
-		return "", err
+	if err := netsec.AssertSafeURLParsed(ctx, u, opts); err != nil {
+		return "", classifyNetsecError(err)
 	}
 	return strings.ToLower(host), nil
 }
 
-// assertResolvedHostSafe performs the DNS-time SSRF check.
-func (r *Resolver) assertResolvedHostSafe(ctx context.Context, host string) error {
-	lookup := r.cfg.resolverLookupHook
-	if lookup == nil {
-		lookup = net.DefaultResolver.LookupIPAddr
+// classifyNetsecError maps a [netsec] sentinel onto the sector-package
+// taxonomy. Loopback / RFC 1918 / cloud-metadata rejections collapse
+// onto [ErrSectorPrivateAddress] so callers can keep their existing
+// [errors.Is] branch; everything else flows through [ErrSectorFetch]
+// so the family root still matches.
+func classifyNetsecError(err error) error {
+	switch {
+	case errors.Is(err, netsec.ErrPrivateNetworkBlocked),
+		errors.Is(err, netsec.ErrCloudMetadataBlocked):
+		return fmt.Errorf("%w: %w (%w)", ErrSectorFetch, ErrSectorPrivateAddress, err)
+	default:
+		return fmt.Errorf("%w: %w", ErrSectorFetch, err)
 	}
-	lookupCtx, cancel := context.WithTimeout(ctx, r.cfg.timeout)
-	defer cancel()
-	addrs, err := lookup(lookupCtx, host)
-	if err != nil {
-		return fmt.Errorf("%w: lookup %q: %w", ErrSectorFetch, host, err)
-	}
-	for _, addr := range addrs {
-		if jar.IsPrivateIP(addr.IP) {
-			return fmt.Errorf("%w: %w (host %q resolves to a private IP)", ErrSectorFetch, ErrSectorPrivateAddress, host)
-		}
-	}
-	return nil
 }
 
 // refuseRedirect is the [http.Client.CheckRedirect] hook installed on

@@ -5,11 +5,36 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/cors"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 )
+
+// spyEmitter records every event the wrapper emits. It is the
+// minimum surface a test needs to assert on the H-C6 short-circuit
+// (the strict preflight returns 204 directly and bypasses every
+// inner handler / outer middleware below the wrapper).
+type spyEmitter struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+func (s *spyEmitter) Emit(_ context.Context, ev audit.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, ev)
+}
+
+func (s *spyEmitter) snapshot() []audit.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]audit.Event, len(s.events))
+	copy(out, s.events)
+	return out
+}
 
 // nextOK returns a handler that responds 200 with a marker body so tests can
 // verify the CORS wrapper called through to the next handler.
@@ -37,7 +62,7 @@ func newReq(tb testing.TB, method, target string) *http.Request {
 func TestStrict_NoOrigin_PassThrough(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, newReq(t, http.MethodGet, "/x"))
 	if rec.Code != http.StatusOK {
@@ -54,7 +79,7 @@ func TestStrict_NoOrigin_PassThrough(t *testing.T) {
 func TestStrict_Preflight_Allowed(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodOptions, "/oidc/token")
 	r.Header.Set("Origin", "https://app.example.com")
 	r.Header.Set("Access-Control-Request-Method", "POST")
@@ -87,7 +112,7 @@ func TestStrict_Preflight_Allowed(t *testing.T) {
 func TestStrict_Preflight_Rejected(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodOptions, "/oidc/token")
 	r.Header.Set("Origin", "https://attacker.example.com")
 	r.Header.Set("Access-Control-Request-Method", "POST")
@@ -110,7 +135,7 @@ func TestStrict_Preflight_Rejected(t *testing.T) {
 func TestStrict_ActualRequest_Allowed_StampsCORS(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodPost, "/oidc/token")
 	r.Header.Set("Origin", "https://app.example.com")
 	rec := httptest.NewRecorder()
@@ -133,7 +158,7 @@ func TestStrict_ActualRequest_Allowed_StampsCORS(t *testing.T) {
 func TestStrict_ActualRequest_Rejected_NoCORS_StillServes(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodPost, "/oidc/token")
 	r.Header.Set("Origin", "https://attacker.example.com")
 	rec := httptest.NewRecorder()
@@ -157,7 +182,7 @@ func TestStrict_Preflight_BareOptionsPassesThrough(t *testing.T) {
 	// A plain OPTIONS without Access-Control-Request-Method is not a
 	// preflight; it is a server-capabilities query that the inner handler
 	// must answer.
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodOptions, "/x")
 	r.Header.Set("Origin", "https://app.example.com")
 	rec := httptest.NewRecorder()
@@ -171,7 +196,7 @@ func TestStrict_Preflight_BareOptionsPassesThrough(t *testing.T) {
 func TestStrict_NilAllowlist_DeniesAllCrossOrigin(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(nil).Handler(nextOK())
+	h := cors.NewStrict(nil, nil).Handler(nextOK())
 	r := newReq(t, http.MethodOptions, "/x")
 	r.Header.Set("Origin", "https://app.example.com")
 	r.Header.Set("Access-Control-Request-Method", "POST")
@@ -226,7 +251,7 @@ func TestPublic_PreflightAccepts(t *testing.T) {
 func TestStrict_Preflight_IntersectsRequestedHeaders(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodOptions, "/oidc/token")
 	r.Header.Set("Origin", "https://app.example.com")
 	r.Header.Set("Access-Control-Request-Method", "POST")
@@ -253,7 +278,7 @@ func TestStrict_Preflight_IntersectsRequestedHeaders(t *testing.T) {
 func TestStrict_Preflight_NoRequestHeaders_FallsBackToStatic(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodOptions, "/oidc/token")
 	r.Header.Set("Origin", "https://app.example.com")
 	r.Header.Set("Access-Control-Request-Method", "POST")
@@ -268,7 +293,7 @@ func TestStrict_Preflight_NoRequestHeaders_FallsBackToStatic(t *testing.T) {
 func TestStrict_Preflight_AllRequestedHeadersUnsupported(t *testing.T) {
 	t.Parallel()
 
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(nextOK())
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
 	r := newReq(t, http.MethodOptions, "/oidc/token")
 	r.Header.Set("Origin", "https://app.example.com")
 	r.Header.Set("Access-Control-Request-Method", "POST")
@@ -278,6 +303,86 @@ func TestStrict_Preflight_AllRequestedHeadersUnsupported(t *testing.T) {
 
 	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "" {
 		t.Errorf("ACAH=%q want empty when no requested header is accepted", got)
+	}
+}
+
+// TestStrict_Preflight_AllowedFiresAuditEvent pins the H-C6 audit
+// emission. The strict preflight short-circuit returns 204 directly
+// and skips every handler / middleware mounted under the CORS
+// wrapper; the audit signal makes the bypass visible to SOC tooling
+// regardless of where the embedder placed their middleware in the
+// chain. The test covers the happy path (allowed origin) and the
+// negative branch (rejected origin) — only the happy path emits.
+func TestStrict_Preflight_AllowedFiresAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	spy := &spyEmitter{}
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), spy).Handler(nextOK())
+
+	r := newReq(t, http.MethodOptions, "/oidc/token")
+	r.Header.Set("Origin", "https://app.example.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d want 204", rec.Code)
+	}
+
+	got := spy.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("emitter saw %d events, want 1: %#v", len(got), got)
+	}
+	if got[0].Name != "cors.preflight.allowed" {
+		t.Errorf("event=%q want cors.preflight.allowed", got[0].Name)
+	}
+	if origin, _ := got[0].Extras["origin"].(string); origin != "https://app.example.com" {
+		t.Errorf("extras.origin=%q want https://app.example.com", origin)
+	}
+}
+
+// TestStrict_Preflight_RejectedDoesNotFireAuditEvent confirms a
+// preflight whose Origin is not in the allowlist does not fire the
+// `cors.preflight.allowed` audit event — the response is 403 and
+// SOC tooling should not see a positive admission for a denied
+// fetch.
+func TestStrict_Preflight_RejectedDoesNotFireAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	spy := &spyEmitter{}
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), spy).Handler(nextOK())
+
+	r := newReq(t, http.MethodOptions, "/oidc/token")
+	r.Header.Set("Origin", "https://attacker.example.com")
+	r.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want 403", rec.Code)
+	}
+	if got := spy.snapshot(); len(got) != 0 {
+		t.Errorf("rejected preflight emitted %d events, want 0: %#v", len(got), got)
+	}
+}
+
+// TestStrict_NonPreflightDoesNotFireAuditEvent confirms a regular
+// (non-OPTIONS) cross-origin request does not fire the preflight-
+// allowed audit event — only the OPTIONS short-circuit branch is
+// instrumented.
+func TestStrict_NonPreflightDoesNotFireAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	spy := &spyEmitter{}
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), spy).Handler(nextOK())
+
+	r := newReq(t, http.MethodPost, "/oidc/token")
+	r.Header.Set("Origin", "https://app.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 (next handler ran)", rec.Code)
+	}
+	if got := spy.snapshot(); len(got) != 0 {
+		t.Errorf("non-preflight emitted %d events, want 0: %#v", len(got), got)
 	}
 }
 
@@ -291,7 +396,7 @@ func TestStrict_VaryDeduplicatedWhenInnerAlreadySet(t *testing.T) {
 		w.Header().Set("Vary", "Origin")
 		w.WriteHeader(http.StatusOK)
 	})
-	h := cors.NewStrict(newAllow(t, "https://app.example.com")).Handler(inner)
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(inner)
 	r := newReq(t, http.MethodGet, "/x")
 	r.Header.Set("Origin", "https://app.example.com")
 	rec := httptest.NewRecorder()

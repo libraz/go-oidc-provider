@@ -311,7 +311,9 @@ func TestNewVerifier_RequiresResolver(t *testing.T) {
 // exercise the OFCS conformance modules
 // "ensure-request-object-without-nbf-fails",
 // "ensure-request-object-with-exp-over-60-fails", and
-// "ensure-request-object-with-nbf-over-60-fails".
+// "ensure-request-object-with-nbf-over-60-fails". The cap matches the
+// op-builder wiring at op_builders.go which pins MaxLifetime to 60
+// seconds for every FAPI-family profile.
 func newStrictTestVerifier(t *testing.T, now time.Time, keys *josev4.JSONWebKeySet) *jar.Verifier {
 	t.Helper()
 	v, err := jar.NewVerifier(jar.VerifierConfig{
@@ -319,7 +321,7 @@ func newStrictTestVerifier(t *testing.T, now time.Time, keys *josev4.JSONWebKeyS
 		Resolver:        &staticResolver{keys: keys},
 		Clock:           fakeClock{now: now},
 		RequireNbf:      true,
-		MaxLifetime:     60 * time.Minute,
+		MaxLifetime:     60 * time.Second,
 		AllowMissingJTI: true,
 	})
 	if err != nil {
@@ -334,7 +336,10 @@ func TestVerify_FAPI2_RejectsMissingNbf(t *testing.T) {
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	c := happyClaims(now)
 	delete(c, "nbf")
-	c["exp"] = now.Add(30 * time.Minute).Unix()
+	// exp is well within the 60-second FAPI lifetime cap so the
+	// verifier reaches assertNbf instead of bailing out earlier on
+	// assertExp.
+	c["exp"] = now.Add(30 * time.Second).Unix()
 	raw, keys := makeRequestObject(t, c)
 	v := newStrictTestVerifier(t, now, keys)
 	_, err := v.Verify(context.Background(), raw, testClientID, newClient())
@@ -343,18 +348,18 @@ func TestVerify_FAPI2_RejectsMissingNbf(t *testing.T) {
 	}
 }
 
-// TestVerify_FAPI2_RejectsExpOver60FutureMin asserts the FAPI 2.0
+// TestVerify_FAPI2_RejectsExpOver60Seconds asserts the FAPI 2.0
 // Message Signing §5.6 rule that exp must not be more than 60
-// minutes in the future. The OFCS module
+// seconds in the future. The OFCS module
 // "ensure-request-object-with-exp-over-60-fails" pushes exp to 70
-// minutes ahead and expects rejection.
-func TestVerify_FAPI2_RejectsExpOver60FutureMin(t *testing.T) {
+// seconds ahead and expects rejection.
+func TestVerify_FAPI2_RejectsExpOver60Seconds(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	c := happyClaims(now)
 	c["nbf"] = now.Unix()
-	c["exp"] = now.Add(70 * time.Minute).Unix()
+	c["exp"] = now.Add(70 * time.Second).Unix()
 	raw, keys := makeRequestObject(t, c)
 	v := newStrictTestVerifier(t, now, keys)
 	_, err := v.Verify(context.Background(), raw, testClientID, newClient())
@@ -363,32 +368,70 @@ func TestVerify_FAPI2_RejectsExpOver60FutureMin(t *testing.T) {
 	}
 }
 
-// TestVerify_FAPI2_RejectsNbfOver60PastMin asserts the FAPI 2.0
-// Message Signing §5.6 staleness bound: nbf must not be more than
-// 60 minutes in the past. The OFCS module
-// "ensure-request-object-with-nbf-over-60-fails" pushes nbf to 70
-// minutes ago and expects rejection.
-func TestVerify_FAPI2_RejectsNbfOver60PastMin(t *testing.T) {
+// TestVerify_FAPI2_AcceptsExpJustUnder60Seconds confirms the boundary
+// of [TestVerify_FAPI2_RejectsExpOver60Seconds]: an exp 59 seconds in
+// the future MUST pass the lifetime cap (so the test pins both sides
+// of the threshold and a regression that flips the comparison from
+// ">" to ">=" surfaces immediately).
+func TestVerify_FAPI2_AcceptsExpJustUnder60Seconds(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	c := happyClaims(now)
-	c["nbf"] = now.Add(-70 * time.Minute).Unix()
-	c["exp"] = now.Add(30 * time.Minute).Unix()
-	c["iat"] = now.Add(-70 * time.Minute).Unix()
+	c["nbf"] = now.Unix()
+	c["iat"] = now.Unix()
+	c["exp"] = now.Add(59 * time.Second).Unix()
+	raw, keys := makeRequestObject(t, c)
+	v := newStrictTestVerifier(t, now, keys)
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("err=%v want nil", err)
+	}
+}
+
+// TestVerify_FAPI2_RejectsNbfOver60SecondsPast asserts the FAPI 2.0
+// Message Signing §5.6 staleness bound: nbf must not be more than
+// 60 seconds in the past. The OFCS module
+// "ensure-request-object-with-nbf-over-60-fails" pushes nbf to 70
+// seconds ago and expects rejection. iat is held inside DefaultMaxAge
+// so the failure surface is unambiguously the nbf check rather than
+// the iat staleness gate.
+func TestVerify_FAPI2_RejectsNbfOver60SecondsPast(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	c := happyClaims(now)
+	c["nbf"] = now.Add(-70 * time.Second).Unix()
+	c["iat"] = now.Add(-70 * time.Second).Unix()
+	c["exp"] = now.Add(30 * time.Second).Unix()
 	raw, keys := makeRequestObject(t, c)
 	v := newStrictTestVerifier(t, now, keys)
 	_, err := v.Verify(context.Background(), raw, testClientID, newClient())
-	// assertIat fires first when iat is also out of window; either
-	// surface is acceptable as long as the verifier rejects.
-	if err == nil {
-		t.Fatal("expected error rejecting nbf > 60min in past, got nil")
+	if !errors.Is(err, jar.ErrNotYetValid) {
+		t.Fatalf("err=%v want ErrNotYetValid", err)
+	}
+}
+
+// TestVerify_FAPI2_AcceptsNbfJustUnder60SecondsPast pins the boundary
+// opposite to [TestVerify_FAPI2_RejectsNbfOver60SecondsPast]: an nbf
+// 59 seconds in the past MUST pass the lifetime cap.
+func TestVerify_FAPI2_AcceptsNbfJustUnder60SecondsPast(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	c := happyClaims(now)
+	c["nbf"] = now.Add(-59 * time.Second).Unix()
+	c["iat"] = now.Add(-59 * time.Second).Unix()
+	c["exp"] = now.Add(1 * time.Second).Unix()
+	raw, keys := makeRequestObject(t, c)
+	v := newStrictTestVerifier(t, now, keys)
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("err=%v want nil", err)
 	}
 }
 
 // TestVerify_FAPI2_AcceptsWithinWindow exercises the canonical
-// OFCS happy-flow shape (nbf=now, exp=now+5min). The strict
-// verifier MUST accept this so the wider plan can drive past PAR.
+// OFCS happy-flow shape (nbf=now, exp=now+30s). The strict verifier
+// MUST accept this so the wider plan can drive past PAR.
 func TestVerify_FAPI2_AcceptsWithinWindow(t *testing.T) {
 	t.Parallel()
 
@@ -396,7 +439,7 @@ func TestVerify_FAPI2_AcceptsWithinWindow(t *testing.T) {
 	c := happyClaims(now)
 	c["nbf"] = now.Unix()
 	c["iat"] = now.Unix()
-	c["exp"] = now.Add(5 * time.Minute).Unix()
+	c["exp"] = now.Add(30 * time.Second).Unix()
 	raw, keys := makeRequestObject(t, c)
 	v := newStrictTestVerifier(t, now, keys)
 	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {

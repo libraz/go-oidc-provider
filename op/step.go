@@ -211,6 +211,66 @@ type PrimaryPasskey struct {
 	// Embedders MAY shorten the value to tighten the replay window but
 	// SHOULD NOT lengthen it past a few minutes.
 	SessionTTL time.Duration
+
+	// CloneDetectionHandler is the optional embedder hook the adapter
+	// invokes when the WebAuthn library reports a credential clone
+	// (sign counter did not strictly increase, W3C WebAuthn L3 §7.2
+	// step 17). Embedders use the hook to disable the affected
+	// credential in their account-management UI so the user does not
+	// loop on the "suspicious activity detected" surface (H-E5).
+	//
+	// The hook is best-effort: a non-nil error is dropped, the
+	// orchestrator still surfaces the clone signal to the chain
+	// through the standard error path. Implementations MUST be safe
+	// for concurrent use.
+	CloneDetectionHandler PasskeyCloneDetectionHandler
+
+	// AAGUIDAllowlist is the optional set of authenticator-model
+	// identifiers (16-byte AAGUIDs encoded as canonical UUID
+	// strings) the registration ceremony will accept. Empty disables
+	// the registration-time check; a non-empty slice rejects any
+	// registration whose authenticator is not in the set. The
+	// allowlist also drives the [AAGUIDReCheckOnAssertion] gate.
+	AAGUIDAllowlist []string
+
+	// AAGUIDReCheckOnAssertion enables M-AUTHN-2: the verifier
+	// re-checks the matched credential's AAGUID against
+	// [AAGUIDAllowlist] at assertion time so an embedder that
+	// narrows the allowlist after registration can revoke
+	// credentials whose authenticator model has fallen out of
+	// policy. The default (false) preserves the v0.x posture where
+	// AAGUID was enforced only at registration.
+	AAGUIDReCheckOnAssertion bool
+}
+
+// PasskeyCloneDetectionHandler is the embedder hook
+// [PrimaryPasskey.CloneDetectionHandler] uses to receive clone-warning
+// signals (H-E5). Implementations decide the policy: disable the
+// credential, page the SOC, force a re-enrolment. The hook is
+// invoked with the persisted [store.PasskeyRecord]'s public fields so
+// the embedder can correlate the credential against the row in the
+// account-management UI.
+//
+// Implementations MUST be safe for concurrent use.
+type PasskeyCloneDetectionHandler interface {
+	// HandleCloneDetected is invoked once per clone-warning. The
+	// credentialID is the WebAuthn credential identifier that
+	// triggered the warning; signCount is the counter the
+	// authenticator reported (which did not strictly increase); the
+	// returned error is dropped — the wire response stays a chain-
+	// fatal failure regardless of whether the embedder's disable hook
+	// succeeds. Embedders that want to observe failures SHOULD log
+	// internally.
+	HandleCloneDetected(ctx context.Context, subject string, credentialID []byte, signCount uint32) error
+}
+
+// PasskeyCloneDetectionHandlerFunc adapts a plain function to the
+// [PasskeyCloneDetectionHandler] interface.
+type PasskeyCloneDetectionHandlerFunc func(ctx context.Context, subject string, credentialID []byte, signCount uint32) error
+
+// HandleCloneDetected implements [PasskeyCloneDetectionHandler].
+func (f PasskeyCloneDetectionHandlerFunc) HandleCloneDetected(ctx context.Context, subject string, credentialID []byte, signCount uint32) error {
+	return f(ctx, subject, credentialID, signCount)
 }
 
 // Begin implements [Step]. The built-in Step is a configuration
@@ -295,6 +355,19 @@ type StepEmailOTP struct {
 	// CodeTTL is the acceptance window from issuance. A zero value
 	// falls back to the library default (five minutes).
 	CodeTTL time.Duration
+
+	// SendLatencyPad is the minimum wall-clock duration the send step
+	// waits before returning regardless of whether the supplied email
+	// matched the subject's bound address. The pad closes the user-
+	// enumeration timing channel (H-E3): the matched and unmatched
+	// branches both return after the same floor so an attacker cannot
+	// infer registration state from the response time. A zero value
+	// falls back to the library's default (currently 750 ms — long
+	// enough to swallow a typical SMTP submission round trip without
+	// inflating happy-path latency); a negative value disables the
+	// pad entirely (intended for tests only — production deployments
+	// MUST keep the pad on).
+	SendLatencyPad time.Duration
 }
 
 // Begin implements [Step]. The built-in Step is a configuration

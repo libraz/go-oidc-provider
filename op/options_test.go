@@ -99,6 +99,37 @@ func TestWithAccessTokenTTL_AcceptsCustomValue(t *testing.T) {
 	}
 }
 
+// TestWithAccessTokenTTL_RejectsAboveImplementationMax pins H-A3:
+// the option layer enforces an implementation-defined upper bound
+// (24h) so a typo cannot produce a token whose practical
+// invalidation requires per-grant revocation. The bound composes
+// with profile-supplied caps; this test exercises the bare
+// (no-profile) deployment.
+func TestWithAccessTokenTTL_RejectsAboveImplementationMax(t *testing.T) {
+	t.Parallel()
+
+	// 24h+1s is just past the bound; the option must reject.
+	_, err := op.New(append(validBaseOpts(t), op.WithAccessTokenTTL(op.MaxAccessTokenTTL+time.Second))...)
+	if err == nil {
+		t.Fatal("expected error for TTL above implementation max, got nil")
+	}
+	if !strings.Contains(err.Error(), "implementation-defined maximum") {
+		t.Errorf("err = %v, want it to mention the implementation-defined maximum", err)
+	}
+}
+
+// TestWithAccessTokenTTL_AcceptsAtImplementationMax pins the
+// happy-path boundary: exactly the documented max is accepted so an
+// embedder can dial up to the ceiling without a one-off configuration
+// error.
+func TestWithAccessTokenTTL_AcceptsAtImplementationMax(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t), op.WithAccessTokenTTL(op.MaxAccessTokenTTL))...); err != nil {
+		t.Fatalf("unexpected error at the implementation max: %v", err)
+	}
+}
+
 func TestWithAccessTokenTTL_FAPI2BaselineRejectsTooLong(t *testing.T) {
 	t.Parallel()
 
@@ -311,6 +342,45 @@ func TestWithTrustedProxies_RejectsEmpty(t *testing.T) {
 
 	if _, err := op.New(append(validBaseOpts(t), op.WithTrustedProxies())...); err == nil {
 		t.Fatal("WithTrustedProxies accepted empty input")
+	}
+}
+
+// TestWithTrustedProxyHosts_AcceptsHosts pins the H-C3 happy path: an
+// embedder running a multi-hostname OP can register additional XFH
+// allowlist entries alongside the auto-derived issuer host.
+func TestWithTrustedProxyHosts_AcceptsHosts(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithTrustedProxies("10.0.0.0/8"),
+		op.WithTrustedProxyHosts("alt.example.com", "legacy.example.com"),
+	)...); err != nil {
+		t.Fatalf("WithTrustedProxyHosts rejected valid hosts: %v", err)
+	}
+}
+
+// TestWithTrustedProxyHosts_RejectsEmpty pins that calling the option
+// with no host argument is a configuration error — the embedder must
+// supply at least one entry or omit the option entirely.
+func TestWithTrustedProxyHosts_RejectsEmpty(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t), op.WithTrustedProxyHosts())...); err == nil {
+		t.Fatal("WithTrustedProxyHosts accepted empty input")
+	}
+}
+
+// TestWithTrustedProxyHosts_RejectsBlankHost pins the empty-string
+// rejection: a blank host would silently widen the allowlist (host
+// allowlist matching strips ports, so an empty-string entry could
+// match any port-only XFH value).
+func TestWithTrustedProxyHosts_RejectsBlankHost(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithTrustedProxyHosts("ok.example.com", "   "),
+	)...); err == nil {
+		t.Fatal("WithTrustedProxyHosts accepted a blank host")
 	}
 }
 

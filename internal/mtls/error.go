@@ -60,4 +60,11 @@ var (
 	// than the one bound to the access token (RFC 8705 §3.2). The
 	// HTTP layer maps this onto invalid_token.
 	ErrThumbprintMismatch = errors.New("mtls: certificate thumbprint does not match the bound value")
+
+	// ErrUnsupportedMethod signals that the supplied
+	// token_endpoint_auth_method names neither tls_client_auth nor
+	// self_signed_tls_client_auth. The dispatcher [VerifyClientAuth]
+	// returns this so the HTTP layer can surface invalid_client
+	// without admitting a cert under an unrecognised policy.
+	ErrUnsupportedMethod = errors.New("mtls: unsupported token_endpoint_auth_method")
 )

@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
 // Sentinel errors returned by [verifyIDTokenHint]. The handler maps
@@ -39,17 +41,38 @@ var (
 	// is multi-valued so a mismatched azp would otherwise let a
 	// different aud entry impersonate the original client.
 	errIDTokenAZP = errors.New("endsession: id_token_hint azp mismatch")
+
+	// errIDTokenStale signals that the payload's "iat" claim is older
+	// than [maxIDTokenHintAge]. The signature continues to verify, but
+	// the OP refuses to admit ancient tokens to the logout flow so an
+	// attacker who exfiltrates a forgotten id_token (browser history,
+	// proxy log, leaked debug dump) cannot replay it indefinitely. The
+	// check is gated on the presence of "iat"; tokens without the
+	// claim fall through to the legacy posture (issuer / signature /
+	// aud are sufficient to identify the requesting client).
+	errIDTokenStale = errors.New("endsession: id_token_hint too old")
 )
 
 // verifyIDTokenHint parses raw, verifies the signature against the OP
 // keyset, asserts the iss claim matches the configured issuer, and
 // returns the requesting client_id (azp when present, otherwise the
-// first audience). The function intentionally does not enforce exp or
-// iat: RP-Initiated Logout 1.0 lets the user log out from a stale
-// tab, and the spec does not require freshness for id_token_hint.
-// Issuer / signature / audience are sufficient to identify the
-// requesting client without admitting cross-OP forgery.
-func verifyIDTokenHint(set *keys.Set, issuer, raw string) (string, error) {
+// first audience). The function does NOT enforce "exp": OIDC
+// RP-Initiated Logout 1.0 lets the user sign out from a stale tab,
+// and the spec does not require freshness through "exp".
+//
+// The function DOES enforce a soft "iat" age cap of
+// [maxIDTokenHintAge] when the claim is present. Tokens older than
+// that are rejected so an attacker who exfiltrates a long-forgotten
+// id_token (browser history, proxy log, or leaked debug dump) cannot
+// replay it indefinitely against the logout endpoint. Tokens without
+// "iat" fall through to the legacy posture; issuer / signature /
+// audience are still sufficient to identify the requesting client
+// without admitting cross-OP forgery.
+//
+// now is the wall-clock reading the iat comparison uses; callers
+// pass [timex.SystemClock]'s reading or a [Deps.Clock]-derived value
+// so the same instant flows through every subsystem.
+func verifyIDTokenHint(set *keys.Set, issuer, raw string, now time.Time) (string, error) {
 	jws, _, err := jose.ParseSigned(raw)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errIDTokenMalformed, err)
@@ -70,12 +93,24 @@ func verifyIDTokenHint(set *keys.Set, issuer, raw string) (string, error) {
 		Issuer   string          `json:"iss"`
 		Audience json.RawMessage `json:"aud"`
 		AZP      string          `json:"azp"`
+		IssuedAt int64           `json:"iat"`
 	}
 	if err := json.Unmarshal(payload, &wire); err != nil {
 		return "", fmt.Errorf("%w: %w", errIDTokenMalformed, err)
 	}
 	if issuer != "" && wire.Issuer != issuer {
 		return "", errIDTokenIssuer
+	}
+	if wire.IssuedAt > 0 {
+		// "iat" is a NumericDate (seconds since the Unix epoch). Convert
+		// and compare against the cap. A token whose iat is in the
+		// future is admitted: the spec does not forbid pre-dated tokens
+		// and a small clock skew is the most common cause; the bound
+		// here is one-sided so freshness skew never blocks a logout.
+		issued := time.Unix(wire.IssuedAt, 0).UTC()
+		if now.Sub(issued) > maxIDTokenHintAge {
+			return "", errIDTokenStale
+		}
 	}
 	aud, err := decodeAudienceFirst(wire.Audience)
 	if err != nil {
@@ -92,6 +127,19 @@ func verifyIDTokenHint(set *keys.Set, issuer, raw string) (string, error) {
 		return wire.AZP, nil
 	}
 	return aud, nil
+}
+
+// hintNow returns the wall-clock reading used by [verifyIDTokenHint]
+// for the iat-age comparison. A configured [Deps.Clock] wins; the
+// fallback is [timex.SystemClock] (the single sanctioned wall-clock
+// seam). The helper mirrors [endSessionNow] but is duplicated rather
+// than shared so the dependency direction stays one-way (idtoken.go
+// must not import handler.go's helpers, only the other way around).
+func hintNow(c Clock) time.Time {
+	if c != nil {
+		return c.Now().UTC()
+	}
+	return timex.SystemClock.Now().UTC()
 }
 
 // audienceContains reports whether raw (a JSON aud value, either a

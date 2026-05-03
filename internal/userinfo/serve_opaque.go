@@ -148,9 +148,13 @@ func projectOpaqueAccessTokenClaims(rec *store.OpaqueAccessToken) *tokens.Access
 // the revoked / expired / generic cases for the operator's logs but
 // stays out of any claim values so a curious client cannot probe the
 // substore through error strings.
+//
+// The challenge value is composed via [buildBearerChallenge] so any
+// CR / LF / quote / backslash byte in the description (defensive
+// guard; no current call site supplies attacker-controlled input) is
+// scrubbed before it lands in the response header.
 func respondOpaqueInvalid(w http.ResponseWriter, description string) {
-	w.Header().Set("WWW-Authenticate",
-		`Bearer error="invalid_token", error_description="`+description+`"`)
+	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", description))
 	w.WriteHeader(http.StatusUnauthorized)
 }
 

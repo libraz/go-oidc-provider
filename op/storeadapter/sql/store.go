@@ -319,12 +319,11 @@ func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return s.opa
 // concrete pointer always satisfies.
 func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRevocationsImpl }
 
-// Metadata implements [store.Store]. The v0.9.1 SQL adapter has not
-// yet provisioned the oidc_op_metadata table; returning nil opts the
-// pairwise immutability gate into its skip-with-warning posture so
-// the OP boots cleanly. A future schema bump (v1.1.sql) will land
-// the table and a real implementation; CHANGELOG calls out the gap.
-func (s *Store) Metadata() store.MetadataStore { return nil }
+// Metadata implements [store.Store] against the oidc_op_metadata
+// table. The substore is the persistence path for coarse construction-
+// time decisions (subject_mode in v0.9.1; future keys land on the same
+// surface without further interface change).
+func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s, nil) }
 
 // --- store.ClientRegistry ----------------------------------------------------
 

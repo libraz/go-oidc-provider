@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -197,6 +198,76 @@ func TestVerify_IssuerMismatch(t *testing.T) {
 	_, _, err := v.Verify(jws)
 	if !errors.Is(err, tokens.ErrAccessTokenIssuerMismatch) {
 		t.Fatalf("err=%v want ErrAccessTokenIssuerMismatch", err)
+	}
+}
+
+// TestVerify_RetiredKidReturnsSignatureError pins the H-F1 contract on
+// the JWT access-token verify path: a token whose kid header names an
+// [keys.Entry] whose [keys.Entry.NotAfter] has elapsed surfaces as
+// [tokens.ErrAccessTokenSignature], indistinguishable from an unknown
+// kid. The wire response the resource server emits is RFC 6750
+// invalid_token regardless, but the audit observer (wired in op.New)
+// still fires [op.AuditKeyRetiredKidPresented] so SOC tooling sees the
+// post-rotation forge attempt.
+//
+// The test also checks the observer fires exactly once per Verify
+// call, since a regression that loses the observer wiring would let
+// the gate flip silent.
+//
+// Tracks H-F1.
+func TestVerify_RetiredKidReturnsSignatureError(t *testing.T) {
+	t.Parallel()
+
+	// Build a single-entry keyset and sign with it. We then rebuild
+	// the verifier-side Set with the entry marked as retired so the
+	// retirement gate flips while the signature itself remains valid.
+	entry, err := keys.GenerateES256("kid-retired")
+	if err != nil {
+		t.Fatalf("GenerateES256: %v", err)
+	}
+	deadline := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	now := deadline.Add(time.Hour)
+
+	jws := signed(t, entry, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"client-1"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Add(-time.Minute).Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "retired-kid-token",
+	})
+
+	var observed atomic.Int64
+	var observedKid atomic.Value
+	retired := keys.Entry{KeyID: entry.KeyID, Signer: entry.Signer, NotAfter: deadline}
+	set, err := keys.NewSet(
+		[]keys.Entry{retired},
+		keys.WithClock(func() time.Time { return now }),
+		keys.WithRetiredKidObserver(func(kid string) {
+			observed.Add(1)
+			observedKid.Store(kid)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+
+	v := &tokens.AccessTokenVerifier{
+		Keys:   set,
+		Issuer: "https://op.example.com",
+		Clock:  fakeClock{now: now},
+	}
+	_, _, gotErr := v.Verify(jws)
+	if !errors.Is(gotErr, tokens.ErrAccessTokenSignature) {
+		t.Fatalf("err=%v want ErrAccessTokenSignature on retired kid", gotErr)
+	}
+
+	if got := observed.Load(); got != 1 {
+		t.Fatalf("retired-kid observer fired %d times; want exactly 1", got)
+	}
+	if got, _ := observedKid.Load().(string); got != "kid-retired" {
+		t.Errorf("observer kid=%q want kid-retired", got)
 	}
 }
 
@@ -495,6 +566,85 @@ func TestVerify_LegacyTokenWithoutGidDecodesEmpty(t *testing.T) {
 	}
 	if got.GrantID != "" {
 		t.Errorf("GrantID=%q want empty (legacy AT without gid)", got.GrantID)
+	}
+}
+
+// TestVerify_RejectsIDTokenTypAtAccessTokenSlot pins the at+jwt typ
+// header check (RFC 9068 §2.1 / §4). The defence is structural: even
+// when an ID token (typ=JWT) shares the OP's signing key with the
+// JWT-shaped access token, presenting it at /userinfo or /introspect
+// MUST be rejected because resource servers consume the typ tag to
+// distinguish the two formats.
+//
+// The token is signed with the OP's ES256 key but with typ=JWT (the ID
+// token shape). Verify MUST surface ErrAccessTokenTypeMismatch before
+// the signature verifies — otherwise an ID token leaking through a
+// resource-server endpoint would resolve as a valid access token.
+func TestVerify_RejectsIDTokenTypAtAccessTokenSlot(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-1")
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: entry.Signer},
+		(&josev4.SignerOptions{}).WithType("JWT").WithHeader("kid", entry.KeyID),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, err := jwt.Signed(signer).Claims(map[string]any{
+		"iss": "https://op.example.com",
+		"sub": "user-1",
+		"aud": "client-1",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(),
+	}).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+
+	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
+	_, _, gotErr := v.Verify(raw)
+	if !errors.Is(gotErr, tokens.ErrAccessTokenTypeMismatch) {
+		t.Fatalf("typ=JWT err=%v want ErrAccessTokenTypeMismatch", gotErr)
+	}
+	if errors.Is(gotErr, tokens.ErrAccessTokenSignature) {
+		t.Fatalf("typ mismatch must NOT leak as ErrAccessTokenSignature; pin lives pre-verify")
+	}
+}
+
+// TestVerify_RejectsMissingTypHeader pins that a JWT without any typ
+// header at all is rejected. RFC 9068 §2.1 mandates an explicit typ
+// value; an absent header would otherwise default to "JWT" by RFC 7519
+// §5.1 convention, so an attacker minting a header without typ would
+// otherwise pass the at+jwt-only branch.
+func TestVerify_RejectsMissingTypHeader(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-1")
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: entry.Signer},
+		(&josev4.SignerOptions{}).WithHeader("kid", entry.KeyID),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, err := jwt.Signed(signer).Claims(map[string]any{
+		"iss": "https://op.example.com",
+		"sub": "user-1",
+		"aud": "client-1",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Hour).Unix(),
+	}).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+
+	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
+	_, _, gotErr := v.Verify(raw)
+	if !errors.Is(gotErr, tokens.ErrAccessTokenTypeMismatch) {
+		t.Fatalf("missing typ err=%v want ErrAccessTokenTypeMismatch", gotErr)
 	}
 }
 

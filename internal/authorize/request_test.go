@@ -858,3 +858,120 @@ func TestIsRedirectSafe_NonPackageError(t *testing.T) {
 		t.Error("IsRedirectSafe(nil) = true; want false")
 	}
 }
+
+// TestParseValues_RequestURIShape pins the structural admission rule on
+// "request_uri": only PAR identifiers (urn:ietf:params:oauth:request_uri:*)
+// are accepted on the wire. RFC 9101 §5.2.2 admits a generic https URL
+// that the OP would have to fetch with the §10.2 hardening applied
+// (https-only, size cap, TTL, content-type, SSRF deny-list); the
+// library does not implement that fetcher, so admitting a non-PAR
+// request_uri would create an SSRF / generic-URL surface with no
+// controls. The parser therefore rejects every shape that is not a PAR
+// URN. The PAR consumption path uses [authorize.RequestSnapshot]
+// rather than ParseValues, so the URN identifier itself never needs
+// to flow through this gate; the field reaches ParseValues only on
+// the wire-form path that this test pins.
+//
+// IsRedirectSafe MUST be false for every rejected row: redirect_uri
+// has not been validated when the request_uri shape fails, so the
+// caller MUST render an inline error rather than redirect. The PAR-
+// URN-prefixed accept row complements the rejection set so a future
+// regression that flips the comparison surfaces immediately.
+func TestParseValues_RequestURIShape(t *testing.T) {
+	t.Parallel()
+
+	t.Run("par_urn_accepted", func(t *testing.T) {
+		t.Parallel()
+		v := goodValues()
+		// 128-bit base64url entropy suffix, mirroring the format
+		// internal/parendpoint emits.
+		v.Set("request_uri", "urn:ietf:params:oauth:request_uri:abc123def456ghi789jkl012mno345pq")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		if req.RequestURI == "" {
+			t.Error("RequestURI not preserved on parsed Request")
+		}
+	})
+
+	t.Run("par_urn_uppercase_scheme_accepted", func(t *testing.T) {
+		t.Parallel()
+		// RFC 8141 §1.2: the URN scheme is case-insensitive. The
+		// parser compares the prefix bytes case-insensitively so a
+		// client that sent "URN:" (or any mixed-case variant) is
+		// still admitted. The body — which the PAR store keys on at
+		// consumption — stays case-sensitive at the persistence
+		// layer.
+		v := goodValues()
+		v.Set("request_uri", "URN:IETF:PARAMS:OAUTH:REQUEST_URI:abc123def456ghi789jkl012mno345pq")
+		if _, err := authorize.ParseValues(v); err != nil {
+			t.Fatalf("ParseValues: %v want nil for case-variant URN scheme", err)
+		}
+	})
+
+	t.Run("par_urn_mixed_case_scheme_accepted", func(t *testing.T) {
+		t.Parallel()
+		// Same case-insensitivity rule under a non-uniform mix. Pin
+		// the explicit shape so a regression that special-cases all-
+		// upper or all-lower without the byte-wise variant surfaces.
+		v := goodValues()
+		v.Set("request_uri", "Urn:Ietf:Params:Oauth:Request_Uri:abc123def456ghi789jkl012mno345pq")
+		if _, err := authorize.ParseValues(v); err != nil {
+			t.Fatalf("ParseValues: %v want nil for mixed-case URN scheme", err)
+		}
+	})
+
+	rejectCases := []struct {
+		name string
+		uri  string
+	}{
+		{"https_url", "https://attacker.example/req"},
+		{"http_url", "http://attacker.example/req"},
+		{"https_localhost", "https://localhost/req"},
+		{"https_internal_ip", "https://10.0.0.1/req"},
+		{"file_scheme", "file:///etc/passwd"},
+		{"javascript_scheme", "javascript:alert(1)"},
+		{"data_scheme", "data:text/plain,hello"},
+		{"plain_path", "/par/abc"},
+		{"empty_with_whitespace", "   "},
+		{"leading_whitespace", " urn:ietf:params:oauth:request_uri:abc"},
+		{"different_urn_namespace", "urn:example:foo"},
+		{"different_oauth_urn", "urn:ietf:params:oauth:token-exchange:abc"},
+		{"prefix_mutation_dashes", "urn-ietf-params-oauth-request_uri:abc"},
+		{"prefix_typo_no_underscore", "urn:ietf:params:oauth:requesturi:abc"},
+	}
+	for _, tc := range rejectCases {
+		t.Run("reject_"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			v := goodValues()
+			v.Set("request_uri", tc.uri)
+			req, err := authorize.ParseValues(v)
+			if !errors.Is(err, authorize.ErrInvalidRequestURI) {
+				t.Fatalf("ParseValues(%q): err=%v want ErrInvalidRequestURI", tc.uri, err)
+			}
+			if req != nil {
+				t.Errorf("ParseValues(%q): non-nil request returned alongside the error", tc.uri)
+			}
+			if authorize.IsRedirectSafe(err) {
+				t.Errorf("ParseValues(%q): IsRedirectSafe = true; pre-trust error MUST NOT be redirect-safe", tc.uri)
+			}
+		})
+	}
+
+	t.Run("absent_request_uri_unaffected", func(t *testing.T) {
+		t.Parallel()
+		// The default canonical fixture omits request_uri; the
+		// existing TestParseRequest_HappyGET row already exercises
+		// that path, but pin it once more here so a regression that
+		// fires the new gate on absent values surfaces explicitly.
+		v := goodValues()
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		if req.RequestURI != "" {
+			t.Errorf("RequestURI=%q want empty", req.RequestURI)
+		}
+	})
+}

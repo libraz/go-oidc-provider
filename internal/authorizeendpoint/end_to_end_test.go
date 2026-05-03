@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -245,6 +246,13 @@ func completeConsentIfPrompted(t *testing.T, client *http.Client, interactionURL
 	stateRef, _ := env["state_ref"].(string)
 	if stateRef == "" {
 		t.Fatal("consent prompt missing state_ref")
+	}
+	// Per-step CSRF scope binding (interaction.go) re-issues the
+	// __Host-oidc_csrf cookie on every step boundary, so the token
+	// minted at the auth.* step does not verify against the consent.*
+	// step. Pull the rotated cookie off the prior response.
+	if rotated := findCookie(prior.Cookies(), cookie.CSRFProfile.Name); rotated != nil {
+		csrf = rotated.Value
 	}
 	approved := approvedScopesFromPrompt(env)
 	return testkit.PostConsentApproval(t, client, interactionURL, origin, csrf, stateRef, approved)

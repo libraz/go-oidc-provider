@@ -34,20 +34,28 @@ import (
 	"slices"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// Audit event names mirrored from the public op.AuditEvent catalogue.
+// internal/grants/refresh cannot import op/, so the strings are
+// duplicated and the op/audit_test.go pin keeps the values aligned.
+const (
+	auditRefreshChainRevokeFailed = "refresh.chain_revoke_failed"
+	auditRefreshGrantRevokeFailed = "refresh.grant_revoke_failed"
+)
+
+// chainRevokeReason names the cascade trigger written onto the
+// [store.GrantTombstone.Reason] field. The constant is local to the
+// package because the only call site is the chain-revoke path.
+const chainRevokeReason = "refresh_replay"
 
 // IDLength is the byte length of a randomly-generated refresh token. 32
 // bytes (256 bits) matches RFC 6819 §5.1.4.2 and the value used for
 // authorization codes.
 const IDLength = 32
-
-// TTLDefault is the default lifetime of a refresh token. The library does
-// not set a global maximum, but the default leans short to discourage
-// "forever" tokens; deployments that need longer lifetimes set the TTL
-// explicitly via [IssuerConfig].
-const TTLDefault = 30 * 24 * time.Hour
 
 // GraceTTLDefault is the default RFC 9700 §2.2.2 grace window during
 // which a just-rotated refresh token is still accepted ("the previous
@@ -116,8 +124,8 @@ type IssuerConfig struct {
 	// [timex.SystemClock.Now] when nil.
 	Clock func() time.Time
 
-	// TTL overrides [TTLDefault]. Zero or negative values fall back to
-	// [TTLDefault].
+	// TTL overrides [timex.RefreshTokenTTLDefault]. Zero or negative
+	// values fall back to [timex.RefreshTokenTTLDefault].
 	TTL time.Duration
 }
 
@@ -132,7 +140,7 @@ func NewIssuer(cfg IssuerConfig) (*Issuer, error) {
 	}
 	ttl := cfg.TTL
 	if ttl <= 0 {
-		ttl = TTLDefault
+		ttl = timex.RefreshTokenTTLDefault
 	}
 	return &Issuer{store: cfg.Store, clock: clock, ttl: ttl}, nil
 }
@@ -222,9 +230,12 @@ func validateIssue(in IssueInput) error {
 // Exchanger consumes refresh tokens and validates the rotation contract.
 // It is immutable after construction and safe for concurrent use.
 type Exchanger struct {
-	store    store.RefreshTokenStore
-	clock    func() time.Time
-	graceTTL time.Duration
+	store            store.RefreshTokenStore
+	clock            func() time.Time
+	graceTTL         time.Duration
+	audit            audit.Emitter
+	grantRevocations store.GrantRevocationStore
+	tombstoneTTL     time.Duration
 }
 
 // ExchangerConfig is the parameter bundle for [NewExchanger].
@@ -248,6 +259,34 @@ type ExchangerConfig struct {
 	// rotation step (the canonical successor was already minted on
 	// the first exchange).
 	GraceTTL time.Duration
+
+	// Audit, when non-nil, receives warn-level events when the chain
+	// revoke side-effects of a replay detection encounter a transport
+	// fault. The replay sentinel ([ErrTokenReplayed]) still surfaces
+	// to the caller — the audit signal exists so SOC tooling can
+	// distinguish "chain successfully revoked" from "chain revoke
+	// silently failed" without grepping operational logs. Nil
+	// collapses to [audit.Discard] so call sites do not need a nil
+	// guard.
+	Audit audit.Emitter
+
+	// GrantRevocations, when non-nil, is the [store.GrantRevocationStore]
+	// the chain-revoke cascade writes a [store.GrantTombstone] to so
+	// JWT access tokens descended from the replayed chain are blocked
+	// at userinfo / introspection / mint time. Without this hook the
+	// chain revoke only invalidates refresh tokens; outstanding JWT
+	// access tokens remain redeemable until their natural expiry.
+	// Nil disables the tombstone path; the chain revoke still runs.
+	GrantRevocations store.GrantRevocationStore
+
+	// GrantTombstoneTTL bounds the lifetime of a tombstone written by
+	// the chain-revoke cascade. The value is computed by the embedder
+	// as max(access_token_TTL + grace) so any access token issued
+	// before the cascade is guaranteed to have expired before its
+	// tombstone disappears. Zero means "no GC", which is safe (the
+	// tombstone is never collected) but unbounded in storage; the
+	// token endpoint wires a positive value at construction.
+	GrantTombstoneTTL time.Duration
 }
 
 // NewExchanger constructs an [Exchanger] from cfg.
@@ -266,7 +305,18 @@ func NewExchanger(cfg ExchangerConfig) (*Exchanger, error) {
 	case graceTTL < 0:
 		graceTTL = 0 // explicit disable
 	}
-	return &Exchanger{store: cfg.Store, clock: clock, graceTTL: graceTTL}, nil
+	em := cfg.Audit
+	if em == nil {
+		em = audit.Discard()
+	}
+	return &Exchanger{
+		store:            cfg.Store,
+		clock:            clock,
+		graceTTL:         graceTTL,
+		audit:            em,
+		grantRevocations: cfg.GrantRevocations,
+		tombstoneTTL:     cfg.GrantTombstoneTTL,
+	}, nil
 }
 
 // ExchangeInput is the bundle of fields the token endpoint extracts from
@@ -376,8 +426,9 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 	rec, err := e.store.Consume(ctx, in.Token)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
-			if existing, ok := e.tryGrace(ctx, in); ok {
-				return existing, nil
+			existing, handled, gerr := e.tryGrace(ctx, in)
+			if handled {
+				return existing, gerr
 			}
 		}
 		return nil, e.mapConsumeError(ctx, in.Token, err)
@@ -432,30 +483,58 @@ func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err
 // ConsumedAt timestamp falls inside the configured grace window AND
 // the presented credentials match the consumed record, returns the
 // [Exchanged] projection callers should use without rotating the
-// chain. ok=false means the caller MUST fall through to the regular
-// replay path (which revokes the chain).
+// chain.
+//
+// The handled return signals whether the caller should treat the
+// (existing, gerr) pair as the final answer or fall through to the
+// regular replay path:
+//
+//   - handled=false: tryGrace did not engage (window disabled, record
+//     missing, ConsumedAt outside the window); caller routes to
+//     [Exchanger.mapConsumeError] which revokes the chain and surfaces
+//     [ErrTokenReplayed].
+//   - handled=true with gerr=nil: idempotent re-emission inside the
+//     grace window; existing carries the projection.
+//   - handled=true with gerr=[ErrTokenExpired]: the consumed record's
+//     ExpiresAt is in the past; grace extends rotation idempotency,
+//     not record lifetime, so the caller surfaces invalid_grant
+//     without revoking the chain.
 //
 // Validation failure inside the grace window (client_id mismatch or
 // scope widening) is treated as evidence of a stolen consumed token:
 // per RFC 9700 §2.2.2 such replays MUST revoke the chain. tryGrace
 // invokes [Exchanger.revokeChainBestEffort] directly on that branch
-// so the cascade is explicit at the call site (defence in depth: the
-// caller's [Exchanger.mapConsumeError] also revokes, but emitting the
-// revoke here keeps the contract local to the validation point and
-// survives future refactoring of the caller).
-func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged, bool) {
+// (returning handled=false so the caller's [Exchanger.mapConsumeError]
+// surfaces [ErrTokenReplayed]); emitting the revoke here keeps the
+// cascade anchored to the validation point even if the caller's
+// post-grace error mapping is later refactored.
+func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged, bool, error) {
 	if e.graceTTL <= 0 {
-		return nil, false
+		return nil, false, nil
 	}
 	rec, err := e.store.Find(ctx, in.Token)
 	if err != nil || rec == nil {
-		return nil, false
+		// Find errors here are intentionally swallowed: tryGrace is
+		// the speculative branch, and a Find miss / store fault
+		// re-surfaces under the regular Consume path that follows
+		// (where the same error becomes the canonical replay /
+		// not-found classification). nilerr is OK because
+		// "speculative miss" is the contract.
+		return nil, false, nil //nolint:nilerr // speculative branch absorbs Find errors; canonical path re-surfaces them.
 	}
 	if !e.withinGraceWindow(rec) {
-		return nil, false
+		return nil, false, nil
 	}
 	exchanged, gerr := e.graceExchange(rec, in)
 	if gerr != nil {
+		if errors.Is(gerr, ErrTokenExpired) {
+			// Expiry is the record's own contract — the chain is
+			// otherwise intact, and revoking it would penalise the
+			// legitimate RP for a clock-skew race. Surface
+			// invalid_grant directly without cascading the chain
+			// revoke.
+			return nil, true, gerr
+		}
 		// Validation failure inside the grace window (client mismatch
 		// or scope widening). Surface as replay so the chain is
 		// revoked: a consumed token presented by a different client,
@@ -464,9 +543,9 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 		// is anchored to the validation point even if the caller's
 		// post-grace error mapping is later refactored.
 		e.revokeChainBestEffort(ctx, in.Token)
-		return nil, false
+		return nil, false, nil
 	}
-	return exchanged, true
+	return exchanged, true, nil
 }
 
 // graceExchange resolves a presented token whose ConsumedAt is at most
@@ -481,6 +560,15 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 // Surfacing the presented id keeps the audit trail aligned with the
 // request.
 func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*Exchanged, error) {
+	// The strict (non-grace) path checks ExpiresAt after Consume; the
+	// grace path runs against a Find-only record so we must apply the
+	// same gate explicitly. Without it, a refresh whose ExpiresAt has
+	// elapsed inside the grace window would still mint a fresh access
+	// token — the original audit concern (H-A1): the grace window
+	// extends rotation idempotency, not record lifetime.
+	if e.clock().UTC().After(rec.ExpiresAt) {
+		return nil, ErrTokenExpired
+	}
 	if rec.ClientID != in.ClientID {
 		return nil, ErrClientMismatch
 	}
@@ -519,18 +607,68 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 }
 
 // revokeChainBestEffort walks parent pointers from presentedID up to the
-// chain root and calls [store.RefreshTokenStore.RevokeChain] on it. The
-// "best effort" qualifier reflects the failure modes: if the consumed
-// record is no longer findable (already garbage-collected, store hiccup)
-// we cannot compute a root and quietly drop the revocation. The token
-// endpoint still returns invalid_grant via [ErrTokenReplayed], which is
-// the user-visible contract.
+// chain root and calls [store.RefreshTokenStore.RevokeChain] on it.
+// When the [Exchanger] was wired with a [store.GrantRevocationStore],
+// the cascade also writes a [store.GrantTombstone] keyed by the chain
+// root's GrantID so JWT access tokens descended from the replayed
+// chain are blocked at userinfo / introspection / mint time.
+//
+// The "best effort" qualifier reflects the failure modes: if the
+// consumed record is no longer findable (already garbage-collected,
+// store hiccup) we cannot compute a root and quietly drop the
+// revocation. Transport faults on RevokeChain or RevokeGrant are
+// surfaced as warn-level audit events (auditRefreshChainRevokeFailed
+// / auditRefreshGrantRevokeFailed) so SOC tooling can spot a silent
+// failure even though the wire response stays at the user-visible
+// invalid_grant contract via [ErrTokenReplayed].
 func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) {
 	rootID, ok := e.findChainRoot(ctx, presentedID)
 	if !ok {
 		return
 	}
-	_ = e.store.RevokeChain(ctx, rootID)
+	if err := e.store.RevokeChain(ctx, rootID); err != nil {
+		e.audit.Emit(ctx, audit.Event{
+			Name:    auditRefreshChainRevokeFailed,
+			Level:   audit.LevelWarn,
+			Message: "refresh chain revoke failed after replay detection",
+			Extras: map[string]any{
+				"reason": err.Error(),
+			},
+		})
+		// Continue to the grant tombstone path: a failed RT cascade
+		// does not block the JWT-AT cascade, and the embedder may
+		// have wired the two against different backends.
+	}
+	if e.grantRevocations == nil {
+		return
+	}
+	rootRec, ferr := e.store.Find(ctx, rootID)
+	if ferr != nil || rootRec == nil || rootRec.GrantID == "" {
+		// Nothing more to do: the chain root is unfindable or carries
+		// no GrantID. JWT-AT revocation is grant-keyed, so without a
+		// GrantID we cannot tombstone the descendants.
+		return
+	}
+	now := e.clock().UTC()
+	tomb := store.GrantTombstone{
+		GrantID:   rootRec.GrantID,
+		RevokedAt: now,
+		Reason:    chainRevokeReason,
+	}
+	if e.tombstoneTTL > 0 {
+		tomb.ExpiresAt = now.Add(e.tombstoneTTL)
+	}
+	if err := e.grantRevocations.RevokeGrant(ctx, tomb); err != nil {
+		e.audit.Emit(ctx, audit.Event{
+			Name:    auditRefreshGrantRevokeFailed,
+			Level:   audit.LevelWarn,
+			Message: "grant tombstone write failed after refresh replay detection",
+			Extras: map[string]any{
+				"grant_id": rootRec.GrantID,
+				"reason":   err.Error(),
+			},
+		})
+	}
 }
 
 // findChainRoot follows parent pointers up to the chain's root or returns

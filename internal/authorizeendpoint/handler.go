@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
+	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -328,6 +329,16 @@ type Deps struct {
 	// fields empty — useful for unit tests that drive the handler
 	// directly without an i18n subsystem.
 	LocaleResolver *i18n.Resolver
+
+	// ProxyTrust, when non-nil, governs how the authorize endpoint
+	// resolves [http.Request.RemoteAddr] / scheme / host through
+	// X-Forwarded-* headers. The trust is consulted on every authorize
+	// request; values arriving from a CIDR outside the trust skip
+	// header consultation (the request's RemoteAddr is treated as the
+	// authoritative client IP). A nil trust disables forwarded-header
+	// processing entirely — the legacy posture before
+	// [op.WithTrustedProxies] was wired through.
+	ProxyTrust *proxy.Trust
 
 	// SubjectProjector, when non-nil, projects the raw post-
 	// authentication subject through the configured op.SubjectGenerator

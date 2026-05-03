@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -103,34 +103,13 @@ type refreshInputs struct {
 func parseRefreshRequest(w http.ResponseWriter, r *http.Request) (refreshInputs, bool) {
 	in := refreshInputs{
 		Token:          r.PostForm.Get("refresh_token"),
-		RequestedScope: parseScopeParam(r.PostForm.Get("scope")),
+		RequestedScope: oidcscope.Parse(r.PostForm.Get("scope")),
 	}
 	if in.Token == "" {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "refresh_token is required")
 		return refreshInputs{}, false
 	}
 	return in, true
-}
-
-// parseScopeParam splits the canonical RFC 6749 §3.3 space-delimited
-// scope string. Empty strings yield a nil slice so callers can treat
-// "scope absent" identically to "scope empty".
-func parseScopeParam(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, " ")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		out = append(out, p)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // exchangeRefresh runs the [refresh.Exchanger] and translates sentinel
@@ -144,9 +123,12 @@ func exchangeRefresh(
 	in refreshInputs,
 ) (*refresh.Exchanged, bool) {
 	exchanger, err := refresh.NewExchanger(refresh.ExchangerConfig{
-		Store:    deps.RefreshTokens,
-		Clock:    deps.clockFunc(),
-		GraceTTL: deps.RefreshTokenGraceTTL,
+		Store:             deps.RefreshTokens,
+		Clock:             deps.clockFunc(),
+		GraceTTL:          deps.RefreshTokenGraceTTL,
+		Audit:             deps.audit(),
+		GrantRevocations:  refreshChainRevocationStore(deps),
+		GrantTombstoneTTL: refreshChainTombstoneTTL(deps),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -176,7 +158,7 @@ func enforceStrictOfflineAccess(w http.ResponseWriter, deps Deps, scope []string
 	if !deps.StrictOfflineAccess {
 		return true
 	}
-	if scopeContainsOfflineAccess(scope) {
+	if oidcscope.ContainsOfflineAccess(scope) {
 		return true
 	}
 	writeError(w, http.StatusBadRequest, errInvalidGrant,
@@ -339,7 +321,7 @@ type refreshIDTokenInput struct {
 // the originating authentication so the spec's "same as the original
 // ID Token" requirement holds across rotations.
 func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) {
-	if !scopeContainsOpenID(in.Scope) {
+	if !oidcscope.ContainsOpenID(in.Scope) {
 		return "", nil
 	}
 	claims := tokens.IDTokenClaims{
@@ -418,7 +400,7 @@ func rotateRefreshToken(
 		ClientID: client.ID,
 		Extras: map[string]any{
 			"grant_id":       exchanged.GrantID,
-			"offline_access": scopeContainsOfflineAccess(exchanged.Scope),
+			"offline_access": oidcscope.ContainsOfflineAccess(exchanged.Scope),
 			"ttl_bucket":     ttlBucketFor(deps, exchanged.Scope),
 		},
 	})
@@ -518,4 +500,36 @@ func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID strin
 		return
 	}
 	_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+}
+
+// refreshChainRevocationStore returns the [store.GrantRevocationStore]
+// the refresh exchanger uses to tombstone replayed chains. The hook
+// fires only when the active strategy is
+// [store.RevocationStrategyGrantTombstone] AND the embedder wired a
+// non-nil substore. Other strategies leave the JWT-AT cascade to the
+// per-token JTI denylist (legacy ADR 0013 path) or skip JWT
+// revocation entirely; both keep the refresh-chain revoke alive but
+// suppress the tombstone write so the wire shape matches the
+// strategy's documented behaviour.
+func refreshChainRevocationStore(deps Deps) store.GrantRevocationStore {
+	if deps.RevocationStrategy != store.RevocationStrategyGrantTombstone {
+		return nil
+	}
+	return deps.GrantRevocations
+}
+
+// refreshChainTombstoneTTL bounds the lifetime of a tombstone written
+// by the refresh chain-revoke cascade. The value is computed as
+// (access_token_TTL + 5 minute grace) so any access token issued
+// before the cascade is guaranteed to have expired before its
+// tombstone disappears. The grace covers clock skew between the OP
+// and resource servers consulting [store.GrantRevocationStore.IsRevoked];
+// 5 minutes is the same floor the access-token registry GC uses. A
+// zero value flows through to [refresh.ExchangerConfig.GrantTombstoneTTL]
+// and disables GC, which is safe but unbounded in storage.
+func refreshChainTombstoneTTL(deps Deps) time.Duration {
+	if deps.AccessTokenTTL <= 0 {
+		return 0
+	}
+	return deps.AccessTokenTTL + 5*time.Minute
 }

@@ -89,6 +89,19 @@ type Config struct {
 	// Construction returns [ErrInvalidConfig] for any malformed
 	// entry so a typo cannot silently widen the policy.
 	AAGUIDAllowlist []string
+
+	// AAGUIDReCheckOnAssertion enables the M-AUTHN-2 defence: when
+	// true the verifier re-checks the matched credential's AAGUID
+	// against the configured [AAGUIDAllowlist] at assertion time so
+	// an embedder that narrows the allowlist after registration can
+	// revoke credentials whose authenticator model has fallen out
+	// of policy. The default (false) preserves the v0.x behaviour
+	// where AAGUID was enforced only at registration; embedders
+	// that want defence-in-depth flip the bit on. The allowlist
+	// itself is shared with the registration check; an empty
+	// allowlist short-circuits the assertion-time check (every
+	// AAGUID is accepted, mirroring the registration behaviour).
+	AAGUIDReCheckOnAssertion bool
 }
 
 // Verifier is the package's high-level façade. Construct one via [New]
@@ -121,6 +134,11 @@ type Verifier struct {
 	// is O(1). nil means "no allowlist configured" — every AAGUID
 	// is accepted.
 	aaguidAllowlist map[string]struct{}
+
+	// aaguidReCheckOnAssertion mirrors [Config.AAGUIDReCheckOnAssertion].
+	// When true the verifier re-checks the matched credential's
+	// AAGUID against [aaguidAllowlist] at FinishLogin time.
+	aaguidReCheckOnAssertion bool
 }
 
 // New constructs a [Verifier] from cfg. It validates the required
@@ -176,14 +194,26 @@ func New(cfg Config) (*Verifier, error) {
 		// helpers. Setting the flag would skip the encoding and
 		// produce a raw UTF-8 string that older browser libraries
 		// would mishandle.
+		// Timeouts.Enforce is hard-coded to false (H-E6): the library
+		// drives the freshness check through its own clock-aware
+		// [Verifier.checkSessionFresh] / [Session.Expires] path and
+		// then zeroes Expires before handing the decoded session to
+		// the upstream library. Letting go-webauthn enforce its own
+		// timeout under that arrangement combines two clocks (the
+		// upstream wall-clock vs. our injected [timex.Clock]) and a
+		// known upstream regression (Enforce=true with Expires=0
+		// surfaces an immediate-fail path on certain library versions).
+		// Leaving the timeout values populated still lets the user
+		// agent surface a sensible "timed out" UX while the
+		// authoritative freshness gate stays under the OP's clock.
 		Timeouts: webauthn.TimeoutsConfig{
 			Registration: webauthn.TimeoutConfig{
-				Enforce:    true,
+				Enforce:    false,
 				Timeout:    ttl,
 				TimeoutUVD: ttl,
 			},
 			Login: webauthn.TimeoutConfig{
-				Enforce:    true,
+				Enforce:    false,
 				Timeout:    ttl,
 				TimeoutUVD: ttl,
 			},
@@ -195,9 +225,10 @@ func New(cfg Config) (*Verifier, error) {
 		return nil, fmt.Errorf("%w: build webauthn: %w", ErrInvalidConfig, err)
 	}
 	return &Verifier{
-		SessionTTL:      ttl,
-		wa:              wa,
-		aaguidAllowlist: allow,
+		SessionTTL:               ttl,
+		wa:                       wa,
+		aaguidAllowlist:          allow,
+		aaguidReCheckOnAssertion: cfg.AAGUIDReCheckOnAssertion,
 	}, nil
 }
 

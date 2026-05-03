@@ -61,7 +61,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry, 
 		return nil, err
 	}
 	publicCORS := cors.NewPublic()
-	strictCORS := cors.NewStrict(originAllow)
+	strictCORS := cors.NewStrict(originAllow, cfg.effectiveAuditEmitter())
 	mux.Handle(cfg.endpoints.Discovery, publicCORS.Handler(discHandler))
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.JWKS),
@@ -179,6 +179,8 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		Logger:                   cfg.logger,
 		Audit:                    cfg.effectiveAuditEmitter(),
 		OnClientDeleted:          cfg.dcr.OnClientDeleted,
+		RefreshTokens:            cfg.store.RefreshTokens(),
+		Grants:                   cfg.store.Grants(),
 	}
 	handler := strictCORS.Handler(registrationendpoint.Handler(deps))
 	registerPath := joinPath(cfg.mountPrefix, cfg.endpoints.Register)
@@ -323,6 +325,10 @@ func mountAuthorizeHandlers(
 	if err != nil {
 		return nil, err
 	}
+	proxyTrust, err := buildProxyTrust(cfg)
+	if err != nil {
+		return nil, err
+	}
 	csrfSigner, err := csrf.NewSigner(deriveCSRFKey(cfg.cookieKeys[0]))
 	if err != nil {
 		return nil, &Error{
@@ -370,6 +376,7 @@ func mountAuthorizeHandlers(
 		ACRResolver:             newACRResolver(cfg),
 		LocaleResolver:          locales,
 		SubjectProjector:        buildSubjectProjector(cfg),
+		ProxyTrust:              proxyTrust,
 	})
 	mux.Handle(authorizePath, handler)
 	if spaLoginMount == "" {

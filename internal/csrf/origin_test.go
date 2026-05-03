@@ -188,6 +188,9 @@ func TestCheckOrigin_FallsBackToReferer(t *testing.T) {
 	r := newPOST(t)
 	// No Origin header — UA stripped it (privacy mode, legacy browser).
 	r.Header.Set("Referer", "https://app.example.com/login")
+	// Sec-Fetch-Site: same-origin vouches the fetch originated from the
+	// OP's own pages; without it the Referer-only path is rejected.
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	if err := csrf.CheckOrigin(r, a); err != nil {
 		t.Errorf("CheckOrigin via Referer: %v", err)
 	}
@@ -199,8 +202,47 @@ func TestCheckOrigin_RejectsForeignReferer(t *testing.T) {
 	a, _ := csrf.NewAllowlist([]string{"https://app.example.com"})
 	r := newPOST(t)
 	r.Header.Set("Referer", "https://evil.example.com/")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	if err := csrf.CheckOrigin(r, a); !errors.Is(err, csrf.ErrOriginRejected) {
 		t.Errorf("err=%v want ErrOriginRejected", err)
+	}
+}
+
+// TestCheckOrigin_RejectsRefererWithoutFetchMetadata pins the H-C2
+// hardening: a request that supplies Referer alone — no Origin header,
+// no Sec-Fetch-Site — is rejected. Modern browsers emit Origin on every
+// state-changing fetch, so the Referer-only path is the legacy
+// fallback; admitting it without a Fetch Metadata vouch lets a privacy
+// mode / extension that strips Origin AND emits no Sec-Fetch-Site (a
+// rare combination on contemporary UAs but reachable through hostile
+// configurations) reach the CSRF gate without forging any header.
+func TestCheckOrigin_RejectsRefererWithoutFetchMetadata(t *testing.T) {
+	t.Parallel()
+
+	a, _ := csrf.NewAllowlist([]string{"https://app.example.com"})
+	r := newPOST(t)
+	// Allowlisted Referer but no Sec-Fetch-Site — gate must still reject.
+	r.Header.Set("Referer", "https://app.example.com/login")
+	if err := csrf.CheckOrigin(r, a); !errors.Is(err, csrf.ErrOriginRejected) {
+		t.Errorf("err=%v want ErrOriginRejected (no Sec-Fetch-Site)", err)
+	}
+}
+
+// TestCheckOrigin_RejectsRefererWithCrossSiteFetchMetadata pins that a
+// non-same-origin Sec-Fetch-Site value (cross-site, same-site, none)
+// fails the gate even when Referer matches. The Referer fallback is
+// reserved for fetches the browser itself classifies as same-origin.
+func TestCheckOrigin_RejectsRefererWithCrossSiteFetchMetadata(t *testing.T) {
+	t.Parallel()
+
+	a, _ := csrf.NewAllowlist([]string{"https://app.example.com"})
+	for _, site := range []string{"cross-site", "same-site", "none"} {
+		r := newPOST(t)
+		r.Header.Set("Referer", "https://app.example.com/login")
+		r.Header.Set("Sec-Fetch-Site", site)
+		if err := csrf.CheckOrigin(r, a); !errors.Is(err, csrf.ErrOriginRejected) {
+			t.Errorf("Sec-Fetch-Site=%q: err=%v want ErrOriginRejected", site, err)
+		}
 	}
 }
 

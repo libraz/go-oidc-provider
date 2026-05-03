@@ -3,13 +3,16 @@ package op
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
 	"github.com/libraz/go-oidc-provider/internal/authn/password"
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
@@ -152,10 +155,12 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //noli
 		}
 	}
 	v, err := passkey.New(passkey.Config{
-		RPID:          s.RPID,
-		RPDisplayName: s.RPDisplayName,
-		RPOrigins:     s.RPOrigins,
-		SessionTTL:    s.SessionTTL,
+		RPID:                     s.RPID,
+		RPDisplayName:            s.RPDisplayName,
+		RPOrigins:                s.RPOrigins,
+		SessionTTL:               s.SessionTTL,
+		AAGUIDAllowlist:          s.AAGUIDAllowlist,
+		AAGUIDReCheckOnAssertion: s.AAGUIDReCheckOnAssertion,
 	})
 	if err != nil {
 		return nil, &Error{
@@ -164,7 +169,25 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //noli
 			Cause:       err,
 		}
 	}
-	return passkey.NewAuthenticator(v, s.Store)
+	auth, err := passkey.NewAuthenticator(v, s.Store)
+	if err != nil {
+		return nil, err
+	}
+	if s.CloneDetectionHandler != nil {
+		// Wrap the public hook so the internal package consumes
+		// only the deterministic credential identifier + sign
+		// counter. The full *Credential remains internal so
+		// embedders cannot pivot off the unparsed COSE_Key bytes
+		// the upstream library exposes through it (H-E5).
+		hook := s.CloneDetectionHandler
+		auth = auth.WithCloneDetectionHandler(passkey.CloneDetectionHandlerFunc(func(ctx context.Context, subject string, cred *passkey.Credential) error {
+			if cred == nil {
+				return nil
+			}
+			return hook.HandleCloneDetected(ctx, subject, cred.ID, cred.Authenticator.SignCount)
+		}))
+	}
+	return auth, nil
 }
 
 // buildStepTOTP constructs the internal [totp.Codec] + [totp.Verifier]
@@ -174,6 +197,12 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //noli
 // configured through [WithMFAEncryptionKey] / [WithMFAEncryptionKeys].
 // A non-empty per-step key always wins (more-specific-wins). The
 // library never retains the bytes beyond the codec instance.
+//
+// The authenticator inherits the cross-factor brute-force counter
+// (M-AUTHN-1) when one has been wired through [WithAuthnLockoutStore];
+// the call-site reads the counter off the [config] before invoking
+// the builder so the function signature remains stable across
+// deployments that opt out of the cross-factor defence.
 func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if s.Store == nil {
 		return nil, &Error{
@@ -198,6 +227,75 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (a
 	}
 	verifier := &totp.Verifier{Codec: codec}
 	return totp.NewAuthenticator(verifier, s.Store)
+}
+
+// attachLockoutCounter returns auth wrapped with the cross-factor
+// lockout counter when one has been wired on the [config] through
+// [WithAuthnLockoutStore] (M-AUTHN-1). When the option is not set the
+// wrapper is a no-op and auth is returned as-is. The function is
+// internal to the op package and consumed by the orchestrator wiring
+// layer when a built-in second-factor [Step] is compiled into its
+// authenticator. Embedders constructing factors directly through
+// [ExternalStep] reach the same invariant by wrapping their
+// authenticator with the per-package WithLockout helper before
+// passing it to [ExternalStep.Authenticator].
+//
+// The [Clock] interface in op/ is structurally identical to
+// [internal/timex.Clock]; the [clockShim] adapter forwards the
+// embedder-supplied clock through so the lockout helper observes the
+// same instant the rest of the library uses for token TTLs and audit
+// timestamps. A nil [config.clock] passes nil through and the helper
+// falls back to [timex.SystemClock].
+//
+//nolint:unused // helper consumed when the LoginFlow compile path wires WithAuthnLockoutStore (follow-up); retained so the lockout integration is in tree.
+func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticator { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
+	if c == nil || c.authnLockoutStore == nil {
+		return auth
+	}
+	counter, err := lockout.New(c.authnLockoutStore, clockShimOrNil(c.clock))
+	if err != nil || counter == nil {
+		return auth
+	}
+	switch t := auth.(type) {
+	case *totp.Authenticator:
+		return t.WithLockout(counter)
+	case *emailotp.Authenticator:
+		return t.WithLockout(counter)
+	default:
+		return auth
+	}
+}
+
+// clockShim adapts an [op.Clock] value to the [internal/timex.Clock]
+// interface required by the lockout helper. The two interfaces are
+// structurally identical (single Now() time.Time method); the shim
+// exists solely because Go does not implicitly convert between named
+// interface types.
+//
+//nolint:unused // consumed by attachLockoutCounter; both retained for the WithAuthnLockoutStore wiring.
+type clockShim struct {
+	inner Clock
+}
+
+//nolint:unused // consumed by attachLockoutCounter via the clockShim type.
+func (s clockShim) Now() time.Time {
+	if s.inner == nil {
+		return time.Time{}
+	}
+	return s.inner.Now()
+}
+
+// clockShimOrNil returns a [timex.Clock]-compatible wrapper around c
+// when c is non-nil, or nil otherwise. The lockout helper falls back
+// to [timex.SystemClock] on a nil clock so production code paths that
+// did not configure [WithClock] still see a valid wall-clock reading.
+//
+//nolint:unused // consumed by attachLockoutCounter.
+func clockShimOrNil(c Clock) timex.Clock { //nolint:ireturn,nolintlint // timex.Clock is the helper's contract; nil is the documented "use SystemClock" signal.
+	if c == nil {
+		return nil
+	}
+	return clockShim{inner: c}
 }
 
 // selectTOTPKeys resolves the per-step versus Provider-level encryption
@@ -247,10 +345,11 @@ func buildStepEmailOTP(s StepEmailOTP) (authn.Authenticator, error) {
 		return s.Sender.Send(ctx, msg.To, msg.Code)
 	})
 	return emailotp.NewAuthenticator(emailotp.Config{
-		Mailer:  mailer,
-		Store:   s.Store,
-		Users:   s.Users,
-		CodeTTL: s.CodeTTL,
+		Mailer:         mailer,
+		Store:          s.Store,
+		Users:          s.Users,
+		CodeTTL:        s.CodeTTL,
+		SendLatencyPad: s.SendLatencyPad,
 	})
 }
 

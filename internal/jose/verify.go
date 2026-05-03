@@ -1,18 +1,15 @@
 package jose
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"crypto"
 	"errors"
 	"fmt"
 
 	josev4 "github.com/go-jose/go-jose/v4"
-
-	"github.com/libraz/go-oidc-provider/internal/keys"
 )
 
 // ErrUnknownKeyID is returned by [Verify] when the JWS protected header
-// names a "kid" that is not present in the supplied [keys.Set]. The
+// names a "kid" that is not present in the supplied [KeyResolver]. The
 // caller MUST treat this as a hard rejection: the package never falls
 // back to a trial-decode loop over every key in the set, because doing
 // so would let an attacker bypass key rotation auditing by stripping
@@ -28,7 +25,7 @@ var ErrUnknownKeyID = errors.New("jose: unknown kid")
 var ErrMissingKeyID = errors.New("jose: missing kid")
 
 // ErrKeyAlgMismatch is returned when the algorithm declared in the JWS
-// header is incompatible with the public key shape the resolved [keys.Entry]
+// header is incompatible with the public key shape the resolved key
 // holds. Examples: ES256 paired with a non-P-256 curve, RS256 with an
 // RSA key shorter than 2048 bits.
 //
@@ -37,6 +34,34 @@ var ErrMissingKeyID = errors.New("jose: missing kid")
 // accidentally feed the JWS into a non-go-jose verifier and skip the
 // algorithm/key shape pairing requirement.
 var ErrKeyAlgMismatch = errors.New("jose: alg/key shape mismatch")
+
+// KeyResolver is the small abstraction [Verify] uses to look up the
+// public key advertised by a JWS "kid" header. The interface keeps the
+// jose package free of an inbound dependency on [internal/keys] so the
+// canonical [KeyShape] matrix can live in this file without an import
+// cycle. Concrete callers wrap their key store (e.g. [keys.Set.Find])
+// in a one-line adapter.
+//
+// Resolve returns the public key on the matching entry and ok=true; a
+// missing or retired kid returns ok=false. The implementation MUST
+// treat a kid that is present but past its rotation deadline as
+// not-found so [Verify] surfaces [ErrUnknownKeyID] uniformly.
+type KeyResolver interface {
+	Resolve(keyID string) (pub crypto.PublicKey, ok bool)
+}
+
+// KeyResolverFunc adapts a free function to [KeyResolver]. It exists
+// for callers that already have a `Find(kid string) (Entry, bool)`-
+// style method on their key store.
+type KeyResolverFunc func(keyID string) (crypto.PublicKey, bool)
+
+// Resolve calls f(keyID).
+func (f KeyResolverFunc) Resolve(keyID string) (crypto.PublicKey, bool) {
+	if f == nil {
+		return nil, false
+	}
+	return f(keyID)
+}
 
 // Verify validates the signature on jws against the public key whose
 // "kid" matches the JWS protected header, returning the verified
@@ -48,7 +73,7 @@ var ErrKeyAlgMismatch = errors.New("jose: alg/key shape mismatch")
 //     subject to the policy.)
 //   - The protected header carries a "kid". A missing "kid" is
 //     [ErrMissingKeyID].
-//   - That "kid" resolves through [keys.Set.Find] to a registered
+//   - That "kid" resolves through [KeyResolver.Resolve] to a registered
 //     entry. An unknown "kid" is [ErrUnknownKeyID]; no trial-decode
 //     fallback over the full set is performed.
 //   - The declared algorithm matches the public-key shape on the
@@ -57,19 +82,11 @@ var ErrKeyAlgMismatch = errors.New("jose: alg/key shape mismatch")
 // On success the returned []byte is the verified payload bytes; the
 // caller is responsible for parsing claims and applying any further
 // audience / expiry checks.
-//
-// Future contract: the function currently only enforces shape pairing
-// for ECDSA P-256 keys because [keys.NewSet] only accepts that shape.
-// When other key types are added to keys.NewSet (RSA / Ed25519), the
-// pairings RS256 / PS256 ⇒ *rsa.PublicKey with N.BitLen() ≥ 2048 and
-// EdDSA ⇒ ed25519.PublicKey MUST be added to [assertAlgKeyShape] in
-// the same change, before the new key shape is wired through the
-// public API.
-func Verify(jws *josev4.JSONWebSignature, set *keys.Set) ([]byte, error) {
+func Verify(jws *josev4.JSONWebSignature, resolver KeyResolver) ([]byte, error) {
 	if jws == nil {
 		return nil, fmt.Errorf("%w: nil JWS", ErrMalformed)
 	}
-	if set == nil {
+	if resolver == nil {
 		return nil, fmt.Errorf("%w: nil keyset", ErrMalformed)
 	}
 	if len(jws.Signatures) != 1 {
@@ -86,12 +103,11 @@ func Verify(jws *josev4.JSONWebSignature, set *keys.Set) ([]byte, error) {
 	if kid == "" {
 		return nil, ErrMissingKeyID
 	}
-	entry, found := set.Find(kid)
+	pub, found := resolver.Resolve(kid)
 	if !found {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownKeyID, kid)
 	}
 
-	pub := entry.Signer.Public()
 	if err := assertAlgKeyShape(alg, pub); err != nil {
 		return nil, err
 	}
@@ -108,35 +124,24 @@ func Verify(jws *josev4.JSONWebSignature, set *keys.Set) ([]byte, error) {
 // attacks where a verifier is tricked into treating an HMAC-style key
 // as a public key (or vice versa) — see RFC 8725 §2.1.
 //
-// Today the only key shape [keys.NewSet] accepts is *ecdsa.PublicKey on
-// the P-256 curve, so the function only meaningfully checks ES256.
-// When [keys.NewSet] is extended:
+// The function is a thin wrapper over [AssertAlgKeyShape] (which is the
+// canonical alg/key matrix shared with [internal/jarm], [internal/dpop],
+// and [internal/keys]); it exists so the [Verify] surface can keep
+// returning [ErrKeyAlgMismatch] as the structural failure label even
+// though the underlying mismatch sentinel is [ErrUnsupportedKeyShape].
+// Any non-nil result from [AssertAlgKeyShape] is wrapped with
+// [ErrKeyAlgMismatch] so callers branching via [errors.Is] continue to
+// see the same identity they did before consolidation.
 //
-//   - RS256 / PS256 MUST match a *rsa.PublicKey with at least a
-//     2048-bit modulus (RFC 8725 §3.3).
-//   - EdDSA MUST match an ed25519.PublicKey of the standard length.
-//
-// Add those branches before exposing the new key types via the public
-// op.WithKeyset.
+// AlgUnspecified is filtered upstream by [ParseAlgorithm], but we re-map
+// it here onto [ErrAlgorithmNotAllowed] for callers that constructed
+// the parsed JWS some other way.
 func assertAlgKeyShape(alg Algorithm, pub any) error {
-	switch alg {
-	case AlgES256:
-		ec, ok := pub.(*ecdsa.PublicKey)
-		if !ok {
-			return fmt.Errorf("%w: ES256 requires *ecdsa.PublicKey", ErrKeyAlgMismatch)
-		}
-		if ec.Curve != elliptic.P256() {
-			return fmt.Errorf("%w: ES256 requires P-256 curve", ErrKeyAlgMismatch)
-		}
-		return nil
-	case AlgRS256, AlgPS256, AlgEdDSA:
-		// Reachable only once keys.NewSet learns about new shapes.
-		// Until then a non-ES256 alg paired with the keystore-allowed
-		// shape (P-256) is a bona fide mismatch.
-		return fmt.Errorf("%w: alg %q not paired with any registered key shape", ErrKeyAlgMismatch, alg)
-	case AlgUnspecified:
+	if alg == AlgUnspecified {
 		return fmt.Errorf("%w: algorithm unspecified", ErrAlgorithmNotAllowed)
-	default:
-		return fmt.Errorf("%w: alg %q has no shape policy", ErrKeyAlgMismatch, alg)
 	}
+	if err := AssertAlgKeyShape(alg.String(), pub); err != nil {
+		return fmt.Errorf("%w: %w", ErrKeyAlgMismatch, err)
+	}
+	return nil
 }

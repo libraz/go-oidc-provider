@@ -52,6 +52,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 // Clock returns the wall-clock time used to evaluate record expiry. It is
@@ -102,6 +103,7 @@ type Store struct {
 	recoveries         *recoveryStore
 	passkeys           *passkeyStore
 	emailotps          *emailOTPStore
+	authnLockouts      *authnLockoutStore
 	accessTokens       *accessTokenStore
 	opaqueAccessTokens *opaqueAccessTokenStore
 	grantRevocations   *grantRevocationStore
@@ -133,6 +135,7 @@ func New(opts ...Option) *Store {
 	s.recoveries = newRecoveryStore()
 	s.passkeys = newPasskeyStore()
 	s.emailotps = newEmailOTPStore(s.clock)
+	s.authnLockouts = newAuthnLockoutStore()
 	s.accessTokens = newAccessTokenStore()
 	s.opaqueAccessTokens = newOpaqueAccessTokenStore()
 	s.grantRevocations = newGrantRevocationStore()
@@ -230,6 +233,15 @@ func (s *Store) Passkeys() store.PasskeyStore { return s.passkeys }
 // here so the authn package and its tests can reach the reference
 // implementation without forking the in-memory backend.
 func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailotps }
+
+// AuthnLockouts returns the [store.AuthnLockoutStore] backed by this
+// Store. The cross-factor brute-force counter (M-AUTHN-1) is not part
+// of the aggregate [store.Store] interface — the wiring lives behind
+// the lockout helper consumed by the per-factor authenticators — but
+// the accessor is exposed here so the authn package and its tests
+// can reach the reference implementation without forking the
+// in-memory backend.
+func (s *Store) AuthnLockouts() store.AuthnLockoutStore { return s.authnLockouts }
 
 // PutUser seeds the in-memory user store with u so tests can drive
 // /userinfo and id_token claim assembly without standing up a real
@@ -423,6 +435,24 @@ func (s *refreshStore) RevokeByGrant(_ context.Context, grantID string) error {
 	return nil
 }
 
+// RevokeByClient implements [store.RevokeByClient]. Used by the
+// dynamic registration cascade so a deleted client takes its
+// outstanding refresh tokens with it.
+func (s *refreshStore) RevokeByClient(_ context.Context, clientID string) error {
+	if clientID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.clock.Now()
+	for _, rec := range s.m {
+		if rec.ClientID == clientID {
+			markRevoked(rec, now)
+		}
+	}
+	return nil
+}
+
 // revokeChainLocked walks the parent pointers in m starting at rootID and
 // stamps ConsumedAt on rootID and every descendant. The traversal repeatedly
 // scans m until a full pass adds no new revocations; this keeps the helper
@@ -586,6 +616,23 @@ func (s *grantStore) Delete(_ context.Context, id string) error {
 		return store.ErrNotFound
 	}
 	delete(s.m, id)
+	return nil
+}
+
+// RevokeByClient implements [store.RevokeByClient]. The dynamic
+// registration cascade calls it so a deleted client takes its
+// outstanding grants with it. A non-existent client is a no-op.
+func (s *grantStore) RevokeByClient(_ context.Context, clientID string) error {
+	if clientID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, rec := range s.m {
+		if rec.ClientID == clientID {
+			delete(s.m, id)
+		}
+	}
 	return nil
 }
 
@@ -835,23 +882,31 @@ func newJTIStore(c Clock) *jtiStore {
 	return &jtiStore{clock: c, m: make(map[string]time.Time)}
 }
 
+// Mark hashes the supplied jti via [patterns.Digest] before keying
+// the map so the raw bearer is never retained in process memory. JWT
+// IDs are caller-supplied strings (RFC 7519 sets no upper bound) and a
+// heap dump that contains the raw values would let an attacker replay
+// proofs against another OP that signed the same key. The digest is
+// not a secret; its only purpose is bounded length and one-way derivation.
 func (s *jtiStore) Mark(_ context.Context, jti string, expiresAt time.Time) error {
+	digest := patterns.Digest(jti)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.m[jti]; ok {
+	if existing, ok := s.m[digest]; ok {
 		// Treat expired entries as absent so a fresh mark may succeed.
 		if !isExpired(existing, s.clock) {
 			return store.ErrAlreadyConsumed
 		}
 	}
-	s.m[jti] = expiresAt
+	s.m[digest] = expiresAt
 	return nil
 }
 
 func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
+	digest := patterns.Digest(jti)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	expiresAt, ok := s.m[jti]
+	expiresAt, ok := s.m[digest]
 	if !ok {
 		return false, nil
 	}

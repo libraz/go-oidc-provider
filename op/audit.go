@@ -71,15 +71,26 @@ const (
 // HTTP 200 per RFC 7009 §2.2, but a non-NotFound storage fault
 // raises this event so SOC tooling can detect the silent-failure
 // class (GHSA-7mqr-2v3q-v2wm).
+//
+// AuditRefreshChainRevokeFailed and AuditRefreshGrantRevokeFailed fire
+// when a refresh-token replay detection successfully observes the
+// replay (the wire response is invalid_grant) but the cascade side-
+// effects encounter a transport fault. The events are warn-level and
+// surface so SOC tooling can distinguish "chain successfully revoked"
+// from "chain revoke silently failed" — the latter leaves the
+// rotation chain intact even though the wire response indicated
+// rejection, which is the audit gap H-A2 closes.
 const (
-	AuditCodeIssued            = AuditEvent("code.issued")
-	AuditCodeConsumed          = AuditEvent("code.consumed")
-	AuditCodeReplayDetected    = AuditEvent("code.replay_detected")
-	AuditTokenIssued           = AuditEvent("token.issued")
-	AuditTokenRefreshed        = AuditEvent("token.refreshed")
-	AuditTokenRevoked          = AuditEvent("token.revoked")
-	AuditTokenRevokeFailed     = AuditEvent("token.revoke_failed")
-	AuditRefreshReplayDetected = AuditEvent("refresh.replay_detected")
+	AuditCodeIssued               = AuditEvent("code.issued")
+	AuditCodeConsumed             = AuditEvent("code.consumed")
+	AuditCodeReplayDetected       = AuditEvent("code.replay_detected")
+	AuditTokenIssued              = AuditEvent("token.issued")
+	AuditTokenRefreshed           = AuditEvent("token.refreshed")
+	AuditTokenRevoked             = AuditEvent("token.revoked")
+	AuditTokenRevokeFailed        = AuditEvent("token.revoke_failed")
+	AuditRefreshReplayDetected    = AuditEvent("refresh.replay_detected")
+	AuditRefreshChainRevokeFailed = AuditEvent("refresh.chain_revoke_failed")
+	AuditRefreshGrantRevokeFailed = AuditEvent("refresh.grant_revoke_failed")
 )
 
 // Session / logout events. Fire from the session manager and the
@@ -112,6 +123,46 @@ const (
 	AuditPKCEViolation       = AuditEvent("pkce.violation")
 	AuditRedirectURIMismatch = AuditEvent("redirect_uri.mismatch")
 	AuditAlgLegacyUsed       = AuditEvent("alg.legacy_used")
+
+	// AuditCORSPreflightAllowed fires every time the strict CORS layer
+	// admits a cross-origin OPTIONS preflight (Origin in allowlist,
+	// Access-Control-Request-Method present). The event surfaces the
+	// short-circuit so SOC tooling can correlate dashboards that
+	// otherwise observe only the actual (non-preflight) request — the
+	// CORS wrapper answers the preflight with 204 directly and bypasses
+	// every inner handler / outer middleware that the embedder
+	// configured *below* the wrapper. The CORS handler MUST sit
+	// outermost so embedder middleware (rate-limit, audit, metrics)
+	// observes the request before this short-circuit; the audit event
+	// makes the short-circuit visible regardless of wrapper order.
+	AuditCORSPreflightAllowed = AuditEvent("cors.preflight.allowed")
+
+	// AuditDPoPLooseMethodCaseAdmitted fires when the embedder has
+	// opted into the DPoP verifier's AllowLooseMethodCase bridge AND
+	// a proof was admitted whose "htm" claim differed from the
+	// request method only in ASCII case. The wire response is
+	// unchanged — the proof was admitted — but SOC tooling needs
+	// the signal so the loose-mode bridge stays visible while the
+	// responsible RP library is fixed. The RFC 9449 §4.3 strict
+	// posture is the default; loose mode is opt-in and produces
+	// this warn-level event on every admission.
+	AuditDPoPLooseMethodCaseAdmitted = AuditEvent("dpop.loose_method_case_admitted")
+
+	// AuditKeyRetiredKidPresented fires when a JWS / JWE presented
+	// for verification carries a "kid" header that matches an entry
+	// in the OP signing keyset whose [SigningKey.NotAfter] retirement
+	// deadline has elapsed. The wire response is the existing
+	// signature-invalid taxonomy — the verifier treats the kid as if
+	// it were unknown — but SOC tooling needs the signal because a
+	// retired kid surfacing at verification time is the canonical
+	// "rotation-after-leak token forge" attempt: an attacker who
+	// captured the old private key before the rotation tries to ride
+	// past the JWKS grace window by minting a fresh JWS that names
+	// the retiring kid. The event is warn-level and carries the
+	// rejected kid in [Event.Extras] so dashboards can correlate
+	// against the rotation timeline without parsing the slog message.
+	// Tracks H-F1.
+	AuditKeyRetiredKidPresented = AuditEvent("key.retired_kid_presented")
 )
 
 // Introspection events. Fire from the /introspect endpoint. Only the

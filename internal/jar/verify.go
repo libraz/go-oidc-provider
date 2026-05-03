@@ -32,6 +32,12 @@ const (
 	// "iat" older than this is rejected even if "exp" still lies in
 	// the future.
 	DefaultMaxAge = 10 * time.Minute
+
+	// maxJTILen bounds the "jti" claim length. RFC 9101 sets no cap;
+	// the verifier rejects oversized values to close the unbounded-
+	// allocation surface (replay store key, audit log column). The
+	// value is comfortably above any UUID encoding.
+	maxJTILen = 256
 )
 
 // JWKSResolver is the verifier's seam for fetching the client's
@@ -317,6 +323,13 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string)
 			return nil
 		}
 		return ErrJTIMissing
+	}
+	// Cap the jti at 256 bytes. RFC 9101 sets no upper bound; the
+	// limit closes an unbounded-allocation surface (replay store key,
+	// audit logs) at the verifier boundary. ErrParse is the right
+	// shape: an oversized jti is a malformed request object.
+	if len(jti) > maxJTILen {
+		return fmt.Errorf("%w: jti too long", ErrParse)
 	}
 	if v.jtis == nil {
 		// AllowMissingJTI=true with no store: skip the gate.

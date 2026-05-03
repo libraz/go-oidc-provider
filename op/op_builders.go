@@ -3,6 +3,7 @@ package op
 import (
 	"context"
 	"errors"
+	"net/url"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -20,6 +21,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -120,6 +122,68 @@ func buildLocaleResolver(cfg *config) (*i18n.Resolver, error) {
 	return resolver, nil
 }
 
+// buildProxyTrust constructs the runtime [proxy.Trust] consumed by the
+// authorize endpoint to resolve the client IP / scheme / host through
+// X-Forwarded-* headers when the request arrives from a trusted CIDR.
+//
+// The X-Forwarded-Host allowlist is the union of:
+//
+//   - the canonical issuer host derived from [WithIssuer] (auto-
+//     included so the typical single-hostname deployment requires no
+//     further configuration);
+//   - explicit entries from [WithTrustedProxyHosts] (multi-hostname
+//     deployments).
+//
+// When [WithTrustedProxies] is configured but the issuer is empty AND
+// no explicit hosts were supplied, the function emits a startup WARN
+// through the operational logger so the operator notices the gap. The
+// returned trust still rejects every XFH in that case (the empty
+// allowlist behaviour is preserved on the runtime side: [proxy.Trust]
+// honours XFH only when the supplied host appears in the allowlist).
+//
+// A nil return is the documented "no proxy trusted" signal — the
+// authorize endpoint passes a nil trust to [proxy.Resolve] which falls
+// back to [http.Request.RemoteAddr] without consulting forwarded
+// headers.
+func buildProxyTrust(cfg *config) (*proxy.Trust, error) {
+	if len(cfg.trustedProxies) == 0 {
+		return nil, nil //nolint:nilnil // documented "no proxy trusted" sentinel.
+	}
+	hosts := append([]string(nil), cfg.trustedProxyHosts...)
+	if h := issuerHost(cfg.issuer); h != "" {
+		hosts = append(hosts, h)
+	}
+	if len(hosts) == 0 && cfg.logger != nil {
+		cfg.logger.Warn(
+			"proxy: WithTrustedProxies configured without a host allowlist; X-Forwarded-Host will be ignored",
+		)
+	}
+	t, err := proxy.NewTrustWithHosts(cfg.trustedProxies, hosts)
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "proxy trust construction failed",
+			Cause:       err,
+		}
+	}
+	return t, nil
+}
+
+// issuerHost returns the lowercase host of the canonical issuer URL
+// or "" when issuer is empty / malformed. The helper is split so the
+// proxy-trust builder and any future runtime check (e.g., a future
+// XFH-aware redirect validator) read the same canonical value.
+func issuerHost(issuer string) string {
+	if issuer == "" {
+		return ""
+	}
+	u, err := url.Parse(issuer)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Hostname()
+}
+
 // buildOriginAllowlist composes the cross-origin allowlist consumed by both
 // the strict CORS layer and the /authorize CSRF Origin gate. The list is the
 // union of:
@@ -165,6 +229,15 @@ func buildDPoPVerifier(cfg *config) (*dpop.Verifier, error) {
 		JTIs:   cfg.store.ConsumedJTIs(),
 		Clock:  cfg.clock,
 		Nonces: cfg.dpopNonces, // nil leaves the §8 / §9 gate disabled.
+		// Emitter is threaded so a future opt-in to the
+		// AllowLooseMethodCase bridge surfaces the
+		// dpop.loose_method_case_admitted audit signal through
+		// the OP's normal emission chain. Today the verifier
+		// runs in strict mode unless the embedder rebuilds it
+		// directly, so the event is only observable when a
+		// future option flips the flag — wiring the emitter
+		// up-front avoids a partial wiring at that point.
+		Emitter: cfg.effectiveAuditEmitter(),
 	})
 	if err != nil {
 		return nil, &Error{
@@ -221,10 +294,13 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 		return nil, nil
 	}
 	// FAPI 2.0 Message Signing §5.6 mandates "nbf" and a request-object
-	// lifetime no longer than 60 minutes after nbf. The library
-	// implements that bound symmetrically: exp must not be more than
-	// 60 minutes in the future, and nbf must not be more than 60
-	// minutes in the past. Baseline (where JAR is rarely exercised)
+	// lifetime no longer than 60 seconds. The library implements that
+	// bound symmetrically: exp must not be more than 60 seconds in the
+	// future, and nbf must not be more than 60 seconds in the past. The
+	// 60-second figure is the OFCS conformance suite floor — its
+	// "ensure-request-object-with-exp-over-60-fails" and
+	// "-with-nbf-over-60-fails" modules push the claim 70 seconds out
+	// and expect rejection. Baseline (where JAR is rarely exercised)
 	// inherits the same posture so a deployment that opts in to JAR
 	// without a Message-Signing-only switch still gets the bound. Other
 	// JAR-enabling profiles inherit the relaxed (back-compat) behaviour.
@@ -248,7 +324,7 @@ func buildJARVerifier(cfg *config) (*jar.Verifier, error) {
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning {
 			requireNbf = true
-			maxLifetime = 60 * time.Minute
+			maxLifetime = 60 * time.Second
 		}
 		if isFAPIProfile(p) {
 			allowMissingJTI = false

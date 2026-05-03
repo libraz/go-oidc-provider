@@ -351,8 +351,8 @@ func TestNew_DefaultsApplied(t *testing.T) {
 	if r.cfg.maxBody != defaultMaxBody {
 		t.Fatalf("maxBody = %d, want %d", r.cfg.maxBody, defaultMaxBody)
 	}
-	if r.cfg.ttl != defaultTTL {
-		t.Fatalf("ttl = %v, want %v", r.cfg.ttl, defaultTTL)
+	if r.cfg.ttl != timex.SectorURICacheTTLDefault {
+		t.Fatalf("ttl = %v, want %v", r.cfg.ttl, timex.SectorURICacheTTLDefault)
 	}
 	if r.cfg.clock != timex.SystemClock {
 		t.Fatalf("clock not defaulted to timex.SystemClock")

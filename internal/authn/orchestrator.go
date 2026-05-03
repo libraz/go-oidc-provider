@@ -307,6 +307,9 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	if step.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
 	}
+	if rerr := guardAAL3RequiresUV(auth, *step.Result); rerr != nil {
+		return st, interaction.Step{}, rerr
+	}
 	st.FactorScratch = nil
 	st = o.appendFactor(st, auth, *step.Result)
 	o.observeSuccess(ctx, st, in.Now, auth.Type())
@@ -432,6 +435,30 @@ const ChooserSessionIDField = "session_id"
 // screen.
 const ChooserPromptType = "interaction.chooser"
 
+// guardAAL3RequiresUV enforces M-AUTHN-3: an authenticator that
+// reports [AAL3] MUST have completed user verification (the
+// [interaction.Result.UserVerified] bit is true). NIST SP 800-63B
+// AAL3 requires UV; a passkey assertion that did not perform UV
+// cannot satisfy AAL3, and trusting the chain to "round up" through
+// orchestrator policy would silently mint a session at a higher
+// assurance level than the factor actually achieved.
+//
+// The gate fires only on authenticators that report AAL3. AAL2 and
+// below pass unconditionally; foreign / out-of-range AAL values pass
+// (the aggregator will treat them defensively). The check runs before
+// [appendFactor] so a factor that fails the gate never lands in
+// [State.Factors] and the chain-fatal error surfaces to the HTTP
+// layer for an explicit reject.
+func guardAAL3RequiresUV(auth Authenticator, result interaction.Result) error {
+	if auth == nil || auth.AAL() != AAL3 {
+		return nil
+	}
+	if result.UserVerified {
+		return nil
+	}
+	return ErrAAL3RequiresUV
+}
+
 // appendFactor is the single point where the orchestrator records a
 // successful authenticator run. It enforces the invariant that only
 // RFC 8176-registered AMR values reach the session: an unregistered
@@ -446,21 +473,7 @@ func (o *Orchestrator) appendFactor(st State, auth Authenticator, result interac
 	}
 	uv := false
 	if auth.Type() == FactorPasskey {
-		// Prefer the real UV bit from the assertion when the
-		// authenticator implements [UserVerificationReporter]. The
-		// hard-coded "hwk" -> true / "swk" -> false fall-back
-		// preserves the legacy contract for adapters that do not
-		// surface the bit (M-AUTHN-7).
-		if reporter, ok := auth.(UserVerificationReporter); ok {
-			uv = reporter.LastUserVerified(result.Subject)
-		} else {
-			switch auth.AMR() {
-			case "hwk":
-				uv = true
-			case "swk":
-				uv = false
-			}
-		}
+		uv = resolvePasskeyUV(auth, result)
 	}
 	st.Factors = append(st.Factors, Factor{
 		Type:           auth.Type(),
@@ -474,6 +487,36 @@ func (o *Orchestrator) appendFactor(st State, auth Authenticator, result interac
 		st.AuthTime = result.AuthTime
 	}
 	return st
+}
+
+// resolvePasskeyUV picks the UV bit to stamp on [Factor.UserVerified]
+// using the precedence chain documented at [appendFactor]:
+//
+//  1. [interaction.Result.UserVerified] (request-scoped, replica-safe;
+//     the built-in passkey adapter populates this since H-E4).
+//  2. The deprecated [UserVerificationReporter] interface (legacy
+//     embedder-supplied adapters that have not migrated; the
+//     orchestrator consults the hook only when the Result is silent).
+//  3. Conservative default: false. The orchestrator deliberately
+//     does NOT consult [Authenticator.AMR] here — the built-in
+//     adapter returns "hwk" unconditionally, so a static AMR fall-
+//     back would over-report UV when an assertion's real flag is
+//     false. Legacy adapters that need to surface UV=false MUST
+//     implement [UserVerificationReporter]; adapters that wire
+//     neither path produce UV=false and the AMR derivation in
+//     [Factor.AMRValue] picks "swk" (presence-only).
+//
+// Step 2 takes the reporter's verdict verbatim — including a "false"
+// — so an embedder that explicitly downgrades a presence-only
+// assertion through the reporter is honoured.
+func resolvePasskeyUV(auth Authenticator, result interaction.Result) bool {
+	if result.UserVerified {
+		return true
+	}
+	if reporter, ok := auth.(UserVerificationReporter); ok {
+		return reporter.LastUserVerified(result.Subject)
+	}
+	return false
 }
 
 // StateRef tag prefixes. The orchestrator inspects the prefix to

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
 type jtiStore struct {
@@ -20,9 +21,15 @@ func newJTIStore(s *Store, tx *databasesql.Tx) *jtiStore {
 
 func (s *jtiStore) runner() runner { return pickRunner(s.parent, s.tx) }
 
-// Mark records jti as consumed.
+// Mark records jti as consumed. The raw jti is hashed via
+// [patterns.Digest] before binding to SQL so the bearer-leakage
+// surface (driver logs, replication snapshots, EXPLAIN traces) only
+// ever sees the SHA-256 digest. JWT IDs may legitimately be long
+// (RFC 7519 sets no upper bound); hashing also bounds the persisted
+// length to a fixed 64-char hex value.
 func (s *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) error {
-	_, err := s.runner().ExecContext(ctx, s.parent.queries.jtiMark, jti, timeToInt64(expiresAt))
+	digest := patterns.Digest(jti)
+	_, err := s.runner().ExecContext(ctx, s.parent.queries.jtiMark, digest, timeToInt64(expiresAt))
 	if err != nil {
 		if isDuplicate(err) {
 			return store.ErrAlreadyConsumed
@@ -32,10 +39,13 @@ func (s *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 	return nil
 }
 
-// Has reports whether jti has previously been marked.
+// Has reports whether jti has previously been marked. The raw jti is
+// hashed via [patterns.Digest] before the WHERE lookup so the same
+// bearer-leakage posture as [jtiStore.Mark] applies.
 func (s *jtiStore) Has(ctx context.Context, jti string) (bool, error) {
+	digest := patterns.Digest(jti)
 	var exp int64
-	err := s.runner().QueryRowContext(ctx, s.parent.queries.jtiHas, jti).Scan(&exp)
+	err := s.runner().QueryRowContext(ctx, s.parent.queries.jtiHas, digest).Scan(&exp)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return false, nil
 	}

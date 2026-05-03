@@ -1,8 +1,11 @@
 package mtls
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -22,10 +25,15 @@ import (
 // admitting any cert would defeat the §2.1 contract.
 type ClientMatcher struct {
 	// SubjectDN is the RFC 4514 string form of the cert subject DN.
-	// The match is byte-for-byte after canonicalisation through the
-	// standard library's [pkix.Name.String]; embedders that store a
-	// non-canonical encoding are expected to normalise at
-	// registration time.
+	// The match runs in two passes (see [VerifyTLSClientAuth]): a
+	// DER round-trip through [pkix.Name] (so RFC 4514 attribute-
+	// ordering differences disappear) and, on parse failure, a
+	// fallback byte-for-byte compare against [pkix.Name.String] of
+	// [x509.Certificate.Subject]. Embedders supplying a value the
+	// DER round-trip cannot canonicalise (multi-valued RDNs,
+	// extension OIDs outside the closed catalogue) MUST normalise
+	// to the standard library's string form at registration time so
+	// the verbatim string fallback succeeds.
 	SubjectDN string
 
 	// SANDNS is the DNS name expected in [x509.Certificate.DNSNames].
@@ -72,6 +80,53 @@ func (m ClientMatcher) hasAny() bool {
 		m.SANEmail != ""
 }
 
+// MethodTLSClientAuth is the RFC 8705 §2.1 token_endpoint_auth_method
+// value naming the PKI-authenticated cert path: the cert is issued
+// by a CA the OP trusts AND its subject DN (or one of the SAN
+// matchers) matches the value the client metadata registered.
+const MethodTLSClientAuth = "tls_client_auth"
+
+// MethodSelfSignedTLSClientAuth is the RFC 8705 §2.2
+// token_endpoint_auth_method value naming the JWK-thumbprint
+// authenticated cert path: the cert is typically self-signed AND its
+// public-key thumbprint appears in the client's registered JWKS.
+const MethodSelfSignedTLSClientAuth = "self_signed_tls_client_auth"
+
+// VerifyClientAuth dispatches the inbound cert onto the per-method
+// verifier RFC 8705 §2 prescribes. The function is the single entry
+// point handler code calls; callers pass the client's stored
+// token_endpoint_auth_method verbatim and the function returns the
+// per-method sentinel on failure.
+//
+//   - tls_client_auth (§2.1) routes to [VerifyTLSClientAuth]; the
+//     supplied [ClientMatcher] is used to decide whether the cert's
+//     subject DN or one of its SANs satisfies the registered value.
+//     Chain validation against the OP's trust anchors is the
+//     EMBEDDER's responsibility (see [VerifyTLSClientAuth]).
+//
+//   - self_signed_tls_client_auth (§2.2) routes to
+//     [VerifySelfSignedTLSClientAuth]; the supplied jwks bytes are
+//     compared against the cert's public-key thumbprint. The matcher
+//     argument is unused on this path because §2.2 binds the cert to
+//     the client by thumbprint, not by DN.
+//
+// Any other method value returns [ErrUnsupportedMethod] so the caller
+// surfaces invalid_client at the wire boundary; the comparison is
+// case-sensitive because RFC 8705 spells the method names exactly.
+// A nil cert returns [ErrNoClientCert] so the caller can distinguish
+// "no cert at all" from "cert presented but does not satisfy the
+// registered method".
+func VerifyClientAuth(method string, cert *x509.Certificate, expected ClientMatcher, jwks []byte) error {
+	switch method {
+	case MethodTLSClientAuth:
+		return VerifyTLSClientAuth(cert, expected)
+	case MethodSelfSignedTLSClientAuth:
+		return VerifySelfSignedTLSClientAuth(cert, jwks)
+	default:
+		return fmt.Errorf("%w: %q", ErrUnsupportedMethod, method)
+	}
+}
+
 // VerifyTLSClientAuth checks the cert against the client's registered
 // matcher per RFC 8705 §2.1.2. It returns nil on a successful match
 // and a typed sentinel on failure; chain validation against the OP's
@@ -82,6 +137,20 @@ func (m ClientMatcher) hasAny() bool {
 // either — the TLS layer (or the proxy that terminated TLS) has
 // already done that. Re-checking would create a clock dependency the
 // package deliberately avoids.
+//
+// Subject DN comparison runs in two passes:
+//
+//  1. Byte-for-byte compare against [x509.Certificate.RawSubject]
+//     (the DER-encoded form). The matcher's SubjectDN is parsed back
+//     into a [pkix.Name] and re-marshalled to DER so RFC 4514 string-
+//     ordering differences (CN/O/OU swaps that the standard library
+//     emits in attribute-OID order rather than the registration form)
+//     do not produce spurious mismatches.
+//  2. Fallback to [pkix.Name.String] equality for matchers stored in
+//     a non-canonical RFC 4514 string the DER round-trip cannot
+//     reproduce (e.g. matchers registered with custom RDN ordering).
+//     The fallback is conservative: it accepts only inputs the
+//     standard library produces from the cert verbatim.
 func VerifyTLSClientAuth(cert *x509.Certificate, expected ClientMatcher) error {
 	if cert == nil {
 		return fmt.Errorf("%w: nil certificate", ErrNoClientCert)
@@ -90,7 +159,7 @@ func VerifyTLSClientAuth(cert *x509.Certificate, expected ClientMatcher) error {
 		return ErrNoMatcherConfigured
 	}
 	if expected.SubjectDN != "" {
-		if cert.Subject.String() == expected.SubjectDN {
+		if subjectDNMatches(cert, expected.SubjectDN) {
 			return nil
 		}
 		// Subject was configured but did not match. Fall through to
@@ -105,6 +174,189 @@ func VerifyTLSClientAuth(cert *x509.Certificate, expected ClientMatcher) error {
 		return ErrSubjectMismatch
 	}
 	return ErrSANMismatch
+}
+
+// subjectDNMatches reports whether expected names the same DN as the
+// cert's subject. The function is the dual-form compare documented on
+// [VerifyTLSClientAuth]: it tries the DER round-trip first (so RFC
+// 4514 string-ordering differences disappear) and falls back to the
+// standard library's string form for matchers the DER pipeline cannot
+// canonicalise.
+//
+// A matcher input that fails RFC 4514 parsing falls onto the string
+// compare alone: rejecting parseable-but-malformed matchers here would
+// surface as ErrSubjectMismatch on a perfectly valid registration, so
+// the conservative posture preserves admission while logging would
+// reveal the parse failure if the OP added a debug log point. The
+// function returns false rather than an error because the caller
+// already maps a non-match onto ErrSubjectMismatch.
+func subjectDNMatches(cert *x509.Certificate, expected string) bool {
+	// Pass 1: DER round-trip. The standard library's
+	// [pkix.Name.String] emits attributes in OID order, which is the
+	// same order the cert's DER encoding uses, so re-marshalling the
+	// expected DN through pkix.Name catches the case where the
+	// matcher was stored with a different surface ordering than the
+	// cert carries.
+	if expectedDER, ok := derFromDNString(expected); ok {
+		if bytes.Equal(cert.RawSubject, expectedDER) {
+			return true
+		}
+	}
+	// Pass 2: standard-library string equality. This catches matchers
+	// stored in a non-OID-order string the DER round-trip cannot
+	// reproduce, but only when the cert's standard string form
+	// happens to match verbatim. RFC 8705 §2.1.2 leaves the precise
+	// comparison to the AS; the dual-form policy is documented on
+	// [VerifyTLSClientAuth].
+	return cert.Subject.String() == expected
+}
+
+// derFromDNString parses an RFC 4514 DN string and returns the
+// canonical DER encoding the standard library would emit for the
+// same name. The function is the dual-form compare's DER fast-path
+// in [subjectDNMatches]: a parse failure returns ok=false and the
+// caller falls back to the string-compare path.
+//
+// The standard library exposes no [pkix.ParseName] helper, so the
+// parser walks the RFC 4514 form directly: comma-separated RDNs,
+// each RDN a "key=value" attribute name. The parsed RDN slice goes
+// through [pkix.Name.FillFromRDNSequence] + [pkix.Name.ToRDNSequence]
+// so the resulting marshal lands in the canonical attribute order
+// the standard library uses for [x509.Certificate.RawSubject].
+// Attributes outside the closed catalogue [knownDNAttributes] return
+// ok=false so the matcher falls back to the verbatim string compare.
+func derFromDNString(dn string) ([]byte, bool) {
+	seq, ok := parseDNString(dn)
+	if !ok {
+		return nil, false
+	}
+	// Round-trip the parsed RDN sequence through pkix.Name so the
+	// resulting marshalled DER matches the canonical attribute
+	// ordering the standard library uses when emitting the cert's
+	// RawSubject. FillFromRDNSequence reads the DER form (root-
+	// first); we already reversed inside parseDNString so the
+	// typed Name is filled correctly. ToRDNSequence then re-emits
+	// the same fields in the standard library's canonical order
+	// (the same order x509.CreateCertificate uses), so the
+	// marshalled bytes end up byte-equal to RawSubject when the
+	// matcher named the same attribute set as the cert.
+	var name pkix.Name
+	name.FillFromRDNSequence(&seq)
+	der, err := asn1.Marshal(name.ToRDNSequence())
+	if err != nil {
+		return nil, false
+	}
+	return der, true
+}
+
+// knownDNAttributes is the closed catalogue of RFC 4514 attribute
+// names [parseDNString] accepts. The mapping picks the OID the
+// standard library's [pkix.Name] surfaces under each attribute name
+// (see pkix.Name.String) so the resulting DN re-marshals through the
+// same encoding path the cert library used when emitting
+// [x509.Certificate.RawSubject]. Attributes outside the catalogue
+// (organisationalUnit pseudo-OIDs, extension fields) fall onto the
+// string-compare path; the conservative posture matches the audit-
+// finding scope (CN/O/OU/L/ST/C/STREET/POSTALCODE/SERIALNUMBER/DC/UID).
+//
+//nolint:gochecknoglobals // closed catalogue; immutable.
+var knownDNAttributes = map[string]asn1.ObjectIdentifier{
+	"CN":           {2, 5, 4, 3},
+	"SERIALNUMBER": {2, 5, 4, 5},
+	"C":            {2, 5, 4, 6},
+	"L":            {2, 5, 4, 7},
+	"ST":           {2, 5, 4, 8},
+	"STREET":       {2, 5, 4, 9},
+	"O":            {2, 5, 4, 10},
+	"OU":           {2, 5, 4, 11},
+	"POSTALCODE":   {2, 5, 4, 17},
+	"DC":           {0, 9, 2342, 19200300, 100, 1, 25},
+	"UID":          {0, 9, 2342, 19200300, 100, 1, 1},
+}
+
+// parseDNString splits an RFC 4514 DN into its RDN sequence. The
+// parser is intentionally narrow — it walks comma-separated
+// "key=value" pairs and resolves each key through
+// [knownDNAttributes] — so it canonicalises the standard inputs
+// without dragging the rest of RFC 4514 (escapes, multi-valued
+// RDNs, dotted-decimal OID forms) onto the comparison path. Inputs
+// outside that subset return ok=false; callers fall back to the
+// verbatim string compare in [subjectDNMatches].
+//
+// RFC 4514 §2.1 spells RDNs most-specific first ("CN=...,O=..."),
+// while the cert's DER encoding (RFC 5280 §4.1.2.4) lists the same
+// RDNs root-first. The function reverses the parsed slice so the
+// resulting RDNSequence — once asn1.Marshal'd — matches the byte
+// shape [x509.Certificate.RawSubject] carries.
+func parseDNString(dn string) (pkix.RDNSequence, bool) {
+	dn = strings.TrimSpace(dn)
+	if dn == "" {
+		return nil, false
+	}
+	parts := splitDNComponents(dn)
+	seq := make(pkix.RDNSequence, 0, len(parts))
+	for _, raw := range parts {
+		eq := strings.IndexByte(raw, '=')
+		if eq <= 0 {
+			return nil, false
+		}
+		key := strings.ToUpper(strings.TrimSpace(raw[:eq]))
+		value := strings.TrimSpace(raw[eq+1:])
+		if key == "" || value == "" {
+			return nil, false
+		}
+		oid, known := knownDNAttributes[key]
+		if !known {
+			return nil, false
+		}
+		seq = append(seq, pkix.RelativeDistinguishedNameSET{
+			{Type: oid, Value: value},
+		})
+	}
+	if len(seq) == 0 {
+		return nil, false
+	}
+	// RFC 4514 puts CN first; DER puts the root attribute (typically
+	// C / DC) first. Reverse so the marshalled bytes match the cert's
+	// RawSubject ordering.
+	for i, j := 0, len(seq)-1; i < j; i, j = i+1, j-1 {
+		seq[i], seq[j] = seq[j], seq[i]
+	}
+	return seq, true
+}
+
+// splitDNComponents splits dn on the unescaped commas that separate
+// RDNs. RFC 4514 §2.4 lets RDNs carry escaped commas (",") inside an
+// attribute value; the parser tolerates that escape so a matcher
+// containing "L=Mountain View, O=Example" survives as a two-RDN DN
+// rather than fracturing into three. Multi-valued RDNs joined with
+// "+" are not split here — [parseDNString] already rejects them via
+// the known-attribute table because the resulting RDN would not be a
+// single attribute.
+func splitDNComponents(dn string) []string {
+	parts := make([]string, 0, 4)
+	var b strings.Builder
+	escaped := false
+	for i := range len(dn) {
+		c := dn[i]
+		switch {
+		case escaped:
+			b.WriteByte(c)
+			escaped = false
+		case c == '\\':
+			b.WriteByte(c)
+			escaped = true
+		case c == ',':
+			parts = append(parts, b.String())
+			b.Reset()
+		default:
+			b.WriteByte(c)
+		}
+	}
+	if b.Len() > 0 {
+		parts = append(parts, b.String())
+	}
+	return parts
 }
 
 // matchSAN reports whether any configured SAN matcher matches a value

@@ -142,20 +142,27 @@ type Deps struct {
 
 	// OnClientDeleted is the optional cascade hook the handler invokes
 	// after a successful DELETE /register/{client_id}. It runs in the
-	// request goroutine after the client and RAT have been removed,
-	// before the 204 is written. The library does not invoke a
-	// built-in cascade because revoking outstanding access_token /
-	// refresh_token / session records keyed by client requires store
-	// surfaces (ListByClient / DeleteByClient) that v1.0 does not
-	// publish; embedders that hold those indexes in their own backend
-	// wire the cascade through this hook. A non-nil error is logged
-	// but does not abort the response — the client record is already
-	// gone, and surfacing the error to the RP would imply a
-	// recoverable failure that the embedder cannot retry.
-	// 02-product-design.md §A.6.2.2 sketches the desired
-	// final shape; the hook is the explicit seam until the store
-	// surfaces grow to support the cascade in-tree.
+	// request goroutine after the in-tree cascade (see [Deps.RefreshTokens]
+	// / [Deps.Grants]) and before the 204 is written. The library
+	// invokes [store.RevokeByClient] on every supplied substore that
+	// implements the optional interface; the hook lets the embedder
+	// extend the cascade to records the library does not own (cached
+	// userinfo, sessions held outside the OP, custom audit pipelines).
+	// A non-nil error is logged but does not abort the response — the
+	// client record is already gone, and surfacing the error to the RP
+	// would imply a recoverable failure that the embedder cannot retry.
 	OnClientDeleted func(ctx context.Context, clientID string) error
+
+	// RefreshTokens is the optional refresh-token substore the handler
+	// probes for [store.RevokeByClient] during the delete cascade. A
+	// nil substore opts out of the in-tree cascade for refresh tokens;
+	// the embedder's [OnClientDeleted] hook takes over.
+	RefreshTokens store.RefreshTokenStore
+
+	// Grants is the optional grant substore the handler probes for
+	// [store.RevokeByClient] during the delete cascade. A nil substore
+	// opts out of the in-tree cascade for grants.
+	Grants store.GrantStore
 }
 
 // Handler returns the HTTP handler the OP mounts at /register and

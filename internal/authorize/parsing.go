@@ -6,6 +6,23 @@ import (
 	"strings"
 )
 
+// parRequestURIPrefix is the URN scheme + namespace RFC 9126 §2.2
+// reserves for pushed-authorization-request identifiers. The library
+// admits exactly this shape on the wire — a request_uri whose value
+// does not begin with this prefix is structurally rejected so the
+// non-PAR JAR-by-URI surface (RFC 9101 §5.2.2) cannot be exercised.
+//
+// The choice is documented in 002-product-design.md: FAPI 2.0 mandates
+// PAR, the OP-side request_uri fetcher needed for JAR-by-URI would
+// require RFC 9101 §10.2 hardening (https-only / size cap / TTL /
+// content-type / SSRF deny-list) that the library has not implemented,
+// and discovery advertises the URN prefix in
+// request_uri_parameter_supported. Rejecting at the parser collapses
+// the attack surface to the PAR path, which already exists with its
+// own dedicated controls in [internal/parendpoint] and the
+// [op/store.PushedAuthRequestStore].
+const parRequestURIPrefix = "urn:ietf:params:oauth:request_uri:"
+
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
 // r.URL.Query(); for POST it parses the form body via [http.Request.ParseForm]
 // and reads r.PostForm. Other methods produce no parameters and the parser
@@ -43,6 +60,19 @@ func ParseValues(v url.Values) (*Request, error) {
 	claims, err := ParseClaimsRequest(singles["claims"])
 	if err != nil {
 		return nil, err
+	}
+	if rawURI := singles["request_uri"]; rawURI != "" {
+		// RFC 9126 §2.2 reserves the urn:ietf:params:oauth:request_uri:
+		// namespace for PAR identifiers; the library does not implement
+		// the RFC 9101 §5.2.2 fetcher needed to safely follow a generic
+		// https URL (see [parRequestURIPrefix]). The prefix check is
+		// case-insensitive (RFC 8141 §1.2 makes the URN scheme case-
+		// insensitive) on the prefix portion only — the body, which the
+		// PAR store keys on, stays case-sensitive at the persistence
+		// layer.
+		if !hasPARRequestURIPrefix(rawURI) {
+			return nil, ErrInvalidRequestURI
+		}
 	}
 	return &Request{
 		ClientID:            singles["client_id"],
@@ -190,4 +220,28 @@ func singleEntry(v url.Values, key string) (string, error) {
 // concatenating.
 func multiValue(v url.Values, key string) (string, error) {
 	return singleEntry(v, key)
+}
+
+// hasPARRequestURIPrefix reports whether raw begins with
+// [parRequestURIPrefix] under a case-insensitive comparison on the
+// prefix bytes only. The body of the URN — what comes after the
+// prefix — is not folded so the byte-equality lookup that
+// [op/store.PushedAuthRequestStore] performs at consumption time
+// keeps every concrete identifier distinct (a 128-bit base64url
+// suffix is case-sensitive and collapsing it here would create
+// collisions on the persistence side).
+func hasPARRequestURIPrefix(raw string) bool {
+	if len(raw) < len(parRequestURIPrefix) {
+		return false
+	}
+	for i := range len(parRequestURIPrefix) {
+		c := raw[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != parRequestURIPrefix[i] {
+			return false
+		}
+	}
+	return true
 }

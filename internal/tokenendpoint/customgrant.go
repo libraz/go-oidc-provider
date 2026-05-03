@@ -3,10 +3,10 @@ package tokenendpoint
 import (
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -91,7 +91,7 @@ func resolveCustomGrantIDToken(deps Deps, client *store.Client, resp customgrant
 	if resp.IDToken != "" {
 		return resp.IDToken, nil
 	}
-	if !slices.Contains(resp.Scope, "openid") {
+	if !oidcscope.ContainsOpenID(resp.Scope) {
 		return "", nil
 	}
 	if resp.Subject == "" {

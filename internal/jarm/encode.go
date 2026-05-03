@@ -1,8 +1,6 @@
 package jarm
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"errors"
 	"fmt"
 	"time"
@@ -10,6 +8,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 )
@@ -134,22 +133,24 @@ func NewSigner(cfg SignerConfig) (*Signer, error) {
 // based on the public key shape. v0.x ships ECDSA P-256 only because
 // [internal/keys.NewSet] rejects every other key shape on construction
 // (see internal/jose F-4); a key reaching this function therefore
-// MUST be a P-256 ECDSA key. The switch surfaces "unknown key shape"
-// as a fail-fast error at [NewSigner] time rather than silently
-// returning ES256 for the wrong key — and provides the natural
-// extension point for additional algorithms when the keys package
-// gains support for them.
+// MUST be a P-256 ECDSA key. Delegating to [jose.KeyShape] keeps the
+// alg/key matrix in one place — the wrapper here surfaces "unknown key
+// shape" as a fail-fast [ErrEncode] at [NewSigner] time rather than
+// silently returning ES256 for the wrong key, while preserving the
+// internal/jose [jose.ErrUnsupportedKeyShape] sentinel for callers that
+// want the structural identity. The "alg" returned is the JWS
+// SIGNATURE algorithm — JARM does not encrypt the response, so the
+// FAPI 2.0 RSA-OAEP key-encryption discussion does not apply here.
 func deriveJWSAlgorithm(key tokens.SigningKey) (josev4.SignatureAlgorithm, error) {
 	pub := key.Signer.Public()
-	switch k := pub.(type) {
-	case *ecdsa.PublicKey:
-		if k.Curve != elliptic.P256() {
-			return "", fmt.Errorf("%w: ECDSA key uses curve %q, want P-256", ErrEncode, k.Params().Name)
-		}
-		return josev4.ES256, nil
-	default:
-		return "", fmt.Errorf("%w: unsupported key type %T (v0.x supports ECDSA P-256 only; see internal/keys.NewSet)", ErrEncode, pub)
+	alg, _, _, ok := jose.KeyShape(pub)
+	if !ok {
+		return "", fmt.Errorf("%w: %w: key type %T (v0.x supports ECDSA P-256 only; see internal/keys.NewSet)", ErrEncode, jose.ErrUnsupportedKeyShape, pub)
 	}
+	if alg != string(josev4.ES256) {
+		return "", fmt.Errorf("%w: %w: alg %q is not ES256 (v0.x supports ECDSA P-256 only)", ErrEncode, jose.ErrUnsupportedKeyShape, alg)
+	}
+	return josev4.ES256, nil
 }
 
 // Issuer returns the issuer string this signer stamps onto every JWT.

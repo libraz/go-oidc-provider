@@ -19,8 +19,12 @@ const IDLength = 16
 
 // IdleTTLDefault is the default idle lifetime applied to session records
 // when no override is configured (14 days for the __Host-oidc_session
-// cookie).
-const IdleTTLDefault = 14 * 24 * time.Hour
+// cookie). The canonical value lives in [timex.SessionIdleTTLDefault];
+// this name is preserved so internal callers and tests retain the
+// session-domain-specific spelling.
+//
+//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
+var IdleTTLDefault = timex.SessionIdleTTLDefault
 
 // ErrCurrentSessionExpired is returned by [Manager.Resolve] when the cookie
 // successfully decrypts but the referenced session has expired or been
@@ -30,8 +34,13 @@ var ErrCurrentSessionExpired = errors.New("sessions: current session expired")
 // AbsoluteTTLDefault is the default cap on a session's total wall-clock
 // lifetime. Idle activity refreshes ExpiresAt up to this bound; once
 // CreatedAt + AbsoluteTTLDefault is in the past the session is considered
-// expired and the next [Manager.Touch] tears it down.
-const AbsoluteTTLDefault = 30 * 24 * time.Hour
+// expired and the next [Manager.Touch] tears it down. The canonical
+// value lives in [timex.SessionAbsoluteTTLDefault]; this name is
+// preserved so internal callers and tests retain the
+// session-domain-specific spelling.
+//
+//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
+var AbsoluteTTLDefault = timex.SessionAbsoluteTTLDefault
 
 // Manager orchestrates the SessionStore + cookie codec + clock. It owns the
 // chooser-group lifecycle without exposing the raw [*store.Session] type to

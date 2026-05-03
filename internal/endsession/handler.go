@@ -22,6 +22,35 @@ import (
 // pathological inputs (gosec G120).
 const maxFormBytes = 64 * 1024
 
+// maxQueryBytes caps the byte-length of [http.Request.URL.RawQuery] on
+// the GET branch of /end_session. RFC 9700 §2.4 recommends keeping
+// query strings short to reduce log-leak amplification; 8 KiB is well
+// above any legitimate payload (id_token_hint + post_logout_redirect_uri
+// + state + client_id) and well below the practical browser / proxy
+// query-length limits, so a hostile request that slips a multi-KiB
+// state value through is rejected before any further processing.
+const maxQueryBytes = 8 * 1024
+
+// maxStateBytes caps the byte-length of the "state" query parameter
+// the OP echoes back on the post-logout redirect. OIDC RP-Initiated
+// Logout 1.0 §3 does not bound the value, but real RPs use 128 - 512
+// byte opaque tokens; 2 KiB is comfortably above that while bounding
+// the server-side reflection surface against a hostile RP that crafts
+// an oversized state to amplify response size or leak data through
+// the redirect target.
+const maxStateBytes = 2 * 1024
+
+// maxIDTokenHintAge caps how old an id_token_hint may be measured by
+// its "iat" claim against the current wall clock. RFC 9700 §2.4
+// recommends bounding the freshness of even non-cryptographically-
+// authenticated hints; 30 days is well above the OP's usual id_token
+// lifetime (an hour) while still rejecting the long-tail of stale
+// tokens that an attacker could harvest from forgotten browser tabs
+// or proxy logs. The check applies only when "iat" is present; the
+// signature / issuer / aud validation continues to gate everything
+// else.
+const maxIDTokenHintAge = 30 * 24 * time.Hour
+
 // Clock is the structural wall-clock dependency, mirroring the
 // interface in the sibling endpoints so a value satisfying [op.Clock]
 // flows through without an adapter. The handler does not currently
@@ -172,6 +201,9 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	req := parseRequest(values)
+	if !validateRequestBounds(w, req) {
+		return
+	}
 	client, ok := resolveClient(r.Context(), w, deps, req)
 	if !ok {
 		return
@@ -184,6 +216,27 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	}
 	terminateSession(w, r, deps)
 	emitResponse(w, r, req)
+}
+
+// validateRequestBounds enforces the per-parameter size caps the
+// /end_session endpoint applies to mitigate amplification / log-leak
+// attacks against the post-logout redirect target. v0.x bounds:
+//
+//   - state at [maxStateBytes] (2 KiB). The value is echoed back on
+//     the post-logout redirect; an unbounded state amplifies the
+//     attacker-controllable payload that lands in proxy logs and
+//     browser history.
+//
+// Other parameters (id_token_hint, post_logout_redirect_uri,
+// client_id) inherit the [maxQueryBytes] / [maxFormBytes] gate
+// readValues installed; the per-field cap here applies to the one
+// value that flows back to the user agent.
+func validateRequestBounds(w http.ResponseWriter, req request) bool {
+	if len(req.state) > maxStateBytes {
+		writeLogoutError(w, http.StatusRequestURITooLong, descRequestTooLarge)
+		return false
+	}
+	return true
 }
 
 // enforceCSRFGate is the CSRF guard for the hint-less branch of the
@@ -224,6 +277,14 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, req request) bool {
 // readValues enforces the method / content-type / size invariants and
 // returns the parsed parameter map. The bool reports whether the
 // caller should continue: false means a response was already written.
+//
+// On the GET branch the function caps [http.Request.URL.RawQuery] at
+// [maxQueryBytes]: a hostile RP that crafts a multi-megabyte query
+// string would otherwise force the OP to allocate megabytes of
+// url-decoded form state before the per-field validation runs. The
+// 8 KiB cap is well above the documented sum of legitimate parameters
+// (id_token_hint + post_logout_redirect_uri + state + client_id) and
+// well below the practical browser / proxy query-length limits.
 func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
@@ -241,6 +302,10 @@ func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 			return nil, false
 		}
 		return r.PostForm, true
+	}
+	if r.URL != nil && len(r.URL.RawQuery) > maxQueryBytes {
+		writeLogoutError(w, http.StatusRequestURITooLong, descRequestTooLarge)
+		return nil, false
 	}
 	return r.URL.Query(), true
 }
@@ -291,13 +356,18 @@ func resolveClient(
 // resolveByIDTokenHint verifies the id_token_hint signature, extracts
 // the aud claim, optionally cross-checks the client_id parameter, and
 // looks the resulting client up in the registry.
+//
+// The verifier consults [Deps.Clock] (or [timex.SystemClock] as a
+// fallback) so the iat-age cap inside [verifyIDTokenHint] is testable
+// against a fixed clock and consistent with the rest of the handler's
+// time references.
 func resolveByIDTokenHint(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps Deps,
 	req request,
 ) (*store.Client, bool) {
-	aud, err := verifyIDTokenHint(deps.Keys, deps.Issuer, req.idTokenHint)
+	aud, err := verifyIDTokenHint(deps.Keys, deps.Issuer, req.idTokenHint, hintNow(deps.Clock))
 	if err != nil {
 		writeLogoutError(w, http.StatusBadRequest, descIDTokenInvalid)
 		return nil, false

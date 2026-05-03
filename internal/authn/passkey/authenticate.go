@@ -50,6 +50,14 @@ var (
 	// cannot forget it; passing an empty list is treated as "no
 	// credentials registered" which can never satisfy an assertion.
 	ErrCredentialNotRegistered = errors.New("passkey: credential not registered")
+
+	// ErrAAGUIDDisallowed is returned when the matched credential's
+	// AAGUID is not in the verifier's allowlist (M-AUTHN-2). The check
+	// runs at assertion time when [Verifier.AAGUIDReCheckOnAssertion]
+	// is true so an embedder that narrows the allowlist after
+	// registration can revoke previously-issued credentials whose
+	// authenticator model has fallen out of policy.
+	ErrAAGUIDDisallowed = errors.New("passkey: AAGUID not in allowlist")
 )
 
 // BeginLogin starts an assertion ceremony for the user identified by
@@ -73,6 +81,27 @@ func (v *Verifier) BeginLogin(_ context.Context, subject, name string, credentia
 	if len(credentials) == 0 {
 		return nil, nil, fmt.Errorf("%w: subject has no registered credentials", ErrCredentialNotRegistered)
 	}
+
+	// AAGUID re-check at the start of the assertion ceremony
+	// (M-AUTHN-2). Filter the credential list so the upstream
+	// library's allowCredentials projection cannot surface a
+	// credential whose authenticator model has fallen out of policy.
+	// An empty allowlist short-circuits the filter (every AAGUID is
+	// accepted); the toggle defaults off so embedders that have not
+	// opted in see no behaviour change.
+	if v.aaguidReCheckOnAssertion && len(v.aaguidAllowlist) > 0 {
+		filtered := make([]Credential, 0, len(credentials))
+		for _, c := range credentials {
+			if v.AAGUIDAllowed(c.Authenticator.AAGUID) {
+				filtered = append(filtered, c)
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, nil, fmt.Errorf("%w: every registered credential is in a now-disallowed AAGUID", ErrAAGUIDDisallowed)
+		}
+		credentials = filtered
+	}
+
 	// displayName is unused by BeginLogin (the user agent shows the
 	// already-registered credential metadata) so we pass the name in
 	// both slots.
@@ -117,6 +146,8 @@ func (v *Verifier) BeginLogin(_ context.Context, subject, name string, credentia
 //
 // On any error other than [ErrCloneDetected] the returned
 // [*Credential] is nil.
+//
+//nolint:gocognit // FinishLogin enumerates assertion / clone / AAGUID branches in flat shape; refactor would obscure WebAuthn spec mapping.
 func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, name string, credentials []Credential, response []byte) (*Credential, error) {
 	if session == nil {
 		return nil, fmt.Errorf("%w: nil session", ErrInvalidResponse)
@@ -147,6 +178,19 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	}
 	if !matched {
 		return nil, ErrCredentialNotRegistered
+	}
+
+	// AAGUID re-check at assertion time (M-AUTHN-2). When enabled,
+	// reject the assertion if the matched credential's AAGUID is no
+	// longer in the configured allowlist. The check uses the AAGUID
+	// persisted at registration (carried on the stored Credential),
+	// not a value extracted from the assertion: assertions do not
+	// reliably carry AAGUID, and even if they did the registration-
+	// time value is the trust anchor — an attacker who somehow
+	// flipped the assertion's AAGUID still cannot satisfy the
+	// allowlist gate.
+	if rerr := v.checkAAGUIDOnAssertion(credentials, parsed.RawID); rerr != nil {
+		return nil, rerr
 	}
 
 	user := newWebauthnUser(subject, name, name, credentials)
@@ -181,4 +225,36 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 		return &out, ErrCloneDetected
 	}
 	return &out, nil
+}
+
+// checkAAGUIDOnAssertion enforces the M-AUTHN-2 re-check gate against
+// the stored credential whose ID matches rawID. Returns
+// [ErrAAGUIDDisallowed] when the verifier's
+// [Config.AAGUIDReCheckOnAssertion] is true, the configured allowlist
+// is non-empty, and the matched credential's AAGUID is not in it. An
+// empty allowlist short-circuits to nil (every AAGUID is accepted),
+// mirroring the registration-time behaviour. A nil verifier or empty
+// credential list short-circuits to nil so the helper is safe to call
+// before the credential-not-registered check has run.
+func (v *Verifier) checkAAGUIDOnAssertion(credentials []Credential, rawID []byte) error {
+	if v == nil || !v.aaguidReCheckOnAssertion {
+		return nil
+	}
+	if len(v.aaguidAllowlist) == 0 {
+		return nil
+	}
+	for _, c := range credentials {
+		if !bytes.Equal(c.ID, rawID) {
+			continue
+		}
+		if !v.AAGUIDAllowed(c.Authenticator.AAGUID) {
+			return fmt.Errorf("%w: AAGUID %x not in allowlist", ErrAAGUIDDisallowed, c.Authenticator.AAGUID)
+		}
+		return nil
+	}
+	// No matched credential. The caller's earlier match check
+	// already rejects this case with [ErrCredentialNotRegistered],
+	// so reaching here means a programming bug; surface a generic
+	// disallowed-AAGUID rather than panic.
+	return ErrAAGUIDDisallowed
 }

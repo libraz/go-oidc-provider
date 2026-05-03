@@ -167,7 +167,7 @@ func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, ver
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	raw, err := extractBearer(r)
+	raw, err := extractBearer(w, r)
 	if err != nil {
 		respondBearerExtractError(w, err)
 		return
@@ -229,8 +229,7 @@ func enforceAudience(w http.ResponseWriter, issuer string, audience []string) bo
 			return true
 		}
 	}
-	w.Header().Set("WWW-Authenticate",
-		`Bearer error="invalid_token", error_description="The access token is invalid"`)
+	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "The access token is invalid"))
 	w.WriteHeader(http.StatusUnauthorized)
 	return false
 }
@@ -336,8 +335,7 @@ func enforceMTLSCnf(
 // continue to function; the description carries enough detail for
 // the operator to triage the failure from logs.
 func respondDPoPInvalid(w http.ResponseWriter, description string) {
-	w.Header().Set("WWW-Authenticate",
-		`DPoP error="invalid_token", error_description="`+description+`"`)
+	w.Header().Set("WWW-Authenticate", buildDPoPChallenge("invalid_token", description))
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
@@ -356,8 +354,8 @@ func respondUseDPoPNonce(w http.ResponseWriter, deps HandlerDeps) {
 			w.Header().Set("DPoP-Nonce", nonce)
 		}
 	}
-	w.Header().Set("WWW-Authenticate",
-		`DPoP error="use_dpop_nonce", error_description="DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header"`)
+	w.Header().Set("WWW-Authenticate", buildDPoPChallenge("use_dpop_nonce",
+		"DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header"))
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
@@ -367,8 +365,7 @@ func respondUseDPoPNonce(w http.ResponseWriter, deps HandlerDeps) {
 // libraries that key off the bearer state machine continue to
 // function; mTLS does not define a new error code for this case.
 func respondMTLSInvalid(w http.ResponseWriter, description string) {
-	w.Header().Set("WWW-Authenticate",
-		`Bearer error="invalid_token", error_description="`+description+`"`)
+	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", description))
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
@@ -378,13 +375,17 @@ func methodAllowed(method string) bool {
 	return method == http.MethodGet || method == http.MethodPost
 }
 
-// bearerError discriminates the two RFC 6750 §3 failure shapes the
+// bearerError discriminates the three RFC 6750 §3 failure shapes the
 // handler emits before signature verification: "no credentials" (which
-// produces a bare WWW-Authenticate challenge) and "invalid request"
-// (which produces an error="invalid_request" challenge per §3.1).
+// produces a bare WWW-Authenticate challenge), "invalid request"
+// (which produces an error="invalid_request" challenge per §3.1), and
+// "request body too large" (which produces a 413 Request Entity Too
+// Large with the same invalid_request code so RP libraries that key
+// off the bearer state machine still see a recognised challenge).
 type bearerError struct {
-	missing bool
-	desc    string
+	missing  bool
+	tooLarge bool
+	desc     string
 }
 
 func (e *bearerError) Error() string { return e.desc }
@@ -403,9 +404,13 @@ func (e *bearerError) Error() string { return e.desc }
 //
 // The "no credentials at all" case returns a bearerError with
 // missing=true so the caller can emit a bare challenge.
-func extractBearer(r *http.Request) (string, error) {
+//
+// The w argument is hoisted here only so the form-body branch can
+// install the [http.MaxBytesReader] cap before invoking ParseForm; the
+// header-only path never touches the response writer.
+func extractBearer(w http.ResponseWriter, r *http.Request) (string, error) {
 	header := bearerFromHeader(r.Header.Get("Authorization"))
-	body, bodyPresent, err := bearerFromBody(r)
+	body, bodyPresent, err := bearerFromBody(w, r)
 	if err != nil {
 		return "", err
 	}
@@ -440,14 +445,30 @@ func bearerFromHeader(value string) string {
 // bearerFromBody extracts the token from a POST application/x-www-form-
 // urlencoded body. The third return value is the parse error (if any);
 // the second reports whether an access_token field was observed at all.
-func bearerFromBody(r *http.Request) (string, bool, error) {
+//
+// The function caps the body via [endpointsupport.LimitFormBody] before
+// invoking ParseForm so a multi-megabyte payload is short-circuited at
+// read time. RFC 6750 §2.2 has no upper bound on the access_token form
+// field, but legitimate OAuth bearer tokens (opaque or JWT) comfortably
+// fit in a few KiB; the 64 KiB cap is far above any real-world value
+// while bounding memory use against pathological inputs (gosec G120).
+func bearerFromBody(w http.ResponseWriter, r *http.Request) (string, bool, error) {
 	if r.Method != http.MethodPost {
 		return "", false, nil
 	}
 	if !isFormContent(r.Header.Get("Content-Type")) {
 		return "", false, nil
 	}
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	// G120 false positive: LimitFormBody wraps r.Body in
+	// http.MaxBytesReader on the line above so ParseForm reads from a
+	// bounded reader. The MaxBytesError surfaces below so callers map
+	// it to invalid_request / 413.
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return "", false, &bearerError{tooLarge: true, desc: "request body exceeds the userinfo endpoint size limit"}
+		}
 		return "", false, &bearerError{desc: "malformed form body"}
 	}
 	values, ok := r.PostForm["access_token"]
@@ -468,19 +489,52 @@ func isFormContent(ct string) bool {
 	return endpointsupport.IsFormContent(ct)
 }
 
-// respondBearerExtractError writes the 401/400 response that matches
-// the failure mode of [extractBearer]: "missing" -> bare challenge,
-// "multiple channels / malformed" -> 400 invalid_request.
+// respondBearerExtractError writes the 401/400/413 response that
+// matches the failure mode of [extractBearer]: "missing" -> bare
+// challenge, "tooLarge" -> 413 with invalid_request, "multiple
+// channels / malformed" -> 400 invalid_request.
 func respondBearerExtractError(w http.ResponseWriter, err error) {
 	var be *bearerError
-	if errors.As(err, &be) && be.missing {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="userinfo"`)
-		w.WriteHeader(http.StatusUnauthorized)
-		return
+	if errors.As(err, &be) {
+		switch {
+		case be.missing:
+			w.Header().Set("WWW-Authenticate", `Bearer realm="userinfo"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		case be.tooLarge:
+			w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_request",
+				"The request body exceeds the maximum allowed size"))
+			http.Error(w, "", http.StatusRequestEntityTooLarge)
+			return
+		}
 	}
-	w.Header().Set("WWW-Authenticate",
-		`Bearer error="invalid_request", error_description="The request is missing a required parameter or is malformed"`)
+	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_request",
+		"The request is missing a required parameter or is malformed"))
 	http.Error(w, "", http.StatusBadRequest)
+}
+
+// buildBearerChallenge composes the WWW-Authenticate value for an
+// RFC 6750 §3.1 invalid_request / invalid_token challenge,
+// running the description through [endpointsupport.SanitizeChallengeValue]
+// so a CR/LF/quote/backslash byte cannot inject a header break or
+// terminate the auth-param prematurely. See [endpointsupport.SanitizeChallengeValue]
+// for the exact byte allow-list.
+func buildBearerChallenge(code, description string) string {
+	return endpointsupport.BuildBearerChallenge(endpointsupport.BearerSchemeBearer,
+		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeError, Value: code},
+		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeErrorDescription, Value: description},
+	)
+}
+
+// buildDPoPChallenge is the DPoP-scheme counterpart of [buildBearerChallenge]
+// for RFC 9449 §7.1 / §9 challenges. The description flows through the
+// same [endpointsupport.SanitizeChallengeValue] gate so the two challenge
+// shapes share their CR/LF/quote/backslash defenses.
+func buildDPoPChallenge(code, description string) string {
+	return endpointsupport.BuildBearerChallenge(endpointsupport.BearerSchemeDPoP,
+		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeError, Value: code},
+		endpointsupport.ChallengeParam{Name: endpointsupport.ChallengeErrorDescription, Value: description},
+	)
 }
 
 // enforceRevocationStatus rejects the request when the access token has
@@ -543,8 +597,7 @@ func enforceRevocationStatusGrantTombstone(
 			return false
 		}
 		if revoked {
-			w.Header().Set("WWW-Authenticate",
-				`Bearer error="invalid_token", error_description="The access token has been revoked"`)
+			w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "The access token has been revoked"))
 			w.WriteHeader(http.StatusUnauthorized)
 			return false
 		}
@@ -579,8 +632,7 @@ func enforceRevocationStatusJTIRegistry(
 		return false
 	}
 	if rec != nil && rec.Revoked {
-		w.Header().Set("WWW-Authenticate",
-			`Bearer error="invalid_token", error_description="The access token has been revoked"`)
+		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "The access token has been revoked"))
 		w.WriteHeader(http.StatusUnauthorized)
 		return false
 	}
@@ -597,8 +649,7 @@ func respondInvalidToken(w http.ResponseWriter, err error) {
 	if errors.Is(err, tokens.ErrAccessTokenExpired) {
 		desc = "The access token expired"
 	}
-	w.Header().Set("WWW-Authenticate",
-		`Bearer error="invalid_token", error_description="`+desc+`"`)
+	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", desc))
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
@@ -615,8 +666,7 @@ func assembleClaims(
 	user, err := deps.UserStore.FindBySubject(ctx, claims.Subject)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			w.Header().Set("WWW-Authenticate",
-				`Bearer error="invalid_token", error_description="subject unknown"`)
+			w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "subject unknown"))
 			w.WriteHeader(http.StatusUnauthorized)
 			return nil, false
 		}
@@ -698,9 +748,16 @@ func userClaims(u *store.User) map[string]any {
 }
 
 // writeJSON encodes body with json.Marshal, stamps the cache and
-// content-type headers OIDC Core 1.0 §5.3.1.1 hints at, and writes
-// the response. Marshal failures fall back to a 500 with no body so a
-// malformed Source map cannot leak claim names through an error string.
+// content-type headers OIDC Core 1.0 §5.3.1.1 / RFC 6749 §5.1 mandate,
+// and writes the response. Marshal failures fall back to a 500 with no
+// body so a malformed Source map cannot leak claim names through an
+// error string.
+//
+// The cache-control posture pairs the modern "no-store" directive with
+// "Pragma: no-cache" for HTTP/1.0 intermediaries that still ignore
+// Cache-Control (RFC 6749 §5.1 calls both out as MUST). The "private"
+// modifier on Cache-Control is preserved for downstream caches that
+// honour the OIDC Core hint while still seeing the no-store gate.
 func writeJSON(w http.ResponseWriter, body map[string]any) {
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -709,5 +766,6 @@ func writeJSON(w http.ResponseWriter, body map[string]any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store, private")
+	w.Header().Set("Pragma", "no-cache")
 	_, _ = w.Write(payload)
 }

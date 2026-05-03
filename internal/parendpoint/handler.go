@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -17,9 +18,11 @@ import (
 // Audit event names mirrored from the public op.AuditEvent catalogue.
 // internal/parendpoint cannot import op/, so the strings are duplicated
 // and TestAuditEvent_ClientAuthnMirror in op/audit_test.go pins the
-// values together.
+// values together. The constant aliases the canonical
+// [clientauthhttp.EventClientAuthnFailure] so the boundary helper and
+// the local emission sites stay in lock-step.
 const (
-	auditClientAuthnFailure = "client_authn.failure"
+	auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
 )
 
 // Defaults the handler applies when [Deps] omits the corresponding field.

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
@@ -129,7 +130,11 @@ func New(opts ...Option) (*Provider, error) {
 	if err := buildMetricsCollector(cfg); err != nil {
 		return nil, err
 	}
-	keySet, err := keys.NewSet(toKeyEntries(cfg.keyset))
+	keySet, err := keys.NewSet(
+		toKeyEntries(cfg.keyset),
+		keys.WithClock(keysetClock(cfg)),
+		keys.WithRetiredKidObserver(retiredKidObserver(cfg)),
+	)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -255,9 +260,45 @@ func toScopeEntries(scopes []Scope) []scoperegistry.Entry {
 func toKeyEntries(ks Keyset) []keys.Entry {
 	out := make([]keys.Entry, len(ks))
 	for i, k := range ks {
-		out[i] = keys.Entry{KeyID: k.KeyID, Signer: k.Signer}
+		out[i] = keys.Entry{KeyID: k.KeyID, Signer: k.Signer, NotAfter: k.NotAfter}
 	}
 	return out
+}
+
+// keysetClock returns the wall-clock seam the [keys.Set] retirement
+// gate consults. The embedder-supplied [op.Clock] (from [WithClock]) is
+// preferred so the gate observes the same instant as token TTLs and
+// audit timestamps; a nil [config.clock] collapses onto the package
+// default (system wall clock) inside [keys.NewSet].
+func keysetClock(cfg *config) func() time.Time {
+	if cfg == nil || cfg.clock == nil {
+		return nil
+	}
+	clock := cfg.clock
+	return func() time.Time { return clock.Now() }
+}
+
+// retiredKidObserver builds the [keys.RetiredKidObserver] that fires
+// [AuditKeyRetiredKidPresented] when the verifier rejects a kid whose
+// retirement deadline has elapsed (H-F1). The observer rides on the
+// configured [audit.Emitter] chain so the event lands on every sink
+// (slog audit logger + the Prometheus bridge when [WithPrometheus] is
+// active). [config.effectiveAuditEmitter] never returns nil — an
+// embedder that did not wire any logger collapses onto [audit.Discard]
+// — so the observer always emits, even when the operator has no sink
+// configured (the discard sink is a no-op but keeps the gate uniform).
+func retiredKidObserver(cfg *config) keys.RetiredKidObserver {
+	emitter := cfg.effectiveAuditEmitter()
+	return func(kid string) {
+		emitter.Emit(context.Background(), audit.Event{
+			Name:    string(AuditKeyRetiredKidPresented),
+			Level:   audit.LevelWarn,
+			Message: "verification rejected: presented kid is retired",
+			Extras: map[string]any{
+				"kid": kid,
+			},
+		})
+	}
 }
 
 // wrapValidateMetadata adapts a caller-supplied

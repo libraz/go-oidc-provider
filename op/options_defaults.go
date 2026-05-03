@@ -23,7 +23,12 @@ const DefaultAccessTokenTTL = 5 * time.Minute
 // days mirrors the typical "long-lived but bounded" posture for
 // authorization-code-derived refresh tokens; embedders facing
 // stricter risk profiles can shorten it through the option.
-const DefaultRefreshTokenTTL = 30 * 24 * time.Hour
+//
+// The canonical value lives in [timex.RefreshTokenTTLDefault]; this
+// name is preserved for embedders that already reference the constant.
+//
+//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
+var DefaultRefreshTokenTTL = timex.RefreshTokenTTLDefault
 
 // applyDefaults fills in optional fields with their library defaults.
 func (c *config) applyDefaults() {
@@ -80,7 +85,7 @@ func (c *config) applyRegistrationDefaults() {
 		return
 	}
 	if c.dcr.IATTTL == 0 {
-		c.dcr.IATTTL = defaultIATTTL
+		c.dcr.IATTTL = timex.RegistrationIATTTLDefault
 	}
 	if c.dcr.IATUses == 0 {
 		c.dcr.IATUses = defaultIATUses

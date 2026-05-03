@@ -318,6 +318,18 @@ func applyFeatureEndpoints(in Input, doc *Document) {
 
 // applyJARFeature publishes the RFC 9101 request-object metadata when
 // JAR is enabled.
+//
+// Wire-shape detail: the library admits "request_uri" only in the
+// RFC 9126 §2.2 PAR form (urn:ietf:params:oauth:request_uri:*); a
+// generic https URL is rejected at the parser
+// ([internal/authorize.ParseValues]) because the OP-side fetcher
+// RFC 9101 §10.2 requires (https-only / size cap / TTL / content-type
+// / SSRF deny-list) is not implemented and FAPI 2.0 mandates PAR
+// anyway. The discovery booleans below stay TRUE because there is no
+// metadata key reserved for "PAR-only" — RPs discover the constraint
+// by looking at pushed_authorization_request_endpoint and inspecting
+// the URN prefix on the wire. Embedders that want a narrower
+// advertisement override the document via [op.WithDiscoveryMetadata].
 func applyJARFeature(in Input, doc *Document) {
 	if !in.Features.JAR {
 		return
@@ -327,6 +339,10 @@ func applyJARFeature(in Input, doc *Document) {
 	// RFC 9101 §5.2.2 leaves the registration policy to the OP;
 	// the library is strict (FAPI 2.0 Message Signing posture)
 	// and refuses any request_uri the client has not preregistered.
+	// The PAR-only stance documented above makes this advertisement
+	// effectively trivial — every accepted request_uri is one the OP
+	// itself minted at /par — but the field stays TRUE for parity
+	// with conformance suites that probe it.
 	doc.RequireRequestURIRegistration = true
 	// RFC 9101 §10.1: advertise the JWS alg values the verifier
 	// accepts on request objects. The list mirrors the project-

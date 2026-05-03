@@ -10,9 +10,20 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// AuditEventLooseMethodCaseAdmitted is the canonical event name the
+// verifier emits when [VerifierConfig.AllowLooseMethodCase] is set
+// AND a proof's "htm" claim differed from the request method only in
+// ASCII case. The wire response is unchanged — the proof was admitted
+// — but SOC tooling needs a signal so it can pin the bridge while
+// the responsible RP library is fixed. The string is duplicated by
+// [op.AuditDPoPLooseMethodCaseAdmitted] so embedders can subscribe
+// through the public catalogue.
+const AuditEventLooseMethodCaseAdmitted = "dpop.loose_method_case_admitted"
 
 // DefaultIatWindow is the symmetric tolerance applied to the proof
 // "iat" claim when [VerifyOptions.IatWindow] is unset. RFC 9449 §11.1
@@ -86,6 +97,7 @@ type Verifier struct {
 	replayLeew    time.Duration
 	nonces        NonceVerifier
 	looseMethCase bool
+	emitter       audit.Emitter
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier].
@@ -133,10 +145,26 @@ type VerifierConfig struct {
 	// then, treat the loose mode as a temporary bridge while the
 	// RP team ships the fix. Leaving the flag on indefinitely
 	// silently accepts non-conforming proofs from every client,
-	// not just the one that prompted the change. The library does
-	// not log a warning when loose mode is active, so an audit
-	// has to grep for the option site to surface it.
+	// not just the one that prompted the change.
+	//
+	// Observability: when [VerifierConfig.Emitter] is non-nil,
+	// every loose-mode admission emits a warn-level audit event
+	// named [AuditEventLooseMethodCaseAdmitted] carrying the
+	// presented "htm" value and the canonical method. SOC
+	// dashboards pin a counter on the event so the bridge is
+	// visible operationally; embedders that ship the audit chain
+	// see the signal even though the wire response was a normal
+	// 200.
 	AllowLooseMethodCase bool
+
+	// Emitter is the optional audit-event sink the verifier
+	// invokes when [AllowLooseMethodCase] admits a proof whose
+	// "htm" differed from the request method only in ASCII case.
+	// A nil emitter collapses to the no-op [audit.Discard] so the
+	// verifier path is unconditional; embedders that want the
+	// signal supply the OP-wide [audit.Emitter] (typically the
+	// value [op/audit.Slog] returned).
+	Emitter audit.Emitter
 }
 
 // NewVerifier builds a [*Verifier] from cfg. The function returns an
@@ -154,6 +182,10 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 	if window <= 0 {
 		window = DefaultIatWindow
 	}
+	emitter := cfg.Emitter
+	if emitter == nil {
+		emitter = audit.Discard()
+	}
 	return &Verifier{
 		clock:         clock,
 		jtis:          cfg.JTIs,
@@ -161,6 +193,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		replayLeew:    window,
 		nonces:        cfg.Nonces,
 		looseMethCase: cfg.AllowLooseMethodCase,
+		emitter:       emitter,
 	}, nil
 }
 
@@ -215,6 +248,8 @@ type VerifyResult struct {
 // [store.ConsumedJTIStore]. The function returns a typed error from
 // the [Err*] sentinel set on every failure path; the caller maps the
 // sentinel onto an HTTP status without inspecting the wrapped cause.
+//
+//nolint:gocognit // verify enumerates RFC 9449 §4 / §6 gates in flat shape; refactor would obscure spec mapping.
 func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, error) {
 	if in.URL == nil {
 		return nil, fmt.Errorf("%w: nil request URL", ErrProofMalformed)
@@ -226,6 +261,22 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 
 	if !v.compareMethod(parsed.claims.HTM, in.Method) {
 		return nil, ErrProofHTMMismatch
+	}
+	if v.looseMethCase && parsed.claims.HTM != in.Method {
+		// Loose-mode admission: the strict byte-equal compare
+		// would have rejected this proof. Emit the warn-level
+		// audit signal so SOC tooling can spot the bridge while
+		// the responsible RP library is fixed (B-DPoP §4.3 strict
+		// posture is the default; loose mode is opt-in).
+		v.emitter.Emit(ctx, audit.Event{
+			Name:    AuditEventLooseMethodCaseAdmitted,
+			Level:   audit.LevelWarn,
+			Message: "DPoP proof admitted with case-folded htm",
+			Extras: map[string]any{
+				"htm":            parsed.claims.HTM,
+				"request_method": in.Method,
+			},
+		})
 	}
 	requestURL := canonicalRequestURL(requestURLSource{URL: in.URL, Host: in.Host, TLS: in.TLS})
 	if !canonicalEqual(parsed.claims.HTU, requestURL) {

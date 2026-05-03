@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,10 +12,12 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -26,11 +27,13 @@ import (
 // Audit event names mirrored from the public op.AuditEvent catalogue.
 // internal/tokenendpoint cannot import op/, so the strings are
 // duplicated and TestAuditEvent_TokenMirror in op/audit_test.go pins
-// the values together.
+// the values together. auditClientAuthnFailure aliases the canonical
+// constant in [clientauthhttp] so the boundary helper and the local
+// emission sites cannot drift.
 const (
 	auditTokenIssued        = "token.issued"
 	auditTokenRefreshed     = "token.refreshed"
-	auditClientAuthnFailure = "client_authn.failure"
+	auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
 )
 
 // ttlBucketDefault / ttlBucketOffline name the two refresh-token TTL
@@ -46,27 +49,17 @@ const (
 // Default token TTLs. These match the existing internal grant defaults
 // and are duplicated here so a caller that constructs [Deps] without
 // filling the TTL fields gets a sensible response shape without having
-// to import the grant packages.
+// to import the grant packages. The refresh-token default is sourced
+// from [timex.RefreshTokenTTLDefault] so the value tracks the canonical
+// constant.
 const (
-	defaultAccessTokenTTL  = 5 * time.Minute
-	defaultIDTokenTTL      = 10 * time.Minute
-	defaultRefreshTokenTTL = 30 * 24 * time.Hour
+	defaultAccessTokenTTL = 5 * time.Minute
+	defaultIDTokenTTL     = 10 * time.Minute
 
 	// jtiByteLength is the entropy of the access-token "jti" claim. 16
 	// bytes (128 bits) is well above the birthday bound for any single
 	// deployment and matches the RFC 9068 §4 guidance.
 	jtiByteLength = 16
-
-	// scopeOpenID is duplicated here so the handler can decide whether
-	// id_tokens are issued without taking a dependency on
-	// [internal/userinfo].
-	scopeOpenID = "openid"
-
-	// scopeOfflineAccess is the OIDC Core 1.0 §11 token that gates
-	// strict-mode refresh-token issuance and selects the offline TTL
-	// bucket under the lax-mode default. Duplicated as a literal here
-	// for the same dependency-isolation reason as scopeOpenID.
-	scopeOfflineAccess = "offline_access"
 
 	// maxFormBytes caps the size of a token-endpoint request body. The
 	// endpoint accepts only the form-encoded shape RFC 6749 §3.2
@@ -133,7 +126,7 @@ type Deps struct {
 	IDTokenTTL time.Duration
 
 	// RefreshTokenTTL is the lifetime of issued refresh tokens. Zero or
-	// negative falls back to [defaultRefreshTokenTTL].
+	// negative falls back to [timex.RefreshTokenTTLDefault].
 	RefreshTokenTTL time.Duration
 
 	// RefreshTokenOfflineTTL is the lifetime applied to refresh tokens
@@ -376,7 +369,7 @@ func resolveDeps(d Deps) Deps {
 		d.IDTokenTTL = defaultIDTokenTTL
 	}
 	if d.RefreshTokenTTL <= 0 {
-		d.RefreshTokenTTL = defaultRefreshTokenTTL
+		d.RefreshTokenTTL = timex.RefreshTokenTTLDefault
 	}
 	if d.SecretVerifier == nil {
 		d.SecretVerifier = &clientauth.Argon2id{}
@@ -419,7 +412,7 @@ func (d *Deps) audit() audit.Emitter {
 // onto the default bucket regardless of scope so the audit signal
 // matches the actual lifetime applied at issuance.
 func ttlBucketFor(deps Deps, scope []string) string {
-	if deps.RefreshTokenOfflineTTL > 0 && scopeContainsOfflineAccess(scope) {
+	if deps.RefreshTokenOfflineTTL > 0 && oidcscope.ContainsOfflineAccess(scope) {
 		return ttlBucketOffline
 	}
 	return ttlBucketDefault
@@ -452,8 +445,9 @@ func writeSuccess(w http.ResponseWriter, body successResponse) {
 
 // authenticate resolves the client credentials carried by the request,
 // looks the client up in the registry, and verifies the credentials. The
-// boolean second return reports whether the request used HTTP Basic so
-// callers can decide whether the 401 path needs a WWW-Authenticate.
+// helper delegates to a per-request [clientauthhttp.Authenticator] so
+// the token endpoint shares an identical authentication contract with
+// the PAR (and any future) endpoint.
 //
 // The function emits its own response on every failure path so the
 // caller only checks the bool: false means "stop, response written".
@@ -467,123 +461,16 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	creds, err := clientauth.Parse(r)
-	usedBasic := r.Header.Get("Authorization") != ""
-	if err != nil {
-		emitClientAuthnFailure(ctx, deps, "", "", reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if creds.Method == clientauth.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
-		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), "private_key_jwt_disabled")
-		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
-		return nil, nil, false
-	}
-	client, err := lookupClient(ctx, deps.Clients, creds.ClientID)
-	if err != nil {
-		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
+	authenticator := clientauthhttp.Authenticator{
+		Clients:           deps.Clients,
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
 		AllowedMethods:    deps.AllowedClientAuthMethods,
-	}); err != nil {
-		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
+		Audit:             deps.audit(),
+		AuditEventName:    auditClientAuthnFailure,
+		AuditMessage:      "client authentication failed at token endpoint",
 	}
-	return client, creds, true
-}
-
-// emitClientAuthnFailure raises [audit.Event] for a pre-issuance client
-// authentication failure on /token. The event carries the attempted
-// client_id (when known), the parsed auth method (when known), and a
-// short reason code so SOC tooling can distinguish "wrong secret" from
-// "unknown client" probing patterns. The wire response stays at the
-// canonical RFC 6749 §5.2 "invalid_client" envelope so the audit stream
-// is the only place the failing client_id is surfaced.
-func emitClientAuthnFailure(ctx context.Context, deps Deps, clientID, method, reason string) {
-	extras := map[string]any{"reason": reason}
-	if method != "" {
-		extras["method"] = method
-	}
-	deps.audit().Emit(ctx, audit.Event{
-		Name:     auditClientAuthnFailure,
-		Level:    audit.LevelWarn,
-		Message:  "client authentication failed at token endpoint",
-		ClientID: clientID,
-		Extras:   extras,
-	})
-}
-
-// reasonForAuthnError maps a clientauth sentinel onto the short reason
-// code emitted on the audit event. The codes match the clientauth error
-// names so a reader can grep from an audit line back to the failing
-// branch in the verifier.
-func reasonForAuthnError(err error) string {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		return "no_credentials"
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials):
-		return "ambiguous_credentials"
-	case errors.Is(err, clientauth.ErrUnsupportedMethod):
-		return "unsupported_method"
-	case errors.Is(err, clientauth.ErrClientMismatch):
-		return "client_mismatch"
-	case errors.Is(err, clientauth.ErrCredentialsInvalid):
-		return "invalid_client_credentials"
-	case errors.Is(err, clientauth.ErrAssertionMalformed):
-		return "assertion_malformed"
-	case errors.Is(err, clientauth.ErrAssertionReplayed):
-		return "assertion_replayed"
-	default:
-		return "server_error"
-	}
-}
-
-// lookupClient resolves the registered client for id, mapping
-// [store.ErrNotFound] to [clientauth.ErrCredentialsInvalid] so the caller
-// cannot tell "unknown client" apart from "wrong secret" through the
-// error surface.
-func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*store.Client, error) {
-	if id == "" {
-		return nil, clientauth.ErrCredentialsInvalid
-	}
-	c, err := clients.GetClient(ctx, id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, clientauth.ErrCredentialsInvalid
-		}
-		return nil, err
-	}
-	return c, nil
-}
-
-// writeAuthnError maps an authentication error onto the wire response.
-// The mapping is the canonical RFC 6749 §5.2 table augmented by this
-// library's sentinel discrimination.
-func writeAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		// No credentials at all: the request reached the token endpoint
-		// without any way to authenticate a confidential client and
-		// without claiming a public-client identity. Surface 401 with a
-		// challenge so RP libraries retry intelligently.
-		writeInvalidClient(w, usedBasic, "client authentication required")
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials),
-		errors.Is(err, clientauth.ErrUnsupportedMethod):
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
-			"client authentication parameters are malformed")
-	case errors.Is(err, clientauth.ErrClientMismatch),
-		errors.Is(err, clientauth.ErrCredentialsInvalid),
-		errors.Is(err, clientauth.ErrAssertionMalformed),
-		errors.Is(err, clientauth.ErrAssertionReplayed):
-		writeInvalidClient(w, usedBasic, "client authentication failed")
-	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-	}
+	return authenticator.Authenticate(ctx, w, r)
 }
 
 // isFormContent reports whether ct is application/x-www-form-urlencoded.
@@ -599,45 +486,20 @@ func isFormContent(ct string) bool {
 	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
 }
 
-// scopeContainsOpenID reports whether scopes lists "openid". The check
-// is case-sensitive per OIDC Core 1.0 §3.1.2.1: scope tokens are not
-// normalised by the server.
-func scopeContainsOpenID(scopes []string) bool {
-	for _, s := range scopes {
-		if s == scopeOpenID {
-			return true
-		}
-	}
-	return false
-}
-
 // clientPermitsRefresh reports whether the registered client may
 // receive refresh tokens. The library issues them only when
 // "refresh_token" is in the client's GrantTypes and the granted scope
 // carries both "openid" and "offline_access", matching OIDC Core 1.0
 // §11 and the project design docs.
 func clientPermitsRefresh(c *store.Client, scope []string) bool {
-	if !scopeContainsOpenID(scope) {
+	if !oidcscope.ContainsOpenID(scope) {
 		return false
 	}
-	if !scopeContainsOfflineAccess(scope) {
+	if !oidcscope.ContainsOfflineAccess(scope) {
 		return false
 	}
 	for _, g := range c.GrantTypes {
 		if g == "refresh_token" {
-			return true
-		}
-	}
-	return false
-}
-
-// scopeContainsOfflineAccess reports whether scope contains the
-// OIDC Core 1.0 §11 "offline_access" token. The match is byte-equal
-// per OIDC Core 1.0 §3.1.2.1: scope tokens are case-sensitive and
-// the server does not normalise.
-func scopeContainsOfflineAccess(scopes []string) bool {
-	for _, s := range scopes {
-		if s == scopeOfflineAccess {
 			return true
 		}
 	}
@@ -649,9 +511,9 @@ func scopeContainsOfflineAccess(scopes []string) bool {
 // applies when the granted scope contains "offline_access" AND the
 // embedder configured a non-zero RefreshTokenOfflineTTL. Otherwise
 // the handler falls back to RefreshTokenTTL (which itself falls back
-// to defaultRefreshTokenTTL via resolveDeps).
+// to [timex.RefreshTokenTTLDefault] via resolveDeps).
 func pickRefreshTokenTTL(deps Deps, scope []string) time.Duration {
-	if deps.RefreshTokenOfflineTTL > 0 && scopeContainsOfflineAccess(scope) {
+	if deps.RefreshTokenOfflineTTL > 0 && oidcscope.ContainsOfflineAccess(scope) {
 		return deps.RefreshTokenOfflineTTL
 	}
 	return deps.RefreshTokenTTL

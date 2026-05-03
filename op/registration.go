@@ -16,12 +16,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// defaultIATTTL is the validity window applied to an Initial Access
-// Token when [RegistrationOption.IATTTL] is left at zero. Twenty-four
-// hours is short enough that an exfiltrated IAT cannot be replayed
-// for long, while still spanning a typical onboarding window.
-const defaultIATTTL = 24 * time.Hour
-
 // defaultIATUses is the consumption ceiling applied to an Initial
 // Access Token when [RegistrationOption.IATUses] is left at zero.
 // Single-use is the production-grade baseline; operators who run

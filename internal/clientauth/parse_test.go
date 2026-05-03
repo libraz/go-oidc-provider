@@ -153,3 +153,62 @@ func TestParse_BasicAndBodyClientIDMismatch(t *testing.T) {
 		t.Errorf("err=%v want ErrClientMismatch", err)
 	}
 }
+
+// TestParse_AssertionWithoutClientID_OversizedAssertionRejected pins
+// H-A5: when client_id is omitted from the form and the parser falls
+// back to the unverified assertion lookup, an oversized assertion
+// (typical signed JWTs are 1-4 KB; 32 KiB is far past the 8 KiB
+// hard cap) MUST NOT be parsed for its unverified body. The cap
+// fires before any base64 decode / json.Unmarshal so a malicious
+// client cannot force the parser to allocate megabytes of buffer
+// before the assertion verifier ever runs.
+//
+// The visible signal is that the fallback lookup leaves ClientID
+// empty (the parser does not surface ErrAssertionMalformed up the
+// stack — the assertion verifier rejects the request later with
+// invalid_client). The contract this test pins is that the cap path
+// MUST NOT panic / OOM and MUST NOT silently extract a client_id
+// from the malformed payload.
+func TestParse_AssertionWithoutClientID_OversizedAssertionRejected(t *testing.T) {
+	t.Parallel()
+
+	// 32 KiB body -> a base64-encoded JWT comfortably above the
+	// 8 KiB hard cap. The shape (header.body.signature) is valid
+	// per the JWT compact form so the early-exit is purely the
+	// length check.
+	bigPayload := strings.Repeat("a", 32*1024)
+	form := url.Values{}
+	form.Set("client_assertion_type", clientauth.AssertionType)
+	form.Set("client_assertion", "eyJhbGciOiJFUzI1NiJ9."+bigPayload+".sig")
+	req := newPostRequest(t, form, "", "")
+	creds, err := clientauth.Parse(req)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if creds.ClientID != "" {
+		t.Errorf("ClientID=%q want empty (oversized assertion must not yield a derived id)", creds.ClientID)
+	}
+}
+
+// TestParse_AssertionWithoutClientID_NormalSizedAssertionParsed pins
+// the legitimate companion behaviour: an assertion within the cap
+// whose unverified body carries a recoverable "iss" claim still
+// derives the client id so FAPI 2.0 / OAuth 2.1 deployments that
+// drop the redundant client_id parameter continue to work.
+func TestParse_AssertionWithoutClientID_NormalSizedAssertionParsed(t *testing.T) {
+	t.Parallel()
+
+	// Construct a tiny assertion whose body decodes to {"iss":"client-1"}.
+	// "eyJpc3MiOiJjbGllbnQtMSJ9" is base64url-no-pad of {"iss":"client-1"}.
+	form := url.Values{}
+	form.Set("client_assertion_type", clientauth.AssertionType)
+	form.Set("client_assertion", "eyJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJjbGllbnQtMSJ9.sig")
+	req := newPostRequest(t, form, "", "")
+	creds, err := clientauth.Parse(req)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if creds.ClientID != "client-1" {
+		t.Errorf("ClientID=%q want %q (assertion-derived id was lost)", creds.ClientID, "client-1")
+	}
+}

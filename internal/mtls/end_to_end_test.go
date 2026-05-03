@@ -164,6 +164,12 @@ func completeConsentIfPromptedMTLS(t testing.TB, client *http.Client, interactio
 	if stateRef == "" {
 		t.Fatal("consent prompt missing state_ref")
 	}
+	for _, c := range prior.Cookies() {
+		if c.Name == "__Host-oidc_csrf" {
+			csrf = c.Value
+			break
+		}
+	}
 	approved := approvedScopesFromPromptMTLS(env)
 	return testkit.PostConsentApproval(t, client, interactionURL, origin, csrf, stateRef, approved)
 }

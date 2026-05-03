@@ -610,7 +610,15 @@ func TestLoginFlowExternalStepFactorContribution(t *testing.T) {
 			return interaction.Step{Prompt: &interaction.Prompt{Type: "auth.myorg.hwk"}}, nil
 		},
 		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
-			return interaction.Step{Result: &interaction.Result{Subject: "user-9", AuthTime: fakeNow()}}, nil
+			// AAL3 authenticators MUST report UserVerified=true; the
+			// orchestrator's M-AUTHN-3 gate (guardAAL3RequiresUV)
+			// rejects AAL3 factors that did not perform UV per
+			// NIST SP 800-63B.
+			return interaction.Step{Result: &interaction.Result{
+				Subject:      "user-9",
+				AuthTime:     fakeNow(),
+				UserVerified: true,
+			}}, nil
 		},
 	}
 	flow, _ := authn.CompileLoginFlow(authn.LoginFlowSpec{

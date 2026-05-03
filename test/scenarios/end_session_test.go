@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -64,15 +65,18 @@ func newESProvider(t *testing.T) (*testkit.Provider, *store.Client) {
 
 // mintESIDToken returns a freshly signed id_token-shaped JWS the
 // /end_session handler will accept. mutate, when non-nil, can override
-// any claim before serialisation.
+// any claim before serialisation. The default iat / exp are anchored
+// to the current wall clock so the handler's iat-age soft cap (30 days
+// per [internal/endsession.maxIDTokenHintAge]) admits the token.
 func mintESIDToken(t *testing.T, p *testkit.Provider, mutate func(*esIDTokenClaims)) string {
 	t.Helper()
+	now := time.Now().Unix()
 	c := esIDTokenClaims{
 		Iss: p.Issuer,
 		Sub: esSubject,
 		Aud: esClientID,
-		Iat: 1700000000,
-		Exp: 1700003600,
+		Iat: now - 60,
+		Exp: now + 3600,
 	}
 	if mutate != nil {
 		mutate(&c)
@@ -160,9 +164,11 @@ func TestScenario_ES_002_ConfirmationFormRenderedOnPostWithoutSession(t *testing
 
 // TestScenario_ES_003_ExpiredIDTokenHintAcceptedForLogout pins the
 // rule that v1.0 admits an id_token_hint with a past exp. The handler
-// (internal/endsession/idtoken.go) deliberately does not enforce exp /
-// iat: the hint exists to identify the requesting client, and OIDC
-// RP-Initiated Logout 1.0 §2 lets a stale tab log out.
+// (internal/endsession/idtoken.go) deliberately does not enforce exp:
+// the hint exists to identify the requesting client, and OIDC
+// RP-Initiated Logout 1.0 §2 lets a stale tab log out. The handler
+// DOES enforce a soft iat-age cap so we keep iat within the 30-day
+// window while pushing exp deep into the past.
 //
 // Spec: OIDC RP-Initiated Logout 1.0 §2.
 func TestScenario_ES_003_ExpiredIDTokenHintAcceptedForLogout(t *testing.T) {
@@ -170,8 +176,7 @@ func TestScenario_ES_003_ExpiredIDTokenHintAcceptedForLogout(t *testing.T) {
 
 	tk, _ := newESProvider(t)
 	hint := mintESIDToken(t, tk, func(c *esIDTokenClaims) {
-		c.Iat = 1600000000
-		c.Exp = 1600000060 // ~2020, deeply in the past
+		c.Exp = time.Now().Unix() - 60 // expired by a minute
 	})
 
 	resp := esGet(t, tk, url.Values{

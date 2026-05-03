@@ -53,4 +53,10 @@ const (
 	// the failure modes intentionally so the response is not an
 	// oracle for the sub-cause.
 	descCSRFRejected = "logout request rejected"
+
+	// descRequestTooLarge is rendered when the GET branch's URL query
+	// string exceeds [maxQueryBytes] or the "state" parameter exceeds
+	// [maxStateBytes]. The single message conflates both bounds so
+	// the response is not an oracle for which limit fired.
+	descRequestTooLarge = "logout request exceeds permitted size"
 )

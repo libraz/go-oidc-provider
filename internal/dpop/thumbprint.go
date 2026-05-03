@@ -4,20 +4,25 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 	"fmt"
 
 	josev4 "github.com/go-jose/go-jose/v4"
+
+	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
 // minRSAKeyBits is the minimum modulus size accepted on a DPoP proof's
 // RSA JWK. RFC 7518 §3.3 already mandates 2048 for RSA-family JWS algs
 // and FAPI 1.0 Advanced §8.6 reiterates the floor; 2048 matches both
 // without forcing operators onto 3072+.
-const minRSAKeyBits = 2048
+//
+// The constant is kept distinct from [jose.MinRSAKeyBits] so a future
+// FAPI-2 tightening on the DPoP path does not have to ripple through
+// the rest of the codebase, but its value MUST stay >= [jose.MinRSAKeyBits].
+const minRSAKeyBits = jose.MinRSAKeyBits
 
 // Thumbprint returns the RFC 7638 SHA-256 JWK thumbprint of jwk encoded
 // as base64url without padding. The value is what the OP places in the
@@ -55,19 +60,32 @@ func Thumbprint(jwk *josev4.JSONWebKey) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(sum), nil
 }
 
-// assertSupportedKeyType narrows go-jose's broader acceptance set to the
-// shapes the DPoP path supports: ECDSA P-256, Ed25519, and RSA ≥
-// [minRSAKeyBits]. The RSA branch tracks the PS256 entry in
-// [allowedProofAlgs] — admitting an RSA key while the alg gate still
-// allowed only EC/Ed would let a client bind a token to a key it could
-// never prove possession of through this verifier.
+// assertSupportedKeyType narrows the canonical [jose.KeyShape] matrix
+// to the shapes the DPoP path supports: ECDSA P-256, Ed25519, and RSA ≥
+// [minRSAKeyBits]. RFC 9449 §3 limits proof signatures to asymmetric
+// JWS algorithms "deemed secure"; FAPI 2.0 narrows that to ES256 / EdDSA
+// while RFC 9449 itself permits PS256 — so the wrapper accepts the RSA
+// shape (paired with PS256 in [allowedProofAlgs]) but rejects ES384 /
+// ES512 because the project's DPoP allow-list has no matching alg
+// entry. Admitting an RSA key while the alg gate still allowed only
+// EC/Ed would let a client bind a token to a key it could never prove
+// possession of through this verifier.
+//
+// The narrower acceptance is layered on top of [jose.KeyShape] (which
+// would otherwise admit ES384 / ES512); the disallowed curves are
+// rejected with an explicit dpop-prefixed error so log output stays
+// stable.
 func assertSupportedKeyType(jwk *josev4.JSONWebKey) error {
 	switch pub := jwk.Key.(type) {
 	case *ecdsa.PublicKey:
 		if pub == nil || pub.Curve == nil {
 			return errors.New("dpop: incomplete ECDSA public key")
 		}
-		if pub.Curve != elliptic.P256() {
+		alg, _, _, ok := jose.KeyShape(pub)
+		if !ok {
+			return fmt.Errorf("dpop: unsupported curve %s", pub.Curve.Params().Name)
+		}
+		if alg != "ES256" {
 			return fmt.Errorf("dpop: unsupported curve %s", pub.Curve.Params().Name)
 		}
 		return nil
@@ -80,8 +98,8 @@ func assertSupportedKeyType(jwk *josev4.JSONWebKey) error {
 		if pub == nil || pub.N == nil {
 			return errors.New("dpop: incomplete RSA public key")
 		}
-		if bits := pub.N.BitLen(); bits < minRSAKeyBits {
-			return fmt.Errorf("dpop: RSA modulus is %d bits (minimum %d)", bits, minRSAKeyBits)
+		if _, _, _, ok := jose.KeyShape(pub); !ok {
+			return fmt.Errorf("dpop: RSA modulus is %d bits (minimum %d)", pub.N.BitLen(), minRSAKeyBits)
 		}
 		return nil
 	default:

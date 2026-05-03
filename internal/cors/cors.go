@@ -5,14 +5,26 @@
 // The package emits headers only; it does not handle business logic and
 // never short-circuits a non-preflight request. Callers wrap their handlers
 // in [Strict.Handler] (or [Public.Handler]) and continue serving as normal.
+//
+// Wrap order: callers MUST place [Strict.Handler] / [Public.Handler]
+// outermost on every endpoint that opts into CORS. The strict
+// preflight branch answers an OPTIONS+ACRM probe with 204 directly
+// and never calls into next, so any audit / rate-limit / metrics
+// middleware mounted *inside* the CORS wrapper would silently miss
+// the request. The H-C6 hardening pairs this constraint with the
+// `cors.preflight.allowed` audit event ([op.AuditCORSPreflightAllowed])
+// so SOC tooling sees the short-circuit even when the embedder's
+// middleware order is wrong.
 package cors
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 )
 
@@ -47,14 +59,23 @@ var allowedHeadersSet = func() map[string]struct{} {
 // answered with 403 (for preflights) or no CORS headers at all (for actual
 // requests, which the browser then blocks).
 type Strict struct {
-	allow *csrf.Allowlist
+	allow   *csrf.Allowlist
+	emitter audit.Emitter
 }
 
 // NewStrict builds a [Strict] handler-builder from an allowlist. The
 // allowlist may be nil to mean "deny everything cross-origin", which is the
 // safe default when no SPA client is registered.
-func NewStrict(allow *csrf.Allowlist) *Strict {
-	return &Strict{allow: allow}
+//
+// emitter is the audit sink the strict preflight short-circuit fires
+// through ([op.AuditCORSPreflightAllowed]). A nil emitter is replaced
+// with [audit.Discard] so the wrapper still works in unit tests that
+// do not assert on audit output.
+func NewStrict(allow *csrf.Allowlist, emitter audit.Emitter) *Strict {
+	if emitter == nil {
+		emitter = audit.Discard()
+	}
+	return &Strict{allow: allow, emitter: emitter}
 }
 
 // AllowedMethods is the static list of methods the OP advertises on a
@@ -119,6 +140,11 @@ func (s *Strict) Handler(next http.Handler) http.Handler {
 // not accept, the unsupported entry is silently dropped from the response so
 // the browser's CORS check fails for that specific header without leaking a
 // list of known-good names.
+//
+// On accept the function fires [op.AuditCORSPreflightAllowed] through
+// the configured emitter so SOC tooling sees the short-circuit even
+// when the embedder's outer middleware (rate-limit, audit) is mounted
+// inside the CORS wrapper and would otherwise miss the request.
 func (s *Strict) servePreflight(w http.ResponseWriter, r *http.Request, origin string, allowed bool) {
 	if !allowed {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
@@ -131,6 +157,26 @@ func (s *Strict) servePreflight(w http.ResponseWriter, r *http.Request, origin s
 	h.Set("Access-Control-Allow-Headers", intersectAllowedHeaders(r.Header.Get("Access-Control-Request-Headers")))
 	h.Set("Access-Control-Max-Age", strconv.Itoa(int(preflightMaxAge.Seconds())))
 	w.WriteHeader(http.StatusNoContent)
+	s.emitter.Emit(emitContext(r), audit.Event{
+		Name:    "cors.preflight.allowed",
+		Level:   audit.LevelInfo,
+		Message: "strict CORS preflight admitted",
+		Extras: map[string]any{
+			"origin":         origin,
+			"request_method": r.Header.Get("Access-Control-Request-Method"),
+			"path":           r.URL.Path,
+		},
+	})
+}
+
+// emitContext returns the request's context, falling back to a fresh
+// [context.Background] when the request is constructed without one
+// (defensive — production paths always carry a context).
+func emitContext(r *http.Request) context.Context {
+	if r != nil && r.Context() != nil {
+		return r.Context()
+	}
+	return context.Background()
 }
 
 // intersectAllowedHeaders returns the subset of requested headers the OP

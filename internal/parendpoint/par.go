@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -274,54 +274,15 @@ func cloneValues(in url.Values) url.Values {
 }
 
 // writeDPoPError translates a [dpop.Err*] sentinel onto the wire form.
-// RFC 9449 §7 prescribes "invalid_dpop_proof" but the PAR endpoint
-// reuses the existing "invalid_request" envelope for parity with the
-// token endpoint and for OFCS expectations under PAR-2.3. The nonce
-// sentinels ([dpop.ErrProofNonceMissing] / [dpop.ErrProofNonceInvalid])
-// take a separate code: §8 defines "use_dpop_nonce" specifically so
-// the client knows to retry with the fresh value carried in the
-// companion "DPoP-Nonce" response header.
+// The package-local helper is a thin wrapper over [dpop.WriteError]
+// so the token / PAR / future endpoints share an identical
+// boundary mapping; see the godoc on [dpop.WriteError] for the wire
+// taxonomy. The PAR-specific default branch ("DPoP proof verification
+// failed") is intentionally collapsed onto the shared 500 server_error
+// fallback — an unknown sentinel is a programmer bug, not a wire
+// condition the client can act on.
 func writeDPoPError(w http.ResponseWriter, deps Deps, err error) {
-	if dpop.IsNonceError(err) {
-		writeUseDPoPNonce(w, deps)
-		return
-	}
-	switch {
-	case errors.Is(err, dpop.ErrProofMalformed),
-		errors.Is(err, dpop.ErrProofMissingJTI):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof malformed")
-	case errors.Is(err, dpop.ErrProofSignature):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof signature invalid")
-	case errors.Is(err, dpop.ErrProofIatWindow):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof iat outside acceptable window")
-	case errors.Is(err, dpop.ErrProofReplayed):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof replayed")
-	case errors.Is(err, dpop.ErrProofHTMMismatch),
-		errors.Is(err, dpop.ErrProofHTUMismatch):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof does not bind to this request")
-	default:
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof verification failed")
-	}
-}
-
-// writeUseDPoPNonce emits the RFC 9449 §8 nonce challenge: a 400
-// JSON envelope with error="use_dpop_nonce" plus a "DPoP-Nonce"
-// response header carrying a fresh value the client should embed in
-// the next proof's "nonce" claim. A nil [Deps.DPoPNonces] omits the
-// header (the issuer is offline) but still emits the JSON body so a
-// debugger can see the gate fired; the client then has no nonce to
-// retry with, which is the most truthful signal the server can give
-// in that misconfiguration. Mirrors the token-endpoint helper so /par
-// and /token issue nonces interchangeably from the same rotation
-// pipeline.
-func writeUseDPoPNonce(w http.ResponseWriter, deps Deps) {
-	if deps.DPoPNonces != nil {
-		if nonce := deps.DPoPNonces.IssueNonce(); nonce != "" {
-			w.Header().Set("DPoP-Nonce", nonce)
-		}
-	}
-	writeError(w, http.StatusBadRequest, errUseDPoPNonce,
-		"DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header")
+	dpop.WriteError(context.Background(), w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
 }
 
 // stripAuthFields returns a copy of in with the credential-bearing keys
@@ -463,9 +424,9 @@ func writeSuccess(w http.ResponseWriter, body successResponse) {
 }
 
 // authenticate resolves the client credentials carried by the request,
-// looks the client up in the registry, and verifies the credentials. It
-// mirrors the token endpoint's helper so the two surfaces share an
-// identical authentication contract.
+// looks the client up in the registry, and verifies the credentials. The
+// helper delegates to a per-request [clientauthhttp.Authenticator] so
+// /par and /token share an identical authentication contract.
 //
 // The function emits its own response on every failure path so the caller
 // only checks the bool: false means "stop, response written". Each
@@ -479,118 +440,16 @@ func authenticate(
 	r *http.Request,
 	deps Deps,
 ) (*store.Client, *clientauth.Credentials, bool) {
-	creds, err := clientauth.Parse(r)
-	usedBasic := r.Header.Get("Authorization") != ""
-	if err != nil {
-		emitClientAuthnFailure(ctx, deps, "", "", reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if creds.Method == clientauth.MethodPrivateKeyJWT && deps.AssertionVerifier == nil {
-		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), "private_key_jwt_disabled")
-		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
-		return nil, nil, false
-	}
-	client, err := lookupClient(ctx, deps.Clients, creds.ClientID)
-	if err != nil {
-		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
+	authenticator := clientauthhttp.Authenticator{
+		Clients:           deps.Clients,
 		SecretVerifier:    deps.SecretVerifier,
 		AssertionVerifier: deps.AssertionVerifier,
 		AllowedMethods:    deps.AllowedClientAuthMethods,
-	}); err != nil {
-		emitClientAuthnFailure(ctx, deps, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
+		Audit:             deps.auditEmitter(),
+		AuditEventName:    auditClientAuthnFailure,
+		AuditMessage:      "client authentication failed at PAR endpoint",
 	}
-	return client, creds, true
-}
-
-// emitClientAuthnFailure raises [audit.Event] for a pre-issuance client
-// authentication failure on /par. Mirrors the token endpoint's emitter:
-// the wire response stays on the canonical RFC 6749 §5.2
-// "invalid_client" envelope, so the audit stream is the only place the
-// failing client_id and a triage-level reason code surface.
-func emitClientAuthnFailure(ctx context.Context, deps Deps, clientID, method, reason string) {
-	extras := map[string]any{"reason": reason}
-	if method != "" {
-		extras["method"] = method
-	}
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:     auditClientAuthnFailure,
-		Level:    audit.LevelWarn,
-		Message:  "client authentication failed at PAR endpoint",
-		ClientID: clientID,
-		Extras:   extras,
-	})
-}
-
-// reasonForAuthnError maps a clientauth sentinel onto the short reason
-// code emitted on the audit event. The codes match the clientauth error
-// names so a reader can grep from an audit line back to the failing
-// branch in the verifier; mirrors the helper in
-// [internal/tokenendpoint] so the two surfaces emit identical reasons.
-func reasonForAuthnError(err error) string {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		return "no_credentials"
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials):
-		return "ambiguous_credentials"
-	case errors.Is(err, clientauth.ErrUnsupportedMethod):
-		return "unsupported_method"
-	case errors.Is(err, clientauth.ErrClientMismatch):
-		return "client_mismatch"
-	case errors.Is(err, clientauth.ErrCredentialsInvalid):
-		return "invalid_client_credentials"
-	case errors.Is(err, clientauth.ErrAssertionMalformed):
-		return "assertion_malformed"
-	case errors.Is(err, clientauth.ErrAssertionReplayed):
-		return "assertion_replayed"
-	default:
-		return "server_error"
-	}
-}
-
-// lookupClient resolves the registered client for id, mapping
-// [store.ErrNotFound] to [clientauth.ErrCredentialsInvalid] so the caller
-// cannot tell "unknown client" apart from "wrong secret" through the
-// error surface.
-func lookupClient(ctx context.Context, clients store.ClientStore, id string) (*store.Client, error) {
-	if id == "" {
-		return nil, clientauth.ErrCredentialsInvalid
-	}
-	c, err := clients.GetClient(ctx, id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, clientauth.ErrCredentialsInvalid
-		}
-		return nil, err
-	}
-	return c, nil
-}
-
-// writeAuthnError maps an authentication error onto the wire response.
-// The mapping is the canonical RFC 6749 §5.2 table augmented by this
-// library's sentinel discrimination, identical to the token endpoint.
-func writeAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		writeInvalidClient(w, usedBasic, "client authentication required")
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials),
-		errors.Is(err, clientauth.ErrUnsupportedMethod):
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
-			"client authentication parameters are malformed")
-	case errors.Is(err, clientauth.ErrClientMismatch),
-		errors.Is(err, clientauth.ErrCredentialsInvalid),
-		errors.Is(err, clientauth.ErrAssertionMalformed),
-		errors.Is(err, clientauth.ErrAssertionReplayed):
-		writeInvalidClient(w, usedBasic, "client authentication failed")
-	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-	}
+	return authenticator.Authenticate(ctx, w, r)
 }
 
 // newRequestURI returns a freshly generated PAR URI. The body is 32 bytes

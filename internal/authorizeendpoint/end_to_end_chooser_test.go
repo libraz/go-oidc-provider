@@ -529,6 +529,12 @@ func postConsentWithSessionCookie(
 	if stateRef == "" {
 		tb.Fatal("consent prompt missing state_ref")
 	}
+	// Per-step CSRF scope binding rotates the cookie at each step
+	// boundary, so the auth.* token does not verify against the
+	// consent.* step. Pull the rotated cookie off the prior response.
+	if rotated := findCookie(prior.Cookies(), cookie.CSRFProfile.Name); rotated != nil {
+		csrfCookie = rotated
+	}
 	approved := approvedScopesFromPrompt(env)
 	body := map[string]any{
 		"state_ref": stateRef,

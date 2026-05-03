@@ -175,6 +175,18 @@ type Result struct {
 	// authorization-code minting. Authenticator factors leave it
 	// nil.
 	Scope []string
+
+	// UserVerified is the WebAuthn-equivalent UV bit observed on the
+	// most recent assertion. The passkey authenticator populates it
+	// from the parsed credential's flags; every other authenticator
+	// leaves it false. The orchestrator reads it on the way to
+	// [authn.Factor.UserVerified] so the RFC 8176 "hwk" / "swk"
+	// choice in [authn.Factor.AMRValue] reflects the assertion's
+	// real UV bit rather than a process-local cache (H-E4). The
+	// field is request-scoped: it is meaningful only on the Step
+	// that produces it and is dropped once the orchestrator records
+	// the [authn.Factor].
+	UserVerified bool
 }
 
 // FormSubmission is the SPA's reply to a [Prompt]. The orchestrator

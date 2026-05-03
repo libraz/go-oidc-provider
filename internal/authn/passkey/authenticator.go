@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -63,24 +62,41 @@ var ErrSessionMissing = errors.New("passkey: session scratch is missing")
 // never reaches the SPA, the cookie, or any persistent store. Callers
 // MUST construct the adapter through [NewAuthenticator]; the zero
 // value is not usable.
+//
+// The UV bit observed on a successful assertion rides
+// [interaction.Result.UserVerified] back to the orchestrator (H-E4):
+// the adapter does NOT keep an in-process cache, so a multi-replica
+// deployment without sticky sessions stays consistent — the bit
+// travels with the request that produced it.
 type Authenticator struct {
 	verifier *Verifier
 	store    store.PasskeyStore
+	driver   CloneDetectionHandler
+}
 
-	// uvCache records the UserVerified bit observed on the most
-	// recent successful Continue, keyed by subject. The orchestrator
-	// reads it through [authn.UserVerificationReporter.LastUserVerified]
-	// at appendFactor time so the chain emits "hwk" vs "swk" based on
-	// the real assertion's UV bit (M-AUTHN-7) rather than a
-	// hard-coded mapping driven by [Authenticator.AMR].
-	//
-	// Entries persist across attempts within the same process; this
-	// is acceptable because the cache is read once per Continue and
-	// always overwritten by a fresh assertion. The map is bounded by
-	// the user population that authenticates against this OP
-	// instance — which is the same bound as every other per-subject
-	// cache embedders accept.
-	uvCache sync.Map // map[string]bool
+// CloneDetectionHandler is the optional embedder hook the adapter
+// invokes when the WebAuthn library reports a credential clone
+// (H-E5). Implementations decide the policy: disable the credential,
+// page the SOC, force a re-enrolment. The adapter calls the handler
+// with the rotated [Credential] (CloneWarning bit set, original sign
+// counter preserved) so the embedder can correlate the credential
+// against its account-management UI.
+//
+// The hook is best-effort: a non-nil error is logged through the
+// orchestrator's audit pipeline but does not change the response the
+// SPA observes — [ErrCloneDetected] still bubbles up through
+// Continue. Implementations MUST be safe for concurrent use.
+type CloneDetectionHandler interface {
+	HandleCloneDetected(ctx context.Context, subject string, cred *Credential) error
+}
+
+// CloneDetectionHandlerFunc adapts a plain function to the
+// [CloneDetectionHandler] interface.
+type CloneDetectionHandlerFunc func(ctx context.Context, subject string, cred *Credential) error
+
+// HandleCloneDetected implements [CloneDetectionHandler].
+func (f CloneDetectionHandlerFunc) HandleCloneDetected(ctx context.Context, subject string, cred *Credential) error {
+	return f(ctx, subject, cred)
 }
 
 // ErrVerifierRequired / ErrStoreRequired are returned by
@@ -106,6 +122,19 @@ func NewAuthenticator(verifier *Verifier, passkeyStore store.PasskeyStore) (*Aut
 		return nil, ErrStoreRequired
 	}
 	return &Authenticator{verifier: verifier, store: passkeyStore}, nil
+}
+
+// WithCloneDetectionHandler returns a copy of the adapter that calls
+// h every time the WebAuthn library raises [ErrCloneDetected] (H-E5).
+// The hook is invoked with the persisted Credential (CloneWarning bit
+// set, sign counter preserved from the prior record) so the embedder
+// can disable the affected credential in its account-management UI.
+// The hook runs after the credential is persisted; a hook error does
+// not change the response the SPA observes.
+func (a *Authenticator) WithCloneDetectionHandler(h CloneDetectionHandler) *Authenticator {
+	cp := *a
+	cp.driver = h
+	return &cp
 }
 
 // Type implements [authn.Authenticator]. Always returns [authn.FactorPasskey].
@@ -235,42 +264,39 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 		if perr := a.persistCredential(ctx, subject, cred); perr != nil {
 			return interaction.Step{}, perr
 		}
-		// Record the UV bit so the orchestrator's appendFactor path
-		// can emit "hwk" vs "swk" from the real assertion rather
-		// than from the static AMR string (M-AUTHN-7).
+		// Stamp the UV bit on the Result so the orchestrator's
+		// appendFactor can pick the RFC 8176 "hwk" vs "swk" token
+		// from the assertion's real flag rather than a process-local
+		// cache (H-E4). The bit is request-scoped: it travels with
+		// the Step and is dropped once the Factor has been recorded.
 		uv := false
 		if cred != nil {
 			uv = cred.Flags.UserVerified
 		}
-		a.uvCache.Store(subject, uv)
-		return interaction.Step{Result: &interaction.Result{Subject: subject, AuthTime: authTime}}, nil
+		return interaction.Step{Result: &interaction.Result{
+			Subject:      subject,
+			AuthTime:     authTime,
+			UserVerified: uv,
+		}}, nil
 	case errors.Is(ferr, ErrCloneDetected):
 		if cred != nil {
 			if perr := a.persistCredential(ctx, subject, cred); perr != nil {
 				return interaction.Step{}, perr
+			}
+			// Notify the embedder so it can disable the affected
+			// credential (H-E5). The hook is best-effort: a hook
+			// error does not change the response the SPA sees, but
+			// it MUST NOT stop the [ErrCloneDetected] surfacing —
+			// embedders that want to observe failures should log
+			// internally.
+			if a.driver != nil {
+				_ = a.driver.HandleCloneDetected(ctx, subject, cred)
 			}
 		}
 		return interaction.Step{}, ferr
 	default:
 		return interaction.Step{}, ferr
 	}
-}
-
-// LastUserVerified implements [authn.UserVerificationReporter]. The
-// orchestrator consults the value at appendFactor time so the
-// resulting [authn.Factor.UserVerified] reflects the assertion's real
-// UV bit (M-AUTHN-7), driving the RFC 8176 "hwk" vs "swk" choice in
-// [authn.Factor.AMRValue]. Returns false when no successful Continue
-// has run for subject in this process — the orchestrator's amr_history
-// then falls back to "swk" (presence-only), which is the conservative
-// default.
-func (a *Authenticator) LastUserVerified(subject string) bool {
-	v, ok := a.uvCache.Load(subject)
-	if !ok {
-		return false
-	}
-	uv, _ := v.(bool)
-	return uv
 }
 
 // loadCredentials reads the subject's registered passkeys and projects

@@ -20,6 +20,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op"
@@ -585,6 +586,161 @@ func TestAuthorize_ScopeAllowedClients_RedirectsInvalidScope(t *testing.T) {
 	// otherwise the OP misclassified the error as pre-redirect-URI.
 	if loc.Host != "rp.example.com" {
 		t.Errorf("redirect host=%q want rp.example.com", loc.Host)
+	}
+}
+
+// TestAuthorize_TrustedProxy_HonoursXFFForRemoteIP pins the H-C5
+// hardening: when [Deps.ProxyTrust] is configured and the request
+// arrives from a CIDR inside the trust, the persisted authn state
+// records the X-Forwarded-For client IP rather than the proxy IP.
+// Without the trust the brute-force counter / audit log would
+// attribute every authenticate request to the LB IP, hiding the real
+// client.
+func TestAuthorize_TrustedProxy_HonoursXFFForRemoteIP(t *testing.T) {
+	t.Parallel()
+
+	h := newHarnessWithProxyTrust(t)
+
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.RemoteAddr = "10.1.2.3:54321" // inside trusted CIDR
+	r.Header.Set("X-Forwarded-For", "203.0.113.42")
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	uid := strings.TrimPrefix(loc.Path, h.interactionPth+"/")
+	if uid == "" {
+		t.Fatalf("could not extract uid from %s", loc.Path)
+	}
+
+	rec, err := h.store.Interactions().Find(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("Find interaction: %v", err)
+	}
+	state, err := authorize.UnmarshalState(rec.RawState)
+	if err != nil {
+		t.Fatalf("UnmarshalState: %v", err)
+	}
+	var as authn.State
+	if err := json.Unmarshal(state.Authn, &as); err != nil {
+		t.Fatalf("decode authn state: %v", err)
+	}
+	if got := as.RemoteIP.String(); got != "203.0.113.42" {
+		t.Errorf("RemoteIP=%q want 203.0.113.42 (XFF first non-trusted hop)", got)
+	}
+}
+
+// TestAuthorize_TrustedProxy_IgnoresXFFFromUntrustedSource confirms
+// the negative branch: a request whose RemoteAddr lies outside the
+// trust cannot inject an XFF value. The persisted state must hold the
+// RemoteAddr verbatim.
+func TestAuthorize_TrustedProxy_IgnoresXFFFromUntrustedSource(t *testing.T) {
+	t.Parallel()
+
+	h := newHarnessWithProxyTrust(t)
+
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.RemoteAddr = "203.0.113.5:54321" // OUTSIDE trusted CIDR
+	r.Header.Set("X-Forwarded-For", "192.0.2.42")
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	loc, _ := url.Parse(resp.Header.Get("Location"))
+	uid := strings.TrimPrefix(loc.Path, h.interactionPth+"/")
+
+	rec, err := h.store.Interactions().Find(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	state, _ := authorize.UnmarshalState(rec.RawState)
+	var as authn.State
+	if err := json.Unmarshal(state.Authn, &as); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := as.RemoteIP.String(); got != "203.0.113.5" {
+		t.Errorf("RemoteIP=%q want 203.0.113.5 (XFF spoof rejected)", got)
+	}
+}
+
+// newHarnessWithProxyTrust wires the harness with a configured
+// [proxy.Trust] that admits the 10.0.0.0/8 CIDR. The trust does NOT
+// configure a host allowlist, mirroring the legacy compatibility
+// posture exercised by [TestAuthorize_TrustedProxy_HonoursXFFForRemoteIP].
+func newHarnessWithProxyTrust(t *testing.T) *testHarness {
+	t.Helper()
+	clock := &fakeClock{now: fixedNow()}
+	st := inmem.New(inmem.WithClock(clock))
+	registerTestClient(t, st)
+
+	cookieKey := make([]byte, 32)
+	for i := range cookieKey {
+		cookieKey[i] = byte(i + 1)
+	}
+	cookieCodec, err := cookie.NewCodec(cookieKey)
+	if err != nil {
+		t.Fatalf("cookie.NewCodec: %v", err)
+	}
+	sessCodec, err := sessions.NewCodec(cookieCodec)
+	if err != nil {
+		t.Fatalf("sessions.NewCodec: %v", err)
+	}
+	mgr, err := sessions.NewManager(sessions.Config{
+		Codec: sessCodec,
+		Store: st.Sessions(),
+		Clock: clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("sessions.NewManager: %v", err)
+	}
+	csrfKey := make([]byte, 32)
+	for i := range csrfKey {
+		csrfKey[i] = byte(i + 100)
+	}
+	signer, _ := csrf.NewSigner(csrfKey)
+	allow, _ := csrf.NewAllowlist([]string{"https://op.example.com"})
+	trust, err := proxy.NewTrust([]string{"10.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("proxy.NewTrust: %v", err)
+	}
+
+	orch := buildTestOrchestrator(t)
+	deps := authorizeendpoint.Deps{
+		Clients:         st.Clients(),
+		Codes:           st.AuthorizationCodes(),
+		Grants:          st.Grants(),
+		Interactions:    st.Interactions(),
+		Sessions:        mgr,
+		CookieCodec:     cookieCodec,
+		CSRF:            signer,
+		Origins:         allow,
+		Driver:          interaction.JSONDriver{},
+		Authn:           orch,
+		AuthorizePath:   "/oidc/auth",
+		InteractionPath: "/oidc/interaction",
+		Clock:           clock,
+		ProxyTrust:      trust,
+	}
+	return &testHarness{
+		handler:        authorizeendpoint.Handler(deps),
+		store:          st,
+		cookieCodec:    cookieCodec,
+		sessionMgr:     mgr,
+		csrfSigner:     signer,
+		driver:         interaction.JSONDriver{},
+		orchestrator:   orch,
+		clock:          clock,
+		authorizePath:  deps.AuthorizePath,
+		interactionPth: deps.InteractionPath,
 	}
 }
 

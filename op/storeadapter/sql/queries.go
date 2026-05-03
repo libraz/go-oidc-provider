@@ -43,6 +43,8 @@ type queries struct {
 	refreshRevokeChainUpdate   string
 	refreshRevokeChainChildren string
 	refreshRevokeByGrant       string
+	refreshRevokeByClient      string
+	grantDeleteByClient        string
 
 	// access tokens
 	accessTokenRegister      string
@@ -114,6 +116,10 @@ type queries struct {
 	ratPut           string
 	ratGetByClientID string
 	ratDelete        string
+
+	// op metadata
+	metadataGet string
+	metadataSet string
 }
 
 // buildQueries assembles every SQL template the adapter needs for the
@@ -175,6 +181,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT id FROM " + n.refreshes + " WHERE parent_id = ?"),
 		refreshRevokeByGrant: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE grant_id = ?"),
+		refreshRevokeByClient: d.rebind(
+			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE client_id = ?"),
+		grantDeleteByClient: d.rebind(
+			"DELETE FROM " + n.grants + " WHERE client_id = ?"),
 
 		// access tokens
 		accessTokenRegister: d.rebind(
@@ -374,6 +384,13 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT client_id, hashed_value, created_at FROM " + n.rats + " WHERE client_id = ?"),
 		ratDelete: d.rebind(
 			"DELETE FROM " + n.rats + " WHERE client_id = ?"),
+
+		// op metadata
+		metadataGet: d.rebind(
+			"SELECT meta_value FROM " + n.metadata + " WHERE meta_key = ?"),
+		metadataSet: d.rebind(
+			"INSERT INTO " + n.metadata + " (meta_key, meta_value) VALUES (?, ?)" + d.upsertAlias() +
+				d.upsertOnConflict("meta_key", "meta_value="+d.excludedRef("meta_value"))),
 	}
 
 	// Layer 6: scan every produced query for SQL-injection

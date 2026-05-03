@@ -9,9 +9,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -327,3 +330,139 @@ var _ = func() interaction.Driver { return testkit.AutoConsentDriver{} }
 
 // Used to silence the unused context import after the rewrite.
 var _ = context.Background
+
+// TestInteractionPost_RotatesSessionIDAfterFreshAuthn pins the H-C1
+// session-fixation defence: when a user with an existing session
+// completes the login interaction (re-authentication for the same
+// subject), the cookie-bound session ID rotates to a fresh value and
+// the previous record is deleted from the store. Without rotation the
+// pre-fixation cookie value (planted by an attacker who could read or
+// observe it before the user logged in) would remain valid.
+func TestInteractionPost_RotatesSessionIDAfterFreshAuthn(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	// Seed an active session for the same subject the
+	// SubjectAuthenticator binds at the end of the interaction.
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+	originalSID := out.SessionID
+
+	// Force the interaction even though a session exists by passing
+	// prompt=login. The chain will run SubjectAuthenticator and bind
+	// the same subject.
+	v := goodAuthorizeValues()
+	v.Set("prompt", "login")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorize status=%d", resp.StatusCode)
+	}
+	loc := mustParseLocation(t, resp)
+	uid := strings.TrimPrefix(loc.Path, h.interactionPth+"/")
+	var ic *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == cookie.InteractionProfile.Name {
+			ic = c
+			break
+		}
+	}
+	if ic == nil {
+		t.Fatal("interaction cookie missing")
+	}
+	start := interactionStart{
+		uid:             uid,
+		interactionCk:   ic,
+		requestRedirect: "https://rp.example.com/cb",
+		requestState:    "state-abc",
+	}
+
+	getResp := doInteractionGet(t, h, start)
+	defer getResp.Body.Close()
+	stateRef, csrfCookie := readPromptStateRef(t, getResp)
+
+	body := interaction.FormSubmission{
+		StateRef: stateRef,
+		Values:   map[string]string{testkit.SubjectFieldName: "user-1"},
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost,
+		h.interactionPth+"/"+start.uid, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://op.example.com")
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	req.AddCookie(start.interactionCk)
+	req.AddCookie(csrfCookie)
+	// Attach the seeded session cookie so ensureSession sees the
+	// active subject and rotates instead of issuing a fresh record.
+	req.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("post status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	// The terminal response MUST set a fresh session cookie: a
+	// rotation, not a pass-through.
+	var newSessionCookie *http.Cookie
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == cookie.SessionProfile.Name {
+			newSessionCookie = c
+			break
+		}
+	}
+	if newSessionCookie == nil {
+		t.Fatal("session cookie missing on terminate (rotation skipped)")
+	}
+	if newSessionCookie.Value == out.Cookie {
+		t.Errorf("session cookie value identical pre/post auth — rotation skipped")
+	}
+
+	// Decode the new cookie and confirm the SessionID changed but the
+	// ChooserGroupID stayed stable (Rotate preserves the group).
+	r2 := httptest.NewRequestWithContext(context.Background(), http.MethodGet, h.authorizePath, http.NoBody)
+	r2.AddCookie(newSessionCookie)
+	c, err := r2.Cookie(cookie.SessionProfile.Name)
+	if err != nil {
+		t.Fatalf("read rotated cookie: %v", err)
+	}
+	active, err := h.sessionMgr.Resolve(context.Background(), c.Value)
+	if err != nil {
+		t.Fatalf("Resolve rotated cookie: %v", err)
+	}
+	if active.Session.ID == originalSID {
+		t.Errorf("SessionID=%q want a fresh value (was %q)", active.Session.ID, originalSID)
+	}
+	if active.Session.ChooserGroupID != out.ChooserGroupID {
+		t.Errorf("ChooserGroupID=%q want %q (rotation must preserve group)",
+			active.Session.ChooserGroupID, out.ChooserGroupID)
+	}
+	// The original SessionID record must be deleted so the
+	// pre-fixation cookie cannot be replayed.
+	if _, err := h.store.Sessions().Find(context.Background(), originalSID); err == nil {
+		t.Errorf("original session %q still present after rotation", originalSID)
+	}
+}

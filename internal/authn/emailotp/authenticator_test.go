@@ -65,6 +65,10 @@ func newFixture(t *testing.T, now time.Time) (*emailotp.Authenticator, *recordin
 		Store:  st.EmailOTPs(),
 		Users:  users,
 		Clock:  clock,
+		// Disable the H-E3 latency pad: the FakeClock never moves
+		// during a real-time time.Sleep, so a non-zero pad would
+		// inflate every test run by the configured duration.
+		SendLatencyPad: -1,
 	})
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
@@ -233,7 +237,7 @@ func TestContinueSendNoBoundEmailClaim(t *testing.T) {
 	}}
 	mailer := &recordingMailer{}
 	a, err := emailotp.NewAuthenticator(emailotp.Config{
-		Mailer: mailer, Store: st.EmailOTPs(), Users: users, Clock: clock,
+		Mailer: mailer, Store: st.EmailOTPs(), Users: users, Clock: clock, SendLatencyPad: -1,
 	})
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)
@@ -343,7 +347,7 @@ func TestContinueVerifyExpiredReturnsError(t *testing.T) {
 	}}
 	mailer := &recordingMailer{}
 	a, err := emailotp.NewAuthenticator(emailotp.Config{
-		Mailer: mailer, Store: st.EmailOTPs(), Users: users, Clock: clock,
+		Mailer: mailer, Store: st.EmailOTPs(), Users: users, Clock: clock, SendLatencyPad: -1,
 	})
 	if err != nil {
 		t.Fatalf("NewAuthenticator: %v", err)

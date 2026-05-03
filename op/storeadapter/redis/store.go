@@ -337,12 +337,11 @@ func (s *Store) RefreshTokens() store.RefreshTokenStore { panic(unimplemented("R
 //nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
 func (s *Store) Grants() store.GrantStore { panic(unimplemented("Grants")) }
 
-// Metadata returns nil; the Redis adapter has not yet implemented
-// [store.MetadataStore]. The library's pairwise immutability gate
-// detects the nil at op.New and skips the gate with a startup
-// warning so the OP boots regardless. A future adapter pass will
-// land a real implementation; CHANGELOG calls out the gap.
-func (s *Store) Metadata() store.MetadataStore { return nil }
+// Metadata implements [store.Store] against a Redis hash. The
+// substore is the persistence path for coarse construction-time
+// decisions (subject_mode in v0.9.1; future keys compose on the
+// same surface without further interface change).
+func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s) }
 
 // Sessions returns the [store.SessionStore] handle. Sessions are an
 // in-scope substore for the Redis adapter: the OP does not

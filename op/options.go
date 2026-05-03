@@ -20,6 +20,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/redact"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -82,6 +83,16 @@ type config struct {
 	// means "no proxy trusted"; X-Forwarded-* headers are ignored.
 	trustedProxies []string
 
+	// trustedProxyHosts holds the hostnames from
+	// [WithTrustedProxyHosts] that the OP will honour in
+	// X-Forwarded-Host. Empty composes with the auto-derived issuer
+	// host: the runtime allowlist used by [proxy.NewTrustWithHosts]
+	// is the union of the explicit entries + the issuer host. A
+	// configured set composes additively with the issuer host so an
+	// embedder fronting two public hostnames can register the
+	// secondary one without losing the canonical issuer match.
+	trustedProxyHosts []string
+
 	// corsOrigins holds the explicit cross-origin entries from
 	// [WithCORSOrigins]. The full allowlist is the union of these plus
 	// every redirect_uri origin registered via the [store.ClientStore].
@@ -133,6 +144,13 @@ type config struct {
 	// observers stack: the orchestrator fans out every
 	// [LoginAttempt] to each in registration order.
 	loginObservers []LoginAttemptObserver
+
+	// authnLockoutStore is the optional [store.AuthnLockoutStore]
+	// supplied through [WithAuthnLockoutStore]. Nil means "no
+	// cross-factor brute-force counter" — every built-in second
+	// factor falls back to its per-record FailedCount only.
+	// At most one store may be registered.
+	authnLockoutStore store.AuthnLockoutStore
 
 	// interactions carries the non-factor [Interaction] values
 	// registered through [WithInteractions]. The orchestrator inserts
@@ -796,14 +814,34 @@ func WithFeature(f feature.Flag) Option {
 	})
 }
 
+// MaxAccessTokenTTL is the implementation-defined upper bound the
+// option layer enforces on [WithAccessTokenTTL]. The value (24 hours)
+// is intentionally generous — long enough that an embedder running an
+// internal API behind the OP can pick a TTL that aligns with their
+// session lifetime — while still rejecting the obviously-wrong inputs
+// (multi-day or multi-year) that produce tokens whose practical
+// invalidation requires the per-grant revocation pathway. The bound
+// composes with profile-supplied caps: a configured FAPI profile pulls
+// the bound down to its 10-minute limit ([profile.MaxAccessTokenTTL]),
+// and the more-restrictive value wins.
+//
+// The canonical value lives in [timex.AccessTokenTTLMax]; this name is
+// preserved for embedders that already reference the constant.
+//
+//nolint:gochecknoglobals // re-export of the canonical timex value; var is required for cross-package alias.
+var MaxAccessTokenTTL = timex.AccessTokenTTLMax
+
 // WithAccessTokenTTL overrides the lifetime applied to issued access
 // tokens. Zero means "use [DefaultAccessTokenTTL]"; a negative value
 // is rejected at the option site so the misconfiguration surfaces at
 // startup rather than silently expiring tokens at the wrong cadence.
-// When [WithProfile] is also configured, the embedder's TTL MUST stay
-// at or below the profile's bound (see [profile.MaxAccessTokenTTL] —
-// FAPI 2.0 §3.1.9 caps at 10 minutes). Stricter-than-profile values
-// are accepted; a value above the bound fails [New].
+// Values above [MaxAccessTokenTTL] are also rejected so a typo cannot
+// produce a token whose practical invalidation requires per-grant
+// revocation; when [WithProfile] is also configured, the embedder's
+// TTL MUST stay at or below the profile's bound (see
+// [profile.MaxAccessTokenTTL] — FAPI 2.0 §3.1.9 caps at 10 minutes).
+// Stricter-than-profile values are accepted; a value above the bound
+// fails [New].
 // Stable since v0.1.
 func WithAccessTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
@@ -811,6 +849,12 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithAccessTokenTTL requires a non-negative duration",
+			}
+		}
+		if ttl > MaxAccessTokenTTL {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAccessTokenTTL exceeds implementation-defined maximum (24h)",
 			}
 		}
 		c.accessTokenTTL = ttl
@@ -1517,10 +1561,65 @@ func WithMFAEncryptionKeys(keys ...[]byte) Option {
 // codec.
 const mfaEncryptionKeyLen = 32
 
+// WithAuthnLockoutStore wires the cross-factor brute-force counter
+// (M-AUTHN-1). When a non-nil store is supplied, every built-in
+// second-factor [Step] (StepTOTP, StepEmailOTP) consults the same
+// per-subject counter so an attacker pivoting between factors cannot
+// double their guess budget. The store backs the rolling 24-hour
+// window described in 02-product-design.md §M.6: a 1-hour lockout at
+// 30 cumulative failures, 24-hour at 90.
+//
+// Backends MUST guarantee atomic increment on
+// [store.AuthnLockoutStore.Increment] (the SQL adapter does
+// "UPDATE ... SET failed_count = failed_count + 1"; in-memory backends
+// hold a mutex around the read-modify-write). The library serialises
+// every other access through the lockout helper so the atomicity
+// requirement is the only invariant backends need to honour.
+//
+// The default (nil store, option unset) preserves the per-factor
+// counters that ship in [internal/authn/totp] and
+// [internal/authn/emailotp]; embedders who want defence-in-depth
+// against pivot attacks set this option and route the supplied store
+// to a shared backend (the inmem reference exposes
+// [inmem.Store.AuthnLockouts]).
+//
+// At most one store may be registered; a second [WithAuthnLockoutStore]
+// call fails [New] with a structured configuration error.
+//
+// Stable since v0.x.
+func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
+	return optionFunc(func(c *config) error {
+		if s == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAuthnLockoutStore received nil AuthnLockoutStore",
+			}
+		}
+		if c.authnLockoutStore != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAuthnLockoutStore may be called at most once",
+			}
+		}
+		c.authnLockoutStore = s
+		return nil
+	})
+}
+
 // WithTrustedProxies declares the CIDRs from which the [Provider] should
 // honour [X-Forwarded-*] headers. When a request arrives from outside these
-// ranges the headers are ignored, preventing IP / scheme spoofing
-// .
+// ranges the headers are ignored, preventing IP / scheme spoofing.
+//
+// X-Forwarded-Host hardening: when at least one CIDR is configured, the
+// OP rejects an X-Forwarded-Host value whose hostname does not match the
+// canonical issuer host or one of the entries supplied through
+// [WithTrustedProxyHosts]. The default allowlist (the issuer host) is
+// auto-derived so a typical single-hostname deployment requires no
+// further configuration. An attacker who spoofs an arbitrary XFH on a
+// connection arriving from a trusted CIDR cannot alias the OP onto a
+// different host because the allowlist intersects the value with the
+// canonical issuer.
+//
 // CIDRs may be IPv4 or IPv6; both notations are accepted. Each call
 // replaces the previous list — pass every trusted CIDR in a single call.
 // Stable since v0.1.
@@ -1535,6 +1634,34 @@ func WithTrustedProxies(cidrs ...string) Option {
 			return newConfigurationError("WithTrustedProxies CIDR rejected", err)
 		}
 		c.trustedProxies = append([]string(nil), cidrs...)
+		return nil
+	})
+}
+
+// WithTrustedProxyHosts adds hostnames the OP will honour in
+// X-Forwarded-Host. The runtime allowlist is the union of the supplied
+// hosts plus the canonical issuer host (auto-derived from [WithIssuer])
+// so embedders that front their OP under a single public hostname need
+// not call this option — the issuer host is allowlisted by default.
+//
+// Each host MUST be a non-empty string. Hostnames are compared
+// case-insensitively against the value of X-Forwarded-Host (port
+// stripped); IPv6 literals follow the bracketed RFC 7239 form. The
+// option appends to any prior call so a deployment with multiple
+// public hostnames can layer entries.
+//
+// Stable since v0.x.
+func WithTrustedProxyHosts(hosts ...string) Option {
+	return optionFunc(func(c *config) error {
+		if len(hosts) == 0 {
+			return newConfigurationError("WithTrustedProxyHosts requires at least one host", nil)
+		}
+		for _, h := range hosts {
+			if strings.TrimSpace(h) == "" {
+				return newConfigurationError("WithTrustedProxyHosts received an empty host", nil)
+			}
+		}
+		c.trustedProxyHosts = append(c.trustedProxyHosts, hosts...)
 		return nil
 	})
 }

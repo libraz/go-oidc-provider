@@ -18,6 +18,12 @@ import (
 // the header) are rejected before any signature work is done.
 const proofTyp = "dpop+jwt"
 
+// maxJTILen bounds the "jti" claim length. RFC 9449 sets no cap, but
+// the verifier rejects oversized values to close the unbounded-
+// allocation surface (replay store key, audit log column). The value
+// is comfortably above any UUID encoding the typical client emits.
+const maxJTILen = 256
+
 // allowedProofAlgs is the set of "alg" values [parseProof] accepts on
 // the JWS header. ES256 / EdDSA are FAPI 2.0 baseline; PS256 is included
 // because RFC 9449 §4.1 permits any asymmetric JWS algorithm "deemed
@@ -137,6 +143,17 @@ func decodeProofClaims(payload []byte) (proofClaims, error) {
 	if c.JTI == "" {
 		return proofClaims{}, ErrProofMissingJTI
 	}
+	// RFC 9449 sets no upper bound on the "jti" claim, but every
+	// downstream consumer (replay store key length, audit log column,
+	// debug-trace size) benefits from a hard cap. 256 bytes is
+	// comfortably above any sensible client-emitted JTI (UUIDv4 in
+	// hex with separators is 36 bytes; UUIDv7 base64url is 22) while
+	// closing the unbounded-allocation vector at the verifier
+	// boundary. ErrProofMalformed is the right shape: an oversized jti
+	// is a syntactically malformed proof, not a replay.
+	if len(c.JTI) > maxJTILen {
+		return proofClaims{}, fmt.Errorf("%w: jti too long", ErrProofMalformed)
+	}
 	if c.HTM == "" || c.HTU == "" {
 		return proofClaims{}, fmt.Errorf("%w: htm / htu are required", ErrProofMalformed)
 	}
@@ -147,18 +164,26 @@ func decodeProofClaims(payload []byte) (proofClaims, error) {
 }
 
 // canonicalRequestURL returns the canonical "htu" value for r per RFC
-// 9449 §4.3: scheme + host + path with the scheme/host lower-cased and
-// the query / fragment stripped. The function is tolerant of the
-// transports the OP runs on top of (TLS-terminating proxies set
-// X-Forwarded-Proto, but the issuer URL is fixed at startup so the
-// caller passes an already-resolved request URL when those concerns
-// matter).
+// 9449 §4.3: scheme + host + path with the scheme/host lower-cased,
+// any default port (":80" for http, ":443" for https) stripped, and
+// the query / fragment removed.
+//
+// The function is tolerant of the transports the OP runs on top of:
+// when [internal/proxy] has rewritten the inbound request through the
+// trusted-proxy middleware (XFP / XFH), the cloned URL carries the
+// externally-visible scheme and host, and this canonicalisation
+// observes them verbatim. Callers that bypass that middleware MAY pass
+// the request URL with [requestURLSource.TLS] set so the scheme
+// fallback derives from the live TLS state.
 func canonicalRequestURL(r requestURLSource) string {
 	u := *r.URL
 	if u.Scheme == "" {
 		// http.Request from the standard library leaves Scheme
 		// empty for incoming requests — the test server fills the
 		// host but expects the handler to derive scheme from TLS.
+		// When a trusted reverse proxy terminated TLS the scheme
+		// is already populated by the [internal/proxy] middleware,
+		// so this fallback only fires for direct connections.
 		if r.TLS {
 			u.Scheme = "https"
 		} else {
@@ -169,7 +194,7 @@ func canonicalRequestURL(r requestURLSource) string {
 		u.Host = r.Host
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
-	u.Host = strings.ToLower(u.Host)
+	u.Host = stripDefaultPort(strings.ToLower(u.Host), u.Scheme)
 	u.RawQuery = ""
 	u.Fragment = ""
 	u.RawFragment = ""
@@ -188,6 +213,13 @@ type requestURLSource struct {
 // canonicalEqual reports whether two URLs match after canonicalisation.
 // Used by the verifier to compare the proof's "htu" against the
 // computed request URL.
+//
+// Both inputs are folded to RFC 9449 §4.3 canonical form (scheme and
+// host lower-cased; query and fragment stripped) and any default port
+// (":80" for http, ":443" for https) is removed before comparison.
+// The default-port normalisation makes "https://op.example.com/token"
+// and "https://op.example.com:443/token" — both spec-conformant — the
+// same value to the verifier.
 func canonicalEqual(htu, request string) bool {
 	if htu == request {
 		return true
@@ -201,9 +233,46 @@ func canonicalEqual(htu, request string) bool {
 	b.RawQuery, b.Fragment = "", ""
 	a.Scheme = strings.ToLower(a.Scheme)
 	b.Scheme = strings.ToLower(b.Scheme)
-	a.Host = strings.ToLower(a.Host)
-	b.Host = strings.ToLower(b.Host)
+	a.Host = stripDefaultPort(strings.ToLower(a.Host), a.Scheme)
+	b.Host = stripDefaultPort(strings.ToLower(b.Host), b.Scheme)
 	return a.String() == b.String()
+}
+
+// stripDefaultPort returns host with any default port for scheme
+// removed. The function is RFC 3986 §3.2.3 normalisation applied to
+// the host:port form Go's [url.URL.Host] field carries: ":80" is the
+// default for http, ":443" for https. The helper is conservative —
+// any non-default explicit port is preserved verbatim — so a proof
+// that pins ":8443" still has to be compared verbatim.
+//
+// IPv6 hosts arrive bracketed ("[::1]:443"); the function rewrites the
+// suffix without unwrapping the bracket so callers do not have to
+// special-case the literal.
+func stripDefaultPort(host, scheme string) string {
+	if host == "" {
+		return host
+	}
+	colon := strings.LastIndexByte(host, ':')
+	if colon < 0 {
+		return host
+	}
+	// IPv6 literals carry colons inside the brackets; only the
+	// trailing ":port" suffix sits outside the closing bracket.
+	if strings.HasPrefix(host, "[") {
+		bracket := strings.LastIndexByte(host, ']')
+		if bracket < 0 || colon < bracket {
+			return host
+		}
+	}
+	port := host[colon+1:]
+	switch {
+	case scheme == "https" && port == "443":
+		return host[:colon]
+	case scheme == "http" && port == "80":
+		return host[:colon]
+	default:
+		return host
+	}
 }
 
 // withinIatWindow reports whether iat is within ±window of now. The

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -13,10 +14,6 @@ import (
 // constant matches op/grant.ClientCredentials.String() by construction
 // and is covered by a compile-time assertion in the test suite.
 const grantTypeWire = "client_credentials"
-
-// scopeOpenID is the OIDC scope the package rejects. Duplicated for
-// the same reason as grantTypeWire.
-const scopeOpenID = "openid"
 
 // Sentinel errors. The HTTP layer maps these to OAuth wire codes:
 //
@@ -91,7 +88,7 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 	if !slices.Contains(in.Client.GrantTypes, grantTypeWire) {
 		return nil, ErrGrantNotPermitted
 	}
-	if slices.Contains(in.RequestedScope, scopeOpenID) {
+	if oidcscope.ContainsOpenID(in.RequestedScope) {
 		return nil, ErrOpenIDScope
 	}
 	if len(in.RequestedScope) == 0 {

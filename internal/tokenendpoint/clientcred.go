@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/clientcred"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -65,7 +66,7 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 // values are tolerated so an HTTP middleware that re-emits the body
 // does not break the handler.
 func parseClientCredsRequest(w http.ResponseWriter, r *http.Request) ([]string, string, bool) {
-	scope := parseScopeParam(r.PostForm.Get("scope"))
+	scope := oidcscope.Parse(r.PostForm.Get("scope"))
 	values := r.PostForm["resource"]
 	if len(values) == 0 {
 		return scope, "", true

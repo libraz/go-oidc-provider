@@ -8,13 +8,14 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
+	"golang.org/x/sync/singleflight"
 
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -40,6 +41,15 @@ const (
 	// value is short enough that a key rotation propagates without
 	// operator intervention while saving most fetches.
 	defaultJWKSTTL = 5 * time.Minute
+
+	// defaultJWKSNegativeTTL caps how long a fetch failure is cached
+	// against a URL. The negative cache exists to defeat amplification
+	// DoS: an attacker who repeatedly drives /authorize with a JAR
+	// that names an unreachable jwks_uri would otherwise issue one
+	// outbound request per inbound request. 30 seconds is long enough
+	// to absorb a flood without delaying recovery from a transient RP
+	// outage by more than half a minute.
+	defaultJWKSNegativeTTL = 30 * time.Second
 )
 
 // jwksCache is a tiny thread-safe TTL cache keyed by the JWKs URL. It
@@ -50,9 +60,10 @@ const (
 // number of clients, and the entries are garbage-collectable once
 // their expiry passes. An eviction policy is unnecessary at v0.x.
 type jwksCache struct {
-	mu      sync.RWMutex
-	entries map[string]*jwksEntry
-	clock   timex.Clock
+	mu       sync.RWMutex
+	entries  map[string]*jwksEntry
+	failures map[string]*jwksFailure
+	clock    timex.Clock
 }
 
 // jwksEntry is the stored projection of one keyset. Keys is the parsed
@@ -64,6 +75,15 @@ type jwksEntry struct {
 	expiry time.Time
 }
 
+// jwksFailure is the negative-cache entry. The cache stores the most
+// recent error so callers see a stable diagnostic across the negative
+// window (rather than retrying and observing a different transient
+// failure on each call).
+type jwksFailure struct {
+	err    error
+	expiry time.Time
+}
+
 // newJWKSCache returns an initialised cache. A nil clock falls back to
 // [timex.SystemClock] so tests that do not care about cache timing can
 // pass nil.
@@ -72,8 +92,9 @@ func newJWKSCache(clock timex.Clock) *jwksCache {
 		clock = timex.SystemClock
 	}
 	return &jwksCache{
-		entries: make(map[string]*jwksEntry),
-		clock:   clock,
+		entries:  make(map[string]*jwksEntry),
+		failures: make(map[string]*jwksFailure),
+		clock:    clock,
 	}
 }
 
@@ -97,7 +118,9 @@ func (c *jwksCache) get(url string) (*jwksEntry, bool) {
 
 // put records keys against url with the supplied ETag and TTL. A zero
 // TTL falls back to [defaultJWKSTTL] so callers do not have to plumb
-// the constant down.
+// the constant down. A successful put clears any negative-cache entry
+// against the same URL so the recovery is observable on the next
+// caller without waiting for the negative TTL to expire.
 func (c *jwksCache) put(url, etag string, keys *josev4.JSONWebKeySet, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = defaultJWKSTTL
@@ -109,6 +132,39 @@ func (c *jwksCache) put(url, etag string, keys *josev4.JSONWebKeySet, ttl time.D
 		etag:   etag,
 		expiry: c.clock.Now().Add(ttl),
 	}
+	delete(c.failures, url)
+}
+
+// putFailure records err against url for negativeTTL. Subsequent
+// fetches against the same URL within the window short-circuit on the
+// stored error, defeating amplification DoS against an unreachable
+// upstream.
+func (c *jwksCache) putFailure(url string, err error, ttl time.Duration) {
+	if ttl <= 0 {
+		ttl = defaultJWKSNegativeTTL
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failures[url] = &jwksFailure{
+		err:    err,
+		expiry: c.clock.Now().Add(ttl),
+	}
+}
+
+// getFailure returns the cached failure for url if it is still within
+// its TTL. The boolean reports whether the caller MUST short-circuit
+// on the stored error rather than reach out again.
+func (c *jwksCache) getFailure(url string) (bool, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	f, ok := c.failures[url]
+	if !ok {
+		return false, nil
+	}
+	if c.clock.Now().Before(f.expiry) {
+		return true, f.err
+	}
+	return false, nil
 }
 
 // httpJWKSFetcher is the production [JWKSResolver] backing
@@ -117,11 +173,18 @@ func (c *jwksCache) put(url, etag string, keys *josev4.JSONWebKeySet, ttl time.D
 // back to the verifier.
 type httpJWKSFetcher struct {
 	cache  *jwksCache
-	client *http.Client
+	flight singleflight.Group
 
-	// allowPrivate, when true, disables the SSRF deny-list. v0.x has
-	// no public knob to flip this; the field exists so a future
-	// op.WithAllowPrivateNetworkJWKS option can wire it through.
+	// clientOnce / clientHTTP wire the lazy client construction so
+	// tests can flip [allowPrivate] (or future netsec-shaping fields)
+	// after [newHTTPJWKSFetcher] returned but before the first fetch
+	// without us re-allocating the [*http.Client] on every fetch.
+	clientOnce sync.Once
+	clientHTTP *http.Client
+
+	// allowPrivate, when true, disables the SSRF deny-list (with the
+	// exception of cloud-metadata IPs, which remain rejected via
+	// [internal/netsec]).
 	allowPrivate bool
 }
 
@@ -131,15 +194,40 @@ type httpJWKSFetcher struct {
 func newHTTPJWKSFetcher(clock timex.Clock) *httpJWKSFetcher {
 	return &httpJWKSFetcher{
 		cache: newJWKSCache(clock),
-		client: &http.Client{
-			Timeout: defaultJWKSTimeout,
-		},
 	}
+}
+
+// netsecOptions returns the [netsec.Options] snapshot the fetcher
+// hands to the URL-time gate and the HTTP client. The function is the
+// single source of truth so the dial-time and URL-time checks always
+// agree on the AllowPrivate posture.
+func (f *httpJWKSFetcher) netsecOptions() netsec.Options {
+	return netsec.Options{
+		Timeout:      defaultJWKSTimeout,
+		AllowPrivate: f.allowPrivate,
+	}
+}
+
+// client returns the lazily-constructed [*http.Client]. The lazy
+// initialisation lets [verify.go]'s [AllowPrivateNetwork] option
+// mutate [allowPrivate] after construction without rebuilding the
+// transport mid-fetch.
+func (f *httpJWKSFetcher) client() *http.Client {
+	f.clientOnce.Do(func() {
+		f.clientHTTP = netsec.NewHTTPClient(f.netsecOptions())
+	})
+	return f.clientHTTP
 }
 
 // fetch retrieves the parsed keyset for jwksURI. The cache is consulted
 // first; on a miss or expired entry the function performs the HTTP
 // round-trip, applies the security checks, and updates the cache.
+//
+// Concurrent fetches against the same URL collapse onto a single
+// outbound request via [singleflight.Group]; this prevents a thundering
+// herd against the RP when the cache expires under load and stops a
+// hostile client from forcing N parallel JWKS fetches by replaying the
+// same JAR N times.
 //
 // The function is unexported because callers reach the JWKS through
 // [Verifier]; exposing it would let a future caller bypass the SSRF /
@@ -148,8 +236,40 @@ func (f *httpJWKSFetcher) fetch(ctx context.Context, jwksURI string) (*josev4.JS
 	if entry, ok := f.cache.get(jwksURI); ok {
 		return entry.keys, nil
 	}
-	if err := f.assertSafeURL(jwksURI); err != nil {
+	if ok, cached := f.cache.getFailure(jwksURI); ok {
+		return nil, cached
+	}
+	v, err, _ := f.flight.Do(jwksURI, func() (any, error) {
+		// Re-check the positive cache inside the singleflight to make
+		// sure a concurrent winner that completed between our get
+		// above and the call here does not force a redundant fetch.
+		if entry, ok := f.cache.get(jwksURI); ok {
+			return entry.keys, nil
+		}
+		keys, err := f.doFetch(ctx, jwksURI)
+		if err != nil {
+			f.cache.putFailure(jwksURI, err, defaultJWKSNegativeTTL)
+			return nil, err
+		}
+		return keys, nil
+	})
+	if err != nil {
 		return nil, err
+	}
+	keys, ok := v.(*josev4.JSONWebKeySet)
+	if !ok {
+		return nil, fmt.Errorf("%w: singleflight returned %T", ErrJWKSFetch, v)
+	}
+	return keys, nil
+}
+
+// doFetch performs the HTTP round-trip and the response post-processing.
+// The function is split out from [fetch] so the singleflight collapses
+// only the network path, while the cache lookup and negative-cache
+// bookkeeping run on every caller.
+func (f *httpJWKSFetcher) doFetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKeySet, error) {
+	if err := netsec.AssertSafeURL(ctx, jwksURI, f.netsecOptions()); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrJWKSFetch, err)
 	}
 	cached, _ := f.cache.get(jwksURI)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI, http.NoBody)
@@ -160,7 +280,7 @@ func (f *httpJWKSFetcher) fetch(ctx context.Context, jwksURI string) (*josev4.JS
 	if cached != nil && cached.etag != "" {
 		req.Header.Set("If-None-Match", cached.etag)
 	}
-	resp, err := f.client.Do(req)
+	resp, err := f.client().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrJWKSFetch, err)
 	}
@@ -192,101 +312,20 @@ func (f *httpJWKSFetcher) fetch(ctx context.Context, jwksURI string) (*josev4.JS
 	return keys, nil
 }
 
-// assertSafeURL rejects URLs whose host resolves to a loopback,
-// link-local, or RFC 1918 address unless the fetcher was constructed
-// with allowPrivate set. The check runs before the request is issued so
-// an attacker-controlled JWKsURI cannot trick the OP into hitting an
-// internal service.
-//
-// The fetcher only performs a syntactic / DNS-time check: a malicious
-// upstream that resolves a public name to a private address at the
-// last moment can still escape this gate. The HTTP client transport
-// could be wrapped to enforce per-connection address checks; v0.x
-// punts on that hardening because the JWKS fetcher already runs with
-// a hard timeout.
-//
-// Embedders that front their RPs with private DNS can opt in by
-// passing [AllowPrivateNetwork] to [NewDefaultResolver]; the
-// public op-package alias is op.WithAllowPrivateNetworkJWKS.
-func (f *httpJWKSFetcher) assertSafeURL(raw string) error {
-	if f.allowPrivate {
-		return nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("%w: parse url: %w", ErrJWKSFetch, err)
-	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return fmt.Errorf("%w: scheme %q not allowed", ErrJWKSFetch, u.Scheme)
-	}
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("%w: missing host", ErrJWKSFetch)
-	}
-	if IsLocalHostname(host) {
-		return fmt.Errorf("%w: host %q is loopback / localhost", ErrJWKSFetch, host)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if IsPrivateIP(ip) {
-			return fmt.Errorf("%w: host %q is loopback / link-local / private", ErrJWKSFetch, host)
-		}
-		return nil
-	}
-	return f.assertResolvedHostSafe(host)
-}
-
-// assertResolvedHostSafe performs the DNS-time SSRF check. It is
-// split out so [assertSafeURL] stays under the project complexity
-// gate; the function uses [net.DefaultResolver.LookupIPAddr] (with
-// a fresh context) because the project lint rule forbids the
-// context-less [net.LookupIP] entry point.
-func (f *httpJWKSFetcher) assertResolvedHostSafe(host string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultJWKSTimeout)
-	defer cancel()
-	addrs, lookupErr := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if lookupErr != nil {
-		return fmt.Errorf("%w: lookup %q: %w", ErrJWKSFetch, host, lookupErr)
-	}
-	for _, addr := range addrs {
-		if IsPrivateIP(addr.IP) {
-			return fmt.Errorf("%w: host %q resolves to a private IP", ErrJWKSFetch, host)
-		}
-	}
-	return nil
-}
-
 // IsLocalHostname reports whether host is a literal "localhost" string
-// or one of its common variants. The check is case-insensitive because
-// DNS is. The function is exported so the authorize-endpoint JAR
-// request_uri fetcher reuses the same allow-list without the two
-// packages drifting.
+// or one of its common variants. Forwards to [internal/netsec.IsLocalHostname]
+// so the deny-list is centralised; retained as a [jar] export because
+// existing call sites (authorizeendpoint, sector, backchannel) reach
+// the helper through this package.
 func IsLocalHostname(host string) bool {
-	h := strings.ToLower(host)
-	switch h {
-	case "localhost", "localhost.", "ip6-localhost", "ip6-loopback":
-		return true
-	default:
-		return false
-	}
+	return netsec.IsLocalHostname(host)
 }
 
 // IsPrivateIP reports whether ip falls inside one of the deny-listed
-// ranges: loopback (127.0.0.0/8 + ::1), link-local (169.254.0.0/16 +
-// fe80::/10), and the RFC 1918 / ULA private blocks. The list is
-// closed; the [WithAllowPrivateNetwork] opt-in flips the gate at the
-// fetcher level rather than poking holes in this check. Exported for
-// the authorize-endpoint JAR request_uri fetcher to share.
+// ranges. Forwards to [internal/netsec.IsPrivateIP]; retained for the
+// same reason as [IsLocalHostname].
 func IsPrivateIP(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	if ip.IsPrivate() {
-		return true
-	}
-	return false
+	return netsec.IsPrivateIP(ip)
 }
 
 // isJSONContentType reports whether ct is a JSON-ish media type. JWKS

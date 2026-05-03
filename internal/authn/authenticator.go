@@ -223,16 +223,17 @@ type Authenticator interface {
 
 // UserVerificationReporter is an optional interface an [Authenticator]
 // MAY implement to surface the WebAuthn-equivalent UV bit observed on
-// the most recently completed Continue. The orchestrator type-asserts
-// the registered authenticator after every successful Result and reads
-// LastUserVerified to populate [Factor.UserVerified] — which in turn
-// drives the RFC 8176 "hwk" / "swk" choice in [Factor.AMRValue].
+// the most recently completed Continue.
 //
-// Authenticators that have no concept of user-verification (password,
-// TOTP, recovery codes, email OTP) do NOT implement this interface;
-// the orchestrator falls back to the legacy AMR-string derivation.
-// Today only the passkey adapter implements it: every other built-in
-// factor reports its UV state implicitly through its AMR mapping.
+// Deprecated: stamp the bit on
+// [interaction.Result.UserVerified] instead. The Result-borne path is
+// request-scoped and replica-safe (no shared cache); the legacy
+// reporter required a process-local cache that lost coverage in
+// multi-replica deployments without sticky sessions (H-E4). The
+// built-in passkey adapter no longer implements this interface; the
+// orchestrator continues to consult it only for embedder-supplied
+// adapters that have not migrated, and only when the matching
+// [interaction.Result.UserVerified] is false.
 //
 // Implementations MUST be safe for concurrent use. The orchestrator
 // dispatches a single Continue at a time per State, but the same

@@ -286,4 +286,14 @@ var (
 	// codec misconfiguration, lockout — MUST NOT wrap this sentinel;
 	// they continue to flow to the HTTP layer as 500 / 4xx.
 	ErrFactorRetry = errors.New("authn: factor retry")
+
+	// ErrAAL3RequiresUV is returned by [Orchestrator.Tick] when an
+	// authenticator that reports [AAL3] completes a Continue without
+	// the user-verification bit set on its [interaction.Result.UserVerified]
+	// (M-AUTHN-3). NIST SP 800-63B AAL3 requires user verification:
+	// a passkey assertion that did not perform UV cannot satisfy AAL3.
+	// The orchestrator surfaces this as a chain-fatal error so the
+	// HTTP layer rejects the attempt rather than minting a session
+	// at a higher AAL than the factor actually achieved.
+	ErrAAL3RequiresUV = errors.New("authn: AAL3 factor requires user verification")
 )

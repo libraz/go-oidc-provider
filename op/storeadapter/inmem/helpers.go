@@ -1,9 +1,6 @@
 package inmem
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
@@ -16,11 +13,14 @@ import (
 // pin the hash-on-store contract documented in [op/store/doc.go]
 // (a snapshot of the in-memory map MUST NOT contain the bearer
 // secret) and to keep the read paths constant-time relative to a
-// non-existent key. Production backends MAY reuse this helper but
-// SHOULD apply HMAC with a server-side pepper before storage.
+// non-existent key.
+//
+// The body delegates to [patterns.Digest] so every adapter in the
+// repository (inmem, SQL, Redis, ...) shares one digest call site:
+// the hash-on-store invariant cannot drift between backends, and a
+// future swap to HMAC-with-pepper happens in one file.
 func hashKey(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
+	return patterns.Digest(s)
 }
 
 // constantTimeKeyMatch reports whether stored and presented hash to the
@@ -29,8 +29,11 @@ func hashKey(s string) string {
 // keyed on the digest, but a constant-time compare keeps the helper
 // safe to copy into a backend that walks a slice or otherwise diverges
 // from the map-lookup model.
+//
+// The body delegates to [patterns.ConstantTimeKeyMatch] so the
+// adapter corpus shares a single comparison primitive.
 func constantTimeKeyMatch(stored, presented string) bool {
-	return subtle.ConstantTimeCompare([]byte(stored), []byte(presented)) == 1
+	return patterns.ConstantTimeKeyMatch(stored, presented)
 }
 
 // isExpired reports whether t is strictly before clock.Now(). The zero

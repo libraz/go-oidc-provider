@@ -101,6 +101,20 @@ func (s *grantStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// RevokeByClient implements [store.RevokeByClient]. The dynamic
+// registration cascade invokes it after a successful
+// DELETE /register/{client_id} so the deleted client's grants are
+// removed in one shot. A missing client is not an error.
+func (s *grantStore) RevokeByClient(ctx context.Context, clientID string) error {
+	if clientID == "" {
+		return nil
+	}
+	if _, err := s.runner().ExecContext(ctx, s.parent.queries.grantDeleteByClient, clientID); err != nil {
+		return wrapErr("grants.RevokeByClient", err)
+	}
+	return nil
+}
+
 // scanner abstracts *sql.Row and *sql.Rows so [grantStore.scan] can
 // drive both single-row Find and multi-row List paths through one
 // helper.

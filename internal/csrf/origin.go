@@ -59,12 +59,28 @@ func (a *Allowlist) Len() int {
 // against allow. The algorithm is:
 //
 //  1. If Origin is present and matches → accept.
-//  2. If Origin is absent and Referer matches → accept (same-origin POST
-//     fallback for legacy browsers / privacy modes).
-//  3. Otherwise → reject.
+//  2. If Origin is absent, fall back to Referer. The Referer fallback is
+//     gated on a Fetch Metadata signal: the request MUST carry
+//     Sec-Fetch-Site: same-origin (so a browser that emits Fetch
+//     Metadata vouches the request originated from the OP's own pages).
+//     A request that supplies Referer alone, with no Sec-Fetch-Site or a
+//     non-same-origin value, is rejected — modern browsers always emit
+//     Origin on state-changing fetches, and the Referer-only path is
+//     reserved for legacy UAs that also do not emit Fetch Metadata.
+//  3. If both Origin and Referer are absent → reject.
 //
 // The function does not consult the request body or cookies. Callers should
 // pair it with a token equality check via [ConstantTimeEqual].
+//
+// Hardening rationale: Referer is omitted on same-origin POSTs by some
+// privacy modes / extensions / Strict-Origin-When-Cross-Origin policies
+// even when Origin is also absent (the earlier code admitted that path
+// when Referer matched the allowlist). Combined with a CSRF token
+// pre-stamped via document.cookie, that gap let an attacker who could
+// observe the cookie reach the gate without forging headers. Tying the
+// Referer fallback to Sec-Fetch-Site closes the gap on every browser
+// that ships Fetch Metadata (Chromium / Firefox / Safari since 2020)
+// without breaking same-origin SSR posts that include the header.
 func CheckOrigin(r *http.Request, allow *Allowlist) error {
 	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
 		canon, err := CanonicalOrigin(origin)
@@ -76,7 +92,10 @@ func CheckOrigin(r *http.Request, allow *Allowlist) error {
 		}
 		return ErrOriginRejected
 	}
-	// Origin missing — fall back to Referer.
+	// Origin missing — fall back to Referer, gated on Fetch Metadata.
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-origin") {
+		return ErrOriginRejected
+	}
 	referer := strings.TrimSpace(r.Header.Get("Referer"))
 	if referer == "" {
 		return ErrOriginRejected

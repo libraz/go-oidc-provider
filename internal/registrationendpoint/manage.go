@@ -285,6 +285,13 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return
 	}
+	// In-tree cascade (H-G5): probe optional [store.RevokeByClient]
+	// implementations on the supplied refresh / grant substores so a
+	// deleted client takes its outstanding tokens / consent with it
+	// without requiring the embedder to hand-roll the cascade.
+	// Backends that do not implement the optional interface fall
+	// through silently, preserving the prior behaviour.
+	cascadeRevokeByClient(ctx, deps, clientID)
 	if deps.OnClientDeleted != nil {
 		if err := deps.OnClientDeleted(ctx, clientID); err != nil {
 			// Cascade failure does not roll the deletion back: the

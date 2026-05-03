@@ -1,7 +1,7 @@
 package tokenendpoint
 
 import (
-	"errors"
+	"context"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -95,56 +95,21 @@ func requireDPoPMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundJK
 }
 
 // writeDPoPError translates a [dpop.Err*] sentinel onto the wire form.
-// RFC 9449 §7 prescribes "invalid_dpop_proof" but we re-use the OAuth
-// "invalid_request" / "invalid_grant" envelope already shared by the
-// rest of the token endpoint so RP libraries that key off the OAuth
-// codes do not need to learn a new code class. The description echoes
-// the closest RFC 9449 wording; the wrapped sentinel cause is dropped
-// to avoid leaking timing-side-channel signal.
+// The package-local helper is a thin wrapper over [dpop.WriteError]
+// so the token / PAR / future endpoints share an identical
+// boundary mapping; see the godoc on [dpop.WriteError] for the wire
+// taxonomy and on the nonce-challenge response specifically.
 //
-// The nonce sentinels ([dpop.ErrProofNonceMissing] /
-// [dpop.ErrProofNonceInvalid]) take a separate code: §8 defines
-// "use_dpop_nonce" specifically so the client knows to retry with the
-// fresh value carried in the companion "DPoP-Nonce" response header.
+// The wrapper takes a [Deps] (rather than the broader [dpop.NonceSource]
+// directly) so call sites stay symmetric with the rest of the
+// package's helpers; the [dpop.NonceSourceFromIssuer] adapter
+// transports the wire shape of [Deps.DPoPNonces] into the shared
+// helper without leaking dpop-package details upward. The
+// [context.Background] argument is acceptable because the nonce
+// adapter ignores the context (the issuer is a synchronous
+// in-memory call); when a request-scoped context is required (e.g.
+// for tracing) the call site can be migrated to
+// [dpop.WriteError] directly.
 func writeDPoPError(w http.ResponseWriter, deps Deps, err error) {
-	if dpop.IsNonceError(err) {
-		writeUseDPoPNonce(w, deps)
-		return
-	}
-	switch {
-	case errors.Is(err, dpop.ErrProofMalformed),
-		errors.Is(err, dpop.ErrProofMissingJTI):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof malformed")
-	case errors.Is(err, dpop.ErrProofSignature):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof signature invalid")
-	case errors.Is(err, dpop.ErrProofIatWindow):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof iat outside acceptable window")
-	case errors.Is(err, dpop.ErrProofReplayed):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof replayed")
-	case errors.Is(err, dpop.ErrProofHTMMismatch),
-		errors.Is(err, dpop.ErrProofHTUMismatch):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof does not bind to this request")
-	case errors.Is(err, dpop.ErrProofATHMismatch):
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "DPoP proof does not bind to the access token")
-	default:
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-	}
-}
-
-// writeUseDPoPNonce emits the RFC 9449 §8 nonce challenge: a 400
-// JSON envelope with error="use_dpop_nonce" plus a "DPoP-Nonce"
-// response header carrying a fresh value the client should embed in
-// the next proof's "nonce" claim. A nil [Deps.DPoPNonces] omits the
-// header (the issuer is offline) but still emits the JSON body so a
-// debugger can see the gate fired; the client then has no nonce to
-// retry with, which is the most truthful signal the server can give
-// in that misconfiguration.
-func writeUseDPoPNonce(w http.ResponseWriter, deps Deps) {
-	if deps.DPoPNonces != nil {
-		if nonce := deps.DPoPNonces.IssueNonce(); nonce != "" {
-			w.Header().Set("DPoP-Nonce", nonce)
-		}
-	}
-	writeError(w, http.StatusBadRequest, errUseDPoPNonce,
-		"DPoP proof requires a server-supplied nonce; retry using the value in the DPoP-Nonce response header")
+	dpop.WriteError(context.Background(), w, err, dpop.NonceSourceFromIssuer(deps.DPoPNonces))
 }

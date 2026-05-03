@@ -67,6 +67,7 @@ type nameMap struct {
 	users              string
 	iats               string
 	rats               string
+	metadata           string
 }
 
 // defaultNames returns the canonical table names. Embedders that
@@ -91,6 +92,7 @@ func defaultNames() nameMap {
 		users:              "oidc_users",
 		iats:               "oidc_initial_access_tokens",
 		rats:               "oidc_registration_access_tokens",
+		metadata:           "oidc_op_metadata",
 	}
 }
 
@@ -135,6 +137,8 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.iats = physical
 		case "registration_access_tokens":
 			n.rats = physical
+		case "op_metadata":
+			n.metadata = physical
 		default:
 			return fmt.Errorf("oidcsql: unknown WithNaming key %q (valid keys: %s)",
 				logical, strings.Join(knownNamingKeys, ", "))
@@ -164,6 +168,7 @@ func (n nameMap) all() []string {
 		n.users,
 		n.iats,
 		n.rats,
+		n.metadata,
 	}
 }
 
@@ -198,6 +203,7 @@ var knownNamingKeys = []string{
 	"users",
 	"initial_access_tokens",
 	"registration_access_tokens",
+	"op_metadata",
 }
 
 // rewriteSchema swaps every default table name in the embedded DDL

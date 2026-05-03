@@ -79,10 +79,16 @@ type Request struct {
 	// (mutually exclusive with RequestURI, non-empty when present).
 	RequestObject string
 
-	// RequestURI is the raw JAR "request_uri" parameter (RFC 9101 §5.2.2
-	// or RFC 9126 §2.2). The HTTP layer disambiguates between the JAR
-	// and PAR forms by inspecting the URN prefix; the validator only
-	// enforces that the value parses as a URI when present.
+	// RequestURI is the raw "request_uri" parameter. The library admits
+	// exactly the RFC 9126 §2.2 PAR form
+	// (urn:ietf:params:oauth:request_uri:*) on the wire; [ParseValues]
+	// rejects every other shape with [ErrInvalidRequestURI] before
+	// constructing the [Request] so the field, when populated, is
+	// always a syntactically-valid PAR URN. The non-PAR JAR-by-URI form
+	// described in RFC 9101 §5.2.2 is intentionally not supported — the
+	// OP-side fetcher RFC 9101 §10.2 mandates (https-only, size cap,
+	// TTL, content-type, SSRF deny-list) is not implemented, and FAPI
+	// 2.0 mandates PAR anyway.
 	RequestURI string
 
 	// DPoPJKT is the RFC 9449 §10 "dpop_jkt" parameter — the SHA-256

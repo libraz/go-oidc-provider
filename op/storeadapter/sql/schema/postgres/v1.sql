@@ -52,6 +52,11 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     request_object_signing_alg TEXT NOT NULL DEFAULT ''
 );
 
+-- oidc_authorization_codes.id stores the SHA-256 hex digest (64
+-- ASCII chars) of the authorization-code bearer secret the client
+-- redeems at the token endpoint; the raw value is never persisted.
+-- The adapter computes the digest on Save / Find / Consume via the
+-- shared op/storeadapter/patterns.Digest helper.
 CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
@@ -70,6 +75,13 @@ CREATE TABLE IF NOT EXISTS oidc_authorization_codes (
     created_at BIGINT NOT NULL
 );
 
+-- oidc_refresh_tokens.id and oidc_refresh_tokens.parent_id store
+-- SHA-256 hex digests (64 ASCII chars) of the refresh-token bearer
+-- secrets; the raw values are never persisted. RevokeChain walks
+-- the parent_id graph entirely in the digest space so the rotation
+-- chain is internally consistent without ever materialising a raw
+-- secret. The adapter computes the digest on Save / Find / Consume
+-- via the shared op/storeadapter/patterns.Digest helper.
 CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     id TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
@@ -162,6 +174,11 @@ CREATE TABLE IF NOT EXISTS oidc_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_sessions_chooser ON oidc_sessions(chooser_group_id);
 
+-- oidc_par_records.uri stores the SHA-256 hex digest (64 ASCII
+-- chars) of the request_uri bearer secret returned to the client by
+-- the PAR endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / Consume via the shared
+-- op/storeadapter/patterns.Digest helper.
 CREATE TABLE IF NOT EXISTS oidc_par_records (
     uri TEXT PRIMARY KEY,
     client_id TEXT NOT NULL,
@@ -211,4 +228,9 @@ CREATE TABLE IF NOT EXISTS oidc_registration_access_tokens (
     client_id TEXT PRIMARY KEY,
     hashed_value TEXT NOT NULL,
     created_at BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oidc_op_metadata (
+    meta_key TEXT PRIMARY KEY,
+    meta_value TEXT NOT NULL
 );

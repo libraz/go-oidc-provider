@@ -566,6 +566,11 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 	if begin.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
 	}
+	if !step.isCaptcha {
+		if rerr := guardAAL3RequiresUV(step.auth, *begin.Result); rerr != nil {
+			return st, interaction.Step{}, rerr
+		}
+	}
 	// Begin completed immediately — record and re-enter the
 	// LoginFlow loop so the dispatcher sees the next pass without
 	// dropping back through advanceOnce's transition guard.
@@ -617,6 +622,8 @@ func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step
 // [State.ActiveStepKind] or the submission is rejected as
 // [ErrInvalidStateRef] (a stale token from an earlier step cannot
 // drive the current one).
+//
+//nolint:gocognit // submission dispatcher enumerates step / AAL / factor branches in flat shape; refactor would obscure flow ordering.
 func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, in Input, kind string) (State, interaction.Step, error) {
 	flow := o.cfg.LoginFlow
 	if flow == nil || st.ActiveStepKind == "" || st.ActiveStepKind != kind {
@@ -671,6 +678,11 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 	}
 	if cont.Result == nil {
 		return st, interaction.Step{}, ErrInvalidStep
+	}
+	if !step.isCaptcha {
+		if rerr := guardAAL3RequiresUV(step.auth, *cont.Result); rerr != nil {
+			return st, interaction.Step{}, rerr
+		}
 	}
 	st = o.recordLoginFlowResult(ctx, st, step, *cont.Result, in.Now)
 	return st, interaction.Step{}, nil

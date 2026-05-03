@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/keys"
 )
@@ -232,5 +234,230 @@ func TestSet_JWKSIsDefensiveCopy(t *testing.T) {
 	}
 	if got := set.JWKS().Keys[0].KeyID; got != "k" {
 		t.Errorf("set view mutated: kid=%q", got)
+	}
+}
+
+// TestSet_Find_RejectsRetiredKey pins H-F1: an [Entry] whose
+// [Entry.NotAfter] has elapsed by the configured clock reading MUST
+// surface as a [Set.Find] miss, even though the kid still matches a
+// physical entry. The retirement gate is the audit anchor for the
+// "rotation-after-leak token forge" attempt — an attacker who captured
+// the old private key before the rotation reuses the same kid against
+// the OP, hoping to ride past the JWKS grace window.
+//
+// Tracks H-F1.
+func TestSet_Find_RejectsRetiredKey(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	deadline := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	set, err := keys.NewSet(
+		[]keys.Entry{
+			{KeyID: "active", Signer: priv},
+			{KeyID: "retiring", Signer: priv, NotAfter: deadline},
+		},
+		keys.WithClock(func() time.Time { return deadline.Add(time.Second) }),
+	)
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	got, ok := set.Find("retiring")
+	if ok {
+		t.Fatalf("Find(retiring) ok=true after deadline; want false (got=%+v)", got)
+	}
+	if got.KeyID != "" || got.Signer != nil {
+		t.Fatalf("Find(retiring) returned non-zero Entry on retirement reject: %+v", got)
+	}
+	// The active key must remain reachable: retirement is per-entry,
+	// not per-set.
+	if got, ok := set.Find("active"); !ok || got.KeyID != "active" {
+		t.Errorf("Find(active)=(%+v,%v) want active key", got, ok)
+	}
+}
+
+// TestSet_Find_AcceptsKeyBeforeNotAfter pins the boundary opposite to
+// [TestSet_Find_RejectsRetiredKey]: a retiring entry MUST verify until
+// the configured clock reaches the deadline. The comparison is "now <
+// NotAfter", so a clock reading strictly before the deadline keeps the
+// kid reachable; reaching the deadline (or stepping past it) flips the
+// gate. The two tests pin both edges of the boundary so a future
+// regression that swaps the comparator surfaces.
+//
+// Tracks H-F1.
+func TestSet_Find_AcceptsKeyBeforeNotAfter(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	deadline := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name string
+		now  time.Time
+		want bool
+	}{
+		{"one nanosecond before deadline", deadline.Add(-time.Nanosecond), true},
+		{"one second before deadline", deadline.Add(-time.Second), true},
+		{"exactly at deadline", deadline, false},
+		{"one nanosecond after deadline", deadline.Add(time.Nanosecond), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			set, err := keys.NewSet(
+				[]keys.Entry{
+					{KeyID: "retiring", Signer: priv, NotAfter: deadline},
+				},
+				keys.WithClock(func() time.Time { return tc.now }),
+			)
+			if err != nil {
+				t.Fatalf("NewSet: %v", err)
+			}
+			got, ok := set.Find("retiring")
+			if ok != tc.want {
+				t.Fatalf("Find(retiring) ok=%v want %v (now=%v deadline=%v)", ok, tc.want, tc.now, deadline)
+			}
+			if !ok && (got.KeyID != "" || got.Signer != nil) {
+				t.Fatalf("Find returned non-zero Entry on miss: %+v", got)
+			}
+		})
+	}
+}
+
+// TestSet_Find_NotifiesObserverOnRetiredKid pins that the observer
+// configured through [WithRetiredKidObserver] is fired exactly once on
+// every Find call that rejects a retired kid, and that the kid value
+// it receives matches the one the caller looked up. The observer is
+// the audit anchor: the OP wires the slog emitter behind it so SOC
+// tooling sees [op.AuditKeyRetiredKidPresented] for every rejection.
+//
+// Unknown-kid lookups MUST NOT trigger the observer — the rotation
+// audit signal would lose meaning if an attacker probing arbitrary
+// kid strings could amplify it.
+//
+// Tracks H-F1.
+func TestSet_Find_NotifiesObserverOnRetiredKid(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	deadline := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+	var calls atomic.Int64
+	var lastKid atomic.Value
+	set, err := keys.NewSet(
+		[]keys.Entry{
+			{KeyID: "active", Signer: priv},
+			{KeyID: "retiring", Signer: priv, NotAfter: deadline},
+		},
+		keys.WithClock(func() time.Time { return deadline.Add(time.Hour) }),
+		keys.WithRetiredKidObserver(func(kid string) {
+			calls.Add(1)
+			lastKid.Store(kid)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+
+	if _, ok := set.Find("retiring"); ok {
+		t.Fatal("Find(retiring) should reject after deadline")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("observer call count=%d want 1", got)
+	}
+	if got, _ := lastKid.Load().(string); got != "retiring" {
+		t.Errorf("observer kid=%q want retiring", got)
+	}
+
+	// Active and unknown kids must not trigger the observer.
+	if _, ok := set.Find("active"); !ok {
+		t.Fatal("Find(active) should still succeed")
+	}
+	if _, ok := set.Find("never-existed"); ok {
+		t.Fatal("Find(never-existed) should miss")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("observer fired beyond retired path: count=%d want 1", got)
+	}
+}
+
+// TestSet_Find_NoObserverDoesNotPanic guards the defensive nil-guard
+// inside [Set.Find]: a Set built without [WithRetiredKidObserver] MUST
+// still reject retired kids cleanly without dereferencing the absent
+// callback. The observer is optional (the discard sink is the
+// caller-side default), and a regression that drops the nil-check
+// would crash the request hot path.
+//
+// Tracks H-F1.
+func TestSet_Find_NoObserverDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	deadline := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	set, err := keys.NewSet(
+		[]keys.Entry{{KeyID: "retiring", Signer: priv, NotAfter: deadline}},
+		keys.WithClock(func() time.Time { return deadline.Add(time.Hour) }),
+	)
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	if _, ok := set.Find("retiring"); ok {
+		t.Fatal("retired kid was admitted")
+	}
+}
+
+// TestSet_Find_ZeroNotAfterNeverRetires pins the back-compat contract:
+// an [Entry] left at the zero-value [Entry.NotAfter] never retires, no
+// matter how far the clock advances. Embedders that have not opted
+// into rotation deadlines see the pre-H-F1 behaviour unchanged.
+//
+// Tracks H-F1.
+func TestSet_Find_ZeroNotAfterNeverRetires(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	farFuture := time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	set, err := keys.NewSet(
+		[]keys.Entry{{KeyID: "evergreen", Signer: priv}},
+		keys.WithClock(func() time.Time { return farFuture }),
+	)
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	if _, ok := set.Find("evergreen"); !ok {
+		t.Fatal("zero-NotAfter entry MUST never retire")
+	}
+}
+
+// TestSet_JWKS_AdvertisesRetiredEntries pins the asymmetry RFC 7517
+// §4.5 prescribes for graceful rotation: a retired kid is rejected on
+// verification but stays in the published JWKS so RP caches that have
+// not yet refreshed continue to see the public key. Pulling the kid
+// out of JWKS the moment the gate flips would strand RPs whose cache
+// TTL has not elapsed; the audit warning on the verification side
+// already covers the post-deadline forge attempt.
+//
+// Tracks H-F1.
+func TestSet_JWKS_AdvertisesRetiredEntries(t *testing.T) {
+	t.Parallel()
+
+	priv := mustECDSAKey(t)
+	deadline := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	set, err := keys.NewSet(
+		[]keys.Entry{
+			{KeyID: "active", Signer: priv},
+			{KeyID: "retired", Signer: priv, NotAfter: deadline},
+		},
+		keys.WithClock(func() time.Time { return deadline.Add(24 * time.Hour) }),
+	)
+	if err != nil {
+		t.Fatalf("NewSet: %v", err)
+	}
+	jwks := set.JWKS()
+	kids := make(map[string]bool, len(jwks.Keys))
+	for _, k := range jwks.Keys {
+		kids[k.KeyID] = true
+	}
+	if !kids["active"] || !kids["retired"] {
+		t.Fatalf("JWKS view dropped a key: %v", kids)
 	}
 }

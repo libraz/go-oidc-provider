@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/libraz/go-oidc-provider/internal/jar"
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 )
 
 // DefaultTimeout is the per-RP request budget the [HTTPDeliverer]
@@ -99,26 +99,44 @@ type HTTPDeliverer struct {
 	Resolver *net.Resolver
 }
 
-// NewHTTPDeliverer returns an [HTTPDeliverer] with the default
-// no-redirect transport and the supplied timeout. Passing zero
-// substitutes [DefaultTimeout]. The constructor is the recommended
-// entry point because it pre-wires the redirect guard; callers that
-// want to inject a fully-custom client may set [HTTPDeliverer.Client]
-// directly but MUST install the same redirect policy or accept the
-// security trade-off.
+// NewHTTPDeliverer returns an [HTTPDeliverer] with the supplied
+// timeout. Passing zero substitutes [DefaultTimeout]. The constructed
+// value carries no pre-built [*http.Client]: [Deliver] builds one
+// lazily from [internal/netsec.NewHTTPClient] on first use so a
+// caller that flips [HTTPDeliverer.AllowPrivateNetwork] (or wires a
+// stub [HTTPDeliverer.Resolver]) after construction sees the change
+// reflected in the dial-time deny-list. Callers that want to inject
+// a fully-custom client may set [HTTPDeliverer.Client] directly but
+// MUST install the same redirect policy or accept the security
+// trade-off.
+//
+// The dial-time hook in [internal/netsec.NewHTTPClient] re-checks the
+// kernel-resolved address against the same deny-list that fires at
+// the URL gate so a DNS-rebinding peer cannot bypass [assertSafeURL]
+// by handing out a public address at gate-time and a private one at
+// dial-time.
 func NewHTTPDeliverer(timeout time.Duration) *HTTPDeliverer {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
-	return &HTTPDeliverer{
-		Client: &http.Client{
-			Timeout: timeout,
-			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		Timeout: timeout,
+	return &HTTPDeliverer{Timeout: timeout}
+}
+
+// resolveClient returns the [*http.Client] [Deliver] should use. The
+// helper honours an embedder-supplied [HTTPDeliverer.Client] when set
+// and otherwise builds one from [internal/netsec.NewHTTPClient] using
+// the current [HTTPDeliverer.AllowPrivateNetwork] flag.
+func (d *HTTPDeliverer) resolveClient() *http.Client {
+	if d.Client != nil {
+		return d.Client
 	}
+	return netsec.NewHTTPClient(netsec.Options{
+		Timeout:      d.timeoutOrDefault(),
+		AllowPrivate: d.AllowPrivateNetwork,
+		// Default MaxRedirects=0 makes [netsec] return
+		// http.ErrUseLastResponse on the first 30x; [Deliver] sees the
+		// 3xx as a non-2xx and surfaces a delivery failure.
+	})
 }
 
 // Deliver implements [Deliverer]. The function returns a non-nil
@@ -150,11 +168,7 @@ func (d *HTTPDeliverer) Deliver(ctx context.Context, target Target, logoutToken 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json, text/plain;q=0.5")
 
-	client := d.Client
-	if client == nil {
-		client = defaultHTTPClient(d.Timeout)
-	}
-	resp, err := client.Do(req)
+	resp, err := d.resolveClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("backchannel: POST %s: %w", target.URL, err)
 	}
@@ -175,93 +189,63 @@ func (d *HTTPDeliverer) Deliver(ctx context.Context, target Target, logoutToken 
 var ErrPrivateNetworkBlocked = errors.New("backchannel: target resolves to a deny-listed network")
 
 // assertSafeURL implements the SSRF deny-list. The function returns
-// nil when the deliverer was constructed with AllowPrivateNetwork
-// (the embedder has explicitly opted into private-network
-// destinations) or when the URL host resolves entirely to public
-// addresses. Any other shape — unparseable URL, scheme outside
-// http/https, missing host, IP literal in a deny-listed range, or a
-// hostname whose A/AAAA records include a deny-listed address —
-// returns [ErrPrivateNetworkBlocked] wrapped in a delivery diagnostic.
+// nil when the URL host resolves entirely to public addresses; any
+// rejection (unparseable URL, scheme outside http/https, missing
+// host, IP literal in a deny-listed range, hostname resolving to a
+// deny-listed address, or a cloud-metadata IP) wraps
+// [ErrPrivateNetworkBlocked] so callers can branch with [errors.Is].
 //
-// The check mirrors the JAR JWKS fetcher's posture
-// ([internal/jar.IsLocalHostname] / [internal/jar.IsPrivateIP]) so
-// the two SSRF gates stay aligned; both packages reject the same set
-// of addresses against the same op-level allow-flag.
+// The check delegates to [internal/netsec.AssertSafeURL]; the same
+// helper backs the JAR JWKS fetcher and the sector_identifier_uri
+// fetcher so the three OP-side SSRF gates cannot drift apart. The
+// dial-time check installed by [internal/netsec.NewHTTPClient]
+// re-runs the deny-list against the kernel-resolved address so a DNS
+// rebinding peer cannot pivot between gate and dial.
+//
+// Cloud-metadata IPs (169.254.169.254 et al) remain rejected even
+// when [HTTPDeliverer.AllowPrivateNetwork] is true.
 func (d *HTTPDeliverer) assertSafeURL(ctx context.Context, raw string) error {
-	if d.AllowPrivateNetwork {
-		return nil
-	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("backchannel: parse Target.URL %q: %w", raw, err)
 	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return fmt.Errorf("backchannel: Target.URL scheme %q not allowed", u.Scheme)
+	opts := netsec.Options{
+		AllowPrivate:   d.AllowPrivateNetwork,
+		AllowedSchemes: []string{"http", "https"},
+		Timeout:        d.timeoutOrDefault(),
+		Resolver:       d.Resolver,
 	}
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("backchannel: Target.URL %q is missing a host", raw)
-	}
-	if jar.IsLocalHostname(host) {
-		return fmt.Errorf("%w: host %q is loopback / localhost", ErrPrivateNetworkBlocked, host)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if jar.IsPrivateIP(ip) {
-			return fmt.Errorf("%w: host %q is loopback / link-local / private", ErrPrivateNetworkBlocked, host)
-		}
-		return nil
-	}
-	return d.assertResolvedHostSafe(ctx, host)
-}
-
-// assertResolvedHostSafe performs the DNS-time SSRF check. Split out
-// from [assertSafeURL] so the parser stays under the project gocognit
-// gate. The function honours [Deliverer.Resolver] when set so tests
-// can inject a stub; the production default is [net.DefaultResolver].
-//
-// The lookup uses a derived context with a hard timeout that mirrors
-// [DefaultTimeout]; without it a slow resolver could stall the entire
-// fan-out. A timeout collapses onto an error so the caller treats the
-// delivery as a transient failure (audit logged via the coordinator).
-func (d *HTTPDeliverer) assertResolvedHostSafe(ctx context.Context, host string) error {
-	resolver := d.Resolver
-	if resolver == nil {
-		resolver = net.DefaultResolver
-	}
-	timeout := d.Timeout
-	if timeout <= 0 {
-		timeout = DefaultTimeout
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	addrs, err := resolver.LookupIPAddr(lookupCtx, host)
-	if err != nil {
-		return fmt.Errorf("backchannel: lookup %q: %w", host, err)
-	}
-	if len(addrs) == 0 {
-		return fmt.Errorf("backchannel: lookup %q returned no addresses", host)
-	}
-	for _, a := range addrs {
-		if jar.IsPrivateIP(a.IP) {
-			return fmt.Errorf("%w: host %q resolves to a private IP %s",
-				ErrPrivateNetworkBlocked, host, a.IP)
-		}
+	if err := netsec.AssertSafeURLParsed(ctx, u, opts); err != nil {
+		return classifyNetsecError(raw, err)
 	}
 	return nil
 }
 
-// defaultHTTPClient mirrors [NewHTTPDeliverer]'s defaults so a
-// caller that constructs an [HTTPDeliverer] zero value still
-// benefits from the timeout / redirect guard.
-func defaultHTTPClient(timeout time.Duration) *http.Client {
-	if timeout <= 0 {
-		timeout = DefaultTimeout
+// timeoutOrDefault returns the effective per-request timeout the
+// deliverer uses for both the SSRF gate and the HTTP round-trip.
+func (d *HTTPDeliverer) timeoutOrDefault() time.Duration {
+	if d.Timeout > 0 {
+		return d.Timeout
 	}
-	return &http.Client{
-		Timeout: timeout,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	return DefaultTimeout
+}
+
+// classifyNetsecError maps a [netsec] sentinel onto the deliverer's
+// existing taxonomy. Loopback / RFC 1918 / cloud-metadata rejections
+// collapse onto [ErrPrivateNetworkBlocked] so callers can keep their
+// existing [errors.Is] branch; everything else wraps under the
+// "backchannel:" prefix the package has emitted historically.
+func classifyNetsecError(raw string, err error) error {
+	switch {
+	case errors.Is(err, netsec.ErrPrivateNetworkBlocked),
+		errors.Is(err, netsec.ErrCloudMetadataBlocked):
+		return fmt.Errorf("%w: %w", ErrPrivateNetworkBlocked, err)
+	case errors.Is(err, netsec.ErrSchemeNotAllowed):
+		return fmt.Errorf("backchannel: Target.URL %q: %w", raw, err)
+	case errors.Is(err, netsec.ErrMissingHost):
+		return fmt.Errorf("backchannel: Target.URL %q is missing a host", raw)
+	default:
+		return fmt.Errorf("backchannel: %q: %w", raw, err)
 	}
 }
 

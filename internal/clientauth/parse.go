@@ -90,11 +90,27 @@ func Parse(r *http.Request) (*Credentials, error) {
 	return creds, nil
 }
 
+// maxAssertionBytes caps the size of a client_assertion the parser
+// will inspect for its unverified "iss" / "sub" claim. RFC 7523
+// client_assertion JWTs in real deployments are typically 1-4 KB
+// (a P-256 ECDSA signature plus the canonical FAPI / OIDC claim
+// set); the 8 KB ceiling leaves comfortable headroom for embedders
+// who chain extra header parameters (x5c chains, embedder-specific
+// claims) while rejecting obviously-pathological inputs that would
+// force [encoding/json.Unmarshal] to allocate megabytes of header /
+// claim buffers before the verifier ever runs. The cap fires before
+// any base64 decoding so a malicious client cannot pivot the parser
+// onto an OOM by attaching a multi-megabyte header.
+const maxAssertionBytes = 8 * 1024
+
 // unverifiedAssertionClientID returns the assertion's "iss" claim
 // without verifying the signature. Callers MUST treat the value as a
 // lookup key only; the assertion verifier re-checks iss / sub against
 // the resolved clientID before authenticating.
 func unverifiedAssertionClientID(assertion string) (string, error) {
+	if len(assertion) > maxAssertionBytes {
+		return "", ErrAssertionMalformed
+	}
 	parts := strings.Split(assertion, ".")
 	if len(parts) < 2 {
 		return "", ErrAssertionMalformed

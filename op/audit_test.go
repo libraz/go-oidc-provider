@@ -47,6 +47,27 @@ func TestAuditEvent_TokenMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_RefreshChainRevokeMirror keeps the public
+// op.AuditRefreshChainRevokeFailed / op.AuditRefreshGrantRevokeFailed
+// constants aligned with the raw strings the refresh exchanger emits
+// when the post-replay cascade encounters a transport fault. The
+// internal package cannot import op/, so the strings are duplicated
+// (auditRefreshChainRevokeFailed / auditRefreshGrantRevokeFailed in
+// internal/grants/refresh/refresh.go) and this test pins the values.
+func TestAuditEvent_RefreshChainRevokeMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"refresh.chain_revoke_failed": op.AuditRefreshChainRevokeFailed,
+		"refresh.grant_revoke_failed": op.AuditRefreshGrantRevokeFailed,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_IntrospectionMirror keeps the public
 // op.AuditIntrospectionError constant aligned with the raw string the
 // introspection endpoint emits. The internal handler cannot import op/,
@@ -58,6 +79,48 @@ func TestAuditEvent_IntrospectionMirror(t *testing.T) {
 
 	want := map[string]op.AuditEvent{
 		"introspection.error": op.AuditIntrospectionError,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
+// TestAuditEvent_DPoPLooseMethodCaseMirror keeps the public
+// op.AuditDPoPLooseMethodCaseAdmitted constant aligned with the raw
+// string that the DPoP verifier emits when the
+// AllowLooseMethodCase bridge admits a case-mismatched proof. The
+// internal package cannot import op/, so the value is duplicated as
+// a string (dpop.AuditEventLooseMethodCaseAdmitted in
+// internal/dpop/verify.go) and this test pins them together.
+func TestAuditEvent_DPoPLooseMethodCaseMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"dpop.loose_method_case_admitted": op.AuditDPoPLooseMethodCaseAdmitted,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
+// TestAuditEvent_KeyRetiredKidValuePin pins the wire form of the H-F1
+// audit event. The constant is emitted from op.go directly (not from
+// an internal package) so there is no internal-vs-public drift hazard,
+// but pinning the string here keeps SOC dashboards / log queries
+// stable across renames: a future contributor who renames the constant
+// without updating the wire form sees a loud test failure rather than
+// silent breakage of the operator's saved searches.
+//
+// Tracks H-F1.
+func TestAuditEvent_KeyRetiredKidValuePin(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"key.retired_kid_presented": op.AuditKeyRetiredKidPresented,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

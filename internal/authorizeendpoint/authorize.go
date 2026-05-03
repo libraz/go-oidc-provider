@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -134,9 +135,13 @@ func extractAuthorizeValues(r *http.Request) (url.Values, error) {
 //  1. PAR: a "request_uri" matching the urn:ietf:params:oauth:request_uri:
 //     prefix is consumed from the persisted record (RFC 9126 §2.3) and
 //     every other parameter except client_id is ignored.
-//  2. JAR: a "request" parameter or a non-PAR "request_uri" is verified
-//     and merged onto the wire values per RFC 9101 §6.1; the merged
-//     values are then re-parsed.
+//  2. JAR: a "request" parameter is verified and merged onto the wire
+//     values per RFC 9101 §6.1; the merged values are then re-parsed.
+//     A "request_uri" that does NOT match the PAR URN prefix is
+//     rejected by [authorize.ParseValues] with
+//     [authorize.ErrInvalidRequestURI] — the library does not
+//     implement the RFC 9101 §5.2.2 generic-URI fetch, only the PAR
+//     form, so the JAR-by-URI surface is intentionally closed.
 //  3. Bare wire form: the values feed straight to [authorize.ParseValues].
 //
 // The returned bool reports whether processing should continue: false
@@ -470,7 +475,7 @@ func startInteraction(
 		InteractionUID:  uid,
 		ClientID:        client.ID,
 		Subject:         currentSubject(active),
-		RemoteIP:        clientIPFromRequest(r),
+		RemoteIP:        clientIPFromRequest(r, deps),
 		UserAgent:       truncateUserAgent(r.UserAgent()),
 		AuthTime:        now,
 		ActiveFactorIdx: -1,
@@ -530,21 +535,25 @@ func truncateUserAgent(ua string) string {
 	return ua[:userAgentMaxLen]
 }
 
-// clientIPFromRequest parses the request's RemoteAddr into a
-// [netip.Addr]. Trusted-proxy resolution is intentionally out of
-// scope for the orchestrator state today; embedders that need the
-// XFF-aware IP can plug it through a future option.
-func clientIPFromRequest(r *http.Request) netip.Addr {
-	host := r.RemoteAddr
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
-	}
-	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return netip.Addr{}
-	}
-	return addr
+// clientIPFromRequest returns the [netip.Addr] the OP considers
+// authoritative for r. The function delegates to [proxy.Resolve],
+// which:
+//
+//   - when [Deps.ProxyTrust] is configured AND r.RemoteAddr lies
+//     inside a trusted CIDR: honours X-Forwarded-For per RFC 7239 §5.2
+//     (first non-trusted hop wins, preventing a client from forging
+//     its IP by writing fake values to the left of the chain);
+//   - otherwise: falls back to r.RemoteAddr so a hostile client
+//     cannot spoof its source IP merely by setting the header.
+//
+// The brute-force counter and audit-log fields downstream consume the
+// returned value, so honouring the forwarded header behind a trusted
+// proxy closes the fingerprinting gap H-C5 surfaced (without the
+// trust every authenticated request would attribute to the proxy IP,
+// hiding the real client from the rate limiter).
+func clientIPFromRequest(r *http.Request, deps resolved) netip.Addr {
+	res := proxy.Resolve(r, deps.ProxyTrust)
+	return res.ClientIP
 }
 
 // currentSubject returns the active session's subject or empty when there

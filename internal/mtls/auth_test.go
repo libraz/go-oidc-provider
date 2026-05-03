@@ -366,3 +366,150 @@ func TestVerifySelfSigned_NilCert(t *testing.T) {
 		t.Errorf("err=%v want ErrNoClientCert", err)
 	}
 }
+
+// TestVerifyTLSClientAuth_SubjectDN_RFC4514Reorder pins B-MTLS §2.1.2
+// against RFC 4514 attribute-ordering drift. The cert subject and the
+// matcher both name the same DN, but the registered string spells
+// the RDNs in a different order than [pkix.Name.String] would emit.
+// The dual-form compare (DER round-trip + verbatim string) MUST
+// admit the cert; a regression that drops to byte-equal string
+// compare against [pkix.Name.String] alone surfaces here as
+// ErrSubjectMismatch.
+func TestVerifyTLSClientAuth_SubjectDN_RFC4514Reorder(t *testing.T) {
+	t.Parallel()
+
+	// Build a cert whose Subject carries CN+O+OU+C in the canonical
+	// pkix.Name field set; the cert's RawSubject lands in the OID
+	// order asn1.Marshal emits.
+	cert := generateLeafWith(t, func(c *x509.Certificate) {
+		c.Subject = pkix.Name{
+			CommonName:         "rp.example",
+			Organization:       []string{"Example Org"},
+			OrganizationalUnit: []string{"Engineering"},
+			Country:            []string{"US"},
+		}
+	})
+
+	// Register the matcher in a non-canonical RFC 4514 order:
+	// O before CN, OU last. The DER round-trip in
+	// [subjectDNMatches] re-emits in canonical order so the bytes
+	// match cert.RawSubject.
+	matcher := mtls.ClientMatcher{
+		SubjectDN: "O=Example Org,CN=rp.example,C=US,OU=Engineering",
+	}
+	if err := mtls.VerifyTLSClientAuth(cert, matcher); err != nil {
+		t.Errorf("VerifyTLSClientAuth (reordered DN): %v", err)
+	}
+}
+
+// TestVerifyTLSClientAuth_SubjectDN_DERFastPath checks the happy-path
+// DER round-trip: matcher and cert spell the same DN in the same
+// order, the DER bytes are byte-equal to RawSubject, and admission
+// succeeds without falling through to the string compare. The test
+// is a regression guard for the canonical case.
+func TestVerifyTLSClientAuth_SubjectDN_DERFastPath(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeafWith(t, func(c *x509.Certificate) {
+		c.Subject = pkix.Name{
+			CommonName:   "rp.example",
+			Organization: []string{"Example Org"},
+		}
+	})
+	if err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{
+		SubjectDN: "CN=rp.example,O=Example Org",
+	}); err != nil {
+		t.Errorf("VerifyTLSClientAuth (canonical DN): %v", err)
+	}
+}
+
+// TestVerifyClientAuth_DispatchByMethod pins the B-MTLS §2 dispatch
+// contract: the [VerifyClientAuth] entry point routes onto the per-
+// method verifier the embedder named in the client's
+// token_endpoint_auth_method. A mismatch between the method and the
+// supplied verifier inputs surfaces as the per-method sentinel
+// (ErrSubjectMismatch on the §2.1 path with no matcher; ErrNoMatchingJWK
+// on the §2.2 path with the wrong JWKS) so the wire layer maps onto
+// invalid_client without leaking which limb actually failed.
+func TestVerifyClientAuth_DispatchByMethod(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(42),
+		Subject:      pkix.Name{CommonName: "dispatch.example"},
+		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	jwks := jwksFromKeys(t, &priv.PublicKey)
+
+	t.Run("tls_client_auth_subject_match", func(t *testing.T) {
+		t.Parallel()
+		err := mtls.VerifyClientAuth(mtls.MethodTLSClientAuth, cert,
+			mtls.ClientMatcher{SubjectDN: cert.Subject.String()}, jwks)
+		if err != nil {
+			t.Errorf("VerifyClientAuth (tls_client_auth, match): %v", err)
+		}
+	})
+
+	t.Run("tls_client_auth_subject_mismatch", func(t *testing.T) {
+		t.Parallel()
+		err := mtls.VerifyClientAuth(mtls.MethodTLSClientAuth, cert,
+			mtls.ClientMatcher{SubjectDN: "CN=other"}, jwks)
+		if !errors.Is(err, mtls.ErrSubjectMismatch) {
+			t.Errorf("err=%v want ErrSubjectMismatch", err)
+		}
+	})
+
+	t.Run("self_signed_tls_client_auth_match", func(t *testing.T) {
+		t.Parallel()
+		err := mtls.VerifyClientAuth(mtls.MethodSelfSignedTLSClientAuth, cert,
+			mtls.ClientMatcher{}, jwks)
+		if err != nil {
+			t.Errorf("VerifyClientAuth (self_signed, match): %v", err)
+		}
+	})
+
+	t.Run("self_signed_tls_client_auth_no_match", func(t *testing.T) {
+		t.Parallel()
+		other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("ecdsa.GenerateKey: %v", err)
+		}
+		otherJWKS := jwksFromKeys(t, &other.PublicKey)
+		verifyErr := mtls.VerifyClientAuth(mtls.MethodSelfSignedTLSClientAuth, cert,
+			mtls.ClientMatcher{}, otherJWKS)
+		if !errors.Is(verifyErr, mtls.ErrNoMatchingJWK) {
+			t.Errorf("err=%v want ErrNoMatchingJWK", verifyErr)
+		}
+	})
+
+	t.Run("unknown_method", func(t *testing.T) {
+		t.Parallel()
+		err := mtls.VerifyClientAuth("client_secret_basic", cert,
+			mtls.ClientMatcher{SubjectDN: cert.Subject.String()}, jwks)
+		if !errors.Is(err, mtls.ErrUnsupportedMethod) {
+			t.Errorf("err=%v want ErrUnsupportedMethod", err)
+		}
+	})
+
+	t.Run("nil_cert_under_dispatch", func(t *testing.T) {
+		t.Parallel()
+		err := mtls.VerifyClientAuth(mtls.MethodTLSClientAuth, nil,
+			mtls.ClientMatcher{SubjectDN: "CN=any"}, nil)
+		if !errors.Is(err, mtls.ErrNoClientCert) {
+			t.Errorf("err=%v want ErrNoClientCert", err)
+		}
+	})
+}

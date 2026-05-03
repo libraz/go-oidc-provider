@@ -18,15 +18,16 @@
 //
 // # SSRF posture
 //
-// The fetcher matches the in-tree posture established by
-// internal/jar/jwks_cache.go and internal/backchannel/deliverer.go:
-// https-only, no redirects, body cap 64 KiB, request timeout 5 s,
-// and a deny-list for loopback / link-local / RFC 1918 / IPv6 ULA.
-// The DNS-time check uses [internal/jar.IsPrivateIP] so the three
-// fetchers cannot drift independently. Embedders fronting their RPs
-// behind private DNS opt in via [Option.AllowPrivateNetwork]; the
-// public op-package surface routes the choice through the same
-// configuration as the JAR fetcher.
+// The fetcher consolidates its SSRF gate in [internal/netsec]: the
+// deny-list (loopback / link-local / RFC 1918 / IPv6 ULA / cloud
+// metadata) and the hardened [*http.Client] (re-checking the
+// kernel-resolved address at dial time to defeat DNS rebinding) are
+// shared with the JAR JWKS fetcher and the back-channel logout
+// deliverer. The package adds https-only scheme pinning, no
+// redirects, a 64 KiB body cap, and a 5 s request timeout on top of
+// that base. Embedders fronting their RPs behind private DNS opt in
+// via [Option.AllowPrivateNetwork]; cloud-metadata IPs remain
+// rejected even when the opt-in is set.
 //
 // # Cache poisoning protection
 //

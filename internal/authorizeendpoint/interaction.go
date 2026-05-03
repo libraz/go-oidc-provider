@@ -95,11 +95,11 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "origin not allowed")
 		return
 	}
-	if !verifyCSRFToken(w, r, deps, uid) {
-		return
-	}
 	rec, state, ok := loadInteraction(w, r, deps, uid)
 	if !ok {
+		return
+	}
+	if !verifyCSRFToken(w, r, deps, uid, rec.Step) {
 		return
 	}
 	authnState, err := decodeAuthnState(state.Authn)
@@ -169,7 +169,13 @@ func dispatchTick(
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist interaction")
 		return
 	}
-	token, err := deps.CSRF.Issue(rec.ID, now)
+	// Scope the CSRF token by the active prompt type so a token issued
+	// for one step (e.g. "auth.password") cannot be replayed against a
+	// later step (e.g. "auth.totp" or "consent.scope") inside the same
+	// interaction. Without the scope binding the prior token stays
+	// valid until the InteractionTTL window elapses, leaving a replay
+	// vector inside a chain whose user-visible step changed.
+	token, err := deps.CSRF.IssueScoped(rec.ID, step.Prompt.Type, now)
 	if err != nil {
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not issue csrf token")
 		return
@@ -279,7 +285,14 @@ func loadInteraction(
 // form posts the value as a hidden field). Either path satisfies the
 // double-submit check; embedders pick whichever matches their UI
 // architecture.
-func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid string) bool {
+//
+// scope is the active step name (the persisted [store.Interaction.Step]
+// value, which equals the prompt type stamped at issuance). The
+// per-step scope is folded into the HMAC binding so a token minted for
+// one prompt (e.g. "auth.password") cannot be replayed against a later
+// prompt in the same chain (e.g. "auth.totp" or "consent.scope") even
+// when both share the same uid + cookie.
+func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid, scope string) bool {
 	cookieVal, err := r.Cookie(cookie.CSRFProfile.Name)
 	if err != nil || cookieVal == nil || cookieVal.Value == "" {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf cookie missing")
@@ -297,7 +310,7 @@ func verifyCSRFToken(w http.ResponseWriter, r *http.Request, deps resolved, uid 
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token mismatch")
 		return false
 	}
-	if err := deps.CSRF.Verify(submitted, uid, deps.now(), deps.InteractionTTL); err != nil {
+	if err := deps.CSRF.VerifyScoped(submitted, uid, scope, deps.now(), deps.InteractionTTL); err != nil {
 		renderJSONError(w, http.StatusForbidden, errInvalidRequest, "csrf token rejected")
 		return false
 	}
@@ -378,6 +391,14 @@ func terminateInteraction(
 		ACR:                      acr,
 		ChooserGroupID:           authnState.ChooserGroupID,
 		ChooserSelectedSessionID: authnState.ChooserSelectedSessionID,
+		// FreshAuthn signals that an authenticator factor ran during
+		// this interaction, so ensureSession can rotate the underlying
+		// session ID even when the resulting subject equals the
+		// cookie's existing subject (session-fixation defence). The
+		// flag is true whenever the chain produced at least one
+		// [authn.Factor] entry; consent / chooser-only branches that
+		// did not run an authenticator leave Factors empty.
+		FreshAuthn: len(authnState.Factors) > 0,
 	}); err != nil {
 		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
@@ -462,6 +483,14 @@ type ensureSessionArgs struct {
 	ACR                      string
 	ChooserGroupID           string
 	ChooserSelectedSessionID string
+
+	// FreshAuthn reports whether an authenticator factor completed
+	// during this interaction. ensureSession reads it to decide
+	// whether to rotate the session ID when the cookie-bound
+	// subject equals the post-authn subject — a step-up or
+	// re-authentication flow that, without rotation, would leave
+	// the pre-fixation cookie value valid.
+	FreshAuthn bool
 }
 
 // ensureSession reuses the cookie-bound session when it represents
@@ -470,10 +499,25 @@ type ensureSessionArgs struct {
 // existing chooser group when a fresh login lands on top of an active
 // session for a different subject, or issues a fresh session
 // otherwise. The resulting cookie is set on the response writer.
+//
+// Session-fixation defence: when the cookie-bound subject equals the
+// post-authn subject AND a fresh authn factor ran during this
+// interaction (in.FreshAuthn), the function rotates the underlying
+// session ID via [sessions.Manager.Rotate] and writes the new cookie
+// before returning. A chain that completed without running an
+// authenticator (consent-only, chooser-only) leaves the cookie
+// untouched so a same-subject silent re-issue keeps the existing SID.
 func ensureSession(w http.ResponseWriter, r *http.Request, deps resolved, in ensureSessionArgs) error {
 	active, _ := resolveSession(r, deps)
 	if active != nil && active.Session != nil && active.Session.Subject == in.Subject {
-		return nil
+		if !in.FreshAuthn {
+			return nil
+		}
+		out, err := deps.Sessions.Rotate(r.Context(), active.Session.ID)
+		if err != nil {
+			return fmt.Errorf("authorizeendpoint: rotate session: %w", err)
+		}
+		return setSessionCookie(w, out.Cookie)
 	}
 	out, err := pickSessionOutcome(r.Context(), deps, in, active)
 	if err != nil {

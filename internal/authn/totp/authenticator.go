@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -43,11 +44,14 @@ var ErrCodeMissing = errors.New("totp: code field is missing")
 // TOTP factor. It binds a [Verifier] (the primitive that does the
 // TOTP math + brute-force counter) to a [store.TOTPStore] (the
 // persisted record) so the orchestrator can drive the factor without
-// knowing about either.
+// knowing about either. The optional [lockout.Counter] adds the
+// cross-factor brute-force counter (M-AUTHN-1) so an attacker pivoting
+// between TOTP and email-OTP cannot double their budget.
 // Construct through [NewAuthenticator]; the zero value is not usable.
 type Authenticator struct {
 	verifier *Verifier
 	store    store.TOTPStore
+	lockout  *lockout.Counter
 }
 
 // ErrVerifierRequired / ErrStoreRequired are returned by
@@ -65,6 +69,10 @@ var (
 // required; a nil verifier or store would surface as a panic on the
 // first Begin / Continue otherwise, which is harder to diagnose than
 // the construction-time error returned here.
+//
+// The cross-factor brute-force counter (M-AUTHN-1) is opt-in through
+// [Authenticator.WithLockout]; the zero value here observes only the
+// per-record FailedCount.
 func NewAuthenticator(verifier *Verifier, totpStore store.TOTPStore) (*Authenticator, error) {
 	if verifier == nil {
 		return nil, ErrVerifierRequired
@@ -73,6 +81,18 @@ func NewAuthenticator(verifier *Verifier, totpStore store.TOTPStore) (*Authentic
 		return nil, ErrStoreRequired
 	}
 	return &Authenticator{verifier: verifier, store: totpStore}, nil
+}
+
+// WithLockout returns a copy of a with the supplied [lockout.Counter]
+// wired so the authenticator consults the cross-factor brute-force
+// counter (M-AUTHN-1) on every Begin / Continue. A nil counter
+// disables the cross-factor gate (the per-record FailedCount continues
+// to apply). The receiver is not mutated; the caller MUST use the
+// returned pointer.
+func (a *Authenticator) WithLockout(c *lockout.Counter) *Authenticator {
+	cp := *a
+	cp.lockout = c
+	return &cp
 }
 
 // Type implements [authn.Authenticator]. Always returns [authn.FactorTOTP].
@@ -97,6 +117,14 @@ func (*Authenticator) Prompts() []string { return []string{PromptType} }
 func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
+	}
+	if a.lockout != nil {
+		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
+			if errors.Is(err, lockout.ErrLocked) {
+				return interaction.Step{}, ErrLocked
+			}
+			return interaction.Step{}, fmt.Errorf("totp: lockout guard: %w", err)
+		}
 	}
 	rec, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
@@ -125,6 +153,8 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 //   - On [OutcomeLocked] / [OutcomeResetRequired]: the matching error
 //     is returned so the orchestrator stops the chain. The persisted
 //     record carries the lockout stamp.
+//
+//nolint:gocognit,cyclop // verify path enumerates lockout / replay / window branches in flat shape; refactor would obscure spec mapping.
 func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
@@ -132,6 +162,14 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	code, ok := in.Submission.Values[CodeFieldName]
 	if !ok || code == "" {
 		return interaction.Step{}, ErrCodeMissing
+	}
+	if a.lockout != nil {
+		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
+			if errors.Is(err, lockout.ErrLocked) {
+				return interaction.Step{}, ErrLocked
+			}
+			return interaction.Step{}, fmt.Errorf("totp: lockout guard: %w", err)
+		}
 	}
 	rec, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
@@ -154,12 +192,32 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 
 	switch {
 	case verr == nil:
+		if a.lockout != nil {
+			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
+				return interaction.Step{}, fmt.Errorf("totp: lockout reset: %w", rerr)
+			}
+		}
 		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case errors.Is(verr, ErrWrongCode):
+		if a.lockout != nil {
+			out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
+			if lerr != nil {
+				return interaction.Step{}, fmt.Errorf("totp: lockout record failure: %w", lerr)
+			}
+			if out.ResetRequired {
+				return interaction.Step{}, ErrResetRequired
+			}
+			if !out.LockedUntil.IsZero() {
+				return interaction.Step{}, ErrLocked
+			}
+		}
 		return interaction.Step{Prompt: a.prompt(res.Record)}, nil
 	default:
 		// ErrLocked / ErrResetRequired / store-decryption failures
 		// flow through verbatim so the orchestrator can dispatch.
+		// The cross-factor counter is intentionally NOT incremented
+		// for these branches: they represent state, not a guess
+		// against the credential.
 		return interaction.Step{}, verr
 	}
 }

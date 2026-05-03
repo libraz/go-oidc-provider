@@ -123,6 +123,14 @@ func completeConsentIfPrompted(t testing.TB, client *http.Client, interactionURL
 	if stateRef == "" {
 		t.Fatal("consent prompt missing state_ref")
 	}
+	// Per-step CSRF scope binding rotates the cookie at each step
+	// boundary. Pull the rotated cookie off the prior response.
+	for _, c := range prior.Cookies() {
+		if c.Name == "__Host-oidc_csrf" {
+			csrf = c.Value
+			break
+		}
+	}
 	approved := approvedScopesFromPrompt(env)
 	return testkit.PostConsentApproval(t, client, interactionURL, origin, csrf, stateRef, approved)
 }

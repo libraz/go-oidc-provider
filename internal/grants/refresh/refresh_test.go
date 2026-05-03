@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -692,12 +693,22 @@ func TestExchange_GraceWindow_BoundaryTable(t *testing.T) {
 // backing store would surface ErrNotFound for an expired record before
 // the exchanger ran its own check.
 type alwaysAliveRefreshStore struct {
-	mu sync.Mutex
-	m  map[string]*store.RefreshToken
+	mu  sync.Mutex
+	m   map[string]*store.RefreshToken
+	now func() time.Time
 }
 
 func newAlwaysAliveRefreshStore() *alwaysAliveRefreshStore {
-	return &alwaysAliveRefreshStore{m: make(map[string]*store.RefreshToken)}
+	return &alwaysAliveRefreshStore{m: make(map[string]*store.RefreshToken), now: func() time.Time { return time.Now().UTC() }}
+}
+
+// withClock returns a fresh store backed by the supplied clock so the
+// ConsumedAt timestamp the store stamps is deterministic relative to
+// the exchanger's own clock; without this hook a wall-clock stamping
+// would race the test's frozen clock and the grace-window arithmetic
+// would diverge.
+func newAlwaysAliveRefreshStoreWithClock(now func() time.Time) *alwaysAliveRefreshStore {
+	return &alwaysAliveRefreshStore{m: make(map[string]*store.RefreshToken), now: now}
 }
 
 func (s *alwaysAliveRefreshStore) Save(_ context.Context, tok *store.RefreshToken) error {
@@ -722,20 +733,26 @@ func (s *alwaysAliveRefreshStore) Find(_ context.Context, id string) (*store.Ref
 	return &clone, nil
 }
 
-func (s *alwaysAliveRefreshStore) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
-	rec, err := s.Find(ctx, id)
-	if err != nil {
-		return nil, err
+func (s *alwaysAliveRefreshStore) Consume(_ context.Context, id string) (*store.RefreshToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[id]
+	if !ok {
+		return nil, store.ErrNotFound
 	}
-	now := time.Now().UTC()
+	if rec.ConsumedAt != nil {
+		return nil, store.ErrAlreadyConsumed
+	}
+	now := s.now().UTC()
 	rec.ConsumedAt = &now
-	return rec, nil
+	clone := *rec
+	return &clone, nil
 }
 
 func (s *alwaysAliveRefreshStore) RevokeChain(_ context.Context, rootID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	if rec, ok := s.m[rootID]; ok {
 		rec.ConsumedAt = &now
 	}
@@ -750,11 +767,319 @@ func (s *alwaysAliveRefreshStore) RevokeChain(_ context.Context, rootID string) 
 func (s *alwaysAliveRefreshStore) RevokeByGrant(_ context.Context, grantID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now().UTC()
+	now := s.now().UTC()
 	for _, rec := range s.m {
 		if rec.GrantID == grantID && rec.ConsumedAt == nil {
 			rec.ConsumedAt = &now
 		}
 	}
 	return nil
+}
+
+// TestExchange_GraceWindow_ExpiredTokenSurfacesExpired pins H-A1: a
+// refresh token whose ExpiresAt has elapsed but whose ConsumedAt is
+// inside the grace window MUST surface ErrTokenExpired rather than
+// minting a fresh access token via the grace path. The audit concern
+// was that the strict (non-grace) path checks ExpiresAt after Consume
+// while the grace path runs against a Find-only record; without an
+// explicit gate, an expired token would still be honoured inside the
+// grace window because the grace check only consults ConsumedAt.
+//
+// This test uses the alwaysAliveRefreshStore so the expiry filter
+// the inmem reference adapter applies on Find does not short-circuit
+// the grace path before it reaches the new gate. A real backing
+// store typically expires reads (mirroring the inmem posture); the
+// test exercises the exchanger's own clock-based check end-to-end.
+//
+// Timeline:
+//
+//	t0          : Issue (TTL=90s, ExpiresAt = t0+90s)
+//	t0 +  85s   : Exchange#1 succeeds (ConsumedAt = t0+85s)
+//	t0 +  95s   : Exchange#2 attempted. elapsed = 10s (well inside the
+//	              60s grace window) but the record is expired
+//	              (clock > ExpiresAt). The exchanger MUST surface
+//	              ErrTokenExpired and MUST NOT cascade the chain
+//	              revoke (expiry is the record's contract; the chain
+//	              is otherwise intact).
+func TestExchange_GraceWindow_ExpiredTokenSurfacesExpired(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	clk := func() time.Time { return cur }
+	st := newAlwaysAliveRefreshStoreWithClock(clk)
+	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 90 * time.Second})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{Store: st, Clock: clk})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+
+	root, err := iss.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	// Move close to (but before) expiry, then consume.
+	cur = cur.Add(85 * time.Second)
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("Exchange#1: %v", err)
+	}
+	// Advance past expiry but well inside the grace window. Without
+	// the H-A1 gate, the grace path would mint a fresh access token
+	// idempotently; with the gate, it surfaces invalid_grant via
+	// ErrTokenExpired.
+	cur = cur.Add(10 * time.Second)
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenExpired) {
+		t.Errorf("expired-in-grace err=%v want ErrTokenExpired", err)
+	}
+}
+
+// recordingEmitter is a test-local audit.Emitter that captures every
+// emitted event for inspection.
+type recordingEmitter struct {
+	mu     sync.Mutex
+	events []audit.Event
+}
+
+// Emit implements audit.Emitter.
+func (r *recordingEmitter) Emit(_ context.Context, ev audit.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, ev)
+}
+
+func (r *recordingEmitter) snapshot() []audit.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]audit.Event, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
+// failingChainStore wraps a [store.RefreshTokenStore] and substitutes
+// a synthetic transport fault for [RefreshTokenStore.RevokeChain]
+// while passing every other call through. Used to drive the H-A2
+// audit signal without breaking the rest of the cascade contract.
+type failingChainStore struct {
+	store.RefreshTokenStore
+	err error
+}
+
+func (s *failingChainStore) RevokeChain(_ context.Context, _ string) error {
+	return s.err
+}
+
+// TestExchange_ChainRevokeFailure_EmitsAuditEvent pins H-A2: when the
+// post-replay chain revoke encounters a transport fault the
+// exchanger MUST emit a warn-level audit event so SOC tooling can
+// distinguish a successful cascade from a silent failure. The wire
+// response (ErrTokenReplayed) is unchanged.
+func TestExchange_ChainRevokeFailure_EmitsAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	clk := func() time.Time { return cur }
+	base := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
+	wrapped := &failingChainStore{RefreshTokenStore: base, err: errors.New("synthetic chain revoke fault")}
+	em := &recordingEmitter{}
+
+	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: base, Clock: clk, TTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store: wrapped,
+		Clock: clk,
+		Audit: em,
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+
+	root, err := iss.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+
+	// Step past the grace window so the second presentation is a true
+	// replay rather than an idempotent retry.
+	cur = cur.Add(refresh.GraceTTLDefault + time.Second)
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+
+	events := em.snapshot()
+	var found bool
+	for _, ev := range events {
+		if ev.Name == "refresh.chain_revoke_failed" && ev.Level == audit.LevelWarn {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected refresh.chain_revoke_failed warn event, got %+v", events)
+	}
+}
+
+// stubGrantRevocationStore captures RevokeGrant invocations so tests
+// can assert the cascade ran the grant tombstone path. Other methods
+// are stubs that return safe defaults so the substore satisfies the
+// interface without coupling the test to behaviour it does not
+// exercise.
+type stubGrantRevocationStore struct {
+	mu     sync.Mutex
+	grants []store.GrantTombstone
+	err    error
+}
+
+func (s *stubGrantRevocationStore) RevokeGrant(_ context.Context, t store.GrantTombstone) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	s.grants = append(s.grants, t)
+	return nil
+}
+
+func (s *stubGrantRevocationStore) RevokeJTI(_ context.Context, _ store.RevokedJTI) error {
+	return nil
+}
+
+func (s *stubGrantRevocationStore) IsRevoked(_ context.Context, _, _ string, _ time.Time) (bool, error) {
+	return false, nil
+}
+
+func (s *stubGrantRevocationStore) GC(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
+}
+
+func (s *stubGrantRevocationStore) snapshot() []store.GrantTombstone {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.GrantTombstone, len(s.grants))
+	copy(out, s.grants)
+	return out
+}
+
+// TestExchange_ChainRevoke_TombstonesGrant pins H-A6: a refresh
+// replay MUST cascade onto the grant-tombstone substore so JWT
+// access tokens descended from the chain are blocked at userinfo /
+// introspection / mint time. Without the cascade, the chain revoke
+// only kills refresh tokens; outstanding JWT access tokens remain
+// redeemable until natural expiry.
+func TestExchange_ChainRevoke_TombstonesGrant(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	clk := func() time.Time { return cur }
+	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
+	revs := &stubGrantRevocationStore{}
+
+	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store:             st,
+		Clock:             clk,
+		GrantRevocations:  revs,
+		GrantTombstoneTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+
+	root, err := iss.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	cur = cur.Add(refresh.GraceTTLDefault + time.Second)
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+
+	tombs := revs.snapshot()
+	if len(tombs) != 1 {
+		t.Fatalf("tombstones=%d want 1: %+v", len(tombs), tombs)
+	}
+	if tombs[0].GrantID != "grant-1" {
+		t.Errorf("tombstone.GrantID=%q want %q", tombs[0].GrantID, "grant-1")
+	}
+	if tombs[0].RevokedAt.IsZero() {
+		t.Errorf("tombstone.RevokedAt is zero")
+	}
+	if tombs[0].ExpiresAt.IsZero() {
+		t.Errorf("tombstone.ExpiresAt is zero (configured TTL was 1h)")
+	}
+	if tombs[0].Reason == "" {
+		t.Errorf("tombstone.Reason is empty; want a non-empty cascade trigger")
+	}
+}
+
+// TestExchange_ChainRevoke_GrantTombstoneFailure_EmitsAudit pins the
+// H-A2 audit signal for the grant tombstone branch: when the
+// tombstone substore returns an error the exchanger MUST emit a
+// warn-level audit event so SOC tooling can spot the half-cascade.
+func TestExchange_ChainRevoke_GrantTombstoneFailure_EmitsAudit(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	clk := func() time.Time { return cur }
+	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
+	revs := &stubGrantRevocationStore{err: errors.New("synthetic tombstone fault")}
+	em := &recordingEmitter{}
+
+	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store:            st,
+		Clock:            clk,
+		Audit:            em,
+		GrantRevocations: revs,
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+
+	root, err := iss.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	cur = cur.Add(refresh.GraceTTLDefault + time.Second)
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+
+	events := em.snapshot()
+	var found bool
+	for _, ev := range events {
+		if ev.Name == "refresh.grant_revoke_failed" && ev.Level == audit.LevelWarn {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected refresh.grant_revoke_failed warn event, got %+v", events)
+	}
 }

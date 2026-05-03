@@ -71,6 +71,30 @@ type EmailOTPRecord struct {
 	// non-zero ConsumedAt older than a deployment-defined retention
 	// window; the library never reads them after the stamp.
 	ConsumedAt time.Time
+
+	// SendCount is the number of OTP send events the authenticator
+	// has issued for this subject within the current rolling window
+	// anchored at SendWindowStart. It is incremented on every send
+	// (including sends that hit the unmatched-email branch and skip
+	// the mailer). Backends MUST persist the field verbatim; the
+	// library updates it through [EmailOTPStore.Put].
+	SendCount int
+
+	// SendWindowStart anchors the rolling send-rate window. A zero
+	// value means "no window active yet"; sends older than the
+	// configured rolling window (one hour) are dropped on the next
+	// send by resetting the anchor and SendCount to 1. Backends MUST
+	// persist the field verbatim.
+	SendWindowStart time.Time
+
+	// LastSendAttemptAt is the wall-clock time of the most recent
+	// send attempt, regardless of whether the user-supplied email
+	// matched the bound address. The library uses it to enforce the
+	// per-subject minimum interval between consecutive sends; SentAt
+	// alone would only count successful (matched) sends and let an
+	// attacker bypass the gate by spamming wrong addresses. Backends
+	// MUST persist the field verbatim.
+	LastSendAttemptAt time.Time
 }
 
 // EmailOTPStore is the substore for pending email-OTP challenges. Like

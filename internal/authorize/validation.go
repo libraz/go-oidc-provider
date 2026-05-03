@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"slices"
 
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -177,7 +178,7 @@ func (req *Request) validateState(stateOrNonceRequired bool) error {
 // client-registered-scope intersection and the allowlist still run
 // — the only relaxation is the OIDC-mandatory "openid" presence check.
 func (req *Request) validateScope(client *store.Client, scopes *scoperegistry.Registry, openIDOptional bool) error {
-	if !openIDOptional && !slices.Contains(req.Scope, "openid") {
+	if !openIDOptional && !oidcscope.ContainsOpenID(req.Scope) {
 		return ErrScopeMissingOpenID
 	}
 	for _, s := range req.Scope {

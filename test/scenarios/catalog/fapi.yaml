@@ -172,10 +172,13 @@ rows:
 
   - id: FAPI-V2-024
     severity: P0
-    spec: FAPI 2.0 §5.3.2.1
+    spec: FAPI 2.0 §5.3.2.1 / FAPI 2.0 Message Signing §5.6
     behaviour: |
-      The same nbf <= exp <= nbf + 3600 constraint as FAPI 1.0 applies;
-      an exp claim too far from nbf yields invalid_request_object.
+      A Request Object's lifetime is bounded by 60 seconds (Message
+      Signing §5.6 / OFCS conformance ensure-request-object-with-exp-
+      over-60-fails / -nbf-over-60-fails); exp more than 60 seconds
+      past now or nbf more than 60 seconds before now yields
+      invalid_request_object.
     status: active
 
   - id: FAPI-V2-025

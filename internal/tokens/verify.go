@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	josev4 "github.com/go-jose/go-jose/v4"
+
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -48,6 +50,15 @@ var (
 	// validate audience after Verify returns. [AccessTokenVerifier]
 	// itself does not raise this error — see the godoc on Verify.
 	ErrAccessTokenAudienceMismatch = errors.New("tokens: access token audience mismatch")
+
+	// ErrAccessTokenTypeMismatch signals that the JOSE "typ" header is
+	// not exactly "at+jwt" (RFC 9068 §2.1 / §4). The check defends
+	// against an ID token (typ=JWT) being presented at a resource-server
+	// endpoint that consumes access tokens: even though both are signed
+	// by the same OP key, the "typ" pin keeps cross-format substitution
+	// out of the protocol surface. The resource server collapses this
+	// onto invalid_token at the wire layer (RFC 6750 §3.1).
+	ErrAccessTokenTypeMismatch = errors.New("tokens: access token typ header is not at+jwt")
 )
 
 // Clock is the package-local view of [internal/timex.Clock]. It is
@@ -113,6 +124,14 @@ func (v *AccessTokenVerifier) Verify(raw string) (*AccessTokenClaims, string, er
 		return nil, "", fmt.Errorf("%w: %w", ErrAccessTokenMalformed, err)
 	}
 
+	// RFC 9068 §2.1 mandates typ="at+jwt" so a resource server can
+	// distinguish a JWT-shaped access token from an ID token. The pin
+	// MUST land before signature verification so a token with the
+	// wrong typ does not contribute timing data about key state.
+	if !accessTokenTypHeaderMatches(jws.Signatures[0]) {
+		return nil, "", ErrAccessTokenTypeMismatch
+	}
+
 	kid := jws.Signatures[0].Header.KeyID
 	if kid == "" {
 		return nil, "", ErrAccessTokenSignature
@@ -153,6 +172,24 @@ func (v *AccessTokenVerifier) Verify(raw string) (*AccessTokenClaims, string, er
 	}
 
 	return claims, kid, nil
+}
+
+// accessTokenTypHeaderMatches reports whether sig carries the canonical
+// "at+jwt" JOSE typ header (RFC 9068 §2.1). The value lives in the
+// protected (or unprotected) ExtraHeaders map because go-jose only
+// promotes "kid", "alg", "jwk", and "nonce" into the typed [Header]
+// struct. The check is case-sensitive: RFC 9068 fixes the literal
+// media type "at+jwt".
+func accessTokenTypHeaderMatches(sig josev4.Signature) bool {
+	for _, hdr := range []map[josev4.HeaderKey]any{sig.Protected.ExtraHeaders, sig.Header.ExtraHeaders} {
+		if v, ok := hdr[josev4.HeaderType]; ok {
+			if s, ok := v.(string); ok {
+				return s == accessTokenTypeHeader
+			}
+			return false
+		}
+	}
+	return false
 }
 
 // now reads the verifier's clock, falling back to the system clock when

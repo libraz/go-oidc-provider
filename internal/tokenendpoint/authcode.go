@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -330,7 +331,7 @@ func issueAuthCodeResponse(
 		return
 	}
 	var idToken string
-	if scopeContainsOpenID(exchanged.Scope) {
+	if oidcscope.ContainsOpenID(exchanged.Scope) {
 		idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
 		idToken, err = mintAuthCodeIDToken(deps, mintIDTokenInput{
 			Subject:     exchanged.Subject,
@@ -654,7 +655,7 @@ func maybeIssueRefreshToken(
 		ClientID: client.ID,
 		Extras: map[string]any{
 			"grant_id":       grantID,
-			"offline_access": scopeContainsOfflineAccess(scope),
+			"offline_access": oidcscope.ContainsOfflineAccess(scope),
 			"ttl_bucket":     ttlBucketFor(deps, scope),
 		},
 	})
@@ -662,7 +663,7 @@ func maybeIssueRefreshToken(
 }
 
 func requireAuthTimeForIDToken(client *store.Client, scope []string, authTime int64) error {
-	if client == nil || !client.RequireAuthTime || !scopeContainsOpenID(scope) {
+	if client == nil || !client.RequireAuthTime || !oidcscope.ContainsOpenID(scope) {
 		return nil
 	}
 	if authTime != 0 {
