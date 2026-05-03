@@ -151,7 +151,8 @@ rows:
       If a persisted Interaction record carries a `prompt.name` that
       is not registered (e.g. tampering), a GET against the
       interaction URL MUST return 501 Not Implemented.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific 'persisted Interaction record with unknown prompt.name' failure mode mapped to 501 Not Implemented. v1.0's interaction record (internal/authorizeendpoint/interaction.go) carries the orchestrator's typed prompt envelope, not a string-named prompt taxonomy with embedder-registered names — there is no surface where an unknown prompt.name could be persisted because the orchestrator is the only writer and emits its closed set ({login, consent, mfa, chooser, captcha, ...}). Tampering with the persisted record would be a substore-level bug, not an unknown-name dispatch path; the safest closed default for cookie-bound records gone bad is 404 (covered by ITX-002 OOS rationale). The 501 wire shape this row asks for is upstream surface that v1.0 does not have."
 
   - id: ITX-040
     severity: P0
@@ -233,7 +234,8 @@ rows:
       A custom interaction failure with `prompt=none` MUST 303
       redirect carrying `error=<custom>`,
       `error_description=<custom>`, and `state`.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific 'custom interaction failure with prompt=none → 303 carrying error=<custom>' extension contract. v1.0 has no embedder-hands-error-back API on the interaction surface — error redirects originate inside the orchestrator (the public interaction.Authenticator returns a typed error, the orchestrator translates it into a registered OAuth code). The closed set of error codes the orchestrator can produce is part of v1.0's catalog; embedders cannot inject arbitrary <custom> codes onto the redirect. The prompt=none branch's wire-observable shape (403 / login_required / consent_required) is bound by the prompt scenarios end-to-end; the upstream 'arbitrary embedder-supplied error code via interaction failure' wire is not v1.0."
 
   - id: ITX-061
     severity: P1
@@ -242,7 +244,8 @@ rows:
       A custom interactive failure MUST resume into another
       interaction round-trip (e.g.
       `validateInteraction('login', 'reason_foo')`).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific 'validateInteraction(name, reason)' resume-into-another-prompt API. v1.0 has no /auth/resume endpoint and no embedder-callable validateInteraction primitive — the orchestrator's own dispatchTick chain decides whether to re-prompt based on the typed Authenticator chain (covered by mfa scenarios for the multi-step case), not by an embedder-supplied 'resume into reason_foo' callback. The looping observable v1.0 does have (multi-step authenticator chain) is bound by mfa rows; the upstream 'failure-with-reason resumes into another interaction round' API is not v1.0 wire."
 
   - id: ITX-062
     severity: P0
@@ -269,7 +272,8 @@ rows:
       A resume carrying a custom (non-standard) error code MUST 303
       and round-trip the custom `error` and `error_description`
       verbatim.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same vendor-specific resume-callback API as ITX-062 / ITX-063 (both OOS): v1.0 has no embedder-hands-error-back API on the interaction surface, so 'resume carrying a custom (non-standard) error code that round-trips verbatim' has no v1.0 wire seam. Error redirects originate inside the orchestrator with codes from the closed catalog; arbitrary <custom> codes never reach the wire. ITX-065 binds the state round-trip property for the codes the OP does emit."
 
   - id: ITX-065
     severity: P0
@@ -286,7 +290,8 @@ rows:
       An RP requesting a registered `prompt=custom` whose interaction
       is unresolved MUST 303 to the interaction redirect (e.g.
       `validateInteraction('custom', 'custom_prompt')`).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific 'registered prompt=custom whose interaction is unresolved' wire. v1.0 does not expose a public prompt-registration extension API — the prompt taxonomy is the orchestrator's closed set ({login, consent, mfa, chooser, captcha, ...}) and the OIDC core 'prompt' parameter is parsed for {none, login, consent, select_account} per the spec. RP-supplied prompt=custom would be rejected as unsupported, not routed to an embedder-registered handler. The upstream extension hook this row asserts is not v1.0 surface."
 
   - id: ITX-071
     severity: P1
@@ -296,7 +301,8 @@ rows:
       the RP cannot ask for but the OP injects, the initial `/auth`
       MUST 303 to the interaction (e.g.
       `validateInteraction('unrequestable', 'un_foo')`).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Vendor-specific 'unrequestable prompt' extension category — an OP-injected prompt that the RP cannot ask for but the OP triggers itself based on policy. v1.0 has no 'unrequestable prompt' registration surface in interaction.Driver / interaction.Authenticator; OP-side conditions that need extra interaction (mfa challenge, risk-driven step-up, account-chooser disambiguation) are wired through typed Authenticators in the chain (op.WithAuthenticator), and their wire-observable redirects to the SPA are bound by the mfa / chooser scenarios. The 'validateInteraction(unrequestable, un_foo)' API and the 303-to-interaction wire that follows are upstream surface; v1.0 routes the same observable through its typed chain."
 
   - id: ITX-072
     severity: P0

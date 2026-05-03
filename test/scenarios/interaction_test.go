@@ -157,9 +157,10 @@ func TestScenario_ITX_025_ConsentNewLoginBeforeResume(t *testing.T) {
 	t.Skip("out-of-scope: ITX-025 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ITX_030_UnknownPromptNameReturns501 is OOS — see catalog out_of_scope_reason.
 func TestScenario_ITX_030_UnknownPromptNameReturns501(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ITX-030")
+	t.Skip("out-of-scope: ITX-030 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ITX_040_AbortReturnsAccessDeniedToClient pins the
@@ -287,14 +288,16 @@ func TestScenario_ITX_055_AccountSwitchRendersLogoutForm(t *testing.T) {
 	t.Skip("out-of-scope: ITX-055 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ITX_060_CustomFailWithPromptNoneRedirects is OOS — see catalog out_of_scope_reason.
 func TestScenario_ITX_060_CustomFailWithPromptNoneRedirects(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ITX-060")
+	t.Skip("out-of-scope: ITX-060 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ITX_061_CustomInteractiveFailLoopsToNextPrompt is OOS — see catalog out_of_scope_reason.
 func TestScenario_ITX_061_CustomInteractiveFailLoopsToNextPrompt(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ITX-061")
+	t.Skip("out-of-scope: ITX-061 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_ITX_062_ResumeAccessDeniedWithoutDescription(t *testing.T) {
@@ -307,9 +310,10 @@ func TestScenario_ITX_063_ResumeAccessDeniedWithDescription(t *testing.T) {
 	t.Skip("out-of-scope: ITX-063 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ITX_064_ResumeWithCustomErrorCode is OOS — see catalog out_of_scope_reason.
 func TestScenario_ITX_064_ResumeWithCustomErrorCode(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ITX-064")
+	t.Skip("out-of-scope: ITX-064 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ITX_065_ErrorRedirectsRoundTripState pins the
@@ -390,14 +394,16 @@ func TestScenario_ITX_065_ErrorRedirectsRoundTripState(t *testing.T) {
 	}
 }
 
+// TestScenario_ITX_070_RequestedCustomPromptRedirectsToInteraction is OOS — see catalog out_of_scope_reason.
 func TestScenario_ITX_070_RequestedCustomPromptRedirectsToInteraction(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ITX-070")
+	t.Skip("out-of-scope: ITX-070 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_ITX_071_UnrequestablePromptInjectedByOP is OOS — see catalog out_of_scope_reason.
 func TestScenario_ITX_071_UnrequestablePromptInjectedByOP(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ITX-071")
+	t.Skip("out-of-scope: ITX-071 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_ITX_072_UnsatisfiedUnrequestablePromptLoops(t *testing.T) {
