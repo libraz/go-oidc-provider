@@ -101,6 +101,7 @@ func newFAPIFixture(t *testing.T) *fapiFixture {
 	}
 	const clientID = "rp-fapi"
 	const redirect = "https://rp.testkit.invalid/callback"
+	//nolint:gosec // G101: test fixture, not a real credential.
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      clientID,
 		RedirectURIs:            []string{redirect},

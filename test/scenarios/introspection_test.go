@@ -666,7 +666,7 @@ func TestScenario_INT_012_ClientCredentialsIntrospectUnrecognisedHint(t *testing
 func runCCIntrospectionWithHint(t *testing.T, idPrefix, hint string) {
 	t.Helper()
 	clientID := idPrefix
-	clientSecret := idPrefix + "-secret" //nolint:gosec // test fixture
+	clientSecret := idPrefix + "-secret"
 
 	hash, err := op.HashClientSecret(clientSecret)
 	if err != nil {

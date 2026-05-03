@@ -825,7 +825,7 @@ func TestScenario_REV_024_ClientCredentialsSuccessRegistersEntities(t *testing.T
 func mintRevocationAccessToken(t *testing.T, idPrefix string) (*testkit.Provider, *store.Client, string, string) {
 	t.Helper()
 	clientID := idPrefix
-	clientSecret := idPrefix + "-secret" //nolint:gosec // test fixture
+	clientSecret := idPrefix + "-secret"
 	callback := "https://rp.testkit.invalid/callback"
 
 	hash, err := op.HashClientSecret(clientSecret)
@@ -877,7 +877,7 @@ func mintRevocationAccessToken(t *testing.T, idPrefix string) (*testkit.Provider
 func mintRevocationRefreshToken(t *testing.T, idPrefix string) (*testkit.Provider, *store.Client, string, string) {
 	t.Helper()
 	clientID := idPrefix
-	clientSecret := idPrefix + "-secret" //nolint:gosec // test fixture
+	clientSecret := idPrefix + "-secret"
 	callback := "https://rp.testkit.invalid/callback"
 
 	hash, err := op.HashClientSecret(clientSecret)
@@ -931,7 +931,7 @@ func mintRevocationRefreshToken(t *testing.T, idPrefix string) (*testkit.Provide
 func mintRevocationClientCredentialsToken(t *testing.T, idPrefix string) (*testkit.Provider, *store.Client, string, string) {
 	t.Helper()
 	clientID := idPrefix
-	clientSecret := idPrefix + "-secret" //nolint:gosec // test fixture
+	clientSecret := idPrefix + "-secret"
 
 	hash, err := op.HashClientSecret(clientSecret)
 	if err != nil {
