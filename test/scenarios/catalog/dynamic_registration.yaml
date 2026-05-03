@@ -58,7 +58,7 @@ rows:
     behaviour: |
       Valid input causes the OP to call Adapter.upsert("Client", id,
       payload) exactly once. Duplicate upserts are detectable in tests.
-    status: pending
+    status: active
 
   - id: DCR-EP-06
     severity: P1
@@ -66,7 +66,7 @@ rows:
     behaviour: |
       A registration_create.success audit event is emitted exactly
       once per successful registration.
-    status: pending
+    status: active
 
   - id: DCR-DEF-01
     severity: P0
@@ -97,7 +97,7 @@ rows:
     spec: OIDC DCR §2
     behaviour: |
       When require_auth_time is omitted, the OP defaults it to false.
-    status: pending
+    status: active
 
   - id: DCR-DEF-05
     severity: P0
@@ -136,7 +136,7 @@ rows:
     behaviour: |
       client_id_issued_at carries the Unix epoch timestamp of
       registration.
-    status: pending
+    status: active
 
   - id: DCR-SEC-01
     severity: P0
@@ -199,7 +199,8 @@ rows:
     behaviour: |
       A client_secret MUST NOT appear in plaintext in OP caches or
       logs; the value is masked through its String() method.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: an upstream's Secret type masks the value through its String() method so accidental fmt prints render '[REDACTED]'. v1.0 returns client_secret as a plain Go string in the JSON response (registration_response.ClientSecret) and tracks the persisted form as store.Client.SecretHash (already an Argon2id PHC encoding, never the plaintext). The OP never logs the plaintext (audit emitter does not surface ClientSecret in dcr.client.registered events) but there is no String()-masked secret type to test against. The 'plaintext never appears in logs' invariant is exercised functionally — every code path that touches ClientSecret returns it through the JSON response only and the operator's slog handler controls its own output."
 
   - id: DCR-IAT-01
     severity: P0
@@ -228,7 +229,8 @@ rows:
       The OP exposes an API to mint IAT entities
       (new InitialAccessToken({expiresIn?, policies?}).save()); when
       expiresIn is absent the IAT never expires.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: an upstream's IAT API exposes 'expiresIn' as an optional field with the contract 'absence means never expires'. v1.0's op.InitialAccessTokenSpec.TTL = 0 falls back to RegistrationOption.IATTTL (default 24h, never zero/never-expires). There is no v1.0 surface to mint an IAT with infinite lifetime — every adapter-managed IAT carries a finite ExpiresAt. The wire shape the row asserts is non-spec residue; finite-TTL IAT issuance is exercised by DCR-IAT-04 / DCR-IAT-07 and the registration_management catalog."
 
   - id: DCR-IAT-04
     severity: P0
@@ -246,7 +248,8 @@ rows:
       When IAT validation succeeds, the OP attaches the IAT entity to
       ctx.oidc.entities.InitialAccessToken so downstream policies can
       reference it.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: 'ctx.oidc.entities.InitialAccessToken' is an upstream koa-style request-context attachment so downstream policies can reference the IAT entity. v1.0 has no ctx.oidc.entities surface — request-scoped state lives in the handler's local variables and audit events carry the IAT identifier through audit.Event.Extras. There is no public hook that exposes the IAT entity to a policy callback during the registration request; downstream policy MUST be wired through op.RegistrationOption.ValidateMetadata which receives op.ClientMetadata only, not the IAT row."
 
   - id: DCR-IAT-06
     severity: P1
@@ -254,7 +257,7 @@ rows:
     behaviour: |
       Public DCR (initialAccessToken undefined) is a supported mode
       but discouraged in production deployments.
-    status: pending
+    status: active
 
   - id: DCR-IAT-07
     severity: P0
@@ -280,7 +283,8 @@ rows:
       OP setting issueRegistrationAccessToken=false (or a function
       returning false) suppresses RAT issuance; the response omits
       both registration_access_token and registration_client_uri.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: 'issueRegistrationAccessToken=false' (or a function returning false) is an upstream toggle that suppresses RAT issuance per registration. v1.0 has no public option to suppress RAT issuance — every successful POST /register issues a RAT (internal/registrationendpoint/register.go:171 unconditionally calls RegistrationAccessTokens.Put). The 'response omits registration_access_token / registration_client_uri' wire shape is unreachable from public configuration; suppression by static-client setup is exercised by DCR-STATIC-02."
 
   - id: DCR-RAT-03
     severity: P1
@@ -288,7 +292,8 @@ rows:
     behaviour: |
       OP setting issueRegistrationAccessToken=true (or a function
       returning true) issues a RAT, equivalent to DCR-RAT-01.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same root cause as DCR-RAT-02: v1.0 has no issueRegistrationAccessToken toggle (truthy or falsy). RAT issuance is unconditional on the dynamic-registration path. The 'function returning true' configuration shape has no v1.0 wire equivalent; the always-on RAT-issuance path is exercised by DCR-RAT-01."
 
   - id: DCR-RAT-04
     severity: P0
@@ -305,7 +310,8 @@ rows:
     behaviour: |
       On success, ctx.oidc.entities contains Client and (when issued)
       RegistrationAccessToken.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: 'ctx.oidc.entities' is an upstream koa-style request-context bag exposing the Client and RegistrationAccessToken entities to downstream policies. v1.0 has no equivalent ctx attachment surface — request-scoped state lives in handler-local variables and audit events surface the entity identifiers through audit.Event.ClientID/Extras only. No public hook exposes ctx.oidc.entities to a policy callback."
 
   - id: DCR-CTX-02
     severity: P1
@@ -313,7 +319,8 @@ rows:
     behaviour: |
       When IAT is in use, ctx.oidc.entities also includes
       InitialAccessToken.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same root cause as DCR-CTX-01: v1.0 has no ctx.oidc.entities surface. The IAT entity is not exposed via a request-scoped context bag; downstream policy must be wired through op.RegistrationOption.ValidateMetadata (which sees op.ClientMetadata, not the IAT row). The wire shape this row asserts is non-spec residue."
 
   - id: DCR-CTX-03
     severity: P2
@@ -321,7 +328,8 @@ rows:
     behaviour: |
       When RAT issuance is suppressed, ctx.oidc.entities does not
       include RegistrationAccessToken.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same root cause as DCR-CTX-01 / DCR-CTX-02: v1.0 has no ctx.oidc.entities surface, AND there is no public option to suppress RAT issuance (DCR-RAT-02 OOS for the same upstream-toggle reason). The 'entities omits RegistrationAccessToken when issuance is suppressed' contract has no v1.0 wire path on either axis."
 
   - id: DCR-STATIC-01
     severity: P0
@@ -364,7 +372,7 @@ rows:
     spec: RFC 7592 §2.1
     behaviour: |
       The response sets Cache-Control: no-store.
-    status: pending
+    status: active
 
   - id: DCR-GET-04
     severity: P0
@@ -477,7 +485,7 @@ rows:
     spec: OIDC Core §2
     behaviour: |
       default_max_age MUST be a non-negative integer.
-    status: pending
+    status: active
 
   - id: DCR-VAL-11
     severity: P1
@@ -485,7 +493,7 @@ rows:
     behaviour: |
       request_object_signing_alg=none is rejected when the OP does
       not support it.
-    status: pending
+    status: active
 
   - id: DCR-ERR-01
     severity: P0
@@ -502,11 +510,11 @@ rows:
     behaviour: |
       Error responses do not carry WWW-Authenticate, except for the
       Bearer-scheme variant emitted on IAT/RAT validation failure.
-    status: pending
+    status: active
 
   - id: DCR-ERR-03
     severity: P1
     spec: OWASP ASVS V8
     behaviour: |
       Error responses do not leak OP-internal detail.
-    status: pending
+    status: active

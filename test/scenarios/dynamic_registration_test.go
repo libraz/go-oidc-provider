@@ -16,10 +16,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
+	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
 
 // dcrFixture bundles a [testkit.Provider] with Dynamic Client
@@ -234,14 +236,71 @@ func TestScenario_DCR_EP_04_InvalidEnumRejectedAsClientMetadata(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_EP_05_AdapterUpsertCalledOnce confirms that a
+// single successful POST /register results in exactly one client row
+// in the OP's store. The store's GetClient lookup against the freshly
+// minted client_id MUST succeed and the row MUST carry
+// store.ClientSourceDynamic so a subsequent caller can distinguish it
+// from a static seed.
+//
+// Spec: RFC 7591.
 func TestScenario_DCR_EP_05_AdapterUpsertCalledOnce(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-EP-05")
+
+	f := newDCRFixture(t)
+	cid, _, _, _ := f.register(t, nil)
+
+	got, err := f.tk.Store.GetClient(context.Background(), cid)
+	if err != nil {
+		t.Fatalf("GetClient(%q): %v", cid, err)
+	}
+	if got.ID != cid {
+		t.Errorf("Store.GetClient.ID=%q want %q", got.ID, cid)
+	}
+	if got.Source != store.ClientSourceDynamic {
+		t.Errorf("Store.GetClient.Source=%v want %v", got.Source, store.ClientSourceDynamic)
+	}
 }
 
+// TestScenario_DCR_EP_06_RegistrationCreateAuditEmitted confirms that a
+// successful POST /register emits exactly one dcr.client.registered
+// audit event carrying the freshly minted client_id. The audit chain
+// is the single observability seam for DCR success on v1.0.
+//
+// Spec: OP audit (op.AuditDCRClientRegistered).
 func TestScenario_DCR_EP_06_RegistrationCreateAuditEmitted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-EP-06")
+
+	audit := scenariokit.NewAuditCapture()
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithDynamicRegistration(op.RegistrationOption{}),
+		op.WithAuditLogger(audit.Logger()),
+	))
+	endpoint := tk.Server.URL + "/oidc/register"
+	issued, err := tk.OP.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+	body, _ := json.Marshal(map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	})
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+issued.Value)
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 201 body=%s", resp.StatusCode, raw)
+	}
+	got := audit.EventsByName(string(op.AuditDCRClientRegistered))
+	if len(got) != 1 {
+		t.Fatalf("dcr.client.registered emitted %d times, want 1; all events=%v",
+			len(got), audit.Events())
+	}
 }
 
 // TestScenario_DCR_DEF_01_ApplicationTypeDefaultsWeb confirms that the
@@ -283,9 +342,33 @@ func TestScenario_DCR_DEF_03_AuthMethodDefaultsBasic(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_DEF_04_RequireAuthTimeDefaultsFalse confirms that
+// when the client omits require_auth_time, the OP defaults it to false
+// (and Go's omitempty serialisation drops the false value from the
+// response). The persisted client record exposes the same default via
+// store.Client.RequireAuthTime so downstream consumers see a
+// deterministic value.
+//
+// Spec: OpenID Connect Dynamic Client Registration 1.0 §2.
 func TestScenario_DCR_DEF_04_RequireAuthTimeDefaultsFalse(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-DEF-04")
+
+	f := newDCRFixture(t)
+	cid, _, _, body := f.register(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	})
+	if got, present := body["require_auth_time"]; present {
+		if b, _ := got.(bool); b {
+			t.Errorf("require_auth_time=%v want false", got)
+		}
+	}
+	persisted, err := f.tk.Store.GetClient(context.Background(), cid)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if persisted.RequireAuthTime {
+		t.Errorf("Store.RequireAuthTime=true want false (default)")
+	}
 }
 
 // TestScenario_DCR_DEF_05_GrantTypesDefaultAuthCode confirms that
@@ -393,9 +476,35 @@ func TestScenario_DCR_DEF_08_SecretExpiresAtZeroIsNever(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_DEF_09_ClientIDIssuedAtIsEpoch confirms that the
+// registration response carries client_id_issued_at as a Unix epoch
+// timestamp (seconds since 1970-01-01 UTC). The value MUST be close
+// to the OP clock's "now" — we assert it lands within a generous
+// 60-second window of the test's wall-clock to absorb CI scheduling
+// jitter.
+//
+// Spec: RFC 7591 §3.2.1.
 func TestScenario_DCR_DEF_09_ClientIDIssuedAtIsEpoch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-DEF-09")
+
+	f := newDCRFixture(t)
+	before := time.Now().Unix()
+	_, _, _, body := f.register(t, nil)
+	after := time.Now().Unix()
+
+	raw, present := body["client_id_issued_at"]
+	if !present {
+		t.Fatalf("client_id_issued_at missing from response: %+v", body)
+	}
+	v, ok := raw.(float64)
+	if !ok {
+		t.Fatalf("client_id_issued_at=%v (%T) want JSON number", raw, raw)
+	}
+	got := int64(v)
+	// Allow 60s of slack on either side to absorb test-runner clock skew.
+	if got < before-60 || got > after+60 {
+		t.Errorf("client_id_issued_at=%d outside [%d, %d] +/- 60s", got, before, after)
+	}
 }
 
 // TestScenario_DCR_SEC_01_NoSecretWhenAuthMethodNone confirms that with
@@ -515,9 +624,10 @@ func TestScenario_DCR_SEC_06_SecretEntropyAtLeast256Bits(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_SEC_07_SecretMaskedInLogs is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_SEC_07_SecretMaskedInLogs(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-SEC-07")
+	t.Skip("out-of-scope: DCR-SEC-07 (see catalog out_of_scope_reason)")
 }
 
 func TestScenario_DCR_IAT_01_FixedStringIATRequiresBearer(t *testing.T) {
@@ -530,9 +640,10 @@ func TestScenario_DCR_IAT_02_AdapterIATEntityRequired(t *testing.T) {
 	t.Skip("out-of-scope: DCR-IAT-02 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DCR_IAT_03_IATCreationAPIAvailable is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_IAT_03_IATCreationAPIAvailable(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-IAT-03")
+	t.Skip("out-of-scope: DCR-IAT-03 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_DCR_IAT_04_MissingOrInvalidIATIs401 confirms that POST
@@ -572,14 +683,51 @@ func TestScenario_DCR_IAT_04_MissingOrInvalidIATIs401(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_IAT_05_IATEntityAttachedToContext is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_IAT_05_IATEntityAttachedToContext(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-IAT-05")
+	t.Skip("out-of-scope: DCR-IAT-05 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DCR_IAT_06_PublicDCRSupportedButDiscouraged confirms
+// that op.RegistrationOption{Open: true} admits POST /register without
+// an Initial Access Token (the "public DCR" mode). The wire shape is a
+// 201 Created carrying a fresh client_id, and the OP MUST stamp a
+// dcr.open_registration_used audit event so operators can quantify the
+// usage of the discouraged mode.
+//
+// Spec: OWASP / RFC 7591 §5.2.
 func TestScenario_DCR_IAT_06_PublicDCRSupportedButDiscouraged(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-IAT-06")
+
+	audit := scenariokit.NewAuditCapture()
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithDynamicRegistration(op.RegistrationOption{Open: true}),
+		op.WithAuditLogger(audit.Logger()),
+	))
+	endpoint := tk.Server.URL + "/oidc/register"
+	body, _ := json.Marshal(map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	})
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 201 (Open=true must admit no-bearer); body=%s", resp.StatusCode, raw)
+	}
+	out := dcrDecode(t, resp)
+	if cid, _ := out["client_id"].(string); cid == "" {
+		t.Errorf("client_id missing from open-DCR response: %+v", out)
+	}
+	if got := audit.EventsByName(string(op.AuditDCROpenRegistrationUsed)); len(got) != 1 {
+		t.Errorf("dcr.open_registration_used emitted %d times, want 1; events=%v",
+			len(got), audit.Events())
+	}
 }
 
 // TestScenario_DCR_IAT_07_ManipulatedIATRejected confirms that a
@@ -634,14 +782,16 @@ func TestScenario_DCR_RAT_01_RATIssuedByDefault(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_RAT_02_RATIssuanceCanBeSuppressed is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_RAT_02_RATIssuanceCanBeSuppressed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-RAT-02")
+	t.Skip("out-of-scope: DCR-RAT-02 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DCR_RAT_03_RATIssuanceFunctionTrue is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_RAT_03_RATIssuanceFunctionTrue(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-RAT-03")
+	t.Skip("out-of-scope: DCR-RAT-03 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_DCR_RAT_04_RATBoundToIssuingClient confirms that an RAT
@@ -681,19 +831,22 @@ func TestScenario_DCR_RAT_04_RATBoundToIssuingClient(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_CTX_01_EntitiesContainClientAndRAT is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_CTX_01_EntitiesContainClientAndRAT(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-CTX-01")
+	t.Skip("out-of-scope: DCR-CTX-01 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DCR_CTX_02_EntitiesIncludeIATWhenInUse is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_CTX_02_EntitiesIncludeIATWhenInUse(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-CTX-02")
+	t.Skip("out-of-scope: DCR-CTX-02 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DCR_CTX_03_EntitiesOmitRATWhenSuppressed is OOS — see catalog out_of_scope_reason.
 func TestScenario_DCR_CTX_03_EntitiesOmitRATWhenSuppressed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-CTX-03")
+	t.Skip("out-of-scope: DCR-CTX-03 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_DCR_STATIC_01_AdapterFindReturnsBothKinds confirms that
@@ -860,9 +1013,35 @@ func TestScenario_DCR_GET_02_GetReturnsNonSecretMetadata(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_GET_03_GetSetsNoStore confirms that the management
+// endpoint stamps Cache-Control: no-store on the GET response so
+// intermediate caches cannot retain client metadata. The OP applies
+// the same header to every dynamic-registration response (success and
+// error), and this row pins the GET facet.
+//
+// Spec: RFC 7592 §2.1.
 func TestScenario_DCR_GET_03_GetSetsNoStore(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-GET-03")
+
+	f := newDCRFixture(t)
+	cid, _, rat, _ := f.register(t, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, f.endpoint+"/"+cid, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+rat)
+	resp, err := f.tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control=%q want no-store", got)
+	}
 }
 
 func TestScenario_DCR_GET_04_CrossClientRATAutoDestroyed(t *testing.T) {
@@ -1062,14 +1241,56 @@ func TestScenario_DCR_VAL_09_EncryptionAlgsBoundedByEnabledJWA(t *testing.T) {
 	t.Skip("out-of-scope: DCR-VAL-09 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DCR_VAL_10_DefaultMaxAgeNonNegative confirms that a
+// negative default_max_age is rejected with 400 invalid_client_metadata.
+// A non-negative value (e.g. 0) MUST be accepted because OIDC Core 1.0
+// §2 admits 0 as "no upper bound on the elapsed authentication age".
+//
+// Spec: OpenID Connect Core 1.0 §2.
 func TestScenario_DCR_VAL_10_DefaultMaxAgeNonNegative(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-VAL-10")
+
+	f := newDCRFixture(t)
+	resp := f.post(t, f.mintIAT(t), "", map[string]any{
+		"redirect_uris":   []string{"https://rp.test.invalid/cb"},
+		"default_max_age": -1,
+	})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	body := dcrDecode(t, resp)
+	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata", got)
+	}
 }
 
+// TestScenario_DCR_VAL_11_RequestObjectAlgNoneRejected confirms that a
+// request_object_signing_alg of "none" is rejected with 400
+// invalid_client_metadata. v1.0 admits only RS256 / PS256 / ES256 /
+// EdDSA on the request-object signing surface; "none" is explicitly
+// outside the allowlist because an unsigned request object defeats
+// JAR's authenticity guarantee (RFC 9101 §10.5).
+//
+// Spec: OpenID Connect Core 1.0 §6 / RFC 9101.
 func TestScenario_DCR_VAL_11_RequestObjectAlgNoneRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-VAL-11")
+
+	f := newDCRFixture(t)
+	resp := f.post(t, f.mintIAT(t), "", map[string]any{
+		"redirect_uris":              []string{"https://rp.test.invalid/cb"},
+		"request_object_signing_alg": "none",
+	})
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	body := dcrDecode(t, resp)
+	if got, _ := body["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata", got)
+	}
 }
 
 // TestScenario_DCR_ERR_01_ErrorCodesLimitedSet exercises the four
@@ -1147,12 +1368,97 @@ func TestScenario_DCR_ERR_01_ErrorCodesLimitedSet(t *testing.T) {
 	}
 }
 
+// TestScenario_DCR_ERR_02_NoWWWAuthenticateOnNonBearer confirms the
+// inverse of RFC 6750 §3: Bearer-scheme errors (missing IAT) carry a
+// WWW-Authenticate challenge so RFC 6750 RPs can react, while
+// RFC 7591 §3.2.2 metadata-validation errors (which are not
+// authentication failures) do NOT carry a WWW-Authenticate header
+// because no scheme negotiation is in progress.
+//
+// Spec: RFC 6749 §5.2 / RFC 6750 §3.
 func TestScenario_DCR_ERR_02_NoWWWAuthenticateOnNonBearer(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-ERR-02")
+
+	f := newDCRFixture(t)
+
+	// 1) Missing IAT -> 401 invalid_token; WWW-Authenticate: Bearer required.
+	missing := f.post(t, "", "", map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	})
+	defer func() { _ = missing.Body.Close() }()
+	if missing.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing IAT status=%d want 401", missing.StatusCode)
+	}
+	if got := missing.Header.Get("WWW-Authenticate"); !strings.HasPrefix(strings.ToLower(got), "bearer") {
+		t.Errorf("missing IAT WWW-Authenticate=%q must start with Bearer", got)
+	}
+
+	// 2) Bad metadata -> 400 invalid_client_metadata; WWW-Authenticate MUST be absent.
+	bad := f.post(t, f.mintIAT(t), "", map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+		"grant_types":   []string{"impossible_grant"},
+	})
+	defer func() { _ = bad.Body.Close() }()
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad metadata status=%d want 400", bad.StatusCode)
+	}
+	if got := bad.Header.Get("WWW-Authenticate"); got != "" {
+		t.Errorf("metadata-validation response carries WWW-Authenticate=%q (must be absent)", got)
+	}
 }
 
+// TestScenario_DCR_ERR_03_NoInternalDetailLeak confirms that the OP's
+// error_description fields do not leak Go-internal detail: no stack
+// traces, no file paths, no SQL, no struct dumps. The sample asserts
+// the metadata-validation envelope (the most likely to embed a Go
+// error) and the IAT-failure envelope.
+//
+// Spec: OWASP ASVS V8.
 func TestScenario_DCR_ERR_03_NoInternalDetailLeak(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DCR-ERR-03")
+
+	f := newDCRFixture(t)
+
+	cases := []struct {
+		name   string
+		bearer string
+		body   map[string]any
+	}{
+		{
+			name:   "metadata validation",
+			bearer: f.mintIAT(t),
+			body: map[string]any{
+				"redirect_uris": []string{"https://rp.test.invalid/cb"},
+				"grant_types":   []string{"impossible_grant"},
+			},
+		},
+		{
+			name:   "missing IAT",
+			bearer: "",
+			body:   map[string]any{"redirect_uris": []string{"https://rp.test.invalid/cb"}},
+		},
+	}
+	leaks := []string{
+		".go:",       // stack-trace file:line
+		"goroutine ", // panic preamble
+		"/Users/",    // dev workstation path
+		"runtime.",   // Go runtime symbol
+		"SELECT ",    // SQL statement
+		"INSERT ",    // SQL statement
+		"github.com/libraz/go-oidc-provider/internal/", // internal pkg path
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			resp := f.post(t, tc.bearer, "", tc.body)
+			defer func() { _ = resp.Body.Close() }()
+			body := dcrDecode(t, resp)
+			desc, _ := body["error_description"].(string)
+			for _, needle := range leaks {
+				if strings.Contains(desc, needle) {
+					t.Errorf("error_description=%q leaks internal detail %q", desc, needle)
+				}
+			}
+		})
+	}
 }
