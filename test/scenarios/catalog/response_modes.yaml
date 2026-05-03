@@ -130,7 +130,8 @@ rows:
       The OP exposes a registerResponseMode(name, fn) hook so embedders
       can add new transports without the registration call panicking
       or returning an error for valid input.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 exposes no public registerResponseMode(name, fn) hook. The valid response_modes set is fixed at the dispatcher boundary (internal/authorizeendpoint) to {query, jwt, query.jwt, fragment.jwt, form_post.jwt} and gated by op.WithJARMResponseMode for the .jwt half; an unknown value triggers unsupported_response_mode (RMO-033). Adding a custom-response-mode extension API would expand the OP's public surface for a feature deliberately scoped out by docs/plans/002 (form_post / web_message / extension transports are out-of-scope; only query and JARM ship). Embedders that need custom transports wrap the OP's response and re-encode at the gateway layer."
 
   - id: RMO-031
     severity: P1
@@ -139,7 +140,8 @@ rows:
       A registered custom response mode is invoked for SUCCESS results
       as fn(ctx, redirectUri, payload), where payload includes code,
       state, and iss (per RFC 9207) for response_type=code.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as RMO-030: v1.0 has no registerResponseMode extension hook so there is no per-success custom-mode invocation surface to assert. The success-mode wire shape v1.0 does emit (query for code flow, with code/state/iss per RFC 9207) is bound by the active code-flow scenarios end-to-end via scenariokit.RunCodeFlow; the iss parameter is verified by ISS-020."
 
   - id: RMO-032
     severity: P1
@@ -148,7 +150,8 @@ rows:
       A registered custom response mode is invoked for ERROR results
       with payload populated with error, error_description, state, and
       iss.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same rationale as RMO-030 / RMO-031: v1.0 has no registerResponseMode extension hook so there is no per-error custom-mode invocation surface. The error-redirect wire shape v1.0 does emit (query carrying error/error_description/state/iss) is bound by RMO-033 (unknown response_mode) and ERR-050 (iss on error redirects)."
 
   - id: RMO-033
     severity: P0

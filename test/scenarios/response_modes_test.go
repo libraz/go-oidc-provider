@@ -79,19 +79,22 @@ func TestScenario_RMO_020_DiscoveryAdvertisesWebMessage(t *testing.T) {
 	t.Skip("out-of-scope: RMO-020 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_030_RegisterResponseModeHookExposed is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_030_RegisterResponseModeHookExposed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-030")
+	t.Skip("out-of-scope: RMO-030 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_031_CustomModeInvokedForSuccess is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_031_CustomModeInvokedForSuccess(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-031")
+	t.Skip("out-of-scope: RMO-031 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_RMO_032_CustomModeInvokedForError is OOS — see catalog out_of_scope_reason.
 func TestScenario_RMO_032_CustomModeInvokedForError(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: RMO-032")
+	t.Skip("out-of-scope: RMO-032 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_RMO_033_UnknownResponseModeRejected verifies that an
