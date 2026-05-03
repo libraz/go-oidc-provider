@@ -143,6 +143,15 @@ const (
 	// transactional cluster: the substore is consulted only by the
 	// op.New construction-time pairwise immutability gate.
 	Metadata
+
+	// DeviceCodes routes [store.DeviceCodeStore] calls. Used by the
+	// /device_authorization endpoint, the verification page, and the
+	// device_code grant at the token endpoint. Outside the
+	// transactional cluster: the approve→consume CAS in
+	// [store.DeviceCodeStore.Consume] supplies the single-use
+	// guarantee without coordinating with the access-token /
+	// refresh-token writes.
+	DeviceCodes
 )
 
 // kindNames maps each [Kind] to its unqualified name. Indexed by Kind value
@@ -166,6 +175,7 @@ var kindNames = map[Kind]string{
 	OpaqueAccessTokens:       "OpaqueAccessTokens",
 	GrantRevocations:         "GrantRevocations",
 	Metadata:                 "Metadata",
+	DeviceCodes:              "DeviceCodes",
 }
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -198,6 +208,7 @@ var allKinds = []Kind{
 	OpaqueAccessTokens,
 	GrantRevocations,
 	Metadata,
+	DeviceCodes,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -506,6 +517,17 @@ func (s *Store) GrantRevocations() store.GrantRevocationStore {
 // to its skip-with-warning posture without further plumbing.
 func (s *Store) Metadata() store.MetadataStore {
 	return s.routes[Metadata].Metadata()
+}
+
+// DeviceCodes implements [store.Store]. The composite passes the
+// call through to the routed backend; nil from the backend surfaces
+// as nil here so op.New can reject the device_code grant option
+// when the substore is missing instead of panicking later. Routed
+// backends MAY support the substore independently of the
+// transactional anchor — DeviceCodes is intentionally outside
+// [TxClusterKinds].
+func (s *Store) DeviceCodes() store.DeviceCodeStore {
+	return s.routes[DeviceCodes].DeviceCodes()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

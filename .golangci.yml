@@ -103,6 +103,8 @@ linters:
             - "!**/internal/registrationendpoint/**"
             - "!**/internal/grants/**"
             - "!**/internal/customgrant/**"
+            - "!**/internal/devicecode/**"
+            - "!**/internal/devicecodeendpoint/**"
             - "!**/internal/authn/**"
             - "!**/internal/backchannel/**"
             - "!**/internal/clientauth/**"

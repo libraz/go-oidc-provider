@@ -67,6 +67,11 @@ func (stubStore) GrantRevocations() store.GrantRevocationStore { return nil }
 // emitting a startup warning and skipping the marker bookkeeping.
 func (stubStore) Metadata() store.MetadataStore { return nil }
 
+// DeviceCodes returns nil; construction tests do not enable the
+// device_code grant, so the library never exercises this path.
+// op.New rejects op.WithDeviceCodeGrant when the substore is missing.
+func (stubStore) DeviceCodes() store.DeviceCodeStore { return nil }
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }

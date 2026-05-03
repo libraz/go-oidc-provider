@@ -83,6 +83,8 @@ func (s nonRegistryStore) GrantRevocations() store.GrantRevocationStore {
 
 func (s nonRegistryStore) Metadata() store.MetadataStore { return s.inner.Metadata() }
 
+func (s nonRegistryStore) DeviceCodes() store.DeviceCodeStore { return s.inner.DeviceCodes() }
+
 // dcrBaseOpts returns the option slice that satisfies op.New for a
 // DCR-enabled provider when paired with WithDynamicRegistration. The
 // helper centralises the deterministic clock so tests that observe

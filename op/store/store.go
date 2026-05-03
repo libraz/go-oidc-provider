@@ -106,4 +106,14 @@ type Store interface {
 	// and skips the immutability gate with a startup warning so the
 	// process still boots. Outside the transactional cluster.
 	Metadata() MetadataStore
+
+	// DeviceCodes returns the [DeviceCodeStore] for RFC 8628
+	// device-authorization records. Backends that have not yet
+	// provisioned the substore MAY return nil; the library detects
+	// nil at op.New and rejects the device_code grant option with a
+	// clear error rather than panicking later. Outside the
+	// transactional cluster: the approve→consume CAS in
+	// [DeviceCodeStore.Consume] supplies the single-use guarantee on
+	// its own.
+	DeviceCodes() DeviceCodeStore
 }

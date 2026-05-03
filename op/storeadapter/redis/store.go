@@ -343,6 +343,15 @@ func (s *Store) Grants() store.GrantStore { panic(unimplemented("Grants")) }
 // same surface without further interface change).
 func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s) }
 
+// DeviceCodes implements [store.Store] but the Redis adapter does
+// not yet ship a [store.DeviceCodeStore] implementation. Embedders
+// requiring device_code support route the substore to a
+// device-code-capable backend (the in-memory adapter or a future
+// SQL/Redis implementation) via op/storeadapter/composite.
+//
+//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
+func (s *Store) DeviceCodes() store.DeviceCodeStore { panic(unimplemented("DeviceCodes")) }
+
 // Sessions returns the [store.SessionStore] handle. Sessions are an
 // in-scope substore for the Redis adapter: the OP does not
 // coordinate Session writes with token-endpoint commits, so a volatile

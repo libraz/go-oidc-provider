@@ -108,6 +108,7 @@ type Store struct {
 	opaqueAccessTokens *opaqueAccessTokenStore
 	grantRevocations   *grantRevocationStore
 	metadata           *metadataStore
+	deviceCodes        *deviceCodeStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -140,6 +141,7 @@ func New(opts ...Option) *Store {
 	s.opaqueAccessTokens = newOpaqueAccessTokenStore()
 	s.grantRevocations = newGrantRevocationStore()
 	s.metadata = newMetadataStore()
+	s.deviceCodes = newDeviceCodeStore(s.clock)
 	return s
 }
 
@@ -203,6 +205,16 @@ func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRe
 // in v0.9.1, so a simple key/value map satisfies every documented
 // access pattern.
 func (s *Store) Metadata() store.MetadataStore { return s.metadata }
+
+// DeviceCodes implements [store.Store]. The reference implementation
+// keys the primary map on the SHA-256 digest of the wire device_code
+// (per ADR 0024 §S.2 hash-on-store contract) and maintains a
+// secondary user_code → digest index so the verification page's
+// FindByUserCode lookup runs without scanning the primary map.
+// Outside the transactional cluster: the approve→consume CAS in
+// [DeviceCodeStore.Consume] supplies the single-use guarantee on
+// its own.
+func (s *Store) DeviceCodes() store.DeviceCodeStore { return s.deviceCodes }
 
 // TOTPs returns the [store.TOTPStore] backed by this Store. The
 // substore is not part of the aggregate [store.Store] interface (the

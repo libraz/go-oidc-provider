@@ -325,6 +325,15 @@ func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRe
 // surface without further interface change).
 func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s, nil) }
 
+// DeviceCodes implements [store.Store] but the SQL adapter does not
+// yet ship a [store.DeviceCodeStore] implementation; the device_code
+// grant ladders in via the in-memory adapter or a composite that
+// routes [composite.DeviceCodes] elsewhere. Returning nil here lets
+// op.New surface the gap with a clear "device_code substore missing"
+// error at construction time when [op.WithDeviceCodeGrant] is
+// supplied.
+func (s *Store) DeviceCodes() store.DeviceCodeStore { return nil }
+
 // --- store.ClientRegistry ----------------------------------------------------
 
 // Compile-time guard: the library calls cfg.store.(store.ClientRegistry)

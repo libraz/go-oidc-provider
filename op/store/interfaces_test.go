@@ -255,6 +255,8 @@ func (fakeStore) GrantRevocations() store.GrantRevocationStore {
 
 func (fakeStore) Metadata() store.MetadataStore { return fakeMetadataStore{} }
 
+func (fakeStore) DeviceCodes() store.DeviceCodeStore { return fakeDeviceCodeStore{} }
+
 var _ store.Store = (*fakeStore)(nil)
 
 type fakeMetadataStore struct{}
@@ -349,3 +351,33 @@ func (fakeRegistrationAccessTokenStore) Delete(context.Context, string) error {
 }
 
 var _ store.RegistrationAccessTokenStore = (*fakeRegistrationAccessTokenStore)(nil)
+
+type fakeDeviceCodeStore struct{}
+
+func (fakeDeviceCodeStore) Save(context.Context, *store.DeviceCode) error { return nil }
+
+func (fakeDeviceCodeStore) FindByDeviceCode(context.Context, string) (*store.DeviceCode, error) {
+	return nil, store.ErrNotFound
+}
+
+func (fakeDeviceCodeStore) FindByUserCode(context.Context, string) (*store.DeviceCode, error) {
+	return nil, store.ErrNotFound
+}
+
+func (fakeDeviceCodeStore) Approve(context.Context, string, string) error { return store.ErrNotFound }
+
+func (fakeDeviceCodeStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
+
+func (fakeDeviceCodeStore) RecordPoll(context.Context, string, time.Time) error {
+	return store.ErrNotFound
+}
+
+func (fakeDeviceCodeStore) IncrementUserCodeStrike(context.Context, string) (uint8, error) {
+	return 0, store.ErrNotFound
+}
+
+func (fakeDeviceCodeStore) Consume(context.Context, string) (*store.DeviceCode, error) {
+	return nil, store.ErrNotFound
+}
+
+var _ store.DeviceCodeStore = (*fakeDeviceCodeStore)(nil)
