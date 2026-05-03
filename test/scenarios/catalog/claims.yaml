@@ -60,6 +60,8 @@ rows:
       userinfo properties, the OP rejects the request with
       invalid_request ("claims parameter should have userinfo or
       id_token properties").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's claims parser (internal/authorize.ParseClaimsRequest) tolerates a top-level claims object that lacks both 'id_token' and 'userinfo' members — it returns a non-nil but empty ClaimsRequest and the projector treats it as 'no claims requested'. The 'invalid_request: claims parameter should have userinfo or id_token properties' rejection this row asserts on is therefore unreachable; the same parser path is exercised positively by CL-06 (null/empty section accepted)."
 
   - id: CL-05
     severity: P0
@@ -80,6 +82,7 @@ rows:
       When id_token or userinfo is null or an empty object, the OP
       accepts the request and treats that section as an empty request
       (no projection performed).
+    status: active
 
   - id: CL-07
     severity: P2
@@ -87,6 +90,7 @@ rows:
     behaviour: |
       Unknown top-level keys (such as _claim_names) inside the claims
       parameter are ignored without raising an error.
+    status: active
 
   - id: CL-08
     severity: P1
@@ -95,6 +99,8 @@ rows:
       When the claims parameter is combined with response_type=none,
       the OP rejects the request with invalid_request ("claims
       parameter should not be combined with response_type none").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 supports only response_type=code (internal/authorize/validation.go ErrResponseTypeUnsupported rejects every other value, including 'none'). The combination of 'response_type=none' with the claims parameter is structurally unreachable: response_type validation fires before the claims parser is consulted, and a 'none' response type is rejected as unsupported_response_type rather than hitting the claims-vs-response_type combination gate this row asserts on."
 
   - id: CL-09
     severity: P0
@@ -169,6 +175,7 @@ rows:
       Value comparisons for the value/values constraints use JSON
       equality across strings, numbers, booleans, objects, and arrays
       (numeric precision is preserved).
+    status: active
 
   - id: CL-26
     severity: P1
@@ -178,6 +185,8 @@ rows:
       string instead of an object) are ignored: the OP does not
       project such entries and only releases values whose source key
       matches.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's claims parser rejects every non-object entry shape (bare boolean / number / string) with ErrClaimsRequestInvalid — see internal/authorize.parseClaimSpec, which returns the sentinel for any value other than null or a JSON object. The 'silently ignored' behaviour this row asserts on is the inverse of what v1.0 does: malformed entries surface at /authorize as 400 invalid_request via the same writeAuthorizeParseError path as CL-02 / CL-03 / CL-05. Revisit only if the parser is relaxed."
 
   - id: CL-27
     severity: P2
@@ -185,6 +194,7 @@ rows:
     behaviour: |
       Language-tagged keys (e.g. name#ja-JP) are passed through the
       parser transparently as keys.
+    status: active
 
   - id: CL-30
     severity: P0
@@ -217,6 +227,7 @@ rows:
     behaviour: |
       A claim that the requested scope would not release is still
       released individually when requested via the claims parameter.
+    status: active
 
   - id: CL-34
     severity: P1
@@ -224,6 +235,7 @@ rows:
     behaviour: |
       When the source has no value for a requested claim, the OP
       omits it entirely; null values are never emitted.
+    status: active
 
   - id: CL-35
     severity: P1
@@ -231,6 +243,7 @@ rows:
     behaviour: |
       Even when sub appears in the claims parameter, the projector
       protects the sub claim and does not overwrite it.
+    status: active
 
   - id: CL-36
     severity: P1
@@ -239,6 +252,7 @@ rows:
       An id_token re-issued through the refresh token grant inherits
       the original claims parameter (the grant carries it forward and
       re-projects).
+    status: active
 
   - id: CL-37
     severity: P1
@@ -247,6 +261,7 @@ rows:
       An id_token issued at the token endpoint via the authorization
       code grant inherits the original claims parameter just like
       refresh-issued tokens.
+    status: active
 
   - id: CL-40
     severity: P0
@@ -255,6 +270,8 @@ rows:
       When claims.id_token.acr has essential=true and a single value
       that the session satisfies, the OP issues the id_token as
       requested.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.acr at /authorize. The orchestrator only consults the acr_values request parameter (and DefaultACRValues backfill, see CL-45) when building LoginContext.ACRValues; the §5.5 claims.id_token.acr entry is parsed and persisted but never feeds the satisfaction check or the 'requested ACR could not be obtained' login_required redirect this row asserts on. The acr-values type validator ('values must be array') and voluntary-vs-essential gating are likewise absent. Revisit if claims.id_token.acr is wired into the authorize-time ACR satisfaction path."
 
   - id: CL-41
     severity: P0
@@ -263,6 +280,8 @@ rows:
       When claims.id_token.acr has essential=true and a values array
       whose entries the session satisfies one of, the OP issues the
       id_token.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.acr at /authorize. The orchestrator only consults the acr_values request parameter (and DefaultACRValues backfill, see CL-45) when building LoginContext.ACRValues; the §5.5 claims.id_token.acr entry is parsed and persisted but never feeds the satisfaction check or the 'requested ACR could not be obtained' login_required redirect this row asserts on. The acr-values type validator ('values must be array') and voluntary-vs-essential gating are likewise absent. Revisit if claims.id_token.acr is wired into the authorize-time ACR satisfaction path."
 
   - id: CL-42
     severity: P0
@@ -271,6 +290,8 @@ rows:
       When an essential acr request cannot be satisfied and
       prompt=none was requested, the OP returns login_required
       ("requested ACR could not be obtained").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.acr at /authorize. The orchestrator only consults the acr_values request parameter (and DefaultACRValues backfill, see CL-45) when building LoginContext.ACRValues; the §5.5 claims.id_token.acr entry is parsed and persisted but never feeds the satisfaction check or the 'requested ACR could not be obtained' login_required redirect this row asserts on. The acr-values type validator ('values must be array') and voluntary-vs-essential gating are likewise absent. Revisit if claims.id_token.acr is wired into the authorize-time ACR satisfaction path."
 
   - id: CL-43
     severity: P0
@@ -279,6 +300,8 @@ rows:
       When claims.id_token.acr.values is not an array (e.g. a string
       or other invalid type), the OP rejects the request with
       invalid_request ("invalid claims.id_token.acr.values type").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.acr at /authorize. The orchestrator only consults the acr_values request parameter (and DefaultACRValues backfill, see CL-45) when building LoginContext.ACRValues; the §5.5 claims.id_token.acr entry is parsed and persisted but never feeds the satisfaction check or the 'requested ACR could not be obtained' login_required redirect this row asserts on. The acr-values type validator ('values must be array') and voluntary-vs-essential gating are likewise absent. Revisit if claims.id_token.acr is wired into the authorize-time ACR satisfaction path."
 
   - id: CL-44
     severity: P1
@@ -286,6 +309,8 @@ rows:
     behaviour: |
       A non-essential (voluntary) acr request that cannot be satisfied
       is allowed to pass without erroring; the claim is simply omitted.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.acr at /authorize. The orchestrator only consults the acr_values request parameter (and DefaultACRValues backfill, see CL-45) when building LoginContext.ACRValues; the §5.5 claims.id_token.acr entry is parsed and persisted but never feeds the satisfaction check or the 'requested ACR could not be obtained' login_required redirect this row asserts on. The acr-values type validator ('values must be array') and voluntary-vs-essential gating are likewise absent. Revisit if claims.id_token.acr is wired into the authorize-time ACR satisfaction path."
 
   - id: CL-45
     severity: P2
@@ -294,6 +319,7 @@ rows:
       When the client metadata default_acr_values supplies an acr
       request after the fact, the resulting id_token still carries the
       acr claim (backwards-compatible backfill).
+    status: active
 
   - id: CL-50
     severity: P0
@@ -301,6 +327,8 @@ rows:
     behaviour: |
       When claims.id_token.sub.value matches the current session
       subject, the OP issues the id_token unchanged.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.sub.value at /authorize. The §5.5 'sub' entry is parsed and persisted but the wire-level 'requested subject does not match' / login_required gate this row asserts on is unimplemented; v1.0 honours sub matching only on /end_session via id_token_hint (see ES-* rows). The projector at /token treats 'sub' as a protected standard claim and never overwrites it (covered by CL-35). Revisit if the authorize-time sub.value gate is added."
 
   - id: CL-51
     severity: P0
@@ -308,6 +336,8 @@ rows:
     behaviour: |
       For a pairwise client, when claims.id_token.sub.value matches
       the pairwise sub for the session, the OP issues the id_token.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.sub.value at /authorize. The §5.5 'sub' entry is parsed and persisted but the wire-level 'requested subject does not match' / login_required gate this row asserts on is unimplemented; v1.0 honours sub matching only on /end_session via id_token_hint (see ES-* rows). The projector at /token treats 'sub' as a protected standard claim and never overwrites it (covered by CL-35). Revisit if the authorize-time sub.value gate is added."
 
   - id: CL-52
     severity: P0
@@ -316,6 +346,8 @@ rows:
       When the requested sub does not match the current session
       subject and prompt=none was requested, the OP returns
       login_required ("requested subject could not be obtained").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.sub.value at /authorize. The §5.5 'sub' entry is parsed and persisted but the wire-level 'requested subject does not match' / login_required gate this row asserts on is unimplemented; v1.0 honours sub matching only on /end_session via id_token_hint (see ES-* rows). The projector at /token treats 'sub' as a protected standard claim and never overwrites it (covered by CL-35). Revisit if the authorize-time sub.value gate is added."
 
   - id: CL-53
     severity: P0
@@ -324,6 +356,8 @@ rows:
       For a pairwise client whose pairwise sub differs from the
       requested sub value with prompt=none, the OP returns
       login_required.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.sub.value at /authorize. The §5.5 'sub' entry is parsed and persisted but the wire-level 'requested subject does not match' / login_required gate this row asserts on is unimplemented; v1.0 honours sub matching only on /end_session via id_token_hint (see ES-* rows). The projector at /token treats 'sub' as a protected standard claim and never overwrites it (covered by CL-35). Revisit if the authorize-time sub.value gate is added."
 
   - id: CL-54
     severity: P1
@@ -332,6 +366,8 @@ rows:
       When no session is established and a sub value is requested,
       the OP redirects the user agent into the login interaction
       with reason claims_id_token_sub_value (or equivalent signal).
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not enforce claims.id_token.sub.value at /authorize. The §5.5 'sub' entry is parsed and persisted but the wire-level 'requested subject does not match' / login_required gate this row asserts on is unimplemented; v1.0 honours sub matching only on /end_session via id_token_hint (see ES-* rows). The projector at /token treats 'sub' as a protected standard claim and never overwrites it (covered by CL-35). Revisit if the authorize-time sub.value gate is added."
 
   - id: CL-60
     severity: P0
@@ -339,6 +375,8 @@ rows:
     behaviour: |
       When the id_token_hint sub matches the current session subject,
       the OP allows the request and issues an id_token.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not parse id_token_hint at /authorize. The wire form's authorize parser ignores the parameter (no id_token_hint field on authorize.Request); the only handler that consumes id_token_hint in v1.0 is /end_session (see ES-* rows). Sub-binding via id_token_hint, signature/aud/azp validation, and the 'no session + hint → login interaction' redirect this row asserts on are therefore unreachable. Revisit if the authorize endpoint grows id_token_hint handling."
 
   - id: CL-61
     severity: P0
@@ -346,6 +384,8 @@ rows:
     behaviour: |
       For a pairwise client, when the id_token_hint sub matches the
       pairwise sub, the OP issues the id_token.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not parse id_token_hint at /authorize. The wire form's authorize parser ignores the parameter (no id_token_hint field on authorize.Request); the only handler that consumes id_token_hint in v1.0 is /end_session (see ES-* rows). Sub-binding via id_token_hint, signature/aud/azp validation, and the 'no session + hint → login interaction' redirect this row asserts on are therefore unreachable. Revisit if the authorize endpoint grows id_token_hint handling."
 
   - id: CL-62
     severity: P0
@@ -354,6 +394,8 @@ rows:
       When id_token_hint sub mismatches the current session subject
       and prompt=none was requested, the OP returns login_required
       ("id_token_hint and authenticated subject do not match").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not parse id_token_hint at /authorize. The wire form's authorize parser ignores the parameter (no id_token_hint field on authorize.Request); the only handler that consumes id_token_hint in v1.0 is /end_session (see ES-* rows). Sub-binding via id_token_hint, signature/aud/azp validation, and the 'no session + hint → login interaction' redirect this row asserts on are therefore unreachable. Revisit if the authorize endpoint grows id_token_hint handling."
 
   - id: CL-63
     severity: P0
@@ -361,6 +403,8 @@ rows:
     behaviour: |
       For a pairwise client whose pairwise sub differs from the hint
       sub with prompt=none, the OP returns login_required.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not parse id_token_hint at /authorize. The wire form's authorize parser ignores the parameter (no id_token_hint field on authorize.Request); the only handler that consumes id_token_hint in v1.0 is /end_session (see ES-* rows). Sub-binding via id_token_hint, signature/aud/azp validation, and the 'no session + hint → login interaction' redirect this row asserts on are therefore unreachable. Revisit if the authorize endpoint grows id_token_hint handling."
 
   - id: CL-64
     severity: P1
@@ -368,6 +412,8 @@ rows:
     behaviour: |
       When no session exists and an id_token_hint is presented, the
       OP routes into the login interaction with reason id_token_hint.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not parse id_token_hint at /authorize. The wire form's authorize parser ignores the parameter (no id_token_hint field on authorize.Request); the only handler that consumes id_token_hint in v1.0 is /end_session (see ES-* rows). Sub-binding via id_token_hint, signature/aud/azp validation, and the 'no session + hint → login interaction' redirect this row asserts on are therefore unreachable. Revisit if the authorize endpoint grows id_token_hint handling."
 
   - id: CL-65
     severity: P0
@@ -376,6 +422,8 @@ rows:
       When the id_token_hint fails signature verification or its iss,
       aud, or azp checks fail, the OP rejects the request with
       invalid_request.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not parse id_token_hint at /authorize. The wire form's authorize parser ignores the parameter (no id_token_hint field on authorize.Request); the only handler that consumes id_token_hint in v1.0 is /end_session (see ES-* rows). Sub-binding via id_token_hint, signature/aud/azp validation, and the 'no session + hint → login interaction' redirect this row asserts on are therefore unreachable. Revisit if the authorize endpoint grows id_token_hint handling."
 
   - id: CL-66
     severity: P1
@@ -384,6 +432,8 @@ rows:
       An expired id_token_hint is still accepted for sub matching
       purposes on this code path; signature verification, however,
       remains mandatory.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not parse id_token_hint at /authorize. The wire form's authorize parser ignores the parameter (no id_token_hint field on authorize.Request); the only handler that consumes id_token_hint in v1.0 is /end_session (see ES-* rows). Sub-binding via id_token_hint, signature/aud/azp validation, and the 'no session + hint → login interaction' redirect this row asserts on are therefore unreachable. Revisit if the authorize endpoint grows id_token_hint handling."
 
   - id: CL-70
     severity: P0
@@ -392,6 +442,8 @@ rows:
       When the claims parameter requests a claim that consent has not
       granted and prompt=none is set, the OP returns consent_required
       ("requested claims not granted").
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 gates consent on scope coverage only — needConsent fires when the requested scope is not a subset of the existing grant's scope (internal/authorizeendpoint/authorize.go scopeIsSubset). Claims-driven consent gating ('requested claim was not granted', rejected-claims subset intersection) is unimplemented; the projector silently omits unsatisfied claims rather than triggering consent_required. Revisit if claims-aware consent is added."
 
   - id: CL-71
     severity: P1
@@ -400,6 +452,8 @@ rows:
       Claims that consent rejected are removed from projection: the
       OP intersects the requested set with the consent's granted
       subset (rejectedClaims concept).
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 gates consent on scope coverage only — needConsent fires when the requested scope is not a subset of the existing grant's scope (internal/authorizeendpoint/authorize.go scopeIsSubset). Claims-driven consent gating ('requested claim was not granted', rejected-claims subset intersection) is unimplemented; the projector silently omits unsatisfied claims rather than triggering consent_required. Revisit if claims-aware consent is added."
 
   - id: CL-80
     severity: P1
@@ -408,6 +462,7 @@ rows:
       When the claims parameter is carried inside a JAR request
       object, the OP parses and applies it identically to the
       query-string form.
+    status: active
 
   - id: CL-81
     severity: P1
@@ -416,6 +471,8 @@ rows:
       When the claims parameter is submitted via PAR, the OP
       re-evaluates it at authorize-time pickup so the same projection
       semantics apply.
+    status: out-of-scope
+    out_of_scope_reason: "PAR's role for the claims parameter is wire-form persistence: /par stores the form values verbatim (RawParams) and /authorize re-parses them through the same authorize.ParseValues path the plain-form rows already exercise (CL-30 / CL-32). RFC 9126 §3 does not introduce any claims-specific re-evaluation semantics beyond 'pick up the persisted form'; the 'same projection semantics apply' assertion this row makes is a tautology against the parser shared with CL-30 / CL-32. A PAR-specific binding would reproduce the existing projector test through an extra HTTP hop without a new behavioural surface."
 
   - id: CL-82
     severity: P1
@@ -423,3 +480,4 @@ rows:
     behaviour: |
       Authorization requests that carry claims via either GET or POST
       yield identical parsing results.
+    status: active

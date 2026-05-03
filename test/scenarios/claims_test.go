@@ -9,13 +9,22 @@ package scenarios_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
+
+	josev4 "github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
@@ -38,6 +47,7 @@ func clRegisterRP(t *testing.T, tk *testkit.Provider, id string) (*store.Client,
 		RedirectURIs:            []string{callback},
 		Scopes:                  []string{"openid", "profile", "email"},
 		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
 	})
 	return rp, secret
 }
@@ -223,9 +233,10 @@ func TestScenario_CL_03_UnparsableClaimsRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_CL_04_MissingIDTokenAndUserinfoRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_04_MissingIDTokenAndUserinfoRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-04")
+	t.Skip("out-of-scope: CL-04 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CL_05_NonObjectSectionRejected checks that when the
@@ -253,19 +264,65 @@ func TestScenario_CL_05_NonObjectSectionRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_CL_06_NullOrEmptySectionAccepted checks that a claims
+// payload whose id_token / userinfo members are JSON null or an empty
+// object parses without error: parseClaimsLocation treats both shapes
+// as "absent member" and the projector behaves identically to "no
+// claims requested". Issuance proceeds and no claim leaks beyond the
+// scope-derived release.
+//
+// Spec: OIDC Core 1.0 §5.5.
 func TestScenario_CL_06_NullOrEmptySectionAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-06")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-06")
+	clSeedAlice(t, tk)
+
+	// Mix the two accepted shapes: id_token=null, userinfo={}.
+	extra := url.Values{"claims": {`{"id_token":null,"userinfo":{}}`}}
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
+	if tok.IDToken == "" {
+		t.Fatal("id_token missing — null/empty section must not block issuance")
+	}
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if v, ok := idClaims["email"]; ok {
+		t.Errorf("id_token leaked email=%v from an empty claims section", v)
+	}
 }
 
+// TestScenario_CL_07_UnknownTopLevelKeysIgnored checks that the parser
+// silently drops top-level members other than id_token / userinfo —
+// per §5.5 the wire form "MAY be supplemented by additional members".
+// A request that pairs a real id_token claim with a vendor-extension
+// _claim_names sibling parses normally and the projector still
+// honours the recognised member.
+//
+// Spec: OIDC Core 1.0 §5.5.
 func TestScenario_CL_07_UnknownTopLevelKeysIgnored(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-07")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-07")
+	clSeedAlice(t, tk)
+
+	extra := url.Values{"claims": {
+		`{"_claim_names":{"foo":"bar"},"id_token":{"email":{"essential":true}}}`,
+	}}
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got := idClaims["email"]; got != "alice@example.com" {
+		t.Errorf("id_token email=%v want alice@example.com (recognised member must still project)", got)
+	}
+	if v, ok := idClaims["_claim_names"]; ok {
+		t.Errorf("id_token leaked _claim_names=%v — vendor extension must not be re-emitted", v)
+	}
 }
 
+// TestScenario_CL_08_ClaimsWithResponseTypeNoneRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_08_ClaimsWithResponseTypeNoneRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-08")
+	t.Skip("out-of-scope: CL-08 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CL_09_UserinfoRequestedWithoutEndpoint is OOS — see catalog out_of_scope_reason.
@@ -422,19 +479,100 @@ func TestScenario_CL_24_ValuesArrayMatchReleasesClaim(t *testing.T) {
 	}
 }
 
+// TestScenario_CL_25_ValueComparisonUsesJSONEquality checks that the
+// projector's value/values comparison observes JSON equality across
+// the primitive shapes the spec admits: strings compare by byte
+// equality (match path releases the claim, mismatch omits it), and
+// booleans compare by identity. Numeric and array shapes share the
+// same jsonEqual path; CL-23 / CL-24 already exercise the value /
+// values constraints positively at the wire layer.
+//
+// Spec: OIDC Core 1.0 §5.5.1.
 func TestScenario_CL_25_ValueComparisonUsesJSONEquality(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-25")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-25")
+	tk.Store.PutUser(context.Background(), &store.User{
+		Subject: scenariokit.DefaultSubject,
+		Claims: map[string]any{
+			"email":          "alice@example.com",
+			"email_verified": true,
+		},
+	})
+
+	// Match path: requested string equals the source string AND the
+	// boolean matches its source value.
+	extraMatch := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"email":          map[string]any{"value": "alice@example.com"},
+			"email_verified": map[string]any{"value": true},
+		},
+	})
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extraMatch)
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got := idClaims["email"]; got != "alice@example.com" {
+		t.Errorf("id_token email=%v want alice@example.com (string equality)", got)
+	}
+	if got := idClaims["email_verified"]; got != true {
+		t.Errorf("id_token email_verified=%v want true (bool equality)", got)
+	}
+
+	// Mismatch path: a different string and a flipped boolean must
+	// both fall out of the projection.
+	rp2, secret2 := clRegisterRP(t, tk, "rp-cl-25b")
+	extraMiss := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"email":          map[string]any{"value": "bob@example.com"},
+			"email_verified": map[string]any{"value": false},
+		},
+	})
+	_, tok2 := clRunCodeFlow(t, tk, rp2, secret2, "openid", extraMiss)
+	idClaims2 := decodeScenarioJWTClaims(t, tok2.IDToken)
+	if v, ok := idClaims2["email"]; ok {
+		t.Errorf("id_token leaked email=%v despite string-value mismatch", v)
+	}
+	if v, ok := idClaims2["email_verified"]; ok {
+		t.Errorf("id_token leaked email_verified=%v despite bool-value mismatch", v)
+	}
 }
 
+// TestScenario_CL_26_NonStandardEntryShapesIgnored is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_26_NonStandardEntryShapesIgnored(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-26")
+	t.Skip("out-of-scope: CL-26 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_27_LanguageTaggedKeysPreserved checks that the parser
+// admits OIDC Core §5.5.2 language tag suffixes ("name#ja-JP") on a
+// claim entry verbatim, and the projector releases the matching key
+// from the user store.
+//
+// Spec: OIDC Core 1.0 §5.5.2.
 func TestScenario_CL_27_LanguageTaggedKeysPreserved(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-27")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-27")
+	tk.Store.PutUser(context.Background(), &store.User{
+		Subject: scenariokit.DefaultSubject,
+		Claims: map[string]any{
+			"name":       "Alice Example",
+			"name#ja-JP": "アリス・エグザンプル",
+		},
+	})
+
+	extra := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"name#ja-JP": map[string]any{"essential": true},
+		},
+	})
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got := idClaims["name#ja-JP"]; got != "アリス・エグザンプル" {
+		t.Errorf("id_token[name#ja-JP]=%v want %q (language tag must be preserved verbatim)",
+			got, "アリス・エグザンプル")
+	}
 }
 
 // TestScenario_CL_30_IDTokenClaimEmbeddedDirectly checks that a claim
@@ -536,142 +674,585 @@ func TestScenario_CL_32_BothSectionsProjectedIndependently(t *testing.T) {
 	}
 }
 
+// TestScenario_CL_33_ClaimsBypassScopeRelease checks that the §5.5
+// projector releases an individually-requested claim even when the
+// granted scope alone would not have surfaced it. The request asks
+// for "email" in the id_token while the granted scope is bare
+// "openid"; the released id_token carries the email claim, proving
+// the claims parameter is read independently of the scope-derived
+// allow-list.
+//
+// Spec: OIDC Core 1.0 §5.5 ("the claims parameter MAY be used to
+// request that specific Claims be returned ... in addition to those
+// returned by the use of specific scope values").
 func TestScenario_CL_33_ClaimsBypassScopeRelease(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-33")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-33")
+	clSeedAlice(t, tk)
+
+	extra := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"email": map[string]any{"essential": true},
+		},
+	})
+	// Bare "openid" — no "email" scope. A scope-only release would
+	// keep email out of the id_token.
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got := idClaims["email"]; got != "alice@example.com" {
+		t.Errorf("id_token email=%v want alice@example.com (claims must bypass scope-only release)", got)
+	}
 }
 
+// TestScenario_CL_34_MissingSourceValueOmitted pins the projector's
+// "omit on absent" stance at the userinfo location: a claim requested
+// in claims.userinfo whose key is missing from the user store record
+// is silently dropped from the response. The OP never emits a JSON
+// null on the wire to signal absence — the same posture as CL-22 for
+// the id_token location.
+//
+// Spec: OIDC Core 1.0 §5.5.
 func TestScenario_CL_34_MissingSourceValueOmitted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-34")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-34")
+	tk.Store.PutUser(context.Background(), &store.User{
+		Subject: scenariokit.DefaultSubject,
+		Claims:  map[string]any{"email": "alice@example.com"},
+	})
+
+	extra := claimsRequestExtra(t, map[string]any{
+		"userinfo": map[string]any{
+			"phone_number": map[string]any{"essential": true},
+		},
+	})
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
+	status, _, body := callUserinfo(t, tk, tok.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("/userinfo status=%d body=%v", status, body)
+	}
+	if v, ok := body["phone_number"]; ok {
+		t.Errorf("/userinfo released phone_number=%v despite missing source value", v)
+	}
+	// "sub" must still be present — projector never drops it.
+	if got, _ := body["sub"].(string); got != scenariokit.DefaultSubject {
+		t.Errorf("/userinfo sub=%v want %q", body["sub"], scenariokit.DefaultSubject)
+	}
 }
 
+// TestScenario_CL_35_SubClaimNotOverwritten checks that the projector
+// guards the standard "sub" claim: even when the request asks for
+// claims.id_token.sub with a value that disagrees with the session
+// subject, the issued id_token carries the OP-internal subject
+// untouched. The same protection applies to /userinfo (sub is the
+// only claim Build always emits regardless of scope).
+//
+// Spec: OIDC Core 1.0 §5.5 ("Requesting the 'sub' (subject) Claim
+// ... has no effect").
 func TestScenario_CL_35_SubClaimNotOverwritten(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-35")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-35")
+	clSeedAlice(t, tk)
+
+	// Hostile request: ask the projector to overwrite "sub" with a
+	// value the user never authenticated as.
+	extra := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"sub": map[string]any{"value": "attacker"},
+		},
+		"userinfo": map[string]any{
+			"sub": map[string]any{"value": "attacker"},
+		},
+	})
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", extra)
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got, _ := idClaims["sub"].(string); got != scenariokit.DefaultSubject {
+		t.Errorf("id_token sub=%v want %q (sub must not be overwritten)",
+			idClaims["sub"], scenariokit.DefaultSubject)
+	}
+	status, _, body := callUserinfo(t, tk, tok.AccessToken)
+	if status != http.StatusOK {
+		t.Fatalf("/userinfo status=%d body=%v", status, body)
+	}
+	if got, _ := body["sub"].(string); got != scenariokit.DefaultSubject {
+		t.Errorf("/userinfo sub=%v want %q (sub must not be overwritten)",
+			body["sub"], scenariokit.DefaultSubject)
+	}
 }
 
+// TestScenario_CL_36_RefreshGrantInheritsClaims checks that the §5.5
+// "claims" payload persisted on the originating grant is honoured by
+// the refresh-token-derived id_token. The originating /authorize
+// carries claims.id_token.email; the refresh exchange returns an
+// id_token that still carries the projected claim (no per-refresh
+// re-submission is required).
+//
+// Spec: OIDC Core 1.0 §5.5.2 / §12 (refresh-derived id_token must
+// reflect the original authorization).
 func TestScenario_CL_36_RefreshGrantInheritsClaims(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-36")
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithStrictOfflineAccess()))
+	rp, secret := clRegisterRP(t, tk, "rp-cl-36")
+	// Re-register with offline_access support so the first /token
+	// returns a refresh_token.
+	updated := *rp
+	updated.Scopes = []string{"openid", "email", "offline_access"}
+	if err := tk.Store.UpdateClient(context.Background(), &updated); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	clSeedAlice(t, tk)
+
+	extra := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"email": map[string]any{"essential": true},
+		},
+	})
+	_, first := clRunCodeFlow(t, tk, rp, secret, "openid email offline_access", extra)
+	if first.RefreshToken == "" {
+		t.Fatalf("first /token did not return refresh_token: raw=%v", first.Raw)
+	}
+	if got := decodeScenarioJWTClaims(t, first.IDToken)["email"]; got != "alice@example.com" {
+		t.Fatalf("first id_token email=%v want alice@example.com", got)
+	}
+
+	refreshed := postRefreshToken(t, tk, first.RefreshToken, rp.ID, secret)
+	if refreshed.StatusCode != http.StatusOK {
+		t.Fatalf("/token refresh status=%d body=%v", refreshed.StatusCode, refreshed.Raw)
+	}
+	if refreshed.IDToken == "" {
+		t.Fatal("refresh did not return id_token")
+	}
+	refreshedClaims := decodeScenarioJWTClaims(t, refreshed.IDToken)
+	if got := refreshedClaims["email"]; got != "alice@example.com" {
+		t.Errorf("refreshed id_token email=%v want alice@example.com (claims request not inherited)", got)
+	}
 }
 
+// TestScenario_CL_37_AuthCodeGrantInheritsClaims checks that the §5.5
+// "claims" payload persisted on the grant by /authorize is honoured by
+// the authorization_code grant at /token. The id_token issued at
+// /token reflects the projection — even though the /token request
+// itself does not carry the claims parameter — because the grant
+// carries it forward (Grant.Claims, decoded via DecodeClaimsFromGrant).
+//
+// CL-30 / CL-32 cover the same code path positively for specific
+// locations; this row pins the broader contract that the carry-forward
+// is unconditional and survives the /authorize → /token boundary.
+//
+// Spec: OIDC Core 1.0 §5.5 / §3.1.3.7.
 func TestScenario_CL_37_AuthCodeGrantInheritsClaims(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-37")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-37")
+	clSeedAlice(t, tk)
+
+	// Request "name" in the id_token (a claim the granted "openid"
+	// scope alone would not surface). The /token request body does
+	// not re-send the claims parameter — the projector must read it
+	// off the grant.
+	extra := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"name": map[string]any{"essential": true},
+		},
+	})
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got := idClaims["name"]; got != "Alice Example" {
+		t.Errorf("id_token name=%v want Alice Example (grant must carry the claims request to /token)", got)
+	}
 }
 
+// TestScenario_CL_40_EssentialACRSingleValueSatisfied is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_40_EssentialACRSingleValueSatisfied(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-40")
+	t.Skip("out-of-scope: CL-40 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_41_EssentialACRValuesArraySatisfied is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_41_EssentialACRValuesArraySatisfied(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-41")
+	t.Skip("out-of-scope: CL-41 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_42_EssentialACRUnsatisfiedPromptNone is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_42_EssentialACRUnsatisfiedPromptNone(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-42")
+	t.Skip("out-of-scope: CL-42 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_43_InvalidACRValuesTypeRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_43_InvalidACRValuesTypeRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-43")
+	t.Skip("out-of-scope: CL-43 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_44_VoluntaryACRMissAllowed is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_44_VoluntaryACRMissAllowed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-44")
+	t.Skip("out-of-scope: CL-44 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_45_DefaultACRValuesBackfilled checks that when an
+// /authorize request omits acr_values and the registered client
+// publishes default_acr_values (store.Client.DefaultACRValues), the
+// authorize endpoint backfills the request's ACR list (see
+// applyClientAuthorizeDefaults) and the resulting id_token carries
+// an "acr" claim driven by the OP's ACR policy.
+//
+// The DefaultACRPolicy echoes the first satisfied entry from the
+// backfilled list when the ceremony reached AAL1 or above (the
+// testkit's SubjectAuthenticator provides exactly that). The wire
+// shape proves the backfill: without DefaultACRValues this id_token
+// would carry the AAL-derived InCommon URI rather than the client's
+// configured value.
+//
+// Spec: OIDC Core 1.0 §5.5 / OIDC Registration §2 (default_acr_values).
 func TestScenario_CL_45_DefaultACRValuesBackfilled(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-45")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-45")
+	clSeedAlice(t, tk)
+
+	// Apply default_acr_values to the registered client. The
+	// authorize endpoint's applyClientAuthorizeDefaults will copy
+	// this list onto req.ACRValues when the wire request omits the
+	// parameter.
+	updated := *rp
+	updated.DefaultACRValues = []string{"urn:test:cl-45:loa1"}
+	if err := tk.Store.UpdateClient(context.Background(), &updated); err != nil {
+		t.Fatalf("UpdateClient(DefaultACRValues): %v", err)
+	}
+
+	// No acr_values on the wire — the backfill is the only path that
+	// can populate the resulting id_token's acr claim.
+	_, tok := clRunCodeFlow(t, tk, rp, secret, "openid email", nil)
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got, _ := idClaims["acr"].(string); got != "urn:test:cl-45:loa1" {
+		t.Errorf("id_token acr=%v want %q (default_acr_values must backfill)",
+			idClaims["acr"], "urn:test:cl-45:loa1")
+	}
 }
 
+// TestScenario_CL_50_SubValueMatchesSessionSubject is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_50_SubValueMatchesSessionSubject(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-50")
+	t.Skip("out-of-scope: CL-50 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_51_PairwiseSubValueMatch is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_51_PairwiseSubValueMatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-51")
+	t.Skip("out-of-scope: CL-51 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_52_SubValueMismatchPromptNone is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_52_SubValueMismatchPromptNone(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-52")
+	t.Skip("out-of-scope: CL-52 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_53_PairwiseSubValueMismatchPromptNone is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_53_PairwiseSubValueMismatchPromptNone(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-53")
+	t.Skip("out-of-scope: CL-53 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_54_NoSessionSubValueLogin is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_54_NoSessionSubValueLogin(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-54")
+	t.Skip("out-of-scope: CL-54 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_60_HintSubMatchesSessionSubject is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_60_HintSubMatchesSessionSubject(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-60")
+	t.Skip("out-of-scope: CL-60 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_61_PairwiseHintSubMatch is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_61_PairwiseHintSubMatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-61")
+	t.Skip("out-of-scope: CL-61 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_62_HintSubMismatchPromptNone is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_62_HintSubMismatchPromptNone(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-62")
+	t.Skip("out-of-scope: CL-62 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_63_PairwiseHintSubMismatchPromptNone is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_63_PairwiseHintSubMismatchPromptNone(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-63")
+	t.Skip("out-of-scope: CL-63 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_64_NoSessionWithHintRoutesToLogin is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_64_NoSessionWithHintRoutesToLogin(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-64")
+	t.Skip("out-of-scope: CL-64 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_65_HintSignatureOrAudFailureRejected is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_65_HintSignatureOrAudFailureRejected(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-65")
+	t.Skip("out-of-scope: CL-65 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_66_ExpiredHintAcceptedForSubMatch is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_66_ExpiredHintAcceptedForSubMatch(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-66")
+	t.Skip("out-of-scope: CL-66 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_70_UngrantedClaimPromptNoneConsentRequired is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_70_UngrantedClaimPromptNoneConsentRequired(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-70")
+	t.Skip("out-of-scope: CL-70 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_71_RejectedClaimsExcludedFromProjection is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_71_RejectedClaimsExcludedFromProjection(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-71")
+	t.Skip("out-of-scope: CL-71 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_80_ClaimsCarriedInJAR checks that a §5.5 claims
+// payload nested inside a signed Request Object (RFC 9101 §6.1) reaches
+// the projector identically to a wire-form claims parameter. The OP's
+// JAR merge re-encodes JSON-shaped claims (claims, authorization_details)
+// onto the merged form and the downstream parser handles them through
+// the same authorize.ParseClaimsRequest path as plain-form rows.
+//
+// Spec: RFC 9101 §6.1 / OIDC Core 1.0 §5.5.
 func TestScenario_CL_80_ClaimsCarriedInJAR(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-80")
+
+	const (
+		callback = "https://rp.testkit.invalid/callback"
+		clientID = "rp-cl-80"
+	)
+	const clientSecret = "rp-cl-80-secret" //nolint:gosec // test fixture, not a real credential.
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.JAR)))
+	hash, err := op.HashClientSecret(clientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	const kid = "rp-cl-80-kid"
+	jwksRaw, err := json.Marshal(josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key:       &priv.PublicKey,
+		KeyID:     kid,
+		Algorithm: string(josev4.ES256),
+		Use:       "sig",
+	}}})
+	if err != nil {
+		t.Fatalf("Marshal JWKS: %v", err)
+	}
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              hash,
+		RedirectURIs:            []string{callback},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		JWKs:                    jwksRaw,
+	})
+	clSeedAlice(t, tk)
+
+	pkce := scenariokit.NewPKCEPair("")
+	now := time.Now().UTC()
+	jtiBytes := make([]byte, 16)
+	if _, err := rand.Read(jtiBytes); err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	roClaims := map[string]any{
+		"iss":                   rp.ID,
+		"aud":                   tk.Issuer,
+		"exp":                   now.Add(2 * time.Minute).Unix(),
+		"iat":                   now.Unix(),
+		"nbf":                   now.Unix(),
+		"jti":                   "cl-80-jti-" + hex.EncodeToString(jtiBytes),
+		"client_id":             rp.ID,
+		"response_type":         "code",
+		"redirect_uri":          callback,
+		"scope":                 "openid",
+		"state":                 scenariokit.DefaultState,
+		"nonce":                 scenariokit.DefaultNonce,
+		"code_challenge":        pkce.Challenge,
+		"code_challenge_method": pkce.Method,
+		// Nest the §5.5 payload as a structured object — the merge
+		// step JSON-encodes it before the form-level parser sees it.
+		"claims": map[string]any{
+			"id_token": map[string]any{
+				"email": map[string]any{"essential": true},
+			},
+		},
+	}
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{
+			Algorithm: josev4.ES256,
+			Key: josev4.JSONWebKey{
+				Key:       priv,
+				KeyID:     kid,
+				Algorithm: string(josev4.ES256),
+				Use:       "sig",
+			},
+		},
+		(&josev4.SignerOptions{}).WithType("JWT"),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	requestObject, err := jwt.Signed(signer).Claims(roClaims).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize request object: %v", err)
+	}
+
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    rp.ID,
+		RedirectURI: callback,
+		Scope:       "openid",
+		PKCE:        pkce,
+		Extra:       url.Values{"request": {requestObject}},
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  callback,
+		Verifier:     pkce.Verifier,
+		ClientID:     rp.ID,
+		ClientSecret: clientSecret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	idClaims := decodeScenarioJWTClaims(t, tok.IDToken)
+	if got := idClaims["email"]; got != "alice@example.com" {
+		t.Errorf("id_token email=%v want alice@example.com (JAR-carried claims must reach projector)", got)
+	}
 }
 
+// TestScenario_CL_81_ClaimsReevaluatedAtPARPickup is OOS — see catalog out_of_scope_reason.
 func TestScenario_CL_81_ClaimsReevaluatedAtPARPickup(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-81")
+	t.Skip("out-of-scope: CL-81 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CL_82_GETAndPOSTParseIdentically checks that an
+// /authorize request carrying a §5.5 claims parameter via the URL
+// query (GET) and via the form body (POST) yields the same projection.
+// The OP's parser delegates to extractValues which reads URL.Query()
+// for GET and r.PostForm for POST, then funnels both into the shared
+// ParseValues path; the resulting id_token must surface the requested
+// claim regardless of transport.
+//
+// Spec: OIDC Core 1.0 §3.1.2.1 (the wire form admits GET and POST).
 func TestScenario_CL_82_GETAndPOSTParseIdentically(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CL-82")
+
+	tk := testkit.NewProvider(t)
+	rp, secret := clRegisterRP(t, tk, "rp-cl-82")
+	clSeedAlice(t, tk)
+
+	// GET path — RunCodeFlow drives /authorize over GET by default.
+	extra := claimsRequestExtra(t, map[string]any{
+		"id_token": map[string]any{
+			"email": map[string]any{"essential": true},
+		},
+	})
+	_, getTok := clRunCodeFlow(t, tk, rp, secret, "openid", extra)
+	getClaims := decodeScenarioJWTClaims(t, getTok.IDToken)
+	if got := getClaims["email"]; got != "alice@example.com" {
+		t.Fatalf("GET id_token email=%v want alice@example.com", got)
+	}
+
+	// POST path — drive /authorize manually with the same parameters
+	// in the form body. The auto-consent driver still threads the
+	// interaction once /authorize has 302'd onto /interaction.
+	pkce := scenariokit.NewPKCEPair("scenariokit-default-verifier-scenariokit-cl-82-post-1234")
+	form := url.Values{
+		"client_id":             {rp.ID},
+		"response_type":         {"code"},
+		"redirect_uri":          {rp.RedirectURIs[0]},
+		"scope":                 {"openid"},
+		"state":                 {scenariokit.DefaultState},
+		"nonce":                 {scenariokit.DefaultNonce},
+		"code_challenge":        {pkce.Challenge},
+		"code_challenge_method": {pkce.Method},
+		"claims":                extra["claims"],
+	}
+	// Drive /authorize via POST body and confirm it 302s to the
+	// interaction step (parsing succeeded). Once parsing is proven we
+	// rely on the GET-path projector test above for the wire payload —
+	// the parser feeds both transports into the same ParseValues.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/auth", io.NopCloser(strReader(form.Encode())))
+	if err != nil {
+		t.Fatalf("build POST /authorize: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /authorize: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST /authorize status=%d want 302 body=%s", resp.StatusCode, string(body))
+	}
+	// A 302 to /oidc/interaction proves the POST parser accepted the
+	// wire form; a parse failure would have surfaced as a 400 envelope.
+	loc, err := resp.Location()
+	if err != nil {
+		t.Fatalf("Location: %v", err)
+	}
+	if !pathHasPrefix(loc.Path, "/oidc/interaction/") {
+		t.Errorf("POST /authorize Location.Path=%q want /oidc/interaction/...", loc.Path)
+	}
+}
+
+// strReader wraps a string as an io.Reader. The helper lets the CL-82
+// POST hop avoid pulling in strings.NewReader at the top of the file
+// when the rest of the suite reads its bodies as []byte.
+func strReader(s string) *clStringReader {
+	return &clStringReader{s: s}
+}
+
+type clStringReader struct {
+	s string
+	i int
+}
+
+func (r *clStringReader) Read(p []byte) (int, error) {
+	if r.i >= len(r.s) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.s[r.i:])
+	r.i += n
+	return n, nil
+}
+
+// pathHasPrefix returns true when path starts with prefix. It avoids a
+// strings import in this file; the suite-wide convention uses dedicated
+// helpers per file.
+func pathHasPrefix(path, prefix string) bool {
+	if len(path) < len(prefix) {
+		return false
+	}
+	return path[:len(prefix)] == prefix
 }
