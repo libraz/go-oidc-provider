@@ -297,3 +297,15 @@ func TestScenario_I18N_013_LocaleFieldsOmitWhenResolverAbsent(t *testing.T) {
 	// behaviour so a future regression is logged here too.
 	t.Log("guarded by op/interaction/types_test.go TestPrompt_LocaleFieldsOmitWhenEmpty")
 }
+
+// TestScenario_I18N_020_LocaleCookieWriteEndpoint is OOS — see catalog out_of_scope_reason.
+func TestScenario_I18N_020_LocaleCookieWriteEndpoint(t *testing.T) {
+	t.Parallel()
+	t.Skip("out-of-scope: I18N-020 (see catalog out_of_scope_reason)")
+}
+
+// TestScenario_I18N_030_LocaleBundleJSONEndpoint is OOS — see catalog out_of_scope_reason.
+func TestScenario_I18N_030_LocaleBundleJSONEndpoint(t *testing.T) {
+	t.Parallel()
+	t.Skip("out-of-scope: I18N-030 (see catalog out_of_scope_reason)")
+}

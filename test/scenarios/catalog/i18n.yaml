@@ -116,7 +116,8 @@ rows:
       the SPA-selected locale into the __Host-oidc_locale cookie
       (1y MaxAge, Lax, __Host- prefix) so subsequent authorize hits
       pick it up at chain layer 3.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Cookie write endpoint POST /oidc/session/locale is deferred to a follow-up plan — the catalog row's own notes record this. v1.0's locale resolver reads __Host-oidc_locale at chain rule 3 (covered by I18N-003) but the OP exposes no public route to write it; SPAs that want to persist a user-selected locale wire their own POST endpoint that sets the cookie with the matching __Host- prefix attributes. The wire seam to assert ('OP-supplied write route persists with 1y MaxAge / Lax / __Host-') does not exist in v1.0."
     notes: deferred to follow-up plan; resolver currently reads the cookie but no write endpoint exists.
 
   - id: I18N-030
@@ -126,5 +127,6 @@ rows:
       The OP serves resolved locale bundle JSON at GET /oidc/i18n/{locale}
       so SPAs can fetch the same translations the OP would render
       server-side, avoiding two-tier translation drift.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Bundle JSON endpoint GET /oidc/i18n/{locale} is deferred to a follow-up plan — the catalog row's own notes record this. v1.0 ships locale resolution and stamps the resolved tag on the prompt envelope (I18N-010..013) but does not expose a public bundle-fetch route; embedder SPAs ship their own translation bundles in the meantime. There is no v1.0 wire seam to assert against."
     notes: deferred to follow-up plan; embedder SPAs ship their own bundles in the meantime.
