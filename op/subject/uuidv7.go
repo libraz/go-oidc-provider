@@ -27,7 +27,9 @@ import (
 // renders both as a server-side configuration error: the issuance
 // pipeline is expected to populate exactly one of the two fields
 // before invoking the generator.
-func UUIDv7() Generator { //nolint:ireturn // sealed-sum interface return is the contract; the projective generator carries no state.
+//
+//nolint:ireturn // sealed-sum interface return is the contract; the projective generator carries no state.
+func UUIDv7() Generator {
 	return uuidv7Generator{}
 }
 

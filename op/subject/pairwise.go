@@ -59,7 +59,9 @@ const MinSaltLength = 32
 // (userID, sector, salt) inputs produce identical outputs across
 // calls and across processes. The package's TestPairwiseDeterminism
 // exercises this with a 10k-iteration property loop.
-func Pairwise(salt []byte) Generator { //nolint:ireturn // sealed-sum interface return is the contract; the salt-too-short branch returns the always-failing variant.
+//
+//nolint:ireturn // sealed-sum interface return is the contract; the salt-too-short branch returns the always-failing variant.
+func Pairwise(salt []byte) Generator {
 	if len(salt) < MinSaltLength {
 		return invalidSaltGenerator{}
 	}
