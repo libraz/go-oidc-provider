@@ -145,7 +145,8 @@ rows:
       returns 401 with WWW-Authenticate: DPoP error="invalid_token"
       so the resource server learns the binding mismatched without
       receiving any of the row's metadata.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 ships no DPoP scenariokit harness: scenariokit.RunCodeFlow does not stamp a DPoP proof, op.WithDPoPNonceSource is the only DPoP option exposed, and crafting the dual-key proof + bound AT round-trip from black-box scenarios would require a new public testkit DPoP signer. The same-key happy-path is exercised by internal/userinfo white-box tests; binding the cross-key wire shape from black-box scenarios needs new helpers that are not on the v1.0 roadmap."
 
   - id: ATO-010
     severity: P1
@@ -157,7 +158,8 @@ rows:
       WWW-Authenticate: Bearer error="invalid_token". The bind check
       runs after the Find lookup so the proof is checked against the
       thumbprint the OP issued.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 ships no mTLS scenariokit harness: scenariokit's HTTP client does not present a TLS client cert and op.WithMTLS surface lives in op/feature for the embedder. Binding the certificate-mismatch wire shape requires a new public testkit mTLS rig (server-side trust pool + client cert injection) not on the v1.0 roadmap; the bind enforcement is exercised by internal/mtls white-box tests."
 
   - id: ATO-011
     severity: P1

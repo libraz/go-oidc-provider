@@ -571,22 +571,16 @@ func TestScenario_ATO_008_PerAudienceMapSelectsFormat(t *testing.T) {
 	}
 }
 
-// TestScenario_ATO_009_DPoPOpaqueATKeyMismatchAtUserinfo is deferred
-// pending a DPoP harness inside scenariokit. The behaviour is already
-// covered by the white-box userinfo handler tests; the row remains so
-// the catalog stays one-to-one with test functions.
+// TestScenario_ATO_009_DPoPOpaqueATKeyMismatchAtUserinfo is OOS — see catalog out_of_scope_reason.
 func TestScenario_ATO_009_DPoPOpaqueATKeyMismatchAtUserinfo(t *testing.T) {
 	t.Parallel()
-	t.Skip("ATO-009: pending DPoP scenariokit harness; covered by internal/userinfo white-box tests")
+	t.Skip("out-of-scope: ATO-009 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_ATO_010_MTLSOpaqueATCertMismatchAtUserinfo is deferred
-// pending an mTLS harness inside scenariokit. The behaviour is
-// covered by internal mTLS-bearer tests; the row remains so the
-// catalog stays one-to-one with test functions.
+// TestScenario_ATO_010_MTLSOpaqueATCertMismatchAtUserinfo is OOS — see catalog out_of_scope_reason.
 func TestScenario_ATO_010_MTLSOpaqueATCertMismatchAtUserinfo(t *testing.T) {
 	t.Parallel()
-	t.Skip("ATO-010: pending mTLS scenariokit harness; covered by internal/mtls white-box tests")
+	t.Skip("out-of-scope: ATO-010 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ATO_011_FormatConfusionWireBytesNoDot pins the §S.9
