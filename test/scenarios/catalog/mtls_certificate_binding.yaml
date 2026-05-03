@@ -24,7 +24,7 @@ rows:
     behaviour: |
       When the feature is enabled, /.well-known/openid-configuration
       includes tls_client_certificate_bound_access_tokens=true.
-    status: pending
+    status: active
 
   - id: MTLS-002
     severity: P0
@@ -69,7 +69,7 @@ rows:
     behaviour: |
       Introspection of a cert-bound access token surfaces cnf.x5t#S256
       and token_type=Bearer in the response.
-    status: pending
+    status: active
 
   - id: MTLS-007
     severity: P0
@@ -250,4 +250,5 @@ rows:
       body {"error":"invalid_grant","error_description":"grant
       request is invalid"} and surfaces the detailed reason via the
       audit/error_detail channel.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "non-spec residue: catalog asserts a generic 400 envelope {error: invalid_grant, error_description: 'grant request is invalid'} with the precise mismatch reason routed through a separate audit/error_detail channel. v1.0 instead writes the mismatch reason directly into error_description (internal/tokenendpoint/* emits 'failed x5t#S256 verification' or 'mutual TLS client certificate not provided' verbatim); MTLS-022 (cert mismatch) and MTLS-021 (no cert) bind that wire shape. The audit/error_detail split surface the catalog assumes is not modelled in v1.0 — there is no separate detail-only channel — so the canonical 'generic body, detail in audit' shape has nothing to assert against."

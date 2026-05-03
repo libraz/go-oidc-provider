@@ -252,14 +252,44 @@ func mtlsUserInfoURL(tk *testkit.Provider) string {
 	return tk.Issuer + "/oidc/userinfo"
 }
 
-// TestScenario_MTLS_001_DiscoveryAdvertisesCertBoundFlag is covered by
-// CA-DISC-07 in client_auth_test.go, which already pins
-// tls_client_certificate_bound_access_tokens=true under
-// [feature.MTLS]. The row is left pending so a future bind can split
-// it out into its own test.
+// TestScenario_MTLS_001_DiscoveryAdvertisesCertBoundFlag pins the
+// RFC 8705 §3.3 discovery surface: when [feature.MTLS] is enabled the
+// /.well-known/openid-configuration document carries
+// tls_client_certificate_bound_access_tokens=true. The discovery
+// builder is the public-facing contract RP libraries key off when
+// deciding whether to thread a client cert through the resource-
+// server hop.
+//
+// The same field is checked from the client_auth angle by CA-DISC-07
+// (focus there: discovery advertises the auth-method allow-list);
+// this binding focuses on the cert-bound flag itself.
+//
+// Spec: RFC 8705 §3.3 / OpenID Connect Discovery 1.0 §3.
 func TestScenario_MTLS_001_DiscoveryAdvertisesCertBoundFlag(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: MTLS-001")
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.MTLS)))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/.well-known/openid-configuration", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("GET discovery: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discovery status=%d want 200", resp.StatusCode)
+	}
+	doc := mtlsDecodeJSON(t, resp)
+	got, ok := doc["tls_client_certificate_bound_access_tokens"].(bool)
+	if !ok {
+		t.Fatalf("tls_client_certificate_bound_access_tokens missing or not a bool (doc=%v)", doc["tls_client_certificate_bound_access_tokens"])
+	}
+	if !got {
+		t.Errorf("tls_client_certificate_bound_access_tokens=false want true under feature.MTLS")
+	}
 }
 
 // TestScenario_MTLS_002_AccessTokenRejectsDualBinding is OOS: the
@@ -370,13 +400,61 @@ func TestScenario_MTLS_005_UserinfoSuccessWithBindingCert(t *testing.T) {
 	}
 }
 
-// TestScenario_MTLS_006_IntrospectionSurfacesCnfX5T is left pending —
-// the row is P1 and not in the P0 sweep, but the introspection cnf
-// emission is wired in internal/introspectendpoint and the harness
-// here is the right vehicle when the row is bound.
+// TestScenario_MTLS_006_IntrospectionSurfacesCnfX5T pins the RFC 8705
+// §3.2 / RFC 7662 introspection contract for cert-bound access
+// tokens: a successful /introspect response carries the cnf.x5t#S256
+// thumbprint copied verbatim from the JWT AT, alongside
+// token_type=Bearer (RFC 9449 §6.1 / RFC 8705 §3.1 keep the bearer
+// label even when a sender-constraint binding is layered on).
+//
+// The fixture is the confidential MTLS fixture with Introspect
+// additionally enabled; the test issues a cert-bound AT via the
+// authorization_code grant and then introspects it via HTTP Basic.
+//
+// Spec: RFC 8705 §3.2 / RFC 7662 §2.2.
 func TestScenario_MTLS_006_IntrospectionSurfacesCnfX5T(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: MTLS-006")
+
+	f := newMTLSConfidentialFixture(t, op.WithFeature(feature.Introspect))
+	cert := mtlsCert(t)
+	at := mtlsIssueAuthCodeAccessToken(t, f, cert)
+	wantThumb := mtlsThumbprint(cert)
+
+	form := url.Values{"token": {at}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		f.tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest /introspect: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(f.client.ID, f.secret)
+	resp, err := f.tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("Do /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("/introspect status=%d body=%s", resp.StatusCode, string(body))
+	}
+	body := mtlsDecodeJSON(t, resp)
+	if active, _ := body["active"].(bool); !active {
+		t.Fatalf("introspect active=false want true (body=%v)", body)
+	}
+	if got, _ := body["token_type"].(string); got != "Bearer" {
+		t.Errorf("token_type=%q want Bearer (RFC 8705 §3.1 keeps bearer label even when cert-bound)", got)
+	}
+	cnf, _ := body["cnf"].(map[string]any)
+	if cnf == nil {
+		t.Fatalf("introspect response missing cnf (body=%v)", body)
+	}
+	if got, _ := cnf["x5t#S256"].(string); got != wantThumb {
+		t.Errorf("cnf.x5t#S256=%q want %q", got, wantThumb)
+	}
+	if _, hasJKT := cnf["jkt"]; hasJKT {
+		t.Errorf("cnf must not carry jkt for an mTLS-only bound token (cnf=%v)", cnf)
+	}
 }
 
 // TestScenario_MTLS_007_ThumbprintAlgorithm pins the wire shape of
@@ -814,14 +892,10 @@ func TestScenario_MTLS_024_ClientCredentialsRequiresMTLS(t *testing.T) {
 	t.Skip("out-of-scope: MTLS-024 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_MTLS_025_GrantErrorResponseShape is left pending. The
-// row asserts the precise OAuth wire envelope on the cert-mismatch
-// path; MTLS-022 already exercises the mismatch rejection at the
-// status / error code granularity, so the additional shape check is
-// best decoupled into its own test in a follow-up bind.
+// TestScenario_MTLS_025_GrantErrorResponseShape is OOS — see catalog out_of_scope_reason.
 func TestScenario_MTLS_025_GrantErrorResponseShape(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: MTLS-025")
+	t.Skip("out-of-scope: MTLS-025 (see catalog out_of_scope_reason)")
 }
 
 // mtlsIssueAuthCodeAccessToken is the shared "issue an mTLS-bound
