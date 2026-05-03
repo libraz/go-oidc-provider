@@ -306,6 +306,18 @@ type Deps struct {
 	// the dispatcher from the [op.WithCustomGrant] registrations
 	// at provider build time.
 	CustomGrants *customgrant.Dispatcher
+
+	// DeviceCodes is the substore for RFC 8628 device-authorization
+	// records. The token-endpoint device_code grant looks records
+	// up by device_code, applies the polling discipline, and
+	// atomically consumes the row before issuing credentials. A
+	// nil value disables the device_code grant entirely: requests
+	// arriving with grant_type=urn:ietf:params:oauth:grant-type:
+	// device_code are rejected with unsupported_grant_type. The
+	// op-layer wiring guards op.WithDeviceCodeGrant against the
+	// nil-substore case at construction time so a deployment that
+	// opts into the grant cannot reach the runtime nil-check.
+	DeviceCodes store.DeviceCodeStore
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.
@@ -349,6 +361,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		handleRefreshToken(w, r, deps)
 	case "client_credentials":
 		handleClientCredentials(w, r, deps)
+	case "urn:ietf:params:oauth:grant-type:device_code":
+		handleDeviceCode(w, r, deps)
 	default:
 		if deps.CustomGrants != nil && deps.CustomGrants.HasHandler(grantType) {
 			handleCustomGrant(w, r, deps, grantType)
