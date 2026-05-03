@@ -52,7 +52,15 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     request_uris TEXT NOT NULL DEFAULT '[]',
     request_object_signing_alg TEXT NOT NULL DEFAULT '',
     request_object_encryption_alg TEXT NOT NULL DEFAULT '',
-    request_object_encryption_enc TEXT NOT NULL DEFAULT ''
+    request_object_encryption_enc TEXT NOT NULL DEFAULT '',
+    id_token_encrypted_response_alg TEXT NOT NULL DEFAULT '',
+    id_token_encrypted_response_enc TEXT NOT NULL DEFAULT '',
+    userinfo_encrypted_response_alg TEXT NOT NULL DEFAULT '',
+    userinfo_encrypted_response_enc TEXT NOT NULL DEFAULT '',
+    authorization_encrypted_response_alg TEXT NOT NULL DEFAULT '',
+    authorization_encrypted_response_enc TEXT NOT NULL DEFAULT '',
+    introspection_encrypted_response_alg TEXT NOT NULL DEFAULT '',
+    introspection_encrypted_response_enc TEXT NOT NULL DEFAULT ''
 );
 
 -- oidc_authorization_codes.id stores the SHA-256 hex digest (64

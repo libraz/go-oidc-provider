@@ -118,6 +118,170 @@ func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testin
 	}
 }
 
+// TestValidatePolicy_AcceptsResponseEncryption pins the v0.9.1 allow-list
+// for the four outbound-encryption metadata pairs (id_token, userinfo,
+// JARM authorization, introspection). Each path mirrors
+// [TestValidatePolicy_AcceptsRequestObjectEncryption]: every alg/enc on
+// the JOSE wrapper's allow-list flows through unchanged, plus the
+// "alg without enc" / "enc without alg" / "both empty" carve-outs OIDC
+// §6.1 admits. The table is keyed by metadata path so a regression in
+// one validator surfaces against the path it ought to.
+func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
+	t.Parallel()
+
+	combos := []struct {
+		alg, enc string
+	}{
+		{alg: "RSA-OAEP-256", enc: "A256GCM"},
+		{alg: "ECDH-ES", enc: "A128GCM"},
+		{alg: "ECDH-ES+A128KW", enc: "A128GCM"},
+		{alg: "ECDH-ES+A256KW", enc: "A256GCM"},
+		{alg: "RSA-OAEP-256", enc: ""},
+		{alg: "", enc: "A256GCM"},
+		{alg: "", enc: ""},
+	}
+	paths := []struct {
+		name string
+		set  func(m *ClientMetadata, alg, enc string)
+	}{
+		{
+			name: "id_token",
+			set: func(m *ClientMetadata, alg, enc string) {
+				m.IDTokenEncryptedResponseAlg = alg
+				m.IDTokenEncryptedResponseEnc = enc
+			},
+		},
+		{
+			name: "userinfo",
+			set: func(m *ClientMetadata, alg, enc string) {
+				m.UserInfoEncryptedResponseAlg = alg
+				m.UserInfoEncryptedResponseEnc = enc
+			},
+		},
+		{
+			name: "authorization",
+			set: func(m *ClientMetadata, alg, enc string) {
+				m.AuthorizationEncryptedResponseAlg = alg
+				m.AuthorizationEncryptedResponseEnc = enc
+			},
+		},
+		{
+			name: "introspection",
+			set: func(m *ClientMetadata, alg, enc string) {
+				m.IntrospectionEncryptedResponseAlg = alg
+				m.IntrospectionEncryptedResponseEnc = enc
+			},
+		},
+	}
+	for _, p := range paths {
+		for _, c := range combos {
+			t.Run(p.name+"/"+c.alg+"/"+c.enc, func(t *testing.T) {
+				t.Parallel()
+				m := ClientMetadata{
+					RedirectURIs: []string{"https://rp.test.invalid/cb"},
+				}
+				p.set(&m, c.alg, c.enc)
+				if _, err := validatePolicy(m,
+					[]string{"authorization_code"}, []string{"code"},
+					nil, nil, false, false); err != nil {
+					t.Fatalf("validatePolicy: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// TestValidatePolicy_RejectsResponseEncryptionOutsideAllowlist pins the
+// negative half across the four outbound-encryption metadata pairs:
+// any alg/enc value off the v0.9.1 allow-list MUST return
+// invalid_client_metadata, and the description MUST name the offending
+// wire field so embedders can self-correct.
+func TestValidatePolicy_RejectsResponseEncryptionOutsideAllowlist(t *testing.T) {
+	t.Parallel()
+
+	type combo struct {
+		name      string
+		alg, enc  string
+		wantField string
+	}
+	paths := []struct {
+		name     string
+		algField string
+		encField string
+		applyAlg func(m *ClientMetadata, alg, enc string)
+	}{
+		{
+			name:     "id_token",
+			algField: "id_token_encrypted_response_alg",
+			encField: "id_token_encrypted_response_enc",
+			applyAlg: func(m *ClientMetadata, alg, enc string) {
+				m.IDTokenEncryptedResponseAlg = alg
+				m.IDTokenEncryptedResponseEnc = enc
+			},
+		},
+		{
+			name:     "userinfo",
+			algField: "userinfo_encrypted_response_alg",
+			encField: "userinfo_encrypted_response_enc",
+			applyAlg: func(m *ClientMetadata, alg, enc string) {
+				m.UserInfoEncryptedResponseAlg = alg
+				m.UserInfoEncryptedResponseEnc = enc
+			},
+		},
+		{
+			name:     "authorization",
+			algField: "authorization_encrypted_response_alg",
+			encField: "authorization_encrypted_response_enc",
+			applyAlg: func(m *ClientMetadata, alg, enc string) {
+				m.AuthorizationEncryptedResponseAlg = alg
+				m.AuthorizationEncryptedResponseEnc = enc
+			},
+		},
+		{
+			name:     "introspection",
+			algField: "introspection_encrypted_response_alg",
+			encField: "introspection_encrypted_response_enc",
+			applyAlg: func(m *ClientMetadata, alg, enc string) {
+				m.IntrospectionEncryptedResponseAlg = alg
+				m.IntrospectionEncryptedResponseEnc = enc
+			},
+		},
+	}
+	for _, p := range paths {
+		combos := []combo{
+			{name: "alg-RSA1_5", alg: "RSA1_5", enc: "A256GCM", wantField: p.algField},
+			{name: "alg-A128KW", alg: "A128KW", enc: "A128GCM", wantField: p.algField},
+			{name: "enc-CBC", alg: "RSA-OAEP-256", enc: "A128CBC-HS256", wantField: p.encField},
+			{name: "enc-A192", alg: "RSA-OAEP-256", enc: "A192GCM", wantField: p.encField},
+		}
+		for _, c := range combos {
+			t.Run(p.name+"/"+c.name, func(t *testing.T) {
+				t.Parallel()
+				m := ClientMetadata{
+					RedirectURIs: []string{"https://rp.test.invalid/cb"},
+				}
+				p.applyAlg(&m, c.alg, c.enc)
+				_, err := validatePolicy(m,
+					[]string{"authorization_code"}, []string{"code"},
+					nil, nil, false, false)
+				if err == nil {
+					t.Fatal("expected validation error, got nil")
+				}
+				var ve *validationError
+				if !errors.As(err, &ve) {
+					t.Fatalf("error %v is not *validationError", err)
+				}
+				if ve.code != codeInvalidClientMetadata {
+					t.Errorf("code = %q, want %q", ve.code, codeInvalidClientMetadata)
+				}
+				if !strings.Contains(ve.description, c.wantField) {
+					t.Errorf("description %q must contain %q", ve.description, c.wantField)
+				}
+			})
+		}
+	}
+}
+
 func TestValidatePolicy_RejectsPairwiseMultiHostWithoutSectorIdentifier(t *testing.T) {
 	t.Parallel()
 

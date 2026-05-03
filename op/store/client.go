@@ -264,6 +264,57 @@ type Client struct {
 	// means "no preference" — the OP still validates the inbound
 	// `enc` against the v0.9.1 allow-list (`A128GCM` / `A256GCM`).
 	RequestObjectEncryptionEnc string
+
+	// IDTokenEncryptedResponseAlg signals that the client wants
+	// issued ID tokens encrypted with the named JWE `alg` (OIDC Core
+	// 1.0 §10.2 / OIDC Dynamic Client Registration 1.0 §2). Empty
+	// means "no encryption" — the OP issues a plain signed ID token.
+	// The value is recorded for the metadata round-trip; outbound
+	// encryption is wired in a later step.
+	IDTokenEncryptedResponseAlg string
+
+	// IDTokenEncryptedResponseEnc mirrors
+	// [IDTokenEncryptedResponseAlg] for the JWE content-encryption
+	// (`enc`) advertisement. Empty means "no preference"; the OP
+	// applies its v0.9.1 allow-list (`A128GCM` / `A256GCM`).
+	IDTokenEncryptedResponseEnc string
+
+	// UserInfoEncryptedResponseAlg signals that the client wants
+	// /userinfo responses encrypted with the named JWE `alg` (OIDC
+	// Core 1.0 §5.3 / OIDC Dynamic Client Registration 1.0 §2).
+	// Empty means "plain JSON or signed JWT" — the OP does not
+	// encrypt the response.
+	UserInfoEncryptedResponseAlg string
+
+	// UserInfoEncryptedResponseEnc mirrors
+	// [UserInfoEncryptedResponseAlg] for the JWE content-encryption
+	// (`enc`) advertisement.
+	UserInfoEncryptedResponseEnc string
+
+	// AuthorizationEncryptedResponseAlg signals that the client wants
+	// JARM authorization responses encrypted with the named JWE `alg`
+	// (JARM / OIDC Dynamic Client Registration 1.0 §2). Empty means
+	// the OP returns a signed-only JARM response (or, when JARM is not
+	// in effect, plain query/fragment parameters).
+	AuthorizationEncryptedResponseAlg string
+
+	// AuthorizationEncryptedResponseEnc mirrors
+	// [AuthorizationEncryptedResponseAlg] for the JWE
+	// content-encryption (`enc`) advertisement.
+	AuthorizationEncryptedResponseEnc string
+
+	// IntrospectionEncryptedResponseAlg signals that the client wants
+	// JWT introspection responses encrypted with the named JWE `alg`
+	// (RFC 7662 + draft JWT Response for OAuth Token Introspection /
+	// OIDC Dynamic Client Registration 1.0 §2). Empty means the OP
+	// returns the introspection result as plain JSON or as a signed
+	// JWT according to [IntrospectionSignedResponseAlg].
+	IntrospectionEncryptedResponseAlg string
+
+	// IntrospectionEncryptedResponseEnc mirrors
+	// [IntrospectionEncryptedResponseAlg] for the JWE
+	// content-encryption (`enc`) advertisement.
+	IntrospectionEncryptedResponseEnc string
 }
 
 // ClientStore is the read-only contract every OP backend MUST satisfy.

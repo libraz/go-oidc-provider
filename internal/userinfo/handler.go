@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -39,6 +40,14 @@ type HandlerDeps struct {
 	// against. An empty Issuer disables the check; callers MUST set
 	// it for any production deployment.
 	Issuer string
+
+	// Clients is the read-only client registry. The handler consults
+	// it after access-token verification to project the registered
+	// userinfo response shape — encrypted JWE wrap when the client
+	// registered userinfo_encrypted_response_alg / _enc, signed JWT
+	// otherwise. A nil value disables the encryption branch and the
+	// handler always emits the signed (or JSON) shape.
+	Clients store.ClientStore
 
 	// UserStore is the read-only end-user lookup the handler consults
 	// after the bearer token has verified. It MUST return
@@ -132,6 +141,15 @@ type HandlerDeps struct {
 	// Wave 2 plumbs this field; the handler logic that consumes it
 	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
+
+	// ClientEncJWKs resolves the RP's encryption recipient when the
+	// client registered userinfo_encrypted_response_alg / _enc and the
+	// response is JWT-shaped (RFC 6750 / OIDC Core 1.0 §5.3.2). A nil
+	// value disables outbound userinfo encryption; clients that
+	// registered the metadata still see signed JWT responses, which
+	// the OP signals upstream as a configuration mismatch via the
+	// validator at registration time.
+	ClientEncJWKs *clientencjwks.Resolver
 }
 
 // Handler returns the /userinfo [http.Handler]. Behaviour follows

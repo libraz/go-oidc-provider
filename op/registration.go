@@ -225,6 +225,76 @@ type ClientMetadata struct {
 	// Stable since v0.9.1.
 	RequestObjectEncryptionEnc string
 
+	// IDTokenEncryptedResponseAlg, when non-empty, signals that the
+	// client wants the OP to encrypt issued ID tokens with the named
+	// JWE `alg` (OIDC Core 1.0 §10.2 / OIDC Dynamic Client
+	// Registration 1.0 §2). The value must be on the OP allow-list
+	// (see [SupportedEncryptionAlgs]). The metadata is recorded for
+	// the registration round-trip; outbound encryption is wired in a
+	// later step.
+	//
+	// Stable since v0.9.1.
+	IDTokenEncryptedResponseAlg string
+
+	// IDTokenEncryptedResponseEnc mirrors [IDTokenEncryptedResponseAlg]
+	// for the JWE content-encryption (`enc`) advertisement. Allowed
+	// values are listed by [SupportedEncryptionEncs].
+	//
+	// Stable since v0.9.1.
+	IDTokenEncryptedResponseEnc string
+
+	// UserInfoEncryptedResponseAlg, when non-empty, signals that the
+	// client wants the OP to encrypt /userinfo responses with the
+	// named JWE `alg` (OIDC Core 1.0 §5.3 / OIDC Dynamic Client
+	// Registration 1.0 §2). The value must be on the OP allow-list
+	// (see [SupportedEncryptionAlgs]).
+	//
+	// Stable since v0.9.1.
+	UserInfoEncryptedResponseAlg string
+
+	// UserInfoEncryptedResponseEnc mirrors
+	// [UserInfoEncryptedResponseAlg] for the JWE content-encryption
+	// (`enc`) advertisement. Allowed values are listed by
+	// [SupportedEncryptionEncs].
+	//
+	// Stable since v0.9.1.
+	UserInfoEncryptedResponseEnc string
+
+	// AuthorizationEncryptedResponseAlg, when non-empty, signals that
+	// the client wants the OP to encrypt JARM authorization responses
+	// with the named JWE `alg` (JARM / OIDC Dynamic Client
+	// Registration 1.0 §2). The value must be on the OP allow-list
+	// (see [SupportedEncryptionAlgs]).
+	//
+	// Stable since v0.9.1.
+	AuthorizationEncryptedResponseAlg string
+
+	// AuthorizationEncryptedResponseEnc mirrors
+	// [AuthorizationEncryptedResponseAlg] for the JWE
+	// content-encryption (`enc`) advertisement. Allowed values are
+	// listed by [SupportedEncryptionEncs].
+	//
+	// Stable since v0.9.1.
+	AuthorizationEncryptedResponseEnc string
+
+	// IntrospectionEncryptedResponseAlg, when non-empty, signals that
+	// the client wants the OP to encrypt JWT introspection responses
+	// with the named JWE `alg` (RFC 7662 + draft JWT Response for
+	// OAuth Token Introspection / OIDC Dynamic Client Registration
+	// 1.0 §2). The value must be on the OP allow-list (see
+	// [SupportedEncryptionAlgs]).
+	//
+	// Stable since v0.9.1.
+	IntrospectionEncryptedResponseAlg string
+
+	// IntrospectionEncryptedResponseEnc mirrors
+	// [IntrospectionEncryptedResponseAlg] for the JWE
+	// content-encryption (`enc`) advertisement. Allowed values are
+	// listed by [SupportedEncryptionEncs].
+	//
+	// Stable since v0.9.1.
+	IntrospectionEncryptedResponseEnc string
+
 	// PostLogoutRedirectURIs lists the candidate URIs the client wants
 	// to register for OpenID Connect RP-Initiated Logout 1.0 §3
 	// post_logout_redirect_uri matching. The library has already

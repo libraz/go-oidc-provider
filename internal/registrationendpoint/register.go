@@ -16,36 +16,44 @@ import (
 // fields (client_secret, registration_access_token, etc.) are tagged
 // omitempty so the wire form matches the spec's "MUST/MAY" guidance.
 type registrationResponse struct {
-	ClientID                   string   `json:"client_id"`
-	ClientIDIssuedAt           int64    `json:"client_id_issued_at"`
-	ClientSecret               string   `json:"client_secret,omitempty"`
-	ClientSecretExpiresAt      int64    `json:"client_secret_expires_at"`
-	RegistrationAccessToken    string   `json:"registration_access_token,omitempty"`
-	RegistrationClientURI      string   `json:"registration_client_uri,omitempty"`
-	RedirectURIs               []string `json:"redirect_uris,omitempty"`
-	GrantTypes                 []string `json:"grant_types,omitempty"`
-	ResponseTypes              []string `json:"response_types,omitempty"`
-	Scope                      string   `json:"scope,omitempty"`
-	TokenEndpointAuthMethod    string   `json:"token_endpoint_auth_method,omitempty"`
-	ApplicationType            string   `json:"application_type,omitempty"`
-	SubjectType                string   `json:"subject_type,omitempty"`
-	IDTokenAlg                 string   `json:"id_token_signed_response_alg,omitempty"`
-	ClientName                 string   `json:"client_name,omitempty"`
-	ClientURI                  string   `json:"client_uri,omitempty"`
-	LogoURI                    string   `json:"logo_uri,omitempty"`
-	PolicyURI                  string   `json:"policy_uri,omitempty"`
-	TosURI                     string   `json:"tos_uri,omitempty"`
-	JWKsURI                    string   `json:"jwks_uri,omitempty"`
-	Contacts                   []string `json:"contacts,omitempty"`
-	DefaultMaxAge              *int64   `json:"default_max_age,omitempty"`
-	RequireAuthTime            bool     `json:"require_auth_time,omitempty"`
-	DefaultACRValues           []string `json:"default_acr_values,omitempty"`
-	InitiateLoginURI           string   `json:"initiate_login_uri,omitempty"`
-	RequestURIs                []string `json:"request_uris,omitempty"`
-	RequestObjectSigningAlg    string   `json:"request_object_signing_alg,omitempty"`
-	RequestObjectEncryptionAlg string   `json:"request_object_encryption_alg,omitempty"`
-	RequestObjectEncryptionEnc string   `json:"request_object_encryption_enc,omitempty"`
-	PostLogoutRedirectURIs     []string `json:"post_logout_redirect_uris,omitempty"`
+	ClientID                          string   `json:"client_id"`
+	ClientIDIssuedAt                  int64    `json:"client_id_issued_at"`
+	ClientSecret                      string   `json:"client_secret,omitempty"`
+	ClientSecretExpiresAt             int64    `json:"client_secret_expires_at"`
+	RegistrationAccessToken           string   `json:"registration_access_token,omitempty"`
+	RegistrationClientURI             string   `json:"registration_client_uri,omitempty"`
+	RedirectURIs                      []string `json:"redirect_uris,omitempty"`
+	GrantTypes                        []string `json:"grant_types,omitempty"`
+	ResponseTypes                     []string `json:"response_types,omitempty"`
+	Scope                             string   `json:"scope,omitempty"`
+	TokenEndpointAuthMethod           string   `json:"token_endpoint_auth_method,omitempty"`
+	ApplicationType                   string   `json:"application_type,omitempty"`
+	SubjectType                       string   `json:"subject_type,omitempty"`
+	IDTokenAlg                        string   `json:"id_token_signed_response_alg,omitempty"`
+	ClientName                        string   `json:"client_name,omitempty"`
+	ClientURI                         string   `json:"client_uri,omitempty"`
+	LogoURI                           string   `json:"logo_uri,omitempty"`
+	PolicyURI                         string   `json:"policy_uri,omitempty"`
+	TosURI                            string   `json:"tos_uri,omitempty"`
+	JWKsURI                           string   `json:"jwks_uri,omitempty"`
+	Contacts                          []string `json:"contacts,omitempty"`
+	DefaultMaxAge                     *int64   `json:"default_max_age,omitempty"`
+	RequireAuthTime                   bool     `json:"require_auth_time,omitempty"`
+	DefaultACRValues                  []string `json:"default_acr_values,omitempty"`
+	InitiateLoginURI                  string   `json:"initiate_login_uri,omitempty"`
+	RequestURIs                       []string `json:"request_uris,omitempty"`
+	RequestObjectSigningAlg           string   `json:"request_object_signing_alg,omitempty"`
+	RequestObjectEncryptionAlg        string   `json:"request_object_encryption_alg,omitempty"`
+	RequestObjectEncryptionEnc        string   `json:"request_object_encryption_enc,omitempty"`
+	IDTokenEncryptedResponseAlg       string   `json:"id_token_encrypted_response_alg,omitempty"`
+	IDTokenEncryptedResponseEnc       string   `json:"id_token_encrypted_response_enc,omitempty"`
+	UserInfoEncryptedResponseAlg      string   `json:"userinfo_encrypted_response_alg,omitempty"`
+	UserInfoEncryptedResponseEnc      string   `json:"userinfo_encrypted_response_enc,omitempty"`
+	AuthorizationEncryptedResponseAlg string   `json:"authorization_encrypted_response_alg,omitempty"`
+	AuthorizationEncryptedResponseEnc string   `json:"authorization_encrypted_response_enc,omitempty"`
+	IntrospectionEncryptedResponseAlg string   `json:"introspection_encrypted_response_alg,omitempty"`
+	IntrospectionEncryptedResponseEnc string   `json:"introspection_encrypted_response_enc,omitempty"`
+	PostLogoutRedirectURIs            []string `json:"post_logout_redirect_uris,omitempty"`
 }
 
 // handleRegister implements POST /register (RFC 7591 §3). The function
@@ -135,37 +143,45 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 	}
 	now := deps.now().UTC()
 	client := &store.Client{
-		ID:                         clientID,
-		ClientIDIssuedAt:           now.Unix(),
-		RedirectURIs:               slices.Clone(m.RedirectURIs),
-		GrantTypes:                 slices.Clone(m.GrantTypes),
-		ResponseTypes:              slices.Clone(m.ResponseTypes),
-		Scopes:                     splitScopes(m.Scope),
-		TokenEndpointAuthMethod:    m.TokenEndpointAuthMethod,
-		SecretHash:                 secretHash,
-		PublicClient:               !confidential,
-		Source:                     store.ClientSourceDynamic,
-		ApplicationType:            m.ApplicationType,
-		SubjectType:                m.SubjectType,
-		IDTokenSignedResponseAlg:   m.IDTokenSignedResponseAlg,
-		SectorIdentifierURI:        m.SectorIdentifierURI,
-		ClientName:                 m.ClientName,
-		ClientURI:                  m.ClientURI,
-		LogoURI:                    m.LogoURI,
-		PolicyURI:                  m.PolicyURI,
-		TosURI:                     m.TosURI,
-		JWKsURI:                    m.JWKsURI,
-		JWKs:                       append(json.RawMessage(nil), m.JWKs...),
-		Contacts:                   slices.Clone(m.Contacts),
-		DefaultMaxAge:              clone.Int64Ptr(m.DefaultMaxAge),
-		RequireAuthTime:            m.RequireAuthTime,
-		DefaultACRValues:           slices.Clone(m.DefaultACRValues),
-		InitiateLoginURI:           m.InitiateLoginURI,
-		RequestURIs:                slices.Clone(m.RequestURIs),
-		RequestObjectSigningAlg:    m.RequestObjectSigningAlg,
-		RequestObjectEncryptionAlg: m.RequestObjectEncryptionAlg,
-		RequestObjectEncryptionEnc: m.RequestObjectEncryptionEnc,
-		PostLogoutRedirectURIs:     slices.Clone(m.PostLogoutRedirectURIs),
+		ID:                                clientID,
+		ClientIDIssuedAt:                  now.Unix(),
+		RedirectURIs:                      slices.Clone(m.RedirectURIs),
+		GrantTypes:                        slices.Clone(m.GrantTypes),
+		ResponseTypes:                     slices.Clone(m.ResponseTypes),
+		Scopes:                            splitScopes(m.Scope),
+		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
+		SecretHash:                        secretHash,
+		PublicClient:                      !confidential,
+		Source:                            store.ClientSourceDynamic,
+		ApplicationType:                   m.ApplicationType,
+		SubjectType:                       m.SubjectType,
+		IDTokenSignedResponseAlg:          m.IDTokenSignedResponseAlg,
+		SectorIdentifierURI:               m.SectorIdentifierURI,
+		ClientName:                        m.ClientName,
+		ClientURI:                         m.ClientURI,
+		LogoURI:                           m.LogoURI,
+		PolicyURI:                         m.PolicyURI,
+		TosURI:                            m.TosURI,
+		JWKsURI:                           m.JWKsURI,
+		JWKs:                              append(json.RawMessage(nil), m.JWKs...),
+		Contacts:                          slices.Clone(m.Contacts),
+		DefaultMaxAge:                     clone.Int64Ptr(m.DefaultMaxAge),
+		RequireAuthTime:                   m.RequireAuthTime,
+		DefaultACRValues:                  slices.Clone(m.DefaultACRValues),
+		InitiateLoginURI:                  m.InitiateLoginURI,
+		RequestURIs:                       slices.Clone(m.RequestURIs),
+		RequestObjectSigningAlg:           m.RequestObjectSigningAlg,
+		RequestObjectEncryptionAlg:        m.RequestObjectEncryptionAlg,
+		RequestObjectEncryptionEnc:        m.RequestObjectEncryptionEnc,
+		IDTokenEncryptedResponseAlg:       m.IDTokenEncryptedResponseAlg,
+		IDTokenEncryptedResponseEnc:       m.IDTokenEncryptedResponseEnc,
+		UserInfoEncryptedResponseAlg:      m.UserInfoEncryptedResponseAlg,
+		UserInfoEncryptedResponseEnc:      m.UserInfoEncryptedResponseEnc,
+		AuthorizationEncryptedResponseAlg: m.AuthorizationEncryptedResponseAlg,
+		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
+		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
+		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
+		PostLogoutRedirectURIs:            slices.Clone(m.PostLogoutRedirectURIs),
 	}
 	if err := deps.Clients.RegisterClient(ctx, client); err != nil {
 		deps.logger().Error("dcr.client.register_failed", "err", err, "client_id", clientID)
@@ -196,36 +212,44 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		ClientID: clientID,
 	})
 	writeRegistrationResponse(w, http.StatusCreated, registrationResponse{
-		ClientID:                   clientID,
-		ClientIDIssuedAt:           client.ClientIDIssuedAt,
-		ClientSecret:               rawSecret,
-		ClientSecretExpiresAt:      0,
-		RegistrationAccessToken:    rat,
-		RegistrationClientURI:      registrationClientURI(deps.Issuer, deps.MountPrefix, deps.RegisterPath, clientID),
-		RedirectURIs:               m.RedirectURIs,
-		GrantTypes:                 m.GrantTypes,
-		ResponseTypes:              m.ResponseTypes,
-		Scope:                      m.Scope,
-		TokenEndpointAuthMethod:    m.TokenEndpointAuthMethod,
-		ApplicationType:            m.ApplicationType,
-		SubjectType:                m.SubjectType,
-		IDTokenAlg:                 m.IDTokenSignedResponseAlg,
-		ClientName:                 m.ClientName,
-		ClientURI:                  m.ClientURI,
-		LogoURI:                    m.LogoURI,
-		PolicyURI:                  m.PolicyURI,
-		TosURI:                     m.TosURI,
-		JWKsURI:                    m.JWKsURI,
-		Contacts:                   m.Contacts,
-		DefaultMaxAge:              clone.Int64Ptr(m.DefaultMaxAge),
-		RequireAuthTime:            m.RequireAuthTime,
-		DefaultACRValues:           m.DefaultACRValues,
-		InitiateLoginURI:           m.InitiateLoginURI,
-		RequestURIs:                m.RequestURIs,
-		RequestObjectSigningAlg:    m.RequestObjectSigningAlg,
-		RequestObjectEncryptionAlg: m.RequestObjectEncryptionAlg,
-		RequestObjectEncryptionEnc: m.RequestObjectEncryptionEnc,
-		PostLogoutRedirectURIs:     m.PostLogoutRedirectURIs,
+		ClientID:                          clientID,
+		ClientIDIssuedAt:                  client.ClientIDIssuedAt,
+		ClientSecret:                      rawSecret,
+		ClientSecretExpiresAt:             0,
+		RegistrationAccessToken:           rat,
+		RegistrationClientURI:             registrationClientURI(deps.Issuer, deps.MountPrefix, deps.RegisterPath, clientID),
+		RedirectURIs:                      m.RedirectURIs,
+		GrantTypes:                        m.GrantTypes,
+		ResponseTypes:                     m.ResponseTypes,
+		Scope:                             m.Scope,
+		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
+		ApplicationType:                   m.ApplicationType,
+		SubjectType:                       m.SubjectType,
+		IDTokenAlg:                        m.IDTokenSignedResponseAlg,
+		ClientName:                        m.ClientName,
+		ClientURI:                         m.ClientURI,
+		LogoURI:                           m.LogoURI,
+		PolicyURI:                         m.PolicyURI,
+		TosURI:                            m.TosURI,
+		JWKsURI:                           m.JWKsURI,
+		Contacts:                          m.Contacts,
+		DefaultMaxAge:                     clone.Int64Ptr(m.DefaultMaxAge),
+		RequireAuthTime:                   m.RequireAuthTime,
+		DefaultACRValues:                  m.DefaultACRValues,
+		InitiateLoginURI:                  m.InitiateLoginURI,
+		RequestURIs:                       m.RequestURIs,
+		RequestObjectSigningAlg:           m.RequestObjectSigningAlg,
+		RequestObjectEncryptionAlg:        m.RequestObjectEncryptionAlg,
+		RequestObjectEncryptionEnc:        m.RequestObjectEncryptionEnc,
+		IDTokenEncryptedResponseAlg:       m.IDTokenEncryptedResponseAlg,
+		IDTokenEncryptedResponseEnc:       m.IDTokenEncryptedResponseEnc,
+		UserInfoEncryptedResponseAlg:      m.UserInfoEncryptedResponseAlg,
+		UserInfoEncryptedResponseEnc:      m.UserInfoEncryptedResponseEnc,
+		AuthorizationEncryptedResponseAlg: m.AuthorizationEncryptedResponseAlg,
+		AuthorizationEncryptedResponseEnc: m.AuthorizationEncryptedResponseEnc,
+		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
+		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
+		PostLogoutRedirectURIs:            m.PostLogoutRedirectURIs,
 	})
 }
 

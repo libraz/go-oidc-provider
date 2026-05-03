@@ -48,6 +48,18 @@ func validatePolicy(
 		func() error {
 			return validateRequestObjectEncryption(canonical.RequestObjectEncryptionAlg, canonical.RequestObjectEncryptionEnc)
 		},
+		func() error {
+			return validateIDTokenResponseEncryption(canonical.IDTokenEncryptedResponseAlg, canonical.IDTokenEncryptedResponseEnc)
+		},
+		func() error {
+			return validateUserInfoResponseEncryption(canonical.UserInfoEncryptedResponseAlg, canonical.UserInfoEncryptedResponseEnc)
+		},
+		func() error {
+			return validateAuthorizationResponseEncryption(canonical.AuthorizationEncryptedResponseAlg, canonical.AuthorizationEncryptedResponseEnc)
+		},
+		func() error {
+			return validateIntrospectionResponseEncryption(canonical.IntrospectionEncryptedResponseAlg, canonical.IntrospectionEncryptedResponseEnc)
+		},
 		func() error { return validatePairwiseMetadata(canonical) },
 		func() error { return validateDefaultMaxAge(canonical.DefaultMaxAge) },
 		func() error {
@@ -286,18 +298,57 @@ func validateRequestObjectSigningAlg(alg string) error {
 // negotiate the other through the discovery list. An empty `alg` with a
 // non-empty `enc` is also accepted for the same reason.
 func validateRequestObjectEncryption(alg, enc string) error {
+	return validateJWEAlgEncPair("request_object_encryption_alg", "request_object_encryption_enc", alg, enc)
+}
+
+// validateIDTokenResponseEncryption pins the JWE alg/enc the client may
+// register for issued ID tokens (OIDC Core 1.0 §10.2). Same allow-list
+// as [validateRequestObjectEncryption]; either field may be empty.
+func validateIDTokenResponseEncryption(alg, enc string) error {
+	return validateJWEAlgEncPair("id_token_encrypted_response_alg", "id_token_encrypted_response_enc", alg, enc)
+}
+
+// validateUserInfoResponseEncryption pins the JWE alg/enc the client may
+// register for /userinfo responses (OIDC Core 1.0 §5.3). Same allow-list
+// as [validateRequestObjectEncryption]; either field may be empty.
+func validateUserInfoResponseEncryption(alg, enc string) error {
+	return validateJWEAlgEncPair("userinfo_encrypted_response_alg", "userinfo_encrypted_response_enc", alg, enc)
+}
+
+// validateAuthorizationResponseEncryption pins the JWE alg/enc the
+// client may register for JARM authorization responses. Same allow-list
+// as [validateRequestObjectEncryption]; either field may be empty.
+func validateAuthorizationResponseEncryption(alg, enc string) error {
+	return validateJWEAlgEncPair("authorization_encrypted_response_alg", "authorization_encrypted_response_enc", alg, enc)
+}
+
+// validateIntrospectionResponseEncryption pins the JWE alg/enc the
+// client may register for JWT introspection responses (RFC 7662 + draft
+// JWT Response for OAuth Token Introspection). Same allow-list as
+// [validateRequestObjectEncryption]; either field may be empty.
+func validateIntrospectionResponseEncryption(alg, enc string) error {
+	return validateJWEAlgEncPair("introspection_encrypted_response_alg", "introspection_encrypted_response_enc", alg, enc)
+}
+
+// validateJWEAlgEncPair is the shared allow-list check the encryption
+// validators share. The (algField, encField) names are the wire field
+// labels used in the error description so failures point the embedder
+// at the offending metadata key. Either alg or enc may be empty: OIDC
+// §6.1 lets the client commit to one half and negotiate the other
+// through the discovery list.
+func validateJWEAlgEncPair(algField, encField, alg, enc string) error {
 	if alg != "" {
 		switch alg {
 		case "RSA-OAEP-256", "ECDH-ES", "ECDH-ES+A128KW", "ECDH-ES+A256KW":
 		default:
-			return errInvalidClientMetadata("request_object_encryption_alg " + alg + " is not supported")
+			return errInvalidClientMetadata(algField + " " + alg + " is not supported")
 		}
 	}
 	if enc != "" {
 		switch enc {
 		case "A128GCM", "A256GCM":
 		default:
-			return errInvalidClientMetadata("request_object_encryption_enc " + enc + " is not supported")
+			return errInvalidClientMetadata(encField + " " + enc + " is not supported")
 		}
 	}
 	return nil

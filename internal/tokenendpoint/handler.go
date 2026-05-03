@@ -13,6 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
+	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -318,6 +319,13 @@ type Deps struct {
 	// nil-substore case at construction time so a deployment that
 	// opts into the grant cannot reach the runtime nil-check.
 	DeviceCodes store.DeviceCodeStore
+
+	// ClientEncJWKs resolves the RP's encryption recipient when the
+	// client registered id_token_encrypted_response_alg / _enc. The
+	// resolver wraps an issued id_token in a JWE addressed to the
+	// RP's `use=enc` key (OIDC Core 1.0 §10.2). A nil value disables
+	// outbound id_token encryption.
+	ClientEncJWKs *clientencjwks.Resolver
 }
 
 // Handler returns the HTTP handler the OP mounts at its token endpoint.

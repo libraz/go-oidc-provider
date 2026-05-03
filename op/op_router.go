@@ -6,6 +6,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cors"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/devicecodeendpoint"
@@ -64,6 +65,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	}
 	publicCORS := cors.NewPublic()
 	strictCORS := cors.NewStrict(originAllow, cfg.effectiveAuditEmitter())
+	encResolver := buildClientEncryptionResolver(cfg)
 	mux.Handle(cfg.endpoints.Discovery, publicCORS.Handler(discHandler))
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.JWKS),
@@ -77,6 +79,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		strictCORS.Handler(userinfo.Handler(userinfo.HandlerDeps{
 			Keys:               keySet,
 			Issuer:             cfg.issuer,
+			Clients:            cfg.store.Clients(),
 			UserStore:          cfg.store.Users(),
 			Grants:             cfg.store.Grants(),
 			Clock:              cfg.clock,
@@ -88,6 +91,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
 			GrantRevocations:   cfg.store.GrantRevocations(),
 			RevocationStrategy: cfg.atRevocation,
+			ClientEncJWKs:      encResolver,
 		})),
 	)
 	mux.Handle(
@@ -121,17 +125,18 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Audit:                          cfg.effectiveAuditEmitter(),
 			CustomGrants:                   buildExtensionDispatcher(cfg, keySet),
 			DeviceCodes:                    deviceCodesFor(cfg),
+			ClientEncJWKs:                  encResolver,
 		})),
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encSet, originAllow, strictCORS, locales)
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encSet, encResolver, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
 	}
 	if err := mountPAREndpoint(mux, cfg, scopes, encSet, assertionVerifier, dpopVerifier, strictCORS); err != nil {
 		return nil, err
 	}
-	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, assertionVerifier, strictCORS)
+	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifier, strictCORS)
 	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifier, strictCORS)
 	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS)
 	bcc, err := buildBackchannelCoordinator(cfg, keySet)
@@ -245,6 +250,7 @@ func mountIntrospectionEndpoint(
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
+	encResolver *clientencjwks.Resolver,
 	assertionVerifier clientauth.AssertionVerifier,
 	strictCORS *cors.Strict,
 ) {
@@ -269,6 +275,7 @@ func mountIntrospectionEndpoint(
 			GrantRevocations:           cfg.store.GrantRevocations(),
 			RevocationStrategy:         cfg.atRevocation,
 			Audit:                      cfg.effectiveAuditEmitter(),
+			ClientEncJWKs:              encResolver,
 		})),
 	)
 }
@@ -313,6 +320,7 @@ func mountAuthorizeHandlers(
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
 	encSet *keys.EncryptionSet,
+	encResolver *clientencjwks.Resolver,
 	allow *csrf.Allowlist,
 	strictCORS *cors.Strict,
 	locales *i18n.Resolver,
@@ -384,6 +392,7 @@ func mountAuthorizeHandlers(
 		LocaleResolver:          locales,
 		SubjectProjector:        buildSubjectProjector(cfg),
 		ProxyTrust:              proxyTrust,
+		ClientEncJWKs:           encResolver,
 	})
 	mux.Handle(authorizePath, handler)
 	if spaLoginMount == "" {

@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/discovery"
@@ -383,6 +384,24 @@ func jarEncryptionResolver(encSet *keys.EncryptionSet) jar.EncryptionResolver {
 		return nil
 	}
 	return encSet
+}
+
+// buildClientEncryptionResolver constructs the [clientencjwks.Resolver]
+// that the four outbound-encryption response paths (id_token /
+// userinfo / JARM / introspection) consult to translate a client's
+// registered (alg, enc) pair into a [jose.EncryptionRecipient]. The
+// resolver shares its SSRF posture with the JAR JWKS fetcher: the
+// [WithAllowPrivateNetworkJWKS] opt-in suppresses the deny-list for
+// embedders fronting their RPs with private DNS. Construction is
+// unconditional — a client that did not register encryption metadata
+// surfaces [clientencjwks.ErrNoEncryptionConfigured] at request time
+// and the consumer skips the JWE wrap, so the resolver only adds a
+// constant-time sentinel check on the non-encryption path.
+func buildClientEncryptionResolver(cfg *config) *clientencjwks.Resolver {
+	return clientencjwks.New(clientencjwks.Config{
+		Clock:               cfg.clock,
+		AllowPrivateNetwork: cfg.allowPrivateNetworkJWKS,
+	})
 }
 
 // buildAssertionVerifier constructs the [clientauth.PrivateKeyJWTVerifier]

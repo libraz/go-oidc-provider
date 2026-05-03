@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
@@ -354,6 +355,15 @@ type Deps struct {
 	// default UUIDv7 passthrough); the wiring layer leaves it nil for
 	// tests that exercise the handler directly without an op.Provider.
 	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
+
+	// ClientEncJWKs resolves the RP's encryption recipient when the
+	// client registered authorization_encrypted_response_alg / _enc
+	// (JARM with JWE wrap; JARM by default emits a signed JWT). A
+	// nil value disables outbound JARM encryption; clients that
+	// registered the metadata still see signed JARM responses, which
+	// the validator rejects at registration time when both halves are
+	// configured but the OP cannot honour the wrap.
+	ClientEncJWKs *clientencjwks.Resolver
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.

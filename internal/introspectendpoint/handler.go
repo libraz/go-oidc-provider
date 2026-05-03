@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -193,6 +194,14 @@ type Deps struct {
 	// canonical shape; the audit event surfaces the attempted
 	// client_id and a short reason code for SOC tooling.
 	Audit audit.Emitter
+
+	// ClientEncJWKs resolves the RP's encryption recipient when the
+	// client registered introspection_encrypted_response_alg / _enc
+	// (RFC 7662 + draft JWT Response for OAuth Token Introspection;
+	// RFC 9701 §5). The handler wraps a signed JWT introspection
+	// response in a JWE addressed to the RP's `use=enc` key. A nil
+	// value disables outbound introspection encryption.
+	ClientEncJWKs *clientencjwks.Resolver
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection

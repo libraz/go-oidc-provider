@@ -62,6 +62,14 @@ var clientColumns = []string{
 	"request_object_signing_alg",
 	"request_object_encryption_alg",
 	"request_object_encryption_enc",
+	"id_token_encrypted_response_alg",
+	"id_token_encrypted_response_enc",
+	"userinfo_encrypted_response_alg",
+	"userinfo_encrypted_response_enc",
+	"authorization_encrypted_response_alg",
+	"authorization_encrypted_response_enc",
+	"introspection_encrypted_response_alg",
+	"introspection_encrypted_response_enc",
 }
 
 // clientArgs returns the bind arguments for an INSERT/UPDATE in the
@@ -111,6 +119,14 @@ func clientArgs(c *store.Client) []any {
 		c.RequestObjectSigningAlg,
 		c.RequestObjectEncryptionAlg,
 		c.RequestObjectEncryptionEnc,
+		c.IDTokenEncryptedResponseAlg,
+		c.IDTokenEncryptedResponseEnc,
+		c.UserInfoEncryptedResponseAlg,
+		c.UserInfoEncryptedResponseEnc,
+		c.AuthorizationEncryptedResponseAlg,
+		c.AuthorizationEncryptedResponseEnc,
+		c.IntrospectionEncryptedResponseAlg,
+		c.IntrospectionEncryptedResponseEnc,
 	}
 }
 
@@ -161,6 +177,14 @@ func scanClient(scan func(...any) error) (*store.Client, error) {
 		&c.RequestObjectSigningAlg,
 		&c.RequestObjectEncryptionAlg,
 		&c.RequestObjectEncryptionEnc,
+		&c.IDTokenEncryptedResponseAlg,
+		&c.IDTokenEncryptedResponseEnc,
+		&c.UserInfoEncryptedResponseAlg,
+		&c.UserInfoEncryptedResponseEnc,
+		&c.AuthorizationEncryptedResponseAlg,
+		&c.AuthorizationEncryptedResponseEnc,
+		&c.IntrospectionEncryptedResponseAlg,
+		&c.IntrospectionEncryptedResponseEnc,
 	)
 	if err != nil {
 		return nil, err
