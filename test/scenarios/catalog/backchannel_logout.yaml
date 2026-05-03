@@ -31,7 +31,8 @@ rows:
       equal to `{ "http://schemas.openid.net/event/backchannel-logout": {} }`,
       `aud` equal to the client_id, `sub` matching the account, and
       `sid` matching the authorization session id.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 back-channel deliverer's SSRF deny-list (loopback / RFC 1918 / ULA) is non-bypassable from the public surface; op.WithBackchannelAllowPrivateNetwork is parsed but not yet plumbed to the deliverer. Test-target HTTPS servers bind to 127.0.0.1, so wire-level fan-out cannot be observed without a public-IP target. Behaviour is covered by internal/backchannel coordinator and deliverer tests."
 
   - id: BCL-002
     severity: P1
@@ -42,7 +43,8 @@ rows:
       logout token MUST omit the `sid` claim. The payload claim set is
       exactly `{sub, events, iat, exp, aud, iss, jti}` and still
       carries the back-channel logout event identifier.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 back-channel deliverer's SSRF deny-list (loopback / RFC 1918 / ULA) is non-bypassable from the public surface; op.WithBackchannelAllowPrivateNetwork is parsed but not yet plumbed to the deliverer. Test-target HTTPS servers bind to 127.0.0.1, so wire-level fan-out cannot be observed without a public-IP target. Behaviour is covered by internal/backchannel coordinator and deliverer tests."
 
   - id: BCL-003
     severity: P0
@@ -52,7 +54,8 @@ rows:
       status (e.g. 500), the OP MUST surface the delivery failure via
       audit event or error result so operators can detect, retry, or
       alarm. Per-RP error state is observable.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 back-channel deliverer's SSRF deny-list (loopback / RFC 1918 / ULA) is non-bypassable from the public surface; op.WithBackchannelAllowPrivateNetwork is parsed but not yet plumbed to the deliverer. Test-target HTTPS servers bind to 127.0.0.1, so wire-level fan-out cannot be observed without a public-IP target. Behaviour is covered by internal/backchannel coordinator and deliverer tests."
 
   - id: BCL-004
     severity: P1
@@ -62,7 +65,7 @@ rows:
       includes `end_session_endpoint`,
       `backchannel_logout_supported=true`, and
       `backchannel_logout_session_supported=true`.
-    status: pending
+    status: active
 
   - id: BCL-005
     severity: P1
@@ -72,7 +75,8 @@ rows:
       (`response_type=code id_token`, scope includes `openid offline_access`,
       `prompt=consent`) for a BCL-enabled client, the issued ID Token
       payload MUST contain a string `sid` claim.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 ID-token issuance path does not stamp sid; sid claim wired only into back-channel logout tokens, not ID tokens.
 
   - id: BCL-006
     severity: P1
@@ -81,7 +85,8 @@ rows:
       When the token endpoint issues an ID Token via
       `grant_type=authorization_code` for a BCL-enabled client, the
       issued ID Token payload MUST contain a string `sid` claim.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 ID-token issuance path does not stamp sid; sid claim wired only into back-channel logout tokens, not ID tokens.
 
   - id: BCL-007
     severity: P1
@@ -90,7 +95,8 @@ rows:
       When the token endpoint issues an ID Token via
       `grant_type=refresh_token` for a BCL-enabled client, the issued
       ID Token payload MUST contain a string `sid` claim.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 ID-token issuance path does not stamp sid; sid claim wired only into back-channel logout tokens, not ID tokens.
 
   - id: BCL-008
     severity: P0
@@ -102,7 +108,8 @@ rows:
       registered a `backchannel_logout_uri`. Each call carries the
       per-client `sid` and the same `sub`, and per-client success and
       failure outcomes are observable independently.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 back-channel deliverer's SSRF deny-list (loopback / RFC 1918 / ULA) is non-bypassable from the public surface; op.WithBackchannelAllowPrivateNetwork is parsed but not yet plumbed to the deliverer. Test-target HTTPS servers bind to 127.0.0.1, so wire-level fan-out cannot be observed without a public-IP target. Behaviour is covered by internal/backchannel coordinator and deliverer tests."
 
   - id: BCL-009
     severity: P1
@@ -112,7 +119,8 @@ rows:
       global-logout flag, the OP MUST trigger logout token delivery
       only for the initiating client. Other co-resident clients MUST
       NOT be contacted.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 /end_session always fans out to every BCL-registered client of the terminating subject; per-client targeted logout is not exposed on the public API.
 
   - id: BCL-010
     severity: P2
@@ -122,4 +130,5 @@ rows:
       `backchannel_logout_uri` MUST be skipped: no delivery is
       attempted to them while other BCL-capable clients still receive
       their logout tokens.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 back-channel deliverer's SSRF deny-list (loopback / RFC 1918 / ULA) is non-bypassable from the public surface; op.WithBackchannelAllowPrivateNetwork is parsed but not yet plumbed to the deliverer. Test-target HTTPS servers bind to 127.0.0.1, so wire-level fan-out cannot be observed without a public-IP target. Behaviour is covered by internal/backchannel coordinator and deliverer tests."
