@@ -94,7 +94,8 @@ rows:
       When CORS is open, Access-Control-Expose-Headers:
       WWW-Authenticate MUST be set so the browser exposes the
       header to JavaScript.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 does not emit Access-Control-Expose-Headers: WWW-Authenticate. Bearer challenge endpoints (/userinfo, /token/introspection, /token/revocation) are CORS-gated by the static op.WithCORSOrigins allowlist (covered by COR-050/051/052), but the OP's response writer never adds Access-Control-Expose-Headers — browser JS calling those endpoints from an allowlisted origin reads the response body but cannot read WWW-Authenticate. Adding the expose-headers stamp is a small enhancement that has not been requested by the FAPI 2.0 OFCS reference deployments, so it is deferred; embedders that need browser-visible challenges proxy through their own gateway (which can layer the header) or read 401 + invalid_token from the JSON envelope instead. ERR-020 covers the WWW-Authenticate emission itself."
 
   - id: ERR-030
     severity: P1
@@ -102,7 +103,7 @@ rows:
     behaviour: |
       The HTML error path MUST be reachable via the
       renderError(ctx, out, error) hook.
-    status: pending
+    status: active
 
   - id: ERR-031
     severity: P0
@@ -120,7 +121,8 @@ rows:
       The OP error catalog MUST be the single source of truth for
       error codes; fmt.Errorf MUST NOT be used to construct API
       errors.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Catalog-as-source-of-truth and 'no fmt.Errorf for API errors' are meta-properties enforced by lint (CLAUDE.md absolute-prohibitions, plus a recent cleanup commit migrating fmt.Errorf to errors.New / op.Error in the public surface) — they are not runtime-observable on the wire. The v1.0 error catalog (op.Error + internal/errcatalog) is the single source the dispatcher consults; a regression where a handler synthesised an error via fmt.Errorf would bypass the catalog and produce a non-registered error code, which ERR-010 (registered-code assertion) would catch, but only for the handlers ERR-010 exercises. The full property is structurally a static-analysis check, not a wire scenario; binding it as a Go-level reflective scan would either duplicate errcheck/staticcheck or require an internal/ symbol walk, neither of which fits the scenarios harness."
 
   - id: ERR-040
     severity: P0

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
@@ -376,14 +377,102 @@ func TestScenario_ERR_021_BasicAuthFailureEmitsWWWAuthenticate(t *testing.T) {
 	}
 }
 
+// TestScenario_ERR_022_CORSExposesWWWAuthenticate is OOS — see catalog out_of_scope_reason.
 func TestScenario_ERR_022_CORSExposesWWWAuthenticate(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ERR-022")
+	t.Skip("out-of-scope: ERR-022 (see catalog out_of_scope_reason)")
 }
 
+// recordingErrorDriver is a minimal [interaction.Driver] that also
+// satisfies [interaction.ErrorRenderer] by capturing the prompt the OP
+// hands to RenderError. It lets ERR-030 assert the public extension
+// hook is the wire seam the OP actually uses for HTML-negotiated
+// errors.
+type recordingErrorDriver struct {
+	mu     sync.Mutex
+	called bool
+	prompt interaction.ErrorPrompt
+}
+
+func (d *recordingErrorDriver) Render(w http.ResponseWriter, _ *http.Request, _ interaction.Prompt) error {
+	w.WriteHeader(http.StatusOK)
+	return nil
+}
+
+func (d *recordingErrorDriver) ParseSubmission(_ *http.Request) (interaction.FormSubmission, error) {
+	return interaction.FormSubmission{}, nil
+}
+
+func (d *recordingErrorDriver) RenderError(w http.ResponseWriter, _ *http.Request, prompt interaction.ErrorPrompt) error {
+	d.mu.Lock()
+	d.called = true
+	d.prompt = prompt
+	d.mu.Unlock()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if prompt.Status > 0 {
+		w.WriteHeader(prompt.Status)
+	} else {
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	_, _ = io.WriteString(w, "<!doctype html><html><body>recorded</body></html>")
+	return nil
+}
+
+// TestScenario_ERR_030_HTMLErrorPathReachableViaHook pins the
+// extension contract: an embedder Driver that satisfies
+// [interaction.ErrorRenderer] in addition to [interaction.Driver] MUST
+// own the HTML-negotiated authorize-error rendering. The OP type-
+// asserts the configured Driver to ErrorRenderer and dispatches there
+// when the request advertises a browser Accept; the JSON envelope is
+// the legacy fallback for Drivers predating the additive hook.
+//
+// Spec: OIDC Core 1.0 §3.1.2.6 (UI-relevant errors).
 func TestScenario_ERR_030_HTMLErrorPathReachableViaHook(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ERR-030")
+
+	driver := &recordingErrorDriver{}
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithInteractionDriver(driver),
+	))
+	httpClient := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/oidc/auth?client_id=unknown-rp&response_type=code&redirect_uri=https%3A%2F%2Frp.invalid%2Fcb&scope=openid",
+		http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET /authorize: %v", err)
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /authorize: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Fatalf("Content-Type=%q want text/html (driver hook should win over JSON fallback)", got)
+	}
+
+	driver.mu.Lock()
+	called, prompt := driver.called, driver.prompt
+	driver.mu.Unlock()
+	if !called {
+		t.Fatal("custom ErrorRenderer.RenderError was never invoked")
+	}
+	if prompt.Code == "" {
+		t.Errorf("ErrorPrompt.Code empty, want a registered code")
+	}
+	if prompt.Status != http.StatusBadRequest {
+		t.Errorf("ErrorPrompt.Status=%d want 400", prompt.Status)
+	}
 }
 
 // TestScenario_ERR_031_ErrorPageHTMLEscapesValues drives the public
@@ -452,9 +541,10 @@ func TestScenario_ERR_031_ErrorPageHTMLEscapesValues(t *testing.T) {
 	}
 }
 
+// TestScenario_ERR_032_ErrorCatalogIsSingleSourceOfTruth is OOS — see catalog out_of_scope_reason.
 func TestScenario_ERR_032_ErrorCatalogIsSingleSourceOfTruth(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: ERR-032")
+	t.Skip("out-of-scope: ERR-032 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_ERR_040_UncaughtExceptionsBecomeServerError is OOS — see catalog out_of_scope_reason.
