@@ -53,11 +53,25 @@ var (
 	// allowed-grants set. Maps to unauthorized_client.
 	ErrClientGrantNotPermitted = errors.New("custom_grant: client is not authorized for this grant_type")
 
-	// ErrEmptyAccessToken signals the handler returned an empty
-	// AccessToken. Maps to server_error; the wire response carries
-	// no detail so a misbehaving handler cannot probe for issuance
-	// internals.
+	// ErrEmptyAccessToken signals the handler returned neither an
+	// AccessToken nor a BoundAccessToken. Maps to server_error; the
+	// wire response carries no detail so a misbehaving handler cannot
+	// probe for issuance internals.
 	ErrEmptyAccessToken = errors.New("custom_grant: handler returned empty access_token")
+
+	// ErrConflictingAccessTokenForms signals the handler set both
+	// AccessToken and BoundAccessToken on the response. The two
+	// fields are mutually exclusive: AccessToken delegates issuance
+	// to the handler, BoundAccessToken delegates it to the OP.
+	// Maps to server_error.
+	ErrConflictingAccessTokenForms = errors.New("custom_grant: AccessToken and BoundAccessToken are mutually exclusive")
+
+	// ErrEmptyBoundSubject signals the handler returned a
+	// BoundAccessToken with no Subject AND the dispatch input also
+	// carried no SubjectID. The OP cannot synthesise a "sub" claim
+	// without a value from the handler so the wire layer rejects the
+	// response. Maps to server_error.
+	ErrEmptyBoundSubject = errors.New("custom_grant: BoundAccessToken has no Subject and request carries no SubjectID")
 
 	// ErrNegativeTTL signals the handler returned a negative
 	// AccessTokenTTL. Maps to server_error; a negative TTL would
@@ -298,14 +312,38 @@ func (d *Dispatcher) invokeHandler(ctx context.Context, h Handler, req Request) 
 }
 
 // validateResponse enforces the post-handler invariants the OP
-// guarantees regardless of handler bugs: AccessToken is non-empty,
-// AccessTokenTTL is non-negative (truncated to the dispatcher's
-// global cap on the way through), Scope is a subset of the client's
-// allowed set, Audience is a subset of the client's registered
-// resources. The function mutates *resp in place when a value is
-// truncated so the caller writes the validated shape.
+// guarantees regardless of handler bugs: exactly one of AccessToken /
+// BoundAccessToken is supplied, the lifetime is non-negative
+// (truncated to the dispatcher's global cap on the way through),
+// Scope is a subset of the client's allowed set, Audience (on both
+// the response and the bound mint) is a subset of the client's
+// registered resources. The function mutates *resp in place when a
+// value is truncated so the caller writes the validated shape.
 func (d *Dispatcher) validateResponse(client *store.Client, resp *Response) error {
-	if resp.AccessToken == "" {
+	if err := d.validateAccessTokenShape(resp); err != nil {
+		return err
+	}
+	if err := d.validateBoundAccessToken(client, resp); err != nil {
+		return err
+	}
+	if !scopeSubset(resp.Scope, client.Scopes) {
+		return ErrScopeNotAllowed
+	}
+	if !audienceSubset(resp.Audience, client.Resources) {
+		return ErrAudienceNotAllowed
+	}
+	return nil
+}
+
+// validateAccessTokenShape rejects responses that set both forms of
+// access token or neither, then applies the global TTL cap to the
+// handler-supplied AccessTokenTTL. The function is the gate that runs
+// before [validateBoundAccessToken] inspects the bound mint.
+func (d *Dispatcher) validateAccessTokenShape(resp *Response) error {
+	if resp.AccessToken != "" && resp.BoundAccessToken != nil {
+		return ErrConflictingAccessTokenForms
+	}
+	if resp.AccessToken == "" && resp.BoundAccessToken == nil {
 		return ErrEmptyAccessToken
 	}
 	if resp.AccessTokenTTL < 0 {
@@ -314,10 +352,23 @@ func (d *Dispatcher) validateResponse(client *store.Client, resp *Response) erro
 	if d.maxAccessTTL > 0 && resp.AccessTokenTTL > d.maxAccessTTL {
 		resp.AccessTokenTTL = d.maxAccessTTL
 	}
-	if !scopeSubset(resp.Scope, client.Scopes) {
-		return ErrScopeNotAllowed
+	return nil
+}
+
+// validateBoundAccessToken applies the TTL cap and audience subset
+// gate to a non-nil BoundAccessToken. Nil short-circuits to a no-op
+// so the caller can invoke it unconditionally.
+func (d *Dispatcher) validateBoundAccessToken(client *store.Client, resp *Response) error {
+	if resp.BoundAccessToken == nil {
+		return nil
 	}
-	if !audienceSubset(resp.Audience, client.Resources) {
+	if resp.BoundAccessToken.TTL < 0 {
+		return ErrNegativeTTL
+	}
+	if d.maxAccessTTL > 0 && resp.BoundAccessToken.TTL > d.maxAccessTTL {
+		resp.BoundAccessToken.TTL = d.maxAccessTTL
+	}
+	if !audienceSubset(resp.BoundAccessToken.Audience, client.Resources) {
 		return ErrAudienceNotAllowed
 	}
 	return nil

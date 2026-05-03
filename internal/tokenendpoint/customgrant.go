@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -64,19 +65,82 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		writeCustomGrantError(w, err)
 		return
 	}
+	accessToken, accessTokenTTL, err := resolveCustomGrantAccessToken(deps, client, dispatchIn, resp, binding)
+	if err != nil {
+		writeCustomGrantError(w, err)
+		return
+	}
 	idToken, err := resolveCustomGrantIDToken(deps, client, resp)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	writeSuccess(w, successResponse{
-		AccessToken:  resp.AccessToken,
+		AccessToken:  accessToken,
 		TokenType:    binding.tokenTypeFor(),
-		ExpiresIn:    int64(resp.AccessTokenTTL.Seconds()),
+		ExpiresIn:    int64(accessTokenTTL.Seconds()),
 		RefreshToken: resp.RefreshToken,
 		IDToken:      idToken,
 		Scope:        joinScope(resp.Scope),
 	})
+}
+
+// resolveCustomGrantAccessToken returns the access token and its TTL
+// for the wire response. The handler-supplied [customgrant.Response.AccessToken]
+// passes through verbatim — the OP does not re-mint the value the
+// handler signed. When the response carries a [customgrant.BoundAccessToken]
+// instead, the OP signs a fresh RFC 9068 JWT with the request's cnf
+// binding stamped automatically: cnf.jkt for DPoP, cnf.x5t#S256 for
+// mTLS, neither for a plain bearer request. The function is the single
+// seam through which the bound-mint path enters the existing wire
+// pipeline; the handler-supplied path keeps the original semantics.
+func resolveCustomGrantAccessToken(
+	deps Deps,
+	client *store.Client,
+	in customgrant.DispatchInput,
+	resp customgrant.Response,
+	binding tokenBinding,
+) (string, time.Duration, error) {
+	if resp.BoundAccessToken == nil {
+		return resp.AccessToken, resp.AccessTokenTTL, nil
+	}
+	subject := resp.BoundAccessToken.Subject
+	if subject == "" {
+		subject = in.SubjectID
+	}
+	if subject == "" {
+		return "", 0, customgrant.ErrEmptyBoundSubject
+	}
+	audience := resp.BoundAccessToken.Audience
+	if len(audience) == 0 {
+		audience = []string{client.ID}
+	}
+	ttl := resp.BoundAccessToken.TTL
+	if ttl <= 0 {
+		ttl = deps.AccessTokenTTL
+	}
+	jti, err := newJTI()
+	if err != nil {
+		return "", 0, err
+	}
+	now := deps.now().UTC()
+	claims := tokens.AccessTokenClaims{
+		Issuer:       deps.Issuer,
+		Subject:      subject,
+		Audience:     append([]string(nil), audience...),
+		ClientID:     client.ID,
+		IssuedAt:     now.Unix(),
+		ExpiresAt:    tokens.ExpiresIn(now, ttl),
+		JTI:          jti,
+		Scope:        append([]string(nil), resp.Scope...),
+		Confirmation: binding.confirmation(),
+		Extra:        resp.BoundAccessToken.ExtraClaims,
+	}
+	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
+	if err != nil {
+		return "", 0, err
+	}
+	return signed, ttl, nil
 }
 
 // resolveCustomGrantIDToken returns the id_token to surface on the wire.
@@ -143,7 +207,9 @@ func writeCustomGrantError(w http.ResponseWriter, err error) {
 			"response audience exceeds the client's registered resources")
 	case errors.Is(err, customgrant.ErrEmptyAccessToken),
 		errors.Is(err, customgrant.ErrNegativeTTL),
-		errors.Is(err, customgrant.ErrPanic):
+		errors.Is(err, customgrant.ErrPanic),
+		errors.Is(err, customgrant.ErrConflictingAccessTokenForms),
+		errors.Is(err, customgrant.ErrEmptyBoundSubject):
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 	default:
 		writeError(w, http.StatusBadRequest, errInvalidGrant,

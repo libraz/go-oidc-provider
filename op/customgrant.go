@@ -201,8 +201,24 @@ type CustomGrantRequest struct {
 //
 // Stable since v0.9.1.
 type CustomGrantResponse struct {
-	// AccessToken is the opaque or JWT-shape access token. Non-empty.
+	// AccessToken is the opaque or JWT-shape access token the OP
+	// writes verbatim. Non-empty when [BoundAccessToken] is nil;
+	// mutually exclusive with [BoundAccessToken] (setting both yields
+	// server_error). Use this field when the handler signs with an
+	// out-of-band key (HSM/KMS) or mints an opaque value backed by
+	// its own introspection backend.
 	AccessToken string
+
+	// BoundAccessToken, when non-nil, instructs the OP to mint a JWT
+	// access token using its active signing key and stamp the
+	// request's cnf binding (cnf.jkt for DPoP, cnf.x5t#S256 for mTLS)
+	// automatically. Mutually exclusive with [AccessToken] — setting
+	// both yields server_error. Use this field when the handler has
+	// no out-of-band signing key and wants the OP to enforce the
+	// FAPI 2.0 §3.1.4 binding contract on its behalf.
+	//
+	// Stable since v0.9.1.
+	BoundAccessToken *BoundAccessToken
 
 	// AccessTokenTTL is the lifetime the OP advertises in the
 	// expires_in field. A zero value falls back to the global
@@ -254,6 +270,54 @@ type CustomGrantResponse struct {
 	// c_hash / sid); a colliding name yields server_error so the
 	// handler bug surfaces in the audit record rather than silently
 	// shipping a malformed token.
+	ExtraClaims map[string]any
+}
+
+// BoundAccessToken instructs the OP to mint a JWT-shape access token
+// with cnf binding stamped automatically. The handler supplies extra
+// claims; the OP fills iss / sub / aud / exp / iat / jti / scope and
+// (when the request carried a verified DPoP proof or mTLS leaf cert)
+// cnf.jkt / cnf.x5t#S256.
+//
+// Use this when:
+//   - your handler needs no out-of-band signing key,
+//   - the issued token is a JWT (not opaque), and
+//   - you want the OP to enforce the FAPI 2.0 §3.1.4 binding contract
+//     automatically.
+//
+// Use [CustomGrantResponse.AccessToken] when:
+//   - the handler signs with an external key (KMS/HSM), OR
+//   - the issued token is opaque and the handler operates its own
+//     introspection backend.
+//
+// [CustomGrantResponse.AccessToken] and [CustomGrantResponse.BoundAccessToken]
+// are mutually exclusive — setting both yields server_error.
+//
+// Stable since v0.9.1.
+type BoundAccessToken struct {
+	// Subject is the "sub" claim. When the zero value, the OP
+	// defaults to the request's Subject; a request whose Subject is
+	// also nil yields server_error so a delegation-style grant that
+	// has no end-user MUST set [Subject] explicitly.
+	Subject Subject
+
+	// Audience is the "aud" claim. When empty, the OP defaults to a
+	// single-element slice containing client.ID. Each entry is
+	// intersected with the client's registered resources by the
+	// dispatcher's existing [CustomGrantResponse.Audience] gate.
+	Audience []string
+
+	// TTL is the access-token lifetime. Zero falls back to the OP's
+	// global access-token cap; values exceeding the cap are
+	// truncated with an audit warning (same policy as the
+	// [CustomGrantResponse.AccessTokenTTL] field).
+	TTL time.Duration
+
+	// ExtraClaims are merged onto the standard JWT set the OP writes
+	// (iss / sub / aud / exp / iat / jti / scope / client_id / cnf).
+	// Names that collide with the standard set yield server_error so
+	// the handler bug surfaces in the audit record rather than
+	// silently shipping a malformed token.
 	ExtraClaims map[string]any
 }
 
@@ -328,7 +392,7 @@ func (a customGrantAdapter) Handle(ctx context.Context, req customgrant.Request)
 	if err != nil {
 		return customgrant.Response{}, err
 	}
-	return customgrant.Response{
+	out := customgrant.Response{
 		AccessToken:    resp.AccessToken,
 		AccessTokenTTL: resp.AccessTokenTTL,
 		RefreshToken:   resp.RefreshToken,
@@ -338,7 +402,16 @@ func (a customGrantAdapter) Handle(ctx context.Context, req customgrant.Request)
 		Scope:          append([]string(nil), resp.Scope...),
 		Audience:       append([]string(nil), resp.Audience...),
 		ExtraClaims:    cloneClaims(resp.ExtraClaims),
-	}, nil
+	}
+	if resp.BoundAccessToken != nil {
+		out.BoundAccessToken = &customgrant.BoundAccessToken{
+			Subject:     string(resp.BoundAccessToken.Subject),
+			Audience:    append([]string(nil), resp.BoundAccessToken.Audience...),
+			TTL:         resp.BoundAccessToken.TTL,
+			ExtraClaims: cloneClaims(resp.BoundAccessToken.ExtraClaims),
+		}
+	}
+	return out, nil
 }
 
 // cloneClaims returns a defensive copy of m or nil when m is nil.

@@ -4,10 +4,15 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -227,6 +232,272 @@ func (g *panicGrant) Name() string                { return g.name }
 func (g *panicGrant) ParamPolicy() op.ParamPolicy { return op.ParamPolicy{} }
 func (g *panicGrant) Handle(_ context.Context, _ op.CustomGrantRequest) (op.CustomGrantResponse, error) {
 	panic("intentional panic for test")
+}
+
+// TestCustomGrant_BoundAccessToken_PlainBearer mints a JWT access
+// token through the OP-side BoundAccessToken path on a plain
+// confidential client (no DPoP, no mTLS). The wire token MUST parse
+// against the OP's signing key, carry the standard RFC 9068 claims
+// the OP fills, AND lack any cnf claim because the request was not
+// sender-constrained.
+func TestCustomGrant_BoundAccessToken_PlainBearer(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:bound-bearer"
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			BoundAccessToken: &op.BoundAccessToken{
+				Subject: op.Subject("user-bound-1"),
+				TTL:     2 * time.Minute,
+				ExtraClaims: map[string]any{
+					"tenant": "acme",
+				},
+			},
+			Scope: []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithCustomGrant(handler)),
+	)
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token", clock: clock}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["token_type"]; got != "Bearer" {
+		t.Errorf("token_type=%v want Bearer", got)
+	}
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	keySet := mustKeySet(t, prov)
+	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
+	parsed, _, err := v.Verify(at)
+	if err != nil {
+		t.Fatalf("Verify access token: %v", err)
+	}
+	if parsed.Subject != "user-bound-1" {
+		t.Errorf("sub=%q want user-bound-1", parsed.Subject)
+	}
+	if len(parsed.Audience) != 1 || parsed.Audience[0] != client.ID {
+		t.Errorf("aud=%v want [%s]", parsed.Audience, client.ID)
+	}
+	if parsed.ClientID != client.ID {
+		t.Errorf("client_id=%q want %q", parsed.ClientID, client.ID)
+	}
+	if parsed.JTI == "" {
+		t.Error("jti missing on bound access token")
+	}
+	if len(parsed.Confirmation) != 0 {
+		t.Errorf("cnf must be absent on plain bearer bound token: %v", parsed.Confirmation)
+	}
+	rawClaims := decodeJWTPayload(t, at)
+	if got := rawClaims["tenant"]; got != "acme" {
+		t.Errorf("extra claim tenant=%v want acme", got)
+	}
+}
+
+// decodeJWTPayload base64url-decodes the second segment of a compact-
+// serialised JWT and returns it as a JSON object. The helper only
+// inspects the payload — the access-token verifier above is the
+// authoritative signature check — so this is just an extra-claim
+// readback for tests that need to assert a claim the typed verifier
+// does not project (e.g. handler-supplied extras on a BoundAccessToken).
+func decodeJWTPayload(tb testing.TB, jwt string) map[string]any {
+	tb.Helper()
+	parts := strings.Split(jwt, ".")
+	if len(parts) != 3 {
+		tb.Fatalf("decodeJWTPayload: expected 3 segments, got %d", len(parts))
+	}
+	raw, err := decodeBase64URL(parts[1])
+	if err != nil {
+		tb.Fatalf("decodeJWTPayload: base64url: %v", err)
+	}
+	out := map[string]any{}
+	if err := jsonUnmarshal(raw, &out); err != nil {
+		tb.Fatalf("decodeJWTPayload: json: %v", err)
+	}
+	return out
+}
+
+// TestCustomGrant_BoundAccessToken_DPoP drives a DPoP-bound request
+// through the BoundAccessToken path and verifies the OP stamps cnf.jkt
+// matching the proof's thumbprint without the handler having to
+// re-implement DPoP binding logic.
+func TestCustomGrant_BoundAccessToken_DPoP(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:bound-dpop"
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			BoundAccessToken: &op.BoundAccessToken{
+				Subject: op.Subject("user-bound-dpop"),
+				TTL:     2 * time.Minute,
+			},
+			Scope: []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithFeature(feature.DPoP),
+			op.WithCustomGrant(handler),
+		),
+	)
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token", clock: clock}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	key := newDPoPKey(t)
+	form := url.Values{"grant_type": []string{grantURN}}
+	proof := makeDPoPProof(t, key, "POST", f.endpoint, clock.now, "jti-cg-dpop-1", "")
+	resp := postWithDPoP(t, prov.HTTPClient(nil), f.endpoint, form, client.ID, secret, proof)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["token_type"]; got != "DPoP" {
+		t.Errorf("token_type=%v want DPoP", got)
+	}
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	keySet := mustKeySet(t, prov)
+	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
+	parsed, _, err := v.Verify(at)
+	if err != nil {
+		t.Fatalf("Verify access token: %v", err)
+	}
+	if got := parsed.Confirmation["jkt"]; got != key.jkt {
+		t.Errorf("cnf.jkt=%q want %q", got, key.jkt)
+	}
+	if _, has := parsed.Confirmation["x5t#S256"]; has {
+		t.Errorf("cnf.x5t#S256 must NOT be present on DPoP-only request")
+	}
+}
+
+// TestCustomGrant_BoundAccessToken_MTLS drives an mTLS-bound request
+// through the BoundAccessToken path and verifies the OP stamps
+// cnf.x5t#S256 matching the leaf-cert thumbprint.
+func TestCustomGrant_BoundAccessToken_MTLS(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:bound-mtls"
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			BoundAccessToken: &op.BoundAccessToken{
+				Subject: op.Subject("user-bound-mtls"),
+				TTL:     2 * time.Minute,
+			},
+			Scope: []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithFeature(feature.MTLS),
+			op.WithCustomGrant(handler),
+		),
+	)
+
+	const secret = "shh-its-a-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-cg-mtls",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grantURN},
+		Scopes:                  []string{"read"},
+	})
+
+	cert := generateMTLSLeaf(t)
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := postWithMTLS(t, prov, form, client.ID, secret, cert)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeMTLSResp(t, resp))
+	}
+	body := decodeMTLSResp(t, resp)
+	if got := body["token_type"]; got != "Bearer" {
+		// RFC 8705 keeps the bearer wire token_type; the binding
+		// rides on cnf.x5t#S256.
+		t.Errorf("token_type=%v want Bearer (mTLS keeps bearer wire type)", got)
+	}
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	keySet := mustKeySet(t, prov)
+	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: prov.Issuer, Clock: clock}
+	parsed, _, err := v.Verify(at)
+	if err != nil {
+		t.Fatalf("Verify access token: %v", err)
+	}
+	want := mtls.Thumbprint(cert)
+	if got := parsed.Confirmation["x5t#S256"]; got != want {
+		t.Errorf("cnf.x5t#S256=%q want %q", got, want)
+	}
+	if _, has := parsed.Confirmation["jkt"]; has {
+		t.Errorf("cnf.jkt must NOT be present on mTLS-only request")
+	}
+}
+
+// TestCustomGrant_BoundAccessToken_ConflictReturns500 confirms a
+// handler that returns BOTH AccessToken and BoundAccessToken trips
+// the dispatcher's mutually-exclusive guard, surfacing as
+// server_error on the wire (with no description leaking the
+// dispatcher's internal sentinel name).
+func TestCustomGrant_BoundAccessToken_ConflictReturns500(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:bound-conflict"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			AccessToken:      "handler-signed-at",
+			BoundAccessToken: &op.BoundAccessToken{Subject: op.Subject("user-x")},
+			Scope:            []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "server_error" {
+		t.Errorf("error=%v want server_error", got)
+	}
 }
 
 // TestCustomGrant_TTLCappedToGlobal confirms a handler-supplied TTL

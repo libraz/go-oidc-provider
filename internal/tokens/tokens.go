@@ -118,6 +118,13 @@ type AccessTokenClaims struct {
 	// semantics so legacy strategies that never populate GrantID
 	// emit unchanged wire bytes.
 	GrantID string `json:"-"`
+
+	// Extra carries non-standard claims the caller wants stamped on
+	// the JWT alongside the standard set. The encoder flattens this
+	// map after the typed fields; collisions with standard claim
+	// names are rejected by [SignAccessToken] so silent overwrites
+	// of "sub" / "exp" / "cnf" cannot ship.
+	Extra map[string]any `json:"-"`
 }
 
 // ErrSignerInvalid is returned when SignIDToken / SignAccessToken is
@@ -171,6 +178,9 @@ func SignAccessToken(key SigningKey, claims AccessTokenClaims) (string, error) {
 	if key.Signer == nil {
 		return "", ErrSignerInvalid
 	}
+	if err := validateNoStandardCollisions(claims.Extra, accessTokenStandardKeys); err != nil {
+		return "", err
+	}
 	signer, err := newSigner(key, accessTokenTypeHeader)
 	if err != nil {
 		return "", err
@@ -210,13 +220,35 @@ var idTokenStandardKeys = map[string]struct{}{
 	"sid":       {},
 }
 
+// accessTokenStandardKeys is the set of claim names [SignAccessToken]
+// manages itself. Callers that pass [AccessTokenClaims.Extra] MUST NOT
+// include any of these keys; the OP refuses to silently overwrite the
+// sender-constraint cnf claim or the spec-mandated iss/sub/aud/exp.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var accessTokenStandardKeys = map[string]struct{}{
+	"iss":       {},
+	"sub":       {},
+	"aud":       {},
+	"client_id": {},
+	"iat":       {},
+	"exp":       {},
+	"jti":       {},
+	"scope":     {},
+	"auth_time": {},
+	"acr":       {},
+	"amr":       {},
+	"cnf":       {},
+	"gid":       {},
+}
+
 // validateNoStandardCollisions returns an error when extra contains a
 // key in standard. The error names the offending key so the caller can
 // fix the call site without guessing.
 func validateNoStandardCollisions(extra map[string]any, standard map[string]struct{}) error {
 	for k := range extra {
 		if _, dup := standard[k]; dup {
-			return fmt.Errorf("tokens: Extra claim %q collides with a standard id_token claim", k)
+			return fmt.Errorf("tokens: Extra claim %q collides with a standard claim", k)
 		}
 	}
 	return nil
@@ -294,6 +326,9 @@ func mergeAccessTokenClaims(c AccessTokenClaims) map[string]any {
 	}
 	if c.GrantID != "" {
 		out["gid"] = c.GrantID
+	}
+	for k, v := range c.Extra {
+		out[k] = v
 	}
 	return out
 }

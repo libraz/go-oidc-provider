@@ -99,8 +99,18 @@ type Request struct {
 // response: TTL truncation, scope intersection, audience intersection,
 // id_token signing from ExtraClaims when IDToken is empty.
 type Response struct {
-	// AccessToken is the opaque or JWT-shape access token.
+	// AccessToken is the opaque or JWT-shape access token written
+	// verbatim. Mutually exclusive with [BoundAccessToken]; setting
+	// both is rejected with [ErrConflictingAccessTokenForms].
 	AccessToken string
+
+	// BoundAccessToken, when non-nil, instructs the wire layer to
+	// mint a JWT access token with cnf binding stamped automatically.
+	// Mutually exclusive with [AccessToken]; setting both is rejected
+	// with [ErrConflictingAccessTokenForms]. Mirror of
+	// op.BoundAccessToken — see that type for the authoritative
+	// documentation.
+	BoundAccessToken *BoundAccessToken
 
 	// AccessTokenTTL is the lifetime the dispatcher caps to the
 	// global access-token TTL before issuance.
@@ -149,3 +159,29 @@ type Response struct {
 // op.CustomGrantDupCap; defined here so internal callers do not
 // import op.
 const DupCap = 32
+
+// BoundAccessToken mirrors op.BoundAccessToken. See the public type
+// for the authoritative documentation. The struct lives here so the
+// dispatcher and the wire layer can pass it across the internal
+// boundary without importing op.
+type BoundAccessToken struct {
+	// Subject is the value the wire layer writes into the JWT "sub"
+	// claim. When empty the wire layer falls back to [Response.Subject].
+	Subject string
+
+	// Audience is the value the wire layer writes into the JWT "aud"
+	// claim. When empty the wire layer defaults to a single-element
+	// slice containing the authenticated client's ID.
+	Audience []string
+
+	// TTL is the access-token lifetime. Zero or negative falls back
+	// to the dispatcher's [WithMaxAccessTTL] cap (or, when no cap is
+	// configured, the wire layer's default).
+	TTL time.Duration
+
+	// ExtraClaims are merged onto the standard JWT set the wire
+	// layer writes. Names that collide with the standard set are
+	// rejected by [tokens.SignAccessToken] (the wire layer surfaces
+	// the rejection as server_error).
+	ExtraClaims map[string]any
+}

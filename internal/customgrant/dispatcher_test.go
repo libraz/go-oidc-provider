@@ -430,3 +430,133 @@ func TestDispatch_NilDispatcherReturnsUnknownGrant(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnknownGrant", err)
 	}
 }
+
+// TestDispatch_BoundAccessTokenPassesThrough verifies that a handler
+// returning only BoundAccessToken (no AccessToken) clears the
+// dispatcher's invariants — the wire layer is the one that mints, so
+// the dispatcher must NOT reject the empty AccessToken in this shape.
+func TestDispatch_BoundAccessTokenPassesThrough(t *testing.T) {
+	t.Parallel()
+
+	const grant = "urn:example:grant-type:bound"
+	disp, _ := newDispatcher(t, stubHandler{
+		name: grant,
+		handle: func(_ context.Context, _ Request) (Response, error) {
+			return Response{
+				BoundAccessToken: &BoundAccessToken{
+					Subject: "user-1",
+					TTL:     time.Minute,
+				},
+				Scope: []string{"read"},
+			}, nil
+		},
+	})
+	resp, err := disp.Dispatch(context.Background(), DispatchInput{
+		GrantType: grant,
+		Client:    newClient(grant),
+	})
+	if err != nil {
+		t.Fatalf("Dispatch err = %v, want nil", err)
+	}
+	if resp.AccessToken != "" {
+		t.Errorf("AccessToken = %q, want empty (BoundAccessToken path)", resp.AccessToken)
+	}
+	if resp.BoundAccessToken == nil {
+		t.Fatalf("BoundAccessToken = nil, want non-nil")
+	}
+	if resp.BoundAccessToken.Subject != "user-1" {
+		t.Errorf("BoundAccessToken.Subject = %q, want user-1", resp.BoundAccessToken.Subject)
+	}
+}
+
+// TestDispatch_BoundAndAccessTokenConflict verifies that a handler
+// returning BOTH AccessToken and BoundAccessToken is rejected with
+// ErrConflictingAccessTokenForms. The two fields are mutually
+// exclusive; the dispatcher must surface the misuse rather than
+// silently preferring one.
+func TestDispatch_BoundAndAccessTokenConflict(t *testing.T) {
+	t.Parallel()
+
+	const grant = "urn:example:grant-type:conflict"
+	disp, _ := newDispatcher(t, stubHandler{
+		name: grant,
+		handle: func(_ context.Context, _ Request) (Response, error) {
+			return Response{
+				AccessToken:      "handler-signed-at",
+				BoundAccessToken: &BoundAccessToken{Subject: "user-1"},
+			}, nil
+		},
+	})
+	_, err := disp.Dispatch(context.Background(), DispatchInput{
+		GrantType: grant,
+		Client:    newClient(grant),
+	})
+	if !errors.Is(err, ErrConflictingAccessTokenForms) {
+		t.Fatalf("err = %v, want ErrConflictingAccessTokenForms", err)
+	}
+}
+
+// TestDispatch_BoundAccessTokenTTLCapped truncates a BoundAccessToken
+// TTL above the dispatcher's global cap. The truncation mirrors the
+// existing AccessTokenTTL policy so a misbehaving handler cannot mint
+// a long-lived bound token by accident.
+func TestDispatch_BoundAccessTokenTTLCapped(t *testing.T) {
+	t.Parallel()
+
+	const grant = "urn:example:grant-type:bound-ttl"
+	disp, _ := newDispatcher(t,
+		stubHandler{
+			name: grant,
+			handle: func(_ context.Context, _ Request) (Response, error) {
+				return Response{
+					BoundAccessToken: &BoundAccessToken{
+						Subject: "user-1",
+						TTL:     24 * time.Hour,
+					},
+				}, nil
+			},
+		},
+		WithMaxAccessTTL(time.Hour),
+	)
+	resp, err := disp.Dispatch(context.Background(), DispatchInput{
+		GrantType: grant,
+		Client:    newClient(grant),
+	})
+	if err != nil {
+		t.Fatalf("Dispatch err = %v", err)
+	}
+	if resp.BoundAccessToken == nil {
+		t.Fatalf("BoundAccessToken = nil")
+	}
+	if resp.BoundAccessToken.TTL != time.Hour {
+		t.Errorf("BoundAccessToken.TTL = %v, want capped to 1h", resp.BoundAccessToken.TTL)
+	}
+}
+
+// TestDispatch_BoundAccessTokenAudienceInflationRejected verifies the
+// dispatcher's audience subset gate also covers BoundAccessToken.Audience.
+// A handler that names an audience the client did not register fails
+// the same way an AccessToken-path response does.
+func TestDispatch_BoundAccessTokenAudienceInflationRejected(t *testing.T) {
+	t.Parallel()
+
+	const grant = "urn:example:grant-type:bound-aud"
+	disp, _ := newDispatcher(t, stubHandler{
+		name: grant,
+		handle: func(_ context.Context, _ Request) (Response, error) {
+			return Response{
+				BoundAccessToken: &BoundAccessToken{
+					Subject:  "user-1",
+					Audience: []string{"https://elsewhere.example"},
+				},
+			}, nil
+		},
+	})
+	_, err := disp.Dispatch(context.Background(), DispatchInput{
+		GrantType: grant,
+		Client:    newClient(grant),
+	})
+	if !errors.Is(err, ErrAudienceNotAllowed) {
+		t.Fatalf("err = %v, want ErrAudienceNotAllowed", err)
+	}
+}
