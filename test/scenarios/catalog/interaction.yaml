@@ -313,3 +313,18 @@ rows:
       satisfied or an external abort intervenes.
     status: out-of-scope
     out_of_scope_reason: "An upstream reference OP resume-loop semantic: an unsatisfied unrequestable prompt at /auth/resume time triggers another 303 back to /interaction. v1.0 has no /auth/resume endpoint and no 'unrequestable' prompt registration API at the public boundary — the orchestrator's loop is internal to a single dispatchTick and re-prompts the SPA with a fresh JSON envelope, not a 303 to a separate resume route. The looping observable (multi-step authenticator chain) is covered by mfa scenarios and the chain.go internal tests; the upstream resume-redirect shape is not v1.0 wire."
+
+  - id: ITX-073
+    severity: P0
+    spec: 02-product-design.md §M.6 / NIST SP 800-63B §5.2.2
+    behaviour: |
+      Failed authentication attempts MUST share a per-subject counter
+      across every authenticator the OP exposes (TOTP, email-OTP,
+      passkey, recovery codes). An attacker pivoting between factors
+      cannot exceed the configured cumulative threshold by exhausting
+      one factor's local counter and switching to another. Crossing
+      the short threshold (5) stamps a 1-hour lock; crossing the long
+      threshold (25) stamps a 24-hour lock; lock state is visible at
+      the next Begin / Continue regardless of which factor drives it.
+    status: out-of-scope
+    out_of_scope_reason: "Cross-factor lockout binds against the AuthnLockoutStore substore (op/store/lockout.go), which the orchestrator consults inside a Begin/Continue dispatch tick. Exercising the cross-factor pivot from the public surface requires multi-authenticator fixture (TOTP factor + email-OTP factor + passkey, all wired into op.WithAuthenticator chain, plus the SPA driver to enumerate ChallengeKinds and Continue against each in turn) that the scenariokit harness does not host. The atomic-increment / window-rollover / 1h-then-24h thresholds are pinned by internal/authn/lockout package tests and by op/storeadapter/sql/lockout_test.go (UPDATE ... SET failed_count = failed_count + 1 RETURNING) and op/storeadapter/redis/lockout_test.go (INCR atomicity). Re-opening for v1.0 would require a new public 'multi-factor failure replay' helper in scenariokit; not on the v1.0 roadmap."

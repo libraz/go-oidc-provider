@@ -238,3 +238,16 @@ rows:
       ClientCredentials entities on the observability context.
     status: out-of-scope
     out_of_scope_reason: "v1.0 audit emitter has no public 'observability context' / 'entity registration' primitive: audit.Event surfaces ActorID/ClientID/SessionID/RequestID/Tag/Extras only — no Entities []EntityRef field — and op/audit.go ships AuditTokenIssued / AuditTokenRefreshed (success) and AuditIntrospectionError (failure) without any per-revocation success event. Binding these rows would require new public API surface (AuditRevocationSuccess event + EntityRef type + Entities slice). Out of scope for v1.0."
+
+  - id: REV-025
+    severity: P0
+    spec: M-STORE-1 / RFC 6819 §5.1.4.5
+    behaviour: |
+      A revoked refresh token's at-rest representation in the storage
+      adapter MUST NOT contain the raw token id; the substore key MUST
+      be the SHA-256 digest so a DB dump cannot replay the token. The
+      same invariant binds opaque access tokens, authorization codes,
+      and PAR request_uri entropy: only the digest is persisted, raw
+      values are zeroed before Save returns.
+    status: out-of-scope
+    out_of_scope_reason: "Storage at-rest representation is internal to op/storeadapter implementations; the black-box scenario boundary observes only the wire (revoke 200 / introspect inactive / refresh denied), which is identical whether the adapter persists raw or hashed values. The hash-on-store invariant is pinned by package-internal tests: TestAuthCode_HashOnStore_RawValueAbsent, TestRefresh_HashOnStore_RawValueAbsent, TestPAR_HashOnStore_RawValueAbsent, and TestOpaqueAccessToken_HashOnStore in op/storeadapter/inmem/, plus TestSQLite_HashOnStore_AuthCode/_Refresh/_PAR in op/storeadapter/sql/. The defense closes the DB-dump replay vector against passive at-rest leakage; the wire-level revocation outcome (REV-001 through REV-022) remains unchanged."

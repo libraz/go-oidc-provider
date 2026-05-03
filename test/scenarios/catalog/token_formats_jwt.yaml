@@ -335,3 +335,16 @@ rows:
       claim; the emitted JWT reflects the customizer's mutations.
     status: out-of-scope
     out_of_scope_reason: "No formats.customizers.jwt hook on the public API: the Go OP does not expose a per-resource JWT claim mutator; embedders that need extra claims attach them through the user/grant data path, not a token customizer"
+
+  - id: TFJ-034
+    severity: P0
+    spec: RFC 9068 §2.1 / RFC 8725 §3.11
+    behaviour: |
+      A JWT-shaped access token whose protected header `typ` is not
+      exactly `at+jwt` (e.g. `JWT` from an ID token slot, or absent)
+      is rejected at verify time before any signature or claim is
+      consulted. This blocks the typ-confusion variant of RFC 8725
+      where an ID token signed with the same key is presented as an
+      access token.
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's typ pin runs in internal/tokens.Verify against the protected header and emits ErrAccessTokenTypeMismatch; the public surface does not expose a 'verify access token' helper at /op or /op/testkit, so the rejection is not observable from the black-box scenario boundary. Behaviour is pinned by TestVerify_RejectsIDTokenTypAtAccessTokenSlot and TestVerify_RejectsMissingTypHeader in internal/tokens/verify_test.go. Outbound issuance shape (typ=at+jwt header on minted access tokens) is covered by the active TFJ-028 / TFJ-030 rows."
