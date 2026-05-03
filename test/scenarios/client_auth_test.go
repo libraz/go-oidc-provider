@@ -96,12 +96,16 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 }
 
 // caTokenResponse captures the wire shape every CA-* assertion needs:
-// HTTP status, the parsed JSON envelope, and the WWW-Authenticate
-// challenge header (relevant to CA-COMMON-06).
+// HTTP status, the parsed JSON envelope, the WWW-Authenticate challenge
+// header (relevant to CA-COMMON-06), and the cache-control envelope
+// RFC 6749 §5.1 / OIDC Core §3.1.3.4 require on every token-endpoint
+// response (relevant to CA-COMMON-07).
 type caTokenResponse struct {
-	StatusCode int
-	Body       map[string]any
-	WWWAuth    string
+	StatusCode   int
+	Body         map[string]any
+	WWWAuth      string
+	CacheControl string
+	Pragma       string
 }
 
 // postTokenForm POSTs form to /oidc/token after letting decorate mutate
@@ -128,7 +132,12 @@ func postTokenForm(t *testing.T, tk *testkit.Provider, form url.Values, decorate
 	if err != nil {
 		t.Fatalf("read /token body: %v", err)
 	}
-	out := caTokenResponse{StatusCode: resp.StatusCode, WWWAuth: resp.Header.Get("WWW-Authenticate")}
+	out := caTokenResponse{
+		StatusCode:   resp.StatusCode,
+		WWWAuth:      resp.Header.Get("WWW-Authenticate"),
+		CacheControl: resp.Header.Get("Cache-Control"),
+		Pragma:       resp.Header.Get("Pragma"),
+	}
 	out.Body = map[string]any{}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &out.Body); err != nil {
@@ -557,14 +566,123 @@ func TestScenario_CA_COMMON_05_BodyClientIDMismatchRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_CA_COMMON_06_BasicChallengeOnlyOnBasicFailure sweeps
+// three failure mechanisms — HTTP Basic, client_secret_post body, and
+// private_key_jwt assertion — and asserts that only the Basic-mode
+// failure carries a "Basic" WWW-Authenticate challenge. CA-ERR-01
+// already locks the Basic / Post pair on the same handler; this row
+// extends the property to the third mechanism v1.0 ships
+// (private_key_jwt) so a future refactor that accidentally stamped the
+// challenge on every invalid_client path is caught here.
+//
+// Spec: RFC 6749 §5.2.
 func TestScenario_CA_COMMON_06_BasicChallengeOnlyOnBasicFailure(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-COMMON-06")
+
+	t.Run("Basic", func(t *testing.T) {
+		t.Parallel()
+		tk := testkit.NewProvider(t)
+		const clientID = "ca-common-06-basic"
+		//nolint:gosec // test fixture: not a real credential.
+		const clientSecret = "ca-common-06-basic-secret"
+		registerCASecretClient(t, tk, clientID, clientSecret, "client_secret_basic")
+
+		resp := postTokenForm(t, tk, url.Values{
+			"grant_type":   {"authorization_code"},
+			"code":         {"never-issued"},
+			"redirect_uri": {"https://rp.testkit.invalid/callback"},
+		}, func(r *http.Request) {
+			r.SetBasicAuth(clientID, "wrong-secret")
+		})
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status=%d want 401 body=%v", resp.StatusCode, resp.Body)
+		}
+		if !strings.HasPrefix(strings.ToLower(resp.WWWAuth), "basic ") {
+			t.Errorf("WWW-Authenticate=%q want Basic challenge after Basic-auth failure", resp.WWWAuth)
+		}
+	})
+
+	t.Run("Post", func(t *testing.T) {
+		t.Parallel()
+		tk := testkit.NewProvider(t)
+		const clientID = "ca-common-06-post"
+		//nolint:gosec // test fixture: not a real credential.
+		const clientSecret = "ca-common-06-post-secret"
+		registerCASecretClient(t, tk, clientID, clientSecret, "client_secret_post")
+
+		resp := postTokenForm(t, tk, url.Values{
+			"grant_type":    {"authorization_code"},
+			"code":          {"never-issued"},
+			"redirect_uri":  {"https://rp.testkit.invalid/callback"},
+			"client_id":     {clientID},
+			"client_secret": {"wrong-secret"},
+		}, nil)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status=%d want 401 body=%v", resp.StatusCode, resp.Body)
+		}
+		if resp.WWWAuth != "" {
+			t.Errorf("WWW-Authenticate=%q want empty after form-based auth failure", resp.WWWAuth)
+		}
+	})
+
+	t.Run("PrivateKeyJWT", func(t *testing.T) {
+		t.Parallel()
+		tk := testkit.NewProvider(t)
+		const clientID = "ca-common-06-pkjwt"
+		kp := newPKJWTKeypair(t, "kid-ca-common-06")
+		registerPKJWTClient(t, tk, clientID, kp)
+
+		// Sign with a foreign keypair so verification fails (the
+		// client's registered JWKS does not contain this key).
+		foreign := newPKJWTKeypair(t, "kid-ca-common-06")
+		tokenURL, _ := pkjwtAudiences(tk)
+		claims := pkjwtClaims(clientID, tokenURL, time.Now())
+		assertion := signedClientAssertion(t, foreign, claims)
+
+		resp := postPKJWTAssertion(t, tk, assertion, url.Values{"client_id": {clientID}})
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status=%d want 401 body=%v", resp.StatusCode, resp.Body)
+		}
+		if got, _ := resp.Body["error"].(string); got != "invalid_client" {
+			t.Fatalf("error=%q want invalid_client (body=%v)", got, resp.Body)
+		}
+		if resp.WWWAuth != "" {
+			t.Errorf("WWW-Authenticate=%q want empty after private_key_jwt failure", resp.WWWAuth)
+		}
+	})
 }
 
+// TestScenario_CA_COMMON_07_ErrorResponsePreservesNoStore exercises a
+// failing /token request and asserts that the error response carries
+// the cache-control envelope OIDC Core §3.1.3.4 / RFC 6749 §5.1
+// require on every token-endpoint response. A token-bearing failure
+// envelope MUST NOT be cached by intermediaries; stampNoStore
+// (internal/tokenendpoint/error.go) sets both Cache-Control: no-store
+// and Pragma: no-cache, and this row pins both so the headers stay
+// synchronised with the success path.
+//
+// Spec: OIDC Core §3.1.3.4 / RFC 6749 §5.1.
 func TestScenario_CA_COMMON_07_ErrorResponsePreservesNoStore(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-COMMON-07")
+
+	tk := testkit.NewProvider(t)
+	resp := postTokenForm(t, tk, url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {"never-issued"},
+		"redirect_uri": {"https://rp.testkit.invalid/callback"},
+	}, func(r *http.Request) {
+		r.SetBasicAuth("ca-common-07-unknown", "doesnotmatter")
+	})
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401 body=%v", resp.StatusCode, resp.Body)
+	}
+	if resp.CacheControl != "no-store" {
+		t.Errorf("Cache-Control=%q want no-store", resp.CacheControl)
+	}
+	if resp.Pragma != "no-cache" {
+		t.Errorf("Pragma=%q want no-cache", resp.Pragma)
+	}
 }
 
 // TestScenario_CA_NONE_01_NoneClientAuthenticatesByClientID drives a
@@ -673,9 +791,43 @@ func TestScenario_CA_NONE_02_NoneClientWithSecretRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_CA_NONE_03_NoneClientNotAllowedForConfidentialFlows
+// registers a public client (token_endpoint_auth_method=none) whose
+// GrantTypes nominally include client_credentials and asserts that a
+// client_credentials request is rejected with 400 unauthorized_client
+// (RFC 6749 §5.2: "the authenticated client is not authorized to use
+// this authorization grant type"). The auth layer admits MethodNone
+// for the public client; the grant authorizer
+// (internal/grants/clientcred) then refuses on PublicClient=true,
+// which is the structural counterpart to RFC 6749 §2.1's "public
+// clients MUST NOT use grants reserved for confidential clients".
+//
+// Spec: RFC 6749 §2.1 / §5.2.
 func TestScenario_CA_NONE_03_NoneClientNotAllowedForConfidentialFlows(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-NONE-03")
+
+	tk := testkit.NewProvider(t)
+	const clientID = "ca-none-03"
+	tk.RegisterClient(t, testkit.ClientFixture{
+		ID:           clientID,
+		RedirectURIs: []string{"https://rp.testkit.invalid/callback"},
+		PublicClient: true,
+		GrantTypes:   []string{"authorization_code", "client_credentials"},
+		Scopes:       []string{"openid", "api"},
+	})
+
+	resp := postTokenForm(t, tk, url.Values{
+		"grant_type": {"client_credentials"},
+		"client_id":  {clientID},
+		"scope":      {"api"},
+	}, nil)
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, resp.Body)
+	}
+	if got, _ := resp.Body["error"].(string); got != "unauthorized_client" {
+		t.Errorf("error=%q want unauthorized_client (body=%v)", got, resp.Body)
+	}
 }
 
 // TestScenario_CA_BASIC_01_WellFormedBasicHeaderAccepted drives a
@@ -747,14 +899,52 @@ func TestScenario_CA_BASIC_01_WellFormedBasicHeaderAccepted(t *testing.T) {
 	}
 }
 
+// TestScenario_CA_BASIC_02_BasicWithMatchingBodyClientID drives a
+// /token request that carries Authorization: Basic AND a body
+// client_id whose value equals the Basic header's user. The parser's
+// pickClientID step (clientauth/parse.go) reconciles the two channels
+// and accepts when they agree; the request then takes the
+// MethodSecretBasic path and authentication succeeds. The wire signal
+// for "auth passed" is "the response is NOT invalid_client" — we use
+// the fake-code shape so a downstream invalid_grant lands instead of
+// minting real tokens. The mismatching counterpart is CA-COMMON-05 /
+// CA-BASIC-05.
+//
+// Spec: RFC 6749 §2.3.1.
 func TestScenario_CA_BASIC_02_BasicWithMatchingBodyClientID(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-BASIC-02")
+
+	tk := testkit.NewProvider(t)
+	const clientID = "ca-basic-02"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "ca-basic-02-secret"
+	registerCASecretClient(t, tk, clientID, clientSecret, "client_secret_basic")
+
+	resp := postTokenForm(t, tk, url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {"never-issued"},
+		"redirect_uri": {"https://rp.testkit.invalid/callback"},
+		"client_id":    {clientID},
+	}, func(r *http.Request) {
+		r.SetBasicAuth(clientID, clientSecret)
+	})
+
+	if got, _ := resp.Body["error"].(string); got == "invalid_client" {
+		t.Fatalf("matching client_id values must authenticate; got invalid_client body=%v", resp.Body)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 invalid_grant (auth passed, code bogus); body=%v",
+			resp.StatusCode, resp.Body)
+	}
+	if got, _ := resp.Body["error"].(string); got != "invalid_grant" {
+		t.Errorf("error=%q want invalid_grant (auth passed); body=%v", got, resp.Body)
+	}
 }
 
+// TestScenario_CA_BASIC_03_BasicAcceptedForPostRegisteredClient is OOS — see catalog out_of_scope_reason.
 func TestScenario_CA_BASIC_03_BasicAcceptedForPostRegisteredClient(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-BASIC-03")
+	t.Skip("out-of-scope: CA-BASIC-03 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CA_BASIC_04_AppendixBFormURLEncoding pins the Appendix B
@@ -1113,9 +1303,85 @@ func TestScenario_CA_POST_01_FormBodyCredentialsAccepted(t *testing.T) {
 	}
 }
 
+// TestScenario_CA_POST_02_ChunkedTransferEncodingAccepted submits a
+// /token POST whose body uses Transfer-Encoding: chunked instead of a
+// fixed Content-Length, exercising the RFC 7230 §4.1 streaming-body
+// shape. The OP MUST NOT require Content-Length for token requests:
+// http.Server's body parser handles both framings transparently and
+// the handler reads through ParseForm, so the chunked path lands on
+// the same code that processes the Content-Length variant. We wrap
+// the request body in a ReadCloser whose Length is unknown so the
+// stdlib http.Client emits Transfer-Encoding: chunked rather than
+// Content-Length; the success signal is "auth passed → invalid_grant"
+// for the bogus authorization_code, identical to the wire shape
+// CA-BASIC-04 uses.
+//
+// Spec: RFC 7230 §4.1.
 func TestScenario_CA_POST_02_ChunkedTransferEncodingAccepted(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-POST-02")
+
+	tk := testkit.NewProvider(t)
+	const clientID = "ca-post-02"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "ca-post-02-secret"
+	registerCASecretClient(t, tk, clientID, clientSecret, "client_secret_post")
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {"never-issued"},
+		"redirect_uri":  {"https://rp.testkit.invalid/callback"},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+	}.Encode()
+
+	// Wrapping the body in a struct that exposes only Read (not Len)
+	// drops the request below http.Client's "known length" optimisation,
+	// so the transport falls back to Transfer-Encoding: chunked.
+	body := io.NopCloser(struct{ io.Reader }{strings.NewReader(form)})
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/token", body)
+	if err != nil {
+		t.Fatalf("build /token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.ContentLength = -1
+	// Pin the framing the assertion claims: the transport otherwise
+	// could elect to buffer the body and re-stamp Content-Length.
+	req.TransferEncoding = []string{"chunked"}
+
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /token (chunked): %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /token body: %v", err)
+	}
+	envelope := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			t.Fatalf("body is not JSON: %v (raw=%q)", err, string(raw))
+		}
+	}
+
+	// "auth passed" wire shape: Content-Length-required deployments
+	// would have rejected the request with 411 (or 400) before any
+	// auth ran, surfacing as either a non-OAuth status or
+	// invalid_request. invalid_grant is the proof that the chunked
+	// body parsed AND auth verified.
+	gotErr, _ := envelope["error"].(string)
+	if gotErr == "invalid_client" {
+		t.Fatalf("chunked POST failed client auth (status=%d body=%v); the OP MUST NOT require Content-Length",
+			resp.StatusCode, envelope)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 invalid_grant (auth passed, code bogus); body=%v",
+			resp.StatusCode, envelope)
+	}
+	if gotErr != "invalid_grant" {
+		t.Errorf("error=%q want invalid_grant (auth passed); body=%v", gotErr, envelope)
+	}
 }
 
 // TestScenario_CA_POST_03_PostSecretMismatchInvalidClient presents
@@ -1200,9 +1466,45 @@ func TestScenario_CA_POST_05_PostSecretExpired(t *testing.T) {
 	t.Skip("out-of-scope: CA-POST-05 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CA_POST_06_PostFromBasicRegisteredClientStrictReject
+// drives a client registered with
+// token_endpoint_auth_method=client_secret_basic that submits its
+// credentials in the form body instead of the Authorization header.
+// methodAllowedForClient (internal/clientauth/verify.go) requires the
+// presented method match the registered one, so MethodSecretPost is
+// refused for a Basic-registered client; the OP collapses the
+// rejection onto 401 invalid_client without naming the registered
+// method. v1.0 does not expose a cross-method compatibility toggle,
+// so the strict-default behaviour is the only mode this row pins.
+//
+// Spec: RFC 6749 §2.3.
 func TestScenario_CA_POST_06_PostFromBasicRegisteredClientStrictReject(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-POST-06")
+
+	tk := testkit.NewProvider(t)
+	const clientID = "ca-post-06"
+	//nolint:gosec // test fixture: not a real credential.
+	const clientSecret = "ca-post-06-secret"
+	registerCASecretClient(t, tk, clientID, clientSecret, "client_secret_basic")
+
+	resp := postTokenForm(t, tk, url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {"never-issued"},
+		"redirect_uri":  {"https://rp.testkit.invalid/callback"},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+	}, nil)
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401 body=%v", resp.StatusCode, resp.Body)
+	}
+	if got, _ := resp.Body["error"].(string); got != "invalid_client" {
+		t.Errorf("error=%q want invalid_client (body=%v)", got, resp.Body)
+	}
+	desc, _ := resp.Body["error_description"].(string)
+	if strings.Contains(strings.ToLower(desc), "method") {
+		t.Errorf("error_description=%q must not name the registered method", desc)
+	}
 }
 
 // TestScenario_CA_CSJWT_01_AssertionTypeRequired is OOS — see catalog out_of_scope_reason.
@@ -2402,9 +2704,133 @@ func TestScenario_CA_ERR_01_InvalidClient401WithConditionalChallenge(t *testing.
 	})
 }
 
+// TestScenario_CA_ERR_02_ErrorDescriptionDoesNotLeakDetail sweeps
+// several invalid_client failure shapes (unknown client, wrong secret,
+// method mismatch, no credentials) and asserts that the
+// error_description carries only the generic public template; OP-
+// internal sentinel names, file paths, error wrappers, secret-storage
+// internals, and method-mismatch hints MUST stay off the wire. The
+// audit stream (CA-ERR-05) is the surface SOC tooling reads for the
+// disambiguating detail.
+//
+// Spec: RFC 6749 §5.2.
 func TestScenario_CA_ERR_02_ErrorDescriptionDoesNotLeakDetail(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CA-ERR-02")
+
+	// Strings that must NOT appear in any client-auth error_description.
+	// The list is intentionally over-broad: a future refactor that
+	// inlines an internal sentinel name into the description should be
+	// caught here even if the wording changes.
+	const (
+		// Internal sentinel / wrapper names.
+		leakErrCredentials = "errcredentialsinvalid"
+		leakErrMethod      = "errmethodmismatch"
+		// Internal package paths.
+		leakInternalPath = "internal/"
+		leakClientauth   = "clientauth"
+		// Storage internals.
+		leakHash     = "hash"
+		leakArgon2   = "argon2"
+		leakSecret   = "secret"
+		leakStore    = "store"
+		leakNotFound = "not found"
+		// Method-mismatch detail (would betray which method the client is
+		// registered with).
+		leakMethodMismatch = "method mismatch"
+		// Stack trace shape.
+		leakStack = ".go:"
+	)
+	leaks := []string{
+		leakErrCredentials, leakErrMethod, leakInternalPath, leakClientauth,
+		leakHash, leakArgon2, leakSecret, leakStore, leakNotFound,
+		leakMethodMismatch, leakStack,
+	}
+
+	cases := []struct {
+		name     string
+		setup    func(t *testing.T, tk *testkit.Provider)
+		decorate func(r *http.Request)
+		body     url.Values
+	}{
+		{
+			name: "UnknownClient",
+			body: url.Values{
+				"grant_type":   {"authorization_code"},
+				"code":         {"never-issued"},
+				"redirect_uri": {"https://rp.testkit.invalid/callback"},
+			},
+			decorate: func(r *http.Request) {
+				r.SetBasicAuth("ca-err-02-unknown", "any")
+			},
+		},
+		{
+			name: "WrongSecret",
+			setup: func(t *testing.T, tk *testkit.Provider) {
+				registerCASecretClient(t, tk, "ca-err-02-known",
+					"ca-err-02-known-secret", "client_secret_basic")
+			},
+			body: url.Values{
+				"grant_type":   {"authorization_code"},
+				"code":         {"never-issued"},
+				"redirect_uri": {"https://rp.testkit.invalid/callback"},
+			},
+			decorate: func(r *http.Request) {
+				r.SetBasicAuth("ca-err-02-known", "wrong-secret")
+			},
+		},
+		{
+			name: "MethodMismatch",
+			setup: func(t *testing.T, tk *testkit.Provider) {
+				registerCASecretClient(t, tk, "ca-err-02-postclient",
+					"ca-err-02-postclient-secret", "client_secret_post")
+			},
+			body: url.Values{
+				"grant_type":   {"authorization_code"},
+				"code":         {"never-issued"},
+				"redirect_uri": {"https://rp.testkit.invalid/callback"},
+			},
+			decorate: func(r *http.Request) {
+				r.SetBasicAuth("ca-err-02-postclient", "ca-err-02-postclient-secret")
+			},
+		},
+		{
+			name: "NoCredentials",
+			body: url.Values{
+				"grant_type":   {"authorization_code"},
+				"code":         {"never-issued"},
+				"redirect_uri": {"https://rp.testkit.invalid/callback"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tk := testkit.NewProvider(t)
+			if tc.setup != nil {
+				tc.setup(t, tk)
+			}
+			resp := postTokenForm(t, tk, tc.body, tc.decorate)
+
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("status=%d want 401 body=%v", resp.StatusCode, resp.Body)
+			}
+			desc, _ := resp.Body["error_description"].(string)
+			// The template must remain short — pin a generous upper
+			// bound so a future template change that inlined a stack
+			// trace or internal note would trip the assertion. 200
+			// chars covers any reasonable human-readable sentence.
+			if len(desc) > 200 {
+				t.Errorf("error_description length=%d want <=200 (full=%q)", len(desc), desc)
+			}
+			lower := strings.ToLower(desc)
+			for _, leak := range leaks {
+				if strings.Contains(lower, leak) {
+					t.Errorf("error_description=%q must not contain internal-state hint %q", desc, leak)
+				}
+			}
+		})
+	}
 }
 
 // TestScenario_CA_ERR_03_TimingEqualisedAcrossFailurePaths locks the

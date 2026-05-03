@@ -82,6 +82,7 @@ rows:
       On authentication failure, the WWW-Authenticate header is
       attached only when the request used HTTP Basic; for any other
       mechanism the OP MUST NOT emit a Basic challenge.
+    status: active
 
   - id: CA-COMMON-07
     severity: P2
@@ -89,6 +90,7 @@ rows:
     behaviour: |
       Error responses preserve the no-store family of cache-control
       headers required for token-bearing responses.
+    status: active
 
   - id: CA-NONE-01
     severity: P0
@@ -118,6 +120,7 @@ rows:
       none clients MUST NOT be permitted to use grant flows reserved
       for confidential clients; none is a public-client-only
       authentication.
+    status: active
 
   - id: CA-BASIC-01
     severity: P0
@@ -133,6 +136,7 @@ rows:
     behaviour: |
       When client_id is also sent in the body alongside the Basic
       header, the request is accepted iff the two values match.
+    status: active
 
   - id: CA-BASIC-03
     severity: P2
@@ -142,6 +146,8 @@ rows:
       client_secret_post MAY be accepted via Basic only when the OP is
       configured in cross-method compatibility mode; the default is to
       require the registered method.
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose a cross-method compatibility toggle (op/op.go has no WithRelaxedClientAuthMethod option), so the only observable behaviour is the strict-default rejection already covered by CA-COMMON-04. Will be revisited if an embedder requests cross-method acceptance.
 
   - id: CA-BASIC-04
     severity: P0
@@ -246,6 +252,7 @@ rows:
     behaviour: |
       Bodies sent with Transfer-Encoding: chunked MUST be accepted;
       the OP MUST NOT require Content-Length.
+    status: active
 
   - id: CA-POST-03
     severity: P0
@@ -292,6 +299,7 @@ rows:
       credentials in the body MUST be rejected by the strict default;
       compatibility mode MAY accept either form when explicitly
       enabled.
+    status: active
 
   - id: CA-CSJWT-01
     severity: P0
@@ -1233,6 +1241,7 @@ rows:
       revocation_endpoint_auth_methods_supported and
       introspection_endpoint_auth_methods_supported are published in
       parity with the token endpoint.
+    status: active
 
   - id: CA-DISC-07
     severity: P1
@@ -1259,6 +1268,7 @@ rows:
       error_description MUST be a short message that does not leak
       internal state; OP-internal detail stays in the error_detail
       log surface.
+    status: active
 
   - id: CA-ERR-03
     severity: P0
