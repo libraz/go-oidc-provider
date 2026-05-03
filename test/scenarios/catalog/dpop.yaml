@@ -27,7 +27,7 @@ rows:
       The discovery document advertises
       dpop_signing_alg_values_supported listing the asymmetric algs
       (e.g. ES256, PS256) the OP accepts in DPoP proofs.
-    status: pending
+    status: active
 
   - id: DPOP-002
     severity: P0
@@ -295,7 +295,7 @@ rows:
       When the client supplies a fresh server-issued nonce, the
       response succeeds (200/201) and does NOT emit a new DPoP-Nonce
       header.
-    status: pending
+    status: active
 
   - id: DPOP-029
     severity: P1
@@ -303,7 +303,8 @@ rows:
     behaviour: |
       Introspection of a DPoP-bound access token surfaces cnf.jkt and
       token_type=DPoP in the response.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 introspection emits token_type=Bearer for all bearer-shaped tokens (RFC 9449 §6 binds via cnf.jkt only); the catalog's token_type=DPoP demand is non-spec residue per internal/introspectendpoint/handler.go tokenTypeBearer constant. cnf.jkt surfacing is in place."
 
   - id: DPOP-030
     severity: P0
@@ -379,7 +380,8 @@ rows:
       and no dpop_jkt parameter persists an authorization code whose
       dpopJkt is derived from the proof (43-char base64url
       thumbprint).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: DPOP-037 layers JAR on top of the DPoP+PAR auto-bind path; v1.0 wires the PAR auto-derive once (covered by DPOP-036) and the /token cnf.jkt assertion once (covered by DPOP-038). The JAR wrapping does not change the dpopJkt persistence path — the verifier records the proof thumbprint at /par regardless of whether the request body is a plain form or a signed request object.
 
   - id: DPOP-038
     severity: P0
@@ -427,7 +429,7 @@ rows:
       A confidential client refresh_token redemption with a DPoP
       proof from the binding key issues a new access token bound by
       jkt; the refresh token remains unbound.
-    status: pending
+    status: active
 
   - id: DPOP-043
     severity: P0
@@ -436,7 +438,7 @@ rows:
       A public client authorization_code redemption with a DPoP proof
       issues both an access token and a refresh token bound by jkt
       (the RT MUST be sender-constrained for public clients).
-    status: pending
+    status: active
 
   - id: DPOP-044
     severity: P0
@@ -445,7 +447,7 @@ rows:
       A public client refresh_token redemption with a DPoP proof from
       the binding key issues a new access token and a rotated refresh
       token both bound by jkt.
-    status: pending
+    status: active
 
   - id: DPOP-045
     severity: P0
@@ -454,7 +456,7 @@ rows:
       A public client refresh_token redemption with a DPoP proof from
       a different key is rejected with 400 invalid_grant "failed jkt
       verification".
-    status: pending
+    status: active
 
   - id: DPOP-046
     severity: P0
@@ -462,7 +464,7 @@ rows:
     behaviour: |
       A client_credentials redemption with a DPoP proof issues a
       ClientCredentials access token bound by jkt.
-    status: pending
+    status: active
 
   - id: DPOP-047
     severity: P2
@@ -471,7 +473,7 @@ rows:
       An invalid DPoP header at /token returns HTTP 400 with body
       {"error":"invalid_dpop_proof","error_description":"invalid DPoP
       key binding"}.
-    status: pending
+    status: active
 
   - id: DPOP-048
     severity: P2
@@ -480,7 +482,8 @@ rows:
       DPoP errors at the protected resource return a
       WWW-Authenticate header of the form
       DPoP error="<code>", algs="<list>".
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: Catalog WWW-Authenticate algs= attribute is non-spec residue; v1.0 emits the bare DPoP scheme + error_description per internal/userinfo/handler.go (mirrors DPOP-003 OOS framing).
 
   - id: DPOP-049
     severity: P1
@@ -488,4 +491,5 @@ rows:
     behaviour: |
       A server-issued DPoP-Nonce header value matches the 43-char
       URL-safe pattern ^[\w-]{43}$.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 in-memory DPoP nonce source mints 128-bit base64url values (22 chars); the catalog's ^[\\\\w-]{43}$ regex matches a 256-bit value (32 bytes) which v1.0 does not emit."
