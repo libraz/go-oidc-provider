@@ -114,3 +114,36 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 	copy(out, c.customGrants)
 	return out
 }
+
+// RegisterTokenExchange enables the RFC 8693 token-exchange grant_type
+// at the token endpoint, gated by the supplied [TokenExchangePolicy].
+// The provider verifies subject_token / actor_token, normalises the
+// requested audience, intersects the requested scope with the
+// subject_token's scope and the calling client's allowed set, builds
+// the act-claim chain (mandatory whenever the actor differs from the
+// subject), rebinds the issued token's cnf to the request's verified
+// DPoP / mTLS credential, and applies the TTL ceiling before invoking
+// the policy. The policy decides whether to admit each exchange and
+// MAY narrow the provider-computed defaults further.
+//
+// Construction-time errors:
+//
+//   - [ErrTokenExchangePolicyNil] — policy is nil. Token-exchange
+//     requires an explicit deny-by-default hook.
+//   - [ErrTokenExchangeDuplicate] — RegisterTokenExchange was already
+//     invoked. The grant_type has a single canonical URN; a second
+//     registration would shadow the first silently.
+//
+// Stable since v0.9.1.
+func RegisterTokenExchange(policy TokenExchangePolicy) Option {
+	return optionFunc(func(c *config) error {
+		if policy == nil {
+			return ErrTokenExchangePolicyNil
+		}
+		if c.tokenExchangePolicy != nil {
+			return ErrTokenExchangeDuplicate
+		}
+		c.tokenExchangePolicy = policy
+		return nil
+	})
+}

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -248,12 +249,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, in DispatchInput) (Response, 
 		return Response{}, err
 	}
 	req := Request{
-		Client:    in.Client,
-		SubjectID: in.SubjectID,
-		AuthTime:  in.AuthTime,
-		Form:      form,
-		DPoPJKT:   in.DPoPJKT,
-		DPoPJTI:   in.DPoPJTI,
+		Client:         in.Client,
+		SubjectID:      in.SubjectID,
+		AuthTime:       in.AuthTime,
+		Form:           form,
+		DPoPJKT:        in.DPoPJKT,
+		DPoPJTI:        in.DPoPJTI,
+		RequestedScope: parseScopeParam(in.Form),
 	}
 	if cert, ok := in.MTLSCert.(*x509.Certificate); ok {
 		req.MTLSCert = cert
@@ -411,6 +413,28 @@ func filterForm(in url.Values, policy ParamPolicy) (map[string][]string, error) 
 	return out, nil
 }
 
+// parseScopeParam reads the canonical RFC 6749 §3.3 space-delimited
+// scope form value. The dispatcher exposes the parsed slice on
+// [Request.RequestedScope] so handlers that participate in scope
+// decisions (token-exchange) read a single normalised shape.
+func parseScopeParam(in url.Values) []string {
+	raw := in.Get("scope")
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, " ")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // isImplicitFormParameter reports whether name is one of the
 // shared-by-every-grant parameters the layers around Dispatch
 // already consumed. The list is the union of the grant_type
@@ -457,14 +481,43 @@ func scopeSubset(want, allowed []string) bool {
 }
 
 // audienceSubset reports whether every entry of want is present in
-// allowed. An empty want vacuously satisfies the check.
+// allowed. Both sides are normalised per RFC 8707 §2 (lowercase
+// scheme + host, trim trailing slash) before the comparison so a
+// handler that returns the canonical form for a resource indicator
+// the embedder registered with a trailing slash still satisfies the
+// allow-list. An empty want vacuously satisfies the check.
 func audienceSubset(want, allowed []string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	idx := make(map[string]struct{}, len(allowed))
+	for _, a := range allowed {
+		idx[normaliseAudience(a)] = struct{}{}
+	}
 	for _, aud := range want {
-		if !slices.Contains(allowed, aud) {
+		if _, ok := idx[normaliseAudience(aud)]; !ok {
 			return false
 		}
 	}
 	return true
+}
+
+// normaliseAudience applies the RFC 8707 §2 canonicalisation rule —
+// lowercase scheme + host, trim the trailing slash from the path.
+// Values that do not parse as a URL with both scheme and host are
+// returned verbatim so non-URL audience labels still compare strictly.
+func normaliseAudience(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return raw
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimRight(u.Path, "/")
+	return u.String()
 }
 
 // emitRequested records a successful dispatch on the audit sink.

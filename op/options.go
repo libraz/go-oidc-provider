@@ -457,6 +457,14 @@ type config struct {
 	// can blame the prior registrant by name; the slice is read-only
 	// after [config.validate] runs.
 	customGrants []CustomGrantHandler
+
+	// tokenExchangePolicy stores the [TokenExchangePolicy] the embedder
+	// supplied through [RegisterTokenExchange]. Nil means token-exchange
+	// is not enabled on this provider; non-nil means the dispatcher
+	// hosts the in-tree RFC 8693 handler with the policy as its admission
+	// hook. At most one policy may be registered; a second
+	// [RegisterTokenExchange] call yields [ErrTokenExchangeDuplicate].
+	tokenExchangePolicy TokenExchangePolicy
 }
 
 // claimsParameterSupported returns the effective discovery

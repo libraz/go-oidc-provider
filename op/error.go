@@ -1,6 +1,10 @@
 package op
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+)
 
 // Error is the canonical error type returned by [Provider]-related code paths
 // that cross the public API boundary. It carries an OAuth/OIDC-style code,
@@ -48,6 +52,64 @@ func (e *Error) Error() string {
 
 // Unwrap exposes the underlying cause to [errors.Is] and [errors.As].
 func (e *Error) Unwrap() error { return e.Cause }
+
+// OAuthCode returns the receiver's RFC 6749 §5.2 wire code. The
+// method exists so internal code paths can recognise a typed [*Error]
+// through a structural interface without importing the op package
+// (the rule "internal MUST NOT import op" forbids the direct
+// reference). Returns the empty string when the receiver is nil so
+// callers can guard with a single zero-value check.
+//
+// Stable since v0.9.1.
+func (e *Error) OAuthCode() string {
+	if e == nil {
+		return ""
+	}
+	return e.Code
+}
+
+// WriteOAuthError renders the receiver as an RFC 6749 §5.2 wire
+// envelope. The method exists so embedder code paths that surface a
+// typed [*Error] (a [TokenExchangePolicy] denial, a custom-grant
+// handler rejection) can ride through the token endpoint's
+// preserve-verbatim seam without re-encoding the value. The HTTP
+// status is derived from the code class: 5xx for server / config
+// failures, 401 for invalid_client (RFC 6749 §5.2 normative shape),
+// 400 for every other client-class code.
+//
+// Stable since v0.9.1.
+func (e *Error) WriteOAuthError(w http.ResponseWriter) {
+	if e == nil {
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatusFor(e.Code))
+	body := struct {
+		Error            string `json:"error"`
+		ErrorDescription string `json:"error_description,omitempty"`
+	}{
+		Error:            e.Code,
+		ErrorDescription: e.Description,
+	}
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// httpStatusFor maps an OAuth error code onto the HTTP status code
+// the wire response carries. The mapping follows RFC 6749 §5.2 and
+// matches the rest of the library's error wiring.
+func httpStatusFor(code string) int {
+	switch code {
+	case codeInvalidClient:
+		return http.StatusUnauthorized
+	case codeServerError, codeTemporarilyUnavailable, codeConfiguration:
+		return http.StatusInternalServerError
+	default:
+		return http.StatusBadRequest
+	}
+}
 
 // Note: [Error] intentionally does not implement a custom Is method.
 // Sentinel errors in this package are package-level pointer values
@@ -268,6 +330,26 @@ var ErrCustomGrantDuplicate = &Error{
 var ErrCustomGrantSecretLikeExempt = &Error{
 	Code:        codeConfiguration,
 	Description: "ParamPolicy.DupesAllowed names a security-sensitive parameter that cannot be exempted",
+}
+
+// ErrTokenExchangePolicyNil is returned when [RegisterTokenExchange]
+// is called with a nil [TokenExchangePolicy]. Token-exchange admission
+// requires an explicit deny-by-default decision hook; the OP refuses
+// the registration so a deployment cannot accidentally enable
+// RFC 8693 exchange without naming the policy that gates it.
+var ErrTokenExchangePolicyNil = &Error{
+	Code:        codeConfiguration,
+	Description: "RegisterTokenExchange requires a non-nil TokenExchangePolicy",
+}
+
+// ErrTokenExchangeDuplicate is returned when [RegisterTokenExchange]
+// is called more than once. Token-exchange has a single canonical
+// grant_type URN so a second registration would shadow the first
+// silently; the OP refuses the duplicate so the misconfiguration
+// surfaces at construction time.
+var ErrTokenExchangeDuplicate = &Error{
+	Code:        codeConfiguration,
+	Description: "RegisterTokenExchange was already invoked on this configuration",
 }
 
 // newConfigurationError returns a fresh configuration_error wrapping

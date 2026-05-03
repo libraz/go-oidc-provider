@@ -201,3 +201,28 @@ const (
 	AuditDCRRATInvalid            = AuditEvent("dcr.rat.invalid")
 	AuditDCRMetadataValidation    = AuditEvent("dcr.metadata.validation_failed")
 )
+
+// Token-exchange events. Fire from the in-tree RFC 8693 handler.
+// Every successful exchange emits Requested + Granted; rejections
+// emit Requested + one of the failure-class events depending on the
+// gate that fired. The internal package cannot import op (one-way
+// import graph), so the values are duplicated as raw strings inside
+// internal/customgrant/tokenexchange/audit.go and a mirror test
+// pins them together.
+const (
+	AuditTokenExchangeRequested             = AuditEvent("token_exchange.requested")
+	AuditTokenExchangeGranted               = AuditEvent("token_exchange.granted")
+	AuditTokenExchangePolicyDenied          = AuditEvent("token_exchange.policy_denied")
+	AuditTokenExchangePolicyError           = AuditEvent("token_exchange.policy_error")
+	AuditTokenExchangeScopeInflationBlocked = AuditEvent("token_exchange.scope_inflation_blocked")
+	AuditTokenExchangeAudienceBlocked       = AuditEvent("token_exchange.audience_blocked")
+	AuditTokenExchangeTTLCapped             = AuditEvent("token_exchange.ttl_capped")
+	AuditTokenExchangeActChainTooDeep       = AuditEvent("token_exchange.act_chain_too_deep")
+	AuditTokenExchangeEmptyScopeRejected    = AuditEvent("token_exchange.empty_scope_rejected")
+	AuditTokenExchangeActorEqualsSubject    = AuditEvent("token_exchange.actor_equals_subject")
+	AuditTokenExchangeSubjectTokenExternal  = AuditEvent("token_exchange.subject_token_external")
+	AuditTokenExchangeActorTokenExternal    = AuditEvent("token_exchange.actor_token_external")
+	AuditTokenExchangeSubjectTokenInvalid   = AuditEvent("token_exchange.subject_token_invalid")
+	AuditTokenExchangeRefreshIssued         = AuditEvent("token_exchange.refresh_issued")
+	AuditTokenExchangeSelfExchange          = AuditEvent("token_exchange.self_exchange")
+)

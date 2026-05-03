@@ -1,0 +1,248 @@
+# yaml-language-server: $schema=./schema.json
+feature: token_exchange
+prefix: TX
+title: OAuth 2.0 Token Exchange (RFC 8693)
+specs:
+  - RFC 8693 — OAuth 2.0 Token Exchange (§1.1, §1.3, §2.1, §2.2, §4.1)
+  - RFC 8707 — Resource Indicators for OAuth 2.0
+  - RFC 9068 — JWT Profile for OAuth 2.0 Access Tokens
+  - RFC 9449 — OAuth 2.0 Demonstrating Proof of Possession (DPoP)
+  - RFC 8705 — OAuth 2.0 Mutual-TLS Client Authentication
+
+description: |
+  Token-exchange grant_type
+  (urn:ietf:params:oauth:grant-type:token-exchange) implemented as a
+  thin wrapper over the custom-grant seam. The provider verifies
+  subject_token / actor_token, normalises the requested audience,
+  enforces scope and audience subset rules, caps TTL by the minimum
+  of (handler request, subject_token remaining, global ceiling),
+  builds the act-claim chain on the OP side (mandatory whenever the
+  actor differs from the subject), and rebinds the issued token's
+  cnf to the request's DPoP / mTLS credential. The TokenExchangePolicy
+  seam is required at op.New; deployments without it cannot exchange.
+
+rows:
+  - id: TX-001
+    severity: P0
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A token-exchange request that omits subject_token MUST be
+      rejected with 400 invalid_request.
+    status: active
+
+  - id: TX-002
+    severity: P0
+    spec: RFC 8693 §2.1
+    behaviour: |
+      A token-exchange request whose subject_token_type is unknown
+      to the provider MUST be rejected with 400 invalid_request.
+    status: active
+
+  - id: TX-003
+    severity: P0
+    spec: RFC 8693 §1.1
+    behaviour: |
+      A subject_token whose issuer is not the provider itself MUST
+      be rejected with 400 invalid_grant. The provider does not
+      verify external-issuer tokens in this profile.
+    status: active
+
+  - id: TX-004
+    severity: P0
+    spec: RFC 8693 §2.1
+    behaviour: |
+      A subject_token that has been revoked, has expired, or refers
+      to an unknown identifier MUST be rejected with 400
+      invalid_grant.
+    status: active
+
+  - id: TX-005
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A request that supplies actor_token but omits actor_token_type
+      MUST be rejected with 400 invalid_request.
+    status: active
+
+  - id: TX-006
+    severity: P0
+    spec: RFC 8693 §1.1
+    behaviour: |
+      An actor_token whose issuer is not the provider itself MUST
+      be rejected with 400 invalid_grant.
+    status: active
+
+  - id: TX-007
+    severity: P1
+    spec: RFC 8693 §1.3
+    behaviour: |
+      A request whose actor_token resolves to the same subject as
+      the subject_token MUST be rejected with 400 invalid_request:
+      delegation requires distinct identities.
+    status: active
+
+  - id: TX-008
+    severity: P0
+    spec: RFC 8693 §4.1
+    behaviour: |
+      A token-exchange request whose construction would produce an
+      act claim chain deeper than five nested levels MUST be
+      rejected with 400 invalid_grant.
+    status: active
+
+  - id: TX-009
+    severity: P0
+    spec: RFC 8693 §2.1
+    behaviour: |
+      A request whose requested scope is not a subset of the
+      subject_token's scope MUST be rejected with 400 invalid_scope.
+      Scope inflation is forbidden in any form.
+    status: active
+
+  - id: TX-010
+    severity: P0
+    spec: RFC 8707 §4
+    behaviour: |
+      A request whose requested audience contains an entry not
+      registered to the calling client MUST be rejected with 400
+      invalid_target.
+    status: active
+
+  - id: TX-011
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When the configured TokenExchangePolicy returns a structured
+      Error, the provider MUST preserve the embedder's error code,
+      description, and HTTP status verbatim in the wire response.
+    status: active
+
+  - id: TX-012
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      When the configured TokenExchangePolicy returns a generic
+      (non-Error) Go error, the provider MUST collapse it to 400
+      invalid_grant with a redacted description and audit the
+      original cause server-side only.
+    status: active
+
+  - id: TX-013
+    severity: P1
+    spec: RFC 8693 §2.2
+    behaviour: |
+      The issued access token's expires_in MUST be the minimum of
+      (the handler-requested TTL, the subject_token's remaining
+      TTL, the provider's global access-token cap). The cap is
+      applied silently; the response succeeds with the truncated
+      lifetime.
+    status: active
+
+  - id: TX-014
+    severity: P1
+    spec: RFC 8693 §2.1
+    behaviour: |
+      A token-exchange path that would issue a token with empty
+      scope MUST be rejected with 400 invalid_scope.
+    status: active
+
+  - id: TX-015
+    severity: P1
+    spec: RFC 8693 §2.2
+    behaviour: |
+      A request whose requested_token_type names anything other
+      than urn:ietf:params:oauth:token-type:access_token MUST be
+      rejected with 400 invalid_request.
+    status: active
+
+  - id: TX-016
+    severity: P0
+    spec: RFC 8693 §4.1
+    behaviour: |
+      A delegation exchange (subject_token + actor_token both
+      present, distinct identities) MUST issue a token whose sub
+      claim is the subject_token's sub and whose act claim names
+      the actor_token's sub. Any prior act chain on the actor_token
+      MUST be preserved as nested act on the issued token.
+    status: active
+
+  - id: TX-017
+    severity: P0
+    spec: RFC 8693 §1.3
+    behaviour: |
+      An impersonation exchange (subject_token only, no actor_token,
+      calling client distinct from the subject) MUST issue a token
+      whose act claim names the calling client's identifier. The
+      provider MUST NOT silently omit the act chain in this case.
+    status: active
+
+  - id: TX-018
+    severity: P1
+    spec: RFC 8693 §1.3
+    behaviour: |
+      A self-exchange (the calling client matches the
+      subject_token's original audience or client) for the purpose
+      of audience or scope narrowing MUST issue a token without
+      adding an act claim entry; the existing chain is preserved
+      unchanged.
+    status: active
+
+  - id: TX-019
+    severity: P0
+    spec: RFC 9449 §6.1
+    behaviour: |
+      When the token-exchange request is accompanied by a verified
+      DPoP proof, the issued access token's cnf.jkt MUST be the
+      thumbprint of the request's proof (not the subject_token's
+      original binding). The provider rebinds tokens on every
+      exchange.
+    status: active
+
+  - id: TX-020
+    severity: P0
+    spec: RFC 8705 §3.1
+    behaviour: |
+      When the token-exchange request authenticates with a verified
+      mTLS client certificate, the issued access token's cnf.x5t#S256
+      MUST be the SHA-256 thumbprint of the request's certificate
+      (not the subject_token's original binding).
+    status: active
+
+  - id: TX-021
+    severity: P1
+    spec: RFC 8693 §2.2
+    behaviour: |
+      The issued response MUST omit refresh_token unless the
+      configured TokenExchangePolicy explicitly opts in via the
+      decision's IssueRefreshToken field. Refresh-on-exchange is
+      off by default.
+    status: active
+
+  - id: TX-022
+    severity: P0
+    spec: RFC 8707 §2
+    behaviour: |
+      The provider MUST normalise every entry of the requested
+      audience per RFC 8707 §2 (lowercase scheme and host, strip
+      trailing slash) before evaluating the AllowedResources
+      filter.
+    status: active
+
+  - id: TX-023
+    severity: P0
+    spec: RFC 8693 §4.1
+    behaviour: |
+      A handler attempting to inject a forged act claim via
+      ExtraClaims MUST see the entry stripped before issuance; the
+      act chain is provider-built and unforgeable from the seam.
+    status: active
+
+  - id: TX-024
+    severity: P0
+    spec: RFC 8693 §1.1
+    behaviour: |
+      The provider MUST reject token-exchange at op.New time when
+      the embedder did not register a TokenExchangePolicy via the
+      RegisterTokenExchange option. Deployments cannot accidentally
+      enable token-exchange.
+    status: active

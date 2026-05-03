@@ -429,18 +429,22 @@ func cloneClaims(m map[string]any) map[string]any {
 }
 
 // customGrantNamesFor returns the registered handler names in
-// registration order. The discovery builder consults the result to
-// extend grant_types_supported beyond the built-in catalogue. The
-// helper lives next to the dispatcher constructor so a future change
-// to the registration store updates both call sites at once.
+// registration order, plus the token-exchange URN when the embedder
+// invoked [RegisterTokenExchange]. The discovery builder consults the
+// result to extend grant_types_supported beyond the built-in catalogue.
+// The helper lives next to the dispatcher constructor so a future
+// change to the registration store updates both call sites at once.
 func customGrantNamesFor(c *config) []string {
 	handlers := c.customGrantHandlers()
-	if len(handlers) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(handlers))
+	out := make([]string, 0, len(handlers)+1)
 	for _, h := range handlers {
 		out = append(out, h.Name())
+	}
+	if c.tokenExchangePolicy != nil {
+		out = append(out, TokenExchangeGrantType)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -450,15 +454,24 @@ func customGrantNamesFor(c *config) []string {
 // of the built-in cases. The function returns nil when no handlers
 // were registered so the caller can short-circuit the wiring instead
 // of mounting an empty dispatcher.
-func (c *config) buildCustomGrantDispatcher() *customgrant.Dispatcher {
+//
+// The token-exchange handler (when [RegisterTokenExchange] was
+// invoked) rides on the same dispatcher: its [customgrant.Handler]
+// surface is appended to the embedder-supplied registrations so a
+// single grant_type lookup table answers every extension grant. The
+// helper takes the additional dependencies it needs through the
+// supplied callback so the call site in op/op_router.go can hand the
+// same keyset / store handles already wired into the token endpoint.
+func (c *config) buildCustomGrantDispatcher(extra ...customgrant.Handler) *customgrant.Dispatcher {
 	handlers := c.customGrantHandlers()
-	if len(handlers) == 0 {
+	if len(handlers) == 0 && len(extra) == 0 {
 		return nil
 	}
-	adapters := make([]customgrant.Handler, len(handlers))
-	for i, h := range handlers {
-		adapters[i] = customGrantAdapter{upstream: h}
+	adapters := make([]customgrant.Handler, 0, len(handlers)+len(extra))
+	for _, h := range handlers {
+		adapters = append(adapters, customGrantAdapter{upstream: h})
 	}
+	adapters = append(adapters, extra...)
 	opts := []customgrant.Option{
 		customgrant.WithMaxAccessTTL(c.accessTokenTTL),
 		customgrant.WithAudit(c.effectiveAuditEmitter()),

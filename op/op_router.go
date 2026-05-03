@@ -116,7 +116,7 @@ func buildRouter(cfg *config, keySet *keys.Set, scopes *scoperegistry.Registry, 
 			GrantRevocations:               cfg.store.GrantRevocations(),
 			RevocationStrategy:             cfg.atRevocation,
 			Audit:                          cfg.effectiveAuditEmitter(),
-			CustomGrants:                   cfg.buildCustomGrantDispatcher(),
+			CustomGrants:                   buildExtensionDispatcher(cfg, keySet),
 		})),
 	)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, originAllow, strictCORS, locales)

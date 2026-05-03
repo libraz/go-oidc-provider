@@ -23,6 +23,16 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ### Added
 
+- RFC 8693 token-exchange grant_type via `op.RegisterTokenExchange`.
+  The provider verifies subject_token / actor_token, normalises the
+  requested audience (RFC 8707 §2), enforces scope and audience
+  subset rules, caps the issued TTL by the minimum of (handler
+  request, subject_token remaining, global ceiling), builds the
+  act-claim chain on the OP side (mandatory whenever the actor
+  differs from the subject), and rebinds the issued token's cnf to
+  the request's verified DPoP / mTLS credential. The
+  `TokenExchangePolicy` seam is required at op.New; deployments
+  without it cannot exchange.
 - `op.WithInteractionDriver` replaces `op.WithInteraction` (driver
   registration). The new name disambiguates the single-driver option
   from `op.WithInteractions` (Step list).

@@ -92,6 +92,13 @@ type Request struct {
 	// so the dispatcher stamps cnf.x5t#S256 on the issued access
 	// token.
 	MTLSCert *x509.Certificate
+
+	// RequestedScope is the value of the "scope" form parameter (RFC
+	// 6749 §3.3), already split on ASCII space. The dispatcher
+	// populates the slice from the inbound form; handlers that need
+	// to participate in scope decisions read it directly. Empty when
+	// the request did not carry a "scope" parameter.
+	RequestedScope []string
 }
 
 // Response is the result a handler returns. The dispatcher validates
