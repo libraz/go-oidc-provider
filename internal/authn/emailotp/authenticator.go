@@ -481,7 +481,7 @@ func (a *Authenticator) checkResendRate(prior *store.EmailOTPRecord, now time.Ti
 // LastSendAttemptAt is stamped with now unconditionally so the per-
 // subject minimum-interval gate sees a fresh value even when the
 // matched-email guard left SentAt at zero.
-func advanceSendWindow(rec *store.EmailOTPRecord, prior *store.EmailOTPRecord, now time.Time) {
+func advanceSendWindow(rec, prior *store.EmailOTPRecord, now time.Time) {
 	rec.LastSendAttemptAt = now
 	if prior == nil || prior.SendWindowStart.IsZero() || now.Sub(prior.SendWindowStart) >= resendWindow {
 		rec.SendWindowStart = now

@@ -318,7 +318,7 @@ func TestMakeDialControl_HookFires(t *testing.T) {
 	called := atomic.Bool{}
 	opts := Options{
 		AllowPrivate: true, // permit loopback so we reach the hook
-		DialControlHook: func(_ string, _ string, _ syscall.RawConn) error {
+		DialControlHook: func(_, _ string, _ syscall.RawConn) error {
 			called.Store(true)
 			return nil
 		},
