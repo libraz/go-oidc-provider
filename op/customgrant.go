@@ -61,9 +61,12 @@ type CustomGrantHandler interface {
 	//     list named, and only those; values are guaranteed to be
 	//     non-secret (RFC 6749 §3.2 secret-like names cannot be
 	//     [DupesAllowed]).
-	//   - req.DPoP / req.MTLSCert are populated when the client
-	//     presented the corresponding credential and the OP's
-	//     profile required it; nil otherwise.
+	//   - req.DPoP / req.MTLSCert are populated whenever the client
+	//     successfully presented the corresponding credential; nil
+	//     otherwise. The values are independent of the active profile —
+	//     the handler decides whether to bind the issued token (the OP
+	//     does not synthesise cnf for handler-supplied tokens; see
+	//     [CustomGrantResponse] for the binding contract).
 	//
 	// A non-nil error MUST be either an [*Error] (the wire envelope
 	// the OP returns verbatim) or a generic Go error (mapped to
@@ -155,16 +158,24 @@ type CustomGrantRequest struct {
 	Form map[string][]string
 
 	// DPoP is the projection of the verified RFC 9449 proof when
-	// the client presented one; nil otherwise. Handlers thread the
-	// [DPoPProof.JKT] into the response so the OP stamps cnf.jkt
-	// on the issued access token.
+	// the client presented one; nil otherwise. The OP has verified
+	// the proof and consumed the jti by the time Handle runs;
+	// handlers that mint a JWT access token MUST embed cnf.jkt =
+	// [DPoPProof.JKT] in the JWT claims to satisfy RFC 9449 §6.1.
+	// Handlers that mint an opaque access token are responsible for
+	// surfacing the binding through their own introspection backend —
+	// the OP does not maintain a shadow row for handler-supplied
+	// access tokens.
 	DPoP *DPoPProof
 
 	// MTLSCert is the client's leaf certificate when the request
 	// was authenticated via [RFC 8705] mutual-TLS; nil otherwise.
 	// The OP has already verified the chain and bound the client_id;
-	// handlers thread the certificate into the response so the OP
-	// stamps cnf.x5t#S256 on the issued access token.
+	// handlers that mint a JWT access token MUST embed cnf.x5t#S256
+	// (the SHA-256 thumbprint of the certificate) in the JWT claims
+	// to satisfy RFC 8705 §3.1. Handlers that mint an opaque access
+	// token are responsible for surfacing the binding through their
+	// own introspection backend.
 	MTLSCert *x509.Certificate
 }
 
@@ -250,16 +261,18 @@ type CustomGrantResponse struct {
 // proof handed to a [CustomGrantHandler.Handle] invocation. The
 // struct is small on purpose — the cryptographic verification, jti
 // replay tracking, and nonce challenge bookkeeping all live inside
-// the OP; handlers receive only the values they need to thread the
-// resulting binding into the issued access token.
+// the OP; handlers receive only the values they need to bind the
+// issued access token themselves.
 //
 // Stable since v0.9.1.
 type DPoPProof struct {
 	// JKT is the RFC 7638 SHA-256 thumbprint of the proof's JWK,
-	// base64url-no-pad. Handlers thread the value into the
-	// response so the OP stamps cnf.jkt on the issued access
-	// token; subsequent uses of the credential then bind to the
-	// same key.
+	// base64url-no-pad. The handler MUST embed cnf.jkt = JKT in any
+	// JWT access token it issues so subsequent uses of the credential
+	// bind to the same key (RFC 9449 §6.1). For opaque access tokens
+	// the handler is responsible for surfacing the binding through
+	// its own introspection backend; the OP does not maintain a
+	// shadow row for handler-supplied access tokens.
 	JKT string
 
 	// JTI is the proof's "jti" claim. The OP has already marked

@@ -40,12 +40,15 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
-	// DPoPJTI / MTLSCert ride into the dispatcher so handler audit
-	// emission can correlate the wire request with the verified
-	// proof / leaf cert. Both values are read-only by contract; the
-	// wire response shape is unaffected because cnf.jkt /
-	// cnf.x5t#S256 stamping happens in the binding pipeline
-	// regardless.
+	// DPoPJKT / DPoPJTI / MTLSCert ride into the dispatcher so the
+	// handler can bind the issued access token (cnf.jkt /
+	// cnf.x5t#S256) and so its audit emission can correlate the
+	// wire request with the verified proof / leaf cert. The OP does
+	// not synthesise cnf for handler-supplied access tokens — the
+	// dispatcher writes resp.AccessToken verbatim — so a JWT-shape
+	// access token MUST embed the binding claims itself, and an
+	// opaque-shape access token MUST surface the binding through
+	// the handler's own introspection backend.
 	dispatchIn := customgrant.DispatchInput{
 		GrantType: grantType,
 		Client:    client,
