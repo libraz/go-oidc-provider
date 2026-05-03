@@ -285,7 +285,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 	hint := r.PostForm.Get("token_type_hint")
 	resp := resolveToken(r.Context(), deps, verifier, client.ID, token, hint)
 	if shouldEmitJWT(deps, client, r.Header.Get("Accept")) {
-		writeJWTResponse(w, deps, client.ID, resp)
+		writeJWTResponse(r.Context(), w, deps, client, client.ID, resp)
 		return
 	}
 	writeResponse(w, resp)

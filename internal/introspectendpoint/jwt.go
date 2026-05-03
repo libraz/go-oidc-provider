@@ -1,6 +1,7 @@
 package introspectendpoint
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -93,8 +94,29 @@ func signIntrospectionJWT(deps Deps, audience string, body response) (string, er
 // collapses onto the 500 error envelope: an unsigned wire body is
 // unsafe under FAPI and the spec does not define a 5xx error format
 // for the JWT path.
-func writeJWTResponse(w http.ResponseWriter, deps Deps, audience string, body response) {
-	out, err := signIntrospectionJWT(deps, audience, body)
+//
+// When the authenticated client registered
+// introspection_encrypted_response_alg / _enc (RFC 9701 §5) the signed
+// envelope is wrapped in a JWE addressed to the RP's `use=enc` key
+// before reaching the wire. A resolution / encryption failure also
+// collapses onto the 500 envelope: silently emitting a signed-only
+// body when the client opted into encryption is a confidentiality
+// downgrade, so the path treats encryption faults the same as signing
+// faults.
+func writeJWTResponse(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	client *store.Client,
+	audience string,
+	body response,
+) {
+	signed, err := signIntrospectionJWT(deps, audience, body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	out, err := maybeEncryptIntrospection(ctx, deps, client, signed)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
@@ -102,7 +124,13 @@ func writeJWTResponse(w http.ResponseWriter, deps Deps, audience string, body re
 	stampNoStore(w)
 	w.Header().Set("Content-Type", jwtMediaType)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(out))
+	// out is a compact JWS or JWE produced by the OP's own JOSE
+	// pipeline (sign + optional nested JWE wrap). Content-Type pins
+	// it as application/token-introspection+jwt (RFC 9701 §5); the
+	// taint gosec sees through client.* metadata is allow-list
+	// validated by clientencjwks.ResolveRecipient before reaching
+	// the encrypter.
+	_, _ = w.Write([]byte(out)) //nolint:gosec // G705: JOSE output, JWT Content-Type, no HTML surface.
 }
 
 // preferJWT parses an Accept header and reports whether the JWT media
