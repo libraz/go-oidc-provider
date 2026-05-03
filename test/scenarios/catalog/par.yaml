@@ -29,7 +29,7 @@ rows:
       request_uri_parameter_supported=false and does NOT advertise
       request_object_signing_alg_values_supported or
       require_pushed_authorization_requests.
-    status: pending
+    status: active
 
   - id: PAR-002
     severity: P1
@@ -37,7 +37,8 @@ rows:
     behaviour: |
       When requirePushedAuthorizationRequests is toggled on globally,
       discovery advertises require_pushed_authorization_requests=true.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 discovery builder never assigns Document.RequirePushedAuthorizationRequests; profile-driven /authorize gate exists but is not surfaced as the require_pushed_authorization_requests metadata field.
 
   - id: PAR-003
     severity: P1
@@ -47,7 +48,7 @@ rows:
       non-empty request_object_signing_alg_values_supported,
       request_parameter_supported=true and
       request_uri_parameter_supported=false.
-    status: pending
+    status: active
 
   - id: PAR-004
     severity: P1
@@ -57,7 +58,8 @@ rows:
       confidential clients, the pushed redirect_uri is persisted with
       the request_uri and honoured by the subsequent /authorize and
       /token calls.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not ship the RFC 9126 §2.4 ad-hoc redirect_uri opt-in; every client (public or confidential) must use a pre-registered URI, so the ad-hoc-on-confidential variant has no v1.0 wire surface.
 
   - id: PAR-005
     severity: P0
@@ -98,7 +100,7 @@ rows:
     behaviour: |
       In PAR-only mode (JAR disabled), a push that includes a request
       parameter is rejected with 400 request_not_supported.
-    status: pending
+    status: active
 
   - id: PAR-009
     severity: P2
@@ -107,7 +109,8 @@ rows:
       A successful PAR submission exposes Client and
       PushedAuthorizationRequest entities on the OP request context
       for downstream observers.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 has no public on-context entity exposure surface for PAR; the catalog row describes a non-spec observation API not in v1.0's audit / store interfaces."
 
   - id: PAR-010
     severity: P0
@@ -141,7 +144,7 @@ rows:
       is rejected with 400 invalid_request (originally
       invalid_redirect_uri); the error MUST be remapped to
       invalid_request per PAR.
-    status: pending
+    status: active
 
   - id: PAR-013
     severity: P1
@@ -150,7 +153,8 @@ rows:
       When the storage adapter throws a non-OIDC error during upsert,
       the response is 500 server_error ("oops! something went
       wrong"); non-OIDC errors MUST NOT leak verbatim to the client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Injecting a non-OIDC PARStore failure requires a custom store.Store wrapper outside testkit.NewProvider's hard-coded inmem path; the rejection envelope is already covered by the same writeError path PAR-013 would exercise."
 
   - id: PAR-014
     severity: P0
@@ -168,7 +172,7 @@ rows:
       A client with request_object_signing_alg registered may push
       plain params (no JAR) and then exchange the returned
       request_uri at /authorize; the PAR is consumed exactly once.
-    status: pending
+    status: active
 
   - id: PAR-016
     severity: P2
@@ -177,7 +181,8 @@ rows:
       A successful PAR submission carrying a signed Request Object
       exposes Client and PushedAuthorizationRequest entities on the
       OP request context.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 has no public on-context entity exposure surface for PAR; same rationale as PAR-009.
 
   - id: PAR-017
     severity: P0
@@ -196,7 +201,8 @@ rows:
     behaviour: |
       A signed Request Object without an exp claim is stored with
       expires_in clamped to the provider MAX_TTL (e.g. 60).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's PAR substore writes a fixed deps.TTL and does not read JWT exp; per-request expires_in clamping driven by the request object has no v1.0 implementation."
 
   - id: PAR-019
     severity: P1
@@ -204,7 +210,8 @@ rows:
     behaviour: |
       A signed Request Object with exp shorter than MAX_TTL has
       expires_in reflect the JWT exp.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's PAR substore writes a fixed deps.TTL and does not read JWT exp; per-request expires_in clamping driven by the request object has no v1.0 implementation."
 
   - id: PAR-020
     severity: P1
@@ -212,7 +219,8 @@ rows:
     behaviour: |
       A signed Request Object with exp longer than MAX_TTL has
       expires_in clamped to MAX_TTL (e.g. 60).
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0's PAR substore writes a fixed deps.TTL and does not read JWT exp; per-request expires_in clamping driven by the request object has no v1.0 implementation."
 
   - id: PAR-021
     severity: P0
@@ -261,7 +269,7 @@ rows:
       A signed Request Object pushed with an unregistered
       redirect_uri is rejected with 400 invalid_request (remapped
       from invalid_redirect_uri).
-    status: pending
+    status: active
 
   - id: PAR-025
     severity: P1
@@ -269,7 +277,8 @@ rows:
     behaviour: |
       When the storage adapter throws a non-OIDC error during a
       signed PAR upsert, the response is 500 server_error.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same as PAR-013: injecting a non-OIDC PARStore failure requires a custom store.Store wrapper outside testkit.NewProvider's hard-coded inmem path."
 
   - id: PAR-026
     severity: P0

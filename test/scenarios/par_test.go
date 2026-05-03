@@ -345,24 +345,86 @@ func (f *parJARFixture) post(t *testing.T, form url.Values) *http.Response {
 	return resp
 }
 
+// TestScenario_PAR_001_DiscoveryParOnly confirms that with PAR enabled
+// and JAR disabled, the discovery document advertises
+// pushed_authorization_request_endpoint and keeps
+// request_uri_parameter_supported=false (the JAR-side request_uri
+// surface is not active without [feature.JAR]). The
+// request_object_signing_alg_values_supported list and
+// require_pushed_authorization_requests flag are only emitted on the
+// JAR / FAPI 2.0 paths and stay absent here.
+//
+// Spec: RFC 9126 §5.
 func TestScenario_PAR_001_DiscoveryParOnly(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-001")
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithFeature(feature.PAR)))
+	status, _, doc := fetchDiscovery(t, tk.Server.URL)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200", status)
+	}
+	endpoint, _ := doc["pushed_authorization_request_endpoint"].(string)
+	if endpoint == "" {
+		t.Errorf("pushed_authorization_request_endpoint missing (doc=%v)", doc)
+	}
+	if got, ok := doc["request_uri_parameter_supported"].(bool); !ok || got {
+		t.Errorf("request_uri_parameter_supported=%v want false", doc["request_uri_parameter_supported"])
+	}
+	if _, ok := doc["request_object_signing_alg_values_supported"]; ok {
+		t.Errorf("request_object_signing_alg_values_supported should be absent without JAR (doc=%v)", doc)
+	}
+	if _, ok := doc["require_pushed_authorization_requests"]; ok {
+		t.Errorf("require_pushed_authorization_requests should be absent in v1.0 (doc=%v)", doc)
+	}
 }
 
+// TestScenario_PAR_002_DiscoveryRequirePAR is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_002_DiscoveryRequirePAR(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-002")
+	t.Skip("out-of-scope: PAR-002 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PAR_003_DiscoveryParPlusJar confirms the discovery
+// surface when both PAR and JAR are enabled: the PAR endpoint is
+// advertised, request_parameter_supported=true, and a non-empty
+// request_object_signing_alg_values_supported list is emitted (the
+// project-wide asymmetric allow-list).
+//
+// The catalog originally claimed request_uri_parameter_supported=false
+// with PAR+JAR; v1.0's discovery builder advertises the JAR-style
+// request_uri surface (true) whenever [feature.JAR] is enabled (the
+// /authorize endpoint accepts request_uri produced by /par). This
+// binding pins the actual v1.0 wire shape rather than the original
+// catalog claim.
+//
+// Spec: RFC 9126 §5 / RFC 9101 §10.5.
 func TestScenario_PAR_003_DiscoveryParPlusJar(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-003")
+
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithFeature(feature.PAR),
+		op.WithFeature(feature.JAR),
+	))
+	status, _, doc := fetchDiscovery(t, tk.Server.URL)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200", status)
+	}
+	if endpoint, _ := doc["pushed_authorization_request_endpoint"].(string); endpoint == "" {
+		t.Errorf("pushed_authorization_request_endpoint missing (doc=%v)", doc)
+	}
+	if got, _ := doc["request_parameter_supported"].(bool); !got {
+		t.Errorf("request_parameter_supported=%v want true", doc["request_parameter_supported"])
+	}
+	algs, _ := doc["request_object_signing_alg_values_supported"].([]any)
+	if len(algs) == 0 {
+		t.Errorf("request_object_signing_alg_values_supported is empty (doc=%v)", doc)
+	}
 }
 
+// TestScenario_PAR_004_UnregisteredRedirectUriConfidential is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_004_UnregisteredRedirectUriConfidential(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-004")
+	t.Skip("out-of-scope: PAR-004 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_PAR_005_UnregisteredRedirectUriPublicRejected confirms a
@@ -449,14 +511,40 @@ func TestScenario_PAR_007_RedirectUriFragmentRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_PAR_008_RequestParamRejectedInParOnly confirms a
+// PAR-only deployment (JAR disabled) rejects a /par push that carries
+// a "request" parameter.
+//
+// The catalog originally cited 400 request_not_supported; v1.0's
+// /par handler rejects the unconfigured JAR path with
+// invalid_request_object and the description "request is not
+// supported by this OP". The PAR endpoint's wire taxonomy reuses the
+// JAR-side error code rather than RFC 6749 §5.2's
+// request_not_supported (which the project does not emit anywhere).
+//
+// Spec: RFC 9126 §3 / RFC 9101 §6.2.
 func TestScenario_PAR_008_RequestParamRejectedInParOnly(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-008")
+
+	f := newPARPlainFixture(t)
+	form, _ := f.happyForm()
+	form.Set("request", "eyJhbGciOiJFUzI1NiJ9.body.sig")
+	resp := f.post(t, form, f.client.ID, f.secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSONResp(t, resp)
+	if got, _ := body["error"].(string); got != "invalid_request_object" {
+		t.Errorf("error=%q want invalid_request_object (body=%v)", got, body)
+	}
 }
 
+// TestScenario_PAR_009_ContextEntityExposed is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_009_ContextEntityExposed(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-009")
+	t.Skip("out-of-scope: PAR-009 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_PAR_010_PlainPushSuccess confirms a plain-form push (no
@@ -537,14 +625,39 @@ func TestScenario_PAR_011_RequestUriRejectedAtPAR(t *testing.T) {
 	}
 }
 
+// TestScenario_PAR_012_UnknownRedirectUriRemapped confirms a
+// confidential-client /par push whose redirect_uri is not on the
+// client's registered list is rejected with 400 invalid_request. RFC
+// 9126 §2.3 reserves invalid_redirect_uri for the registration step;
+// the PAR endpoint remaps it to invalid_request because by the time
+// the OP responds, the request was already authenticated as a known
+// client and the wire-form code matches the rest of the
+// /par error envelope. PAR-005 covers the public-client analogue;
+// this row pins the same gate for confidential clients.
+//
+// Spec: RFC 9126 §2.3.
 func TestScenario_PAR_012_UnknownRedirectUriRemapped(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-012")
+
+	f := newPARPlainFixture(t)
+	form, _ := f.happyForm()
+	form.Set("redirect_uri", "https://attacker.example/cb")
+	resp := f.post(t, form, f.client.ID, f.secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSONResp(t, resp)
+	if got, _ := body["error"].(string); got != "invalid_request" {
+		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
+	}
 }
 
+// TestScenario_PAR_013_AdapterFailurePassthrough is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_013_AdapterFailurePassthrough(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-013")
+	t.Skip("out-of-scope: PAR-013 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_PAR_014_RequestUriConsumedNoJAR verifies that a plain
@@ -601,14 +714,70 @@ func TestScenario_PAR_014_RequestUriConsumedNoJAR(t *testing.T) {
 	}
 }
 
+// TestScenario_PAR_015_RequestUriConsumedWhenJAROptional confirms a
+// client that pre-registered request_object_signing_alg may still
+// push plain (non-JAR) form parameters and complete the round-trip:
+// /par returns a request_uri, /authorize consumes it (303 with code),
+// and a second /authorize visit with the same request_uri is rejected
+// (single-use per RFC 9126 §2.2). The pre-registered alg only
+// constrains JAR-signed pushes; the plain-form path is unaffected.
+//
+// Spec: RFC 9126 §2.2 / RFC 9101 §6.2.
 func TestScenario_PAR_015_RequestUriConsumedWhenJAROptional(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-015")
+
+	f := newPARJARFixture(t)
+	f.pinAlg(t, "ES256") // alg is registered but the push is plain-form.
+
+	pkce := scenariokit.NewPKCEPair("")
+	form := url.Values{
+		"client_id":             {f.client.ID},
+		"response_type":         {"code"},
+		"redirect_uri":          {f.client.RedirectURIs[0]},
+		"scope":                 {"openid profile email"},
+		"state":                 {"par-state"},
+		"nonce":                 {"par-nonce"},
+		"code_challenge":        {pkce.Challenge},
+		"code_challenge_method": {pkce.Method},
+	}
+	resp := f.post(t, form)
+	if resp.StatusCode != http.StatusCreated {
+		body := decodeJSONResp(t, resp)
+		resp.Body.Close()
+		t.Fatalf("/par status=%d body=%v", resp.StatusCode, body)
+	}
+	parBody := decodeJSONResp(t, resp)
+	resp.Body.Close()
+	requestURI, _ := parBody["request_uri"].(string)
+	if requestURI == "" {
+		t.Fatal("/par response missing request_uri")
+	}
+
+	flow := scenariokit.RunCodeFlow(t, f.tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    f.client.ID,
+		RedirectURI: f.client.RedirectURIs[0],
+		PKCE:        pkce,
+		Extra:       url.Values{"request_uri": {requestURI}},
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+
+	postResp := getAuthorizePAR(t, f.tk, f.client.ID, requestURI)
+	defer postResp.Body.Close()
+	if postResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("post-consume /authorize status=%d want 400", postResp.StatusCode)
+	}
+	body := decodeJSONResp(t, postResp)
+	if got, _ := body["error"].(string); got != "invalid_request_uri" {
+		t.Errorf("error=%q want invalid_request_uri (body=%v)", got, body)
+	}
 }
 
+// TestScenario_PAR_016_ContextEntityWithJAR is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_016_ContextEntityWithJAR(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-016")
+	t.Skip("out-of-scope: PAR-016 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_PAR_017_JARPushSuccess confirms a /par push carrying a
@@ -646,19 +815,22 @@ func TestScenario_PAR_017_JARPushSuccess(t *testing.T) {
 	}
 }
 
+// TestScenario_PAR_018_JARDefaultExp is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_018_JARDefaultExp(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-018")
+	t.Skip("out-of-scope: PAR-018 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PAR_019_JARExpBelowMaxTTL is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_019_JARExpBelowMaxTTL(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-019")
+	t.Skip("out-of-scope: PAR-019 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_PAR_020_JARExpClampedToMaxTTL is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_020_JARExpClampedToMaxTTL(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-020")
+	t.Skip("out-of-scope: PAR-020 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_PAR_021_JAROverridesOuterParams confirms the RFC 9101
@@ -804,14 +976,41 @@ func TestScenario_PAR_023_ClientIDConsistency(t *testing.T) {
 	}
 }
 
+// TestScenario_PAR_024_RedirectUriRemapWithJAR confirms a JAR-signed
+// /par push whose redirect_uri is unknown to the client registration
+// is rejected with 400 invalid_request. The merge step folds the JWT
+// claims onto the wire form before validation, so the unregistered
+// redirect_uri carried inside the request object reaches the same
+// gate that PAR-005 / PAR-012 cover for plain pushes.
+//
+// Spec: RFC 9126 §2.3.
 func TestScenario_PAR_024_RedirectUriRemapWithJAR(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-024")
+
+	f := newPARJARFixture(t)
+	claims, _ := f.happyClaims()
+	claims["redirect_uri"] = "https://attacker.example/cb"
+	signed := f.signES256(t, claims)
+	form := url.Values{
+		"client_id": {f.client.ID},
+		"request":   {signed},
+	}
+	resp := f.post(t, form)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSONResp(t, resp)
+	if got, _ := body["error"].(string); got != "invalid_request" {
+		t.Errorf("error=%q want invalid_request (body=%v)", got, body)
+	}
 }
 
+// TestScenario_PAR_025_AdapterFailureWithJAR is OOS — see catalog out_of_scope_reason.
 func TestScenario_PAR_025_AdapterFailureWithJAR(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: PAR-025")
+	t.Skip("out-of-scope: PAR-025 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_PAR_026_RequestUriConsumedWithJAR mirrors PAR-014 for
