@@ -54,7 +54,7 @@ rows:
     behaviour: |
       Revoking an access token with token_type_hint=access_token
       returns 200 with an empty body and destroys the access token.
-    status: pending
+    status: active
 
   - id: REV-005
     severity: P1
@@ -63,7 +63,7 @@ rows:
       Revoking an access token with token_type_hint=refresh_token
       ignores the wrong hint, resolves the token as an access token,
       destroys it, and returns 200 with an empty body.
-    status: pending
+    status: active
 
   - id: REV-006
     severity: P1
@@ -71,7 +71,7 @@ rows:
     behaviour: |
       An unrecognised hint such as foobar is ignored; the access
       token is destroyed and the endpoint returns 200.
-    status: pending
+    status: active
 
   - id: REV-007
     severity: P0
@@ -98,7 +98,7 @@ rows:
     behaviour: |
       Revoking a refresh token with token_type_hint=refresh_token
       returns 200 with an empty body and destroys the refresh token.
-    status: pending
+    status: active
 
   - id: REV-010
     severity: P1
@@ -107,7 +107,7 @@ rows:
       Revoking a refresh token with token_type_hint=access_token
       ignores the wrong hint, destroys the refresh token, and returns
       200.
-    status: pending
+    status: active
 
   - id: REV-011
     severity: P1
@@ -115,7 +115,7 @@ rows:
     behaviour: |
       An unrecognised hint when revoking a refresh token is ignored;
       the refresh token is destroyed and the endpoint returns 200.
-    status: pending
+    status: active
 
   - id: REV-012
     severity: P0
@@ -132,7 +132,7 @@ rows:
     behaviour: |
       Revoking a client_credentials access token with
       token_type_hint=access_token destroys the token and returns 200.
-    status: pending
+    status: active
 
   - id: REV-014
     severity: P1
@@ -141,7 +141,7 @@ rows:
       An unrecognised hint when revoking a client_credentials access
       token is ignored; the token is destroyed and the endpoint
       returns 200.
-    status: pending
+    status: active
 
   - id: REV-015
     severity: P1
@@ -150,7 +150,7 @@ rows:
       Posting to the revocation endpoint without a token parameter
       returns 400 invalid_request "missing required parameter
       'token'".
-    status: pending
+    status: active
 
   - id: REV-016
     severity: P0
@@ -218,7 +218,8 @@ rows:
     behaviour: |
       A successful access-token revocation registers both Client and
       AccessToken entities on the observability context.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 audit emitter has no public 'observability context' / 'entity registration' primitive: audit.Event surfaces ActorID/ClientID/SessionID/RequestID/Tag/Extras only — no Entities []EntityRef field — and op/audit.go ships AuditTokenIssued / AuditTokenRefreshed (success) and AuditIntrospectionError (failure) without any per-revocation success event. Binding these rows would require new public API surface (AuditRevocationSuccess event + EntityRef type + Entities slice). Out of scope for v1.0."
 
   - id: REV-023
     severity: P2
@@ -226,7 +227,8 @@ rows:
     behaviour: |
       A successful refresh-token revocation registers Client and
       RefreshToken entities on the observability context.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 audit emitter has no public 'observability context' / 'entity registration' primitive: audit.Event surfaces ActorID/ClientID/SessionID/RequestID/Tag/Extras only — no Entities []EntityRef field — and op/audit.go ships AuditTokenIssued / AuditTokenRefreshed (success) and AuditIntrospectionError (failure) without any per-revocation success event. Binding these rows would require new public API surface (AuditRevocationSuccess event + EntityRef type + Entities slice). Out of scope for v1.0."
 
   - id: REV-024
     severity: P2
@@ -234,4 +236,5 @@ rows:
     behaviour: |
       A successful client_credentials revocation registers Client and
       ClientCredentials entities on the observability context.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 audit emitter has no public 'observability context' / 'entity registration' primitive: audit.Event surfaces ActorID/ClientID/SessionID/RequestID/Tag/Extras only — no Entities []EntityRef field — and op/audit.go ships AuditTokenIssued / AuditTokenRefreshed (success) and AuditIntrospectionError (failure) without any per-revocation success event. Binding these rows would require new public API surface (AuditRevocationSuccess event + EntityRef type + Entities slice). Out of scope for v1.0."
