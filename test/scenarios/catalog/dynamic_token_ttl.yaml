@@ -26,7 +26,8 @@ rows:
       execution of grant_type=client_credentials, the response body
       carries expires_in=123. The TTL function is invoked exactly once
       with the ClientCredentials token instance and the issuing Client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 exposes only global static TTL options (op.WithAccessTokenTTL, op.WithRefreshTokenTTL, op.WithRefreshTokenOfflineTTL); there is no per-token-kind callback API like ttl.ClientCredentials(ctx, token, client) the row asserts on. The dynamic-callback contract has no v1.0 wire equivalent. Additionally, the client_credentials grant is allowlisted only for static clients via op.WithGrants — there is no embedder-facing TTL hook to invoke once per credentials issuance.
 
   - id: DTT-002
     severity: P1
@@ -36,7 +37,8 @@ rows:
       /device/auth, the response body carries expires_in=123 and the
       TTL function is invoked once with the DeviceCode token instance
       and the issuing Client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: v1.0 does not expose feature.Device or a /device/auth endpoint; grant.DeviceCode constant exists for option-signature stability but no device-flow handler is mounted. The ttl.DeviceCode dynamic callback API is also absent (v1.0 ships only global static TTL options). No v1.0 wire path can drive this row.
 
   - id: DTT-003
     severity: P1
@@ -47,7 +49,8 @@ rows:
       invoke the TTL functions for IdToken, AccessToken and
       RefreshToken exactly once each, with the corresponding token
       instance and the issuing Client.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Device-code grant exchange is not implemented in v1.0; grant.DeviceCode is a stub constant and no token-endpoint dispatcher accepts urn:ietf:params:oauth:grant-type:device_code. Per-token-kind dynamic TTL callbacks (ttl.IdToken, ttl.AccessToken, ttl.RefreshToken) are also absent — v1.0 uses global static TTL options only. No v1.0 wire path can drive this row."
 
   - id: DTT-004
     severity: P1
@@ -59,7 +62,8 @@ rows:
       the AccessToken TTL, the id_token payload satisfies exp - iat
       equal to the IdToken TTL, and the AuthorizationCode TTL is
       consumed when the code is issued.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 advertises response_type=code only (op.WithDynamicRegistration AllowedResponseTypes accepts only 'code'; the authorize endpoint rejects every other value). Hybrid response_type='code id_token token' has no v1.0 wire path. Per-token-kind dynamic TTL callbacks are also absent — v1.0 ships only global static TTL options."
 
   - id: DTT-005
     severity: P1
@@ -69,7 +73,8 @@ rows:
       /token) MUST invoke the TTL functions for IdToken, AccessToken
       and RefreshToken exactly once each, each with the correct token
       instance.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "v1.0 exposes only global static TTL options (op.WithAccessTokenTTL, op.WithRefreshTokenTTL); there is no per-token-kind callback API like ttl.IdToken(ctx, token, client). The 'invoke ttl.IdToken / ttl.AccessToken / ttl.RefreshToken exactly once each' contract has no v1.0 surface to assert on. Static-TTL invariants are exercised by the dedicated TTL scenarios in id_token_claims and access_token_opaque."
 
   - id: DTT-006
     severity: P1
@@ -78,4 +83,5 @@ rows:
       A refresh_token grant exchange MUST invoke the TTL functions
       for IdToken, AccessToken and RefreshToken anew (once each) so
       the refreshed lifetimes can differ from the original issuance.
-    status: pending
+    status: out-of-scope
+    out_of_scope_reason: "Same root cause as DTT-005: v1.0 has no per-token-kind dynamic TTL callback API. Refresh-grant TTL recomputation is governed by the global op.WithRefreshTokenTTL (and offline variant) at issuance time; there is no embedder-supplied ttl.* function that the OP invokes per-grant-execution. The 'reinvoke once per grant' contract is non-spec residue."

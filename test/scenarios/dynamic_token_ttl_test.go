@@ -11,32 +11,38 @@ package scenarios_test
 
 import "testing"
 
+// TestScenario_DTT_001_ClientCredentialsTTLApplied is OOS — see catalog out_of_scope_reason.
 func TestScenario_DTT_001_ClientCredentialsTTLApplied(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DTT-001")
+	t.Skip("out-of-scope: DTT-001 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DTT_002_DeviceCodeTTLApplied is OOS — see catalog out_of_scope_reason.
 func TestScenario_DTT_002_DeviceCodeTTLApplied(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DTT-002")
+	t.Skip("out-of-scope: DTT-002 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DTT_003_DeviceCodeExchangeInvokesTTLs is OOS — see catalog out_of_scope_reason.
 func TestScenario_DTT_003_DeviceCodeExchangeInvokesTTLs(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DTT-003")
+	t.Skip("out-of-scope: DTT-003 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DTT_004_HybridFlowAppliesPerKindTTL is OOS — see catalog out_of_scope_reason.
 func TestScenario_DTT_004_HybridFlowAppliesPerKindTTL(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DTT-004")
+	t.Skip("out-of-scope: DTT-004 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DTT_005_AuthorizationCodeGrantInvokesTTLs is OOS — see catalog out_of_scope_reason.
 func TestScenario_DTT_005_AuthorizationCodeGrantInvokesTTLs(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DTT-005")
+	t.Skip("out-of-scope: DTT-005 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_DTT_006_RefreshGrantReinvokesTTLs is OOS — see catalog out_of_scope_reason.
 func TestScenario_DTT_006_RefreshGrantReinvokesTTLs(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DTT-006")
+	t.Skip("out-of-scope: DTT-006 (see catalog out_of_scope_reason)")
 }
