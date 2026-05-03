@@ -166,3 +166,76 @@ func DecodeJWSClaims(tb testing.TB, jws string) map[string]any {
 func JWEParts(jwe string) []string {
 	return strings.Split(jwe, ".")
 }
+
+// EncryptJWE wraps the supplied compact-serialised inner JWS in a JWE
+// addressed to opPub using alg / enc. The protected header carries
+// cty=JWT (RFC 7519 §5.2 nested JWT) and the supplied kid so the OP's
+// kid-routing resolver can pick the matching private key. Callers
+// drive the unsupported-alg / unsupported-enc rejection paths by
+// tampering the resulting compact-serialised header via [TamperJWEAlg]
+// or [TamperJWEEnc]; go-jose v4 itself will refuse to mint a JWE with
+// a header outside its constants.
+//
+// alg defaults to "RSA-OAEP-256" and enc defaults to "A256GCM" when
+// the caller passes the empty string.
+func EncryptJWE(tb testing.TB, innerJWS string, opPub *rsa.PublicKey, kid, alg, enc string) string {
+	tb.Helper()
+	if alg == "" {
+		alg = "RSA-OAEP-256"
+	}
+	if enc == "" {
+		enc = "A256GCM"
+	}
+	rcpt := josev4.Recipient{
+		Algorithm: josev4.KeyAlgorithm(alg),
+		Key:       opPub,
+		KeyID:     kid,
+	}
+	opts := (&josev4.EncrypterOptions{}).
+		WithType("JWT").
+		WithContentType("JWT")
+	encrypter, err := josev4.NewEncrypter(josev4.ContentEncryption(enc), rcpt, opts)
+	if err != nil {
+		tb.Fatalf("scenariokit: NewEncrypter(%s/%s): %v", alg, enc, err)
+	}
+	obj, err := encrypter.Encrypt([]byte(innerJWS))
+	if err != nil {
+		tb.Fatalf("scenariokit: Encrypt: %v", err)
+	}
+	out, err := obj.CompactSerialize()
+	if err != nil {
+		tb.Fatalf("scenariokit: CompactSerialize: %v", err)
+	}
+	return out
+}
+
+// TamperJWEHeader rewrites a single string field in the protected
+// header of a compact-serialised JWE and returns the re-serialised
+// form. It exists because go-jose v4 refuses to mint a JWE whose
+// `alg` or `enc` lives outside its allow-list; tests that need to
+// exercise the OP's pre-crypto allow-list gate construct the hostile
+// fixture by post-hoc header rewrite.
+//
+// The match is a literal substring replacement on the JSON header
+// (`"<field>":"<from>"`); callers MUST supply the exact value that
+// appeared in the original header so the replacement targets the
+// intended JSON key.
+func TamperJWEHeader(tb testing.TB, jwe, field, from, to string) string {
+	tb.Helper()
+	parts := strings.Split(jwe, ".")
+	if len(parts) != 5 {
+		tb.Fatalf("scenariokit: not a compact JWE: %d parts", len(parts))
+	}
+	header, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		tb.Fatalf("scenariokit: decode protected header: %v", err)
+	}
+	needle := `"` + field + `":"` + from + `"`
+	repl := `"` + field + `":"` + to + `"`
+	tampered := strings.Replace(string(header), needle, repl, 1)
+	if tampered == string(header) {
+		tb.Fatalf("scenariokit: tamper target %q not found in header %s", needle, header)
+	}
+	parts[0] = base64.RawURLEncoding.EncodeToString([]byte(tampered))
+	return strings.Join(parts, ".")
+}

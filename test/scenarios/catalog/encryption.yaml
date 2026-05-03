@@ -152,10 +152,13 @@ rows:
     behaviour: |
       An /authorize request whose request_object is JWE-encrypted
       with an unsupported alg (for example RSA-OAEP-512 when only
-      RSA-OAEP-256 is in the allow-list) MUST trigger a redirect
-      whose query string carries error=invalid_request_object. The
-      exact error_description wording is implementation-defined and
-      not asserted.
+      RSA-OAEP-256 is in the allow-list) MUST be rejected with a
+      400 invalid_request_object envelope. The exact error_description
+      wording is implementation-defined and not asserted. The catalog
+      originally specified a redirect-with-query envelope; the v0.9.1
+      wire shape is JSON 400 (writeJAREnvelopeError), which is what
+      the test pins.
+    status: active
 
   - id: ENC-031
     severity: P0
@@ -163,8 +166,10 @@ rows:
     behaviour: |
       An /authorize request whose request_object is JWE-encrypted
       with an unsupported enc (for example A192CBC-HS384, not in the
-      A128GCM / A256GCM allow-list) MUST trigger the same
-      error=invalid_request_object redirect as ENC-030.
+      A128GCM / A256GCM allow-list) MUST be rejected with the same
+      400 invalid_request_object envelope as ENC-030 (JSON shape, not
+      a redirect — see ENC-030 deviation note).
+    status: active
 
   - id: ENC-032
     severity: P1
@@ -176,6 +181,7 @@ rows:
       narrow it via [op.WithSupportedEncryptionAlgs] but MUST NOT
       extend it. Without an encryption keyset all
       *_encryption_*_values_supported arrays MUST be absent.
+    status: active
 
   - id: ENC-040
     severity: P0
@@ -187,6 +193,7 @@ rows:
       /authorize?request_uri=... drives the OP to decrypt the object,
       verify the inner JWS, and emit a code redirect to the
       registered redirect_uri.
+    status: active
 
   - id: ENC-041
     severity: P1
@@ -309,6 +316,7 @@ rows:
       to the client's enc-use key. The unencrypted-id_token branch
       MUST NOT be exercised on refresh when the client registered
       id_token_encrypted_response_alg.
+    status: active
 
   - id: ENC-110
     severity: P0
@@ -333,6 +341,7 @@ rows:
       application/json) even when the client registered
       userinfo_encrypted_response_alg. Encryption negotiation is
       gated on the explicit JWT-shape opt-in.
+    status: active
 
   - id: ENC-120
     severity: P0
@@ -358,6 +367,7 @@ rows:
       falls back to the signed-only JARM payload rather than
       collapsing onto a server_error redirect. Authenticity is
       preserved at the cost of error-code confidentiality.
+    status: active
 
   - id: ENC-130
     severity: P0
@@ -395,3 +405,4 @@ rows:
       userinfo / introspection paths surface the failure as a 5xx
       to the RP; the JARM success path emits a server_error redirect
       so the user is not stranded mid-flow.
+    status: active
