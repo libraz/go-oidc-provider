@@ -105,9 +105,10 @@ func TestScenario_CC_001_ConfidentialClientGetsAccessToken(t *testing.T) {
 	}
 }
 
+// TestScenario_CC_002_UnsupportedScopeNarrowedSilently is OOS — see catalog out_of_scope_reason.
 func TestScenario_CC_002_UnsupportedScopeNarrowedSilently(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CC-002")
+	t.Skip("out-of-scope: CC-002 (see catalog out_of_scope_reason)")
 }
 
 // TestScenario_CC_003_DisallowedScopeRejected pins the negative path
@@ -187,7 +188,8 @@ func TestScenario_CC_003_DisallowedScopeRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_CC_004_EntitiesOmitAccountAndGrant is OOS — see catalog out_of_scope_reason.
 func TestScenario_CC_004_EntitiesOmitAccountAndGrant(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: CC-004")
+	t.Skip("out-of-scope: CC-004 (see catalog out_of_scope_reason)")
 }
