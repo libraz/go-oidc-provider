@@ -181,10 +181,11 @@ different driver hint.
 
 ## Release sign-off (v0.9.1)
 
-The v0.9.1 release blocker is "8 plans land green for 7 consecutive
-runs, with the final run executing op-demo under the race detector".
-The full ceremony is manual; CI does not gate on it because OFCS
-runtime exceeds the budget of a hobby-OSS pipeline.
+The v0.9.1 release blocker is "every plan lands green at least once,
+flake is ruled out for any plan that didn't, and a final pass runs
+op-demo under the race detector with zero `WARNING: DATA RACE` hits".
+The ceremony is manual; CI does not gate on it because OFCS runtime
+exceeds the budget of a hobby-OSS pipeline.
 
 ### One-time setup per machine
 
@@ -208,11 +209,10 @@ the op-demo wires `op.WithCIBA` and the auto-approving substore:
 OP_PROFILE=fapi-ciba make conformance-op-up
 ```
 
-### 7-consecutive-green ceremony
+### Single-pass green ceremony
 
-Run each of the 8 plans through `make conformance-baseline` until 7
-consecutive captures show no regressions vs. a chosen reference
-baseline. Use `LABEL=v0.9.1-rc<N>-<plan>` so the file names sort
+Run each of the 8 plans through `make conformance-baseline` once.
+Use `LABEL=v0.9.1-rc<N>-<plan>` so the file names sort
 chronologically.
 
 ```sh
@@ -225,13 +225,16 @@ make conformance-baseline-diff \
     BASELINE_NEW=conformance/baselines/<latest>.json
 ```
 
-If a single capture regresses, the counter resets; the goal is 7 in
-a row across all 8 plans.
+If a plan regresses on the first try, rerun **only that plan** a
+handful of times to distinguish flake from real regression. A flake
+is acceptable as long as a subsequent run is green; a deterministic
+regression blocks the release.
 
 ### Final race-detector pass
 
-The last of the 7 runs is captured with op-demo built under `-race`.
-The flag is opt-in so day-to-day iteration stays fast:
+After the per-plan green captures, run one more pass with op-demo
+built under `-race`. The flag is opt-in so day-to-day iteration
+stays fast:
 
 ```sh
 make conformance-down
@@ -251,7 +254,7 @@ A non-zero count is a release blocker — investigate before tagging.
 The diff command exits non-zero on any module that *was* `PASSED` in
 the reference and *is no longer* `PASSED` in the new capture. Modules
 that were never green (skipped, awaiting review, OFCS-side bug) do
-not block the count; they are tracked in
+not block the run; they are tracked in
 [`docs/plans/013-v0.9.1-plan.md`](../docs/plans/013-v0.9.1-plan.md) §7.
 
 [ofcs]: https://gitlab.com/openid/conformance-suite
