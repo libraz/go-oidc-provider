@@ -23,6 +23,58 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ### Added
 
+- `op.WithCustomGrant(...)` (Wave N0, ADR 0027) graduates from the
+  experimental marker introduced in v0.9.0 to a stable surface:
+  `CustomGrantHandler` interface (`Name` / `ParamPolicy` / `Handle`)
+  + `BoundAccessToken` helper that mints a cnf-bound `at+jwt` access
+  token signed with the OP's keyset. The handler-owned cnf binding
+  contract is documented on the public type — the dispatcher writes
+  `resp.AccessToken` verbatim and the handler is responsible for
+  embedding `cnf` when the request carries DPoP / mTLS proof.
+  Openid-scoped custom grants emit an id_token signed from
+  `ExtraClaims` after reserved-claim filtering.
+- `op.WithDeviceCode(...)` (Wave N1, RFC 8628) wires the OP for
+  device-authorization grant: `/device_authorization` endpoint,
+  token-endpoint dispatcher honoring `authorization_pending` /
+  `slow_down` / `access_denied` / `expired_token`, and discovery
+  advertise of `device_authorization_endpoint` +
+  `urn:ietf:params:oauth:grant-type:device_code` in
+  `grant_types_supported`. The `DeviceCodeStore` substore ships in
+  the in-memory adapter; `op/storeadapter/{sql,redis}` follow in
+  v0.9.2.
+- `op.WithPairwiseSubject(salt)` and `op.WithSubjectGenerator(...)`
+  (Wave O1, ADR 0029) add OIDC Core §8 pairwise subject derivation
+  and an extensible generator seam. `internal/sector` resolves
+  `sector_identifier_uri` with HTTPS-only enforcement, RFC 1918 /
+  loopback / link-local rejection, redirect-target re-validation,
+  body-size + timeout caps, and a 24 h success cache. Mid-life
+  switching of the subject strategy is rejected at `op.New` to
+  prevent silently re-keying issued grants. Discovery now publishes
+  `["public", "pairwise"]` in `subject_types_supported` whenever
+  `WithPairwiseSubject` is active, and the subject projector
+  dispatches per-client on `Client.SubjectType` so public-typed
+  clients keep their UUIDv7 sub when the OP is mixed-mode.
+- `mtls_endpoint_aliases` is now published under the MTLS feature so
+  embedders running mTLS behind a reverse proxy can advertise the
+  alias set defined in RFC 8705 §5.
+- `acr_values_supported` is now publishable via
+  `op.WithACRValuesSupported(values ...string)` so deployments that
+  honor explicit ACR values (FAPI, eIDAS, NIST 800-63) advertise
+  them in discovery without overriding the full document.
+- `op.WithDiscoveryMetadata(map[string]any)` lets embedders extend
+  the discovery document with non-OIDC keys (federation, custom
+  registration metadata) at op.New time.
+- DCR mount accepts `post_logout_redirect_uris` in inbound RFC 7591
+  client metadata; the values flow into the seeded
+  `Client.PostLogoutRedirectURIs` and are echoed back by the
+  registration response and management endpoint.
+- `audit.client_authn.failure` event fires from `/token` and `/par`
+  whenever client authentication rejects (wrong secret, expired
+  assertion, alg mismatch, missing `private_key_jwt`). Mirrors the
+  existing introspection / revocation auth-failure events.
+- `audit.introspection.error` event fires when an inbound token
+  introspection request fails client authentication, completing the
+  cross-endpoint authn-failure audit surface.
 - CIBA poll mode (Wave N2). The OP now exposes the
   Client-Initiated Backchannel Authentication endpoint
   (`/oidc/bc-authorize`) and accepts
@@ -85,8 +137,10 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
     alongside the existing `use=sig` material (RFC 7517 §4.2).
   - `op.WithSupportedEncryptionAlgs(algs []string, encs []string)`
     narrows the OP-advertised algorithm set below the v0.9.1 default
-    allowlist (`RSA-OAEP-{256,384,512}` / `ECDH-ES{,+A128KW,+A256KW}`
-    × `A{128,256}GCM`). `RSA1_5` is intentionally not shipped
+    allowlist (`RSA-OAEP-256` / `ECDH-ES{,+A128KW,+A256KW}` ×
+    `A{128,256}GCM`). `RSA-OAEP-384` / `RSA-OAEP-512` are deferred
+    (go-jose v4.1.x exposes no constants for them; ADR 0030 amended
+    2026-05-04). `RSA1_5` is intentionally not shipped
     (CVE-2017-11424 padding oracle); `dir` and symmetric-only `A*KW`
     are reserved for v2+.
   - Discovery now publishes `id_token_encryption_alg_values_supported`
@@ -162,6 +216,17 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ### Changed
 
+- **Breaking**: `store.DeviceCodeStore.RecordPoll` now takes
+  `nextInterval time.Duration` and persists it atomically alongside
+  `LastPolledAt`. The token endpoint passes the doubled value on a
+  slow_down decision so the substore row reflects the elevated bar
+  the next poll's gate compares against (RFC 8628 §3.5: "If the
+  interval is more than 5 seconds, the client MUST honor the new
+  value"). Out-of-tree adapters MUST update to honor the slow_down
+  ladder; otherwise a malicious device can keep polling at the
+  original cadence indefinitely. The reference inmem adapter is
+  updated; SQL / Redis adapters land in v0.9.2 and pick up the
+  new contract there.
 - **Breaking**: `op.WithInteraction` was renamed to
   `op.WithInteractionDriver` so the single-driver option no longer
   collides with `op.WithInteractions` (Step list).
@@ -234,6 +299,15 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ### Fixed
 
+- Refresh-token rotation now preserves the original authorization-time
+  `nonce` across every chained id_token issuance. OIDC Core §12 makes
+  the nonce echo mandatory on refresh-issued id_tokens; the prior path
+  dropped the value during the rotation copy.
+- `client_secret_basic` credentials sent on `/token` and `/par` are now
+  form-url-decoded per RFC 6749 §2.3.1 / Appendix B before constant-time
+  comparison. Clients whose `client_id` or `client_secret` contained
+  reserved characters (`:`, `+`, percent-escapes) previously rejected
+  with `invalid_client` despite presenting the correct credential.
 - `op/testkit.ensureTrust` now triggers `http.DefaultTransport`'s
   internal `nextProtoOnce` before mutating `TLSClientConfig`. The
   prior path raced with `httptest.Server.Close` (which calls
