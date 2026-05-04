@@ -54,7 +54,7 @@ def run_one(plan: str, module: str) -> ModuleOutcome:
     saved_env = {k: os.environ.get(k) for k in ("OFCS_DRIVE_REJECT", "OFCS_DRIVE_DOUBLE_VISIT")}
     os.environ.update(_drive_flags_for(module))
     try:
-        variant = variants.select(module)
+        variant = variants.select(module, plan)
         start_ms = int(time.time() * 1000)
         resp = ofcs.create_runner(module, plan, variant)
         rid = (resp or {}).get("id", "")

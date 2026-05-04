@@ -188,6 +188,31 @@ def plan_modules(plan_id: str) -> list[str]:
     return mods
 
 
+def plan_module_variants(plan_id: str) -> dict[str, dict[str, str]]:
+    """Return {module_name: variant_dict} from the plan's module list.
+
+    The runner has to send the full variant set when it creates a
+    test instance, otherwise OFCS rejects the call with "Missing value
+    for required variant parameter". OFCS records each module's
+    explicit variant overrides under the module's `variant` key, but
+    leaves plan-level defaults (e.g. fapi_request_method=signed for
+    fapi2-message-signing) implicit. Merge plan-level on top of the
+    module's variant so the result is the full set the runner needs,
+    and the runner stays in sync regardless of which variants the
+    plan accepts at creation time vs hardcodes per module.
+    """
+    out = request_json("GET", f"/api/plan/{plan_id}") or {}
+    plan_level = out.get("variant") or {}
+    result: dict[str, dict[str, str]] = {}
+    for entry in out.get("modules", []) or []:
+        name = entry.get("testModule") or entry.get("name") or ""
+        if name:
+            merged: dict[str, str] = {**plan_level}
+            merged.update(entry.get("variant") or {})
+            result[name] = merged
+    return result
+
+
 def browser_visit(runner_id: str, url: str) -> int:
     body = urllib.parse.urlencode({"url": url})
     status, _, _ = request(
