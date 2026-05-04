@@ -513,7 +513,7 @@ func revokeJWTAccessTokensForGrant(
 	grantID string,
 	now time.Time,
 ) {
-	endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+	_ = endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		RevocationStrategy: deps.RevocationStrategy,

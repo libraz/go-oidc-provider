@@ -35,6 +35,7 @@ import (
 const (
 	auditTokenIssued        = "token.issued"
 	auditTokenRefreshed     = "token.refreshed"
+	auditTokenRevokeFailed  = "token.revoke_failed"
 	auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
 )
 

@@ -261,11 +261,22 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 // not own a slog logger today, so we leave the failure observable
 // only through the audit emitter (handled by the caller).
 func revokeJWTAccessTokensForGrant(ctx context.Context, deps Deps, grantID string) {
-	endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+	if err := endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		RevocationStrategy: deps.RevocationStrategy,
-	}, grantID, deps.now().UTC(), deps.AccessTokenTTL+5*time.Minute, "code_replay")
+	}, grantID, deps.now().UTC(), deps.AccessTokenTTL+5*time.Minute, "code_replay"); err != nil {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:    auditTokenRevokeFailed,
+			Level:   audit.LevelWarn,
+			Message: "access-token revoke cascade failed after authorization-code replay",
+			Extras: map[string]any{
+				"surface":  "code_replay_jwt_access_tokens",
+				"grant_id": grantID,
+				"err":      err.Error(),
+			},
+		})
+	}
 }
 
 // issueAuthCodeResponse mints the access token, optionally a refresh

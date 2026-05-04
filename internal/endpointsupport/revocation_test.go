@@ -57,10 +57,13 @@ func TestRevokeJWTAccessTokensByGrant_GrantTombstoneWritesTombstone(t *testing.T
 
 	now := time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC)
 	revs := &fakeGrantRevocations{}
-	endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	err := endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "grant-1", now, 15*time.Minute, "logout")
+	if err != nil {
+		t.Fatalf("RevokeJWTAccessTokensByGrant: %v", err)
+	}
 
 	if len(revs.tombstones) != 1 {
 		t.Fatalf("tombstones=%d want 1", len(revs.tombstones))
@@ -75,10 +78,13 @@ func TestRevokeJWTAccessTokensByGrant_FallsBackToRegistry(t *testing.T) {
 	t.Parallel()
 
 	reg := &fakeATRegistry{}
-	endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	err := endpointsupport.RevokeJWTAccessTokensByGrant(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "grant-2", time.Now(), time.Minute, "code_replay")
+	if err != nil {
+		t.Fatalf("RevokeJWTAccessTokensByGrant: %v", err)
+	}
 
 	if len(reg.revokeByGrant) != 1 || reg.revokeByGrant[0] != "grant-2" {
 		t.Fatalf("revokeByGrant=%v want [grant-2]", reg.revokeByGrant)
@@ -90,10 +96,13 @@ func TestRevokeJWTAccessTokenByJTI_GrantTombstoneWritesDenylist(t *testing.T) {
 
 	exp := time.Date(2026, 5, 5, 13, 0, 0, 0, time.UTC)
 	revs := &fakeGrantRevocations{}
-	endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		GrantRevocations:   revs,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-1", "grant-1", exp)
+	if err != nil {
+		t.Fatalf("RevokeJWTAccessTokenByJTI: %v", err)
+	}
 
 	if len(revs.revokedJTIs) != 1 {
 		t.Fatalf("revokedJTIs=%d want 1", len(revs.revokedJTIs))
@@ -108,10 +117,13 @@ func TestRevokeJWTAccessTokenByJTI_FallsBackToRegistry(t *testing.T) {
 	t.Parallel()
 
 	reg := &fakeATRegistry{}
-	endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
+	err := endpointsupport.RevokeJWTAccessTokenByJTI(context.Background(), endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       reg,
 		RevocationStrategy: store.RevocationStrategyGrantTombstone,
 	}, "jti-2", "grant-2", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("RevokeJWTAccessTokenByJTI: %v", err)
+	}
 
 	if len(reg.revokeByJTI) != 1 || reg.revokeByJTI[0] != "jti-2" {
 		t.Fatalf("revokeByJTI=%v want [jti-2]", reg.revokeByJTI)
@@ -161,5 +173,19 @@ func TestJWTAccessTokenRevoked_LookupErrorReportsNotOK(t *testing.T) {
 	}, claims)
 	if revoked || ok {
 		t.Fatalf("got revoked=%v ok=%v want false,false", revoked, ok)
+	}
+}
+
+func TestJWTAccessTokenRevoked_ErrNotFoundIsTreatedAsAbsent(t *testing.T) {
+	t.Parallel()
+
+	reg := &fakeATRegistry{findErr: store.ErrNotFound}
+	claims := &tokens.AccessTokenClaims{JTI: "jti-404"}
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(context.Background(), endpointsupport.JWTRevocationOpts{
+		AccessTokens:       reg,
+		RevocationStrategy: store.RevocationStrategyJTIRegistry,
+	}, claims)
+	if revoked || !ok {
+		t.Fatalf("got revoked=%v ok=%v want false,true", revoked, ok)
 	}
 }

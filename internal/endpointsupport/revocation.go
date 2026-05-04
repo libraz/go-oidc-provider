@@ -2,6 +2,7 @@ package endpointsupport
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -80,6 +81,9 @@ func jwtAccessTokenRevokedByJTI(
 	}
 	rec, err := reg.Find(ctx, claims.JTI)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return false, true
+		}
 		return false, false
 	}
 	return rec != nil && rec.Revoked, true
@@ -114,27 +118,30 @@ func RevokeJWTAccessTokensByGrant(
 	now time.Time,
 	retention time.Duration,
 	reason string,
-) {
+) error {
 	switch opts.RevocationStrategy {
 	case store.RevocationStrategyNone:
-		return
+		return nil
 	case store.RevocationStrategyJTIRegistry:
 		if opts.AccessTokens != nil {
-			_, _ = opts.AccessTokens.RevokeByGrant(ctx, grantID)
+			_, err := opts.AccessTokens.RevokeByGrant(ctx, grantID)
+			return err
 		}
+		return nil
 	default:
 		if opts.GrantRevocations != nil && grantID != "" {
-			_ = opts.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
+			return opts.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
 				GrantID:   grantID,
 				RevokedAt: now,
 				ExpiresAt: now.Add(retention),
 				Reason:    reason,
 			})
-			return
 		}
 		if opts.AccessTokens != nil {
-			_, _ = opts.AccessTokens.RevokeByGrant(ctx, grantID)
+			_, err := opts.AccessTokens.RevokeByGrant(ctx, grantID)
+			return err
 		}
+		return nil
 	}
 }
 
@@ -151,25 +158,26 @@ func RevokeJWTAccessTokenByJTI(
 	opts JWTGrantCascadeOpts,
 	jti, grantID string,
 	expiresAt time.Time,
-) {
+) error {
 	switch opts.RevocationStrategy {
 	case store.RevocationStrategyNone:
-		return
+		return nil
 	case store.RevocationStrategyJTIRegistry:
 		if opts.AccessTokens != nil {
-			_ = opts.AccessTokens.RevokeByJTI(ctx, jti)
+			return opts.AccessTokens.RevokeByJTI(ctx, jti)
 		}
+		return nil
 	default:
 		if opts.GrantRevocations != nil {
-			_ = opts.GrantRevocations.RevokeJTI(ctx, store.RevokedJTI{
+			return opts.GrantRevocations.RevokeJTI(ctx, store.RevokedJTI{
 				JTI:       jti,
 				GrantID:   grantID,
 				ExpiresAt: expiresAt,
 			})
-			return
 		}
 		if opts.AccessTokens != nil {
-			_ = opts.AccessTokens.RevokeByJTI(ctx, jti)
+			return opts.AccessTokens.RevokeByJTI(ctx, jti)
 		}
+		return nil
 	}
 }

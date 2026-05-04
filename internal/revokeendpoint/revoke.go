@@ -124,11 +124,13 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 	// {"active": false}. The shape depends on the configured ADR 0025
 	// strategy; every branch is idempotent (missing row → nil) and
 	// keeps the endpoint on the RFC 7009 §2.2 "always 200" path.
-	endpointsupport.RevokeJWTAccessTokenByJTI(ctx, endpointsupport.JWTGrantCascadeOpts{
+	if err := endpointsupport.RevokeJWTAccessTokenByJTI(ctx, endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		RevocationStrategy: deps.RevocationStrategy,
-	}, claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0).Add(5*time.Minute).UTC())
+	}, claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0).Add(5*time.Minute).UTC()); err != nil {
+		emitRevokeFailed(ctx, deps, authenticatedClientID, "jwt_access_token", err)
+	}
 	return true
 }
 

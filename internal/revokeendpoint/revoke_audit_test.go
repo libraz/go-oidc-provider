@@ -21,6 +21,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -37,6 +38,10 @@ var errStoreFault = errors.New("simulated storage outage")
 // handler's lookup / chain walk reach the RevokeChain call site.
 type faultyRefreshStore struct {
 	inner store.RefreshTokenStore
+}
+
+type faultyAccessTokenRegistry struct {
+	inner store.AccessTokenRegistry
 }
 
 func (f *faultyRefreshStore) Save(ctx context.Context, token *store.RefreshToken) error {
@@ -57,6 +62,26 @@ func (f *faultyRefreshStore) RevokeChain(_ context.Context, _ string) error {
 
 func (f *faultyRefreshStore) RevokeByGrant(_ context.Context, _ string) error {
 	return errStoreFault
+}
+
+func (f *faultyAccessTokenRegistry) Register(ctx context.Context, rec store.AccessTokenRecord) error {
+	return f.inner.Register(ctx, rec)
+}
+
+func (f *faultyAccessTokenRegistry) Find(ctx context.Context, jti string) (*store.AccessTokenRecord, error) {
+	return f.inner.Find(ctx, jti)
+}
+
+func (f *faultyAccessTokenRegistry) RevokeByJTI(_ context.Context, _ string) error {
+	return errStoreFault
+}
+
+func (f *faultyAccessTokenRegistry) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
+	return f.inner.RevokeByGrant(ctx, grantID)
+}
+
+func (f *faultyAccessTokenRegistry) GC(ctx context.Context, cutoff time.Time) (int, error) {
+	return f.inner.GC(ctx, cutoff)
 }
 
 // TestHandler_RefreshToken_StoreFault_EmitsAudit pins the structural
@@ -137,25 +162,17 @@ func TestHandler_RefreshToken_StoreFault_EmitsAudit(t *testing.T) {
 		Clock:         clock,
 		Audit:         capture.emitter(),
 	}
-	srv := httptest.NewServer(revokeendpoint.Handler(deps))
-	defer srv.Close()
-
 	form := url.Values{
 		"token":           {refreshID},
 		"token_type_hint": {"refresh_token"},
 	}
-	req, err := http.NewRequestWithContext(context.Background(),
-		http.MethodPost, srv.URL, strings.NewReader(form.Encode()))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	req := httptest.NewRequest(http.MethodPost, "https://op.example/revoke", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(clientID, secret)
+	rec := httptest.NewRecorder()
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
+	revokeendpoint.Handler(deps).ServeHTTP(rec, req)
+	resp := rec.Result()
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -179,16 +196,16 @@ func TestHandler_RefreshToken_StoreFault_EmitsAudit(t *testing.T) {
 	// Audit event MUST surface so SOC tooling can detect the
 	// silent-swallow path. Without this assertion the test passes
 	// even if the handler regresses to fosite's defect.
-	rec := capture.findEvent("token.revoke_failed")
-	if rec == nil {
+	auditRec := capture.findEvent("token.revoke_failed")
+	if auditRec == nil {
 		t.Fatalf("expected audit event token.revoke_failed, captured=%s", capture.dump())
 	}
-	if got, _ := rec["client_id"].(string); got != clientID {
+	if got, _ := auditRec["client_id"].(string); got != clientID {
 		t.Errorf("audit client_id=%q want %q", got, clientID)
 	}
-	extras, ok := rec["extras"].(map[string]any)
+	extras, ok := auditRec["extras"].(map[string]any)
 	if !ok {
-		t.Fatalf("audit record missing extras: %v", rec)
+		t.Fatalf("audit record missing extras: %v", auditRec)
 	}
 	if got, _ := extras["surface"].(string); got != "refresh_chain" {
 		t.Errorf("extras.surface=%q want refresh_chain", got)
@@ -196,8 +213,111 @@ func TestHandler_RefreshToken_StoreFault_EmitsAudit(t *testing.T) {
 	if got, _ := extras["err"].(string); !strings.Contains(got, errStoreFault.Error()) {
 		t.Errorf("extras.err=%q want it to contain %q", got, errStoreFault.Error())
 	}
-	if got, _ := rec["level"].(string); !strings.EqualFold(got, "ERROR") {
+	if got, _ := auditRec["level"].(string); !strings.EqualFold(got, "ERROR") {
 		t.Errorf("audit level=%q want ERROR", got)
+	}
+}
+
+func TestHandler_JWTAccessToken_StoreFault_EmitsAudit(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa key: %v", err)
+	}
+	keyset, err := keys.NewSet([]keys.Entry{{KeyID: "audit-jwt-1", Signer: priv}})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	innerStore := inmem.New(inmem.WithClock(clock))
+
+	const clientID = "client-revoke-jwt-fault"
+	const secret = "revoke-jwt-fault-secret"
+	hash, err := (&clientauth.Argon2id{}).Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	if err := innerStore.RegisterClient(context.Background(), &store.Client{
+		ID:                      clientID,
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	const jti = "jwt-fault-jti-1"
+	const grantID = "jwt-fault-grant-1"
+	if err := innerStore.AccessTokens().Register(context.Background(), store.AccessTokenRecord{
+		JTI:       jti,
+		GrantID:   grantID,
+		Subject:   "user-1",
+		ClientID:  clientID,
+		Scopes:    []string{"openid"},
+		IssuedAt:  clock.now,
+		ExpiresAt: clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("AccessTokens.Register: %v", err)
+	}
+	raw, err := tokens.SignAccessToken(tokens.SigningKey{KeyID: "audit-jwt-1", Signer: priv}, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example",
+		Subject:   "user-1",
+		Audience:  []string{"https://op.example"},
+		ClientID:  clientID,
+		IssuedAt:  clock.now.Unix(),
+		ExpiresAt: clock.now.Add(time.Hour).Unix(),
+		JTI:       jti,
+		GrantID:   grantID,
+		Scope:     []string{"openid"},
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+
+	capture := newRevokeAuditCapture()
+	deps := revokeendpoint.Deps{
+		Issuer:        "https://op.example",
+		Clients:       innerStore.Clients(),
+		RefreshTokens: innerStore.RefreshTokens(),
+		Keys:          keyset,
+		Clock:         clock,
+		AccessTokens:  &faultyAccessTokenRegistry{inner: innerStore.AccessTokens()},
+		Audit:         capture.emitter(),
+	}
+
+	form := url.Values{"token": {raw}, "token_type_hint": {"access_token"}}
+	req := httptest.NewRequest(http.MethodPost, "https://op.example/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, secret)
+	rec := httptest.NewRecorder()
+
+	revokeendpoint.Handler(deps).ServeHTTP(rec, req)
+	resp := rec.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode=%d want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control=%q want no-store", got)
+	}
+
+	auditRec := capture.findEvent("token.revoke_failed")
+	if auditRec == nil {
+		t.Fatalf("expected audit event token.revoke_failed, captured=%s", capture.dump())
+	}
+	if got, _ := auditRec["client_id"].(string); got != clientID {
+		t.Errorf("audit client_id=%q want %q", got, clientID)
+	}
+	extras, ok := auditRec["extras"].(map[string]any)
+	if !ok {
+		t.Fatalf("audit record missing extras: %v", auditRec)
+	}
+	if got, _ := extras["surface"].(string); got != "jwt_access_token" {
+		t.Errorf("extras.surface=%q want jwt_access_token", got)
+	}
+	if got, _ := extras["err"].(string); !strings.Contains(got, errStoreFault.Error()) {
+		t.Errorf("extras.err=%q want it to contain %q", got, errStoreFault.Error())
 	}
 }
 
