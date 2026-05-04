@@ -198,6 +198,25 @@ rows:
       attacker cannot probe for the cap value via wire-code variation.
     status: active
 
+  - id: ENC-036
+    severity: P0
+    spec: RFC 7591 §2 / OIDC Core §6.1
+    behaviour: |
+      Dynamic Client Registration MUST reject a half-set encryption
+      pair on every encrypted-response family with 400
+      invalid_client_metadata. Registering one of `*_encrypted_response_alg`
+      / `*_encryption_alg` without the matching `_enc` (or vice versa)
+      across the five families (id_token, userinfo, request_object,
+      authorization, introspection) admits a configuration the OP's
+      runtime encryption path will reject on the first response, so the
+      validator closes the gap at registration time. Both empty is
+      accepted (the client takes the unencrypted, signed-only path);
+      both set to an alg/enc on the closed JOSE allow-list is accepted.
+      OIDC Core §6.1 permits negotiating the missing half from the
+      discovery list, but the v0.9.x OP does not implement that
+      negotiation.
+    status: active
+
   - id: ENC-040
     severity: P0
     spec: RFC 9126 + RFC 9101

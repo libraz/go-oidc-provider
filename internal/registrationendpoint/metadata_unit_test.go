@@ -45,10 +45,17 @@ func TestValidatePolicy_RejectsUnsupportedRequestObjectSigningAlg(t *testing.T) 
 }
 
 // TestValidatePolicy_AcceptsRequestObjectEncryption pins the v0.9.1
-// allow-list for [request_object_encryption_alg / _enc]: every entry on
-// the JOSE wrapper's allow-list flows through the DCR validator
-// unchanged. The test fails closed if the allow-list grows past the
-// validator's hard-coded set without a corresponding update.
+// allow-list for [request_object_encryption_alg / _enc]: every entry
+// on the JOSE wrapper's allow-list flows through the DCR validator
+// unchanged when both halves are present. The test fails closed if
+// the allow-list grows past the validator's source-of-truth set
+// (jose.AllowedJWEAlgs / AllowedJWEEncs) without a corresponding
+// update.
+//
+// Half-pair cases (alg-only / enc-only) are NOT in this table — they
+// are pinned as rejections by [TestRegister_JWEAlgEncPair_Matrix] in
+// metadata_validate_encryption_test.go (M6 closes the prior
+// admit-then-runtime-reject gap).
 func TestValidatePolicy_AcceptsRequestObjectEncryption(t *testing.T) {
 	t.Parallel()
 
@@ -59,8 +66,6 @@ func TestValidatePolicy_AcceptsRequestObjectEncryption(t *testing.T) {
 		{alg: "ECDH-ES", enc: "A128GCM"},
 		{alg: "ECDH-ES+A128KW", enc: "A128GCM"},
 		{alg: "ECDH-ES+A256KW", enc: "A256GCM"},
-		{alg: "RSA-OAEP-256", enc: ""},
-		{alg: "", enc: "A256GCM"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.alg+"/"+tc.enc, func(t *testing.T) {
@@ -122,10 +127,16 @@ func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testin
 // for the four outbound-encryption metadata pairs (id_token, userinfo,
 // JARM authorization, introspection). Each path mirrors
 // [TestValidatePolicy_AcceptsRequestObjectEncryption]: every alg/enc on
-// the JOSE wrapper's allow-list flows through unchanged, plus the
-// "alg without enc" / "enc without alg" / "both empty" carve-outs OIDC
-// §6.1 admits. The table is keyed by metadata path so a regression in
-// one validator surfaces against the path it ought to.
+// the JOSE wrapper's allow-list flows through unchanged when both
+// halves are present, plus the "both empty" carve-out (the client opts
+// out of encryption for that response type). The table is keyed by
+// metadata path so a regression in one validator surfaces against the
+// path it ought to.
+//
+// Half-pair cases are pinned as rejections by
+// [TestRegister_JWEAlgEncPair_Matrix] in
+// metadata_validate_encryption_test.go (M6: half-pair admits used to
+// land here and fail at first-use; v0.9.1 rejects them at registration).
 func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 	t.Parallel()
 
@@ -136,8 +147,6 @@ func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 		{alg: "ECDH-ES", enc: "A128GCM"},
 		{alg: "ECDH-ES+A128KW", enc: "A128GCM"},
 		{alg: "ECDH-ES+A256KW", enc: "A256GCM"},
-		{alg: "RSA-OAEP-256", enc: ""},
-		{alg: "", enc: "A256GCM"},
 		{alg: "", enc: ""},
 	}
 	paths := []struct {

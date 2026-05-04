@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 )
 
@@ -284,48 +285,54 @@ func validateRequestObjectSigningAlg(alg string) error {
 }
 
 // validateRequestObjectEncryption pins the JWE alg/enc the client may
-// register against the v0.9.1 closed allow-list. The list mirrors
-// [internal/jose.AllowedJWEAlgs] / [AllowedJWEEncs] so DCR cannot
-// admit a value the verifier would later reject as
-// [jar.ErrEncryptionAlgNotAllowed]; an embedder that narrows the
-// advertised list via [op.WithSupportedEncryptionAlgs] is responsible
-// for the per-deployment hardening — the registration validator stays
-// at the v0.9.1 ceiling so a non-narrowing OP accepts every alg/enc
-// the JOSE wrapper can decrypt.
+// register against the closed allow-list exposed by [jose.ParseJWEAlg]
+// / [jose.ParseJWEEnc] so DCR cannot admit a value the verifier would
+// later reject as [jar.ErrEncryptionAlgNotAllowed]; an embedder that
+// narrows the advertised list via [op.WithSupportedEncryptionAlgs] is
+// responsible for the per-deployment hardening — the registration
+// validator stays at the library ceiling so a non-narrowing OP accepts
+// every alg/enc the JOSE wrapper can decrypt.
 //
-// Either field may be empty: registering only `alg` (or only `enc`) is
-// permitted because OIDC §6.1 lets the client commit to one half and
-// negotiate the other through the discovery list. An empty `alg` with a
-// non-empty `enc` is also accepted for the same reason.
+// Both alg and enc are required together. OIDC Core §6.1 permits
+// registering one half and negotiating the other through the discovery
+// list; this OP does not implement that negotiation (the runtime
+// encryption path requires both values, see
+// [internal/clientencjwks].validateAlgEnc), so DCR rejects mixed
+// half-pairs at registration time to close the admit/runtime-reject gap.
+// Both empty is fine — the client takes the unencrypted (signed-only)
+// path.
 func validateRequestObjectEncryption(alg, enc string) error {
 	return validateJWEAlgEncPair("request_object_encryption_alg", "request_object_encryption_enc", alg, enc)
 }
 
 // validateIDTokenResponseEncryption pins the JWE alg/enc the client may
-// register for issued ID tokens (OIDC Core 1.0 §10.2). Same allow-list
-// as [validateRequestObjectEncryption]; either field may be empty.
+// register for issued ID tokens (OIDC Core 1.0 §10.2). Same closed
+// allow-list and both-or-neither rule as
+// [validateRequestObjectEncryption].
 func validateIDTokenResponseEncryption(alg, enc string) error {
 	return validateJWEAlgEncPair("id_token_encrypted_response_alg", "id_token_encrypted_response_enc", alg, enc)
 }
 
 // validateUserInfoResponseEncryption pins the JWE alg/enc the client may
-// register for /userinfo responses (OIDC Core 1.0 §5.3). Same allow-list
-// as [validateRequestObjectEncryption]; either field may be empty.
+// register for /userinfo responses (OIDC Core 1.0 §5.3). Same closed
+// allow-list and both-or-neither rule as
+// [validateRequestObjectEncryption].
 func validateUserInfoResponseEncryption(alg, enc string) error {
 	return validateJWEAlgEncPair("userinfo_encrypted_response_alg", "userinfo_encrypted_response_enc", alg, enc)
 }
 
 // validateAuthorizationResponseEncryption pins the JWE alg/enc the
-// client may register for JARM authorization responses. Same allow-list
-// as [validateRequestObjectEncryption]; either field may be empty.
+// client may register for JARM authorization responses. Same closed
+// allow-list and both-or-neither rule as
+// [validateRequestObjectEncryption].
 func validateAuthorizationResponseEncryption(alg, enc string) error {
 	return validateJWEAlgEncPair("authorization_encrypted_response_alg", "authorization_encrypted_response_enc", alg, enc)
 }
 
 // validateIntrospectionResponseEncryption pins the JWE alg/enc the
 // client may register for JWT introspection responses (RFC 7662 + draft
-// JWT Response for OAuth Token Introspection). Same allow-list as
-// [validateRequestObjectEncryption]; either field may be empty.
+// JWT Response for OAuth Token Introspection). Same closed allow-list
+// and both-or-neither rule as [validateRequestObjectEncryption].
 func validateIntrospectionResponseEncryption(alg, enc string) error {
 	return validateJWEAlgEncPair("introspection_encrypted_response_alg", "introspection_encrypted_response_enc", alg, enc)
 }
@@ -333,21 +340,36 @@ func validateIntrospectionResponseEncryption(alg, enc string) error {
 // validateJWEAlgEncPair is the shared allow-list check the encryption
 // validators share. The (algField, encField) names are the wire field
 // labels used in the error description so failures point the embedder
-// at the offending metadata key. Either alg or enc may be empty: OIDC
-// §6.1 lets the client commit to one half and negotiate the other
-// through the discovery list.
+// at the offending metadata key.
+//
+// The allow-list is sourced verbatim from [jose.ParseJWEAlg] /
+// [jose.ParseJWEEnc] so the registration validator and the JWE
+// verifier cannot drift; adding a new alg/enc requires editing
+// [internal/jose/jweparam.go] only. RSA1_5, dir, A*KW, A*GCMKW and
+// `none` are deliberately excluded from the JOSE allow-list and are
+// therefore rejected here without any local mention.
+//
+// Both alg and enc must be set together. OIDC Core §6.1 permits a
+// client to commit to one half and let the OP negotiate the other from
+// the discovery list, but this OP does not implement that negotiation
+// — the runtime check at
+// [internal/clientencjwks].validateAlgEnc requires both fields, so
+// admitting a half-pair would surface as a runtime failure on the
+// first encrypted response. Rejecting the mismatch at DCR time closes
+// that admit/runtime-reject gap. Both empty is permitted: the client
+// takes the unencrypted (signed-only) path.
 func validateJWEAlgEncPair(algField, encField, alg, enc string) error {
+	if (alg == "") != (enc == "") {
+		return errInvalidClientMetadata(algField + " and " + encField +
+			" must be set together (RFC 7591 / OIDC Core §6.1)")
+	}
 	if alg != "" {
-		switch alg {
-		case "RSA-OAEP-256", "ECDH-ES", "ECDH-ES+A128KW", "ECDH-ES+A256KW":
-		default:
+		if _, ok := jose.ParseJWEAlg(alg); !ok {
 			return errInvalidClientMetadata(algField + " " + alg + " is not supported")
 		}
 	}
 	if enc != "" {
-		switch enc {
-		case "A128GCM", "A256GCM":
-		default:
+		if _, ok := jose.ParseJWEEnc(enc); !ok {
 			return errInvalidClientMetadata(encField + " " + enc + " is not supported")
 		}
 	}

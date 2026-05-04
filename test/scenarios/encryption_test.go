@@ -620,6 +620,87 @@ func TestScenario_ENC_035_NestedJWEDepthCapRejected(t *testing.T) {
 	}
 }
 
+// TestScenario_ENC_036_DCRRejectsHalfPairEncryptionMetadata pins the
+// admit/runtime-reject gap closed by the DCR encryption-pair validator:
+// a Dynamic Client Registration request that sets only one half of an
+// `*_encrypted_response_alg` / `_enc` pair (or only the matching
+// `request_object_encryption_alg` / `_enc`) MUST be rejected with 400
+// invalid_client_metadata. The rule applies to all five encrypted-response
+// families (id_token, userinfo, request_object, authorization,
+// introspection); the row pins id_token as a representative because the
+// registration validator routes all five families through the same
+// shared helper.
+//
+// The negative path (alg-only) is paired with the positive path (both
+// fields set on the closed JOSE allow-list -> 201 Created) so a future
+// regression flipping the gate's polarity surfaces immediately. The
+// runtime resolver requires both fields to be present
+// (internal/clientencjwks.validateAlgEnc) — registration gating closes
+// the gap so the failure surfaces at registration time, not on the
+// first encrypted response.
+//
+// Spec: RFC 7591 §2 / OIDC Core 1.0 §6.1.
+func TestScenario_ENC_036_DCRRejectsHalfPairEncryptionMetadata(t *testing.T) {
+	t.Parallel()
+
+	encKey := scenariokit.NewOPEncryptionKey(t, "op-enc-036")
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithDynamicRegistration(op.RegistrationOption{Open: true}),
+		op.WithEncryptionKeyset(op.EncryptionKeyset{encKey}),
+	))
+
+	postRegister := func(t *testing.T, body map[string]any) *http.Response {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			tk.Server.URL+"/oidc/register", strings.NewReader(string(raw)))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := tk.HTTPClient(nil).Do(req)
+		if err != nil {
+			t.Fatalf("POST /register: %v", err)
+		}
+		return resp
+	}
+
+	// Negative: alg only -> 400 invalid_client_metadata.
+	halfPairBody := map[string]any{
+		"redirect_uris":                   []string{"https://rp.testkit.invalid/cb"},
+		"id_token_encrypted_response_alg": "RSA-OAEP-256",
+	}
+	respBad := postRegister(t, halfPairBody)
+	defer func() { _ = respBad.Body.Close() }()
+	if respBad.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(respBad.Body)
+		t.Fatalf("alg-only registration: status=%d want 400 body=%s", respBad.StatusCode, body)
+	}
+	var badEnv map[string]any
+	if err := json.NewDecoder(respBad.Body).Decode(&badEnv); err != nil {
+		t.Fatalf("decode 400 body: %v", err)
+	}
+	if got, _ := badEnv["error"].(string); got != "invalid_client_metadata" {
+		t.Errorf("error=%q want invalid_client_metadata (env=%v)", got, badEnv)
+	}
+
+	// Positive: both alg+enc set on the closed JOSE allow-list -> 201.
+	bothPairBody := map[string]any{
+		"redirect_uris":                   []string{"https://rp.testkit.invalid/cb"},
+		"id_token_encrypted_response_alg": "RSA-OAEP-256",
+		"id_token_encrypted_response_enc": "A256GCM",
+	}
+	respOK := postRegister(t, bothPairBody)
+	defer func() { _ = respOK.Body.Close() }()
+	if respOK.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(respOK.Body)
+		t.Fatalf("both-set registration: status=%d want 201 body=%s", respOK.StatusCode, body)
+	}
+}
+
 // TestScenario_ENC_040_PARAcceptsEncryptedRequestObject pins the
 // RFC 9126 + RFC 9101 happy path for an encrypted-and-signed request
 // object: a confidential client signs an inner JWS (ES256) with its
