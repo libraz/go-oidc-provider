@@ -259,3 +259,18 @@ rows:
       An embedder-injected cnf via the policy decision's ExtraClaims
       MUST be stripped; the OP-built binding wins.
     status: active
+
+  - id: TX-026
+    severity: P1
+    spec: RFC 6749 §5.2
+    behaviour: |
+      A non-NotFound fault from the access-token registry during
+      subject_token (or actor_token) lookup MUST surface on the
+      dedicated token_exchange.subject_token_registry_error audit
+      event at warn level, NOT on token_exchange.subject_token_invalid.
+      The wire response MUST stay collapsed to invalid_grant — the
+      wire shape never differentiates revocation from a transient
+      registry outage — but operators get a separate observation
+      channel so a quiet outage is distinguishable from an actual
+      revocation.
+    status: active

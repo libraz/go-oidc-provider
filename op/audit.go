@@ -218,6 +218,26 @@ const (
 	AuditDeviceCodeTokenIssued              = AuditEvent("device_code.token.issued")
 	AuditDeviceCodeTokenRejected            = AuditEvent("device_code.token.rejected")
 	AuditDeviceCodeTokenSlowDown            = AuditEvent("device_code.token.slow_down")
+
+	// AuditDeviceCodeRevoked fires from the public revoke helper
+	// ([github.com/libraz/go-oidc-provider/op/devicecodekit.Revoke]).
+	// The helper wraps [store.DeviceCodeStore.Deny] with an audit
+	// signal so SOC tooling and embedder cascade-revoke subscribers
+	// can react in one place. Extras carry: client_id, reason (e.g.
+	// "user_denied", "user_code_lockout", or an embedder-supplied
+	// value).
+	//
+	// v0.9.1 ships the audit signal only. The library-side cascade —
+	// walking [store.AccessTokenRegistry] for tokens whose grant_id
+	// matches the revoked device_code — is a v0.9.2 design task that
+	// requires an issued-tokens-by-device_code mapping the substore
+	// does not yet expose. Until then, embedders subscribe to this
+	// event and call [store.AccessTokenRegistry.RevokeByGrant] (or
+	// the equivalent on their custom registry) themselves; the
+	// device_code.ID equals the GrantID stamped on every issued
+	// access token derived from that device authorization, so the
+	// existing RevokeByGrant primitive is sufficient.
+	AuditDeviceCodeRevoked = AuditEvent("device_code.revoked")
 )
 
 // CIBA events. Fire from the /bc-authorize endpoint, the embedder's
@@ -271,4 +291,17 @@ const (
 	AuditTokenExchangeSubjectTokenInvalid   = AuditEvent("token_exchange.subject_token_invalid")
 	AuditTokenExchangeRefreshIssued         = AuditEvent("token_exchange.refresh_issued")
 	AuditTokenExchangeSelfExchange          = AuditEvent("token_exchange.self_exchange")
+
+	// AuditTokenExchangeSubjectTokenRegistryError fires when the in-tree
+	// RFC 8693 handler observed a non-NotFound fault from the access-
+	// token registry while looking up subject_token (or actor_token).
+	// The wire response is unchanged — the request still collapses to
+	// invalid_grant per RFC 6749 §5.2 — but SOC tooling needs a separate
+	// observation channel so a transient registry outage (DB blip,
+	// network partition, secondary failover) is visible as something
+	// other than an ordinary revocation. Warn-level: a healthy
+	// deployment should never emit this event. Extras carry: reason
+	// ("registry_error"), is_subject (true when the failed lookup was
+	// for subject_token, false for actor_token).
+	AuditTokenExchangeSubjectTokenRegistryError = AuditEvent("token_exchange.subject_token_registry_error")
 )

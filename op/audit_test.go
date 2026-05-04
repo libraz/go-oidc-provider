@@ -107,6 +107,7 @@ func TestAuditEvent_DeviceCodeMirror(t *testing.T) {
 		"device_code.token.issued":                       op.AuditDeviceCodeTokenIssued,
 		"device_code.token.rejected":                     op.AuditDeviceCodeTokenRejected,
 		"device_code.token.slow_down":                    op.AuditDeviceCodeTokenSlowDown,
+		"device_code.revoked":                            op.AuditDeviceCodeRevoked,
 	}
 	for s, ev := range want {
 		if string(ev) != s {
@@ -134,6 +135,40 @@ func TestAuditEvent_CIBAMirror(t *testing.T) {
 		"ciba.token.rejected":                 op.AuditCIBATokenRejected,
 		"ciba.token.slow_down":                op.AuditCIBATokenSlowDown,
 		"ciba.poll_observation.failed":        op.AuditCIBAPollObservationFailed,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
+// TestAuditEvent_TokenExchangeMirror keeps the public op.AuditTokenExchange*
+// constants aligned with the raw strings the in-tree RFC 8693 handler
+// emits. The internal customgrant/tokenexchange package cannot import
+// op (one-way import graph), so the values are duplicated as raw
+// strings inside internal/customgrant/tokenexchange/audit.go and this
+// test pins the two lists together.
+func TestAuditEvent_TokenExchangeMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"token_exchange.requested":                    op.AuditTokenExchangeRequested,
+		"token_exchange.granted":                      op.AuditTokenExchangeGranted,
+		"token_exchange.policy_denied":                op.AuditTokenExchangePolicyDenied,
+		"token_exchange.policy_error":                 op.AuditTokenExchangePolicyError,
+		"token_exchange.scope_inflation_blocked":      op.AuditTokenExchangeScopeInflationBlocked,
+		"token_exchange.audience_blocked":             op.AuditTokenExchangeAudienceBlocked,
+		"token_exchange.ttl_capped":                   op.AuditTokenExchangeTTLCapped,
+		"token_exchange.act_chain_too_deep":           op.AuditTokenExchangeActChainTooDeep,
+		"token_exchange.empty_scope_rejected":         op.AuditTokenExchangeEmptyScopeRejected,
+		"token_exchange.actor_equals_subject":         op.AuditTokenExchangeActorEqualsSubject,
+		"token_exchange.subject_token_external":       op.AuditTokenExchangeSubjectTokenExternal,
+		"token_exchange.actor_token_external":         op.AuditTokenExchangeActorTokenExternal,
+		"token_exchange.subject_token_invalid":        op.AuditTokenExchangeSubjectTokenInvalid,
+		"token_exchange.refresh_issued":               op.AuditTokenExchangeRefreshIssued,
+		"token_exchange.self_exchange":                op.AuditTokenExchangeSelfExchange,
+		"token_exchange.subject_token_registry_error": op.AuditTokenExchangeSubjectTokenRegistryError,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

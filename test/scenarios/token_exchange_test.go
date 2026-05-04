@@ -898,6 +898,43 @@ func TestScenario_TX_025_IDTokenCnfMirrorsAccessTokenBinding(t *testing.T) {
 	}
 }
 
+// TestScenario_TX_026_RegistryFaultEmitsDedicatedAudit pins the M10
+// invariant at the public-API level: the dedicated audit event the
+// in-tree RFC 8693 handler emits on a transient access-token registry
+// fault is registered in the op.AuditEvent catalogue and is byte-
+// distinct from the ordinary token_exchange.subject_token_invalid
+// event so SOC tooling can branch on it. The deep behavioural pin —
+// drive the registry-fault path end-to-end and assert the wire shape
+// stays collapsed to invalid_grant while the audit channel splits —
+// rides on the white-box test in
+// internal/customgrant/tokenexchange/lookup_registry_fault_test.go,
+// where the [store.AccessTokenRegistry] seam is reachable without
+// reconstructing the testkit's substore wiring around a wrapper.
+//
+// The wire shape MUST stay collapsed (invalid_grant in both cases) so
+// an attacker cannot distinguish a transient outage from an actual
+// revocation; the audit channel is the only place the split is
+// observable. This row pins both halves: the public constant exists
+// (so embedders can subscribe), and it is byte-distinct from the
+// generic event (so a SOC dashboard can route on the name).
+//
+// Spec: RFC 6749 §5.2 (collapsed wire taxonomy).
+func TestScenario_TX_026_RegistryFaultEmitsDedicatedAudit(t *testing.T) {
+	t.Parallel()
+	if op.AuditTokenExchangeSubjectTokenRegistryError == "" {
+		t.Fatalf("AuditTokenExchangeSubjectTokenRegistryError is empty; the M10 dedicated audit constant is missing from the public catalogue")
+	}
+	if op.AuditTokenExchangeSubjectTokenRegistryError == op.AuditTokenExchangeSubjectTokenInvalid {
+		t.Fatalf("registry-error event %q must be byte-distinct from the generic invalid event %q so SOC tooling can branch on the name",
+			op.AuditTokenExchangeSubjectTokenRegistryError, op.AuditTokenExchangeSubjectTokenInvalid)
+	}
+	const wantWire = "token_exchange.subject_token_registry_error"
+	if string(op.AuditTokenExchangeSubjectTokenRegistryError) != wantWire {
+		t.Errorf("registry-error event wire form = %q, want %q",
+			op.AuditTokenExchangeSubjectTokenRegistryError, wantWire)
+	}
+}
+
 // buildDeepAct constructs a nested act chain at depth d. The function
 // is used by TX-008 to seed an actor_token whose chain is already at
 // the depth limit so adding the calling-client level overflows.

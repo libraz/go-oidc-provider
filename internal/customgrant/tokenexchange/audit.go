@@ -25,6 +25,16 @@ const (
 	auditSubjectTokenInvalid   = "token_exchange.subject_token_invalid"
 	auditRefreshIssued         = "token_exchange.refresh_issued"
 	auditSelfExchange          = "token_exchange.self_exchange"
+
+	// auditSubjectTokenRegistryError fires when the access-token
+	// registry returned a non-ErrNotFound error during subject_token
+	// (or actor_token) lookup. The wire shape is unchanged — the
+	// request still collapses to invalid_grant — but operators need
+	// a separate observation channel so a transient registry outage
+	// (DB blip, network partition) is distinguishable from an actual
+	// revocation. The event is warn-level: a healthy deployment
+	// should never emit it.
+	auditSubjectTokenRegistryError = "token_exchange.subject_token_registry_error"
 )
 
 // emit writes an audit event through the configured emitter, using

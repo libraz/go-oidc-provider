@@ -160,10 +160,26 @@ type TokenExchangeDecision struct {
 	IssueIDToken *bool
 
 	// IssueRefreshToken, when non-nil, overrides the provider's
-	// refresh_token-emission default. The default is false (refresh
-	// on token-exchange is uncommon and creates long-lived chained
-	// delegations); the policy MUST set the field to a non-nil
-	// pointer-to-true to opt in. Issuance audits the decision.
+	// refresh_token-emission default. The zero value (nil) means
+	// "no refresh token issued"; the policy MUST set the field to a
+	// non-nil pointer-to-true to opt in. RFC 8693 §2.2.1 makes the
+	// refresh_token response parameter OPTIONAL precisely because
+	// chained delegations should not silently extend their reach
+	// past the subject_token's lifetime — the provider stays on
+	// that posture by default.
+	//
+	// The pointer shape exists so an embedder cannot conflate
+	// "field unset" with "field set to false"; both deny issuance,
+	// but only the explicit *bool pointer-to-true opts in. Use
+	// [PtrBool] for a one-line literal:
+	//
+	//	decision := &op.TokenExchangeDecision{
+	//	    IssueRefreshToken: op.PtrBool(true),
+	//	}
+	//
+	// Issuance audits every decision via the
+	// [AuditTokenExchangeRefreshIssued] event. The opt-in contract
+	// is pinned by catalog row TX-021.
 	IssueRefreshToken *bool
 
 	// ExtraClaims are merged into the id_token the provider signs
@@ -230,6 +246,25 @@ type SubjectTokenView struct {
 	// the maximum chain depth.
 	ActChainDepth int
 }
+
+// PtrBool returns a pointer to v. The helper exists so embedders
+// constructing decisions whose [TokenExchangeDecision.IssueRefreshToken]
+// or [TokenExchangeDecision.IssueIDToken] field needs an explicit
+// boolean override can avoid the awkward two-line address-of-local
+// idiom:
+//
+//	yes := true
+//	decision := &op.TokenExchangeDecision{IssueRefreshToken: &yes}
+//
+// collapses to:
+//
+//	decision := &op.TokenExchangeDecision{IssueRefreshToken: op.PtrBool(true)}
+//
+// The helper is intentionally generic in name so future *bool fields
+// across the public API can reuse it.
+//
+// Stable since v0.9.1.
+func PtrBool(v bool) *bool { return &v }
 
 // ConfirmationProof is the public projection of an RFC 7800 cnf
 // claim from a verified subject_token or actor_token. At most one

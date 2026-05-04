@@ -409,7 +409,11 @@ func (h *Handler) attachRefresh(ctx context.Context, resp *customgrant.Response,
 
 // translateLookupErr maps an errExternalIssuer / errTokenInvalid
 // onto the right audit event and a wire error. Both classes surface
-// as invalid_grant.
+// as invalid_grant on the wire — the wire shape MUST stay collapsed
+// so an attacker cannot probe for a known token via the audit channel —
+// but a transient registry / opaque-store fault is emitted on a
+// dedicated audit event so SOC tooling can distinguish it from an
+// actual revocation. The wire response is invalid_grant in both cases.
 func (h *Handler) translateLookupErr(ctx context.Context, client *store.Client, err error, result lookupResult, isSubject bool) error {
 	switch {
 	case errors.Is(err, errExternalIssuer):
@@ -424,6 +428,13 @@ func (h *Handler) translateLookupErr(ctx context.Context, client *store.Client, 
 			map[string]any{"detected_issuer": result.reason})
 		return invalidGrant("token issuer not recognised")
 	case errors.Is(err, errTokenInvalid):
+		if isRegistryFaultReason(result.reason) {
+			h.emit(ctx, auditSubjectTokenRegistryError, audit.LevelWarn,
+				"token-exchange rejected: subject_token registry observation failed",
+				clientIDOf(client), "",
+				map[string]any{"reason": result.reason, "is_subject": isSubject})
+			return invalidGrant("token failed verification")
+		}
 		h.emit(ctx, auditSubjectTokenInvalid, audit.LevelInfo,
 			"token-exchange rejected: subject_token failed verification",
 			clientIDOf(client), "",
@@ -431,6 +442,20 @@ func (h *Handler) translateLookupErr(ctx context.Context, client *store.Client, 
 		return invalidGrant("token failed verification")
 	default:
 		return invalidGrant("token failed verification")
+	}
+}
+
+// isRegistryFaultReason reports whether the lookup classifier produced
+// a reason that names a transient registry / opaque-store fault rather
+// than an actual revocation, expiry, or signature mismatch. The set
+// agrees with the reason strings lookup.go writes when the registry
+// or opaque substore returns a non-ErrNotFound error.
+func isRegistryFaultReason(reason string) bool {
+	switch reason {
+	case "registry_error", "store_error":
+		return true
+	default:
+		return false
 	}
 }
 
