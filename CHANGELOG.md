@@ -23,6 +23,57 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ### Added
 
+- CIBA poll mode (Wave N2). The OP now exposes the
+  Client-Initiated Backchannel Authentication endpoint
+  (`/oidc/bc-authorize`) and accepts
+  `urn:openid:params:grant-type:ciba` at the token endpoint.
+  Push and ping delivery modes are deferred to v2+; only poll
+  mode ships in v0.9.1. Public surface:
+  - `op.WithCIBA(...)` registers the CIBA substore, the
+    `HintResolver` seam (login_hint / login_hint_token / id_token_hint
+    → internal subject), and the `AuthDevice` seam (out-of-band
+    push to the authentication device). The option is required to
+    enable CIBA; the endpoint and grant_type stay off by default.
+  - `op.CIBARequestStore` is a new substore in the public store
+    interface; the in-memory adapter ships, SQL / Redis adapters
+    follow in v0.9.2.
+  - Discovery now publishes
+    `backchannel_authentication_endpoint`,
+    `backchannel_token_delivery_modes_supported=["poll"]`,
+    `backchannel_user_code_parameter_supported=false`, and
+    `backchannel_authentication_request_signing_alg_values_supported`.
+  - `profile.FAPICIBA` graduates from placeholder to enforced:
+    `RequiredFeatures=[JAR]`, `RequiredAnyOf=[[DPoP, MTLS]]`,
+    `MaxAccessTokenTTL=10min`, the FAPI 2.0 client-authentication
+    set (`private_key_jwt` / `tls_client_auth` /
+    `self_signed_tls_client_auth`), and
+    `RequiresAccessTokenRevocation=true`. JAR enforcement on the
+    /bc-authorize side requires `iss` / `aud` / `exp` / `nbf` and
+    caps the request-object lifetime at 60 seconds.
+  - `examples/31-ciba-pos/` ships a paired OP+RP demo (POS terminal
+    initiates `/bc-authorize`, the staff phone approves,
+    end-to-end in roughly one second).
+- v0.9.1 example backfill — paired OP+RP demos for the four Waves
+  whose example slot was reserved in `008` §5.0 but unfilled:
+  - `examples/19-custom-grant/` (Wave N0) — embedder defines
+    `urn:example:libraz:service-token-exchange`, the OP routes it via
+    `op.WithCustomGrant`, and the handler returns a `BoundAccessToken`
+    so the dispatcher mints a JWT access token bound to the
+    request's DPoP / mTLS confirmation.
+  - `examples/30-device-code-cli/` (Wave N1) — terminal CLI drives the
+    RFC 8628 device-authorization grant against the OP, prints the
+    boxed user_code panel + `verification_uri_complete` shortcut,
+    and polls `/token` honoring `slow_down` and
+    `authorization_pending`.
+  - `examples/32-token-exchange-delegation/` (Wave N3) — frontend →
+    service-a → service-b cross-client impersonation triggers the
+    OP-side `act` claim chain (ADR 0028); service-b's RS-side
+    verifier walks `act.sub` and accepts only delegated tokens.
+  - `examples/33-pairwise-saas/` (Wave O1) — `WithPairwiseSubject`
+    salt with two tenants in distinct sectors observes `A != B`
+    (different sector → different sub) and `A1 == A2` (same
+    sector + same user → identical sub), satisfying both the
+    privacy and determinism properties of OIDC Core §8.1.
 - JWE encryption (Wave T1, ADR 0030). The OP now decrypts JWE-shaped
   request objects (JAR / PAR) and wraps outbound `id_token`,
   `userinfo` (JWT-shape), JARM authorization responses, and

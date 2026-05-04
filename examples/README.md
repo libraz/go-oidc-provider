@@ -61,10 +61,14 @@ it boots with `go run -tags example ./examples/08-composite-hot-cold`.
 | translate prompts (i18n) | [`16-i18n-locale`](16-i18n-locale/main.go) |
 | split public-discoverable from internal-only scopes | [`12-scopes-public-private`](12-scopes-public-private/main.go) |
 | honour the OIDC §5.5 `claims` request parameter | [`17-claims-request`](17-claims-request/main.go) |
+| dispatch an embedder-defined `grant_type` at the token endpoint | [`19-custom-grant`](19-custom-grant/main.go) |
 | require password + TOTP at every login (always-on 2FA) | [`20-mfa-totp`](20-mfa-totp/main.go) |
 | require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
 | step a logged-in session up to a higher ACR (RFC 9470) | [`23-step-up`](23-step-up/main.go) |
+| drive a TV / IoT / CLI tool via RFC 8628 device authorization | [`30-device-code-cli`](30-device-code-cli/main.go) |
 | issue tokens via Client-Initiated Backchannel Authentication (CIBA) | [`31-ciba-pos`](31-ciba-pos/main.go) |
+| exchange a service token for an audience-narrowed token (RFC 8693) | [`32-token-exchange-delegation`](32-token-exchange-delegation/main.go) |
+| issue distinct `sub` per RP sector for the same end-user (pairwise) | [`33-pairwise-saas`](33-pairwise-saas/main.go) |
 | issue encrypted ID Tokens (JWE-of-JWS) to a registered RP | [`34-encrypted-id-token`](34-encrypted-id-token/main.go) |
 | skip consent for first-party clients | [`40-first-party-skip-consent`](40-first-party-skip-consent/main.go) |
 | let RPs register themselves (Dynamic Client Registration) | [`41-dynamic-registration`](41-dynamic-registration/main.go) |

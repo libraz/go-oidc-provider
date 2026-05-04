@@ -39,6 +39,7 @@ The project itself is licensed under Apache-2.0 (see `LICENSE` and `NOTICE` at t
 | `go.yaml.in/yaml/v2` | Apache-2.0 | <https://github.com/yaml/go-yaml/blob/v2.4.2/LICENSE> |
 | `golang.org/x/crypto` | BSD-3-Clause | <https://cs.opensource.google/go/x/crypto/+/v0.40.0:LICENSE> |
 | `golang.org/x/sync/semaphore` | BSD-3-Clause | <https://cs.opensource.google/go/x/sync/+/v0.20.0:LICENSE> |
+| `golang.org/x/sync/singleflight` | BSD-3-Clause | <https://cs.opensource.google/go/x/sync/+/v0.20.0:LICENSE> |
 | `golang.org/x/sys/unix` | BSD-3-Clause | <https://cs.opensource.google/go/x/sys/+/v0.35.0:LICENSE> |
 | `golang.org/x/sys/unix` | BSD-3-Clause | <https://cs.opensource.google/go/x/sys/+/v0.42.0:LICENSE> |
 | `golang.org/x/text` | BSD-3-Clause | <https://cs.opensource.google/go/x/text/+/v0.34.0:LICENSE> |
