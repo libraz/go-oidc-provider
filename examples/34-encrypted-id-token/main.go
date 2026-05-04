@@ -361,7 +361,12 @@ func newRP(opts rpOptions) (*rp, error) {
 
 func fetchDiscovery(issuer string) (discoveryDoc, error) {
 	var doc discoveryDoc
-	resp, err := http.Get(issuer + "/.well-known/openid-configuration")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		issuer+"/.well-known/openid-configuration", nil)
+	if err != nil {
+		return doc, fmt.Errorf("rp: build discovery request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return doc, fmt.Errorf("rp: discover %s: %w", issuer, err)
 	}
@@ -376,7 +381,11 @@ func fetchDiscovery(issuer string) (discoveryDoc, error) {
 }
 
 func fetchJWKS(uri string) (*josev4.JSONWebKeySet, error) {
-	resp, err := http.Get(uri)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, uri, nil)
+	if err != nil {
+		return nil, fmt.Errorf("rp: build jwks request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("rp: fetch jwks %s: %w", uri, err)
 	}

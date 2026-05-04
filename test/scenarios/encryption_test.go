@@ -156,6 +156,7 @@ func TestScenario_ENC_020_NestedJWEIsFivePartCompact(t *testing.T) {
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithEncryptionKeyset(op.EncryptionKeyset{encKey}),
 	))
+	//nolint:gosec // G101 false positive: ClientFixture struct literal carries test-only fields.
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                          clientID,
 		SecretHash:                  hash,
@@ -694,6 +695,7 @@ func TestScenario_ENC_100_AuthorizationCodeIDTokenJWE(t *testing.T) {
 	tk := testkit.NewProvider(t, testkit.WithOptions(
 		op.WithEncryptionKeyset(op.EncryptionKeyset{encKey}),
 	))
+	//nolint:gosec // G101 false positive: ClientFixture struct literal carries test-only fields.
 	tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                          clientID,
 		SecretHash:                  hash,
