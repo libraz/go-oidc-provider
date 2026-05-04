@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
+	"sort"
 )
 
 // formPostScript is the inline script auto-submitting the form on page
@@ -77,6 +79,77 @@ func buildFormPostBody(redirectURI, jwtToken string) string {
 		"<body>" +
 		"<form method=\"post\" action=\"" + action + "\">" +
 		"<input type=\"hidden\" name=\"response\" value=\"" + value + "\" />" +
+		"<noscript><button type=\"submit\">Continue</button></noscript>" +
+		"</form>" +
+		"<script>" + formPostScript + "</script>" +
+		"</body></html>"
+}
+
+// WriteParamsFormPost renders the OIDC Core Form Post Response Mode
+// 1.0 body — a self-submitting HTML form with one hidden input per
+// authorization response parameter (`code`, `state`, `iss`, `error`,
+// `error_description`, ...). The shape is the multi-field variant of
+// [WriteFormPost], which carries a single `response` JWT for the JARM
+// `form_post.jwt` mode.
+//
+// The helper reuses the same CSP / no-store / no-referrer headers and
+// the same auto-submit script (so the script-src hash stays in
+// lock-step with the JARM path). Field order is sorted by name for a
+// deterministic body — tests can assert on the exact bytes without
+// observing map-iteration jitter, and a future regression that flips
+// the order is loud rather than silent.
+func WriteParamsFormPost(w http.ResponseWriter, redirectURI string, params url.Values) error {
+	if redirectURI == "" {
+		return fmt.Errorf("%w: redirect_uri required", ErrInvalidRedirect)
+	}
+	if len(params) == 0 {
+		return fmt.Errorf("%w: at least one param required", ErrEncode)
+	}
+	header := w.Header()
+	header.Set("Content-Type", "text/html; charset=utf-8")
+	header.Set("Cache-Control", "no-store")
+	header.Set("Pragma", "no-cache")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Content-Security-Policy",
+		"default-src 'none'; form-action "+formPostFormActionSource(redirectURI)+
+			"; script-src "+formPostScriptHash+"; base-uri 'none'; frame-ancestors 'none'")
+	header.Set("Referrer-Policy", "no-referrer")
+	w.WriteHeader(http.StatusOK)
+	body := buildParamsFormPostBody(redirectURI, params)
+	if _, err := w.Write([]byte(body)); err != nil {
+		return fmt.Errorf("jarm: write form_post params body: %w", err)
+	}
+	return nil
+}
+
+// buildParamsFormPostBody is the params variant of [buildFormPostBody].
+// Hidden inputs are emitted in sorted-by-name order so the body is
+// deterministic and tests can match exact bytes.
+func buildParamsFormPostBody(redirectURI string, params url.Values) string {
+	action := html.EscapeString(redirectURI)
+	names := make([]string, 0, len(params))
+	for k := range params {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	inputs := ""
+	for _, name := range names {
+		// url.Values is a map[string][]string; OIDC authorization
+		// responses are single-valued so emit the first entry. Empty
+		// values are skipped so an absent state / iss does not produce
+		// a stray empty hidden input.
+		v := params.Get(name)
+		if v == "" {
+			continue
+		}
+		inputs += "<input type=\"hidden\" name=\"" + html.EscapeString(name) +
+			"\" value=\"" + html.EscapeString(v) + "\" />"
+	}
+	return "<!DOCTYPE html>" +
+		"<html><head><meta charset=\"utf-8\"><title>Submitting</title></head>" +
+		"<body>" +
+		"<form method=\"post\" action=\"" + action + "\">" +
+		inputs +
 		"<noscript><button type=\"submit\">Continue</button></noscript>" +
 		"</form>" +
 		"<script>" + formPostScript + "</script>" +

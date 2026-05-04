@@ -392,13 +392,20 @@ func applyEncryptionFeature(in Input, doc *Document) {
 // fields on top.
 func newBaseDocument(in Input) Document {
 	return Document{
-		Issuer:                            in.Issuer,
-		AuthorizationEndpoint:             join(in.Issuer, in.MountPrefix, in.Endpoints.Authorize),
-		TokenEndpoint:                     join(in.Issuer, in.MountPrefix, in.Endpoints.Token),
-		UserInfoEndpoint:                  join(in.Issuer, in.MountPrefix, in.Endpoints.UserInfo),
-		JWKSURI:                           join(in.Issuer, in.MountPrefix, in.Endpoints.JWKS),
-		EndSessionEndpoint:                join(in.Issuer, in.MountPrefix, in.Endpoints.EndSession),
-		ResponseTypesSupported:            []string{"code"},
+		Issuer:                 in.Issuer,
+		AuthorizationEndpoint:  join(in.Issuer, in.MountPrefix, in.Endpoints.Authorize),
+		TokenEndpoint:          join(in.Issuer, in.MountPrefix, in.Endpoints.Token),
+		UserInfoEndpoint:       join(in.Issuer, in.MountPrefix, in.Endpoints.UserInfo),
+		JWKSURI:                join(in.Issuer, in.MountPrefix, in.Endpoints.JWKS),
+		EndSessionEndpoint:     join(in.Issuer, in.MountPrefix, in.Endpoints.EndSession),
+		ResponseTypesSupported: []string{"code"},
+		// OIDC Core §3.1.2.1 / Form Post Response Mode 1.0: "query" is
+		// the implicit default for response_type=code; "form_post"
+		// delivers the same parameters via a self-submitting POST body
+		// to keep them out of access-log / Referer surfaces. JARM adds
+		// the four "*.jwt" variants on top when the feature is on
+		// ([applyJARMFeature]).
+		ResponseModesSupported:            []string{"query", "form_post"},
 		GrantTypesSupported:               in.GrantsSupported,
 		SubjectTypesSupported:             subjectTypesFor(in.PairwiseEnabled),
 		IDTokenSigningAlgValuesSupported:  []string{"ES256"},
@@ -549,18 +556,15 @@ func applyDynamicRegistration(in Input, doc *Document) {
 
 // applyJARMFeature publishes the four *.jwt response modes plus the
 // signing-alg list (ES256 only, mirroring the rest of the OP's posture)
-// when JARM is enabled.
+// when JARM is enabled. The legacy "query" / "form_post" entries come
+// from [newBaseDocument]; this helper appends the JWT variants on top
+// so a deployment without JARM still advertises form_post.
 func applyJARMFeature(in Input, doc *Document) {
 	if !in.Features.JARM {
 		return
 	}
-	// JARM (OpenID FAPI WG): advertise the four *.jwt response modes
-	// alongside the legacy "query" / "form_post" so clients can
-	// discover the protection without trial-and-error.
-	doc.ResponseModesSupported = []string{
-		"query", "form_post",
-		"query.jwt", "fragment.jwt", "form_post.jwt", "jwt",
-	}
+	doc.ResponseModesSupported = append(doc.ResponseModesSupported,
+		"query.jwt", "fragment.jwt", "form_post.jwt", "jwt")
 	// v1.0 signs with ES256 only; keep the field single-valued so
 	// embedders that grow the algorithm list see a stable shape.
 	doc.AuthorizationSigningAlgValuesSupported = []string{"ES256"}

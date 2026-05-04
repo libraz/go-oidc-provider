@@ -3,10 +3,17 @@ package authorizeendpoint
 import (
 	"errors"
 	"net/http"
+	"net/url"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/jarm"
 )
+
+// formPostResponseMode is the OIDC Core Form Post Response Mode 1.0
+// wire token. Unlike the JARM modes (which carry a single signed
+// "response" JWT), this mode delivers each authorization response
+// parameter as a separate hidden input — see [jarm.WriteParamsFormPost].
+const formPostResponseMode = "form_post"
 
 // jarmModeForRequest returns the resolved JARM response mode the
 // authorize endpoint should use, or the empty string when the request
@@ -183,6 +190,24 @@ func emitAuthorizeSuccess(
 		}
 		// Fall through to legacy emit on signer / dispatch failure.
 	}
+	if req.ResponseMode == formPostResponseMode {
+		params := url.Values{"code": {code}}
+		if req.State != "" {
+			params.Set("state", req.State)
+		}
+		if deps.Issuer != "" {
+			// RFC 9207 §2.3 — same iss echo as the legacy redirect path.
+			params.Set("iss", deps.Issuer)
+		}
+		if err := jarm.WriteParamsFormPost(w, req.RedirectURI, params); err == nil {
+			return
+		}
+		// Fall through to the legacy redirect on form_post emit failure
+		// so the RP still gets a determinate outcome (the OP cannot
+		// honour the requested mode but the response parameters are
+		// safe to expose via query — they are the same values the
+		// form would have carried).
+	}
 	stampNoStore(w)
 	http.Redirect(w, r, buildSuccessRedirect(req.RedirectURI, code, req.State, deps.Issuer), http.StatusFound)
 }
@@ -216,6 +241,23 @@ func emitAuthorizeError(
 			return
 		}
 		// Fall through to legacy redirect on signer / dispatch failure.
+	}
+	if req.ResponseMode == formPostResponseMode {
+		params := url.Values{"error": {code}}
+		if description != "" {
+			params.Set("error_description", description)
+		}
+		if req.State != "" {
+			params.Set("state", req.State)
+		}
+		if deps.Issuer != "" {
+			// RFC 9207 §2.4 — error responses carry iss too.
+			params.Set("iss", deps.Issuer)
+		}
+		if err := jarm.WriteParamsFormPost(w, req.RedirectURI, params); err == nil {
+			return
+		}
+		// Fall through to legacy redirect on form_post emit failure.
 	}
 	redirectError(w, r, req.RedirectURI, code, description, req.State, deps.Issuer)
 }
