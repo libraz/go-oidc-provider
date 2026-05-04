@@ -157,7 +157,7 @@ func TestWriteParamsFormPost_HappyPath(t *testing.T) {
 	codeIdx := strings.Index(body, `name="code"`)
 	issIdx := strings.Index(body, `name="iss"`)
 	stateIdx := strings.Index(body, `name="state"`)
-	if !(codeIdx < issIdx && issIdx < stateIdx) {
+	if codeIdx >= issIdx || issIdx >= stateIdx {
 		t.Errorf("hidden inputs not in sorted order: code=%d iss=%d state=%d", codeIdx, issIdx, stateIdx)
 	}
 }

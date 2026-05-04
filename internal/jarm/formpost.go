@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 )
 
 // formPostScript is the inline script auto-submitting the form on page
@@ -132,7 +133,7 @@ func buildParamsFormPostBody(redirectURI string, params url.Values) string {
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	inputs := ""
+	var inputs strings.Builder
 	for _, name := range names {
 		// url.Values is a map[string][]string; OIDC authorization
 		// responses are single-valued so emit the first entry. Empty
@@ -142,14 +143,17 @@ func buildParamsFormPostBody(redirectURI string, params url.Values) string {
 		if v == "" {
 			continue
 		}
-		inputs += "<input type=\"hidden\" name=\"" + html.EscapeString(name) +
-			"\" value=\"" + html.EscapeString(v) + "\" />"
+		inputs.WriteString("<input type=\"hidden\" name=\"")
+		inputs.WriteString(html.EscapeString(name))
+		inputs.WriteString("\" value=\"")
+		inputs.WriteString(html.EscapeString(v))
+		inputs.WriteString("\" />")
 	}
 	return "<!DOCTYPE html>" +
 		"<html><head><meta charset=\"utf-8\"><title>Submitting</title></head>" +
 		"<body>" +
 		"<form method=\"post\" action=\"" + action + "\">" +
-		inputs +
+		inputs.String() +
 		"<noscript><button type=\"submit\">Continue</button></noscript>" +
 		"</form>" +
 		"<script>" + formPostScript + "</script>" +

@@ -130,7 +130,7 @@ func newFormPostHarness(t *testing.T) (*testkit.Provider, *store.Client, string)
 // returning the response from the terminal interaction POST. mode is
 // the response_mode parameter; extraScope is appended to the canonical
 // "openid profile email" scope when non-empty.
-func drivePostInteraction(t *testing.T, tk *testkit.Provider, rp *store.Client, _ string, mode, extraScope string) *http.Response {
+func drivePostInteraction(t *testing.T, tk *testkit.Provider, rp *store.Client, _, mode, extraScope string) *http.Response {
 	t.Helper()
 
 	values := e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0])
