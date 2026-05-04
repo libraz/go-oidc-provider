@@ -26,10 +26,12 @@ func (c *config) validate() error {
 	}
 	for _, fn := range []func() error{
 		c.validateScopes,
+		c.validateSupportedProfiles,
 		c.validateProfiles,
 		c.validateRegistration,
 		c.validateAuthenticators,
 		c.validateInteractions,
+		c.validateUIOptionsImplemented,
 		c.validateLocales,
 		c.validateFirstPartyClients,
 		c.validateOpenIDScopeOptional,
@@ -43,6 +45,25 @@ func (c *config) validate() error {
 	} {
 		if err := fn(); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// validateSupportedProfiles rejects profile enum values whose option
+// surface has been reserved publicly but whose runtime constraints and
+// endpoint wiring have not landed yet. Keeping the enum exported lets
+// documentation and future planning refer to the identifier stably, but
+// op.New must fail fast so callers cannot believe they booted into a
+// hardened profile that the library does not actually enforce.
+func (c *config) validateSupportedProfiles() error {
+	for _, p := range c.profiles {
+		if p != profile.IGovHigh {
+			continue
+		}
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithProfile(" + p.String() + ") is not implemented yet",
 		}
 	}
 	return nil
@@ -226,6 +247,14 @@ func (c *config) validateAccessTokenRevocation() error {
 		}
 	}
 	if c.atRevocation != store.RevocationStrategyNone {
+		if c.atRevocation == store.RevocationStrategyGrantTombstone &&
+			c.store.GrantRevocations() == nil {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "RevocationStrategyGrantTombstone requires " +
+					"Store.GrantRevocations() to be non-nil",
+			}
+		}
 		return nil
 	}
 	for _, p := range c.profiles {
@@ -416,6 +445,33 @@ func (c *config) validateProfiles() error {
 		}
 	}
 	return nil
+}
+
+// validateUIOptionsImplemented rejects UI options whose public shape
+// shipped ahead of their runtime wiring. Earlier v0.x builds accepted
+// them and logged a warning, which let embedders believe the Provider
+// would serve mounts / templates it never actually used. Failing at
+// construction time is the safer contract until the handlers land.
+func (c *config) validateUIOptionsImplemented() error {
+	switch {
+	case c.spaUISet:
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithSPAUI is not implemented yet; mount your SPA outside op.New for now",
+		}
+	case c.consentUISet:
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithConsentUI is not implemented yet",
+		}
+	case c.chooserUISet:
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithChooserUI is not implemented yet",
+		}
+	default:
+		return nil
+	}
 }
 
 // validateProfile checks one [profile.Profile] against the enabled

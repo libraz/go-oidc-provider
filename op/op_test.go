@@ -56,11 +56,11 @@ func (stubStore) AccessTokens() store.AccessTokenRegistry { return stubAccessTok
 // branch never fires.
 func (stubStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
 
-// GrantRevocations returns nil; construction tests do not exercise the
-// grant-tombstone JWT access-token revocation strategy (ADR 0025) so
-// the library's fail-fast path that requires a non-nil substore never
-// fires.
-func (stubStore) GrantRevocations() store.GrantRevocationStore { return nil }
+// GrantRevocations is invoked eagerly by construction-time validation
+// because the default revocation strategy is GrantTombstone. Returning a
+// no-op substore keeps constructor tests focused on the option under
+// test while still satisfying the fail-fast contract.
+func (stubStore) GrantRevocations() store.GrantRevocationStore { return stubGrantRevocationStore{} }
 
 // Metadata returns nil; construction tests skip the pairwise
 // immutability gate, and the library tolerates a nil substore by
@@ -217,6 +217,18 @@ func (stubGrantStore) Find(context.Context, string) (*store.Grant, error) {
 func (stubGrantStore) FindBySubjectClient(context.Context, string, string) (*store.Grant, error) {
 	return nil, store.ErrNotFound
 }
+
+type stubGrantRevocationStore struct{}
+
+func (stubGrantRevocationStore) RevokeGrant(context.Context, store.GrantTombstone) error { return nil }
+
+func (stubGrantRevocationStore) RevokeJTI(context.Context, store.RevokedJTI) error { return nil }
+
+func (stubGrantRevocationStore) IsRevoked(context.Context, string, string, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (stubGrantRevocationStore) GC(context.Context, time.Time) (int, error) { return 0, nil }
 
 func (stubGrantStore) ListBySubject(context.Context, string) ([]*store.Grant, error) {
 	return nil, nil

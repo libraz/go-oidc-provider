@@ -267,10 +267,14 @@ func TestWithLoginFlow_AbsentLeavesNoError(t *testing.T) {
 func TestWithSPAUI_AcceptsValid(t *testing.T) {
 	t.Parallel()
 
-	if _, err := op.New(append(validBaseOpts(t),
+	_, err := op.New(append(validBaseOpts(t),
 		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-	)...); err != nil {
-		t.Fatalf("WithSPAUI rejected valid mount: %v", err)
+	)...)
+	if err == nil {
+		t.Fatal("expected fail-fast for WithSPAUI, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithSPAUI is not implemented yet") {
+		t.Errorf("err = %v, want not-implemented diagnostic", err)
 	}
 }
 
@@ -323,10 +327,14 @@ func TestWithSPAUI_AcceptsExistingStaticDir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	if _, err := op.New(append(validBaseOpts(t),
+	_, err := op.New(append(validBaseOpts(t),
 		op.WithSPAUI(op.SPAUI{LoginMount: "/login", StaticDir: dir}),
-	)...); err != nil {
-		t.Fatalf("WithSPAUI rejected existing StaticDir: %v", err)
+	)...)
+	if err == nil {
+		t.Fatal("expected fail-fast for WithSPAUI with existing StaticDir, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithSPAUI is not implemented yet") {
+		t.Errorf("err = %v, want not-implemented diagnostic", err)
 	}
 }
 
@@ -364,10 +372,14 @@ func TestWithConsentUI_AcceptsValid(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("consent").Parse("hi"))
-	if _, err := op.New(append(validBaseOpts(t),
+	_, err := op.New(append(validBaseOpts(t),
 		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
-	)...); err != nil {
-		t.Fatalf("WithConsentUI rejected valid template: %v", err)
+	)...)
+	if err == nil {
+		t.Fatal("expected fail-fast for WithConsentUI, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithConsentUI is not implemented yet") {
+		t.Errorf("err = %v, want not-implemented diagnostic", err)
 	}
 }
 
@@ -384,6 +396,21 @@ func TestWithConsentUI_RejectsSPAUICombination(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("err = %v, want mutually-exclusive diagnostic", err)
+	}
+}
+
+func TestWithChooserUI_AcceptsValidButFailsFast(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("chooser").Parse("hi"))
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithChooserUI(op.ChooserUI{Template: tmpl}),
+	)...)
+	if err == nil {
+		t.Fatal("expected fail-fast for WithChooserUI, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithChooserUI is not implemented yet") {
+		t.Errorf("err = %v, want not-implemented diagnostic", err)
 	}
 }
 
@@ -433,14 +460,16 @@ func TestNew_WithInteractionDriverWinsOverDefault(t *testing.T) {
 func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {
 	t.Parallel()
 
-	// With WithSPAUI active the default-driver fallback in
-	// applyDefaults short-circuits; the embedder's SPA owns rendering
-	// and the OP only serves JSON state endpoints. op.New must still
-	// succeed because no interaction.Driver is required when a SPA
-	// shell is configured.
-	if _, err := op.New(append(validBaseOpts(t),
+	// The option shape is public but runtime wiring has not landed yet,
+	// so op.New must fail fast rather than accepting a configuration the
+	// Provider cannot actually serve.
+	_, err := op.New(append(validBaseOpts(t),
 		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
-	)...); err != nil {
-		t.Fatalf("op.New with WithSPAUI: %v", err)
+	)...)
+	if err == nil {
+		t.Fatal("expected fail-fast for WithSPAUI, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithSPAUI is not implemented yet") {
+		t.Errorf("err = %v, want not-implemented diagnostic", err)
 	}
 }

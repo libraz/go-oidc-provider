@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
+	"github.com/libraz/go-oidc-provider/op/store"
 )
 
 func TestAccessTokenRevocationStrategy_StringIsStable(t *testing.T) {
@@ -89,6 +90,28 @@ func TestWithAccessTokenRevocationStrategy_RoundTripAllStrategies(t *testing.T) 
 	}
 }
 
+func TestWithAccessTokenRevocationStrategy_RejectsMissingGrantRevocations(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(validBaseOpts(t)...)
+	if err != nil {
+		t.Fatalf("default constructor with stub grant-revocation store must succeed: %v", err)
+	}
+
+	_, err = op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutGrantRevocations{inner: stubStore{}}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	)
+	if err == nil {
+		t.Fatal("expected error for missing GrantRevocations under default strategy, got nil")
+	}
+	if !strings.Contains(err.Error(), "GrantRevocations") {
+		t.Errorf("err = %v, want it to mention GrantRevocations", err)
+	}
+}
+
 func TestWithAccessTokenRevocationStrategy_DefaultIsGrantTombstone(t *testing.T) {
 	t.Parallel()
 
@@ -102,6 +125,48 @@ func TestWithAccessTokenRevocationStrategy_DefaultIsGrantTombstone(t *testing.T)
 		t.Fatal("expected non-nil provider")
 	}
 }
+
+type storeWithoutGrantRevocations struct{ inner stubStore }
+
+func (s storeWithoutGrantRevocations) Clients() store.ClientStore { return s.inner.Clients() }
+func (s storeWithoutGrantRevocations) AuthorizationCodes() store.AuthorizationCodeStore {
+	return s.inner.AuthorizationCodes()
+}
+func (s storeWithoutGrantRevocations) RefreshTokens() store.RefreshTokenStore {
+	return s.inner.RefreshTokens()
+}
+func (s storeWithoutGrantRevocations) Grants() store.GrantStore     { return s.inner.Grants() }
+func (s storeWithoutGrantRevocations) Sessions() store.SessionStore { return s.inner.Sessions() }
+func (s storeWithoutGrantRevocations) PushedAuthRequests() store.PushedAuthRequestStore {
+	return s.inner.PushedAuthRequests()
+}
+func (s storeWithoutGrantRevocations) Interactions() store.InteractionStore {
+	return s.inner.Interactions()
+}
+func (s storeWithoutGrantRevocations) ConsumedJTIs() store.ConsumedJTIStore {
+	return s.inner.ConsumedJTIs()
+}
+func (s storeWithoutGrantRevocations) InitialAccessTokens() store.InitialAccessTokenStore {
+	return s.inner.InitialAccessTokens()
+}
+func (s storeWithoutGrantRevocations) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	return s.inner.RegistrationAccessTokens()
+}
+func (s storeWithoutGrantRevocations) AccessTokens() store.AccessTokenRegistry {
+	return s.inner.AccessTokens()
+}
+func (s storeWithoutGrantRevocations) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return s.inner.OpaqueAccessTokens()
+}
+func (s storeWithoutGrantRevocations) GrantRevocations() store.GrantRevocationStore { return nil }
+func (s storeWithoutGrantRevocations) Metadata() store.MetadataStore                { return s.inner.Metadata() }
+func (s storeWithoutGrantRevocations) DeviceCodes() store.DeviceCodeStore {
+	return s.inner.DeviceCodes()
+}
+func (s storeWithoutGrantRevocations) CIBARequests() store.CIBARequestStore {
+	return s.inner.CIBARequests()
+}
+func (s storeWithoutGrantRevocations) Users() store.UserStore { return s.inner.Users() }
 
 func TestWithAccessTokenRevocationStrategy_RejectsUnknownValue(t *testing.T) {
 	t.Parallel()

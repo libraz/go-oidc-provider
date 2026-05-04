@@ -145,36 +145,12 @@ func isStandardScope(name string) bool {
 }
 
 // emitPartialWiringWarnings logs one warning per registered option whose
-// runtime wiring is still in flight. The warning is intentionally a log
-// line and not a constructor error: the options have shipped, embedders
-// already call them in working binaries, and the partial wiring does
-// not produce wrong protocol output — it leaves SPA mounts unserved.
-// Surfacing the gap through the configured logger lets operators notice
-// the limitation in their boot logs without breaking existing call
-// sites.
-// The warnings are emitted at WARN so a discardHandler-backed logger
-// (the library default when [WithLogger] is not called) drops them
-// silently and only operators who opt in to logging see them.
+// runtime wiring is intentionally partial but still accepted at
+// construction time. Options that would mislead embedders into believing
+// a feature is live are rejected in [config.validate] instead of being
+// warned here.
 func (c *config) emitPartialWiringWarnings() {
 	if c.logger == nil {
 		return
-	}
-	if c.spaUISet {
-		c.logger.Warn(
-			"WithSPAUI is partially wired: the Provider suppresses the default HTML driver, but the configured LoginMount/ConsentMount/LogoutMount and StaticDir are not yet served by op.New. Embedders must mount their SPA externally; JSON state endpoints under the configured mounts land in a follow-up release.",
-			"option", "WithSPAUI",
-		)
-	}
-	if c.consentUISet {
-		c.logger.Warn(
-			"WithConsentUI is registered but the supplied Template is not yet rendered by any handler. The option is a no-op until the consent-interaction wiring lands.",
-			"option", "WithConsentUI",
-		)
-	}
-	if c.chooserUISet {
-		c.logger.Warn(
-			"WithChooserUI is registered but the supplied Template is not yet rendered by any handler. The option is a no-op until the chooser-interaction HTML render wiring lands.",
-			"option", "WithChooserUI",
-		)
 	}
 }

@@ -461,15 +461,10 @@ func WithLoginFlow(flow LoginFlow) Option {
 //     construction time (an [os.Stat] check) so a typo fails [New]
 //     rather than the first request.
 //
-// Experimental — partial wiring: as of v0.x, [New] validates the
-// option, suppresses the default HTML driver, and emits a WARN log
-// line through the configured logger documenting the gap. The
-// configured LoginMount, ConsentMount, LogoutMount, and StaticDir
-// are NOT yet mounted by the [Provider] — embedders must serve their
-// SPA externally (typically via an outer mux that routes the SPA
-// paths to the bundle directory and forwards everything else to the
-// Provider). Auto-mounted JSON state endpoints under the configured
-// mounts land in a follow-up release.
+// Reserved public shape: the option validates its input eagerly so
+// typos surface at the option boundary, but [op.New] rejects any
+// configuration that uses it until the Provider-side mount wiring
+// lands. Embedders must serve their SPA externally for now.
 func WithSPAUI(ui SPAUI) Option {
 	return optionFunc(func(c *config) error {
 		if err := checkSPAUIPrecondition(c); err != nil {
@@ -574,13 +569,8 @@ func validateSPAUIStaticDir(dir string) error {
 //   - Template MUST be non-nil.
 //   - Repeated [WithConsentUI] calls are rejected.
 //
-// Experimental — no-op today: as of v0.x, [New] validates the option
-// and emits a WARN log line through the configured logger but does
-// NOT yet route the supplied Template into any consent renderer. The
-// option is reserved so the v1.0 surface can be planned without
-// shipping a placeholder type later; embedders can register a
-// template now and have it consumed automatically once the
-// consent-interaction wiring lands.
+// Reserved public shape: [op.New] rejects any configuration that uses
+// this option until the consent renderer wiring lands.
 func WithConsentUI(ui ConsentUI) Option {
 	return optionFunc(func(c *config) error {
 		if c.consentUISet {
@@ -615,13 +605,8 @@ func WithConsentUI(ui ConsentUI) Option {
 //   - Template MUST be non-nil.
 //   - Repeated [WithChooserUI] calls are rejected.
 //
-// Experimental — no-op today: as of v0.x, [New] validates the option
-// and emits a WARN log line through the configured logger but does
-// NOT yet route the supplied Template into the chooser renderer.
-// The option is reserved so the v1.0 surface can be planned without
-// shipping a placeholder type later; embedders can register a
-// template now and have it consumed automatically once the chooser
-// HTML render path lands.
+// Reserved public shape: [op.New] rejects any configuration that uses
+// this option until the chooser renderer wiring lands.
 func WithChooserUI(ui ChooserUI) Option {
 	return optionFunc(func(c *config) error {
 		if c.chooserUISet {

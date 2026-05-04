@@ -77,6 +77,20 @@ func TestWithProfile_RejectsDuplicate(t *testing.T) {
 	}
 }
 
+func TestWithProfile_RejectsUnsupportedIGovHigh(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithProfile(profile.IGovHigh),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for unsupported IGovHigh profile, got nil")
+	}
+	if !strings.Contains(err.Error(), "not implemented yet") {
+		t.Errorf("err = %v, want not-implemented diagnostic", err)
+	}
+}
+
 // TestValidateProfile_NoFalsePositiveWithoutProfile pins the
 // contrapositive of the F-7 add-only invariant: when no profile is
 // active the validator MUST NOT demand any profile-required flag be
