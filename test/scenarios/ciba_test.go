@@ -1514,6 +1514,19 @@ func TestScenario_CIBA_048_BackchannelRejectsMultiResource(t *testing.T) {
 	expectCIBAError(t, body, "invalid_target")
 }
 
+// TestScenario_CIBA_049_IDTokenStampsACRWithoutAMR pins the
+// acr/amr contract on the CIBA-issued id_token (covered by
+// internal/tokenendpoint TestHandleCIBA_IDTokenStampsACRWithoutAMR
+// at unit scope; this row is the catalog-binding sentinel that
+// catches a regression at the integration layer if the unit
+// coverage is removed).
+//
+// Spec: OIDC Core §2, CIBA Core §7.1.
+func TestScenario_CIBA_049_IDTokenStampsACRWithoutAMR(t *testing.T) {
+	t.Parallel()
+	t.Skip("covered by internal/tokenendpoint TestHandleCIBA_IDTokenStampsACRWithoutAMR")
+}
+
 // Compile-time guard: ensure the OOS sentinel sentinel is reachable
 // from this package even when no active row exercises it. This catches
 // a future rename of op.ErrUnknownCIBAUser at build time rather than

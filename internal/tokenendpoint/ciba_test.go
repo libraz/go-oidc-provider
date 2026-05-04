@@ -422,6 +422,51 @@ func TestHandleCIBA_RecordPollFault_EmitsWarn(t *testing.T) {
 	}
 }
 
+// TestHandleCIBA_IDTokenStampsACRWithoutAMR pins the acr/amr
+// contract on the CIBA-issued id_token: when the persisted record
+// carries one or more requested ACR values, the issued id_token
+// stamps acr from the first entry and MUST NOT synthesise amr
+// from the same slice. acr names the authentication context class
+// (OIDC Core 1.0 §2) and amr names the authentication methods
+// used; the two are not synonyms, and the substore does not yet
+// retain a real authentication-method signal so amr stays absent.
+func TestHandleCIBA_IDTokenStampsACRWithoutAMR(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:        "auth-req-acr",
+		Scope:     []string{"openid"},
+		Status:    store.CIBARequestStatusPending,
+		ACRValues: []string{"urn:mace:incommon:iap:bronze", "urn:mace:incommon:iap:silver"},
+	})
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-acr", "user-42"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "auth-req-acr")
+	rec := f.post(t, form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		IDToken string `json:"id_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.IDToken == "" {
+		t.Fatalf("id_token missing: %s", rec.Body.String())
+	}
+	claims := decodeIDTokenClaims(t, body.IDToken)
+	if got, _ := claims["acr"].(string); got != "urn:mace:incommon:iap:bronze" {
+		t.Errorf("acr = %q, want urn:mace:incommon:iap:bronze", got)
+	}
+	if _, present := claims["amr"]; present {
+		t.Errorf("amr MUST be absent (substore does not retain authentication methods); got %v", claims["amr"])
+	}
+}
+
 // eventNames flattens an [audit.Event] slice to its Name fields.
 // The helper exists so a failing assertion on a missing event can
 // print a compact list of what WAS emitted instead of dumping the

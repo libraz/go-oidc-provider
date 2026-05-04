@@ -331,11 +331,13 @@ func consumeCIBARequest(
 // matching the access-token aud claim's single-entry encoding.
 //
 // acr / amr threading: the bc-authorize record carries the
-// requested ACR values verbatim. When non-empty the handler
-// stamps acr from the first entry and amr from the full slice on
-// the issued id_token; embedders typically supply distinct lists
-// per spec, but for poll mode the requested ACR set is the
-// closest signal to "what the authentication device satisfied".
+// requested ACR values verbatim. The handler stamps acr from the
+// first entry on the issued id_token. amr is left unset until the
+// substore retains a real authentication-method signal — copying
+// acr_values into amr (the previous v0.9.x posture) was a wire-
+// shape mismatch: OIDC Core 1.0 §2 defines acr as the
+// authentication context class and amr as the authentication
+// methods used, and the two have no defined synonymy.
 func issueCIBAResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -457,7 +459,6 @@ func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {
 	}
 	if len(in.ACRValues) > 0 {
 		claims.ACR = in.ACRValues[0]
-		claims.AMR = append([]string(nil), in.ACRValues...)
 	}
 	return tokens.SignIDToken(activeSigningKey(deps), claims)
 }

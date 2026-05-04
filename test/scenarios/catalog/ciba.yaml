@@ -507,3 +507,19 @@ rows:
       entry. Multi-aud support is deferred to a later wave; the
       handler refuses input the issuer side cannot honour in full.
     status: active
+
+  - id: CIBA-049
+    severity: P1
+    spec: OIDC Core §2 / CIBA Core §7.1
+    behaviour: |
+      The id_token issued from a CIBA poll redemption MUST stamp
+      acr from the first entry of the persisted ACRValues slice
+      when non-empty, and MUST NOT synthesise amr by copying the
+      same slice. acr names the authentication context class and
+      amr names the authentication methods used; the two are not
+      synonymous, and the v0.9.x CIBARequest substore does not
+      retain a real authentication-method signal. The previous
+      "amr := acr_values" plumbing was a wire-shape mismatch and
+      let the OP misrepresent the methods the authentication device
+      actually satisfied.
+    status: active
