@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -24,7 +25,21 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
+
+// newSeededInmem returns a fresh *inmem.Store with seedDemoUser
+// already applied. Tests that exercise buildOPStore use it so the
+// store presents the same shape the run() entrypoint hands to op.New.
+func newSeededInmem(t *testing.T) *inmem.Store {
+	t.Helper()
+	st := inmem.New()
+	if err := seedDemoUser(st); err != nil {
+		t.Fatalf("seedDemoUser: %v", err)
+	}
+	return st
+}
 
 var (
 	errInvalidScheme    = errors.New("waitDiscovery: discovery URL must use http or https scheme")
@@ -103,6 +118,138 @@ func TestBuildClientSeeds_ConfidentialTrio(t *testing.T) {
 		if got[id] != method {
 			t.Errorf("ConfidentialClient[%q].AuthMethod = %q, want %q", id, got[id], method)
 		}
+	}
+}
+
+func TestDerivePostLogoutURIs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{
+			name: "single-callback",
+			in:   []string{"https://app.example/test/a/x/callback"},
+			want: []string{"https://app.example/test/a/x/post_logout_redirect"},
+		},
+		{
+			name: "drops-non-callback",
+			in:   []string{"https://app.example/cb", "https://app.example/test/a/x/callback"},
+			want: []string{"https://app.example/test/a/x/post_logout_redirect"},
+		},
+		{
+			name: "empty",
+			in:   []string{},
+			want: []string{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := derivePostLogoutURIs(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("len = %d, want %d (got %v)", len(got), len(tc.want), got)
+			}
+			for i, want := range tc.want {
+				if got[i] != want {
+					t.Errorf("[%d] = %q, want %q", i, got[i], want)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildOPStore_WrapsForCIBAProfile(t *testing.T) {
+	t.Parallel()
+
+	cfg := runConfig{profile: "fapi-ciba", cibaAutoApproveDelay: time.Second}
+	st := newSeededInmem(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	got := buildOPStore(ctx, cfg, st, logger)
+	if _, ok := got.(*cibaAutoApproveStore); !ok {
+		t.Fatalf("buildOPStore for fapi-ciba returned %T; want *cibaAutoApproveStore", got)
+	}
+}
+
+func TestBuildOPStore_BareForNonCIBAProfile(t *testing.T) {
+	t.Parallel()
+
+	cfg := runConfig{profile: "fapi2-baseline"}
+	st := newSeededInmem(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	got := buildOPStore(ctx, cfg, st, logger)
+	if got != store.Store(st) {
+		t.Errorf("buildOPStore for fapi2-baseline returned a wrapper; want bare *inmem.Store")
+	}
+}
+
+func TestProfileFor_AcceptsFAPICIBA(t *testing.T) {
+	t.Parallel()
+
+	got, err := profileFor("fapi-ciba")
+	if err != nil {
+		t.Fatalf("profileFor(fapi-ciba): %v", err)
+	}
+	if got == 0 {
+		t.Fatal("profileFor(fapi-ciba) returned 0; expected profile.FAPICIBA")
+	}
+	if !isCIBAProfile("fapi-ciba") {
+		t.Error("isCIBAProfile(fapi-ciba) = false, want true")
+	}
+	if !isFAPIProfile("fapi-ciba") {
+		t.Error("isFAPIProfile(fapi-ciba) = false, want true")
+	}
+	if !needsDPoPNonceSource("fapi-ciba") {
+		t.Error("needsDPoPNonceSource(fapi-ciba) = false, want true")
+	}
+}
+
+// TestRun_DiscoveryAdvertisesDCRAndLogout boots run() with -enable-dcr
+// against the empty profile and asserts the discovery document
+// advertises /register and /end_session. Without this the smoke test
+// suite would not catch a regression that silently dropped the DCR
+// option from buildOptions.
+func TestRun_DiscoveryAdvertisesDCRAndLogout(t *testing.T) {
+	t.Parallel()
+
+	addr := pickFreeAddr(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	cfg := baseTestConfig(addr)
+	cfg.enableDCR = true
+
+	var (
+		runErr error
+		wg     sync.WaitGroup
+	)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runErr = run(ctx, cfg, logger)
+	}()
+
+	doc := fetchDiscovery(t, "http://"+addr+"/.well-known/openid-configuration", http.DefaultClient)
+	if doc["registration_endpoint"] == nil {
+		t.Error("discovery is missing registration_endpoint; -enable-dcr was not honoured")
+	}
+	if doc["end_session_endpoint"] == nil {
+		t.Error("discovery is missing end_session_endpoint; RP-initiated logout regressed")
+	}
+
+	cancel()
+	waitRunDone(t, &wg)
+	if runErr != nil {
+		t.Fatalf("run returned err: %v", runErr)
 	}
 }
 
@@ -278,6 +425,35 @@ func waitRunDone(t *testing.T, wg *sync.WaitGroup) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("run did not return within 10s of context cancel")
 	}
+}
+
+// fetchDiscovery polls discoveryURL until it responds 200, then
+// returns the parsed JSON body. Used by smoke tests that assert on a
+// specific discovery field; the polling loop replaces a fixed sleep
+// so the test stays correct under -race.
+func fetchDiscovery(t *testing.T, discoveryURL string, client *http.Client) map[string]any {
+	t.Helper()
+	if err := waitDiscovery(discoveryURL, client); err != nil {
+		t.Fatalf("discovery never came up: %v", err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, discoveryURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("fetch discovery: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("decode discovery: %v", err)
+	}
+	return doc
 }
 
 // waitDiscovery polls discoveryURL until it responds 200 or the
