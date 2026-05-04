@@ -58,9 +58,7 @@ func (n nonceIssuerSource) NextNonce(_ context.Context) (string, error) {
 // the alternative (returning the concrete unexported adapter type)
 // would force every caller to import a package-internal symbol just
 // to declare the variable type, defeating the adapter's purpose.
-//
-//nolint:ireturn // adapter contract requires the interface return.
-func NonceSourceFromIssuer(issuer NonceIssuer) NonceSource {
+func NonceSourceFromIssuer(issuer NonceIssuer) NonceSource { //nolint:ireturn,nolintlint // adapter contract requires the interface return.
 	if issuer == nil {
 		return nil
 	}
