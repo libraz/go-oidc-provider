@@ -500,6 +500,52 @@ func TestCustomGrant_BoundAccessToken_ConflictReturns500(t *testing.T) {
 	}
 }
 
+// TestCustomGrant_RefreshTokenRejectedInV091 confirms an embedder-
+// supplied [op.CustomGrantHandler] that returns a non-empty
+// [op.CustomGrantResponse.RefreshToken] is rejected with server_error.
+// v0.9.1 has no plumbing to persist a handler-supplied refresh token
+// through the OP's own [store.RefreshTokenStore] / lineage tracker,
+// so echoing the value verbatim would silently miss the registry on
+// the next refresh attempt. v0.9.2 will wire embedder-supplied refresh-
+// token persistence; until then the wire layer rejects the field at
+// dispatch time. The built-in token-exchange handler rides on the same
+// dispatcher but is explicitly exempt because its issuance / revocation
+// path is owned by the OP — its happy-path test
+// (test/scenarios/token_exchange_test.go) covers the exempt branch.
+func TestCustomGrant_RefreshTokenRejectedInV091(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:refresh-rejected"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			AccessToken:  "test-access-token",
+			RefreshToken: "handler-supplied-refresh",
+			Scope:        []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "server_error" {
+		t.Errorf("error=%v want server_error", got)
+	}
+	desc, _ := body["error_description"].(string)
+	if !strings.Contains(desc, "v0.9.2") {
+		t.Errorf("error_description=%q must cite v0.9.2 lineage wiring", desc)
+	}
+}
+
 // TestCustomGrant_TTLCappedToGlobal confirms a handler-supplied TTL
 // above the global access-token cap is truncated to the cap before
 // the wire response is written.

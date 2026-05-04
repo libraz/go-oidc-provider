@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -652,4 +654,36 @@ func TestScenario_PW_64_SectorURIFetchHasBoundedTimeout(t *testing.T) {
 func TestScenario_PW_65_SectorURIResponseCacheablePolicyOPDefined(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: PW-65 (see catalog out_of_scope_reason)")
+}
+
+// TestScenario_PW_70_RejectsSwitchOnUsedStoreWithWipedMarker pins the
+// empty-store edge case for the subject-mode immutability gate. A
+// re-used metadata store whose [store.SubjectModeKey] row was wiped
+// (truncation, deliberate manipulation, or a tooling bug) but whose
+// [store.OpInitKey] sentinel survives MUST refuse a non-public
+// op.New construction. Without the sentinel probe the gate would
+// fall through to the "fresh install" branch and silently re-key
+// every future "sub" against the new strategy. The test seeds the
+// op-init sentinel directly to simulate the post-wipe shape because
+// no public API exposes a metadata-only truncation.
+//
+// Spec: OIDC Core 1.0 §8 (sub stability) / project v0.9.1 contract.
+func TestScenario_PW_70_RejectsSwitchOnUsedStoreWithWipedMarker(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	if err := st.Metadata().Set(context.Background(), store.OpInitKey, store.OpInitMarker); err != nil {
+		t.Fatalf("seed op-init sentinel: %v", err)
+	}
+	// MinimalOptions seeds its own inmem store; we override with WithStore
+	// so the gate observes the sentinel we just stamped. The pairwise
+	// option drives the gate into the "non-public on a previously-used
+	// store" branch the row pins.
+	opts := testkit.MinimalOptions(t,
+		op.WithStore(st),
+		op.WithPairwiseSubject(pwPairwiseSalt),
+	)
+	_, err := op.New(opts...)
+	if !errors.Is(err, op.ErrSubjectModeMismatch) {
+		t.Fatalf("op.New err=%v, want ErrSubjectModeMismatch (wiped marker on used store)", err)
+	}
 }

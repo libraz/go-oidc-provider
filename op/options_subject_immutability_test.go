@@ -146,3 +146,103 @@ func TestSubjectModeGate_LegacyUpgradeAcceptsPublic(t *testing.T) {
 		t.Errorf("marker=%q want %q", got, store.SubjectModePublic)
 	}
 }
+
+// TestSubjectModeGate_FreshStoreWritesOpInitMarker pins the sentinel
+// the gate stamps alongside [store.SubjectModeKey] on every successful
+// construction. The sentinel is the empty-store edge case defence: a
+// later boot whose [store.SubjectModeKey] row was wiped (deliberately
+// or by truncation) reads the sentinel back and refuses any non-public
+// construction even when no grants remain.
+func TestSubjectModeGate_FreshStoreWritesOpInitMarker(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	if _, err := op.New(validBaseOptsWithStore(t, st)...); err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	got, err := st.Metadata().Get(context.Background(), store.OpInitKey)
+	if err != nil {
+		t.Fatalf("metadata Get OpInitKey: %v", err)
+	}
+	if got != store.OpInitMarker {
+		t.Errorf("op-init marker=%q want %q", got, store.OpInitMarker)
+	}
+}
+
+// TestSubjectModeGate_RejectsSwitchOnUsedStoreWithWipedMarker pins the
+// empty-store edge case. A previously-used store whose subject_mode
+// row was wiped (truncation, deliberate manipulation, or a tooling
+// bug) but whose op-init sentinel survives MUST still reject a
+// non-public construction. Without the sentinel probe the gate would
+// fall through to the "fresh install" branch and silently re-key
+// every future "sub". The test seeds the [store.OpInitKey] sentinel
+// directly to simulate the post-wipe state because no public API
+// exposes a metadata-only truncation.
+func TestSubjectModeGate_RejectsSwitchOnUsedStoreWithWipedMarker(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	// Stamp the op-init sentinel as a previous OP boot would have,
+	// but leave [store.SubjectModeKey] absent — this is the wiped /
+	// truncated-but-not-empty shape the gate defends against.
+	if err := st.Metadata().Set(context.Background(), store.OpInitKey, store.OpInitMarker); err != nil {
+		t.Fatalf("seed op-init sentinel: %v", err)
+	}
+	pwOpts := append(validBaseOptsWithStore(t, st), op.WithPairwiseSubject(minSalt()))
+	_, err := op.New(pwOpts...)
+	if !errors.Is(err, op.ErrSubjectModeMismatch) {
+		t.Fatalf("op.New err=%v, want ErrSubjectModeMismatch (wiped marker on used store)", err)
+	}
+}
+
+// TestSubjectModeGate_RejectsCustomGenOnUsedStoreWithWipedMarker pins
+// the same defence for the WithSubjectGenerator branch: a re-used
+// store where [store.SubjectModeKey] was wiped but the op-init
+// sentinel survives MUST refuse a custom-generator construction too,
+// because the new generator could re-key every future "sub" against
+// a different algorithm.
+func TestSubjectModeGate_RejectsCustomGenOnUsedStoreWithWipedMarker(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	if err := st.Metadata().Set(context.Background(), store.OpInitKey, store.OpInitMarker); err != nil {
+		t.Fatalf("seed op-init sentinel: %v", err)
+	}
+	customOpts := append(validBaseOptsWithStore(t, st), op.WithSubjectGenerator(passthroughGenerator{}))
+	_, err := op.New(customOpts...)
+	if !errors.Is(err, op.ErrSubjectModeMismatch) {
+		t.Fatalf("op.New err=%v, want ErrSubjectModeMismatch (wiped marker on used store, custom gen)", err)
+	}
+}
+
+// TestSubjectModeGate_AcceptsPublicOnUsedStoreWithWipedMarker pins
+// the converse: the empty-store edge case admits a public
+// construction even when the op-init sentinel is present and
+// [store.SubjectModeKey] is absent. Public-on-public is the only
+// transition that cannot reassign existing subs, so the gate writes
+// the marker through and accepts.
+func TestSubjectModeGate_AcceptsPublicOnUsedStoreWithWipedMarker(t *testing.T) {
+	t.Parallel()
+	st := inmem.New()
+	if err := st.Metadata().Set(context.Background(), store.OpInitKey, store.OpInitMarker); err != nil {
+		t.Fatalf("seed op-init sentinel: %v", err)
+	}
+	if _, err := op.New(validBaseOptsWithStore(t, st)...); err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	got, err := st.Metadata().Get(context.Background(), store.SubjectModeKey)
+	if err != nil {
+		t.Fatalf("metadata Get: %v", err)
+	}
+	if got != store.SubjectModePublic {
+		t.Errorf("marker=%q want %q", got, store.SubjectModePublic)
+	}
+}
+
+// passthroughGenerator is a SubjectGenerator that returns the input
+// InternalUserID verbatim. The test only needs it to exercise the
+// WithSubjectGenerator path of the gate; the generator's behaviour
+// is irrelevant because op.New rejects construction before issuance.
+type passthroughGenerator struct{}
+
+// Generate implements [op.SubjectGenerator].
+func (passthroughGenerator) Generate(_ context.Context, in op.SubjectGeneratorInput) (op.Subject, error) {
+	return op.Subject(in.InternalUserID), nil
+}

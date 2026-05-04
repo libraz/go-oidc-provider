@@ -62,3 +62,21 @@ const SubjectModePairwise = "pairwise"
 // — because the library cannot reason about whether two distinct
 // custom generators emit equivalent subject identifiers.
 const SubjectModeCustom = "custom"
+
+// OpInitKey is the [MetadataStore] key under which the OP records a
+// presence sentinel on every successful op.New construction. The
+// subject-mode immutability gate consults the sentinel as a
+// "this store has been used by an OP before" probe so a re-used
+// store whose [SubjectModeKey] entry was wiped (deliberately or by
+// truncation) still rejects a non-matching subject-issuance mode
+// rather than silently re-keying every future "sub". The value the
+// OP writes is intentionally fixed to [OpInitMarker] so the sentinel
+// is presence-only; backends MAY treat the key as opaque.
+const OpInitKey = "__op_init"
+
+// OpInitMarker is the value the OP writes under [OpInitKey] on every
+// successful construction. The string is fixed so the gate's presence
+// check is unambiguous: the marker MUST equal this constant when read
+// back, otherwise the gate treats the row as foreign and refuses to
+// boot.
+const OpInitMarker = "v1"

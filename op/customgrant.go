@@ -225,11 +225,15 @@ type CustomGrantResponse struct {
 	// access-token TTL; a negative value is rejected at issuance.
 	AccessTokenTTL time.Duration
 
-	// RefreshToken is the optional refresh credential. An empty
-	// value omits the field from the wire response. The OP does
-	// not interpret the value beyond persisting it; rotation and
-	// expiry remain a handler concern unless the handler is built
-	// on top of the in-tree refresh-token store.
+	// RefreshToken is reserved for the v0.9.2 lineage-wiring contract
+	// and MUST be empty in v0.9.1. A non-empty value yields server_error
+	// at the wire layer because the OP would echo the value onto the
+	// response without persisting it through its own refresh-token store,
+	// so the next refresh attempt would silently miss the registry. The
+	// built-in token-exchange handler is the single in-tree exception
+	// because its issuance / revocation lineage already rides on the
+	// same path; v0.9.2 will wire embedder-supplied refresh-token
+	// persistence via the existing refresh-token store.
 	RefreshToken string
 
 	// IDToken, when non-empty, is the embedder-signed JWT the OP

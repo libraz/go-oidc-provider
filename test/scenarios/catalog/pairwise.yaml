@@ -367,3 +367,19 @@ rows:
       mandate a particular freshness policy.
     status: out-of-scope
     out_of_scope_reason: "The pairwise public API (op.WithPairwiseSubject + op/subject.Pairwise) and the SSRF-defended internal/sector resolver are wired into dynamic client registration; rows that exercise registration-time validation are tracked separately under PW-10..PW-27 (now pending, not OOS). This row depends on issuance-side wiring that is not yet present: the SubjectGenerator returned by Provider.SubjectGenerator() is not invoked by the authorization-code/refresh-token grant exchanger, so the derived pairwise sub does not flow into id_token / userinfo / introspection (PW-40..PW-54), and salt rotation, multi-tenant key isolation, and projection invariants on top (PW-60..PW-65) ride on the same missing plumbing. PW-30..PW-32 additionally require CIBA / Device-flow handlers that v1.0 does not ship. When the issuance pipeline consumes SubjectGenerator at code redemption, this row should flip back to pending and be bound."
+
+  - id: PW-70
+    severity: P0
+    spec: OIDC Core §8 / project v0.9.1 contract
+    behaviour: |
+      The subject-mode immutability gate at op.New refuses to switch
+      subject-issuance strategies on a re-used metadata store even
+      when no grants survive. Specifically, when [store.SubjectModeKey]
+      is absent but the [store.OpInitKey] sentinel is present (a
+      previously-used store whose subject-mode row was wiped or
+      truncated), op.New MUST refuse any non-public construction; the
+      "fresh install" inference cannot be trusted because the marker
+      ABSENCE is no longer a reliable fresh-install signal. A public
+      construction on the same shape proceeds and writes the marker
+      back through.
+    status: active

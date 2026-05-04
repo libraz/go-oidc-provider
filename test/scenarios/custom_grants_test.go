@@ -376,6 +376,46 @@ func TestScenario_CG_009_HandlerReceivesClientEntityOnly(t *testing.T) {
 	t.Skip("out-of-scope: CG-009 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CG_010_HandlerRefreshTokenRejectedInV091 confirms that
+// an embedder-registered custom grant whose handler returns a non-empty
+// CustomGrantResponse.RefreshToken is rejected with 500 server_error,
+// citing v0.9.2 as the release that wires embedder-supplied refresh-
+// token persistence. v0.9.1 has no plumbing to persist a handler-
+// supplied refresh token through the OP's own refresh-token store /
+// lineage tracker, so echoing the value verbatim would silently miss
+// the registry on the next refresh attempt. The built-in token-exchange
+// handler is exempt from this gate (its issuance / revocation lineage
+// rides on the same path); see token_exchange_test.go for that
+// happy-path coverage.
+//
+// Spec: project v0.9.1 contract (RFC 6749 §5.2 server_error envelope).
+func TestScenario_CG_010_HandlerRefreshTokenRejectedInV091(t *testing.T) {
+	t.Parallel()
+	const grantURN = "urn:example:grant-type:cg-010"
+	handler := &recordingCustomGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{ //nolint:gosec // G101 false positive: AccessToken/RefreshToken are fixed-string test fixtures, not credentials.
+			AccessToken:  "issued-cg-010",
+			RefreshToken: "handler-supplied-refresh-token",
+			Scope:        []string{"openid"},
+		},
+	}
+	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	status, body := postCustomGrant(t, tk, url.Values{
+		"grant_type": []string{grantURN},
+	}, rp.ID, cgClientSecret)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500, body=%v", status, body)
+	}
+	if got := body["error"]; got != "server_error" {
+		t.Errorf("error=%v want server_error", got)
+	}
+	desc, _ := body["error_description"].(string)
+	if !strings.Contains(desc, "v0.9.2") {
+		t.Errorf("error_description=%q must cite v0.9.2 lineage wiring", desc)
+	}
+}
+
 // TestCustomGrant_IDTokenSigning_FromExtraClaims confirms the OP signs
 // a fresh id_token from the response Subject + AuthTime + ExtraClaims
 // when the handler returns an empty IDToken and Scope contains "openid".

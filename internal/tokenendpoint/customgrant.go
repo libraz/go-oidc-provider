@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
+	"github.com/libraz/go-oidc-provider/internal/customgrant/tokenexchange"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -63,6 +64,19 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 	resp, err := deps.CustomGrants.Dispatch(ctx, dispatchIn)
 	if err != nil {
 		writeCustomGrantError(w, err)
+		return
+	}
+	// v0.9.1 rejects handler-supplied RefreshToken on the embedder
+	// surface: the dispatcher would otherwise echo the value verbatim,
+	// but the OP would never persist it through its own
+	// [store.RefreshTokenStore] / lineage tracker. The next refresh
+	// request would then miss the registry and fail silently. The
+	// built-in token-exchange handler is the single in-tree exception
+	// because its issuance / revocation lineage rides on the same
+	// path; lineage wiring for embedder grants lands in v0.9.2.
+	if resp.RefreshToken != "" && grantType != tokenexchange.GrantType {
+		writeError(w, http.StatusInternalServerError, errServerError,
+			"custom-grant handlers cannot issue refresh tokens in v0.9.1; lineage wiring lands in v0.9.2")
 		return
 	}
 	accessToken, accessTokenTTL, err := resolveCustomGrantAccessToken(deps, client, dispatchIn, resp, binding)

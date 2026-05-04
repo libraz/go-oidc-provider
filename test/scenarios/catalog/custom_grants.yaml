@@ -105,3 +105,19 @@ rows:
       them.
     status: out-of-scope
     out_of_scope_reason: "The 'ctx.oidc.entities' Account/Session/AccessToken graph is an upstream-specific middleware shape this library does not adopt; the projected handler surface (op.CustomGrantRequest with Client + Subject + Form + DPoP/MTLS) carries only the values the handler is expected to read, so there is no ambient entity bag for the row's negative assertion to gate against."
+
+  - id: CG-010
+    severity: P1
+    spec: RFC 6749 §5.2 / project v0.9.1 contract
+    behaviour: |
+      An embedder-registered custom grant whose handler returns a
+      non-empty CustomGrantResponse.RefreshToken MUST be rejected with
+      500 server_error and an error_description that cites v0.9.2 as
+      the release that wires embedder-supplied refresh-token
+      persistence. The OP would otherwise echo the value verbatim
+      onto the wire without persisting it through its own refresh-
+      token store, so the next refresh attempt would silently miss
+      the registry. The built-in token-exchange handler is exempt
+      from this gate because its issuance / revocation lineage rides
+      on the same path.
+    status: active
