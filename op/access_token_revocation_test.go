@@ -132,6 +132,7 @@ func (s storeWithoutGrantRevocations) Clients() store.ClientStore { return s.inn
 func (s storeWithoutGrantRevocations) AuthorizationCodes() store.AuthorizationCodeStore {
 	return s.inner.AuthorizationCodes()
 }
+
 func (s storeWithoutGrantRevocations) RefreshTokens() store.RefreshTokenStore {
 	return s.inner.RefreshTokens()
 }
@@ -140,21 +141,27 @@ func (s storeWithoutGrantRevocations) Sessions() store.SessionStore { return s.i
 func (s storeWithoutGrantRevocations) PushedAuthRequests() store.PushedAuthRequestStore {
 	return s.inner.PushedAuthRequests()
 }
+
 func (s storeWithoutGrantRevocations) Interactions() store.InteractionStore {
 	return s.inner.Interactions()
 }
+
 func (s storeWithoutGrantRevocations) ConsumedJTIs() store.ConsumedJTIStore {
 	return s.inner.ConsumedJTIs()
 }
+
 func (s storeWithoutGrantRevocations) InitialAccessTokens() store.InitialAccessTokenStore {
 	return s.inner.InitialAccessTokens()
 }
+
 func (s storeWithoutGrantRevocations) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 	return s.inner.RegistrationAccessTokens()
 }
+
 func (s storeWithoutGrantRevocations) AccessTokens() store.AccessTokenRegistry {
 	return s.inner.AccessTokens()
 }
+
 func (s storeWithoutGrantRevocations) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return s.inner.OpaqueAccessTokens()
 }
@@ -163,6 +170,7 @@ func (s storeWithoutGrantRevocations) Metadata() store.MetadataStore            
 func (s storeWithoutGrantRevocations) DeviceCodes() store.DeviceCodeStore {
 	return s.inner.DeviceCodes()
 }
+
 func (s storeWithoutGrantRevocations) CIBARequests() store.CIBARequestStore {
 	return s.inner.CIBARequests()
 }
@@ -174,6 +182,7 @@ func (s storeWithoutAccessTokens) Clients() store.ClientStore { return s.inner.C
 func (s storeWithoutAccessTokens) AuthorizationCodes() store.AuthorizationCodeStore {
 	return s.inner.AuthorizationCodes()
 }
+
 func (s storeWithoutAccessTokens) RefreshTokens() store.RefreshTokenStore {
 	return s.inner.RefreshTokens()
 }
@@ -182,15 +191,19 @@ func (s storeWithoutAccessTokens) Sessions() store.SessionStore { return s.inner
 func (s storeWithoutAccessTokens) PushedAuthRequests() store.PushedAuthRequestStore {
 	return s.inner.PushedAuthRequests()
 }
+
 func (s storeWithoutAccessTokens) Interactions() store.InteractionStore {
 	return s.inner.Interactions()
 }
+
 func (s storeWithoutAccessTokens) ConsumedJTIs() store.ConsumedJTIStore {
 	return s.inner.ConsumedJTIs()
 }
+
 func (s storeWithoutAccessTokens) InitialAccessTokens() store.InitialAccessTokenStore {
 	return s.inner.InitialAccessTokens()
 }
+
 func (s storeWithoutAccessTokens) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 	return s.inner.RegistrationAccessTokens()
 }
@@ -198,6 +211,7 @@ func (s storeWithoutAccessTokens) AccessTokens() store.AccessTokenRegistry { ret
 func (s storeWithoutAccessTokens) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return s.inner.OpaqueAccessTokens()
 }
+
 func (s storeWithoutAccessTokens) GrantRevocations() store.GrantRevocationStore {
 	return s.inner.GrantRevocations()
 }
@@ -205,6 +219,7 @@ func (s storeWithoutAccessTokens) Metadata() store.MetadataStore { return s.inne
 func (s storeWithoutAccessTokens) DeviceCodes() store.DeviceCodeStore {
 	return s.inner.DeviceCodes()
 }
+
 func (s storeWithoutAccessTokens) CIBARequests() store.CIBARequestStore {
 	return s.inner.CIBARequests()
 }

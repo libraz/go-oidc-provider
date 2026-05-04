@@ -22,10 +22,12 @@ func (f *fakeATRegistry) Register(context.Context, store.AccessTokenRecord) erro
 func (f *fakeATRegistry) Find(context.Context, string) (*store.AccessTokenRecord, error) {
 	return f.find, f.findErr
 }
+
 func (f *fakeATRegistry) RevokeByJTI(_ context.Context, jti string) error {
 	f.revokeByJTI = append(f.revokeByJTI, jti)
 	return nil
 }
+
 func (f *fakeATRegistry) RevokeByGrant(_ context.Context, grantID string) (int, error) {
 	f.revokeByGrant = append(f.revokeByGrant, grantID)
 	return 1, nil
@@ -43,10 +45,12 @@ func (f *fakeGrantRevocations) RevokeGrant(_ context.Context, t store.GrantTombs
 	f.tombstones = append(f.tombstones, t)
 	return nil
 }
+
 func (f *fakeGrantRevocations) RevokeJTI(_ context.Context, r store.RevokedJTI) error {
 	f.revokedJTIs = append(f.revokedJTIs, r)
 	return nil
 }
+
 func (f *fakeGrantRevocations) IsRevoked(context.Context, string, string, time.Time) (bool, error) {
 	return f.revoked, f.err
 }
