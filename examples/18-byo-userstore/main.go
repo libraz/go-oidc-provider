@@ -36,6 +36,18 @@
 //   - :9090 — the RP from examples/internal/rpkit. It exposes /,
 //     /login, /callback, /me.
 //
+// The codebase is split by role across this directory:
+//
+//   - main.go  — entrypoint, package godoc, listener orchestration,
+//     SQLite open + DDL apply, RP wiring through rpkit.
+//   - op.go    — OP-side wiring: buildProvider composes oidcsql.Store
+//   - MemberUserStore + hybridStore and passes them to op.New.
+//   - store.go — embedder-owned types: hybridStore (Users() override)
+//     and MemberUserStore (FindBySubject / FindByUsername /
+//     ReadPasswordHash) plus the members DDL the run() bootstrap
+//     applies.
+//   - seed.go  — seedMember helper that upserts the demo row.
+//
 // Manual verification:
 //
 //  1. Open http://127.0.0.1:9090/
@@ -72,12 +84,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
-	"github.com/libraz/go-oidc-provider/op"
-	"github.com/libraz/go-oidc-provider/op/store"
-	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
 
 const (
@@ -93,24 +101,6 @@ const (
 	demoSubject  = "mem-0001"
 )
 
-// membersDDL is the embedder-owned schema. Column names deliberately
-// avoid the OP's bundled oidc_users layout (subject / claims /
-// updated_at / username / password_hash) to make it concrete that
-// MemberUserStore is doing the projection: nothing in the OP cares
-// about these column names.
-const membersDDL = `
-CREATE TABLE IF NOT EXISTS members (
-    member_id      TEXT PRIMARY KEY,
-    email_address  TEXT NOT NULL,
-    password_phc   BLOB NOT NULL,
-    full_name      TEXT,
-    locale_pref    TEXT,
-    tenant_id      TEXT,
-    last_modified  INTEGER NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS members_email ON members (email_address);
-`
-
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -118,8 +108,6 @@ func main() {
 }
 
 func run() error {
-	keys := devkeys.MustEphemeral("byo-userstore-1")
-
 	dbPath := filepath.Join(os.TempDir(), "oidc-example-18.db")
 	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := databasesql.Open("sqlite", dsn)
@@ -128,51 +116,20 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	if _, err := db.ExecContext(context.Background(), membersDDL); err != nil {
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, membersDDL); err != nil {
 		return fmt.Errorf("apply members DDL: %w", err)
 	}
 
-	durable, err := oidcsql.New(db, oidcsql.SQLite())
-	if err != nil {
-		return fmt.Errorf("oidcsql.New: %w", err)
-	}
-	if err := durable.Migrate(context.Background()); err != nil {
-		return fmt.Errorf("migrate OIDC schema: %w", err)
-	}
-	log.Printf("OIDC store: sqlite at %s (members + bundled oidc_*)", dbPath)
-
-	members := &MemberUserStore{db: db}
-
-	if err := seedMember(context.Background(), db); err != nil {
+	if err := seedMember(ctx, db); err != nil {
 		return fmt.Errorf("seed demo member: %w", err)
 	}
 
-	// hybridStore is the value op.WithStore receives. The embedded
-	// *oidcsql.Store provides every store.Store method except
-	// Users(): that one is shadowed by the wrapper's own method, so
-	// the OP's /userinfo and ID Token assembly reach MemberUserStore
-	// at every call site that reads end-user claims.
-	storage := &hybridStore{Store: durable, users: members}
-
-	flow := op.LoginFlow{
-		Primary: op.PrimaryPassword{Store: members},
-	}
-
-	provider, err := op.New(
-		op.WithIssuer(issuer),
-		op.WithStore(storage),
-		op.WithKeyset(keys.Keyset()),
-		op.WithCookieKeys(keys.CookieKey),
-		op.WithLoginFlow(flow),
-		op.WithStaticClients(op.PublicClient{
-			ID:           clientID,
-			RedirectURIs: []string{redirectURI},
-			Scopes:       []string{"openid", "profile", "email"},
-		}),
-	)
+	provider, err := buildProvider(ctx, db)
 	if err != nil {
-		return fmt.Errorf("op.New: %w", err)
+		return err
 	}
+	log.Printf("OIDC store: sqlite at %s (members + bundled oidc_*)", dbPath)
 
 	opMux := http.NewServeMux()
 	opMux.Handle("/", provider)
@@ -214,157 +171,6 @@ func run() error {
 	case err := <-rpErrCh:
 		return err
 	}
-}
-
-// hybridStore wraps an oidcsql.Store and replaces only the Users()
-// substore with an embedder-supplied implementation. Every other
-// substore method (Clients, AuthorizationCodes, RefreshTokens,
-// Grants, Sessions, PushedAuthRequests, Interactions, ConsumedJTIs,
-// InitialAccessTokens, RegistrationAccessTokens, AccessTokens,
-// OpaqueAccessTokens, GrantRevocations) is provided by the embedded
-// *oidcsql.Store via Go method promotion.
-//
-// The store.Transactional capability is also inherited from the
-// embedded oidcsql.Store, so the transactional cluster
-// (authorization-code exchange, refresh-token rotation, PAR
-// consumption) commits atomically against the same SQLite database.
-// Users is intentionally outside the cluster (store.Tx has no
-// Users() accessor), so routing it to a different backend cannot
-// break atomicity.
-type hybridStore struct {
-	*oidcsql.Store
-	users store.UserPasswordStore
-}
-
-// Users overrides oidcsql.Store.Users() so the OP reads end-user
-// records from the embedder-owned members table.
-func (h *hybridStore) Users() store.UserStore { return h.users }
-
-// MemberUserStore projects the members table onto store.User and
-// satisfies store.UserPasswordStore. The struct holds only the
-// *sql.DB; SQL templates live as string constants below so the
-// example is single-file readable. Production embedders would lift
-// them into a query builder of their choice.
-type MemberUserStore struct {
-	db *databasesql.DB
-}
-
-const (
-	memberSelectBySubject   = `SELECT member_id, email_address, full_name, locale_pref, tenant_id, last_modified FROM members WHERE member_id = ?`
-	memberSelectByEmail     = `SELECT member_id, email_address, full_name, locale_pref, tenant_id, last_modified FROM members WHERE email_address = ?`
-	memberSelectPasswordPHC = `SELECT password_phc FROM members WHERE member_id = ?`
-)
-
-// FindBySubject implements store.UserStore.FindBySubject.
-func (m *MemberUserStore) FindBySubject(ctx context.Context, sub string) (*store.User, error) {
-	return m.scanMember(ctx, memberSelectBySubject, sub)
-}
-
-// FindByUsername implements store.UserPasswordStore.FindByUsername.
-// The embedder treats "username" as "email_address" — the column the
-// PrimaryPassword Step's input string is matched against. Production
-// embedders MAY case-fold the value here as long as FindBySubject is
-// consistent so the resolved subject is stable across login paths.
-func (m *MemberUserStore) FindByUsername(ctx context.Context, username string) (*store.User, error) {
-	return m.scanMember(ctx, memberSelectByEmail, username)
-}
-
-// ReadPasswordHash implements store.UserPasswordStore.ReadPasswordHash.
-// It returns store.ErrNotFound both when the subject is unknown and
-// when the row exists but carries no password (e.g. an
-// invitation-only member that has not yet enrolled), so the
-// orchestrator surfaces an enumeration-safe response.
-func (m *MemberUserStore) ReadPasswordHash(ctx context.Context, subject string) ([]byte, error) {
-	var hash []byte
-	err := m.db.QueryRowContext(ctx, memberSelectPasswordPHC, subject).Scan(&hash)
-	if errors.Is(err, databasesql.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("members.ReadPasswordHash: %w", err)
-	}
-	if len(hash) == 0 {
-		return nil, store.ErrNotFound
-	}
-	out := make([]byte, len(hash))
-	copy(out, hash)
-	return out, nil
-}
-
-// scanMember projects a SELECT row onto store.User. Columns the OP
-// does not consume (tenant_id is the example) are still loaded and
-// placed on Claims so embedders can demonstrate scope-based
-// filtering: the OP releases only the claim names authorised by the
-// granted scopes, so tenant remains invisible to the RP unless the
-// embedder adds a scope that releases it.
-func (m *MemberUserStore) scanMember(ctx context.Context, query, arg string) (*store.User, error) {
-	var (
-		subject    string
-		email      databasesql.NullString
-		fullName   databasesql.NullString
-		localePref databasesql.NullString
-		tenantID   databasesql.NullString
-		updatedAt  int64
-	)
-	err := m.db.QueryRowContext(ctx, query, arg).
-		Scan(&subject, &email, &fullName, &localePref, &tenantID, &updatedAt)
-	if errors.Is(err, databasesql.ErrNoRows) {
-		return nil, store.ErrNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("members.scan: %w", err)
-	}
-
-	claims := map[string]any{}
-	if email.Valid {
-		claims["email"] = email.String
-	}
-	if fullName.Valid {
-		claims["name"] = fullName.String
-	}
-	if localePref.Valid {
-		claims["locale"] = localePref.String
-	}
-	if tenantID.Valid {
-		// Custom embedder claim. Not authorised by any standard
-		// scope, so the OP filters it out of /userinfo and ID Token
-		// responses. Embedders that want to release it MUST register
-		// a custom scope or use the OIDC Core §5.5 claims parameter.
-		claims["tenant"] = tenantID.String
-	}
-
-	return &store.User{
-		Subject:   subject,
-		Claims:    claims,
-		UpdatedAt: time.Unix(updatedAt, 0),
-	}, nil
-}
-
-func seedMember(ctx context.Context, db *databasesql.DB) error {
-	hash, err := op.HashPassword(demoPassword)
-	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
-	}
-	const upsert = `
-INSERT INTO members (member_id, email_address, password_phc, full_name, locale_pref, tenant_id, last_modified)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(member_id) DO UPDATE SET
-    email_address = excluded.email_address,
-    password_phc  = excluded.password_phc,
-    full_name     = excluded.full_name,
-    locale_pref   = excluded.locale_pref,
-    tenant_id     = excluded.tenant_id,
-    last_modified = excluded.last_modified;
-`
-	now := time.Now().Unix() //nolint:forbidigo // example seed script — not OP business logic; internal/timex is unreachable from examples/.
-	_, err = db.ExecContext(ctx, upsert,
-		demoSubject, demoUsername, hash,
-		"Demo Member", "en-US", "tenant-acme", now,
-	)
-	if err != nil {
-		return fmt.Errorf("seed member: %w", err)
-	}
-	return nil
 }
 
 // waitForIssuer polls iss + "/.well-known/openid-configuration" until
