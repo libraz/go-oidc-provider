@@ -25,6 +25,7 @@ allowed=(
   "/oidc/end_session"
   "/oidc/register"
   "/oidc/backchannel-logout"
+  "/oidc/bc-authorize"
   "/oidc/interaction"
 )
 

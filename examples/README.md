@@ -64,6 +64,7 @@ it boots with `go run -tags example ./examples/08-composite-hot-cold`.
 | require password + TOTP at every login (always-on 2FA) | [`20-mfa-totp`](20-mfa-totp/main.go) |
 | require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
 | step a logged-in session up to a higher ACR (RFC 9470) | [`23-step-up`](23-step-up/main.go) |
+| issue tokens via Client-Initiated Backchannel Authentication (CIBA) | [`31-ciba-pos`](31-ciba-pos/main.go) |
 | issue encrypted ID Tokens (JWE-of-JWS) to a registered RP | [`34-encrypted-id-token`](34-encrypted-id-token/main.go) |
 | skip consent for first-party clients | [`40-first-party-skip-consent`](40-first-party-skip-consent/main.go) |
 | let RPs register themselves (Dynamic Client Registration) | [`41-dynamic-registration`](41-dynamic-registration/main.go) |
@@ -81,7 +82,7 @@ in-flight or v1.x work:
 | 00–09 | bootstrap, grant variants, storage adapters                    |
 | 10–19 | UI, scopes, SPA, locale, claims request, CORS                  |
 | 20–29 | MFA and authentication rules (TOTP / risk / captcha / step-up) |
-| 30–39 | token-format crypto (encrypted ID tokens, JARM) and federation |
+| 30–39 | delayed-grant flows (CIBA), token-format crypto (encrypted ID tokens, JARM), and federation |
 | 40–49 | governance: first-party, DCR, back-channel logout              |
 | 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce         |
 | 60–69 | compliance (reserved — v1.x late)                              |

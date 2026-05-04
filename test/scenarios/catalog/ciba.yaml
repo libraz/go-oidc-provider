@@ -12,432 +12,412 @@ specs:
   - RFC 7519 §4.1 (registered JWT claims)
 
 description: |
-  CIBA endpoint (POST /backchannel) plus the
-  urn:openid:params:grant-type:ciba token grant. Token delivery modes
-  covered are poll and ping (push delivery omitted in upstream tests).
-  auth_req_id corresponds to the JTI of the persisted
-  BackchannelAuthenticationRequest. Discovery, provider-API guards,
-  parameter validation, signed Request Object handling, and
-  delivery-integrity assertions are all in scope.
+  CIBA endpoint (POST /bc-authorize, mounted under the OP's mountPrefix
+  — /oidc/bc-authorize on the testkit) plus the
+  urn:openid:params:grant-type:ciba token grant. v1.0 ships poll-mode
+  delivery only; ping and push are reserved for a future release. The
+  auth_req_id is the wire identifier of the persisted store.CIBARequest;
+  embedders Approve / Deny by calling store.CIBARequestStore directly.
+  Discovery, parameter validation, signed Request Object handling under
+  FAPI-CIBA, and hint resolution are all in scope.
 
 rows:
   - id: CIBA-001
     severity: P1
-    spec: CIBA Core §4
+    spec: CIBA Core §4; OIDC Discovery §3
     behaviour: |
-      With CIBA enabled and signed Request Objects disabled, discovery
-      advertises backchannel_authentication_endpoint,
-      backchannel_token_delivery_modes_supported=[poll, ping], and
-      backchannel_user_code_parameter_supported=true; it MUST NOT
-      include backchannel_authentication_request_signing_alg_values_supported.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      With CIBA enabled and the JAR feature off, discovery advertises
+      backchannel_authentication_endpoint (issuer + mountPrefix +
+      /bc-authorize), backchannel_token_delivery_modes_supported=["poll"]
+      (poll-only — ping is deferred), and
+      backchannel_user_code_parameter_supported is not advertised as
+      true (the field is encoded with omitempty, so a deployment that
+      does not pre-validate user codes either omits it or emits
+      false — the wire forbids only the true shape). The
+      backchannel_authentication_request_signing_alg_values_supported
+      field MUST be absent because the CIBA request-object channel
+      shares the JAR verifier.
+    status: active
 
   - id: CIBA-002
     severity: P1
-    spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2
+    spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2; OIDC Discovery §3
     behaviour: |
-      With CIBA and signed Request Objects both enabled, discovery
-      additionally advertises
-      backchannel_authentication_request_signing_alg_values_supported,
-      and that list MUST exclude symmetric algorithms such as HS256
-      per FAPI-CIBA.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      With CIBA enabled and the JAR feature also on, discovery
+      additionally publishes
+      backchannel_authentication_request_signing_alg_values_supported
+      (RS256, PS256, ES256, EdDSA). The list MUST exclude HS-family
+      algorithms per FAPI-CIBA's symmetric-alg ban.
+    status: active
 
   - id: CIBA-003
     severity: P1
     spec: CIBA Core §10
     behaviour: |
-      The provider's backchannelResult API resolves an existing
-      persisted JTI to the BackchannelAuthenticationRequest; an
-      unknown JTI MUST be rejected with
-      "BackchannelAuthenticationRequest not found".
+      Embedders Approve a Pending CIBA request through the
+      store.CIBARequestStore substore directly; an unknown auth_req_id
+      surfaces as store.ErrNotFound to the embedder.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Provider-side approval-result API is a JS-runtime hook not modelled in v1.0; embedders Approve/Deny via store.CIBARequestStore directly (op/store/cibarequests.go)."
 
   - id: CIBA-004
     severity: P2
     spec: CIBA Core §10
     behaviour: |
-      The backchannelResult API also accepts a typed
+      The provider-side approval API also accepts a typed
       BackchannelAuthenticationRequest instance directly.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Typed-request overload of the provider-side approval API is a JS-runtime hook not modelled in v1.0; embedders interact with store.CIBARequestStore using auth_req_id strings."
 
   - id: CIBA-005
     severity: P2
     spec: CIBA Core §10
     behaviour: |
-      Calling backchannelResult with an invalid request type (object,
-      array, primitive, Set, Error) MUST raise a TypeError with the
-      message 'invalid "request" argument'.
+      Calling the provider-side approval API with an invalid request
+      type raises a runtime type error.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "JS-runtime type-checks not applicable to the Go-typed surface; equivalent discipline is enforced by the compiler."
 
   - id: CIBA-006
     severity: P1
     spec: CIBA Core §10
     behaviour: |
-      The backchannelResult API resolves a Grant JTI string to the
-      Grant entity; unknown JTI MUST be rejected with
-      "Grant not found".
+      The provider-side approval API resolves a Grant JTI string to a
+      Grant entity; an unknown JTI MUST be rejected.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Grant-string-to-entity resolution is a JS-runtime hook not modelled in v1.0; grant binding lives on the persisted CIBARequest."
 
   - id: CIBA-007
     severity: P2
     spec: CIBA Core §10
     behaviour: |
-      Passing an invalid result type to backchannelResult MUST raise
-      a TypeError with the message 'invalid "result" argument'.
+      Passing an invalid result type to the provider-side approval API
+      raises a runtime type error.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "JS-runtime type-checks not applicable to the Go-typed surface; equivalent discipline is enforced by the compiler."
 
   - id: CIBA-008
     severity: P1
     spec: CIBA Core §10
     behaviour: |
-      backchannelResult MUST reject a request whose clientId does not
-      resolve to a known client with "Client not found".
+      The provider-side approval API rejects a request whose clientId
+      does not resolve to a known client.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "clientId resolution via the provider-side approval API is a JS-runtime hook not modelled; v1.0 reads client_id off the CIBARequest record directly."
 
   - id: CIBA-009
     severity: P0
     spec: CIBA Core §10
     behaviour: |
-      backchannelResult MUST reject when the request's clientId
-      differs from the Grant's clientId with "client mismatch";
-      cross-client grant binding is forbidden.
+      The provider-side approval API rejects when the request's
+      clientId differs from the Grant's clientId; cross-client grant
+      binding is forbidden.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Client-mismatch guard via the provider-side approval API is a JS-runtime hook not modelled; v1.0's /token grant handler enforces client binding via store.CIBARequestStore (internal/grants/ciba.go)."
 
   - id: CIBA-010
     severity: P0
     spec: CIBA Core §10
     behaviour: |
-      backchannelResult MUST reject when the request's accountId
-      differs from the Grant's accountId with "accountId mismatch".
+      The provider-side approval API rejects when the request's
+      accountId differs from the Grant's accountId.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "AccountId-mismatch guard via the provider-side approval API is a JS-runtime hook not modelled; v1.0 records subject on the persisted CIBARequest and requires no separate accountId comparison."
 
   - id: CIBA-011
     severity: P2
     spec: CIBA Core §10
     behaviour: |
-      Calling backchannelResult on an unsaved request MUST persist
-      the request and assign it a JTI.
+      Calling the provider-side approval API on an unsaved request
+      persists the request and assigns it a JTI on the fly.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "On-the-fly persistence inside the provider-side approval API is a JS-runtime hook not modelled; v1.0 persists at /bc-authorize emission."
 
   - id: CIBA-012
     severity: P0
     spec: CIBA Core §10.2
     behaviour: |
       For ping-mode clients, a backend that returns 204 No Content to
-      the notification callback MUST be treated as successful
-      delivery.
+      the notification callback is treated as successful delivery.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Ping-mode delivery (HTTP 204) deferred. v1.0 advertises poll-only (backchannel_token_delivery_modes_supported=[\"poll\"]); ping is post-v1.0 — see internal/discovery/build.go::applyCIBAFeature."
 
   - id: CIBA-013
     severity: P1
     spec: CIBA Core §10.2
     behaviour: |
       For ping-mode clients, a backend that returns 200 OK to the
-      notification callback MUST also be treated as successful
-      delivery.
+      notification callback is treated as successful delivery.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Ping-mode delivery (HTTP 200) deferred. v1.0 advertises poll-only; ping is post-v1.0."
 
   - id: CIBA-014
     severity: P0
     spec: CIBA Core §10.2
     behaviour: |
-      When the ping endpoint returns 400, the provider MUST raise a
-      delivery-integrity error referencing the 4xx response.
+      When the ping endpoint returns 4xx, the provider raises a
+      delivery-integrity error referencing the response.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Ping-mode delivery (4xx integrity surface) deferred. v1.0 advertises poll-only; there is no ping callback to fail."
 
   - id: CIBA-015
     severity: P0
     spec: CIBA Core §7.1, §7.3
     behaviour: |
-      A POST /backchannel with login_hint and scope=openid returns
-      200 application/json containing expires_in (≤ 600) and
-      auth_req_id; the OP invokes triggerAuthenticationDevice,
-      processLoginHint, validateBindingMessage / context, and
-      verifyUserCode hooks; the persisted request carries scope and a
-      params object with defaults merged.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      A POST /bc-authorize with login_hint, scope=openid, and valid
+      client authentication returns 200 application/json with a
+      non-empty auth_req_id, expires_in (capped by the OP default), and
+      interval. The persisted store.CIBARequest carries the resolved
+      subject (from the configured HintResolver) and the requested
+      scope.
+    status: active
 
   - id: CIBA-016
     severity: P1
     spec: CIBA Core §7.1; RFC 9126 §2
     behaviour: |
-      A client with require_pushed_authorization_requests=true that
-      calls /backchannel directly MUST receive 200 OK; CIBA bypasses
-      the PAR requirement because it is a separate request channel.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      A client posting directly to /bc-authorize MUST receive 200 OK
+      regardless of the deployment's PAR posture. CIBA is a separate
+      request channel and does not flow through PAR.
+    status: active
 
   - id: CIBA-017
     severity: P1
     spec: CIBA Core §7.1
     behaviour: |
-      When the request supplies requested_expiry=300, the response's
-      expires_in MUST be at most 300 seconds.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      When the request supplies requested_expiry=300 and the OP's
+      configured CIBA max-expiry is at least 300 seconds, the response
+      expires_in is exactly 300.
+    status: active
 
   - id: CIBA-018
     severity: P0
     spec: CIBA Core §7.1
     behaviour: |
-      A POST /backchannel with login_hint_token and scope=openid
-      returns 200 OK; the processLoginHintToken hook is invoked and
-      the persisted request reflects the supplied params.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      A POST /bc-authorize with login_hint_token and scope=openid
+      returns 200 OK; the persisted record's hint_kind is
+      "login_hint_token".
+    status: active
 
   - id: CIBA-019
     severity: P0
     spec: CIBA Core §7.1
     behaviour: |
-      A POST /backchannel with id_token_hint (an id_token from a
-      prior CIBA cycle) returns 200 OK; the subsequent token exchange
-      via urn:openid:params:grant-type:ciba mints an id_token and the
-      downstream id_token_hint flow validates the persisted hint.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      A POST /bc-authorize with id_token_hint and scope=openid returns
+      200 OK; the persisted record's hint_kind is "id_token_hint". The
+      handler does not parse the id_token internally — the
+      HintResolver receives the raw value and is responsible for any
+      JWT verification.
+    status: active
 
   - id: CIBA-020
     severity: P0
     spec: CIBA Core §4
     behaviour: |
-      A client whose registered grant_types do not include
+      A registered client whose grant_types do not include
       urn:openid:params:grant-type:ciba MUST be rejected with 400
-      invalid_request and the description
-      "urn:openid:params:grant-type:ciba is not allowed for this client".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      unauthorized_client and the description "client is not authorized
+      for the ciba grant".
+    status: active
 
   - id: CIBA-021
     severity: P0
     spec: RFC 6749 §5.2; CIBA Core §7.1
     behaviour: |
-      An unknown client_id at /backchannel MUST be rejected with 401
-      invalid_client and the description "client authentication failed".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      An unknown client_id at /bc-authorize MUST be rejected with 401
+      invalid_client.
+    status: active
 
   - id: CIBA-022
     severity: P1
     spec: CIBA Core §7; RFC 6749 §3.2
     behaviour: |
-      /backchannel MUST reject any body whose Content-Type is not
+      /bc-authorize MUST reject any body whose Content-Type is not
       application/x-www-form-urlencoded with 400 invalid_request and
-      the description "only application/x-www-form-urlencoded
-      content-type bodies are supported on POST /backchannel".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      the description "content-type must be application/x-www-form-urlencoded".
+    status: active
 
   - id: CIBA-023
     severity: P1
     spec: CIBA Core §7.1.1
     behaviour: |
-      /backchannel MUST reject a request parameter when signed
-      Request Objects are disabled with 400 request_not_supported.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      /bc-authorize MUST reject a "request" form parameter when the
+      JAR feature is off with 400 invalid_request_object and the
+      description "request is not supported by this OP".
+    status: active
 
   - id: CIBA-024
     severity: P1
     spec: CIBA Core §7.1
     behaviour: |
-      /backchannel MUST reject a request_uri parameter with 400
-      request_uri_not_supported; CIBA never supports request_uri.
+      /bc-authorize rejects a request_uri form parameter; CIBA never
+      supports request_uri.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "request_uri at /bc-authorize: CIBA Core §7.1 does not define request_uri for backchannel-authentication; v1.0 silently ignores unknown form params. The signed-request channel is JWT-by-value via the \"request\" parameter only."
 
   - id: CIBA-025
     severity: P1
     spec: OIDC Core §7.2.1
     behaviour: |
-      /backchannel MUST reject a registration parameter with 400
-      registration_not_supported.
+      /bc-authorize rejects a registration form parameter.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: 'registration parameter on CIBA: OIDC Core §7.2.1 defines "registration" for the front-channel /authorize redirect; CIBA never carries it. v1.0 ignores unknown form params.'
 
   - id: CIBA-026
     severity: P0
     spec: CIBA Core §7.1, §13
     behaviour: |
-      When login_hint cannot resolve to an account, /backchannel MUST
-      return 400 unknown_user_id with the description "could not
-      identify end-user".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      When a login_hint cannot resolve to a known end-user (the
+      HintResolver returns op.ErrUnknownCIBAUser), /bc-authorize MUST
+      return 400 unknown_user_id with the description "the hint did
+      not resolve to a known end-user".
+    status: active
 
   - id: CIBA-027
     severity: P0
     spec: CIBA Core §7.1.1
     behaviour: |
-      When login_hint_token cannot resolve to an account identifier,
-      /backchannel MUST return 400 unknown_user_id with the
-      description "could not identify end-user".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      When a login_hint_token cannot resolve to a known end-user (the
+      HintResolver returns op.ErrUnknownCIBAUser), /bc-authorize MUST
+      return 400 unknown_user_id with the description "the hint did
+      not resolve to a known end-user".
+    status: active
 
   - id: CIBA-028
     severity: P0
     spec: CIBA Core §7.1
     behaviour: |
-      A /backchannel request missing scope MUST be rejected with 400
-      invalid_request and the description "missing required parameter
-      'scope'".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      A /bc-authorize request missing scope MUST be rejected with 400
+      invalid_request and the description "scope parameter is required".
+    status: active
 
   - id: CIBA-029
     severity: P0
     spec: CIBA Core §7.1.1
     behaviour: |
       A ping-mode client that omits client_notification_token MUST be
-      rejected with 400 invalid_request and the description "missing
-      required parameter 'client_notification_token'".
+      rejected with 400 invalid_request.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Ping-mode client_notification_token deferred. v1.0 advertises poll-only; ping is post-v1.0."
 
   - id: CIBA-030
     severity: P0
     spec: CIBA Core §7.1
     behaviour: |
       A scope value that lacks openid MUST be rejected with 400
-      invalid_request and the description "openid scope must be
-      requested for this request".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      invalid_scope and the description "the openid scope value is
+      required for ciba".
+    status: active
 
   - id: CIBA-031
     severity: P1
     spec: CIBA Core §7.1
     behaviour: |
-      requested_expiry=0 (or any otherwise invalid value) MUST be
-      rejected with 400 invalid_request and the description
-      "invalid requested_expiry parameter value".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      requested_expiry that is not a positive integer (zero, a
+      negative integer, or a non-numeric string) MUST be rejected with
+      400 invalid_request and the description "requested_expiry must
+      be a positive integer".
+    status: active
 
   - id: CIBA-032
     severity: P0
     spec: CIBA Core §7.1
     behaviour: |
-      A request with none of login_hint_token, id_token_hint, or
-      login_hint MUST be rejected with 400 invalid_request and the
-      description "missing one of required parameters
-      login_hint_token, id_token_hint, or login_hint".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      A request supplying none of login_hint / login_hint_token /
+      id_token_hint MUST be rejected with 400 invalid_request and the
+      description "exactly one of login_hint, id_token_hint, or
+      login_hint_token is required".
+    status: active
 
   - id: CIBA-033
     severity: P0
     spec: CIBA Core §7.1
     behaviour: |
-      A request that supplies more than one hint parameter MUST be
-      rejected with 400 invalid_request and the description "only one
-      of required parameters login_hint_token, id_token_hint, or
-      login_hint must be provided".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      A request supplying more than one hint parameter MUST be rejected
+      with 400 invalid_request and the description "exactly one of
+      login_hint, id_token_hint, or login_hint_token is required".
+    status: active
 
   - id: CIBA-034
     severity: P1
-    spec: CIBA Core §7.1.1
+    spec: CIBA Core §7.1
     behaviour: |
-      With JAR disabled, a /backchannel request carrying request MUST
-      be rejected with 400 request_not_supported.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      With JAR enabled but no FAPI-CIBA profile active, /bc-authorize
+      MUST still accept plain form requests that do not include a
+      "request" parameter — the signed-request channel is opt-in for
+      vanilla deployments. 200 OK.
+    status: active
 
   - id: CIBA-035
     severity: P1
     spec: CIBA Core §7.1.1
     behaviour: |
-      Even with signed Request Object support enabled, /backchannel
-      MUST still reject request_uri with 400
-      request_uri_not_supported.
+      Even with JAR enabled, /bc-authorize rejects a request_uri form
+      parameter.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "request_uri at /bc-authorize (with-JAR variant): CIBA Core §7.1 does not define request_uri for backchannel-authentication; v1.0 silently ignores unknown form params. The signed-request channel is JWT-by-value via the \"request\" parameter only."
 
   - id: CIBA-036
     severity: P1
     spec: OIDC Core §7.2.1
     behaviour: |
-      Even with JAR enabled, /backchannel MUST reject a registration
-      parameter with 400 registration_not_supported.
+      Even with JAR enabled, /bc-authorize rejects a registration form
+      parameter.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: 'registration parameter on CIBA (with-JAR variant): OIDC Core §7.2.1 defines "registration" for the front-channel /authorize redirect; CIBA never carries it. v1.0 ignores unknown form params.'
 
   - id: CIBA-037
     severity: P0
     spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2
     behaviour: |
-      A client that requires a signed Request Object MUST be rejected
-      with 400 invalid_request "Request Object must be used by this
-      client" when the request omits it; retrying with a valid signed
-      Request Object yields 200 OK.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      Under FAPI-CIBA profile, posting /bc-authorize without a
+      "request" parameter MUST be rejected with 400 invalid_request and
+      the description "request object is required by the active
+      profile". Retrying with a valid signed Request Object yields 200
+      OK.
+    status: active
 
   - id: CIBA-038
     severity: P0
     spec: CIBA Core §7.1.1; RFC 9101 §10.8
     behaviour: |
-      A signed Request Object missing the exp claim MUST be rejected
-      with 400 invalid_request and the description "Request Object is
-      missing the 'exp' claim".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      Under FAPI-CIBA profile, a signed Request Object missing the
+      exp claim MUST be rejected with 400 invalid_request_object.
+    status: active
 
   - id: CIBA-039
     severity: P0
     spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2
     behaviour: |
-      A signed Request Object missing the nbf claim MUST be rejected
-      with 400 invalid_request and the description "Request Object is
-      missing the 'nbf' claim".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      Under FAPI-CIBA profile, a signed Request Object missing the
+      nbf claim MUST be rejected with 400 invalid_request_object. The
+      JAR verifier flips RequireNbf=true under FAPI-CIBA per
+      FAPI 2.0 Message Signing §5.6.
+    status: active
 
   - id: CIBA-040
     severity: P0
     spec: CIBA Core §7.1.1; RFC 7519 §4.1.7
     behaviour: |
-      A signed Request Object missing the jti claim MUST be rejected
-      with 400 invalid_request and the description "Request Object is
-      missing the 'jti' claim".
-    status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+      Under FAPI-CIBA profile, a signed Request Object missing the
+      jti claim MUST be rejected with 400 invalid_request_object. The
+      JAR verifier flips AllowMissingJTI=false under any FAPI profile.
+    status: active
 
   - id: CIBA-041
     severity: P0
     spec: CIBA Core §7.1.1; RFC 7519 §4.1.6
     behaviour: |
-      A signed Request Object missing the iat claim MUST be rejected
-      with 400 invalid_request and the description "Request Object is
-      missing the 'iat' claim".
+      Under FAPI-CIBA profile, a signed Request Object missing the
+      iat claim is rejected with 400 invalid_request_object.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Mandatory iat claim on the request object: RFC 9101 §6.1 marks iat OPTIONAL and v1.0's JAR verifier honours that — replay defence is anchored on exp + jti, not iat. See internal/jar/verify.go::assertIat."
 
   - id: CIBA-042
     severity: P1
     spec: CIBA Core §7.1.1
     behaviour: |
       A JWE-formed request parameter MUST be rejected with 400
-      invalid_request and the description "Encrypted Request Objects
-      are not supported by CIBA".
+      invalid_request_object.
     status: out-of-scope
-    out_of_scope_reason: v1.0 does not implement CIBA. op/feature/feature.go has no CIBA flag (only PKCE/PAR/JAR/JARM/DPoP/MTLS/Introspect/Revoke/DynamicRegistration). docs/plans/002-product-design.md L2335,L2386,L3462 explicitly defer ProfileFAPICIBA to v1.x. No internal/ciba implementation; internal/backchannel is for backchannel-logout, not CIBA.
+    out_of_scope_reason: "Encrypted CIBA request object rejection: v1.0's JAR verifier accepts JWE-wrapped request objects when an encryption keyset is registered (internal/jar/verify.go); FAPI-CIBA-ID1 §5.2.2 does not forbid encryption. If a deployment wishes to disallow it, the embedder leaves WithEncryptionKeyset unset."
