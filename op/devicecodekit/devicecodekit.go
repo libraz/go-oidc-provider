@@ -252,7 +252,8 @@ func recordStrike(ctx context.Context, deps *Deps, deviceCodeID, clientID string
 		if !errors.Is(denyErr, store.ErrConflict) && !errors.Is(denyErr, store.ErrNotFound) {
 			return denyErr
 		}
-		return nil //nolint:nilerr // sentinel-class race absorbed; audit already emitted, lockout observable.
+		// Sentinel-class race absorbed; audit already emitted, lockout observable.
+		return nil
 	}
 	deps.auditEmitter().Emit(ctx, audit.Event{
 		Name:     devicecode.AuditVerificationDenied,

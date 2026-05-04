@@ -98,7 +98,15 @@ func TestHandle_RegistryFault_EmitsRegistryErrorAudit(t *testing.T) {
 	emitter := &recordingEmitter{}
 
 	h := &Handler{
-		policy:       func(_ context.Context, _ RequestView) (*Decision, error) { return nil, nil },
+		policy: func(_ context.Context, _ RequestView) (*Decision, error) {
+			// The registry-fault path returns invalid_grant before
+			// the policy runs; reaching this stub means the gate
+			// regressed and the test should fail loudly rather than
+			// silently emit (nil, nil).
+			t.Helper()
+			t.Fatal("policy unexpectedly invoked: registry-fault path should short-circuit before policy runs")
+			return nil, errors.New("unreachable")
+		},
 		issuer:       "https://op.example",
 		keys:         keySet,
 		accessTokens: faultyRegistry{},

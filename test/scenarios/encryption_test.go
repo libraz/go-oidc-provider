@@ -669,7 +669,7 @@ func TestScenario_ENC_036_DCRRejectsHalfPairEncryptionMetadata(t *testing.T) {
 	}
 
 	// Negative: alg only -> 400 invalid_client_metadata.
-	halfPairBody := map[string]any{
+	halfPairBody := map[string]any{ //nolint:gosec // G101: client-metadata field name "id_token_encrypted_response_alg" is JOSE / OIDC vocabulary, not a credential.
 		"redirect_uris":                   []string{"https://rp.testkit.invalid/cb"},
 		"id_token_encrypted_response_alg": "RSA-OAEP-256",
 	}
@@ -688,7 +688,7 @@ func TestScenario_ENC_036_DCRRejectsHalfPairEncryptionMetadata(t *testing.T) {
 	}
 
 	// Positive: both alg+enc set on the closed JOSE allow-list -> 201.
-	bothPairBody := map[string]any{
+	bothPairBody := map[string]any{ //nolint:gosec // G101: client-metadata field names are JOSE / OIDC vocabulary, not credentials.
 		"redirect_uris":                   []string{"https://rp.testkit.invalid/cb"},
 		"id_token_encrypted_response_alg": "RSA-OAEP-256",
 		"id_token_encrypted_response_enc": "A256GCM",
