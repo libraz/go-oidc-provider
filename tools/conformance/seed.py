@@ -8,10 +8,21 @@ from typing import Any
 from . import ofcs
 from .paths import CERTS, PLAN_IDS_FILE, PLANS_DIR
 
+# Plan name strings are the OFCS internal "test plan" identifier the
+# /plan REST endpoint expects in the planName= query parameter. The
+# names below are the canonical IDs the OFCS UI exposes when a user
+# selects the plan by hand. If a name ever drifts (OFCS renames a
+# plan in a release bump), seed-plans surfaces the failure as
+# "[seed] failed for <file>: ..." and the operator updates this list.
 _PLANS = [
     ("oidcc-basic.json", "oidcc-basic-certification-test-plan"),
+    ("oidcc-config.json", "oidcc-config-certification-test-plan"),
+    ("oidcc-formpost.json", "oidcc-formpost-basic-certification-test-plan"),
+    ("oidcc-rp-initiated-logout.json", "oidcc-rp-initiated-logout-certification-test-plan"),
+    ("oidcc-back-channel-logout.json", "oidcc-back-channel-rp-initiated-logout-certification-test-plan"),
     ("fapi2-baseline.json", "fapi2-security-profile-id2-test-plan"),
     ("fapi2-message-signing.json", "fapi2-message-signing-id1-test-plan"),
+    ("fapi-ciba.json", "fapi-ciba-id1-test-plan"),
 ]
 
 

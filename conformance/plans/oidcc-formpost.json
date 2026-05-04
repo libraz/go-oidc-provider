@@ -1,0 +1,27 @@
+{
+  "alias": "go-oidc-oidcc-formpost",
+  "publish": "summary",
+  "description": "go-oidc-provider — oidcc-formpost (response_mode=form_post on Authorization Code + PKCE)",
+  "consent": false,
+  "server": {
+    "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "demo-confidential",
+    "client_secret": "demo-confidential-secret",
+    "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-formpost/callback",
+    "scope": "openid profile email"
+  },
+  "client2": {
+    "client_id": "demo-confidential-2",
+    "client_secret": "demo-confidential-secret"
+  },
+  "variant": {
+    "server_metadata": "discovery",
+    "client_registration": "static_client",
+    "response_type": "code",
+    "response_mode": "form_post",
+    "client_auth_type": "client_secret_basic"
+  },
+  "browser": []
+}

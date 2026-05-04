@@ -1,0 +1,31 @@
+{
+  "alias": "go-oidc-oidcc-bc-logout",
+  "publish": "summary",
+  "description": "go-oidc-provider — oidcc-back-channel-rp-initiated-logout-test (RP-Initiated Logout + back-channel logout_token)",
+  "consent": false,
+  "server": {
+    "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "demo-confidential",
+    "client_secret": "demo-confidential-secret",
+    "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-bc-logout/callback",
+    "post_logout_redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-bc-logout/post_logout_redirect",
+    "backchannel_logout_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-bc-logout/backchannel_logout",
+    "backchannel_logout_session_required": true,
+    "scope": "openid profile email"
+  },
+  "client2": {
+    "client_id": "demo-confidential-2",
+    "client_secret": "demo-confidential-secret",
+    "post_logout_redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-bc-logout/post_logout_redirect"
+  },
+  "variant": {
+    "server_metadata": "discovery",
+    "client_registration": "dynamic_client",
+    "response_type": "code",
+    "response_mode": "default",
+    "client_auth_type": "client_secret_basic"
+  },
+  "browser": []
+}

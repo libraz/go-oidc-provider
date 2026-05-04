@@ -82,12 +82,19 @@ MOUNT="/oidc"
 CLIENT_ID="demo-client"
 
 # Each OFCS plan gets a callback path keyed on the plan alias; seed
-# every alias up front so a single op-demo run covers all three
-# profiles without restarting between plans.
+# every alias up front so a single op-demo run covers every profile
+# without restarting between plans. Aliases that exercise logout (RP-
+# initiated and back-channel) reuse the same /callback shape — op-demo
+# derives the matching /post_logout_redirect URI from the suffix.
 REDIRECT_URIS="\
 https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-basic/callback,\
+https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-config/callback,\
+https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-formpost/callback,\
+https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-rp-init-logout/callback,\
+https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-bc-logout/callback,\
 https://localhost.emobix.co.uk:8443/test/a/go-oidc-fapi2-baseline/callback,\
-https://localhost.emobix.co.uk:8443/test/a/go-oidc-fapi2-msg-signing/callback"
+https://localhost.emobix.co.uk:8443/test/a/go-oidc-fapi2-msg-signing/callback,\
+https://localhost.emobix.co.uk:8443/test/a/go-oidc-fapi-ciba/callback"
 
 OFCS_API="${OFCS_API:-https://localhost:8443}"
 export OFCS_API
@@ -230,15 +237,38 @@ cmd_op_up() {
   # parent does not always reap the child, which leaks a listener on
   # ${LISTEN}. Building once and exec-ing the binary directly means
   # the captured PID is the only process to manage.
+  # OPDEMO_RACE=1 builds op-demo with -race so the manual
+  # release-prep run can catch concurrent accesses that pass under
+  # the unit test suite. The default (unset) is a normal build —
+  # -race adds CPU + memory overhead OFCS does not need on every
+  # iteration. The flag is silent when unset so casual op-up still
+  # builds quickly.
+  build_args=()
+  if [[ "${OPDEMO_RACE:-}" == "1" ]]; then
+    build_args+=(-race)
+    echo "[op-up] OPDEMO_RACE=1; building with -race"
+  fi
   echo "[op-up] building ${BINFILE}"
-  ( cd "${ROOT}" && go build -o "${BINFILE}" ./cmd/op-demo )
+  ( cd "${ROOT}" && go build "${build_args[@]}" -o "${BINFILE}" ./cmd/op-demo )
+
+  # OP_ENABLE_DCR=1 turns on Dynamic Client Registration. Required by
+  # the oidcc-dynamic plan and by oidcc-back-channel-rp-initiated-
+  # logout's dynamic_client variant. Op-demo prints the resulting IAT
+  # to stdout (captured in ${LOGFILE}) so the operator can paste it
+  # into OFCS.
+  dcr_flag=()
+  if [[ "${OP_ENABLE_DCR:-}" == "1" ]]; then
+    dcr_flag+=(-enable-dcr)
+  fi
 
   # OP_PROFILE selects the security profile op-demo runs under. The
   # default ("") = vanilla OIDC Core. Override with
   #   OP_PROFILE=fapi2-baseline scripts/conformance.sh op-up
   # to drive the FAPI 2.0 Baseline plan; the binary then activates
   # WithProfile + the features the profile demands (PAR / DPoP).
-  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic})"
+  # OP_PROFILE=fapi-ciba activates the FAPI-CIBA profile and the
+  # auto-approving CIBA substore wrapper.
+  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic}, dcr=${OP_ENABLE_DCR:-0})"
   "${BINFILE}" \
     -listen "${LISTEN}" \
     -issuer "${ISSUER}" \
@@ -250,6 +280,7 @@ cmd_op_up() {
     -profile "${OP_PROFILE:-}" \
     -fapi-client-jwks "${ROOT}/conformance/keys/fapi-client.jwks.json" \
     -fapi-client-2-jwks "${ROOT}/conformance/keys/fapi-client-2.jwks.json" \
+    "${dcr_flag[@]}" \
     > "${LOGFILE}" 2>&1 &
   echo $! > "${PIDFILE}"
   sleep 1

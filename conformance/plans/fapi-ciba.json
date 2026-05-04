@@ -1,0 +1,39 @@
+{
+  "alias": "go-oidc-fapi-ciba",
+  "publish": "summary",
+  "description": "go-oidc-provider — fapi-ciba-id1 (FAPI-CIBA poll mode, JAR + DPoP)",
+  "consent": false,
+  "server": {
+    "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "client_id": "demo-fapi-ciba",
+    "scope": "openid profile",
+    "client_authentication_type": "private_key_jwt",
+    "hint_type": "login_hint",
+    "hint_value": "demo",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "use": "sig",
+          "alg": "ES256",
+          "kid": "fapi-client-1",
+          "x": "tn47XpuJUkfY7CDSmu5fayO7EnPvG9u9uqVb-Ifmthc",
+          "y": "k5a3GEPNL35HRcw-Ajt5rfJ5llU7HomRBQfWWroFva8",
+          "d": "jJIxf76uD4dK01r2oxsG5fv1XjOZFdJpdWWUuSh5Dxs"
+        }
+      ]
+    }
+  },
+  "variant": {
+    "client_auth_type": "private_key_jwt",
+    "sender_constrain": "dpop",
+    "fapi_profile": "plain_fapi",
+    "ciba_mode": "poll",
+    "fapi_request_method": "signed_non_repudiation",
+    "client_registration": "static_client"
+  },
+  "browser": []
+}

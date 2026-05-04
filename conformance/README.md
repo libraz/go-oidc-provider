@@ -1,14 +1,19 @@
 # go-oidc-provider — OFCS Conformance Harness
 
 This directory carries the artifacts needed to run go-oidc-provider
-against the [OpenID Foundation Conformance Suite][ofcs]. Three plans
+against the [OpenID Foundation Conformance Suite][ofcs]. Eight plans
 are scaffolded:
 
 | Plan file                               | Profile                  | What it exercises                            |
 | --------------------------------------- | ------------------------ | -------------------------------------------- |
 | `plans/oidcc-basic.json`                | `oidcc-basic`            | Authorization Code + PKCE, ID token, UserInfo |
+| `plans/oidcc-config.json`               | `oidcc-config`           | Discovery document + JWKS shape              |
+| `plans/oidcc-formpost.json`             | `oidcc-formpost-basic`   | Authorization Code + `response_mode=form_post` |
+| `plans/oidcc-rp-initiated-logout.json`  | `oidcc-rp-init-logout`   | OpenID Connect RP-Initiated Logout 1.0       |
+| `plans/oidcc-back-channel-logout.json`  | `oidcc-back-channel-rp-initiated-logout` | RP-Initiated + back-channel `logout_token` |
 | `plans/fapi2-baseline.json`             | `fapi2-baseline`         | + PAR, JAR, DPoP                             |
 | `plans/fapi2-message-signing.json`      | `fapi2-message-signing`  | + JARM, signed introspection                 |
+| `plans/fapi-ciba.json`                  | `fapi-ciba-id1`          | CIBA poll mode (signed JAR + DPoP)           |
 
 ## Prerequisites
 
@@ -148,8 +153,13 @@ conformance/
 ├── baselines/            ← `baseline` snapshots (gitignored)
 └── plans/                ← OFCS plan templates (committed)
     ├── oidcc-basic.json
+    ├── oidcc-config.json
+    ├── oidcc-formpost.json
+    ├── oidcc-rp-initiated-logout.json
+    ├── oidcc-back-channel-logout.json
     ├── fapi2-baseline.json
-    └── fapi2-message-signing.json
+    ├── fapi2-message-signing.json
+    └── fapi-ciba.json
 ```
 
 ## Bumping the pinned OFCS release
@@ -168,5 +178,80 @@ OFCS test logic does drift between releases (module renames, condition
 strictness changes, new variants); rerun the batch spot-check after
 any bump and update `scripts/conformance.sh` if a module needs a
 different driver hint.
+
+## Release sign-off (v0.9.1)
+
+The v0.9.1 release blocker is "8 plans land green for 7 consecutive
+runs, with the final run executing op-demo under the race detector".
+The full ceremony is manual; CI does not gate on it because OFCS
+runtime exceeds the budget of a hobby-OSS pipeline.
+
+### One-time setup per machine
+
+```sh
+make conformance-up                   # certs + OFCS + op-demo + seed-plans
+```
+
+For the **logout** and **DCR** plans, restart op-demo with DCR turned
+on so OFCS can mint per-test client records:
+
+```sh
+OP_ENABLE_DCR=1 make conformance-op-up
+# op-demo prints the Initial Access Token to conformance/op-demo.log;
+# grep "DCR Initial Access Token" conformance/op-demo.log
+```
+
+For the **fapi-ciba** plan, restart with `OP_PROFILE=fapi-ciba` so
+the op-demo wires `op.WithCIBA` and the auto-approving substore:
+
+```sh
+OP_PROFILE=fapi-ciba make conformance-op-up
+```
+
+### 7-consecutive-green ceremony
+
+Run each of the 8 plans through `make conformance-baseline` until 7
+consecutive captures show no regressions vs. a chosen reference
+baseline. Use `LABEL=v0.9.1-rc<N>-<plan>` so the file names sort
+chronologically.
+
+```sh
+# Capture
+make conformance-baseline LABEL=v0.9.1-rc1-fapi2-baseline
+
+# Compare against the previous release point
+make conformance-baseline-diff \
+    BASELINE_OLD=conformance/baselines/2026-05-01T16-42-42Z-pre-v0.9.0-fixed-3.json \
+    BASELINE_NEW=conformance/baselines/<latest>.json
+```
+
+If a single capture regresses, the counter resets; the goal is 7 in
+a row across all 8 plans.
+
+### Final race-detector pass
+
+The last of the 7 runs is captured with op-demo built under `-race`.
+The flag is opt-in so day-to-day iteration stays fast:
+
+```sh
+make conformance-down
+OPDEMO_RACE=1 make conformance-up
+# … run baseline as above …
+make conformance-baseline LABEL=v0.9.1-rc-final-race-<plan>
+
+# After every plan finishes, scan the log for races. A clean run
+# prints zero hits.
+grep -c "WARNING: DATA RACE" conformance/op-demo.log
+```
+
+A non-zero count is a release blocker — investigate before tagging.
+
+### What "green" means here
+
+The diff command exits non-zero on any module that *was* `PASSED` in
+the reference and *is no longer* `PASSED` in the new capture. Modules
+that were never green (skipped, awaiting review, OFCS-side bug) do
+not block the count; they are tracked in
+[`docs/plans/013-v0.9.1-plan.md`](../docs/plans/013-v0.9.1-plan.md) §7.
 
 [ofcs]: https://gitlab.com/openid/conformance-suite

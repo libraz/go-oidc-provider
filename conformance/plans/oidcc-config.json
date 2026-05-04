@@ -1,0 +1,10 @@
+{
+  "alias": "go-oidc-oidcc-config",
+  "publish": "summary",
+  "description": "go-oidc-provider — oidcc-config-certification (Discovery + JWKS shape)",
+  "consent": false,
+  "server": {
+    "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
+  },
+  "browser": []
+}
