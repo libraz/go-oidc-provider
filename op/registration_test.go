@@ -85,6 +85,8 @@ func (s nonRegistryStore) Metadata() store.MetadataStore { return s.inner.Metada
 
 func (s nonRegistryStore) DeviceCodes() store.DeviceCodeStore { return s.inner.DeviceCodes() }
 
+func (s nonRegistryStore) CIBARequests() store.CIBARequestStore { return s.inner.CIBARequests() }
+
 // dcrBaseOpts returns the option slice that satisfies op.New for a
 // DCR-enabled provider when paired with WithDynamicRegistration. The
 // helper centralises the deterministic clock so tests that observe

@@ -334,6 +334,14 @@ func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s, nil)
 // supplied.
 func (s *Store) DeviceCodes() store.DeviceCodeStore { return nil }
 
+// CIBARequests implements [store.Store] but the SQL adapter does not
+// yet ship a [store.CIBARequestStore] implementation; CIBA support
+// ladders in via the in-memory adapter or a composite that routes
+// [composite.CIBARequests] elsewhere. Returning nil here lets op.New
+// surface the gap with a clear "CIBA substore missing" error at
+// construction time when [op.WithCIBA] is supplied.
+func (s *Store) CIBARequests() store.CIBARequestStore { return nil }
+
 // --- store.ClientRegistry ----------------------------------------------------
 
 // Compile-time guard: the library calls cfg.store.(store.ClientRegistry)

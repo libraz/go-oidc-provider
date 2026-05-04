@@ -352,6 +352,15 @@ func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s) }
 //nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
 func (s *Store) DeviceCodes() store.DeviceCodeStore { panic(unimplemented("DeviceCodes")) }
 
+// CIBARequests implements [store.Store] but the Redis adapter does
+// not yet ship a [store.CIBARequestStore] implementation. Embedders
+// requiring CIBA support route the substore to a CIBA-capable backend
+// (the in-memory adapter or a future SQL/Redis implementation) via
+// op/storeadapter/composite.
+//
+//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
+func (s *Store) CIBARequests() store.CIBARequestStore { panic(unimplemented("CIBARequests")) }
+
 // Sessions returns the [store.SessionStore] handle. Sessions are an
 // in-scope substore for the Redis adapter: the OP does not
 // coordinate Session writes with token-endpoint commits, so a volatile

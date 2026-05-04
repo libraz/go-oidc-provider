@@ -152,6 +152,15 @@ const (
 	// guarantee without coordinating with the access-token /
 	// refresh-token writes.
 	DeviceCodes
+
+	// CIBARequests routes [store.CIBARequestStore] calls. Used by the
+	// /bc-authorize endpoint, the embedder's authentication device
+	// callback, and the CIBA grant at the token endpoint. Outside the
+	// transactional cluster: the approve→consume CAS in
+	// [store.CIBARequestStore.Consume] supplies the single-use
+	// guarantee without coordinating with the access-token /
+	// refresh-token writes.
+	CIBARequests
 )
 
 // kindNames maps each [Kind] to its unqualified name. Indexed by Kind value
@@ -176,6 +185,7 @@ var kindNames = map[Kind]string{
 	GrantRevocations:         "GrantRevocations",
 	Metadata:                 "Metadata",
 	DeviceCodes:              "DeviceCodes",
+	CIBARequests:             "CIBARequests",
 }
 
 // String returns the unqualified name of the Kind, suitable for error
@@ -209,6 +219,7 @@ var allKinds = []Kind{
 	GrantRevocations,
 	Metadata,
 	DeviceCodes,
+	CIBARequests,
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
@@ -528,6 +539,16 @@ func (s *Store) Metadata() store.MetadataStore {
 // [TxClusterKinds].
 func (s *Store) DeviceCodes() store.DeviceCodeStore {
 	return s.routes[DeviceCodes].DeviceCodes()
+}
+
+// CIBARequests implements [store.Store]. The composite passes the
+// call through to the routed backend; nil from the backend surfaces
+// as nil here so op.New can reject the op.WithCIBA option when the
+// substore is missing instead of panicking later. Routed backends MAY
+// support the substore independently of the transactional anchor —
+// CIBARequests is intentionally outside [TxClusterKinds].
+func (s *Store) CIBARequests() store.CIBARequestStore {
+	return s.routes[CIBARequests].CIBARequests()
 }
 
 // BeginTx implements [store.Transactional] by delegating to the

@@ -116,4 +116,15 @@ type Store interface {
 	// [DeviceCodeStore.Consume] supplies the single-use guarantee on
 	// its own.
 	DeviceCodes() DeviceCodeStore
+
+	// CIBARequests returns the [CIBARequestStore] for OpenID Connect
+	// CIBA Core 1.0 backchannel-authentication records. Backends that
+	// have not yet provisioned the substore MAY return nil; the
+	// library detects nil at op.New and rejects op.WithCIBA with a
+	// clear error rather than panicking later. Outside the
+	// transactional cluster for the same reason as
+	// [Store.DeviceCodes]: the approve→consume CAS in
+	// [CIBARequestStore.Consume] supplies the single-use guarantee on
+	// its own.
+	CIBARequests() CIBARequestStore
 }

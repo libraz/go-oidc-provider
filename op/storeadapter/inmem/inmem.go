@@ -109,6 +109,7 @@ type Store struct {
 	grantRevocations   *grantRevocationStore
 	metadata           *metadataStore
 	deviceCodes        *deviceCodeStore
+	cibaRequests       *cibaRequestStore
 }
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
@@ -142,6 +143,7 @@ func New(opts ...Option) *Store {
 	s.grantRevocations = newGrantRevocationStore()
 	s.metadata = newMetadataStore()
 	s.deviceCodes = newDeviceCodeStore(s.clock)
+	s.cibaRequests = newCIBARequestStore(s.clock)
 	return s
 }
 
@@ -215,6 +217,9 @@ func (s *Store) Metadata() store.MetadataStore { return s.metadata }
 // [DeviceCodeStore.Consume] supplies the single-use guarantee on
 // its own.
 func (s *Store) DeviceCodes() store.DeviceCodeStore { return s.deviceCodes }
+
+// CIBARequests implements [store.Store].
+func (s *Store) CIBARequests() store.CIBARequestStore { return s.cibaRequests }
 
 // TOTPs returns the [store.TOTPStore] backed by this Store. The
 // substore is not part of the aggregate [store.Store] interface (the

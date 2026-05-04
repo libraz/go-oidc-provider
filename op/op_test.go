@@ -72,6 +72,11 @@ func (stubStore) Metadata() store.MetadataStore { return nil }
 // op.New rejects op.WithDeviceCodeGrant when the substore is missing.
 func (stubStore) DeviceCodes() store.DeviceCodeStore { return nil }
 
+// CIBARequests returns nil; construction tests do not enable CIBA, so
+// the library never exercises this path. op.New rejects op.WithCIBA
+// when the substore is missing.
+func (stubStore) CIBARequests() store.CIBARequestStore { return nil }
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }

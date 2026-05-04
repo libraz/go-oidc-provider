@@ -257,6 +257,8 @@ func (fakeStore) Metadata() store.MetadataStore { return fakeMetadataStore{} }
 
 func (fakeStore) DeviceCodes() store.DeviceCodeStore { return fakeDeviceCodeStore{} }
 
+func (fakeStore) CIBARequests() store.CIBARequestStore { return fakeCIBARequestStore{} }
+
 var _ store.Store = (*fakeStore)(nil)
 
 type fakeMetadataStore struct{}
@@ -381,3 +383,29 @@ func (fakeDeviceCodeStore) Consume(context.Context, string) (*store.DeviceCode, 
 }
 
 var _ store.DeviceCodeStore = (*fakeDeviceCodeStore)(nil)
+
+type fakeCIBARequestStore struct{}
+
+func (fakeCIBARequestStore) Save(context.Context, *store.CIBARequest) error { return nil }
+
+func (fakeCIBARequestStore) FindByAuthReqID(context.Context, string) (*store.CIBARequest, error) {
+	return nil, store.ErrNotFound
+}
+
+func (fakeCIBARequestStore) Approve(context.Context, string, string) error { return store.ErrNotFound }
+
+func (fakeCIBARequestStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
+
+func (fakeCIBARequestStore) RecordPoll(context.Context, string, time.Time) error {
+	return store.ErrNotFound
+}
+
+func (fakeCIBARequestStore) IncrementPollViolation(context.Context, string) (uint8, error) {
+	return 0, store.ErrNotFound
+}
+
+func (fakeCIBARequestStore) Consume(context.Context, string) (*store.CIBARequest, error) {
+	return nil, store.ErrNotFound
+}
+
+var _ store.CIBARequestStore = (*fakeCIBARequestStore)(nil)
