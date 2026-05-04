@@ -81,14 +81,19 @@ func TestNewInMemoryDPoPNonceSource_ValidatesCurrent(t *testing.T) {
 func TestNewInMemoryDPoPNonceSource_AcceptsPreviousAcrossRotation(t *testing.T) {
 	t.Parallel()
 
-	src, err := op.NewInMemoryDPoPNonceSource(context.Background(), 20*time.Millisecond)
+	// 200ms rotation gives ~20x headroom over the 10ms polling cadence
+	// so a CPU-contended test runner cannot slip past TWO rotations
+	// (which would retire `first` from the previous slot) between the
+	// IssueNonce that mints `first` and the IssueNonce that observes
+	// the rotation.
+	src, err := op.NewInMemoryDPoPNonceSource(context.Background(), 200*time.Millisecond)
 	if err != nil {
 		t.Fatalf("NewInMemoryDPoPNonceSource: %v", err)
 	}
 	first := src.IssueNonce()
 
 	// Wait for at least one rotation to occur.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if next := src.IssueNonce(); next != first {
 			// Rotation happened. The previous value MUST still
@@ -102,7 +107,7 @@ func TestNewInMemoryDPoPNonceSource_AcceptsPreviousAcrossRotation(t *testing.T) 
 			}
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("nonce did not rotate within deadline (first=%q)", first)
 }
