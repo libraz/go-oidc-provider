@@ -220,6 +220,24 @@ const (
 	AuditDeviceCodeTokenSlowDown            = AuditEvent("device_code.token.slow_down")
 )
 
+// CIBA events. Fire from the /bc-authorize endpoint, the embedder's
+// authentication-device interaction, and the token-endpoint CIBA
+// grant. The internal package cannot import op (one-way import graph),
+// so the values are duplicated as raw strings inside
+// internal/ciba/audit.go and a mirror test (TestAuditEvent_CIBAMirror)
+// pins them together.
+const (
+	AuditCIBAAuthorizationIssued          = AuditEvent("ciba.authorization.issued")
+	AuditCIBAAuthorizationRejected        = AuditEvent("ciba.authorization.rejected")
+	AuditCIBAAuthorizationUnboundRejected = AuditEvent("ciba.authorization.unbound_rejected")
+	AuditCIBAAuthDeviceApproved           = AuditEvent("ciba.auth_device.approved")
+	AuditCIBAAuthDeviceDenied             = AuditEvent("ciba.auth_device.denied")
+	AuditCIBAPollAbuseLockout             = AuditEvent("ciba.poll_abuse.lockout")
+	AuditCIBATokenIssued                  = AuditEvent("ciba.token.issued")
+	AuditCIBATokenRejected                = AuditEvent("ciba.token.rejected")
+	AuditCIBATokenSlowDown                = AuditEvent("ciba.token.slow_down")
+)
+
 // Token-exchange events. Fire from the in-tree RFC 8693 handler.
 // Every successful exchange emits Requested + Granted; rejections
 // emit Requested + one of the failure-class events depending on the

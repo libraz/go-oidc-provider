@@ -115,6 +115,32 @@ func TestAuditEvent_DeviceCodeMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_CIBAMirror keeps the public op.AuditCIBA* constants
+// aligned with the raw strings the CIBA surfaces emit. The internal
+// ciba helpers (internal/ciba/audit.go) and the cibaendpoint /
+// token-endpoint CIBA handler all consume the raw strings; the public
+// constants are the SOC-facing API and must agree byte-for-byte.
+func TestAuditEvent_CIBAMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"ciba.authorization.issued":           op.AuditCIBAAuthorizationIssued,
+		"ciba.authorization.rejected":         op.AuditCIBAAuthorizationRejected,
+		"ciba.authorization.unbound_rejected": op.AuditCIBAAuthorizationUnboundRejected,
+		"ciba.auth_device.approved":           op.AuditCIBAAuthDeviceApproved,
+		"ciba.auth_device.denied":             op.AuditCIBAAuthDeviceDenied,
+		"ciba.poll_abuse.lockout":             op.AuditCIBAPollAbuseLockout,
+		"ciba.token.issued":                   op.AuditCIBATokenIssued,
+		"ciba.token.rejected":                 op.AuditCIBATokenRejected,
+		"ciba.token.slow_down":                op.AuditCIBATokenSlowDown,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_DPoPLooseMethodCaseMirror keeps the public
 // op.AuditDPoPLooseMethodCaseAdmitted constant aligned with the raw
 // string that the DPoP verifier emits when the

@@ -105,6 +105,7 @@ linters:
             - "!**/internal/customgrant/**"
             - "!**/internal/devicecode/**"
             - "!**/internal/devicecodeendpoint/**"
+            - "!**/internal/cibaendpoint/**"
             - "!**/internal/authn/**"
             - "!**/internal/backchannel/**"
             - "!**/internal/clientauth/**"

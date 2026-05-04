@@ -320,6 +320,17 @@ type Deps struct {
 	// opts into the grant cannot reach the runtime nil-check.
 	DeviceCodes store.DeviceCodeStore
 
+	// CIBARequests is the substore for OpenID Connect CIBA records.
+	// The token-endpoint CIBA grant looks records up by auth_req_id,
+	// applies the polling discipline, and atomically consumes the row
+	// before issuing credentials. A nil value disables the CIBA grant
+	// entirely: requests arriving with grant_type=urn:openid:params:
+	// grant-type:ciba are rejected with unsupported_grant_type. The
+	// op-layer wiring guards op.WithCIBA against the nil-substore case
+	// at construction time so a deployment that opts into the grant
+	// cannot reach the runtime nil-check.
+	CIBARequests store.CIBARequestStore
+
 	// ClientEncJWKs resolves the RP's encryption recipient when the
 	// client registered id_token_encrypted_response_alg / _enc. The
 	// resolver wraps an issued id_token in a JWE addressed to the
@@ -371,6 +382,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		handleClientCredentials(w, r, deps)
 	case "urn:ietf:params:oauth:grant-type:device_code":
 		handleDeviceCode(w, r, deps)
+	case "urn:openid:params:grant-type:ciba":
+		handleCIBA(w, r, deps)
 	default:
 		if deps.CustomGrants != nil && deps.CustomGrants.HasHandler(grantType) {
 			handleCustomGrant(w, r, deps, grantType)

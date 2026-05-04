@@ -32,6 +32,13 @@ const (
 	// grant from RFC 8628. Implemented in v1.x; the constant exists so
 	// option signatures are stable across releases.
 	DeviceCode
+
+	// CIBA selects the urn:openid:params:grant-type:ciba grant from
+	// the OpenID Connect Client-Initiated Backchannel Authentication
+	// Flow Core 1.0 specification. The library implements poll mode
+	// only; push and ping delivery modes are reserved for a future
+	// release.
+	CIBA
 )
 
 // String returns the wire form of the grant_type. The wire form is the value
@@ -47,6 +54,8 @@ func (t Type) String() string {
 		return "client_credentials"
 	case DeviceCode:
 		return "urn:ietf:params:oauth:grant-type:device_code"
+	case CIBA:
+		return "urn:openid:params:grant-type:ciba"
 	case typeUnspecified:
 		return ""
 	default:
@@ -59,7 +68,7 @@ func (t Type) String() string {
 // it.
 func (t Type) IsValid() bool {
 	switch t {
-	case AuthorizationCode, RefreshToken, ClientCredentials, DeviceCode:
+	case AuthorizationCode, RefreshToken, ClientCredentials, DeviceCode, CIBA:
 		return true
 	case typeUnspecified:
 		return false

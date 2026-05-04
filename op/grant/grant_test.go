@@ -18,6 +18,7 @@ func TestType_String(t *testing.T) {
 		{"refresh_token", grant.RefreshToken, "refresh_token"},
 		{"client_credentials", grant.ClientCredentials, "client_credentials"},
 		{"device_code", grant.DeviceCode, "urn:ietf:params:oauth:grant-type:device_code"},
+		{"ciba", grant.CIBA, "urn:openid:params:grant-type:ciba"},
 		{"zero", grant.Type(0), ""},
 		{"unknown", grant.Type(99), ""},
 	}
@@ -40,6 +41,7 @@ func TestType_IsValid(t *testing.T) {
 		grant.RefreshToken,
 		grant.ClientCredentials,
 		grant.DeviceCode,
+		grant.CIBA,
 	}
 	for _, v := range valid {
 		if !v.IsValid() {
