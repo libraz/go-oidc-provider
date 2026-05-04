@@ -481,6 +481,38 @@ type config struct {
 	// option site (absolute URL with a non-empty host).
 	deviceVerificationURI string
 
+	// cibaGrantEnabled records the explicit [WithCIBA] opt-in. When
+	// true the construction-time validator requires the configured
+	// [store.Store] to expose a non-nil [store.CIBARequestStore]
+	// substore AND a non-nil [HintResolver]; when false the CIBA
+	// grant is enabled iff [grant.CIBA] appears in [config.grants],
+	// and the runtime path falls back to unsupported_grant_type if
+	// the substore is missing.
+	cibaGrantEnabled bool
+
+	// cibaHintResolver maps the inbound CIBA hint (login_hint,
+	// id_token_hint, or login_hint_token) to a stable end-user
+	// subject. Required by [WithCIBA] because the /bc-authorize
+	// handler returns login_required when the resolver is nil.
+	cibaHintResolver HintResolver
+
+	// cibaDefaultExpiresIn overrides the auth_req_id lifetime the
+	// OP advertises when the client did not supply requested_expiry.
+	// Zero falls back to [ciba.DefaultExpiresIn] (600s).
+	cibaDefaultExpiresIn time.Duration
+
+	// cibaMaxExpiresIn caps the requested_expiry value the client
+	// supplies. Zero disables clamping (the client's value passes
+	// through verbatim); a non-zero value is the maximum
+	// auth_req_id lifetime the OP will honour regardless of the
+	// client's request.
+	cibaMaxExpiresIn time.Duration
+
+	// cibaPollInterval overrides the `interval` value the OP
+	// advertises to the client. Zero falls back to
+	// [ciba.DefaultInterval] (5s).
+	cibaPollInterval time.Duration
+
 	// encryptionKeyset carries the asymmetric private keys the OP
 	// uses to decrypt inbound JWE (request_object) and to encrypt
 	// outbound JWE addressed to RP keys (id_token / userinfo / JARM

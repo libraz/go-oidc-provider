@@ -730,6 +730,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 			Session:             cfg.endpoints.Session,
 			Register:            cfg.endpoints.Register,
 			DeviceAuthorization: cfg.endpoints.DeviceAuthorization,
+			Backchannel:         cfg.endpoints.Backchannel,
 		},
 		Features:                  buildDiscoveryFeatures(cfg),
 		GrantsSupported:           grantStrings,
@@ -788,6 +789,7 @@ func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, cl
 func buildDiscoveryFeatures(cfg *config) discovery.Features {
 	out := buildFeatures(cfg.features)
 	out.DeviceCodeGrant = cfg.deviceCodeGrantConfigured()
+	out.CIBAGrant = cfg.cibaGrantConfigured()
 	out.Encryption = cfg.encryptionEnabled()
 	return out
 }

@@ -90,6 +90,37 @@ type Document struct {
 	// (urn:ietf:params:oauth:grant-type:device_code).
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint,omitempty"`
 
+	// BackchannelAuthenticationEndpoint is the absolute URL of the
+	// CIBA Core 1.0 §7 backchannel-authentication endpoint
+	// (/bc-authorize). Only emitted when the OP is configured to
+	// accept the CIBA grant (urn:openid:params:grant-type:ciba).
+	BackchannelAuthenticationEndpoint string `json:"backchannel_authentication_endpoint,omitempty"`
+
+	// BackchannelTokenDeliveryModesSupported lists the CIBA Core 1.0
+	// §4 token delivery modes the OP supports. v0.9.x ships poll mode
+	// only; the field is emitted only when the CIBA grant is
+	// configured. Values are "poll", "ping", or "push"; this OP
+	// advertises ["poll"] exclusively.
+	BackchannelTokenDeliveryModesSupported []string `json:"backchannel_token_delivery_modes_supported,omitempty"`
+
+	// BackchannelUserCodeParameterSupported reports whether the OP
+	// honours the CIBA Core 1.0 §7.1 "user_code" parameter on
+	// /bc-authorize. The library accepts the parameter on the wire
+	// and persists it onto the record, but does not pre-validate
+	// against an OP-managed user-code registry; the value is therefore
+	// false. The field is emitted only when the CIBA grant is
+	// configured.
+	BackchannelUserCodeParameterSupported bool `json:"backchannel_user_code_parameter_supported,omitempty"`
+
+	// BackchannelAuthenticationRequestSigningAlgValuesSupported lists
+	// the JWS alg values the OP accepts when a client signs the CIBA
+	// authentication request itself (CIBA Core 1.0 §7.1.1). The field
+	// is emitted only when the CIBA grant AND the JAR feature are
+	// both configured; the list mirrors the project-wide JAR allow-
+	// list so a single rotation of the alg posture flows to both
+	// surfaces.
+	BackchannelAuthenticationRequestSigningAlgValuesSupported []string `json:"backchannel_authentication_request_signing_alg_values_supported,omitempty"`
+
 	// ResponseTypesSupported lists the response_type values the OP
 	// accepts. v1.0 ships with "code" only (no implicit / hybrid).
 	ResponseTypesSupported []string `json:"response_types_supported"`

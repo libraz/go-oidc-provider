@@ -608,6 +608,82 @@ func TestBuild_SubjectTypes_PairwiseAdvertisedWhenEnabled(t *testing.T) {
 	}
 }
 
+// TestBuild_CIBA_OmittedWhenGrantOff confirms the four CIBA Core 1.0
+// §3 metadata fields stay absent from the wire when the OP does not
+// advertise the CIBA grant. An OP that mounted /bc-authorize without
+// configuring the grant would tell RPs the endpoint exists while
+// quietly serving 404 — the discovery side mirrors the router gating.
+func TestBuild_CIBA_OmittedWhenGrantOff(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(baseInput())
+	if doc.BackchannelAuthenticationEndpoint != "" {
+		t.Errorf("backchannel_authentication_endpoint=%q want empty when CIBA grant disabled", doc.BackchannelAuthenticationEndpoint)
+	}
+	if len(doc.BackchannelTokenDeliveryModesSupported) != 0 {
+		t.Errorf("backchannel_token_delivery_modes_supported=%v want nil when CIBA grant disabled", doc.BackchannelTokenDeliveryModesSupported)
+	}
+	if doc.BackchannelUserCodeParameterSupported {
+		t.Errorf("backchannel_user_code_parameter_supported=true want false when CIBA grant disabled")
+	}
+	if len(doc.BackchannelAuthenticationRequestSigningAlgValuesSupported) != 0 {
+		t.Errorf("backchannel_authentication_request_signing_alg_values_supported=%v want nil when CIBA grant disabled", doc.BackchannelAuthenticationRequestSigningAlgValuesSupported)
+	}
+}
+
+// TestBuild_CIBA_EmitsEndpointWhenGrantOn confirms the discovery
+// builder advertises /bc-authorize, the poll-only delivery mode list,
+// and the user-code-disabled flag when [Features.CIBAGrant] is true.
+//
+// Spec: OpenID Connect Client-Initiated Backchannel Authentication
+// Flow Core 1.0 §3.
+func TestBuild_CIBA_EmitsEndpointWhenGrantOn(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Endpoints.Backchannel = "/bc-authorize"
+	in.Features.CIBAGrant = true
+	doc := discovery.Build(in)
+	if got, want := doc.BackchannelAuthenticationEndpoint, "https://idp.example.com/oidc/bc-authorize"; got != want {
+		t.Errorf("backchannel_authentication_endpoint=%q want %q", got, want)
+	}
+	if want := []string{"poll"}; len(doc.BackchannelTokenDeliveryModesSupported) != 1 || doc.BackchannelTokenDeliveryModesSupported[0] != want[0] {
+		t.Errorf("backchannel_token_delivery_modes_supported=%v want %v", doc.BackchannelTokenDeliveryModesSupported, want)
+	}
+	if doc.BackchannelUserCodeParameterSupported {
+		t.Errorf("backchannel_user_code_parameter_supported=true want false (library does not validate user_code)")
+	}
+	if len(doc.BackchannelAuthenticationRequestSigningAlgValuesSupported) != 0 {
+		t.Errorf("backchannel_authentication_request_signing_alg_values_supported=%v want nil when JAR disabled", doc.BackchannelAuthenticationRequestSigningAlgValuesSupported)
+	}
+}
+
+// TestBuild_CIBA_EmitsRequestSigningAlgsWhenJAROn confirms the CIBA
+// authentication-request signing alg list mirrors the JAR alg posture
+// and is emitted only when both features are configured.
+//
+// Spec: CIBA Core 1.0 §7.1.1 (signed authentication request) +
+// RFC 9101 §10.1.
+func TestBuild_CIBA_EmitsRequestSigningAlgsWhenJAROn(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Endpoints.Backchannel = "/bc-authorize"
+	in.Features.CIBAGrant = true
+	in.Features.JAR = true
+	doc := discovery.Build(in)
+	want := []string{"RS256", "PS256", "ES256", "EdDSA"}
+	got := doc.BackchannelAuthenticationRequestSigningAlgValuesSupported
+	if len(got) != len(want) {
+		t.Fatalf("backchannel_authentication_request_signing_alg_values_supported len=%d want %d (%v)", len(got), len(want), got)
+	}
+	for i, v := range want {
+		if got[i] != v {
+			t.Errorf("backchannel_authentication_request_signing_alg_values_supported[%d]=%q want %q", i, got[i], v)
+		}
+	}
+}
+
 // TestBuild_ACRValues_DefensiveCopy confirms Build clones the input
 // slice so a mutation through the caller's backing array cannot
 // silently change the published wire. The discovery layer is the

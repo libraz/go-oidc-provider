@@ -1,10 +1,13 @@
 package op
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
+	"github.com/libraz/go-oidc-provider/internal/ciba"
+	"github.com/libraz/go-oidc-provider/internal/cibaendpoint"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cors"
@@ -125,10 +128,12 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Audit:                          cfg.effectiveAuditEmitter(),
 			CustomGrants:                   buildExtensionDispatcher(cfg, keySet),
 			DeviceCodes:                    deviceCodesFor(cfg),
+			CIBARequests:                   cibaRequestsFor(cfg),
 			ClientEncJWKs:                  encResolver,
 		})),
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encSet, encResolver, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
@@ -497,6 +502,83 @@ func deviceCodesFor(cfg *config) store.DeviceCodeStore {
 		return nil
 	}
 	return cfg.store.DeviceCodes()
+}
+
+// cibaRequestsFor returns the [store.CIBARequestStore] the CIBA
+// surfaces consume. The function mirrors [deviceCodesFor]: the
+// token-endpoint mount and the /bc-authorize mount share an
+// identical resolution path, returning nil verbatim when the
+// configured Store does not implement the substore so the runtime
+// path emits unsupported_grant_type rather than panic.
+func cibaRequestsFor(cfg *config) store.CIBARequestStore {
+	if cfg.store == nil {
+		return nil
+	}
+	return cfg.store.CIBARequests()
+}
+
+// cibaHintResolverAdapter bridges the public [HintResolver] surface
+// onto the internal [cibaendpoint.HintResolver] interface. The two
+// have identical method signatures (HintKind is a type alias) but
+// the wrapper preserves the public/internal split so a future
+// internal-only refactor cannot leak through the public option.
+type cibaHintResolverAdapter struct {
+	r HintResolver
+}
+
+// Resolve forwards to the wrapped public resolver.
+func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind, value string) (string, error) {
+	return a.r.Resolve(ctx, kind, value)
+}
+
+// mountBackchannelAuthenticationEndpoint registers the /bc-authorize
+// handler when the CIBA grant is configured (via [WithCIBA] or by
+// including [grant.CIBA] in [WithGrants]). The mount is gated on
+// the resolved grant configuration so a deployment that does not
+// enable the grant keeps the route absent — the discovery document
+// advertises the endpoint with the same gating, so the OP cannot
+// tell clients the endpoint exists while quietly serving 404.
+//
+// The substore is reached through [cibaRequestsFor]; an embedder
+// who included [grant.CIBA] without wiring a substore reaches the
+// runtime nil-check in [internal/cibaendpoint.Handler] and surfaces
+// server_error for the inbound request, mirroring the token-endpoint
+// dispatch's unsupported_grant_type fallback.
+func mountBackchannelAuthenticationEndpoint(
+	mux *http.ServeMux,
+	cfg *config,
+	dpopVerifier *dpop.Verifier,
+	mtlsVerifier *mtls.Verifier,
+	assertionVerifier clientauth.AssertionVerifier,
+	strictCORS *cors.Strict,
+) {
+	if !cfg.cibaGrantConfigured() {
+		return
+	}
+	var resolver cibaendpoint.HintResolver
+	if cfg.cibaHintResolver != nil {
+		resolver = cibaHintResolverAdapter{r: cfg.cibaHintResolver}
+	}
+	mux.Handle(
+		joinPath(cfg.mountPrefix, cfg.endpoints.Backchannel),
+		strictCORS.Handler(cibaendpoint.Handler(cibaendpoint.Deps{
+			Issuer:                   cfg.issuer,
+			Clients:                  cfg.store.Clients(),
+			CIBARequests:             cibaRequestsFor(cfg),
+			Clock:                    cfg.clock,
+			AssertionVerifier:        assertionVerifier,
+			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+			DPoP:                     dpopVerifier,
+			DPoPNonces:               cfg.dpopNonces,
+			MTLS:                     mtlsVerifier,
+			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
+			HintResolver:             resolver,
+			DefaultExpiresIn:         cfg.effectiveCIBADefaultExpiresIn(),
+			MaxExpiresIn:             cfg.cibaMaxExpiresIn,
+			PollInterval:             cfg.effectiveCIBAPollInterval(),
+			Audit:                    cfg.effectiveAuditEmitter(),
+		})),
+	)
 }
 
 // joinPath concatenates mountPrefix and endpoint into a full path, handling

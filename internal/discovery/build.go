@@ -171,6 +171,7 @@ type EndpointPaths struct {
 	Session             string
 	Register            string
 	DeviceAuthorization string
+	Backchannel         string
 }
 
 // Features carries the enable bits for optional protocol extensions.
@@ -190,6 +191,17 @@ type Features struct {
 	// field; the op layer wires it from the resolved grants list and
 	// substore presence.
 	DeviceCodeGrant bool
+
+	// CIBAGrant reports whether the OP is configured to accept the
+	// CIBA Core 1.0 grant (urn:openid:params:grant-type:ciba). The
+	// discovery builder uses the flag to gate emission of the
+	// backchannel_authentication_endpoint /
+	// backchannel_token_delivery_modes_supported /
+	// backchannel_user_code_parameter_supported /
+	// backchannel_authentication_request_signing_alg_values_supported
+	// fields; the op layer wires it from the resolved grants list
+	// and substore presence.
+	CIBAGrant bool
 
 	// Encryption reports whether the OP has a JWE encryption keyset
 	// configured (op.WithEncryptionKeyset). When true the discovery
@@ -304,8 +316,35 @@ func Build(in Input) Document {
 	applyClaimsSupported(in, &doc)
 	applyACRValuesSupported(in, &doc)
 	applyEncryptionFeature(in, &doc)
+	applyCIBAFeature(in, &doc)
 	applyStaticMetadata(in, &doc)
 	return doc
+}
+
+// applyCIBAFeature publishes the CIBA Core 1.0 §3 metadata fields when
+// the OP is configured to accept the CIBA grant. The
+// backchannel_authentication_endpoint URL is built from the issuer +
+// mount prefix + endpoint path the same way the other endpoints are.
+// The token delivery modes list is fixed at ["poll"] because v0.9.x
+// implements poll mode only; ping and push are reserved for a future
+// release. The user-code support flag is false because the library
+// accepts the parameter on the wire but does not pre-validate against
+// an OP-managed code registry. The request-object signing alg list is
+// emitted only when JAR is also enabled because a CIBA request object
+// shares the JAR verifier; the list mirrors the JAR alg posture so a
+// single rotation flows to both surfaces.
+func applyCIBAFeature(in Input, doc *Document) {
+	if !in.Features.CIBAGrant {
+		return
+	}
+	doc.BackchannelAuthenticationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.Backchannel)
+	doc.BackchannelTokenDeliveryModesSupported = []string{"poll"}
+	doc.BackchannelUserCodeParameterSupported = false
+	if in.Features.JAR {
+		doc.BackchannelAuthenticationRequestSigningAlgValuesSupported = []string{
+			"RS256", "PS256", "ES256", "EdDSA",
+		}
+	}
 }
 
 // applyEncryptionFeature publishes the five

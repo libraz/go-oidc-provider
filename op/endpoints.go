@@ -65,6 +65,14 @@ type Endpoints struct {
 	// [WithGrants]); the discovery document advertises
 	// "device_authorization_endpoint" with the same gating.
 	DeviceAuthorization string
+
+	// Backchannel overrides the CIBA Core 1.0 §7
+	// backchannel-authentication endpoint. Default: "/bc-authorize".
+	// Only mounted when the CIBA grant is configured via [WithCIBA]
+	// (or by including [grant.CIBA] in [WithGrants]); the discovery
+	// document advertises "backchannel_authentication_endpoint" with
+	// the same gating.
+	Backchannel string
 }
 
 // defaultEndpoints returns the endpoint paths the [Provider] uses when the
@@ -85,6 +93,7 @@ func defaultEndpoints() Endpoints {
 		Session:             "/session",
 		Register:            "/register",
 		DeviceAuthorization: "/device_authorization",
+		Backchannel:         "/bc-authorize",
 	}
 }
 
@@ -130,6 +139,9 @@ func (e Endpoints) merge(override Endpoints) Endpoints {
 	}
 	if override.DeviceAuthorization != "" {
 		out.DeviceAuthorization = override.DeviceAuthorization
+	}
+	if override.Backchannel != "" {
+		out.Backchannel = override.Backchannel
 	}
 	return out
 }
