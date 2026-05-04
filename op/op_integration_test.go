@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -248,6 +251,75 @@ func TestIntegration_Discovery_RegisteredScopesRespectVisibility(t *testing.T) {
 	// entire point of the Public flag.
 	if _, leaked := advertised["internal:metrics"]; leaked {
 		t.Errorf("scopes_supported leaked private scope internal:metrics: %v", rawScopes)
+	}
+}
+
+func TestIntegration_UserInfo_CustomScopeClaimsAreWired(t *testing.T) {
+	t.Parallel()
+
+	signKey := newTestKey(t, "userinfo-test")
+	st := inmem.New()
+	st.PutUser(context.Background(), &store.User{
+		Subject: "user-1",
+		Claims: map[string]any{
+			"project_ids": []string{"p-1", "p-2"},
+			"email":       "alice@example.com",
+		},
+	})
+	provider, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(st),
+		op.WithKeyset(op.Keyset{signKey}),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		op.WithScope(op.Scope{
+			Name:   "projects:read",
+			Public: true,
+			Claims: []string{"project_ids"},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+
+	jws, err := tokens.SignAccessToken(tokens.SigningKey{
+		KeyID:  signKey.KeyID,
+		Signer: signKey.Signer,
+	}, tokens.AccessTokenClaims{
+		Issuer:    validIssuer,
+		Subject:   "user-1",
+		Audience:  []string{validIssuer},
+		ClientID:  "client-1",
+		IssuedAt:  time.Now().Add(-time.Minute).Unix(),
+		ExpiresAt: time.Now().Add(time.Hour).Unix(),
+		JTI:       "at-custom-scope",
+		Scope:     []string{"openid", "projects:read"},
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(),
+		http.MethodGet, validIssuer+"/oidc/userinfo", http.NoBody)
+	req.Header.Set("Authorization", "Bearer "+jws)
+	rec := httptest.NewRecorder()
+	provider.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got, ok := body["project_ids"].([]any)
+	if !ok {
+		t.Fatalf("project_ids=%T want []any", body["project_ids"])
+	}
+	if len(got) != 2 || got[0] != "p-1" || got[1] != "p-2" {
+		t.Fatalf("project_ids=%v want [p-1 p-2]", got)
+	}
+	if _, leaked := body["email"]; leaked {
+		t.Fatalf("email leaked without email scope: %v", body["email"])
 	}
 }
 

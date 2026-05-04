@@ -97,9 +97,10 @@ type Scope struct {
 	Category string
 
 	// Claims lists the userinfo claim names this scope releases. The
-	// library does not currently use this field at runtime; it exists
-	// so the consent prompt can inform the user which claim names a
-	// scope unlocks.
+	// library releases these claim names from /userinfo when the scope
+	// is granted, in addition to surfacing them on the consent prompt.
+	// Standard OIDC scopes keep their RFC-defined mappings; this field
+	// is the custom-scope hook.
 	Claims []string
 
 	// Required marks scopes the user cannot decline. The OIDC

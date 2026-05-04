@@ -92,6 +92,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Grants:             cfg.store.Grants(),
 			Clock:              cfg.clock,
 			Leeway:             defaultUserInfoLeeway,
+			CustomScopeClaims:  customScopeClaims(cfg.scopes),
 			DPoP:               dpopVerifier,
 			DPoPNonces:         cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
 			MTLS:               mtlsVerifier,

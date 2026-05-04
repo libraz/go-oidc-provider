@@ -1070,6 +1070,24 @@ func consentCatalog(scopes []Scope) []interaction.ConsentScope {
 	return out
 }
 
+// customScopeClaims projects the public scope catalogue onto the
+// runtime-only scope -> claim-name mapping consumed by /userinfo.
+// Scopes with no claim mapping are omitted entirely so downstream code
+// can treat absence and "no custom claims" identically.
+func customScopeClaims(scopes []Scope) map[string][]string {
+	out := make(map[string][]string)
+	for _, s := range scopes {
+		if len(s.Claims) == 0 {
+			continue
+		}
+		out[s.Name] = append([]string(nil), s.Claims...)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // authorizePARStore returns the substore the authorize handler should use
 // to consume PAR records when the feature is enabled. When PAR is
 // disabled the helper returns nil, which the handler treats as
