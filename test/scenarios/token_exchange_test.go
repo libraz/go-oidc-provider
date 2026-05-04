@@ -849,6 +849,55 @@ func TestScenario_TX_024_RegisterTokenExchangeRequiredAtNew(t *testing.T) {
 	}
 }
 
+func TestScenario_TX_025_IDTokenCnfMirrorsAccessTokenBinding(t *testing.T) {
+	t.Parallel()
+	// id_token cnf MUST mirror the access_token cnf when the request
+	// is sender-constrained, and MUST stay absent when the request is
+	// bearer. Driving real DPoP / mTLS proofs through the wire lives
+	// in the DPoP and mTLS suites; for TX-025 we pin the structural
+	// contract: a bearer + openid-scoped exchange MUST NOT pollute the
+	// id_token with a synthesised cnf, and the id_token's missing cnf
+	// matches the access_token's missing cnf so the two carriers stay
+	// in lock-step. The positive (bound) cases ride on the unit tests
+	// in internal/customgrant/tokenexchange/cnf_test.go where the
+	// DPoPJKT / MTLSCert plumbing is reachable without a wire DPoP
+	// proof.
+	yes := true
+	policy := txDecisionPolicy{decision: &op.TokenExchangeDecision{IssueIDToken: &yes}}
+	p := newTXProvider(t, policy)
+	subjectClaims := p.defaultSubjectClaims("tx-025-jti")
+	subjectClaims.Scope = []string{"openid", "read"}
+	// Subject_token carries cnf so the rebinding posture is
+	// observable: a bearer exchange MUST NOT inherit it on either
+	// the access_token or the id_token.
+	subjectClaims.Confirmation = map[string]string{"jkt": "subject-jkt-original"}
+	subjectJWS := p.mintSubjectToken(t, subjectClaims)
+	form := url.Values{
+		"subject_token":      []string{subjectJWS},
+		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
+		"scope":              []string{"openid read"},
+	}
+	status, body := p.postTokenExchange(t, form)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", status, body)
+	}
+	at, _ := body["access_token"].(string)
+	atClaims := decodeTXJWTClaims(t, at)
+	idt, _ := body["id_token"].(string)
+	if idt == "" {
+		t.Fatalf("id_token absent: body=%v", body)
+	}
+	idClaims := decodeTXJWTClaims(t, idt)
+	atCnf, _ := atClaims["cnf"].(map[string]any)
+	idCnf, _ := idClaims["cnf"].(map[string]any)
+	if atCnf != nil {
+		t.Errorf("access_token cnf present on bearer exchange: %v", atCnf)
+	}
+	if idCnf != nil {
+		t.Errorf("id_token cnf present on bearer exchange: %v", idCnf)
+	}
+}
+
 // buildDeepAct constructs a nested act chain at depth d. The function
 // is used by TX-008 to seed an actor_token whose chain is already at
 // the depth limit so adding the calling-client level overflows.

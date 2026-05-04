@@ -246,3 +246,16 @@ rows:
       RegisterTokenExchange option. Deployments cannot accidentally
       enable token-exchange.
     status: active
+
+  - id: TX-025
+    severity: P0
+    spec: RFC 9449 §6.1
+    behaviour: |
+      When an openid-scoped token-exchange request is sender-
+      constrained (DPoP proof or mTLS leaf certificate), the issued
+      id_token MUST carry a cnf claim matching the access_token's
+      cnf: cnf.jkt for DPoP, cnf.x5t#S256 for mTLS. A bearer
+      exchange MUST NOT pollute the id_token with a synthesised cnf.
+      An embedder-injected cnf via the policy decision's ExtraClaims
+      MUST be stripped; the OP-built binding wins.
+    status: active

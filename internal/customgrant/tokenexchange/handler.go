@@ -15,8 +15,9 @@ import (
 
 // reservedClaims are the protocol-managed names a handler-supplied
 // ExtraClaims map MUST NOT carry. The token-exchange handler builds
-// its own act chain; an embedder-injected act would otherwise
-// undermine the chain's structural unforgeability.
+// its own act chain and cnf binding; an embedder-injected act or cnf
+// would otherwise undermine the chain's structural unforgeability and
+// the RFC 9449 / RFC 8705 sender-constraint pin.
 //
 //nolint:gochecknoglobals // closed catalog; immutable.
 var reservedClaims = map[string]struct{}{
@@ -34,6 +35,7 @@ var reservedClaims = map[string]struct{}{
 	"c_hash":    {},
 	"sid":       {},
 	"act":       {},
+	"cnf":       {},
 }
 
 // Config bundles the dependencies the handler needs. The op-side
@@ -367,6 +369,19 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 				idClaims = make(map[string]any)
 			}
 			idClaims["act"] = actChain
+		}
+		// RFC 9449 §6.1 / RFC 8705 §3 — when the request is sender-
+		// constrained the issued id_token MUST carry the same cnf
+		// claim the access_token does, so a resource server that
+		// validates id_token-side proof-of-possession sees the matching
+		// key. The wire layer stamps cnf onto the access_token
+		// automatically (tokenBinding.confirmation); the id_token claim
+		// map is owned by the handler so we mirror the rule here.
+		if cnf := buildCnfClaim(req); cnf != nil {
+			if idClaims == nil {
+				idClaims = make(map[string]any)
+			}
+			idClaims["cnf"] = cnf
 		}
 		resp.ExtraClaims = idClaims
 	}

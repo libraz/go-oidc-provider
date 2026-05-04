@@ -170,8 +170,9 @@ type TokenExchangeDecision struct {
 	// when [IssueIDToken] resolves to true. The reserved-claim
 	// filter applies: keys naming protocol-managed claims (iss /
 	// sub / aud / iat / exp / auth_time / nonce / acr / amr / azp /
-	// at_hash / c_hash / sid / act) are dropped without error so
-	// the policy cannot rewrite the act chain or hijack the sub.
+	// at_hash / c_hash / sid / act / cnf) are dropped without error
+	// so the policy cannot rewrite the act chain, hijack the sub, or
+	// forge the proof-of-possession binding.
 	ExtraClaims map[string]any
 }
 
