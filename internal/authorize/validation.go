@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
@@ -117,7 +118,20 @@ func loopbackRedirectMatchesAnyPort(registered, requested string) bool {
 	return true
 }
 
+// isWildcardLoopbackHost reports whether host is one of the loopback
+// shapes the registration endpoint admits for native clients (RFC
+// 8252 §7.3 / OIDC Reg §2): the IP literals 127.0.0.1 and [::1], and
+// the textual "localhost" alias. The DCR validator
+// (internal/registrationendpoint/metadata_schemes.go) accepts all
+// three for native clients; the authorize-side wildcard MUST mirror
+// that set so a native app that registers http://localhost:0/cb can
+// successfully call back on its ephemeral port. Restricting the
+// wildcard to the IP literals previously broke the typical native
+// flow (registration accepted localhost, authorize rejected it).
 func isWildcardLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
 	addr, err := netip.ParseAddr(host)
 	if err != nil {
 		return false

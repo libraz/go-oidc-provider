@@ -57,16 +57,22 @@ func TestScenario_NA_001_MalformedRedirectURIRejected(t *testing.T) {
 	}
 }
 
-// TestScenario_NA_002_LocalhostWithRegisteredPortAllowsAnyPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_002_LocalhostWithRegisteredPortAllowsAnyPort pins
+// the textual-localhost arm of the native-app loopback wildcard. RFC
+// 8252 §7.3 admits 127.0.0.1, [::1], and the textual "localhost" for
+// native clients; DCR honours all three at registration so the
+// authorize-side wildcard MUST mirror the same set.
 func TestScenario_NA_002_LocalhostWithRegisteredPortAllowsAnyPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-002 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackAuthorize(t, "http://localhost:2355/op/callback", "http://localhost:8888/op/callback")
 }
 
-// TestScenario_NA_003_LocalhostWithoutPortAllowsAnyPort is OOS — see catalog out_of_scope_reason.
+// TestScenario_NA_003_LocalhostWithoutPortAllowsAnyPort exercises the
+// no-port-registered variant of NA-002: a client that registers
+// http://localhost/op/callback can dial back on any ephemeral port.
 func TestScenario_NA_003_LocalhostWithoutPortAllowsAnyPort(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: NA-003 (see catalog out_of_scope_reason)")
+	assertNativeLoopbackAuthorize(t, "http://localhost/op/callback", "http://localhost:8888/op/callback")
 }
 
 func TestScenario_NA_004_IPv4LoopbackWithRegisteredPortAllowsAnyPort(t *testing.T) {

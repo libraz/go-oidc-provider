@@ -28,25 +28,29 @@ rows:
 
   - id: NA-002
     severity: P0
-    spec: RFC 8252 §7.3
+    spec: RFC 8252 §7.3 / OIDC Reg §2
     behaviour: |
       For a native client registered with
       http://localhost:2355/op/callback, redirectUriAllowed MUST
       return true for any port variant on the same host and path: no
       port, port 80, port 443, the originally registered port, and
-      any other port (e.g. 8888).
-    status: out-of-scope
-    out_of_scope_reason: "RFC 8252 §7.3 explicitly states 'the use of localhost is NOT RECOMMENDED' and recommends the loopback IP literal (127.0.0.1 / ::1) instead, because the localhost hostname can inadvertently bind to non-loopback interfaces. internal/authorize/request.go isWildcardLoopbackHost honours this guidance: it accepts only IP literals via netip.ParseAddr and rejects the bare 'localhost' string. NA-004 / NA-005 / NA-006 / NA-007 cover the IP-literal path the RFC actually recommends. The catalog row inherits an upstream's looser posture (which accepts the localhost hostname); v1.0 follows the RFC and the equality-on-registered-string discipline pinned by TestRequest_Validate_RedirectURIAttackVariants. The localhost-rejection path is regression-pinned by internal/authorize/request_test.go TestRequest_Validate_LoopbackRedirectWildcardDoesNotCoverLocalhostOrPathVariants (which fails redirect_uri=http://localhost:49152/cb when the client is registered with http://127.0.0.1/cb), so a future relaxation that started accepting the localhost hostname would surface immediately."
+      any other port (e.g. 8888). DCR (OIDC Reg §2 / RFC 8252 §7.3)
+      admits the textual "localhost" alongside 127.0.0.1 / ::1 for
+      native clients, so the authorize-side wildcard MUST mirror
+      that set; otherwise registration succeeds but the typical
+      ephemeral-port callback fails at /authorize.
+    status: active
 
   - id: NA-003
     severity: P0
-    spec: RFC 8252 §7.3
+    spec: RFC 8252 §7.3 / OIDC Reg §2
     behaviour: |
       For a native client registered with http://localhost/op/callback
       (no port), redirectUriAllowed MUST return true for any port
       variant (none, 80, 443, 2355, 8888) on the same host and path.
-    status: out-of-scope
-    out_of_scope_reason: "Same as NA-002: RFC 8252 §7.3 says 'the use of localhost is NOT RECOMMENDED'. internal/authorize/request.go isWildcardLoopbackHost rejects the localhost hostname and only wildcard-matches the IP literals (127.0.0.1 / ::1) covered by NA-005 / NA-007. The catalog row is non-spec residue; v1.0 follows the RFC. The localhost-rejection path is regression-pinned by the same TestRequest_Validate_LoopbackRedirectWildcardDoesNotCoverLocalhostOrPathVariants cited under NA-002."
+      DCR admits the textual "localhost" for native clients; the
+      authorize-side wildcard mirrors that set.
+    status: active
 
   - id: NA-004
     severity: P0

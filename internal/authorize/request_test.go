@@ -410,11 +410,24 @@ func TestRequest_Validate_LoopbackRedirectAllowsAnyPort(t *testing.T) {
 	t.Parallel()
 
 	client := goodClient()
-	client.RedirectURIs = []string{"http://127.0.0.1/cb", "http://[::1]/cb"}
+	client.RedirectURIs = []string{
+		"http://127.0.0.1/cb",
+		"http://[::1]/cb",
+		"http://localhost/cb",
+	}
 
 	cases := []string{
 		"http://127.0.0.1:49152/cb",
 		"http://[::1]:4242/cb",
+		// localhost mirrors the registration carve-out (RFC 8252 §7.3 /
+		// OIDC Reg §2): native clients may register http://localhost/cb
+		// and dial back on an ephemeral port. The authorize-side
+		// wildcard MUST admit both port-bearing and bare forms; before
+		// the fix only the IP literals were honoured and the typical
+		// native-app flow broke at the authorize step despite the
+		// registration succeeding.
+		"http://localhost:49152/cb",
+		"http://localhost:8080/cb",
 	}
 	for _, uri := range cases {
 		t.Run(uri, func(t *testing.T) {
