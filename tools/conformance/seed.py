@@ -30,7 +30,12 @@ _PLANS = [
 def _massage_plan(plan_key: str, cfg: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
     """Apply per-plan rewrites and return (body, variant_dict)."""
     variant = cfg.pop("variant", None) or {}
-    if plan_key.startswith("fapi2-"):
+    # All FAPI-family plans (fapi2-*, fapi-ciba) need the mtls slot
+    # populated. The cert/key is consumed for sender-constrained token
+    # binding (RFC 8705) and a handful of negative tests, regardless of
+    # whether client_auth_type is private_key_jwt or mtls — OFCS
+    # rejects plan creation with "missing mtls credentials" otherwise.
+    if plan_key.startswith("fapi2-") or plan_key == "fapi-ciba.json":
         for slot, base in (("mtls", "fapi-client"), ("mtls2", "fapi-client-2")):
             cert_p = CERTS / f"{base}.cert.pem"
             key_p = CERTS / f"{base}.key.pem"

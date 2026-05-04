@@ -217,7 +217,7 @@ OP_PROFILE=fapi-ciba make conformance-op-up
 
 ### Single-pass green ceremony
 
-Run each of the 8 plans through `make conformance-baseline` once.
+Run each of the 9 plans through `make conformance-baseline` once.
 Use `LABEL=v0.9.1-rc<N>-<plan>` so the file names sort
 chronologically.
 
@@ -262,5 +262,28 @@ the reference and *is no longer* `PASSED` in the new capture. Modules
 that were never green (skipped, awaiting review, OFCS-side bug) do
 not block the run; they are tracked in
 [`docs/plans/013-v0.9.1-plan.md`](../docs/plans/013-v0.9.1-plan.md) §7.
+
+### Plan-level scope exclusions
+
+Some modules are out of scope for this OP by design and cannot pass
+without a deliberate spec deviation. They are listed here so a reviewer
+does not chase them as regressions:
+
+- **`oidcc-dynamic`** — covers Discovery + Dynamic Client Registration
+  with both `code` and `implicit` flow variants. The OP intentionally
+  does not implement the implicit flow (per `docs/plans/002-product-design.md`
+  §J.1: "implicit / hybrid を持たない"). The plan still exercises DCR
+  end-to-end against the `code` variant, which is the practical value
+  of running it; the implicit-flow modules are expected non-PASS and
+  do not block release sign-off.
+- **`oidcc-basic` / `oidcc-config` / `oidcc-formpost` / `*-rp-initiated-logout`
+  modules that mandate `id_token_signed_response_alg=RS256`** — the OP
+  signs ID tokens with `ES256` only (per §J.5: "発行は ES256 のみ").
+  RS256 is in the verification allow-list (for client assertions), but
+  is not an issuance-side alg. OFCS modules that require RS256 issuance
+  remain non-PASS and are not in scope for the green ceremony.
+  `WithLegacySignatureAlgorithm(RS256)` is reserved as the documented
+  escape hatch for migration deployments, not for satisfying the
+  ceremony — see `docs/plans/002-product-design.md` §J.5.
 
 [ofcs]: https://gitlab.com/openid/conformance-suite

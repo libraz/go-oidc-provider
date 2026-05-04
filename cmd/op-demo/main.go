@@ -592,19 +592,29 @@ func buildFAPIClientSeeds(cfg runConfig, postLogoutURIs []string) ([]op.ClientSe
 	if isCIBAProfile(cfg.profile) {
 		// CIBA clients never visit /authorize; redirect_uri MUST be
 		// empty. The grant set is overridden so the registration
-		// only carries the CIBA URN. The JWKS is reused from the
-		// primary FAPI test client because OFCS drives both paths
-		// from the same private_key_jwt material.
-		pub, err := op.LoadPublicJWKS(cfg.fapiClient1JWKS)
-		if err != nil {
-			return nil, fmt.Errorf("load JWKS %s: %w", cfg.fapiClient1JWKS, err)
+		// only carries the CIBA URN. Two clients are seeded so the
+		// OFCS fapi-ciba "another-client-cannot-poll" / "another-
+		// client-cannot-token" tests have a distinct second identity
+		// to drive against; each reuses the matching FAPI JWKS so
+		// OFCS can sign with the same private_key_jwt material.
+		for _, entry := range []struct {
+			id   string
+			path string
+		}{
+			{"demo-fapi-ciba", cfg.fapiClient1JWKS},
+			{"demo-fapi-ciba-2", cfg.fapiClient2JWKS},
+		} {
+			pub, err := op.LoadPublicJWKS(entry.path)
+			if err != nil {
+				return nil, fmt.Errorf("load JWKS %s: %w", entry.path, err)
+			}
+			seeds = append(seeds, op.PrivateKeyJWTClient{
+				ID:         entry.id,
+				JWKS:       pub,
+				Scopes:     fapiScopeCatalog,
+				GrantTypes: []string{opgrant.CIBA.String()},
+			})
 		}
-		seeds = append(seeds, op.PrivateKeyJWTClient{
-			ID:         "demo-fapi-ciba",
-			JWKS:       pub,
-			Scopes:     fapiScopeCatalog,
-			GrantTypes: []string{opgrant.CIBA.String()},
-		})
 	}
 	return seeds, nil
 }

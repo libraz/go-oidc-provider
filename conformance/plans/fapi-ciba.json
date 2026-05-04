@@ -6,6 +6,9 @@
   "server": {
     "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
   },
+  "resource": {
+    "resourceUrl": "https://host.docker.internal:9443/oidc/userinfo"
+  },
   "client": {
     "client_id": "demo-fapi-ciba",
     "scope": "openid profile",
@@ -23,6 +26,27 @@
           "x": "tn47XpuJUkfY7CDSmu5fayO7EnPvG9u9uqVb-Ifmthc",
           "y": "k5a3GEPNL35HRcw-Ajt5rfJ5llU7HomRBQfWWroFva8",
           "d": "jJIxf76uD4dK01r2oxsG5fv1XjOZFdJpdWWUuSh5Dxs"
+        }
+      ]
+    }
+  },
+  "client2": {
+    "client_id": "demo-fapi-ciba-2",
+    "scope": "openid profile",
+    "client_authentication_type": "private_key_jwt",
+    "hint_type": "login_hint",
+    "hint_value": "demo",
+    "jwks": {
+      "keys": [
+        {
+          "kty": "EC",
+          "crv": "P-256",
+          "use": "sig",
+          "alg": "ES256",
+          "kid": "fapi-client-2-1",
+          "x": "bqbDRmZUV9q_VMPl9OHQZaFbjy5hGVhdg-0O_6aCpGs",
+          "y": "qlJ7HWQ9sYY9iScO4VKPM_gfOj64IrmYTVaElf9IgwI",
+          "d": "hElLJgOd0o7wkNioOE5xV1nFgTQBn67ZCoUdyw-9zwY"
         }
       ]
     }
