@@ -207,6 +207,18 @@ type successResponse struct {
 // Handler returns the HTTP handler the OP mounts at its
 // /device_authorization endpoint. The returned handler is safe for
 // concurrent use; deps MUST NOT be mutated after the call.
+//
+// The verification page (the embedder-owned HTML form the user
+// submits the user_code through) is NOT mounted here — it lives in
+// the embedder's HTTP layer per the [op/interaction] driver
+// posture. The
+// [github.com/libraz/go-oidc-provider/op/devicecodekit] sub-package
+// ships the brute-force-protected user_code lookup
+// ([devicecodekit.VerifyUserCode]) and the audit-emitting revoke
+// wrapper ([devicecodekit.Revoke]) every embedder verification page
+// SHOULD compose with so the per-record strike ceiling and the
+// cascade-revoke audit signal stay aligned with the library's
+// other surfaces.
 func Handler(deps Deps) http.Handler {
 	resolved := resolveDeps(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

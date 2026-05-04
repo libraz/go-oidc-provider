@@ -70,4 +70,20 @@ const (
 	// effective_interval (the value before doubling),
 	// next_interval (the value after doubling).
 	AuditTokenSlowDown = "device_code.token.slow_down"
+
+	// AuditRevoked is emitted by the public revoke helper that wraps
+	// [store.DeviceCodeStore.Deny] with an audit signal so SOC tooling
+	// and embedder cascade-revoke subscribers can react to a denied
+	// device authorization in one place. Extras carry: client_id,
+	// reason (the embedder-supplied or library-default value, e.g.
+	// "user_denied", "user_code_lockout", "user_revoked_device").
+	//
+	// v0.9.1 ships the audit signal only; embedders walk their own
+	// [store.AccessTokenRegistry] (and any opaque-AT shadow store)
+	// for tokens whose grant_id matches the revoked device_code so
+	// the per-grant cascade fires immediately. The library-side
+	// cascade — walking the registry on the embedder's behalf — is a
+	// v0.9.2 design task tracked alongside the substore extension
+	// that surfaces "issued access tokens for device_code D".
+	AuditRevoked = "device_code.revoked"
 )

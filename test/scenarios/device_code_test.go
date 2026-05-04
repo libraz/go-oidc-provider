@@ -13,15 +13,18 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/devicecodekit"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -1276,5 +1279,159 @@ func TestScenario_DEV_099_DiscoveryGrantTypesIncludesDeviceCode(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("grant_types_supported=%v must include %q", raw, devURNDeviceCode)
+	}
+}
+
+// TestScenario_DEV_100_UserCodeBruteForceLockout pins the public
+// brute-force gate (op/devicecodekit.VerifyUserCode). Four wrong
+// submissions stay Pending; the fifth transitions the record to
+// Denied with reason "user_code_lockout"; a sixth submission to the
+// Denied record returns ErrAlreadyDecided without further strikes;
+// the wire posture on the polling channel is access_denied (covered
+// by the substore's Denied → access_denied mapping at /token).
+//
+// Spec: RFC 8628 §5.2, ADR 0031 §S.1.
+func TestScenario_DEV_100_UserCodeBruteForceLockout(t *testing.T) {
+	t.Parallel()
+	p := newDevProvider(t, []string{"openid"})
+
+	deviceCode := p.issueDeviceCode(t, "openid")
+	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode (seed): %v", err)
+	}
+	correct := rec.UserCode
+
+	deps := &devicecodekit.Deps{DeviceCodes: p.tk.Store.DeviceCodes()}
+
+	// Strikes 1–4: mismatched submission, record stays Pending.
+	for i := 1; i <= 4; i++ {
+		matched, err := devicecodekit.VerifyUserCode(context.Background(), deps, deviceCode, "WRONG"+strconv.Itoa(i))
+		if err != nil {
+			t.Fatalf("strike #%d: VerifyUserCode err = %v", i, err)
+		}
+		if matched {
+			t.Errorf("strike #%d: matched = true on mismatched submission", i)
+		}
+		got, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+		if err != nil {
+			t.Fatalf("strike #%d: FindByDeviceCode: %v", i, err)
+		}
+		if int(got.UserCodeStrikes) != i {
+			t.Errorf("strike #%d: Strikes = %d, want %d", i, got.UserCodeStrikes, i)
+		}
+		if got.Status != store.DeviceCodeStatusPending {
+			t.Errorf("strike #%d: Status = %v, want Pending (lockout fires only on the ceiling)", i, got.Status)
+		}
+	}
+
+	// Strike 5: lockout transition. The helper still returns
+	// (false, nil) for the failed match; the side effect is on the
+	// substore.
+	matched, err := devicecodekit.VerifyUserCode(context.Background(), deps, deviceCode, "WRONG5")
+	if err != nil {
+		t.Fatalf("strike #5: VerifyUserCode err = %v", err)
+	}
+	if matched {
+		t.Errorf("strike #5: matched = true on mismatched submission")
+	}
+	got, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("after lockout: FindByDeviceCode: %v", err)
+	}
+	if got.Status != store.DeviceCodeStatusDenied {
+		t.Errorf("after lockout: Status = %v, want Denied", got.Status)
+	}
+	if got.DenyReason != devicecodekit.DenyReasonUserCodeLockout {
+		t.Errorf("after lockout: DenyReason = %q, want %q",
+			got.DenyReason, devicecodekit.DenyReasonUserCodeLockout)
+	}
+
+	// Strike 6+: subsequent submissions short-circuit on ErrAlreadyDecided
+	// even when the embedder presents the canonical user_code, so a
+	// probing attacker cannot generate audit noise past the ceiling.
+	matched, err = devicecodekit.VerifyUserCode(context.Background(), deps, deviceCode, correct)
+	if !errors.Is(err, devicecodekit.ErrAlreadyDecided) {
+		t.Fatalf("post-lockout submission: err = %v, want ErrAlreadyDecided", err)
+	}
+	if matched {
+		t.Errorf("post-lockout submission: matched = true on a Denied record")
+	}
+	postLockoutRec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("post-lockout FindByDeviceCode: %v", err)
+	}
+	if postLockoutRec.UserCodeStrikes != got.UserCodeStrikes {
+		t.Errorf("post-lockout Strikes = %d, want %d (no further increments)",
+			postLockoutRec.UserCodeStrikes, got.UserCodeStrikes)
+	}
+
+	// Wire posture on the polling channel: a /token poll for the
+	// locked-out device_code returns access_denied. The substore's
+	// Denied → access_denied mapping is the existing piece of
+	// machinery the gate relies on; this assertion pins that the
+	// gate's audit-only side effect did not regress the wire shape.
+	status, body := p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("post-lockout /token: status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "access_denied")
+}
+
+// TestScenario_DEV_101_RevokeEmitsAuditAndTransitions pins the public
+// revoke helper (op/devicecodekit.Revoke). The helper transitions a
+// Pending record to Denied with the supplied reason, the next /token
+// poll returns access_denied, and a second revoke call surfaces
+// ErrAlreadyDecided so the embedder's idempotency posture is
+// preserved.
+//
+// v0.9.1 ships the audit signal only; the library-side cascade walk
+// lands in v0.9.2. Embedders subscribing to AuditDeviceCodeRevoked
+// read the device_code_id extra and call AccessTokenRegistry.RevokeByGrant
+// with the value (the GrantID stamped on issued access tokens equals
+// the device_code's ID at consume time).
+//
+// Spec: RFC 8628 §3.5, OAuth 2.0 user-trust posture.
+func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
+	t.Parallel()
+	p := newDevProvider(t, []string{"openid"})
+
+	deviceCode := p.issueDeviceCode(t, "openid")
+	deps := &devicecodekit.Deps{DeviceCodes: p.tk.Store.DeviceCodes()}
+
+	if err := devicecodekit.Revoke(context.Background(), deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after revoke: %v", err)
+	}
+	if rec.Status != store.DeviceCodeStatusDenied {
+		t.Errorf("Status = %v, want Denied after revoke", rec.Status)
+	}
+	if rec.DenyReason != devicecodekit.DenyReasonUserRevokedDevice {
+		t.Errorf("DenyReason = %q, want %q",
+			rec.DenyReason, devicecodekit.DenyReasonUserRevokedDevice)
+	}
+
+	// Wire posture: /token poll returns access_denied because the
+	// substore now reports the record as Denied.
+	status, body := p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("post-revoke /token: status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "access_denied")
+
+	// Idempotency: a second revoke surfaces ErrAlreadyDecided so the
+	// embedder's UI can render "already revoked" without inspecting
+	// the substore's internal shape.
+	if err := devicecodekit.Revoke(context.Background(), deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); !errors.Is(err, devicecodekit.ErrAlreadyDecided) {
+		t.Errorf("second Revoke: err = %v, want ErrAlreadyDecided", err)
 	}
 }
