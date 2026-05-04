@@ -61,6 +61,7 @@ it boots with `go run -tags example ./examples/08-composite-hot-cold`.
 | translate prompts (i18n) | [`16-i18n-locale`](16-i18n-locale/main.go) |
 | split public-discoverable from internal-only scopes | [`12-scopes-public-private`](12-scopes-public-private/main.go) |
 | honour the OIDC §5.5 `claims` request parameter | [`17-claims-request`](17-claims-request/main.go) |
+| project an embedder-owned users / members table onto OIDC | [`18-byo-userstore`](18-byo-userstore/main.go) |
 | dispatch an embedder-defined `grant_type` at the token endpoint | [`19-custom-grant`](19-custom-grant/main.go) |
 | require password + TOTP at every login (always-on 2FA) | [`20-mfa-totp`](20-mfa-totp/main.go) |
 | require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
@@ -86,7 +87,7 @@ in-flight or v1.x work:
 | 00–09 | bootstrap, grant variants, storage adapters                    |
 | 10–19 | UI, scopes, SPA, locale, claims request, CORS                  |
 | 20–29 | MFA and authentication rules (TOTP / risk / captcha / step-up) |
-| 30–39 | delayed-grant flows (CIBA), token-format crypto (encrypted ID tokens, JARM), and federation |
+| 30–39 | delayed-grant flows (device-code, CIBA), token exchange, pairwise subjects, encrypted tokens, federation |
 | 40–49 | governance: first-party, DCR, back-channel logout              |
 | 50–59 | operations: FAPI helpers, metrics, tracing, DPoP nonce         |
 | 60–69 | compliance (reserved — v1.x late)                              |
