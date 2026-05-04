@@ -6,7 +6,7 @@
 // # Scope
 // The package is **self-contained** in the sense documented in
 // 02-product-design.md §E: orchestrator wiring, HTTP handlers,
-// and the [op.WithMFAEncryptionKey] option live elsewhere. Callers compose
+// and the [op.WithMFAEncryptionKeys] option live elsewhere. Callers compose
 // the building blocks here into an authenticator chain. The package does
 // not import any other internal authn code: the existing
 // [github.com/libraz/go-oidc-provider/internal/authn] package handles
@@ -33,8 +33,8 @@
 // distinct lifecycle: TOTP secrets persist for the lifetime of the
 // enrolment, so the rotation history MUST be retained until every record
 // has been re-encrypted under the current key. Storing a TOTP secret
-// without encryption is a deployment-time bug; the future
-// [op.WithMFAEncryptionKey] option will refuse to construct a [Provider]
+// without encryption is a deployment-time bug; the
+// [op.WithMFAEncryptionKeys] option will refuse to construct a [Provider]
 // in production mode without a key.
 // The Additional Authenticated Data (AAD) is the subject ID, so a record
 // stolen from one user's row cannot be replayed under a different

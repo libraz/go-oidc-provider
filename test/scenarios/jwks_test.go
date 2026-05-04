@@ -543,7 +543,7 @@ func TestScenario_JWKS_042_RotationIssuesNewKid(t *testing.T) {
 	}
 }
 
-// newJWKSCookieKey returns a fresh 32-byte cookie key for op.WithCookieKey.
+// newJWKSCookieKey returns a fresh 32-byte cookie key for op.WithCookieKeys.
 // The helper is local to the JWKS file because JWKS-042 is the only row
 // in the suite that constructs op.New without going through testkit,
 // and the BUS file already owns its own cookie-key helper.

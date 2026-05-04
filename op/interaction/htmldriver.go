@@ -40,7 +40,7 @@ const htmlSubmissionContentType = "application/x-www-form-urlencoded"
 //     before emission so golden tests can pin the byte-for-byte form.
 //
 // Embedders that want branding or CSS replace the driver via
-// [op.WithInteraction]; the canonical examples for that path live
+// [op.WithInteractionDriver]; the canonical examples for that path live
 // under examples/04-custom-interaction/ and 10-react-login/.
 //
 // HTMLDriver carries no state and is safe for concurrent use.

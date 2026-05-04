@@ -29,7 +29,7 @@ func validKeyset(tb testing.TB) op.Keyset {
 }
 
 // newRandomCookieKey returns a freshly generated 32-byte cookie key suitable
-// for satisfying [op.WithCookieKey] in unit tests. The key is generated per
+// for satisfying [op.WithCookieKeys] in unit tests. The key is generated per
 // call so parallel tests do not contend on a shared value.
 func newRandomCookieKey(tb testing.TB) []byte {
 	tb.Helper()

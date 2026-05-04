@@ -194,7 +194,7 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //noli
 // + [totp.Authenticator] that drives the [StepTOTP] step. The codec is
 // built from the public [StepTOTP.EncryptionKey] and rotation history,
 // or — when those fields are empty — from the Provider-level fallback
-// configured through [WithMFAEncryptionKey] / [WithMFAEncryptionKeys].
+// configured through [WithMFAEncryptionKeys].
 // A non-empty per-step key always wins (more-specific-wins). The
 // library never retains the bytes beyond the codec instance.
 //

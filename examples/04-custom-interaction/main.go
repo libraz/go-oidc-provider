@@ -1,10 +1,10 @@
 //go:build example
 
-// Example 04 demonstrates the [op.WithInteraction] seam. The library
+// Example 04 demonstrates the [op.WithInteractionDriver] seam. The library
 // ships two reference Drivers in [op/interaction]:
 //
-//   - [interaction.HTMLDriver] (default, used when WithInteraction is
-//     not called): server-side renders the prompts as a tiny HTML
+//   - [interaction.HTMLDriver] (default, used when WithInteractionDriver
+//     is not called): server-side renders the prompts as a tiny HTML
 //     form. The right choice for a server-rendered embedder.
 //   - [interaction.JSONDriver]: emits the prompt as JSON and reads
 //     submissions as JSON. The right choice when the embedder ships

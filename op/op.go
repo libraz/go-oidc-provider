@@ -759,7 +759,7 @@ func spaWiringFor(cfg *config) (loginMount, staticDir string) {
 //
 // cfg supplies the Provider-level fallbacks the per-step builders
 // consult when the Step omits its own field (e.g. StepTOTP defers to
-// [WithMFAEncryptionKey] when [StepTOTP.EncryptionKey] is empty).
+// [WithMFAEncryptionKeys] when [StepTOTP.EncryptionKey] is empty).
 func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, error) {
 	primary, err := projectStepToFlow("Primary", flow.Primary, cfg)
 	if err != nil {
@@ -907,7 +907,7 @@ func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep,
 }
 
 // totpFallbackKeys returns the Provider-level TOTP encryption keys
-// configured through [WithMFAEncryptionKey] / [WithMFAEncryptionKeys].
+// configured through [WithMFAEncryptionKeys].
 // The first return value is the active key (or nil when the option is
 // unset), the second is the rotation history (nil when absent or when
 // only the active key was supplied). Splitting the slice this way lets

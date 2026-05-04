@@ -16,10 +16,10 @@ import (
 )
 
 // TestApplyDefaults_HTMLDriverDefault confirms the plan 005 §3.4
-// promise: with neither [WithInteraction] nor [WithSPAUI] supplied
+// promise: with neither [WithInteractionDriver] nor [WithSPAUI] supplied
 // the OP boots with [interaction.HTMLDriver] as its default driver,
 // so an embedder who calls only the four required options
-// (WithIssuer / WithStore / WithKeyset / WithCookieKey) still gets a
+// (WithIssuer / WithStore / WithKeyset / WithCookieKeys) still gets a
 // working HTML login surface.
 func TestApplyDefaults_HTMLDriverDefault(t *testing.T) {
 	t.Parallel()
@@ -31,11 +31,11 @@ func TestApplyDefaults_HTMLDriverDefault(t *testing.T) {
 	}
 }
 
-// TestApplyDefaults_HonoursWithInteraction confirms the explicit
-// [WithInteraction] driver wins over the HTMLDriver default. The
+// TestApplyDefaults_HonoursWithInteractionDriver confirms the explicit
+// [WithInteractionDriver] driver wins over the HTMLDriver default. The
 // default substitution short-circuits when [config.interactionD] is
 // already set so an embedder's custom driver is preserved verbatim.
-func TestApplyDefaults_HonoursWithInteraction(t *testing.T) {
+func TestApplyDefaults_HonoursWithInteractionDriver(t *testing.T) {
 	t.Parallel()
 
 	custom := interaction.JSONDriver{}

@@ -300,8 +300,8 @@ type StepTOTP struct {
 
 	// EncryptionKey is the AES-256-GCM key used to seal the shared
 	// secret at rest. When non-empty, MUST be exactly 32 bytes; an
-	// empty value falls back to [WithMFAEncryptionKey] /
-	// [WithMFAEncryptionKeys] configured on the Provider. The library
+	// empty value falls back to [WithMFAEncryptionKeys] configured on
+	// the Provider. The library
 	// binds the subject identifier as additional authenticated data,
 	// so a blob exfiltrated from one row fails to decrypt under a
 	// different subject.

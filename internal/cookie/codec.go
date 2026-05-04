@@ -49,7 +49,7 @@ type Codec struct {
 // for new encryptions; remaining keys are accepted only on decryption to
 // support rotation.
 // Every key must be exactly 32 bytes; an empty list is rejected so that
-// "WithCookieKey was forgotten" surfaces at startup rather than at runtime.
+// "WithCookieKeys was forgotten" surfaces at startup rather than at runtime.
 func NewCodec(current []byte, previous ...[]byte) (*Codec, error) {
 	if len(current) != keyLen {
 		return nil, ErrInvalidKey

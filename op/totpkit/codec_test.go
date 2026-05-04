@@ -48,7 +48,7 @@ func TestNewCodec_RejectsLongKey(t *testing.T) {
 }
 
 // TestNewCodec_RejectsZeroKey covers nil and empty slices. Both
-// represent "the operator forgot to wire WithMFAEncryptionKey"; the
+// represent "the operator forgot to wire WithMFAEncryptionKeys"; the
 // construction-time error makes that misconfiguration loud rather
 // than letting the codec encrypt under whatever zero-bytes-key the
 // AEAD would build.

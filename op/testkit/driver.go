@@ -13,7 +13,7 @@ import (
 // tests a single import path for the default driver.
 //
 // Tests that need a different shape (custom rendering, multi-step
-// flows) install their own driver via [op.WithInteraction] passed
+// flows) install their own driver via [op.WithInteractionDriver] passed
 // through [WithOptions].
 //
 // AutoConsentDriver is safe for concurrent use; it carries no state.

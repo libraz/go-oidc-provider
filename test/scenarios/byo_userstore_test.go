@@ -213,7 +213,7 @@ func newBUSSigningKey(tb testing.TB) op.SigningKey {
 	return op.SigningKey{KeyID: "bus-sig-1", Signer: priv}
 }
 
-// newBUSCookieKey returns a fresh 32-byte cookie key for op.WithCookieKey.
+// newBUSCookieKey returns a fresh 32-byte cookie key for op.WithCookieKeys.
 func newBUSCookieKey(tb testing.TB) []byte {
 	tb.Helper()
 	key := make([]byte, 32)

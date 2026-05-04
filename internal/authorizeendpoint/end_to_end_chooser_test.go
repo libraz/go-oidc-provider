@@ -21,7 +21,7 @@ import (
 )
 
 // chooserCookieKey is the deterministic 32-byte AES-256-GCM key the
-// chooser end-to-end test injects via [op.WithCookieKey]. The fixed
+// chooser end-to-end test injects via [op.WithCookieKeys]. The fixed
 // value lets the test build a parallel [sessions.Manager] that the
 // running provider's session cookie codec round-trips with.
 const chooserCookieKey = "0123456789abcdef0123456789abcdef"

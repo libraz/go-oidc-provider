@@ -46,7 +46,7 @@ func DefaultLoginFlow(passwords store.UserPasswordStore) op.LoginFlow {
 // embedder's storage backend). encryptionKey is the AES-256-GCM key
 // used to seal the shared secret at rest; an empty value falls back
 // to the key configured on the Provider through
-// op.WithMFAEncryptionKey / op.WithMFAEncryptionKeys.
+// op.WithMFAEncryptionKeys.
 //
 // The function preserves loginFlow.Primary, loginFlow.Decider, and
 // loginFlow.Risk; the new RuleAlways(StepTOTP{...}) entry is appended

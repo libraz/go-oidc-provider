@@ -32,7 +32,7 @@ type Material struct {
 	// KeyID is the JWS "kid" header value paired with SigningKey.
 	KeyID string
 	// CookieKey is a 32-byte AES-256-GCM key for the OP's session
-	// cookie codec. Pass to [op.WithCookieKey].
+	// cookie codec. Pass to [op.WithCookieKeys].
 	CookieKey []byte
 	// TOTPKey is a 32-byte AES-256-GCM key for at-rest encryption of
 	// stored TOTP secrets. Pass to [op.StepTOTP.EncryptionKey] when
