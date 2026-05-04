@@ -264,6 +264,11 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
+	if name, ok := firstDuplicateParameter(r.PostForm); !ok {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"parameter "+name+" must not be repeated")
+		return
+	}
 	dpopJKT, ok := verifyDPoPProof(r, w, deps)
 	if !ok {
 		return
@@ -922,6 +927,51 @@ func bindingLabel(dpopJKT, mtlsThumbprint string) string {
 	default:
 		return "bearer"
 	}
+}
+
+// cibaSingleValuedParams is the closed list of /bc-authorize form
+// parameters RFC 6749 §3.2 forbids from appearing more than once.
+// "resource" is intentionally absent — RFC 8707 §2 allows the
+// resource indicator to repeat — and any unknown form key is
+// silently tolerated (the catalog row CIBA-024 / CIBA-025 documents
+// the "ignore unknown form params" posture).
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var cibaSingleValuedParams = []string{
+	"scope",
+	"login_hint",
+	"login_hint_token",
+	"id_token_hint",
+	"binding_message",
+	"user_code",
+	"acr_values",
+	"requested_expiry",
+	"request",
+	"client_notification_token",
+}
+
+// firstDuplicateParameter scans values for a member of
+// [cibaSingleValuedParams] that appears more than once. The second
+// return is false when a duplicate was found; the first return then
+// names the offending parameter so the caller can stamp the wire
+// description. The helper mirrors the duplicate-parameter rejection
+// the /authorize parser performs in [internal/authorize.singleValue]
+// — both endpoints inherit the RFC 6749 §3.2 "MUST NOT include more
+// than once" rule that CIBA Core 1.0 §7.1 carries forward by
+// reference.
+//
+// Unlike the authorize parser, byte-equal repeats are NOT tolerated:
+// the ambiguity the spec warns against exists regardless of whether
+// the values agree, and the CIBA endpoint has no legacy clients
+// whose libraries are known to emit the byte-equal shape. Rejecting
+// uniformly keeps the wire contract crisp.
+func firstDuplicateParameter(values url.Values) (string, bool) {
+	for _, name := range cibaSingleValuedParams {
+		if len(values[name]) > 1 {
+			return name, false
+		}
+	}
+	return "", true
 }
 
 // isFormContent reports whether ct is application/x-www-form-

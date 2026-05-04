@@ -1286,6 +1286,49 @@ func TestScenario_CIBA_042_BackchannelRejectsEncryptedRequestObject(t *testing.T
 	t.Skip("out-of-scope: CIBA-042 (see catalog out_of_scope_reason)")
 }
 
+// TestScenario_CIBA_043_BackchannelRejectsDuplicateSingleValuedParams
+// pins the RFC 6749 §3.2 "MUST NOT include more than once" rule for
+// the CIBA Core 1.0 §7.1 single-valued parameters. /authorize and
+// /token already enforce this at parse time; the row pins the same
+// guarantee for /bc-authorize so a request that doubles, say,
+// login_hint cannot silently pick one. The RFC 8707 §2 resource
+// indicator stays multi-valued and the table omits it; the unit
+// suite under internal/cibaendpoint additionally pins that sibling
+// invariant.
+//
+// Spec: RFC 6749 §3.2, CIBA Core §7.1.
+func TestScenario_CIBA_043_BackchannelRejectsDuplicateSingleValuedParams(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		param string
+		other string
+	}{
+		{name: "login_hint", param: "login_hint", other: "bob"},
+		{name: "binding_message", param: "binding_message", other: "stop"},
+		{name: "acr_values", param: "acr_values", other: "urn:mace:incommon:iap:silver"},
+		{name: "requested_expiry", param: "requested_expiry", other: "120"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := newCIBAProvider(t, []string{"openid", "profile"})
+			form := url.Values{}
+			form.Set("scope", "openid")
+			if tc.param != "login_hint" {
+				form.Set("login_hint", cibaKnownLoginHint)
+			}
+			form.Add(tc.param, "first")
+			form.Add(tc.param, tc.other)
+			status, body, _ := p.bcAuthorizeForm(t, form)
+			if status != http.StatusBadRequest {
+				t.Fatalf("status=%d want 400 body=%v", status, body)
+			}
+			expectCIBAError(t, body, "invalid_request")
+		})
+	}
+}
+
 // Compile-time guard: ensure the OOS sentinel sentinel is reachable
 // from this package even when no active row exercises it. This catches
 // a future rename of op.ErrUnknownCIBAUser at build time rather than

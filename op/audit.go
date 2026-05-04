@@ -236,6 +236,16 @@ const (
 	AuditCIBATokenIssued                  = AuditEvent("ciba.token.issued")
 	AuditCIBATokenRejected                = AuditEvent("ciba.token.rejected")
 	AuditCIBATokenSlowDown                = AuditEvent("ciba.token.slow_down")
+
+	// AuditCIBAPollObservationFailed fires when the token-endpoint
+	// CIBA grant observed a substore fault while persisting the
+	// LastPolledAt stamp on a poll. The wire response is unchanged —
+	// the poll decision still proceeds, fail-open, because the
+	// stamp is best-effort observability rather than a single-use
+	// gate — but SOC tooling needs the signal so a transient store
+	// outage that quietly defeats the slow_down ladder is visible.
+	// Warn-level: a healthy deployment should never emit this event.
+	AuditCIBAPollObservationFailed = AuditEvent("ciba.poll_observation.failed")
 )
 
 // Token-exchange events. Fire from the in-tree RFC 8693 handler.

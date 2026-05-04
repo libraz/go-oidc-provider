@@ -421,3 +421,18 @@ rows:
       invalid_request_object.
     status: out-of-scope
     out_of_scope_reason: "Encrypted CIBA request object rejection: v1.0's JAR verifier accepts JWE-wrapped request objects when an encryption keyset is registered (internal/jar/verify.go); FAPI-CIBA-ID1 §5.2.2 does not forbid encryption. If a deployment wishes to disallow it, the embedder leaves WithEncryptionKeyset unset."
+
+  - id: CIBA-043
+    severity: P1
+    spec: RFC 6749 §3.2; CIBA Core §7.1
+    behaviour: |
+      /bc-authorize MUST reject any request whose body repeats a
+      single-valued parameter (login_hint, login_hint_token,
+      id_token_hint, binding_message, acr_values, requested_expiry,
+      scope, user_code, request, or client_notification_token). The
+      response is 400 invalid_request before hint classification or
+      scope parsing fires. The RFC 8707 §2 resource indicator is
+      legitimately multi-valued and MUST still be accepted; client_id
+      and client_secret are validated by the client-authentication
+      layer and do not double-fire here.
+    status: active

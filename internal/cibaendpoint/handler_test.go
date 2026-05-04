@@ -417,3 +417,117 @@ func TestServe_HonoursRequestedExpiryClamp(t *testing.T) {
 		t.Fatalf("expires_in = %d, want 600", body.ExpiresIn)
 	}
 }
+
+// TestServe_RejectsDuplicateSingleValuedParams pins the RFC 6749
+// §3.2 "MUST NOT include more than once" rule for the CIBA Core 1.0
+// §7.1 single-valued parameters. /authorize and /token enforce this
+// at parse time; /bc-authorize previously accepted duplicates by
+// silently picking one. The handler now rejects with 400
+// invalid_request before classifying the hint or parsing scope so
+// the wire contract matches the other OAuth endpoints uniformly.
+//
+// "resource" is intentionally omitted from this table — RFC 8707 §2
+// permits the resource indicator to repeat — and a sibling row pins
+// that the legitimate-multi-value parameter is still admitted.
+func TestServe_RejectsDuplicateSingleValuedParams(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		param string
+		other string
+	}{
+		{name: "login_hint", param: "login_hint", other: "bob"},
+		{name: "binding_message", param: "binding_message", other: "stop"},
+		{name: "acr_values", param: "acr_values", other: "urn:mace:incommon:iap:silver"},
+		{name: "requested_expiry", param: "requested_expiry", other: "120"},
+		{name: "id_token_hint", param: "id_token_hint", other: "ey..."},
+		{name: "login_hint_token", param: "login_hint_token", other: "ey..."},
+		{name: "user_code", param: "user_code", other: "5678"},
+		{name: "client_notification_token", param: "client_notification_token", other: "tok-2"},
+		{name: "request", param: "request", other: "ey..."},
+	}
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t, clock)
+			deps := newDeps(s, clock)
+			form := url.Values{}
+			form.Set("scope", "openid")
+			form.Set("login_hint", "alice")
+			// Override single-value defaults the helper seeded so the
+			// duplicate is the only ambiguity in the request.
+			if tc.param == "login_hint" {
+				form.Del("login_hint")
+			}
+			form.Add(tc.param, "first")
+			form.Add(tc.param, tc.other)
+			rec := httptest.NewRecorder()
+			cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+				t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
+			}
+		})
+	}
+}
+
+// TestServe_RejectsDuplicateScope pins that the space-delimited
+// "scope" parameter is single-occurrence on the wire even though
+// each occurrence is itself a list. RFC 6749 §3.3 mandates the
+// space-delimited representation; admitting two scope= entries would
+// require the OP to choose a merge policy, which the spec does not
+// define. Reject uniformly.
+func TestServe_RejectsDuplicateScope(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Add("scope", "openid")
+	form.Add("scope", "openid profile")
+	form.Set("login_hint", "alice")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
+	}
+}
+
+// TestServe_AdmitsRepeatedResource pins the RFC 8707 §2 carve-out:
+// the resource indicator is legitimately multi-valued on the wire,
+// so two resource= entries MUST NOT trip the duplicate-parameter
+// gate. The persisted record carries both audiences after
+// normalisation.
+func TestServe_AdmitsRepeatedResource(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Add("resource", "https://api-a.example/")
+	form.Add("resource", "https://api-b.example/")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body successBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	persisted, err := s.CIBARequests().FindByAuthReqID(context.Background(), body.AuthReqID)
+	if err != nil {
+		t.Fatalf("FindByAuthReqID: %v", err)
+	}
+	if len(persisted.Resource) != 2 {
+		t.Fatalf("persisted resource count = %d, want 2 (got %v)", len(persisted.Resource), persisted.Resource)
+	}
+}

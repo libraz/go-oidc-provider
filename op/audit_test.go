@@ -133,6 +133,7 @@ func TestAuditEvent_CIBAMirror(t *testing.T) {
 		"ciba.token.issued":                   op.AuditCIBATokenIssued,
 		"ciba.token.rejected":                 op.AuditCIBATokenRejected,
 		"ciba.token.slow_down":                op.AuditCIBATokenSlowDown,
+		"ciba.poll_observation.failed":        op.AuditCIBAPollObservationFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

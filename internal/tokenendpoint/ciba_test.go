@@ -3,6 +3,7 @@ package tokenendpoint_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/keys"
@@ -303,3 +305,131 @@ func TestHandleCIBA_PollAbuseLockout(t *testing.T) {
 // embedder can distinguish "never polled" from "polled at the
 // epoch".
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// recordPollFailingStore wraps an in-memory [store.CIBARequestStore]
+// and forces every [store.CIBARequestStore.RecordPoll] call to fail
+// with [errInjectedRecordPoll]. The remaining methods delegate to the
+// inner substore so the rest of the poll flow behaves exactly like
+// the production path. The test that consumes this stub asserts that
+// the poll decision still proceeds (fail-open) and that the failure
+// is observable as a warn-level audit event.
+type recordPollFailingStore struct {
+	inner store.CIBARequestStore
+}
+
+var errInjectedRecordPoll = errors.New("injected: RecordPoll fault")
+
+func (s recordPollFailingStore) Save(ctx context.Context, req *store.CIBARequest) error {
+	return s.inner.Save(ctx, req)
+}
+
+func (s recordPollFailingStore) FindByAuthReqID(ctx context.Context, id string) (*store.CIBARequest, error) {
+	return s.inner.FindByAuthReqID(ctx, id)
+}
+
+func (s recordPollFailingStore) Approve(ctx context.Context, id, subject string) error {
+	return s.inner.Approve(ctx, id, subject)
+}
+
+func (s recordPollFailingStore) Deny(ctx context.Context, id, reason string) error {
+	return s.inner.Deny(ctx, id, reason)
+}
+
+func (s recordPollFailingStore) RecordPoll(_ context.Context, _ string, _ time.Time) error {
+	return errInjectedRecordPoll
+}
+
+func (s recordPollFailingStore) IncrementPollViolation(ctx context.Context, id string) (uint8, error) {
+	return s.inner.IncrementPollViolation(ctx, id)
+}
+
+func (s recordPollFailingStore) Consume(ctx context.Context, id string) (*store.CIBARequest, error) {
+	return s.inner.Consume(ctx, id)
+}
+
+// recordingEmitter captures every emitted [audit.Event] in order so
+// tests can assert on the warn-level audit record produced by a
+// failing RecordPoll. The struct is intentionally not goroutine-safe
+// — every test that consumes it drives a single request from the
+// foreground.
+type recordingEmitter struct {
+	events []audit.Event
+}
+
+func (e *recordingEmitter) Emit(_ context.Context, ev audit.Event) {
+	e.events = append(e.events, ev)
+}
+
+// TestHandleCIBA_RecordPollFault_EmitsWarn pins the M3 invariant: a
+// transient substore fault on RecordPoll MUST surface as a warn-
+// level audit event without short-circuiting the poll decision.
+// The fixture wraps the production CIBARequestStore in a stub that
+// forces RecordPoll to fail; the wire response is unchanged
+// (authorization_pending against a Pending record) and the audit
+// stream carries a [ciba.AuditPollObservationFailed] record stamped
+// at warn level so SOC tooling can spot a quiet outage that defeats
+// the slow_down ladder.
+func TestHandleCIBA_RecordPollFault_EmitsWarn(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:     "auth-req-poll-fault",
+		Scope:  []string{"openid"},
+		Status: store.CIBARequestStatusPending,
+	})
+	emitter := &recordingEmitter{}
+	f.deps.Audit = emitter
+	f.deps.CIBARequests = recordPollFailingStore{inner: f.store.CIBARequests()}
+
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "auth-req-poll-fault")
+	rec := f.post(t, form)
+
+	// (a) the poll decision still proceeds — Pending records yield
+	// authorization_pending; the persistence fault MUST NOT change
+	// the wire shape.
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := cibaDecodeError(t, rec.Body.Bytes()); got != "authorization_pending" {
+		t.Fatalf("error = %q, want authorization_pending", got)
+	}
+
+	// (b) a warn-level audit entry was emitted naming the failed
+	// observation. Search rather than indexing because the handler
+	// also emits AuditTokenRejected for the wire response.
+	var found *audit.Event
+	for i := range emitter.events {
+		ev := emitter.events[i]
+		if ev.Name == ciba.AuditPollObservationFailed {
+			found = &ev
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected audit event %q; got %v", ciba.AuditPollObservationFailed, eventNames(emitter.events))
+	}
+	if found.Level != audit.LevelWarn {
+		t.Errorf("event level = %v, want LevelWarn", found.Level)
+	}
+	if found.ClientID != f.client.ID {
+		t.Errorf("event client_id = %q, want %q", found.ClientID, f.client.ID)
+	}
+	gotErr, _ := found.Extras["error"].(string)
+	if gotErr == "" {
+		t.Errorf("extras.error empty; want stringified store error")
+	}
+}
+
+// eventNames flattens an [audit.Event] slice to its Name fields.
+// The helper exists so a failing assertion on a missing event can
+// print a compact list of what WAS emitted instead of dumping the
+// full audit struct.
+func eventNames(events []audit.Event) []string {
+	out := make([]string, 0, len(events))
+	for _, ev := range events {
+		out = append(out, ev.Name)
+	}
+	return out
+}

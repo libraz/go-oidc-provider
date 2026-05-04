@@ -131,8 +131,22 @@ func applyCIBAPollDecision(
 	// store fault here is non-fatal: the worst case is the next
 	// poll gets the same decision because LastPolledAt is stale,
 	// which is the correct fail-open behaviour for a transient
-	// substore outage.
-	_ = deps.CIBARequests.RecordPoll(ctx, authReqID, now)
+	// substore outage. We surface the fault as a warn-level audit
+	// event so SOC tooling can spot a transient outage that quietly
+	// defeats the slow_down ladder; the poll decision itself still
+	// proceeds because RecordPoll is best-effort observability
+	// rather than a single-use gate.
+	if err := deps.CIBARequests.RecordPoll(ctx, authReqID, now); err != nil {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     ciba.AuditPollObservationFailed,
+			Level:    audit.LevelWarn,
+			Message:  "ciba poll observation persistence failed; slow_down ladder may read stale LastPolledAt",
+			ClientID: clientID,
+			Extras: map[string]any{
+				"error": err.Error(),
+			},
+		})
+	}
 	switch decision.Decision {
 	case ciba.PollDecisionAuthorizationPending:
 		emitCIBAReject(ctx, deps, clientID, errAuthorizationPending)
