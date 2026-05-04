@@ -259,9 +259,23 @@ type successResponse struct {
 // Handler returns the HTTP handler the OP mounts at its
 // /bc-authorize endpoint. The returned handler is safe for
 // concurrent use; deps MUST NOT be mutated after the call.
+//
+// Defence in depth: op.New's validateCIBAGrant rejects a
+// configured-but-unwired substore at construction time, but a
+// caller that bypasses op.New (e.g. constructs the handler
+// directly) and forgets to wire CIBARequests would otherwise
+// reach a nil-interface Save inside serve. The wrapper short-
+// circuits to 500 server_error before any request work, keeping
+// the bug visible without crashing the process.
 func Handler(deps Deps) http.Handler {
 	resolved := resolveDeps(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if resolved.CIBARequests == nil {
+			stampNoStore(w)
+			writeError(w, http.StatusInternalServerError, errServerError,
+				"backchannel-authentication substore is not configured")
+			return
+		}
 		serve(w, r, resolved)
 	})
 }
@@ -281,19 +295,6 @@ func resolveDeps(d Deps) Deps {
 // resolves it to a subject, parses the requested parameters,
 // mints the auth_req_id, and persists the resulting record.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
-	if deps.CIBARequests == nil {
-		// Defence in depth: op.New's validateCIBAGrant rejects
-		// this configuration before the router mounts. The
-		// branch only fires when an embedder bypassed op.New
-		// (e.g. constructed the handler directly via
-		// cibaendpoint.Handler) and forgot to wire the
-		// substore. Surfacing 500 server_error keeps the bug
-		// visible without crashing the process.
-		stampNoStore(w)
-		writeError(w, http.StatusInternalServerError, errServerError,
-			"backchannel-authentication substore is not configured")
-		return
-	}
 	if !parseAndValidateForm(w, r) {
 		return
 	}

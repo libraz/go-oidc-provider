@@ -55,7 +55,7 @@ func selfVerify(logger *slog.Logger) error {
 	}
 	logger.Debug("self-verify authorized", slog.String("user_code", authz.UserCode))
 
-	if err := st.DeviceCodes().Approve(ctx, authz.DeviceCode, demoSubject, time.Now().UTC()); err != nil {
+	if err := st.DeviceCodes().Approve(ctx, authz.DeviceCode, demoSubject, time.Now().UTC()); err != nil { //nolint:forbidigo // demo only: production embedders stamp authTime from their authentication device's clock seam.
 		return fmt.Errorf("approve: %w", err)
 	}
 

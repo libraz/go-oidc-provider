@@ -166,7 +166,7 @@ func TestHandler_RefreshToken_StoreFault_EmitsAudit(t *testing.T) {
 		"token":           {refreshID},
 		"token_type_hint": {"refresh_token"},
 	}
-	req := httptest.NewRequest(http.MethodPost, "https://op.example/revoke", strings.NewReader(form.Encode()))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "https://op.example/revoke", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(clientID, secret)
 	rec := httptest.NewRecorder()
@@ -233,7 +233,7 @@ func TestHandler_JWTAccessToken_StoreFault_EmitsAudit(t *testing.T) {
 	innerStore := inmem.New(inmem.WithClock(clock))
 
 	const clientID = "client-revoke-jwt-fault"
-	const secret = "revoke-jwt-fault-secret"
+	const secret = "revoke-jwt-fault-secret" //nolint:gosec // not a credential — opaque test fixture secret.
 	hash, err := (&clientauth.Argon2id{}).Hash(secret)
 	if err != nil {
 		t.Fatalf("Argon2id.Hash: %v", err)
@@ -286,7 +286,7 @@ func TestHandler_JWTAccessToken_StoreFault_EmitsAudit(t *testing.T) {
 	}
 
 	form := url.Values{"token": {raw}, "token_type_hint": {"access_token"}}
-	req := httptest.NewRequest(http.MethodPost, "https://op.example/revoke", strings.NewReader(form.Encode()))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "https://op.example/revoke", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.SetBasicAuth(clientID, secret)
 	rec := httptest.NewRecorder()

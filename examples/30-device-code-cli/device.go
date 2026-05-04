@@ -39,7 +39,7 @@ func simulateBrowserApproval(ctx context.Context, st store.Store, authz *authori
 		return
 	case <-time.After(demoApprovalDelay):
 	}
-	if err := st.DeviceCodes().Approve(context.Background(), authz.DeviceCode, demoSubject, time.Now().UTC()); err != nil {
+	if err := st.DeviceCodes().Approve(context.Background(), authz.DeviceCode, demoSubject, time.Now().UTC()); err != nil { //nolint:forbidigo // demo only: production embedders stamp authTime from their authentication device's clock seam.
 		logger.Warn("simulated approval failed", slog.String("err", err.Error()))
 		return
 	}

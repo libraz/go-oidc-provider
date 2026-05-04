@@ -223,6 +223,20 @@ type successResponse struct {
 func Handler(deps Deps) http.Handler {
 	resolved := resolveDeps(deps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Defence in depth: op.New's validateDeviceCodeGrant
+		// rejects this configuration before the router mounts;
+		// the wrapper short-circuits to 500 server_error when
+		// an embedder bypassed op.New and forgot to wire the
+		// substore. Keeping the check ahead of the method gate
+		// means a misconfigured handler surfaces the
+		// configuration error on every probe rather than
+		// passing GET/HEAD through to the 405 path first.
+		if resolved.DeviceCodes == nil {
+			stampNoStore(w)
+			writeError(w, http.StatusInternalServerError, errServerError,
+				"device-authorization substore is not configured")
+			return
+		}
 		serve(w, r, resolved)
 	})
 }
@@ -246,18 +260,6 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		w.Header().Set("Allow", http.MethodPost)
 		stampNoStore(w)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if deps.DeviceCodes == nil {
-		// Defence in depth: op.New's validateDeviceCodeGrant
-		// rejects this configuration before the router mounts.
-		// The branch only fires when an embedder bypassed
-		// op.New (e.g. constructed the handler directly via
-		// devicecodeendpoint.Handler) and forgot to wire the
-		// substore. Surfacing 500 server_error keeps the bug
-		// visible without crashing the process.
-		writeError(w, http.StatusInternalServerError, errServerError,
-			"device-authorization substore is not configured")
 		return
 	}
 	if !isFormContent(r.Header.Get("Content-Type")) {

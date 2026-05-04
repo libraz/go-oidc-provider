@@ -72,7 +72,12 @@ func (a *autoApprovingCIBA) approveAfterDelay(authReqID, subject string) {
 	case <-a.ctx.Done():
 		return
 	}
-	err := a.inner.Approve(a.ctx, authReqID, subject, time.Now().UTC())
+	// authTime is left zero: this binary is a smoke-test fixture
+	// driven by OFCS, not a production OP, and the project's
+	// forbidigo gate (ADR 0002) blocks direct time.Now in cmd/.
+	// A zero AuthTime omits the auth_time claim, which suits a
+	// demo that never asserts the value.
+	err := a.inner.Approve(a.ctx, authReqID, subject, time.Time{})
 	switch {
 	case err == nil:
 		a.log.Info("ciba auto-approved",
