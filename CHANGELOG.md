@@ -125,11 +125,15 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   `urn:openid:params:grant-type:ciba` at the token endpoint.
   Push and ping delivery modes are deferred to v2+; only poll
   mode ships in v0.9.1. Public surface:
-  - `op.WithCIBA(...)` registers the CIBA substore, the
+  - `op.WithCIBA(...)` registers the CIBA substore and the
     `HintResolver` seam (login_hint / login_hint_token / id_token_hint
-    → internal subject), and the `AuthDevice` seam (out-of-band
-    push to the authentication device). The option is required to
-    enable CIBA; the endpoint and grant_type stay off by default.
+    → internal subject). The option is required to enable CIBA; the
+    endpoint and grant_type stay off by default. Authentication-device
+    response (approve / deny) is delivered out-of-band by the
+    embedder calling `store.CIBARequestStore.Approve` /
+    `Deny` directly from the authentication device's callback handler;
+    the OP never pushes to the authentication device itself
+    (`examples/31-ciba-pos/` shows the substore-direct shape).
   - `op.CIBARequestStore` is a new substore in the public store
     interface; the in-memory adapter ships, SQL / Redis adapters
     follow in v0.9.2.
