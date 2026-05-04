@@ -760,11 +760,60 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 // [SubjectGenerator] surface to the function-typed callback the
 // handler receives so the internal package does not import op.
 //
-// A v0.x default install (UUIDv7 passthrough) returns the raw subject
-// verbatim, preserving the legacy wire shape; a pairwise install
-// derives the sector from [store.Client.SectorIdentifierURI] /
-// [store.Client.RedirectURIs] before hashing.
+// # Per-client dispatch (built-in pairwise)
+//
+// When [WithPairwiseSubject] is active, OIDC Core 1.0 §8 mandates that
+// the OP MUST compute pairwise sub values only for clients that
+// requested subject_type=pairwise; clients registered with
+// subject_type=public (or with the field empty, which the registration
+// endpoint defaults to "public") MUST receive a non-pairwise sub. The
+// projector implements that dispatch: it consults
+// [store.Client.SubjectType] (RFC 7591 §2 makes subject_type per-
+// client metadata) and routes pairwise clients to the configured
+// pairwise generator while routing every other client to the
+// package-default UUIDv7 passthrough. This is what allows a single OP
+// to serve a mixed tenant base where some clients want sector-scoped
+// subjects and others want a stable global identifier.
+//
+// # Custom-generator passthrough
+//
+// When [WithSubjectGenerator] supplies a fully custom generator
+// (anything other than the built-in pairwise wiring), the projector
+// hands every client to that generator without per-client routing.
+// Embedders that need bespoke dispatch (attribute-derived sub values,
+// federated-identifier hashing, multi-strategy mixes) own the routing
+// inside their own [SubjectGenerator] so they can read whatever client
+// metadata their strategy requires.
+//
+// # Default install
+//
+// Without any subject option the projector hands every client to the
+// UUIDv7 passthrough, preserving the legacy v0.x wire shape where the
+// OP-internal subject flows verbatim into the "sub" claim.
 func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
+	if cfg.pairwiseEnabled() {
+		// Built-in pairwise wiring: dispatch on the per-client
+		// subject_type. The pairwise generator is the one the option
+		// recorded; the non-pairwise arm collapses onto the package
+		// default (UUIDv7 passthrough), which preserves the v0.x wire
+		// shape for any client that did not opt into pairwise.
+		pairwiseGen := cfg.subjectGenerator
+		fallbackGen := defaultSubjectGenerator()
+		return func(ctx context.Context, raw string, client *store.Client) (string, error) {
+			gen := fallbackGen
+			if client != nil && client.SubjectType == "pairwise" {
+				gen = pairwiseGen
+			}
+			sub, err := gen.Generate(ctx, SubjectGeneratorInput{
+				InternalUserID: raw,
+				Client:         client,
+			})
+			if err != nil {
+				return "", err
+			}
+			return string(sub), nil
+		}
+	}
 	gen := cfg.effectiveSubjectGenerator()
 	return func(ctx context.Context, raw string, client *store.Client) (string, error) {
 		sub, err := gen.Generate(ctx, SubjectGeneratorInput{

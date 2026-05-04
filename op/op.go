@@ -72,8 +72,16 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // generator from [WithSubjectGenerator] or [WithPairwiseSubject], or
 // the package default UUIDv7 passthrough when neither option was
 // supplied. Embedders calling this from out-of-band code paths
-// (admin tooling, audit reports) get the same instance the issuance
-// pipeline runs against.
+// (admin tooling, audit reports) drive the same generator instance
+// the issuance pipeline consults — but note that under
+// [WithPairwiseSubject] the issuance pipeline also performs per-
+// client dispatch on [store.Client.SubjectType] (OIDC Core 1.0 §8 /
+// RFC 7591 §2): only clients registered with subject_type=pairwise
+// receive pairwise sub values; clients with subject_type=public (or
+// the field empty) receive the package-default UUIDv7 passthrough.
+// Out-of-band callers that want to reproduce the issuance value MUST
+// either inspect [store.Client.SubjectType] themselves or invoke the
+// per-client projector through a /authorize round-trip.
 //
 // Stable since v0.9.1.
 func (p *Provider) SubjectGenerator() SubjectGenerator { //nolint:ireturn,nolintlint // sealed-sum interface return is the contract.

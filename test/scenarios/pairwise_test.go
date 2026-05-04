@@ -76,6 +76,7 @@ func pairwiseClient(t *testing.T, tk *testkit.Provider, id, redirectURI string) 
 		RedirectURIs:            []string{redirectURI},
 		Scopes:                  []string{"openid", "profile", "email"},
 		TokenEndpointAuthMethod: "client_secret_basic",
+		SubjectType:             "pairwise",
 	})
 }
 

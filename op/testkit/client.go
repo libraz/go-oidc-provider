@@ -43,6 +43,15 @@ type ClientFixture struct {
 	// (single-host) redirect URIs.
 	SectorIdentifierURI string
 
+	// SubjectType is the OIDC Core 1.0 §8 subject_type the client
+	// requests at registration ("public" or "pairwise"). The empty
+	// string is normalised to "public" by the OP's issuance projector,
+	// so tests that want pairwise issuance against an OP enrolled with
+	// [op.WithPairwiseSubject] MUST set the field to "pairwise"
+	// explicitly — the global pairwise option no longer forces every
+	// client onto the pairwise path.
+	SubjectType string
+
 	// JWKs is the raw JWK Set the client publishes for private_key_jwt /
 	// request-object verification. The testkit stores the bytes verbatim
 	// onto [store.Client.JWKs]; consumers parse them lazily. Leave nil
@@ -115,6 +124,7 @@ func buildClient(fix ClientFixture) *store.Client {
 		SecretHash:              fix.SecretHash,
 		PublicClient:            fix.PublicClient,
 		SectorIdentifierURI:     fix.SectorIdentifierURI,
+		SubjectType:             fix.SubjectType,
 		JWKs:                    append(json.RawMessage(nil), fix.JWKs...),
 
 		IDTokenEncryptedResponseAlg:       fix.IDTokenEncryptedResponseAlg,
