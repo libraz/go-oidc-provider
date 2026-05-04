@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -123,34 +124,11 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 	// {"active": false}. The shape depends on the configured ADR 0025
 	// strategy; every branch is idempotent (missing row → nil) and
 	// keeps the endpoint on the RFC 7009 §2.2 "always 200" path.
-	switch deps.RevocationStrategy {
-	case store.RevocationStrategyNone:
-		// Stateless mode: the OP knowingly opted out of AT
-		// revocation. RFC 7009 §2.2 still requires HTTP 200; the
-		// caller writes the status. Nothing to persist.
-	case store.RevocationStrategyJTIRegistry:
-		if deps.AccessTokens != nil {
-			_ = deps.AccessTokens.RevokeByJTI(ctx, claims.JTI)
-		}
-	default:
-		// GrantTombstone (default): write a per-JTI denylist row.
-		// ADR 0025 §Alternatives explicitly rejects coalescing a
-		// single-AT revoke into a grant tombstone — the rest of the
-		// grant stays alive. The denylist row's expiry is the AT's
-		// own exp plus a 5-minute grace so it outlives any cache.
-		if deps.GrantRevocations != nil {
-			_ = deps.GrantRevocations.RevokeJTI(ctx, store.RevokedJTI{
-				JTI:       claims.JTI,
-				GrantID:   claims.GrantID,
-				ExpiresAt: time.Unix(claims.ExpiresAt, 0).Add(5 * time.Minute).UTC(),
-			})
-		} else if deps.AccessTokens != nil {
-			// Legacy fallback: GrantRevocations is unwired but the
-			// JTI registry is. Use it so the cascade still works for
-			// embedders mid-migration.
-			_ = deps.AccessTokens.RevokeByJTI(ctx, claims.JTI)
-		}
-	}
+	endpointsupport.RevokeJWTAccessTokenByJTI(ctx, endpointsupport.JWTGrantCascadeOpts{
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		RevocationStrategy: deps.RevocationStrategy,
+	}, claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0).Add(5*time.Minute).UTC())
 	return true
 }
 

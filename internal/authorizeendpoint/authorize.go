@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -201,13 +201,7 @@ func methodAllowed(method string) bool {
 // tolerating optional parameters (charset, boundary, etc.). Mirrors the
 // helper in [internal/tokenendpoint] so the two endpoints stay aligned.
 func isFormContent(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
+	return endpointsupport.IsFormContent(ct)
 }
 
 // writeAuthorizeParseError handles errors emitted by [authorize.ParseRequest].

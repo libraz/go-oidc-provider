@@ -8,6 +8,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -260,38 +261,11 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 // not own a slog logger today, so we leave the failure observable
 // only through the audit emitter (handled by the caller).
 func revokeJWTAccessTokensForGrant(ctx context.Context, deps Deps, grantID string) {
-	switch deps.RevocationStrategy {
-	case store.RevocationStrategyJTIRegistry:
-		if deps.AccessTokens != nil {
-			_, _ = deps.AccessTokens.RevokeByGrant(ctx, grantID)
-		}
-	case store.RevocationStrategyGrantTombstone:
-		if deps.GrantRevocations == nil || grantID == "" {
-			return
-		}
-		now := deps.now().UTC()
-		_ = deps.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
-			GrantID:   grantID,
-			RevokedAt: now,
-			// Tombstone retention: max_AT_TTL + 5m grace. Any AT issued
-			// before the cascade is guaranteed to have expired (or to
-			// be rejected) before the tombstone disappears
-			// (ADR 0025 §GC).
-			ExpiresAt: now.Add(deps.AccessTokenTTL + 5*time.Minute),
-			Reason:    "code_replay",
-		})
-	case store.RevocationStrategyNone:
-		// Embedder opted out of server-side JWT revocation. The
-		// refresh-token cascade still runs; outstanding JWT ATs live
-		// until exp.
-	default:
-		// Unknown strategy. The op-level [store.AccessTokenRevocationStrategy.IsValid]
-		// gate at op.New rejects unknown values, so reaching here means
-		// a manual Deps was misconfigured. Fall back to the
-		// most-permissive default (no-op) rather than panic — the
-		// failure mode is observable through the missing tombstone if
-		// the embedder later inspects the substore.
-	}
+	endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		RevocationStrategy: deps.RevocationStrategy,
+	}, grantID, deps.now().UTC(), deps.AccessTokenTTL+5*time.Minute, "code_replay")
 }
 
 // issueAuthCodeResponse mints the access token, optionally a refresh

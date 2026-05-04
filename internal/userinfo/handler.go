@@ -127,9 +127,6 @@ type HandlerDeps struct {
 	// the AT's "gid" private claim. A nil value disables the lookup
 	// and the handler falls back to whichever legacy behaviour
 	// [RevocationStrategy] selects.
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	GrantRevocations store.GrantRevocationStore
 
 	// RevocationStrategy selects the JWT access-token revocation
@@ -137,9 +134,6 @@ type HandlerDeps struct {
 	// [store.RevocationStrategyGrantTombstone], which is the
 	// documented default; the library wires this from
 	// [op.WithAccessTokenRevocationStrategy].
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
 	// ClientEncJWKs resolves the RP's encryption recipient when the
@@ -617,75 +611,16 @@ func enforceRevocationStatus(
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
 ) bool {
-	switch deps.RevocationStrategy {
-	case store.RevocationStrategyNone:
-		return true
-	case store.RevocationStrategyJTIRegistry:
-		return enforceRevocationStatusJTIRegistry(ctx, w, deps, claims)
-	default:
-		return enforceRevocationStatusGrantTombstone(ctx, w, deps, claims)
-	}
-}
-
-// enforceRevocationStatusGrantTombstone is the default (ADR 0025
-// §Wire-through points / Verify userinfo). It consults
-// [store.GrantRevocationStore.IsRevoked] when both the AT carries a
-// "gid" claim and the substore is configured; otherwise it falls back
-// to the JTI registry so legacy tokens (minted before the gid claim
-// landed) keep verifying for the migration window.
-func enforceRevocationStatusGrantTombstone(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps HandlerDeps,
-	claims *tokens.AccessTokenClaims,
-) bool {
-	if claims.GrantID != "" && deps.GrantRevocations != nil {
-		revoked, err := deps.GrantRevocations.IsRevoked(
-			ctx,
-			claims.GrantID,
-			claims.JTI,
-			time.Unix(claims.IssuedAt, 0).UTC(),
-		)
-		if err != nil {
-			http.Error(w, "internal server error", http.StatusInternalServerError)
-			return false
-		}
-		if revoked {
-			w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "The access token has been revoked"))
-			w.WriteHeader(http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-	// Legacy fallback: AT predates the gid claim. Consult the JTI
-	// registry if it is wired; otherwise accept (the embedder wired
-	// neither substore = explicit opt-out).
-	if deps.AccessTokens == nil {
-		return true
-	}
-	return enforceRevocationStatusJTIRegistry(ctx, w, deps, claims)
-}
-
-// enforceRevocationStatusJTIRegistry is the ADR 0013 path: look the
-// JTI up in the per-token registry; a marked-revoked row collapses
-// onto invalid_token. A missing row is allowed through so directly-
-// constructed test tokens and external-issuer registries do not flip
-// the contract.
-func enforceRevocationStatusJTIRegistry(
-	ctx context.Context,
-	w http.ResponseWriter,
-	deps HandlerDeps,
-	claims *tokens.AccessTokenClaims,
-) bool {
-	if deps.AccessTokens == nil {
-		return true
-	}
-	rec, err := deps.AccessTokens.Find(ctx, claims.JTI)
-	if err != nil {
+	revoked, ok := endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		RevocationStrategy: deps.RevocationStrategy,
+	}, claims)
+	if !ok {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return false
 	}
-	if rec != nil && rec.Revoked {
+	if revoked {
 		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "The access token has been revoked"))
 		w.WriteHeader(http.StatusUnauthorized)
 		return false

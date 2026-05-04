@@ -19,6 +19,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -1083,11 +1084,5 @@ func firstDuplicateParameter(values url.Values) (string, bool) {
 // urlencoded, tolerating optional parameters (charset, boundary,
 // etc.).
 func isFormContent(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
+	return endpointsupport.IsFormContent(ct)
 }

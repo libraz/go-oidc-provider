@@ -4,11 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -513,31 +513,11 @@ func revokeJWTAccessTokensForGrant(
 	grantID string,
 	now time.Time,
 ) {
-	switch deps.RevocationStrategy {
-	case store.RevocationStrategyNone:
-		return
-	case store.RevocationStrategyJTIRegistry:
-		if deps.AccessTokens == nil {
-			return
-		}
-		_, _ = deps.AccessTokens.RevokeByGrant(ctx, grantID)
-	default:
-		if deps.GrantRevocations == nil {
-			// Legacy fallback: GrantRevocations unwired but the JTI
-			// registry is. Use it so the cascade still works for
-			// embedders mid-migration.
-			if deps.AccessTokens != nil {
-				_, _ = deps.AccessTokens.RevokeByGrant(ctx, grantID)
-			}
-			return
-		}
-		_ = deps.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
-			GrantID:   grantID,
-			RevokedAt: now,
-			ExpiresAt: now.Add(tombstoneRetention(deps.AccessTokenTTL)),
-			Reason:    "logout",
-		})
-	}
+	endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		RevocationStrategy: deps.RevocationStrategy,
+	}, grantID, now, tombstoneRetention(deps.AccessTokenTTL), "logout")
 }
 
 // tombstoneRetention returns the period a grant tombstone must live
@@ -640,11 +620,5 @@ func buildPostLogoutRedirect(postLogout, state string) (string, bool) {
 // tolerating optional parameters. Mirrors the helper in the sibling
 // endpoints so the form-content contract stays uniform.
 func isFormContent(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
+	return endpointsupport.IsFormContent(ct)
 }

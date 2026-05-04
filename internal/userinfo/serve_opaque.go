@@ -2,12 +2,10 @@ package userinfo
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"net/http"
-	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -172,20 +170,5 @@ func respondOpaqueInvalid(w http.ResponseWriter, description string) {
 // JWT branch would reject it anyway, but the conservative choice
 // keeps the dispatcher simple to reason about.
 func looksLikeJWT(token string) bool {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return false
-	}
-	if parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return false
-	}
-	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return false
-	}
-	var header map[string]any
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		return false
-	}
-	return len(header) > 0
+	return endpointsupport.LooksLikeJWT(token)
 }

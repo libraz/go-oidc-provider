@@ -55,18 +55,18 @@ func (c *config) effectiveSubjectMode() string {
 // non-public construction so a deliberate or accidental wipe cannot
 // silently re-key every future "sub".
 //
-// The gate is tolerant of [store.Store.Metadata] returning nil: the
-// SQL / Redis adapters in v0.9.1 have not yet provisioned the
-// substore and the library logs a warning rather than refusing to
-// boot. Embedders running pairwise on those adapters carry the
-// switch-by-accident risk explicitly until the adapter pass lands.
+// The gate is tolerant of [store.Store.Metadata] returning nil: custom
+// stores may legitimately omit the substore, and the library logs a
+// warning rather than refusing to boot. Embedders running pairwise or a
+// custom subject generator on such a store carry the switch-by-accident
+// risk explicitly until the store implements MetadataStore.
 func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 	current := c.effectiveSubjectMode()
 	meta := c.store.Metadata()
 	if meta == nil {
 		if c.logger != nil && current != store.SubjectModePublic {
 			c.logger.Warn(
-				"subject-mode immutability gate skipped: store does not implement MetadataStore (sql / redis adapters defer the substore to a future release); switching subject strategies on a populated store will silently reassign sub values.",
+				"subject-mode immutability gate skipped: store does not implement MetadataStore; switching subject strategies on a populated store will silently reassign sub values.",
 				"mode", current,
 			)
 		}

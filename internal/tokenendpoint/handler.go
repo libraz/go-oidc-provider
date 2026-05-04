@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -273,9 +274,6 @@ type Deps struct {
 	// [RevocationStrategy] selects. The library wires a non-nil
 	// substore from the configured [op.Store] when the embedder pins
 	// [op.RevocationStrategyGrantTombstone] (default).
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	GrantRevocations store.GrantRevocationStore
 
 	// RevocationStrategy selects the JWT access-token revocation
@@ -285,9 +283,6 @@ type Deps struct {
 	// [op.WithAccessTokenRevocationStrategy]. The opaque path
 	// (ADR 0024) is unaffected because opaque tokens are
 	// intrinsically per-token in storage.
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
 	// Audit is the structured audit-event sink. A nil Emitter falls
@@ -512,13 +507,7 @@ func authenticate(
 // Parameters (charset, etc.) are tolerated so the handler accepts the
 // shape RP libraries actually send.
 func isFormContent(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
+	return endpointsupport.IsFormContent(ct)
 }
 
 // clientPermitsRefresh reports whether the registered client may

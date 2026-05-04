@@ -2,13 +2,13 @@ package parendpoint
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -251,11 +251,5 @@ func (d *Deps) now() time.Time {
 // tolerating optional parameters (charset, boundary, etc.). Mirrors the
 // helper in [internal/tokenendpoint] so the two endpoints stay aligned.
 func isFormContent(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), "application/x-www-form-urlencoded")
+	return endpointsupport.IsFormContent(ct)
 }

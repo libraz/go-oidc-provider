@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -160,62 +160,11 @@ func isJWTAccessTokenRevoked(
 	deps Deps,
 	claims *tokens.AccessTokenClaims,
 ) (revoked, ok bool) {
-	switch deps.RevocationStrategy {
-	case store.RevocationStrategyNone:
-		return false, true
-	case store.RevocationStrategyJTIRegistry:
-		return isJWTAccessTokenRevokedByJTI(ctx, deps, claims)
-	default:
-		return isJWTAccessTokenRevokedByTombstone(ctx, deps, claims)
-	}
-}
-
-// isJWTAccessTokenRevokedByTombstone consults the GrantRevocations
-// substore keyed by the AT's "gid" claim. Tokens without a gid (legacy
-// migration window per ADR 0025 §Migration) fall back to the JTI
-// registry when one is configured.
-func isJWTAccessTokenRevokedByTombstone(
-	ctx context.Context,
-	deps Deps,
-	claims *tokens.AccessTokenClaims,
-) (revoked, ok bool) {
-	if claims.GrantID != "" && deps.GrantRevocations != nil {
-		got, err := deps.GrantRevocations.IsRevoked(
-			ctx,
-			claims.GrantID,
-			claims.JTI,
-			time.Unix(claims.IssuedAt, 0).UTC(),
-		)
-		if err != nil {
-			return false, false
-		}
-		return got, true
-	}
-	if deps.AccessTokens == nil {
-		return false, true
-	}
-	return isJWTAccessTokenRevokedByJTI(ctx, deps, claims)
-}
-
-// isJWTAccessTokenRevokedByJTI is the ADR 0013 path. A missing row is
-// allowed through so directly-constructed test tokens do not flip the
-// contract. A lookup error collapses onto inactive.
-func isJWTAccessTokenRevokedByJTI(
-	ctx context.Context,
-	deps Deps,
-	claims *tokens.AccessTokenClaims,
-) (revoked, ok bool) {
-	if deps.AccessTokens == nil {
-		return false, true
-	}
-	rec, err := deps.AccessTokens.Find(ctx, claims.JTI)
-	if err != nil {
-		return false, false
-	}
-	if rec != nil && rec.Revoked {
-		return true, true
-	}
-	return false, true
+	return endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		RevocationStrategy: deps.RevocationStrategy,
+	}, claims)
 }
 
 // projectAccessTokenClaims builds an active introspection response
