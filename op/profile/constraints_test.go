@@ -27,7 +27,11 @@ func TestRequiredFeatures(t *testing.T) {
 			profile.FAPI2MessageSigning,
 			[]feature.Flag{feature.PAR, feature.JAR, feature.JARM},
 		},
-		{"fapi-ciba", profile.FAPICIBA, nil},
+		{
+			"fapi-ciba",
+			profile.FAPICIBA,
+			[]feature.Flag{feature.JAR},
+		},
 		{"igov-high", profile.IGovHigh, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
@@ -90,9 +94,17 @@ func TestRequiredAnyOf(t *testing.T) {
 		}
 	})
 
+	t.Run("fapi-ciba-inherits-anyof", func(t *testing.T) {
+		t.Parallel()
+		got := profile.RequiredAnyOf(profile.FAPICIBA)
+		if len(got) != 1 || !slices.Equal(got[0], []feature.Flag{feature.DPoP, feature.MTLS}) {
+			t.Errorf("RequiredAnyOf(FAPICIBA) = %v, want [[DPoP MTLS]]", got)
+		}
+	})
+
 	t.Run("zero-and-deferred-profiles-have-no-anyof", func(t *testing.T) {
 		t.Parallel()
-		for _, p := range []profile.Profile{profile.Profile(0), profile.FAPICIBA, profile.IGovHigh, profile.Profile(99)} {
+		for _, p := range []profile.Profile{profile.Profile(0), profile.IGovHigh, profile.Profile(99)} {
 			if got := profile.RequiredAnyOf(p); got != nil {
 				t.Errorf("RequiredAnyOf(%v) = %v, want nil", p, got)
 			}
@@ -120,7 +132,7 @@ func TestMaxAccessTokenTTL(t *testing.T) {
 	}{
 		{"fapi2-baseline", profile.FAPI2Baseline, 10 * time.Minute},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, 10 * time.Minute},
-		{"fapi-ciba", profile.FAPICIBA, 0},
+		{"fapi-ciba", profile.FAPICIBA, 10 * time.Minute},
 		{"igov-high", profile.IGovHigh, 0},
 		{"zero", profile.Profile(0), 0},
 		{"unknown", profile.Profile(99), 0},
@@ -148,7 +160,7 @@ func TestAllowedClientAuthMethods(t *testing.T) {
 	}{
 		{"fapi2-baseline", profile.FAPI2Baseline, fapi2Allowed},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, fapi2Allowed},
-		{"fapi-ciba", profile.FAPICIBA, nil},
+		{"fapi-ciba", profile.FAPICIBA, fapi2Allowed},
 		{"igov-high", profile.IGovHigh, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
@@ -172,4 +184,79 @@ func TestAllowedClientAuthMethods(t *testing.T) {
 			t.Error("AllowedClientAuthMethods returned aliased slice; mutation leaked across calls")
 		}
 	})
+}
+
+func TestRequiresNonce(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want bool
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, false},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, false},
+		{"fapi-ciba", profile.FAPICIBA, false},
+		{"igov-high", profile.IGovHigh, false},
+		{"zero", profile.Profile(0), false},
+		{"unknown", profile.Profile(99), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := profile.RequiresNonce(tc.in); got != tc.want {
+				t.Errorf("RequiresNonce(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequiresStateOrNonce(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want bool
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, true},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
+		{"fapi-ciba", profile.FAPICIBA, false},
+		{"igov-high", profile.IGovHigh, false},
+		{"zero", profile.Profile(0), false},
+		{"unknown", profile.Profile(99), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := profile.RequiresStateOrNonce(tc.in); got != tc.want {
+				t.Errorf("RequiresStateOrNonce(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequiresPAR(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want bool
+	}{
+		{"fapi2-baseline", profile.FAPI2Baseline, true},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
+		{"fapi-ciba", profile.FAPICIBA, false},
+		{"igov-high", profile.IGovHigh, false},
+		{"zero", profile.Profile(0), false},
+		{"unknown", profile.Profile(99), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := profile.RequiresPAR(tc.in); got != tc.want {
+				t.Errorf("RequiresPAR(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
 }

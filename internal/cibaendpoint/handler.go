@@ -18,6 +18,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -131,6 +132,24 @@ type Deps struct {
 	// so a deployment locked to sender-constrained tokens cannot
 	// silently downgrade through CIBA flow.
 	RequireSenderConstraint bool
+
+	// JAR, when non-nil, makes /bc-authorize accept a "request"
+	// form parameter carrying a signed authentication request
+	// per FAPI-CIBA-ID1 §5.2.2. The handler verifies the JWT
+	// against the authenticated client's keyset and merges the
+	// claims onto the form values before parsing CIBA-specific
+	// parameters. A nil verifier rejects any request that
+	// carries a "request" parameter with invalid_request_object.
+	JAR *jar.Verifier
+
+	// RequireSignedAuthRequest, when true, makes the handler
+	// reject any /bc-authorize POST that does not carry a
+	// "request" parameter with invalid_request. The flag is set
+	// by FAPI-CIBA so a profile-locked deployment cannot accept
+	// unsigned form submissions. When set, [Deps.JAR] MUST be
+	// non-nil — the constructor in [op] enforces that pairing
+	// at startup.
+	RequireSignedAuthRequest bool
 
 	// HintResolver maps an inbound CIBA hint to a stable subject.
 	// A nil resolver makes every request fail with login_required
@@ -260,7 +279,11 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !verifyClientGrantTypeAllowed(r.Context(), w, deps, client) {
 		return
 	}
-	hintKind, hintValue, ok := classifyHint(r.Context(), w, deps, r.PostForm, client.ID)
+	merged, ok := consumeJARRequestObject(r.Context(), w, deps, client, r.PostForm)
+	if !ok {
+		return
+	}
+	hintKind, hintValue, ok := classifyHint(r.Context(), w, deps, merged, client.ID)
 	if !ok {
 		return
 	}
@@ -268,24 +291,24 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	scope, ok := parseScope(r.Context(), w, deps, r.PostForm, client)
+	scope, ok := parseScope(r.Context(), w, deps, merged, client)
 	if !ok {
 		return
 	}
-	resource, ok := parseResource(w, r.PostForm)
+	resource, ok := parseResource(w, merged)
 	if !ok {
 		return
 	}
-	acrValues := parseACRValues(r.PostForm.Get("acr_values"))
-	bindingMessage, ok := parseBindingMessage(w, r.PostForm.Get("binding_message"))
+	acrValues := parseACRValues(merged.Get("acr_values"))
+	bindingMessage, ok := parseBindingMessage(w, merged.Get("binding_message"))
 	if !ok {
 		return
 	}
-	expiresIn, ok := parseRequestedExpiry(w, r.PostForm.Get("requested_expiry"), deps)
+	expiresIn, ok := parseRequestedExpiry(w, merged.Get("requested_expiry"), deps)
 	if !ok {
 		return
 	}
-	userCode := strings.TrimSpace(r.PostForm.Get("user_code"))
+	userCode := strings.TrimSpace(merged.Get("user_code"))
 	persist(r.Context(), w, deps, persistInput{
 		Client:         client,
 		Subject:        subject,
@@ -412,6 +435,142 @@ func verifyClientGrantTypeAllowed(ctx context.Context, w http.ResponseWriter, de
 	writeError(w, http.StatusBadRequest, errUnauthorizedClient,
 		"client is not authorized for the ciba grant")
 	return false
+}
+
+// consumeJARRequestObject inspects the form values for a "request"
+// parameter. When present, it verifies the JWT against the
+// authenticated client and merges the claims onto the form values
+// per RFC 9101 §6.1 / FAPI-CIBA-ID1 §5.2.2. A nil [Deps.JAR] means
+// the OP has not enabled JAR; the request is rejected with
+// invalid_request_object.
+//
+// When [Deps.RequireSignedAuthRequest] is true and "request" is
+// missing, the request is rejected with invalid_request because
+// FAPI-CIBA-ID1 §5.2.2 mandates a signed authentication request on
+// every /bc-authorize POST.
+//
+// The returned bool is false when the function wrote the response;
+// the caller then stops processing.
+func consumeJARRequestObject(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	client *store.Client,
+	values url.Values,
+) (url.Values, bool) {
+	raw := values.Get("request")
+	if raw == "" {
+		if deps.RequireSignedAuthRequest {
+			deps.auditEmitter().Emit(ctx, audit.Event{
+				Name:     ciba.AuditAuthorizationRejected,
+				Level:    audit.LevelWarn,
+				Message:  "backchannel-authentication rejected: signed request object required",
+				ClientID: client.ID,
+				Extras: map[string]any{
+					"reason": "request_object_required",
+				},
+			})
+			writeError(w, http.StatusBadRequest, errInvalidRequest,
+				"request object is required by the active profile")
+			return nil, false
+		}
+		return values, true
+	}
+	if deps.JAR == nil {
+		deps.auditEmitter().Emit(ctx, audit.Event{
+			Name:     ciba.AuditAuthorizationRejected,
+			Level:    audit.LevelWarn,
+			Message:  "backchannel-authentication rejected: request object not supported",
+			ClientID: client.ID,
+			Extras: map[string]any{
+				"reason": "request_object_invalid",
+			},
+		})
+		writeError(w, http.StatusBadRequest, errInvalidRequestObject,
+			"request is not supported by this OP")
+		return nil, false
+	}
+	obj, err := deps.JAR.Verify(ctx, raw, client.ID, client)
+	if err != nil {
+		deps.auditEmitter().Emit(ctx, audit.Event{
+			Name:     ciba.AuditAuthorizationRejected,
+			Level:    audit.LevelWarn,
+			Message:  "backchannel-authentication rejected: request object verification failed",
+			ClientID: client.ID,
+			Extras: map[string]any{
+				"reason": "request_object_invalid",
+			},
+		})
+		writeJARError(w, err)
+		return nil, false
+	}
+	merged, err := jar.Merge(values, obj)
+	if err != nil {
+		deps.auditEmitter().Emit(ctx, audit.Event{
+			Name:     ciba.AuditAuthorizationRejected,
+			Level:    audit.LevelWarn,
+			Message:  "backchannel-authentication rejected: request object merge failed",
+			ClientID: client.ID,
+			Extras: map[string]any{
+				"reason": "request_object_invalid",
+			},
+		})
+		writeJARError(w, err)
+		return nil, false
+	}
+	return merged, true
+}
+
+// writeJARError translates a [jar] sentinel into the OAuth wire
+// envelope. The taxonomy mirrors the parendpoint surface (alg /
+// signature / claim failures map to invalid_request_object;
+// client_id mismatches map to invalid_request).
+func writeJARError(w http.ResponseWriter, err error) {
+	if errors.Is(err, jar.ErrClientIDMismatch) {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"client_id mismatch in request object")
+		return
+	}
+	writeError(w, http.StatusBadRequest, errInvalidRequestObject,
+		jarDescriptionFor(err))
+}
+
+// jarDescriptions is the sentinel-to-string catalogue
+// [jarDescriptionFor] walks. Mirrors the parendpoint table —
+// duplicated rather than shared because the cibaendpoint package
+// does not import parendpoint.
+//
+//nolint:gochecknoglobals // immutable error-to-description catalogue.
+var jarDescriptions = []struct {
+	sentinel error
+	desc     string
+}{
+	{jar.ErrAlgNotAllowed, "request object alg is not allowed"},
+	{jar.ErrSigInvalid, "request object signature is invalid"},
+	{jar.ErrIssMismatch, "request object iss does not match client_id"},
+	{jar.ErrAudMismatch, "request object aud does not match issuer"},
+	{jar.ErrExpired, "request object is expired or too old"},
+	{jar.ErrNotYetValid, "request object is not yet valid"},
+	{jar.ErrNestedRequest, "request object must not contain nested request parameters"},
+	{jar.ErrJWKSFetch, "client jwks fetch failed"},
+	{jar.ErrNoMatchingJWK, "no matching client jwk"},
+	{jar.ErrJWKSConfigured, "client has no JWKs or JWKsURI"},
+	{jar.ErrJTIMissing, "request object missing jti"},
+	{jar.ErrJTIReplayed, "request object jti already consumed"},
+	{jar.ErrEncryptionUnsupported, "encrypted request objects are not supported"},
+	{jar.ErrEncryptionAlgNotAllowed, "request object encryption alg/enc is not allowed"},
+	{jar.ErrDecryptFailed, "request object could not be decrypted"},
+	{jar.ErrParse, "request object is malformed"},
+}
+
+// jarDescriptionFor returns a short description for a JAR sentinel.
+func jarDescriptionFor(err error) string {
+	for _, entry := range jarDescriptions {
+		if errors.Is(err, entry.sentinel) {
+			return entry.desc
+		}
+	}
+	return "request object verification failed"
 }
 
 // classifyHint dispatches to [ciba.ClassifyHint] and maps the

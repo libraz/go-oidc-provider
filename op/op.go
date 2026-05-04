@@ -500,20 +500,20 @@ func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
 // requireSenderConstrainedTokens reports whether the active
 // [profile.Profile] set forbids the issuance of bearer access
 // tokens. The library's product design (§J.7.2) ties this to the
-// FAPI 2.0 family; the build-time profile validator already requires
-// either DPoP or mTLS feature to be enabled when a FAPI2 profile is
-// active, so the runtime path returning true here means "an /token
-// request must present a proof or a cert".
+// FAPI 2.0 family and FAPI-CIBA (which inherits the FAPI 2.0
+// §3.1.4 mandate verbatim per FAPI-CIBA-ID1 §5); the build-time
+// profile validator already requires either DPoP or mTLS feature
+// to be enabled when one of those profiles is active, so the
+// runtime path returning true here means "an /token (or
+// /bc-authorize) request must present a proof or a cert".
 func (c *config) requireSenderConstrainedTokens() bool {
 	for _, p := range c.profiles {
 		switch p {
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:
 			return true
-		case profile.FAPICIBA, profile.IGovHigh:
-			// Future profiles. v1.0 ships without their constraint
-			// tables; FAPI-CIBA requires sender-constrained tokens
-			// the same way and will land here when the profile
-			// graduates from placeholder.
+		case profile.IGovHigh:
+			// IGovHigh is a placeholder today; it will land here
+			// when its constraint table graduates.
 		}
 	}
 	return false
@@ -600,10 +600,40 @@ func (c *config) requireSignedRequestObject() bool {
 		case profile.FAPI2MessageSigning:
 			return true
 		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
-			// Baseline does not mandate signed_non_repudiation; the
-			// two future profiles ship without their constraint
-			// tables and will land here when they graduate from
-			// placeholder.
+			// Baseline does not mandate signed_non_repudiation;
+			// FAPI-CIBA mandates signed authentication requests
+			// at /bc-authorize but not at /authorize / /par
+			// (CIBA does not exercise either endpoint), so its
+			// gate lives on [config.requireSignedBackchannelRequest].
+			// IGovHigh is a placeholder today and will land here
+			// when its constraint table graduates.
+		}
+	}
+	return false
+}
+
+// requireSignedBackchannelRequest reports whether the active
+// [profile.Profile] set mandates that every /bc-authorize request
+// carry a signed JAR request object. FAPI-CIBA-ID1 §5.2.2 ("the
+// authentication request MUST be a signed authentication request")
+// is the canonical source. The build-time profile validator
+// requires [feature.JAR] to be enabled when [profile.FAPICIBA] is
+// active, so the runtime path returning true here means "a JAR
+// verifier is guaranteed to be wired" at /bc-authorize. The
+// helper mirrors the disjunctive shape of [config.requirePKCE]:
+// any one active profile that mandates signed backchannel
+// requests resolves the answer to true.
+func (c *config) requireSignedBackchannelRequest() bool {
+	for _, p := range c.profiles {
+		switch p {
+		case profile.FAPICIBA:
+			return true
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.IGovHigh:
+			// FAPI 2.0 Baseline / Message Signing do not mount a
+			// backchannel-authentication endpoint; the signed-
+			// request mandate is specific to FAPI-CIBA. IGovHigh
+			// is a placeholder today and will land here when its
+			// constraint table graduates.
 		}
 	}
 	return false
@@ -624,9 +654,10 @@ func (c *config) requireJARMResponseMode() bool {
 		case profile.FAPI2MessageSigning:
 			return true
 		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
-			// Baseline does not require response signing; the two
-			// future profiles ship without their constraint tables
-			// and will land here when they graduate from placeholder.
+			// Baseline does not require response signing;
+			// FAPI-CIBA does not exercise /authorize so JARM does
+			// not apply. IGovHigh is a placeholder today and will
+			// land here when its constraint table graduates.
 		}
 	}
 	return false
@@ -646,10 +677,12 @@ func (c *config) requireSignedIntrospection() bool {
 		case profile.FAPI2MessageSigning:
 			return true
 		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
-			// Baseline does not require introspection signing; the
-			// two future profiles ship without their constraint
-			// tables and will land here when they graduate from
-			// placeholder.
+			// Baseline does not require introspection signing;
+			// FAPI-CIBA inherits the FAPI 2.0 Baseline posture for
+			// /introspect (the profile only adds backchannel-
+			// authentication mandates). IGovHigh is a placeholder
+			// today and will land here when its constraint table
+			// graduates.
 		}
 	}
 	return false

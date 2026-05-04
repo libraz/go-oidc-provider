@@ -43,6 +43,7 @@ const (
 // reach the unexported constants.
 const (
 	wireInvalidRequest        = "invalid_request"
+	wireInvalidRequestObject  = "invalid_request_object"
 	wireInvalidScope          = "invalid_scope"
 	wireUnauthorizedClient    = "unauthorized_client"
 	wireUnknownUserID         = "unknown_user_id"

@@ -323,7 +323,7 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 		allowMissingJTI = true
 	)
 	for _, p := range cfg.profiles {
-		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning {
+		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
 			maxLifetime = 60 * time.Second
 		}

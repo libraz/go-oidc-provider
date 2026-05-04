@@ -19,18 +19,24 @@ import (
 //     lives on [RequiredAnyOf] rather than here.
 //   - [FAPI2MessageSigning]: every [FAPI2Baseline] requirement plus
 //     JARM (Message Signing §5).
+//   - [FAPICIBA]: JAR (FAPI-CIBA-ID1 §5.2.2 mandates that every
+//     /bc-authorize request be a signed authentication request). The
+//     sender-constrained-token requirement is inherited from the
+//     FAPI 2.0 family and lives on [RequiredAnyOf] like Baseline /
+//     Message Signing.
 //
-// [FAPICIBA] and [IGovHigh] return nil because their option surfaces
-// are scheduled for v1.x / v2+; returning nil keeps the switch
-// exhaustive without the library claiming requirements it cannot yet
-// enforce.
+// [IGovHigh] returns nil because its option surface is scheduled for
+// v2+; returning nil keeps the switch exhaustive without the library
+// claiming requirements it cannot yet enforce.
 func RequiredFeatures(p Profile) []feature.Flag {
 	switch p {
 	case FAPI2Baseline:
 		return []feature.Flag{feature.PAR, feature.JAR}
 	case FAPI2MessageSigning:
 		return []feature.Flag{feature.PAR, feature.JAR, feature.JARM}
-	case FAPICIBA, IGovHigh, profileUnspecified:
+	case FAPICIBA:
+		return []feature.Flag{feature.JAR}
+	case IGovHigh, profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -46,12 +52,13 @@ func RequiredFeatures(p Profile) []feature.Flag {
 // lets the deployment choose between DPoP (RFC 9449) and mTLS
 // (RFC 8705), so the constraint is "DPoP OR MTLS" rather than the
 // stronger "DPoP AND MTLS" — pinning a single binding mechanism would
-// reject conformant deployments that picked the other.
+// reject conformant deployments that picked the other. FAPI-CIBA
+// inherits the FAPI 2.0 §3.1.4 mandate verbatim (FAPI-CIBA-ID1 §5).
 func RequiredAnyOf(p Profile) [][]feature.Flag {
 	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning:
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return [][]feature.Flag{{feature.DPoP, feature.MTLS}}
-	case FAPICIBA, IGovHigh, profileUnspecified:
+	case IGovHigh, profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -63,14 +70,15 @@ func RequiredAnyOf(p Profile) [][]feature.Flag {
 // rule is one-directional: an embedder MAY configure a stricter
 // (smaller) TTL but MUST NOT configure a value above this bound.
 //
-// Both FAPI 2.0 Baseline and Message Signing cap access tokens at
-// 10 minutes (FAPI 2.0 §3.1.9). [FAPICIBA] and [IGovHigh] return 0
-// because their option surfaces are scheduled for v1.x / v2+.
+// FAPI 2.0 Baseline and Message Signing cap access tokens at 10
+// minutes (FAPI 2.0 §3.1.9); FAPI-CIBA inherits the same cap by
+// reference (FAPI-CIBA-ID1 §5). [IGovHigh] returns 0 because its
+// option surface is scheduled for v2+.
 func MaxAccessTokenTTL(p Profile) time.Duration {
 	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning:
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return 10 * time.Minute
-	case FAPICIBA, IGovHigh, profileUnspecified:
+	case IGovHigh, profileUnspecified:
 		return 0
 	default:
 		return 0
@@ -88,10 +96,12 @@ func MaxAccessTokenTTL(p Profile) time.Duration {
 // PKCE path, while every FAPI 2.0 deployment keeps the stronger MUST
 // the profile mandates (FAPI 2.0 §2.1.1, citing RFC 7636).
 //
-// [FAPICIBA] and [IGovHigh] return false because their option
-// surfaces are scheduled for v1.x / v2+; the helper is intentionally
-// conservative — a future profile that needs PKCE will be added here
-// rather than relied on as the default.
+// [FAPICIBA] returns false because the CIBA flow has no /authorize
+// redirect — the client posts directly to /bc-authorize and there is
+// no code_challenge step the gate could attach to. [IGovHigh] returns
+// false because its option surface is scheduled for v2+; the helper
+// is intentionally conservative — a future profile that needs PKCE
+// will be added here rather than relied on as the default.
 func RequiresPKCE(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
@@ -125,8 +135,9 @@ func RequiresPKCE(p Profile) bool {
 // wire their own [Policy.NonceRequired]; a future profile that needs
 // it will be added here rather than relied on as the default.
 //
-// [FAPICIBA] and [IGovHigh] return false because their option
-// surfaces are scheduled for v1.x / v2+.
+// [FAPICIBA] returns false because the CIBA flow has no /authorize
+// redirect — there is no nonce parameter on the wire. [IGovHigh]
+// returns false because its option surface is scheduled for v2+.
 func RequiresNonce(p Profile) bool {
 	switch p {
 	case FAPICIBA, IGovHigh, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
@@ -142,8 +153,10 @@ func RequiresNonce(p Profile) bool {
 // nonce parameter") is the canonical source. Vanilla OIDC Core
 // leaves this false because state is RECOMMENDED but not REQUIRED.
 //
-// [FAPICIBA] and [IGovHigh] return false because their option
-// surfaces are scheduled for v1.x / v2+.
+// [FAPICIBA] returns false because the CIBA flow has no /authorize
+// redirect — there is no state or nonce parameter on the wire.
+// [IGovHigh] returns false because its option surface is scheduled
+// for v2+.
 func RequiresStateOrNonce(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
@@ -166,8 +179,9 @@ func RequiresStateOrNonce(p Profile) bool {
 // OIDC Core deployments leave this false so the legacy direct-form
 // /authorize path stays functional.
 //
-// [FAPICIBA] and [IGovHigh] return false because their option
-// surfaces are scheduled for v1.x / v2+.
+// [FAPICIBA] returns false because the CIBA flow does not exercise
+// /authorize at all — there is no PAR push step in CIBA. [IGovHigh]
+// returns false because its option surface is scheduled for v2+.
 func RequiresPAR(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
@@ -189,17 +203,18 @@ func RequiresPAR(p Profile) bool {
 // [tls_client_auth] (RFC 8705), or [self_signed_tls_client_auth]
 // (RFC 8705 §2.2). Public clients ("none") and shared-secret
 // methods ("client_secret_basic", "client_secret_post",
-// "client_secret_jwt") are forbidden. Both Baseline and Message
-// Signing inherit the same set; Message Signing's additional
-// constraints concern response signing rather than client auth.
+// "client_secret_jwt") are forbidden. Baseline, Message Signing,
+// and FAPI-CIBA inherit the same set; Message Signing's additional
+// constraints concern response signing rather than client auth, and
+// FAPI-CIBA inherits the FAPI 2.0 §3.1.3 set verbatim.
 //
 // The slice is freshly allocated on each call; callers may mutate
 // it freely.
 func AllowedClientAuthMethods(p Profile) []string {
 	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning:
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
-	case FAPICIBA, IGovHigh, profileUnspecified:
+	case IGovHigh, profileUnspecified:
 		return nil
 	default:
 		return nil

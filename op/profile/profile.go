@@ -22,7 +22,17 @@ const (
 	FAPI2MessageSigning
 
 	// FAPICIBA selects the FAPI Client-Initiated Backchannel
-	// Authentication profile. v1.x.
+	// Authentication profile (FAPI-CIBA-ID1). It enforces:
+	//   - signed authentication request on /bc-authorize
+	//     (FAPI-CIBA-ID1 §5.2.2);
+	//   - sender-constrained access tokens via DPoP or mTLS
+	//     (inherited from FAPI 2.0 §3.1.4);
+	//   - 10-minute access-token TTL cap (FAPI 2.0 §3.1.9);
+	//   - private_key_jwt / tls_client_auth /
+	//     self_signed_tls_client_auth client authentication
+	//     (FAPI 2.0 §3.1.3);
+	//   - server-side access-token revocation
+	//     (FAPI 2.0 §5.3.2.2).
 	FAPICIBA
 
 	// IGovHigh selects the OpenID iGov High profile. v2+.
@@ -64,8 +74,9 @@ func (p Profile) IsValid() bool {
 // RequiresAccessTokenRevocation reports whether p mandates server-side
 // JWT access-token revocation (ADR 0025). FAPI 2.0 Security Profile
 // §5.3.2.2 imposes the requirement on the FAPI 2.0 family (Baseline,
-// Message Signing); the future FAPI CIBA / iGov profiles inherit the
-// posture once their constraint tables graduate from placeholder.
+// Message Signing); FAPI-CIBA inherits the same posture by reference
+// (FAPI-CIBA-ID1 §5). The future iGov High profile is still a
+// placeholder and will land here when its constraint table graduates.
 // Non-FAPI profiles return false so embedders deploying plain
 // OAuth 2.0 / OIDC can opt into [op.RevocationStrategyNone] without
 // tripping the gate.
@@ -76,11 +87,11 @@ func (p Profile) IsValid() bool {
 // serves a single token before the gate fires.
 func RequiresAccessTokenRevocation(p Profile) bool {
 	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning:
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
-	case FAPICIBA, IGovHigh, profileUnspecified:
-		// FAPICIBA / IGovHigh are placeholders today; they will land
-		// here when their constraint tables graduate.
+	case IGovHigh, profileUnspecified:
+		// IGovHigh is a placeholder today; it will land here when
+		// its constraint table graduates.
 		return false
 	}
 	return false

@@ -465,13 +465,15 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 
 // profileForcesDPoPNonce reports whether p mandates the RFC 9449 §8/§9
 // nonce challenge flow. FAPI 2.0 Message Signing §5.3.4 requires the
-// AS to issue a server-side DPoP nonce; the future FAPI CIBA / iGov
-// profiles inherit the same posture but are placeholders today.
+// AS to issue a server-side DPoP nonce; FAPI-CIBA inherits the same
+// posture by reference (FAPI-CIBA-ID1 §5). The future iGov High
+// profile is still a placeholder and will land here when its
+// constraint table graduates.
 func profileForcesDPoPNonce(p profile.Profile) bool {
 	switch p {
-	case profile.FAPI2MessageSigning:
+	case profile.FAPI2MessageSigning, profile.FAPICIBA:
 		return true
-	case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+	case profile.FAPI2Baseline, profile.IGovHigh:
 		return false
 	}
 	return false

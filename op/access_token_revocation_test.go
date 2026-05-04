@@ -215,9 +215,9 @@ func TestWithAccessTokenRevocationStrategy_FAPIAcceptsJTIRegistry(t *testing.T) 
 // TestProfile_RequiresAccessTokenRevocation pins the FAPI / non-FAPI
 // classification consumed by the validator. Adding a FAPI variant to
 // the profile package without updating this predicate would surface
-// here as a missing FAPI entry. FAPICIBA / IGovHigh are placeholders
-// today (no constraint table) so the predicate returns false; both
-// will graduate in a future release.
+// here as a missing FAPI entry. FAPICIBA inherits the FAPI 2.0 §5.3.2.2
+// posture so it returns true; IGovHigh remains a placeholder until its
+// constraint table graduates.
 func TestProfile_RequiresAccessTokenRevocation(t *testing.T) {
 	t.Parallel()
 
@@ -227,7 +227,7 @@ func TestProfile_RequiresAccessTokenRevocation(t *testing.T) {
 	}{
 		{profile.FAPI2Baseline, true},
 		{profile.FAPI2MessageSigning, true},
-		{profile.FAPICIBA, false},
+		{profile.FAPICIBA, true},
 		{profile.IGovHigh, false},
 		{profile.Profile(0), false},
 		{profile.Profile(99), false},

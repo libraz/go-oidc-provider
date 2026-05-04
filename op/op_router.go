@@ -18,6 +18,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/endsession"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
+	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/jwks"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
@@ -59,6 +60,10 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		return nil, err
 	}
 	assertionVerifier, err := buildAssertionVerifier(cfg)
+	if err != nil {
+		return nil, err
+	}
+	jarVerifier, err := buildJARVerifier(cfg, encSet)
 	if err != nil {
 		return nil, err
 	}
@@ -133,12 +138,12 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		})),
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
-	mountBackchannelAuthenticationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encSet, encResolver, originAllow, strictCORS, locales)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, jarVerifier, strictCORS)
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes, encSet, assertionVerifier, dpopVerifier, strictCORS); err != nil {
+	if err := mountPAREndpoint(mux, cfg, scopes, jarVerifier, assertionVerifier, dpopVerifier, strictCORS); err != nil {
 		return nil, err
 	}
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifier, strictCORS)
@@ -207,21 +212,24 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 // is enabled. Without the flag the route is absent — discovery already
 // gates the advertisement on the same flag, so the OP cannot tell clients
 // the endpoint exists while quietly serving 404.
+//
+// The JAR verifier is built once at the router scope so /par,
+// /authorize, and /bc-authorize share the same instance (one JTI
+// replay-defence pool, one HTTP-fetch client, one resolver cache).
+// A nil verifier signals that [feature.JAR] is off; the PAR handler
+// surfaces invalid_request_object for any inbound request that
+// carries a "request" parameter.
 func mountPAREndpoint(
 	mux *http.ServeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
-	encSet *keys.EncryptionSet,
+	jarVerifier *jar.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
 	dpopVerifier *dpop.Verifier,
 	strictCORS *cors.Strict,
 ) error {
 	if !featureEnabled(cfg.features, feature.PAR) {
 		return nil
-	}
-	jarVerifier, err := buildJARVerifier(cfg, encSet)
-	if err != nil {
-		return err
 	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
@@ -319,13 +327,19 @@ func mountRevocationEndpoint(
 // mountAuthorizeHandlers wires the /authorize and /interaction routes.
 // Returns a [*sessions.Manager] reused by [mountEndSessionEndpoint], or
 // nil when the configured grants do not require the authorize endpoint.
+//
+// The JAR verifier is built once at the router scope (see
+// [buildRouter]) so /par, /authorize, and /bc-authorize share the
+// same instance. A nil verifier signals that [feature.JAR] is off;
+// the authorize handler treats it as "request_uri / request not
+// supported" rather than panicking.
 func mountAuthorizeHandlers(
 	mux *http.ServeMux,
 	cfg *config,
 	scopes *scoperegistry.Registry,
 	keySet *keys.Set,
-	encSet *keys.EncryptionSet,
 	encResolver *clientencjwks.Resolver,
+	jarVerifier *jar.Verifier,
 	allow *csrf.Allowlist,
 	strictCORS *cors.Strict,
 	locales *i18n.Resolver,
@@ -334,10 +348,6 @@ func mountAuthorizeHandlers(
 		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
 	}
 	jarmSigner, err := buildJARMSigner(cfg, keySet)
-	if err != nil {
-		return nil, err
-	}
-	jarVerifier, err := buildJARVerifier(cfg, encSet)
 	if err != nil {
 		return nil, err
 	}
@@ -544,12 +554,20 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 // runtime nil-check in [internal/cibaendpoint.Handler] and surfaces
 // server_error for the inbound request, mirroring the token-endpoint
 // dispatch's unsupported_grant_type fallback.
+//
+// The JAR verifier is built once at the router scope so /par,
+// /authorize, and /bc-authorize share the same instance. A nil
+// verifier signals that [feature.JAR] is off; the cibaendpoint
+// handler surfaces invalid_request_object for any inbound request
+// that carries a "request" parameter, and rejects requests under
+// FAPI-CIBA (which mandates the parameter) with invalid_request.
 func mountBackchannelAuthenticationEndpoint(
 	mux *http.ServeMux,
 	cfg *config,
 	dpopVerifier *dpop.Verifier,
 	mtlsVerifier *mtls.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
+	jarVerifier *jar.Verifier,
 	strictCORS *cors.Strict,
 ) {
 	if !cfg.cibaGrantConfigured() {
@@ -572,6 +590,8 @@ func mountBackchannelAuthenticationEndpoint(
 			DPoPNonces:               cfg.dpopNonces,
 			MTLS:                     mtlsVerifier,
 			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
+			JAR:                      jarVerifier,
+			RequireSignedAuthRequest: cfg.requireSignedBackchannelRequest(),
 			HintResolver:             resolver,
 			DefaultExpiresIn:         cfg.effectiveCIBADefaultExpiresIn(),
 			MaxExpiresIn:             cfg.cibaMaxExpiresIn,

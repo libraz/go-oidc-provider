@@ -221,9 +221,8 @@ func TestWithProfile_FAPI2MessageSigning_AcceptsFullStack(t *testing.T) {
 // is no public option for an embedder to flip it back on — so the
 // test exercises the construction path through every FAPI profile
 // that admits JAR (FAPI 2.0 Baseline auto-enables JAR; FAPI 2.0
-// Message Signing inherits the same auto-enable; FAPICIBA is a
-// placeholder profile today but the wiring still flips the bit so
-// its conformance landing does not have to revisit the rule).
+// Message Signing inherits the same auto-enable; FAPI-CIBA also
+// auto-enables JAR through its RequiredFeatures table).
 //
 // A dedicated negative test ("FAPI profile + AllowMissingJTI=true
 // fails") cannot exist in the option layer because the surface does
@@ -248,6 +247,15 @@ func TestWithProfile_FAPI_JARVerifierStrictJTIPosture(t *testing.T) {
 			name: "FAPI2MessageSigning",
 			opts: []op.Option{
 				op.WithProfile(profile.FAPI2MessageSigning),
+				op.WithFeature(feature.DPoP),
+				op.WithDPoPNonceSource(stubDPoPNonceSource{}),
+			},
+		},
+		{
+			name: "FAPICIBA",
+			opts: []op.Option{
+				op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+				op.WithProfile(profile.FAPICIBA),
 				op.WithFeature(feature.DPoP),
 				op.WithDPoPNonceSource(stubDPoPNonceSource{}),
 			},
@@ -381,4 +389,100 @@ func TestWithProfile_AutoEnableSilentlySkipsExisting(t *testing.T) {
 	)...); err != nil {
 		t.Fatalf("WithProfile auto-enable rejected pre-enabled feature: %v", err)
 	}
+}
+
+// TestWithProfile_FAPICIBA_AutoEnablesJAR_RequiresSenderConstraint
+// pins the FAPI-CIBA build-time validation contract:
+//
+//   - WithProfile(FAPICIBA) auto-enables JAR (RequiredFeatures);
+//   - the disjunctive DPoP / MTLS sender-constraint
+//     requirement (RequiredAnyOf) MUST be supplied manually;
+//   - either DPoP or MTLS satisfies the gate.
+//
+// FAPI-CIBA does NOT auto-enable PAR (CIBA does not flow through
+// /authorize) or DPoP / MTLS (the sender-constrained requirement
+// is disjunctive).
+func TestWithProfile_FAPICIBA_AutoEnablesJAR_RequiresSenderConstraint(t *testing.T) {
+	t.Parallel()
+
+	// WithCIBA appends grant.CIBA to the configured grant set
+	// idempotently, so a separate WithGrants call is unnecessary; the
+	// shared option set keeps the per-subtest body terse.
+	cibaCommon := func() []op.Option {
+		return []op.Option{
+			op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+		}
+	}
+
+	t.Run("missing-sender-constraint-fails", func(t *testing.T) {
+		t.Parallel()
+		opts := append(validBaseOptsWithInmem(t), cibaCommon()...)
+		opts = append(opts, op.WithProfile(profile.FAPICIBA))
+		_, err := op.New(opts...)
+		if err == nil {
+			t.Fatal("expected error when neither DPoP nor MTLS is enabled, got nil")
+		}
+		// The error message lists the disjunctive flags via
+		// feature.Flag.String() — "dpop" and "mtls" lowercase per
+		// the canonical discovery identifiers.
+		if !strings.Contains(err.Error(), "dpop") || !strings.Contains(err.Error(), "mtls") {
+			t.Errorf("err = %v, want it to mention dpop and mtls", err)
+		}
+	})
+
+	t.Run("dpop-satisfies-sender-constraint", func(t *testing.T) {
+		t.Parallel()
+		opts := append(validBaseOptsWithInmem(t), cibaCommon()...)
+		opts = append(opts,
+			op.WithProfile(profile.FAPICIBA),
+			op.WithFeature(feature.DPoP),
+			op.WithDPoPNonceSource(stubDPoPNonceSource{}),
+		)
+		if _, err := op.New(opts...); err != nil {
+			t.Fatalf("WithProfile(FAPICIBA) + DPoP failed: %v", err)
+		}
+	})
+
+	t.Run("mtls-satisfies-sender-constraint", func(t *testing.T) {
+		t.Parallel()
+		opts := append(validBaseOptsWithInmem(t), cibaCommon()...)
+		opts = append(opts,
+			op.WithProfile(profile.FAPICIBA),
+			op.WithFeature(feature.MTLS),
+		)
+		if _, err := op.New(opts...); err != nil {
+			t.Fatalf("WithProfile(FAPICIBA) + MTLS failed: %v", err)
+		}
+	})
+}
+
+// TestWithProfile_FAPICIBA_RequiresDPoPNonceSource confirms that
+// FAPI-CIBA inherits the FAPI 2.0 §5.3.4 mandate: when the profile
+// is active and DPoP is the chosen sender constraint, the embedder
+// MUST supply a nonce source. Omitting it produces a configuration
+// error at op.New time rather than a silent runtime degradation.
+func TestWithProfile_FAPICIBA_RequiresDPoPNonceSource(t *testing.T) {
+	t.Parallel()
+
+	opts := append(validBaseOptsWithInmem(t),
+		op.WithCIBA(op.WithCIBAHintResolver(stubCIBAHintResolver{})),
+		op.WithProfile(profile.FAPICIBA),
+		op.WithFeature(feature.DPoP),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error when DPoP nonce source is omitted, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithDPoPNonceSource") {
+		t.Errorf("err = %v, want it to mention WithDPoPNonceSource", err)
+	}
+}
+
+// stubCIBAHintResolver is a minimal [op.HintResolver] used by tests
+// that need to satisfy [op.WithCIBA]'s resolver-presence invariant
+// without exercising the runtime hint-resolution flow.
+type stubCIBAHintResolver struct{}
+
+func (stubCIBAHintResolver) Resolve(_ context.Context, _ op.HintKind, _ string) (string, error) {
+	return "user-stub", nil
 }
