@@ -49,7 +49,7 @@ func TestDecryptChain_DepthBoundary(t *testing.T) {
 
 			leaf := "leaf-payload"
 			payload := leaf
-			for i := 0; i < tc.jweLayers; i++ {
+			for range tc.jweLayers {
 				payload = nestedJWE(t, payload, &rsaKey.PublicKey, "k1")
 			}
 

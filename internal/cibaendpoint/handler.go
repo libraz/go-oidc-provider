@@ -248,25 +248,7 @@ func resolveDeps(d Deps) Deps {
 // resolves it to a subject, parses the requested parameters,
 // mints the auth_req_id, and persists the resulting record.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !isFormContent(r.Header.Get("Content-Type")) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
-			"content-type must be application/x-www-form-urlencoded")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
-		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
-		return
-	}
-	if name, ok := firstDuplicateParameter(r.PostForm); !ok {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
-			"parameter "+name+" must not be repeated")
+	if !parseAndValidateForm(w, r) {
 		return
 	}
 	dpopJKT, ok := verifyDPoPProof(r, w, deps)
@@ -327,6 +309,37 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		DPoPJKT:        dpopJKT,
 		MTLSThumbprint: mtlsThumbprint,
 	})
+}
+
+// parseAndValidateForm runs the request-shape gates that must clear
+// before any cryptographic or business work: HTTP method, content
+// type, body size, body parse, and the RFC 6749 §3.2 single-valued
+// duplicate-parameter rejection (CIBA Core §7.1 inherits §3.2). On
+// any failure the function writes the wire envelope and returns
+// false. On success r.PostForm is populated and the caller proceeds.
+func parseAndValidateForm(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		stampNoStore(w)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	if !isFormContent(r.Header.Get("Content-Type")) {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"content-type must be application/x-www-form-urlencoded")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	if err := r.ParseForm(); err != nil {
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		return false
+	}
+	if name, ok := firstDuplicateParameter(r.PostForm); !ok {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"parameter "+name+" must not be repeated")
+		return false
+	}
+	return true
 }
 
 // verifyDPoPProof inspects the request for a DPoP proof. When

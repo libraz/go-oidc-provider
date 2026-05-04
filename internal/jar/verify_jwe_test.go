@@ -249,7 +249,7 @@ func TestVerify_RejectsDeeplyNestedJWE(t *testing.T) {
 	// MaxJOSENestingDepth-1 wrappers are within budget; the
 	// MaxJOSENestingDepth-th is the one that trips the cap.
 	payload := mustEncryptToJWE(t, inner, &priv.PublicKey, "enc-1")
-	for i := 0; i < jose.MaxJOSENestingDepth-1; i++ {
+	for range jose.MaxJOSENestingDepth - 1 {
 		payload = mustEncryptToJWE(t, payload, &priv.PublicKey, "enc-1")
 	}
 
@@ -274,7 +274,7 @@ func TestVerify_AcceptsJWEAtBoundary(t *testing.T) {
 
 	// (MaxJOSENestingDepth-1) total JWE layers + 1 JWS = MaxJOSENestingDepth.
 	payload := mustEncryptToJWE(t, inner, &priv.PublicKey, "enc-1")
-	for i := 0; i < jose.MaxJOSENestingDepth-2; i++ {
+	for range jose.MaxJOSENestingDepth - 2 {
 		payload = mustEncryptToJWE(t, payload, &priv.PublicKey, "enc-1")
 	}
 

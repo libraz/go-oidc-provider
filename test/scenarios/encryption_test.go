@@ -585,7 +585,7 @@ func TestScenario_ENC_035_NestedJWEDepthCapRejected(t *testing.T) {
 	// MaxJOSENestingDepth JWEs.
 	const overBudget = 10 // mirrors internal/jose.MaxJOSENestingDepth
 	payload := signed
-	for i := 0; i < overBudget; i++ {
+	for range overBudget {
 		payload = scenariokit.EncryptJWE(t, payload, f.encPub, f.encKID, "RSA-OAEP-256", "A256GCM")
 	}
 

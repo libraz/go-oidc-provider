@@ -50,7 +50,7 @@ func FuzzJWENested(f *testing.F) {
 	leaf := "leaf-payload"
 	for _, depth := range []int{0, 1, 5, 10, 11} {
 		payload := leaf
-		for i := 0; i < depth; i++ {
+		for range depth {
 			out, err := jose.Encrypt([]byte(payload), jose.EncryptionRecipient{
 				Alg:   jose.JWEAlgRSAOAEP256,
 				Enc:   jose.JWEEncA256GCM,

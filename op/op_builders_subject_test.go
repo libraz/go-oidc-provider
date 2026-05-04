@@ -1,4 +1,4 @@
-package op
+package op //nolint:testpackage // exercises package-private buildSubjectProjector and effectiveSubjectGenerator helpers.
 
 import (
 	"context"

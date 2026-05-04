@@ -21,8 +21,6 @@ import (
 // hash. The bytes are not parsed as a real cert anywhere in this
 // package — Thumbprint reads cert.Raw verbatim — so a fabricated
 // payload is sufficient to exercise the SHA-256 path.
-//
-//nolint:gochecknoglobals // test fixture, immutable.
 var fixtureLeafCertDER = []byte("test-cert-raw-bytes-for-thumbprint")
 
 // fixtureLeafCert returns an x509.Certificate whose Raw field carries
