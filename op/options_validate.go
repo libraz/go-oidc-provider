@@ -255,6 +255,14 @@ func (c *config) validateAccessTokenRevocation() error {
 					"Store.GrantRevocations() to be non-nil",
 			}
 		}
+		if c.atRevocation == store.RevocationStrategyJTIRegistry &&
+			c.store.AccessTokens() == nil {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "RevocationStrategyJTIRegistry requires " +
+					"Store.AccessTokens() to be non-nil",
+			}
+		}
 		return nil
 	}
 	for _, p := range c.profiles {

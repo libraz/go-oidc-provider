@@ -168,6 +168,48 @@ func (s storeWithoutGrantRevocations) CIBARequests() store.CIBARequestStore {
 }
 func (s storeWithoutGrantRevocations) Users() store.UserStore { return s.inner.Users() }
 
+type storeWithoutAccessTokens struct{ inner stubStore }
+
+func (s storeWithoutAccessTokens) Clients() store.ClientStore { return s.inner.Clients() }
+func (s storeWithoutAccessTokens) AuthorizationCodes() store.AuthorizationCodeStore {
+	return s.inner.AuthorizationCodes()
+}
+func (s storeWithoutAccessTokens) RefreshTokens() store.RefreshTokenStore {
+	return s.inner.RefreshTokens()
+}
+func (s storeWithoutAccessTokens) Grants() store.GrantStore     { return s.inner.Grants() }
+func (s storeWithoutAccessTokens) Sessions() store.SessionStore { return s.inner.Sessions() }
+func (s storeWithoutAccessTokens) PushedAuthRequests() store.PushedAuthRequestStore {
+	return s.inner.PushedAuthRequests()
+}
+func (s storeWithoutAccessTokens) Interactions() store.InteractionStore {
+	return s.inner.Interactions()
+}
+func (s storeWithoutAccessTokens) ConsumedJTIs() store.ConsumedJTIStore {
+	return s.inner.ConsumedJTIs()
+}
+func (s storeWithoutAccessTokens) InitialAccessTokens() store.InitialAccessTokenStore {
+	return s.inner.InitialAccessTokens()
+}
+func (s storeWithoutAccessTokens) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	return s.inner.RegistrationAccessTokens()
+}
+func (s storeWithoutAccessTokens) AccessTokens() store.AccessTokenRegistry { return nil }
+func (s storeWithoutAccessTokens) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return s.inner.OpaqueAccessTokens()
+}
+func (s storeWithoutAccessTokens) GrantRevocations() store.GrantRevocationStore {
+	return s.inner.GrantRevocations()
+}
+func (s storeWithoutAccessTokens) Metadata() store.MetadataStore { return s.inner.Metadata() }
+func (s storeWithoutAccessTokens) DeviceCodes() store.DeviceCodeStore {
+	return s.inner.DeviceCodes()
+}
+func (s storeWithoutAccessTokens) CIBARequests() store.CIBARequestStore {
+	return s.inner.CIBARequests()
+}
+func (s storeWithoutAccessTokens) Users() store.UserStore { return s.inner.Users() }
+
 func TestWithAccessTokenRevocationStrategy_RejectsUnknownValue(t *testing.T) {
 	t.Parallel()
 
@@ -186,6 +228,24 @@ func TestWithAccessTokenRevocationStrategy_RejectsUnknownValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown AccessTokenRevocationStrategy") {
 		t.Errorf("err = %v, want it to mention unknown AccessTokenRevocationStrategy", err)
+	}
+}
+
+func TestWithAccessTokenRevocationStrategy_RejectsMissingAccessTokens(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutAccessTokens{inner: stubStore{}}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry),
+	)
+	if err == nil {
+		t.Fatal("expected error for missing AccessTokens under JTIRegistry, got nil")
+	}
+	if !strings.Contains(err.Error(), "AccessTokens") {
+		t.Errorf("err = %v, want it to mention AccessTokens", err)
 	}
 }
 
