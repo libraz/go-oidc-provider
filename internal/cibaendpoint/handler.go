@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,14 @@ import (
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// fapiCIBAMaxRequestedExpiry caps the auth_req_id lifetime a client may
+// request under the FAPI-CIBA profile. FAPI-CIBA-ID1 §5 inherits the
+// FAPI 2.0 §3.1.9 ten-minute access-token lifetime cap and applies it
+// to the backchannel-authentication TTL: any requested_expiry above
+// 600s MUST be rejected (not silently clamped) so the wire response
+// reflects the operator-mandated ceiling.
+const fapiCIBAMaxRequestedExpiry = 10 * time.Minute
 
 // auditClientAuthnFailure aliases the canonical event constant so
 // the boundary helper and the local emission sites cannot drift.
@@ -150,6 +159,29 @@ type Deps struct {
 	// non-nil — the constructor in [op] enforces that pairing
 	// at startup.
 	RequireSignedAuthRequest bool
+
+	// FAPICIBAProfileActive reports whether the FAPI-CIBA profile is
+	// currently selected. The flag flips the TTL gate from the vanilla
+	// "clamp silently against [Deps.MaxExpiresIn]" posture to the
+	// FAPI-CIBA-ID1 §5 / FAPI 2.0 §3.1.9 hard-reject posture: any
+	// requested_expiry above the ten-minute cap surfaces as
+	// invalid_request rather than being clamped down without notice.
+	// Set by [op] when the active profile set contains
+	// [profile.FAPICIBA]; non-FAPI deployments leave it false and
+	// retain the legacy clamp behaviour.
+	FAPICIBAProfileActive bool
+
+	// ACRValuesSupported is the OP-side allowlist of Authentication
+	// Context Class Reference values published in discovery via
+	// `acr_values_supported`. Empty means the OP did not advertise the
+	// list and any client-supplied acr_values value is accepted (the
+	// legacy posture); a non-empty slice makes the handler validate
+	// every requested value against the list per OIDC Core 1.0
+	// §3.1.2.1 (acr_values handling) + CIBA Core 1.0 §7.1, rejecting
+	// any unsupported entry with invalid_request so a client cannot
+	// drive the OP to mint an id_token bearing an `acr` claim the
+	// operator never enrolled.
+	ACRValuesSupported []string
 
 	// HintResolver maps an inbound CIBA hint to a stable subject.
 	// A nil resolver makes every request fail with login_required
@@ -286,7 +318,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	acrValues := parseACRValues(merged.Get("acr_values"))
+	acrValues, ok := parseACRValues(w, merged.Get("acr_values"), deps)
+	if !ok {
+		return
+	}
 	bindingMessage, ok := parseBindingMessage(w, merged.Get("binding_message"))
 	if !ok {
 		return
@@ -295,7 +330,10 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	userCode := strings.TrimSpace(merged.Get("user_code"))
+	userCode, ok := parseUserCode(w, merged.Get("user_code"))
+	if !ok {
+		return
+	}
 	persist(r.Context(), w, deps, persistInput{
 		Client:         client,
 		Subject:        subject,
@@ -786,17 +824,35 @@ func normaliseResource(raw string) (string, error) {
 	return u.String(), nil
 }
 
-// parseACRValues splits the acr_values parameter on ASCII
-// whitespace and returns the trimmed list. CIBA Core §7.1 carries
-// the value verbatim onto the authentication device so the OP
-// does not validate against a registered set; embedders perform
-// the policy check inside their authentication-device callback.
-func parseACRValues(raw string) []string {
+// parseACRValues splits the acr_values parameter on ASCII whitespace
+// and validates every entry against the OP-advertised list. OIDC Core
+// 1.0 §3.1.2.1 (acr_values handling) + CIBA Core 1.0 §7.1 require the
+// OP to refuse client-requested ACR values it has not enrolled to
+// recognise: silently accepting the request would let a client drive
+// the issued id_token's `acr` claim to any string regardless of what
+// the OP actually supports.
+//
+// The validation runs only when [Deps.ACRValuesSupported] is non-empty
+// (the operator declared the allowlist in discovery); an empty list
+// preserves the legacy "carry verbatim" posture so a deployment that
+// did not opt into discovery advertisement is unaffected.
+func parseACRValues(w http.ResponseWriter, raw string, deps Deps) ([]string, bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return nil
+		return nil, true
 	}
-	return strings.Fields(trimmed)
+	values := strings.Fields(trimmed)
+	if len(deps.ACRValuesSupported) == 0 {
+		return values, true
+	}
+	for _, v := range values {
+		if !slices.Contains(deps.ACRValuesSupported, v) {
+			writeError(w, http.StatusBadRequest, errInvalidRequest,
+				"acr_values entry "+v+" is not advertised in acr_values_supported")
+			return nil, false
+		}
+	}
+	return values, true
 }
 
 // parseBindingMessage dispatches to [ciba.ValidateBindingMessage]
@@ -816,15 +872,34 @@ func parseBindingMessage(w http.ResponseWriter, raw string) (string, bool) {
 	return value, true
 }
 
-// parseRequestedExpiry dispatches to [ciba.ParseRequestedExpiry]
-// and maps the sentinel onto the wire response. A zero return
-// value means the client did not supply requested_expiry; the
-// caller substitutes [Deps.effectiveExpiresIn].
+// parseRequestedExpiry dispatches to [ciba.ParseRequestedExpiry] and
+// maps the sentinel onto the wire response. A zero return value means
+// the client did not supply requested_expiry; the caller substitutes
+// [Deps.effectiveExpiresIn].
+//
+// Under FAPI-CIBA the helper additionally enforces the FAPI-CIBA-ID1
+// §5 / FAPI 2.0 §3.1.9 ten-minute lifetime cap as a hard reject:
+// requested_expiry above [fapiCIBAMaxRequestedExpiry] surfaces as
+// invalid_request rather than being clamped silently. The
+// non-FAPI-CIBA path keeps the legacy clamp posture so vanilla
+// deployments still tolerate over-spec asks against
+// [Deps.MaxExpiresIn].
 func parseRequestedExpiry(
 	w http.ResponseWriter,
 	raw string,
 	deps Deps,
 ) (time.Duration, bool) {
+	if deps.FAPICIBAProfileActive {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed != "" {
+			n, err := strconv.ParseInt(trimmed, 10, 64)
+			if err == nil && n > int64(fapiCIBAMaxRequestedExpiry.Seconds()) {
+				writeError(w, http.StatusBadRequest, errInvalidRequest,
+					"requested_expiry exceeds FAPI-CIBA 10-minute cap")
+				return 0, false
+			}
+		}
+	}
 	value, err := ciba.ParseRequestedExpiry(raw, deps.MaxExpiresIn)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
@@ -835,6 +910,23 @@ func parseRequestedExpiry(
 		return deps.effectiveExpiresIn(), true
 	}
 	return value, true
+}
+
+// parseUserCode validates the user_code form parameter. The library
+// does not advertise `backchannel_user_code_parameter_supported=true`
+// in discovery (the option to flip the flag is reserved for a future
+// release), and CIBA Core 1.0 §7.1 requires a client to refrain from
+// sending parameters the OP has not advertised. The handler therefore
+// rejects any non-empty user_code with invalid_request rather than
+// silently stamping it onto the persisted record where it would have
+// no downstream effect.
+func parseUserCode(w http.ResponseWriter, raw string) (string, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return "", true
+	}
+	writeError(w, http.StatusBadRequest, errInvalidRequest,
+		"user_code parameter is not supported")
+	return "", false
 }
 
 // persistInput bundles the parameters [persist] consumes. The

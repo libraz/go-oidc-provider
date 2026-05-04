@@ -647,6 +647,29 @@ func (c *config) requireSignedBackchannelRequest() bool {
 	return false
 }
 
+// fapiCIBAProfileActive reports whether [profile.FAPICIBA] is in the
+// active profile set. The /bc-authorize handler consults the flag to
+// flip the requested_expiry gate from the legacy "clamp silently"
+// posture to the FAPI-CIBA-ID1 §5 / FAPI 2.0 §3.1.9 hard-reject
+// posture (any value above ten minutes surfaces as invalid_request
+// rather than being clamped down without notice). The helper mirrors
+// the disjunctive shape of [config.requirePKCE]; the inner switch
+// names every other profile so an exhaustive linter flags a future
+// addition that needs to revisit the FAPI-CIBA distinction.
+func (c *config) fapiCIBAProfileActive() bool {
+	for _, p := range c.profiles {
+		switch p {
+		case profile.FAPICIBA:
+			return true
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.IGovHigh:
+			// FAPI 2.0 Baseline / Message Signing do not mount the
+			// backchannel-authentication endpoint; IGovHigh is a
+			// placeholder today.
+		}
+	}
+	return false
+}
+
 // requireJARMResponseMode reports whether the active
 // [profile.Profile] set mandates that every /authorize response be
 // JARM-wrapped. FAPI 2.0 Message Signing §5.5 is the only profile

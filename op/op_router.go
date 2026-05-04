@@ -592,6 +592,8 @@ func mountBackchannelAuthenticationEndpoint(
 			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
 			JAR:                      jarVerifier,
 			RequireSignedAuthRequest: cfg.requireSignedBackchannelRequest(),
+			FAPICIBAProfileActive:    cfg.fapiCIBAProfileActive(),
+			ACRValuesSupported:       cfg.acrValuesSupportedCopy(),
 			HintResolver:             resolver,
 			DefaultExpiresIn:         cfg.effectiveCIBADefaultExpiresIn(),
 			MaxExpiresIn:             cfg.cibaMaxExpiresIn,

@@ -499,6 +499,199 @@ func TestServe_RejectsDuplicateScope(t *testing.T) {
 	}
 }
 
+// TestServe_FAPICIBARejectsRequestedExpiryAboveTenMinutes pins the
+// FAPI-CIBA-ID1 §5 / FAPI 2.0 §3.1.9 hard-reject posture: under the
+// FAPI-CIBA profile the ten-minute auth_req_id lifetime cap is a
+// MUST, so any requested_expiry above 600s surfaces as 400
+// invalid_request with a description naming the cap rather than
+// being clamped silently. CIBA-044.
+func TestServe_FAPICIBARejectsRequestedExpiryAboveTenMinutes(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	deps.FAPICIBAProfileActive = true
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("requested_expiry", "601")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "FAPI-CIBA 10-minute cap") {
+		t.Fatalf("body must name the FAPI-CIBA cap; got %s", rec.Body.String())
+	}
+}
+
+// TestServe_FAPICIBAAcceptsRequestedExpiryAtBoundary pins the
+// inclusive boundary of the FAPI-CIBA cap: requested_expiry=600 is
+// the maximum permitted under the profile and MUST succeed.
+// CIBA-044 boundary.
+func TestServe_FAPICIBAAcceptsRequestedExpiryAtBoundary(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	deps.FAPICIBAProfileActive = true
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("requested_expiry", "600")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body successBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.ExpiresIn != 600 {
+		t.Fatalf("expires_in = %d, want 600", body.ExpiresIn)
+	}
+}
+
+// TestServe_VanillaCIBAClampsRequestedExpiry pins the non-FAPI
+// posture: with the FAPI-CIBA profile inactive, requested_expiry
+// above the configured MaxExpiresIn is clamped silently rather than
+// rejected. The clamp is the legacy CIBA Core §7.1 behaviour and
+// MUST stay intact for vanilla deployments. CIBA-044 negative.
+func TestServe_VanillaCIBAClampsRequestedExpiry(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	deps.MaxExpiresIn = 600 * time.Second
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("requested_expiry", "86400")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body successBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.ExpiresIn != 600 {
+		t.Fatalf("expires_in = %d, want 600 (clamped)", body.ExpiresIn)
+	}
+}
+
+// TestServe_RejectsACRValueNotAdvertised pins the OIDC Core 1.0
+// §3.1.2.1 + CIBA Core §7.1 acr_values gate: when the OP advertises
+// `acr_values_supported`, any client-requested value outside that
+// list MUST be rejected with 400 invalid_request. Without the gate
+// a client can drive the issued id_token's `acr` claim to an
+// arbitrary string the operator never enrolled. CIBA-045.
+func TestServe_RejectsACRValueNotAdvertised(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	deps.ACRValuesSupported = []string{"urn:mace:incommon:iap:bronze"}
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("acr_values", "urn:not-supported")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "acr_values_supported") {
+		t.Fatalf("body must name the advertised list; got %s", rec.Body.String())
+	}
+}
+
+// TestServe_AcceptsACRValueAdvertised pins the positive arm of the
+// acr_values gate: a value present in [Deps.ACRValuesSupported] is
+// accepted and stamped onto the persisted record. CIBA-045 positive.
+func TestServe_AcceptsACRValueAdvertised(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	deps.ACRValuesSupported = []string{"urn:mace:incommon:iap:bronze"}
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("acr_values", "urn:mace:incommon:iap:bronze")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body successBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	persisted, err := s.CIBARequests().FindByAuthReqID(context.Background(), body.AuthReqID)
+	if err != nil {
+		t.Fatalf("FindByAuthReqID: %v", err)
+	}
+	if len(persisted.ACRValues) != 1 || persisted.ACRValues[0] != "urn:mace:incommon:iap:bronze" {
+		t.Fatalf("persisted ACRValues = %v, want [urn:mace:incommon:iap:bronze]", persisted.ACRValues)
+	}
+}
+
+// TestServe_RejectsUserCodeWhenUnsupported pins the discovery
+// consistency gate for `backchannel_user_code_parameter_supported`:
+// the v0.9.x default discovery shape advertises the parameter as
+// unsupported, and CIBA Core 1.0 §7.1 mandates the client refrain
+// from sending parameters the OP has not advertised. Any non-empty
+// `user_code` MUST therefore surface as 400 invalid_request.
+// CIBA-046.
+func TestServe_RejectsUserCodeWhenUnsupported(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("user_code", "12345678")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "user_code parameter is not supported") {
+		t.Fatalf("body must name the user_code rejection reason; got %s", rec.Body.String())
+	}
+}
+
+// TestServe_AcceptsAbsentUserCode pins the negative arm of the
+// user_code gate: a request without the parameter (or with an empty
+// value) MUST proceed. CIBA-046 positive.
+func TestServe_AcceptsAbsentUserCode(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestServe_AdmitsRepeatedResource pins the RFC 8707 §2 carve-out:
 // the resource indicator is legitimately multi-valued on the wire,
 // so two resource= entries MUST NOT trip the duplicate-parameter

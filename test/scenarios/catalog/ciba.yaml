@@ -436,3 +436,48 @@ rows:
       and client_secret are validated by the client-authentication
       layer and do not double-fire here.
     status: active
+
+  - id: CIBA-044
+    severity: P0
+    spec: FAPI-CIBA-ID1 §5; FAPI 2.0 §3.1.9; CIBA Core §7.1
+    behaviour: |
+      Under the FAPI-CIBA profile, /bc-authorize MUST reject any
+      requested_expiry value above the ten-minute (600s) cap with
+      400 invalid_request. The error description names the
+      "FAPI-CIBA 10-minute cap" so a conformance probe can diagnose
+      the over-spec request. Under non-FAPI-CIBA deployments the
+      legacy clamp behaviour against MaxExpiresIn is preserved (a
+      requested_expiry above the cap is silently capped, not
+      rejected) so vanilla CIBA Core compliance stays intact.
+      Boundary: requested_expiry=600 is accepted under FAPI-CIBA;
+      requested_expiry=601 is rejected.
+    status: active
+
+  - id: CIBA-045
+    severity: P0
+    spec: OIDC Core §3.1.2.1; CIBA Core §7.1
+    behaviour: |
+      When the OP advertises acr_values_supported in discovery,
+      /bc-authorize MUST reject any acr_values entry the client
+      requests that is absent from the advertised list with 400
+      invalid_request. The error description names the offending
+      value and references acr_values_supported. Without the gate a
+      client could drive the issued id_token's acr claim to any
+      string regardless of the OP's enrolled set. When the OP did
+      not advertise acr_values_supported (the field is omitted /
+      empty), the legacy "carry verbatim" posture is preserved.
+    status: active
+
+  - id: CIBA-046
+    severity: P1
+    spec: CIBA Core §7.1
+    behaviour: |
+      The OP advertises backchannel_user_code_parameter_supported as
+      false (the v0.9.x default; the option to flip the flag is
+      reserved for a future release). CIBA Core §7.1 requires the
+      client to refrain from sending parameters the OP has not
+      advertised, so any non-empty user_code on /bc-authorize MUST
+      be rejected with 400 invalid_request and the description
+      "user_code parameter is not supported". Absent or empty
+      user_code values continue to succeed.
+    status: active

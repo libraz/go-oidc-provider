@@ -1329,6 +1329,132 @@ func TestScenario_CIBA_043_BackchannelRejectsDuplicateSingleValuedParams(t *test
 	}
 }
 
+// TestScenario_CIBA_044_FAPICIBARejectsRequestedExpiryAboveTenMinutes
+// pins the FAPI-CIBA-ID1 §5 / FAPI 2.0 §3.1.9 ten-minute lifetime cap
+// at /bc-authorize. Under the FAPI-CIBA profile, requested_expiry
+// above 600s MUST yield 400 invalid_request rather than being clamped
+// silently; the cap is operator-mandated under the profile and a
+// silent clamp would hide the deviation from the requesting client.
+// Boundary cases: requested_expiry=600 succeeds, requested_expiry=601
+// fails. Vanilla CIBA Core deployments retain the clamp behaviour;
+// the unit suite under internal/cibaendpoint additionally pins the
+// vanilla branch.
+//
+// Spec: FAPI-CIBA-ID1 §5, FAPI 2.0 §3.1.9, CIBA Core §7.1.
+func TestScenario_CIBA_044_FAPICIBARejectsRequestedExpiryAboveTenMinutes(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFAPIFixture(t)
+
+	// requested_expiry=601 — must reject.
+	overSpec := f.happyClaims()
+	overSpec["requested_expiry"] = int64(601)
+	signed := f.signES256(t, overSpec)
+	status, body := f.bcAuthorizeFAPIForm(t, url.Values{"request": {signed}})
+	if status != http.StatusBadRequest {
+		t.Fatalf("over-spec status=%d want 400 body=%v", status, body)
+	}
+	expectCIBAError(t, body, "invalid_request")
+
+	// requested_expiry=600 — boundary, must succeed.
+	atCap := f.happyClaims()
+	atCap["requested_expiry"] = int64(600)
+	signed = f.signES256(t, atCap)
+	status, body = f.bcAuthorizeFAPIForm(t, url.Values{"request": {signed}})
+	if status != http.StatusOK {
+		t.Fatalf("boundary status=%d want 200 body=%v", status, body)
+	}
+	got, ok := body["expires_in"].(float64)
+	if !ok || int(got) != 600 {
+		t.Errorf("expires_in=%v want 600", body["expires_in"])
+	}
+}
+
+// TestScenario_CIBA_045_BackchannelRejectsUnadvertisedACRValue pins
+// the OIDC Core §3.1.2.1 + CIBA Core §7.1 acr_values gate. With the
+// OP advertising acr_values_supported via op.WithACRValuesSupported,
+// any client-requested acr_values value outside that list MUST be
+// rejected with 400 invalid_request — silently accepting it would
+// let the client drive the issued id_token's acr claim to an
+// arbitrary string the operator never enrolled. The positive arm
+// confirms a value present in the advertised list still succeeds.
+//
+// Spec: OIDC Core §3.1.2.1, CIBA Core §7.1.
+func TestScenario_CIBA_045_BackchannelRejectsUnadvertisedACRValue(t *testing.T) {
+	t.Parallel()
+	const supportedACR = "urn:mace:incommon:iap:bronze"
+	p := newCIBAProvider(t, []string{"openid"},
+		op.WithACRValuesSupported(supportedACR))
+
+	// Negative: an unsupported value is rejected.
+	status, body, _ := p.bcAuthorizeForm(t, url.Values{
+		"login_hint": {cibaKnownLoginHint},
+		"scope":      {"openid"},
+		"acr_values": {"urn:not-supported"},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("unsupported status=%d want 400 body=%v", status, body)
+	}
+	expectCIBAError(t, body, "invalid_request")
+
+	// Positive: the advertised value is accepted.
+	status, body, _ = p.bcAuthorizeForm(t, url.Values{
+		"login_hint": {cibaKnownLoginHint},
+		"scope":      {"openid"},
+		"acr_values": {supportedACR},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("supported status=%d want 200 body=%v", status, body)
+	}
+	authReqID, _ := body["auth_req_id"].(string)
+	if authReqID == "" {
+		t.Fatalf("auth_req_id missing: %v", body)
+	}
+	rec := p.findCIBARecord(t, authReqID)
+	if len(rec.ACRValues) != 1 || rec.ACRValues[0] != supportedACR {
+		t.Errorf("persisted ACRValues=%v want [%s]", rec.ACRValues, supportedACR)
+	}
+}
+
+// TestScenario_CIBA_046_BackchannelRejectsUserCodeWhenUnsupported
+// pins the discovery-consistency gate for
+// backchannel_user_code_parameter_supported. The library advertises
+// the parameter as unsupported in v0.9.x (the option to flip the
+// flag is reserved for a future release); CIBA Core §7.1 requires
+// the client to refrain from sending parameters the OP has not
+// advertised, so any non-empty user_code MUST surface as 400
+// invalid_request with the description "user_code parameter is not
+// supported". The positive arm confirms an absent user_code still
+// succeeds.
+//
+// Spec: CIBA Core §7.1.
+func TestScenario_CIBA_046_BackchannelRejectsUserCodeWhenUnsupported(t *testing.T) {
+	t.Parallel()
+	p := newCIBAProvider(t, []string{"openid"})
+
+	// Negative: a non-empty user_code is rejected.
+	status, body, _ := p.bcAuthorizeForm(t, url.Values{
+		"login_hint": {cibaKnownLoginHint},
+		"scope":      {"openid"},
+		"user_code":  {"12345678"},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectCIBAError(t, body, "invalid_request")
+
+	// Positive: an absent user_code still succeeds.
+	status, body, _ = p.bcAuthorizeForm(t, url.Values{
+		"login_hint": {cibaKnownLoginHint},
+		"scope":      {"openid"},
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", status, body)
+	}
+	if id, _ := body["auth_req_id"].(string); id == "" {
+		t.Errorf("auth_req_id missing: %v", body)
+	}
+}
+
 // Compile-time guard: ensure the OOS sentinel sentinel is reachable
 // from this package even when no active row exercises it. This catches
 // a future rename of op.ErrUnknownCIBAUser at build time rather than
