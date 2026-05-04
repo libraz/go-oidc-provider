@@ -363,6 +363,7 @@ func newBaseDocument(in Input) Document {
 		GrantTypesSupported:               in.GrantsSupported,
 		SubjectTypesSupported:             subjectTypesFor(in.PairwiseEnabled),
 		IDTokenSigningAlgValuesSupported:  []string{"ES256"},
+		UserInfoSigningAlgValuesSupported: []string{"ES256"},
 		ScopesSupported:                   append([]string(nil), in.ScopesSupported...),
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: defaultAuthMethods(in.AuthMethodsSupported),

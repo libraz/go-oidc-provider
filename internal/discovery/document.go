@@ -108,6 +108,15 @@ type Document struct {
 	// to sign ID tokens. v1.0 is "ES256" only.
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
 
+	// UserInfoSigningAlgValuesSupported lists the JWS alg values the OP
+	// uses when serving the JWT-shape UserInfo response (OIDC Core 1.0
+	// §5.3.2 / OIDC Discovery 1.0 §3 "userinfo_signing_alg_values_supported").
+	// The value mirrors the ID-token signing posture (ES256 only) since
+	// the signing key is shared. The field is always emitted because the
+	// JWT-shape UserInfo path is unconditionally available — clients
+	// opt in by setting Accept: application/jwt on the userinfo request.
+	UserInfoSigningAlgValuesSupported []string `json:"userinfo_signing_alg_values_supported"`
+
 	// ScopesSupported lists the scope values the OP advertises in
 	// discovery. The op layer assembles the list from the OpenID
 	// Connect Core 1.0 §5.4 standard scopes plus every embedder-

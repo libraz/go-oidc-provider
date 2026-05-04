@@ -23,6 +23,31 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ### Added
 
+- JWE encryption (Wave T1, ADR 0030). The OP now decrypts JWE-shaped
+  request objects (JAR / PAR) and wraps outbound `id_token`,
+  `userinfo` (JWT-shape), JARM authorization responses, and
+  RFC 9701 JWT introspection responses in a JWE addressed to the
+  client's `use=enc` JWK whenever client metadata registers
+  `*_encrypted_response_alg` / `_enc`. Public surface:
+  - `op.WithEncryptionKeyset(keys ...op.EncryptionKey)` registers the
+    OP's `use=enc` keyset; keys are published on the JWKS document
+    alongside the existing `use=sig` material (RFC 7517 §4.2).
+  - `op.WithSupportedEncryptionAlgs(algs []string, encs []string)`
+    narrows the OP-advertised algorithm set below the v0.9.1 default
+    allowlist (`RSA-OAEP-{256,384,512}` / `ECDH-ES{,+A128KW,+A256KW}`
+    × `A{128,256}GCM`). `RSA1_5` is intentionally not shipped
+    (CVE-2017-11424 padding oracle); `dir` and symmetric-only `A*KW`
+    are reserved for v2+.
+  - Discovery now publishes `id_token_encryption_alg_values_supported`
+    / `_enc_values_supported`, the userinfo / request_object /
+    authorization (JARM) / introspection counterparts, and gates each
+    on the corresponding feature flag (JAR / JARM / Introspect).
+  - `userinfo_signing_alg_values_supported` is now published
+    unconditionally (`ES256`); the JWT-shape userinfo path is
+    always available via `Accept: application/jwt`.
+  - `examples/34-encrypted-id-token` ships a paired OP+RP demo of
+    RSA-OAEP-256 / A256GCM id_token encryption (client metadata +
+    JWKS distribution + RP-side decrypt).
 - RFC 8693 token-exchange grant_type via `op.RegisterTokenExchange`.
   The provider verifies subject_token / actor_token, normalises the
   requested audience (RFC 8707 §2), enforces scope and audience
