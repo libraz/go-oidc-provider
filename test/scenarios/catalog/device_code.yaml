@@ -737,3 +737,29 @@ rows:
       walk lands in v0.9.2 alongside the substore extension that
       surfaces "issued access tokens for device_code D".
     status: active
+
+  - id: DEV-102
+    severity: P0
+    spec: RFC 8707 §2 / RFC 8628 §3.1
+    behaviour: |
+      A /device_authorization request whose resource indicator is a
+      syntactically valid absolute URI but does not appear in the
+      client's registered Resources allowlist MUST be rejected with
+      400 invalid_target. The check mirrors /authorize and
+      /token (client_credentials), preventing audience escalation
+      against a client that has never been registered for the
+      resource server.
+    status: active
+
+  - id: DEV-103
+    severity: P0
+    spec: RFC 8707 §2 / RFC 8628 §3.1
+    behaviour: |
+      v0.9.x's issuance pipeline encodes a single audience entry on
+      the access-token aud claim, so a /device_authorization request
+      carrying more than one resource= form value (RFC 8707 §2
+      permits the parameter to repeat) MUST be rejected with 400
+      invalid_target rather than silently truncated to the first
+      entry. Multi-aud support is deferred to a later wave; the
+      handler refuses input the issuer side cannot honour in full.
+    status: active

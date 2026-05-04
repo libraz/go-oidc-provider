@@ -68,6 +68,15 @@ func (f fixedClock) Now() time.Time { return f.now }
 // newTestStore seeds an [inmem.Store] with a single confidential
 // client registered for the CIBA grant.
 func newTestStore(t *testing.T, c fixedClock) *inmem.Store {
+	return newTestStoreWithResources(t, c)
+}
+
+// newTestStoreWithResources seeds the test store and additionally
+// registers the supplied resource indicators on the client's
+// Resources allowlist. The CIBA endpoint enforces that allowlist on
+// the resource= form parameter, so tests that exercise the resource
+// pipeline must seed the values they intend to send.
+func newTestStoreWithResources(t *testing.T, c fixedClock, resources ...string) *inmem.Store {
 	t.Helper()
 	s := inmem.New(inmem.WithClock(c))
 	hasher := clientauth.Argon2id{}
@@ -81,6 +90,7 @@ func newTestStore(t *testing.T, c fixedClock) *inmem.Store {
 		TokenEndpointAuthMethod: "client_secret_basic",
 		GrantTypes:              []string{"urn:openid:params:grant-type:ciba"},
 		Scopes:                  []string{"openid", "profile", "email"},
+		Resources:               append([]string(nil), resources...),
 	}); err != nil {
 		t.Fatalf("RegisterClient: %v", err)
 	}
@@ -427,8 +437,9 @@ func TestServe_HonoursRequestedExpiryClamp(t *testing.T) {
 // the wire contract matches the other OAuth endpoints uniformly.
 //
 // "resource" is intentionally omitted from this table — RFC 8707 §2
-// permits the resource indicator to repeat — and a sibling row pins
-// that the legitimate-multi-value parameter is still admitted.
+// permits the resource indicator to repeat on the wire. The handler
+// rejects multi-resource with invalid_target (the issuance pipeline
+// honours a single audience entry); see [TestServe_RejectsMultiResource].
 func TestServe_RejectsDuplicateSingleValuedParams(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -692,21 +703,46 @@ func TestServe_AcceptsAbsentUserCode(t *testing.T) {
 	}
 }
 
-// TestServe_AdmitsRepeatedResource pins the RFC 8707 §2 carve-out:
-// the resource indicator is legitimately multi-valued on the wire,
-// so two resource= entries MUST NOT trip the duplicate-parameter
-// gate. The persisted record carries both audiences after
-// normalisation.
-func TestServe_AdmitsRepeatedResource(t *testing.T) {
+// TestServe_RejectsMultiResource pins the issuance contract: the
+// CIBA pipeline honours a single audience entry, so multi-resource
+// requests are refused at the parse step with invalid_target rather
+// than silently truncated downstream. The check fires before
+// allowlist matching, so even two registered audiences are
+// rejected.
+func TestServe_RejectsMultiResource(t *testing.T) {
 	t.Parallel()
 	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
-	s := newTestStore(t, clock)
+	s := newTestStoreWithResources(t, clock,
+		"https://api-a.example", "https://api-b.example")
 	deps := newDeps(s, clock)
 	form := url.Values{}
 	form.Set("scope", "openid")
 	form.Set("login_hint", "alice")
 	form.Add("resource", "https://api-a.example/")
 	form.Add("resource", "https://api-b.example/")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != "invalid_target" {
+		t.Fatalf("error = %q, want invalid_target", got)
+	}
+}
+
+// TestServe_AdmitsRegisteredResource verifies that a single resource
+// indicator that matches the client's registered Resources allowlist
+// flows through the parse step and is persisted on the CIBA record
+// in canonical form.
+func TestServe_AdmitsRegisteredResource(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStoreWithResources(t, clock, "https://api.example")
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("resource", "https://api.example/")
 	rec := httptest.NewRecorder()
 	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
 	if rec.Code != http.StatusOK {
@@ -720,7 +756,30 @@ func TestServe_AdmitsRepeatedResource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindByAuthReqID: %v", err)
 	}
-	if len(persisted.Resource) != 2 {
-		t.Fatalf("persisted resource count = %d, want 2 (got %v)", len(persisted.Resource), persisted.Resource)
+	if len(persisted.Resource) != 1 || persisted.Resource[0] != "https://api.example" {
+		t.Fatalf("persisted Resource = %v, want [https://api.example]", persisted.Resource)
+	}
+}
+
+// TestServe_RejectsUnregisteredResource pins that a request carrying
+// a resource that is not in the client's Resources allowlist is
+// refused with invalid_target — even if the value is a syntactically
+// valid absolute URI.
+func TestServe_RejectsUnregisteredResource(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStoreWithResources(t, clock, "https://api-allowed.example")
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("resource", "https://api-other.example/")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != "invalid_target" {
+		t.Fatalf("error = %q, want invalid_target", got)
 	}
 }

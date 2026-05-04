@@ -324,13 +324,11 @@ func consumeCIBARequest(
 // so the cnf-claim plumbing, opaque-format dispatch, and audit
 // emission all stay aligned with the authorization_code path.
 //
-// audience selection: the bc-authorize record may have stamped
-// multiple normalised resource indicators, but the issuance
-// pipeline currently honours a single value (the access-token aud
-// claim is encoded with one entry). The handler picks the first
-// entry as the canonical audience; an embedder relying on
-// multi-aud tokens via CIBA flow would need a wiring extension
-// the project has explicitly deferred to a later wave.
+// audience selection: the /bc-authorize endpoint rejects
+// multi-resource requests with invalid_target, so
+// [authorized.Audience] holds at most one canonicalised entry. The
+// handler reads index 0 (or empty when none was registered),
+// matching the access-token aud claim's single-entry encoding.
 //
 // acr / amr threading: the bc-authorize record carries the
 // requested ACR values verbatim. When non-empty the handler

@@ -315,7 +315,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	resource, ok := parseResource(w, merged)
+	resource, ok := parseResource(w, merged, client)
 	if !ok {
 		return
 	}
@@ -785,8 +785,14 @@ func parseScope(
 // form. The function rejects relative URIs (RFC 8707 §2 mandates
 // absolute) and normalises each value (lowercase scheme + host,
 // trailing-slash stripped) so the persisted record carries the
-// canonical form.
-func parseResource(w http.ResponseWriter, form url.Values) ([]string, bool) {
+// canonical form. Each surviving value MUST appear in the client's
+// registered Resources allowlist; the same rule the authorize and
+// client-credentials paths enforce. The current issuance pipeline
+// honours a single audience entry, so a request carrying more than
+// one non-empty resource is rejected with invalid_target — the
+// handler refuses to accept input the issuance side would silently
+// truncate.
+func parseResource(w http.ResponseWriter, form url.Values, client *store.Client) ([]string, bool) {
 	raw := form["resource"]
 	if len(raw) == 0 {
 		return nil, true
@@ -803,7 +809,17 @@ func parseResource(w http.ResponseWriter, form url.Values) ([]string, bool) {
 				"resource parameter is not a valid absolute URI")
 			return nil, false
 		}
+		if !slices.Contains(client.Resources, canonical) {
+			writeError(w, http.StatusBadRequest, errInvalidTarget,
+				"resource is not registered for this client")
+			return nil, false
+		}
 		out = append(out, canonical)
+	}
+	if len(out) > 1 {
+		writeError(w, http.StatusBadRequest, errInvalidTarget,
+			"multiple resource indicators are not supported on the backchannel-authentication endpoint")
+		return nil, false
 	}
 	return out, true
 }

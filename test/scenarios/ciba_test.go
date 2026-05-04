@@ -113,6 +113,15 @@ func newCIBAProvider(t *testing.T, scopes []string, extra ...op.Option) *cibaPro
 // always wired by the harness so callers cannot forget the
 // resolver-presence invariant.
 func newCIBAProviderWithCIBAOpts(t *testing.T, scopes []string, cibaOpts []op.CIBAOption, extra ...op.Option) *cibaProvider {
+	return newCIBAProviderWithResources(t, scopes, nil, cibaOpts, extra...)
+}
+
+// newCIBAProviderWithResources is the resource-aware variant of
+// [newCIBAProviderWithCIBAOpts]: it threads resources onto the
+// registered client's Resources allowlist so /bc-authorize can admit
+// the values the test row sends. A nil/empty resources slice matches
+// the default helper.
+func newCIBAProviderWithResources(t *testing.T, scopes, resources []string, cibaOpts []op.CIBAOption, extra ...op.Option) *cibaProvider {
 	t.Helper()
 	hash, err := op.HashClientSecret(cibaClientSecret)
 	if err != nil {
@@ -125,6 +134,7 @@ func newCIBAProviderWithCIBAOpts(t *testing.T, scopes []string, cibaOpts []op.CI
 		ID:                      "ciba-rp",
 		SecretHash:              hash,
 		Scopes:                  scopes,
+		Resources:               append([]string(nil), resources...),
 		TokenEndpointAuthMethod: "client_secret_basic",
 		GrantTypes: []string{
 			"authorization_code",
@@ -1453,6 +1463,55 @@ func TestScenario_CIBA_046_BackchannelRejectsUserCodeWhenUnsupported(t *testing.
 	if id, _ := body["auth_req_id"].(string); id == "" {
 		t.Errorf("auth_req_id missing: %v", body)
 	}
+}
+
+// TestScenario_CIBA_047_BackchannelRejectsUnregisteredResource pins
+// the audience-escalation gate at /bc-authorize: a request whose
+// resource is a syntactically valid absolute URI but does not
+// appear in the client's Resources allowlist MUST be rejected with
+// 400 invalid_target.
+//
+// Spec: RFC 8707 §2, CIBA Core §7.1.
+func TestScenario_CIBA_047_BackchannelRejectsUnregisteredResource(t *testing.T) {
+	t.Parallel()
+	p := newCIBAProviderWithResources(t,
+		[]string{"openid"},
+		[]string{"https://api-allowed.example"}, nil)
+
+	status, body, _ := p.bcAuthorizeForm(t, url.Values{
+		"login_hint": {cibaKnownLoginHint},
+		"scope":      {"openid"},
+		"resource":   {"https://api-other.example/"},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectCIBAError(t, body, "invalid_target")
+}
+
+// TestScenario_CIBA_048_BackchannelRejectsMultiResource pins the
+// single-audience invariant: even when both values are individually
+// in the client's allowlist, a request carrying more than one
+// resource= entry MUST be rejected with 400 invalid_target rather
+// than silently truncated to the first value at issuance.
+//
+// Spec: RFC 8707 §2, CIBA Core §7.1.
+func TestScenario_CIBA_048_BackchannelRejectsMultiResource(t *testing.T) {
+	t.Parallel()
+	p := newCIBAProviderWithResources(t,
+		[]string{"openid"},
+		[]string{"https://api-a.example", "https://api-b.example"}, nil)
+
+	form := url.Values{}
+	form.Set("login_hint", cibaKnownLoginHint)
+	form.Set("scope", "openid")
+	form.Add("resource", "https://api-a.example/")
+	form.Add("resource", "https://api-b.example/")
+	status, body, _ := p.bcAuthorizeForm(t, form)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectCIBAError(t, body, "invalid_target")
 }
 
 // Compile-time guard: ensure the OOS sentinel sentinel is reachable

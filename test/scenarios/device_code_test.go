@@ -62,6 +62,15 @@ type devProvider struct {
 // the device_code URN. scopes lets the caller widen the scope set
 // per-row.
 func newDevProvider(t *testing.T, scopes []string) *devProvider {
+	return newDevProviderWithResources(t, scopes, nil)
+}
+
+// newDevProviderWithResources is the resource-aware variant of
+// [newDevProvider]: it threads resources onto the registered client's
+// Resources allowlist so /device_authorization can admit the values
+// the test row sends. A nil/empty resources slice matches the
+// default helper.
+func newDevProviderWithResources(t *testing.T, scopes, resources []string) *devProvider {
 	t.Helper()
 	hash, err := op.HashClientSecret(devClientSecret)
 	if err != nil {
@@ -72,6 +81,7 @@ func newDevProvider(t *testing.T, scopes []string) *devProvider {
 		ID:                      "dev-rp",
 		SecretHash:              hash,
 		Scopes:                  scopes,
+		Resources:               append([]string(nil), resources...),
 		TokenEndpointAuthMethod: "client_secret_basic",
 		GrantTypes: []string{
 			"authorization_code",
@@ -1034,6 +1044,52 @@ func TestScenario_DEV_093_DeviceAuthRejectsRelativeResource(t *testing.T) {
 		"scope":    {"openid"},
 		"resource": {"/relative/path"},
 	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "invalid_target")
+}
+
+// TestScenario_DEV_102_DeviceAuthRejectsUnregisteredResource pins
+// the audience-escalation gate at /device_authorization: a request
+// whose resource is a syntactically valid absolute URI but does not
+// appear in the client's Resources allowlist MUST be rejected with
+// 400 invalid_target.
+//
+// Spec: RFC 8707 §2, RFC 8628 §3.1.
+func TestScenario_DEV_102_DeviceAuthRejectsUnregisteredResource(t *testing.T) {
+	t.Parallel()
+	p := newDevProviderWithResources(t,
+		[]string{"openid"}, []string{"https://api-allowed.example"})
+
+	status, body, _ := p.deviceAuthForm(t, url.Values{
+		"scope":    {"openid"},
+		"resource": {"https://api-other.example/"},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "invalid_target")
+}
+
+// TestScenario_DEV_103_DeviceAuthRejectsMultiResource pins the
+// single-audience invariant: even when both values are individually
+// in the client's allowlist, a request carrying more than one
+// resource= entry MUST be rejected with 400 invalid_target rather
+// than silently truncated to the first value at issuance.
+//
+// Spec: RFC 8707 §2, RFC 8628 §3.1.
+func TestScenario_DEV_103_DeviceAuthRejectsMultiResource(t *testing.T) {
+	t.Parallel()
+	p := newDevProviderWithResources(t,
+		[]string{"openid"},
+		[]string{"https://api-a.example", "https://api-b.example"})
+
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Add("resource", "https://api-a.example/")
+	form.Add("resource", "https://api-b.example/")
+	status, body, _ := p.deviceAuthForm(t, form)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 body=%v", status, body)
 	}
