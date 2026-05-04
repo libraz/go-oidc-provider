@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
 // stubHintResolver is a deterministic [op.HintResolver] used by the
@@ -81,6 +82,47 @@ func TestWithCIBA_RejectsMissingSubstore(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CIBARequests") {
 		t.Errorf("err = %v, want it to mention CIBARequests", err)
+	}
+}
+
+// TestWithGrants_CIBA_RejectsMissingSubstore mirrors
+// [TestWithCIBA_RejectsMissingSubstore] for the alternative entry
+// point: an embedder that activates CIBA via [op.WithGrants] (rather
+// than the dedicated [op.WithCIBA] option) must still see the
+// construction error when the configured Store does not provide a
+// CIBARequests substore. Prior to the fix this path bypassed the
+// gate and the runtime reached a nil-substore Save on the first
+// /bc-authorize POST.
+func TestWithGrants_CIBA_RejectsMissingSubstore(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithGrants(grant.CIBA),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when CIBARequests substore is nil under WithGrants(grant.CIBA)")
+	}
+	if !strings.Contains(err.Error(), "CIBARequests") {
+		t.Errorf("err = %v, want it to mention CIBARequests", err)
+	}
+}
+
+// TestWithGrants_CIBA_RejectsMissingHintResolver mirrors
+// [TestWithCIBA_RejectsMissingHintResolver] for the alternative
+// entry point: configuring CIBA via [op.WithGrants] without
+// supplying a HintResolver MUST surface the same construction error
+// as the dedicated option.
+func TestWithGrants_CIBA_RejectsMissingHintResolver(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithGrants(grant.CIBA),
+	)...)
+	if err == nil {
+		t.Fatal("expected error when WithGrants(grant.CIBA) is used without a HintResolver")
+	}
+	if !strings.Contains(err.Error(), "HintResolver") {
+		t.Errorf("err = %v, want it to mention HintResolver", err)
 	}
 }
 

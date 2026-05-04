@@ -248,6 +248,18 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if deps.DeviceCodes == nil {
+		// Defence in depth: op.New's validateDeviceCodeGrant
+		// rejects this configuration before the router mounts.
+		// The branch only fires when an embedder bypassed
+		// op.New (e.g. constructed the handler directly via
+		// devicecodeendpoint.Handler) and forgot to wire the
+		// substore. Surfacing 500 server_error keeps the bug
+		// visible without crashing the process.
+		writeError(w, http.StatusInternalServerError, errServerError,
+			"device-authorization substore is not configured")
+		return
+	}
 	if !isFormContent(r.Header.Get("Content-Type")) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"content-type must be application/x-www-form-urlencoded")

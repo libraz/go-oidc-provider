@@ -138,6 +138,31 @@ func decodeError(t *testing.T, body []byte) string {
 	return env.Error
 }
 
+// TestServe_NilSubstoreDoesNotPanic exercises the defence-in-depth
+// guard: the package-level Handler can be constructed with a nil
+// CIBARequests substore (op.New rejects this configuration, but a
+// caller who bypassed op.New still must not crash the process).
+// The handler MUST surface 500 server_error rather than panic on
+// the eventual Save call.
+func TestServe_NilSubstoreDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	deps := cibaendpoint.Deps{
+		Issuer:       "https://op.example",
+		Clients:      newTestStore(t, fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}),
+		CIBARequests: nil,
+		Clock:        fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)},
+		HintResolver: fakeResolver{subject: "user-123"},
+	}
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != "server_error" {
+		t.Fatalf("error = %q, want server_error", got)
+	}
+}
+
 func TestServe_RejectsNonPOST(t *testing.T) {
 	t.Parallel()
 	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}

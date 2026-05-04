@@ -206,17 +206,17 @@ func WithCIBA(opts ...CIBAOption) Option {
 }
 
 // validateCIBAGrant enforces the substore-presence and
-// resolver-presence invariants the dedicated [WithCIBA] option
-// promises. An embedder that opts in MUST have a
-// [store.CIBARequestStore] substore wired AND a [HintResolver]
-// configured; otherwise the runtime path would either reach a nil
-// substore on the first /bc-authorize POST or return login_required
-// for every request. Embedders who include [grant.CIBA] only via
-// [WithGrants] (without invoking [WithCIBA]) bypass this check; the
-// runtime tokenendpoint path returns unsupported_grant_type when the
-// substore is nil so the deployment surfaces the gap on first probe.
+// resolver-presence invariants the CIBA flow depends on: any
+// embedder that activates the grant — through the dedicated
+// [WithCIBA] option OR by listing [grant.CIBA] in [WithGrants] —
+// MUST have a [store.CIBARequestStore] substore wired AND a
+// [HintResolver] configured. Without the substore the
+// /bc-authorize handler's Save call would reach a nil substore on
+// the first request, and without the resolver every request would
+// surface login_required. Surfacing the gap at construction time
+// is the same posture the rest of the v0.x options take.
 func (c *config) validateCIBAGrant() error {
-	if !c.cibaGrantEnabled {
+	if !c.cibaGrantConfiguredOrEnabled() {
 		return nil
 	}
 	if c.store == nil {
@@ -227,7 +227,7 @@ func (c *config) validateCIBAGrant() error {
 	if c.store.CIBARequests() == nil {
 		return &Error{
 			Code: codeConfiguration,
-			Description: "WithCIBA requires the configured Store to provide " +
+			Description: "the CIBA grant requires the configured Store to provide " +
 				"a non-nil CIBARequests substore (storeadapter/inmem ships one; " +
 				"SQL / Redis adapters require an explicit implementation)",
 		}
@@ -235,26 +235,38 @@ func (c *config) validateCIBAGrant() error {
 	if c.cibaHintResolver == nil {
 		return &Error{
 			Code: codeConfiguration,
-			Description: "WithCIBA requires a HintResolver; supply one through " +
-				"WithCIBAHintResolver (the resolver maps login_hint / " +
-				"id_token_hint / login_hint_token to a stable subject)",
+			Description: "the CIBA grant requires a HintResolver; supply one through " +
+				"WithCIBA(WithCIBAHintResolver(...)) (the resolver maps " +
+				"login_hint / id_token_hint / login_hint_token to a stable subject)",
 		}
 	}
 	return nil
 }
 
-// cibaGrantConfigured reports whether the OP should mount the
-// /bc-authorize endpoint and advertise it in discovery. The flag
-// derives from either the explicit [WithCIBA] opt-in OR the
-// presence of [grant.CIBA] in the configured grant set; either
-// path is sufficient because the substore validation runs only on
-// the explicit opt-in (so a [WithGrants] caller who forgets the
-// substore gets unsupported_grant_type rather than a panic).
-func (c *config) cibaGrantConfigured() bool {
+// cibaGrantConfiguredOrEnabled reports whether the embedder
+// activated the CIBA grant through any supported entry point (the
+// dedicated [WithCIBA] option or [WithGrants] with [grant.CIBA]).
+// The validator and the router both key on this helper so the
+// substore-presence invariant cannot drift between the "explicit
+// opt-in" and "grant set" paths.
+func (c *config) cibaGrantConfiguredOrEnabled() bool {
 	if c.cibaGrantEnabled {
 		return true
 	}
 	return slices.Contains(c.grants, grant.CIBA)
+}
+
+// cibaGrantConfigured reports whether the OP should mount the
+// /bc-authorize endpoint and advertise it in discovery. A grant is
+// "configured" when the embedder activated it (via the dedicated
+// [WithCIBA] option OR by listing [grant.CIBA] in [WithGrants]).
+// The substore-presence invariant is enforced ahead of this helper
+// by [validateCIBAGrant], so once the helper returns true the
+// router can rely on the [store.CIBARequestStore] substore being
+// non-nil — there is no longer a configured-without-substore path
+// that the runtime needs to fall back from.
+func (c *config) cibaGrantConfigured() bool {
+	return c.cibaGrantConfiguredOrEnabled()
 }
 
 // effectiveCIBADefaultExpiresIn returns the auth_req_id lifetime

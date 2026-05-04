@@ -463,11 +463,12 @@ func mountEndSessionEndpoint(
 // the endpoint with the same gating, so the OP cannot tell clients the
 // endpoint exists while quietly serving 404.
 //
-// The substore is reached through [deviceCodesFor]; an embedder who
-// included [grant.DeviceCode] without wiring a substore reaches the
-// runtime nil-check in [internal/devicecodeendpoint.Handler] and
-// surfaces server_error for the inbound request, mirroring the
-// token-endpoint dispatch's unsupported_grant_type fallback.
+// The substore is reached through [deviceCodesFor];
+// [validateDeviceCodeGrant] runs ahead of the router so a
+// configured grant without a wired substore is rejected at
+// construction time. The handler retains a defensive nil guard so
+// any residual misconfiguration surfaces as 500 server_error
+// rather than a nil-interface panic.
 func mountDeviceAuthorizationEndpoint(
 	mux *http.ServeMux,
 	cfg *config,
@@ -502,12 +503,11 @@ func mountDeviceAuthorizationEndpoint(
 // deviceCodesFor returns the [store.DeviceCodeStore] the device-flow
 // surfaces consume. The function exists so the token-endpoint mount
 // and the device-authorization mount share an identical resolution
-// path: a configured Store may legitimately return nil (the substore
-// is intentionally outside the transactional cluster, and a
-// deployment that does not opt into the grant via the dedicated
-// option may have wired only the cluster substores). Returning the
-// nil verbatim lets the runtime path emit unsupported_grant_type
-// rather than panic.
+// path. [validateDeviceCodeGrant] guarantees the substore is non-nil
+// whenever the grant is configured, but the helper still tolerates
+// a nil Store so the no-grant boot path (where the dispatch never
+// reaches the device-flow branch) does not require a fully-wired
+// store.
 func deviceCodesFor(cfg *config) store.DeviceCodeStore {
 	if cfg.store == nil {
 		return nil
@@ -516,11 +516,10 @@ func deviceCodesFor(cfg *config) store.DeviceCodeStore {
 }
 
 // cibaRequestsFor returns the [store.CIBARequestStore] the CIBA
-// surfaces consume. The function mirrors [deviceCodesFor]: the
-// token-endpoint mount and the /bc-authorize mount share an
-// identical resolution path, returning nil verbatim when the
-// configured Store does not implement the substore so the runtime
-// path emits unsupported_grant_type rather than panic.
+// surfaces consume. The function mirrors [deviceCodesFor]:
+// [validateCIBAGrant] guarantees the substore is non-nil whenever
+// the CIBA grant is configured, but the helper still tolerates a
+// nil Store so the no-grant boot path is unaffected.
 func cibaRequestsFor(cfg *config) store.CIBARequestStore {
 	if cfg.store == nil {
 		return nil
@@ -550,11 +549,12 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 // advertises the endpoint with the same gating, so the OP cannot
 // tell clients the endpoint exists while quietly serving 404.
 //
-// The substore is reached through [cibaRequestsFor]; an embedder
-// who included [grant.CIBA] without wiring a substore reaches the
-// runtime nil-check in [internal/cibaendpoint.Handler] and surfaces
-// server_error for the inbound request, mirroring the token-endpoint
-// dispatch's unsupported_grant_type fallback.
+// The substore is reached through [cibaRequestsFor];
+// [validateCIBAGrant] runs ahead of the router so a configured
+// grant without a wired substore (or HintResolver) is rejected at
+// construction time. The handler retains a defensive nil guard so
+// any residual misconfiguration surfaces as 500 server_error rather
+// than a nil-interface panic.
 //
 // The JAR verifier is built once at the router scope so /par,
 // /authorize, and /bc-authorize share the same instance. A nil

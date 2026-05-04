@@ -86,15 +86,17 @@ func WithDeviceVerificationURI(uri string) Option {
 }
 
 // validateDeviceCodeGrant enforces the substore-presence invariant
-// the dedicated [WithDeviceCodeGrant] option promises: an embedder
-// that opts in MUST have a [store.Store.DeviceCodes] substore wired,
-// otherwise the runtime path would reach a nil substore on the first
-// poll. Embedders who include [grant.DeviceCode] only via [WithGrants]
-// (without invoking [WithDeviceCodeGrant]) bypass this check; the
-// runtime tokenendpoint path returns unsupported_grant_type when the
-// substore is nil so the deployment surfaces the gap on first probe.
+// the device-flow surfaces depend on: any embedder that activates
+// the grant — through the dedicated [WithDeviceCodeGrant] option OR
+// by listing [grant.DeviceCode] in [WithGrants] — MUST have a
+// [store.Store.DeviceCodes] substore wired. Without it the
+// /device_authorization handler's Save call would reach a nil
+// substore on the first request, and the token endpoint's poll path
+// would dispatch to a grant whose backing store cannot resolve the
+// presented device_code. Surfacing the gap at construction time is
+// the same posture the rest of the v0.x options take.
 func (c *config) validateDeviceCodeGrant() error {
-	if !c.deviceCodeGrantEnabled {
+	if !c.deviceCodeGrantConfiguredOrEnabled() {
 		return nil
 	}
 	if c.store == nil {
@@ -105,12 +107,25 @@ func (c *config) validateDeviceCodeGrant() error {
 	if c.store.DeviceCodes() == nil {
 		return &Error{
 			Code: codeConfiguration,
-			Description: "WithDeviceCodeGrant requires the configured Store to provide " +
+			Description: "the device_code grant requires the configured Store to provide " +
 				"a non-nil DeviceCodes substore (storeadapter/inmem ships one; SQL / " +
 				"Redis adapters require an explicit implementation)",
 		}
 	}
 	return nil
+}
+
+// deviceCodeGrantConfiguredOrEnabled reports whether the embedder
+// activated the device_code grant through any supported entry point
+// (the dedicated [WithDeviceCodeGrant] option or [WithGrants] with
+// [grant.DeviceCode]). The validator and the router both key on this
+// helper so the substore-presence invariant cannot drift between the
+// "explicit opt-in" and "grant set" paths.
+func (c *config) deviceCodeGrantConfiguredOrEnabled() bool {
+	if c.deviceCodeGrantEnabled {
+		return true
+	}
+	return slices.Contains(c.grants, grant.DeviceCode)
 }
 
 // effectiveDeviceVerificationURI returns the URI the
@@ -126,15 +141,15 @@ func (c *config) effectiveDeviceVerificationURI() string {
 }
 
 // deviceCodeGrantConfigured reports whether the OP should mount the
-// /device_authorization endpoint and advertise it in discovery. The
-// flag derives from either the explicit [WithDeviceCodeGrant] opt-in
-// OR the presence of [grant.DeviceCode] in the configured grant set;
-// either path is sufficient because the substore validation runs
-// only on the explicit opt-in (so a [WithGrants] caller who forgets
-// the substore gets unsupported_grant_type rather than a panic).
+// /device_authorization endpoint and advertise it in discovery. A
+// grant is "configured" when the embedder activated it (via the
+// dedicated [WithDeviceCodeGrant] option OR by listing
+// [grant.DeviceCode] in [WithGrants]). The substore-presence
+// invariant is enforced ahead of this helper by
+// [validateDeviceCodeGrant], so once the helper returns true the
+// router can rely on the [store.Store.DeviceCodes] substore being
+// non-nil — there is no longer a configured-without-substore path
+// that the runtime needs to fall back from.
 func (c *config) deviceCodeGrantConfigured() bool {
-	if c.deviceCodeGrantEnabled {
-		return true
-	}
-	return slices.Contains(c.grants, grant.DeviceCode)
+	return c.deviceCodeGrantConfiguredOrEnabled()
 }

@@ -281,6 +281,19 @@ func resolveDeps(d Deps) Deps {
 // resolves it to a subject, parses the requested parameters,
 // mints the auth_req_id, and persists the resulting record.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
+	if deps.CIBARequests == nil {
+		// Defence in depth: op.New's validateCIBAGrant rejects
+		// this configuration before the router mounts. The
+		// branch only fires when an embedder bypassed op.New
+		// (e.g. constructed the handler directly via
+		// cibaendpoint.Handler) and forgot to wire the
+		// substore. Surfacing 500 server_error keeps the bug
+		// visible without crashing the process.
+		stampNoStore(w)
+		writeError(w, http.StatusInternalServerError, errServerError,
+			"backchannel-authentication substore is not configured")
+		return
+	}
 	if !parseAndValidateForm(w, r) {
 		return
 	}
