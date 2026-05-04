@@ -554,6 +554,72 @@ func TestScenario_ENC_032_DefaultJWEInventoryFromKeystore(t *testing.T) {
 	}
 }
 
+// TestScenario_ENC_035_NestedJWEDepthCapRejected pins the structural
+// depth ceiling on nested JWE-of-JWE-of-...-of-JWS request objects
+// (see [internal/jose.MaxJOSENestingDepth]). The JAR / PAR verifier
+// budgets [internal/jose.MaxJOSENestingDepth] total JOSE layers; a
+// chain whose JWE wrappers + inner JWS exceed that ceiling MUST be
+// rejected with a 400 invalid_request_object envelope (the same wire
+// shape ENC-030 / ENC-031 pin for unsupported alg / enc — the failure
+// class is collapsed so an attacker probing for the cap value via
+// wire-code variation learns nothing).
+//
+// The test wraps a happy-path inner JWS in [internal/jose.MaxJOSENestingDepth]
+// JWE layers — one over the budget — and asserts the /authorize endpoint
+// responds with a 400 carrying error=invalid_request_object. The pair
+// (cap minus one accepted by ENC-040, cap plus one rejected here)
+// pins both sides of the inequality so a regression flipping ">" to
+// ">=" surfaces immediately.
+//
+// Spec: RFC 7519 §5.2 (Nested JWT) + RFC 9101 §6.1.
+func TestScenario_ENC_035_NestedJWEDepthCapRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newEncJARFixture(t, false)
+	pkce := scenariokit.NewPKCEPair("")
+	signed := f.signES256(t, f.happyClaims(pkce))
+
+	// Build MaxJOSENestingDepth JWE layers around the inner JWS.
+	// One JWE alone counts as depth=2 (one JWE + one JWS); to reach
+	// MaxJOSENestingDepth+1 total JOSE layers we wrap the JWS in
+	// MaxJOSENestingDepth JWEs.
+	const overBudget = 10 // mirrors internal/jose.MaxJOSENestingDepth
+	payload := signed
+	for i := 0; i < overBudget; i++ {
+		payload = scenariokit.EncryptJWE(t, payload, f.encPub, f.encKID, "RSA-OAEP-256", "A256GCM")
+	}
+
+	values := url.Values{
+		"client_id": {f.clientID},
+		"request":   {payload},
+	}
+	target := f.tk.Server.URL + "/oidc/auth?" + values.Encode()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, target, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp, err := f.tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("GET /authorize: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, body)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("decode envelope %q: %v", body, err)
+	}
+	if got, _ := env["error"].(string); got != "invalid_request_object" {
+		t.Errorf("error=%q want invalid_request_object (env=%v)", got, env)
+	}
+}
+
 // TestScenario_ENC_040_PARAcceptsEncryptedRequestObject pins the
 // RFC 9126 + RFC 9101 happy path for an encrypted-and-signed request
 // object: a confidential client signs an inner JWS (ES256) with its

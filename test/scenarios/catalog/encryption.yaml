@@ -183,6 +183,21 @@ rows:
       *_encryption_*_values_supported arrays MUST be absent.
     status: active
 
+  - id: ENC-035
+    severity: P0
+    spec: RFC 7519 §5.2 / RFC 9101 §6.1
+    behaviour: |
+      A JAR / PAR request_object that nests JWE-of-JWE-of-...-of-JWS
+      beyond the OP's structural depth ceiling (10 total JOSE layers,
+      counting each JWE peel and the inner JWS) MUST be rejected with
+      a 400 invalid_request_object envelope. The boundary is
+      deliberately chosen so the existing per-layer 1 MiB plaintext
+      cap and the depth cap together bound the total decrypt work an
+      attacker can force per request. The wire-error class is
+      collapsed onto the malformed-request-object family so an
+      attacker cannot probe for the cap value via wire-code variation.
+    status: active
+
   - id: ENC-040
     severity: P0
     spec: RFC 9126 + RFC 9101

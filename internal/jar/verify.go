@@ -334,16 +334,26 @@ func (v *Verifier) Verify(ctx context.Context, raw, expectedClientID string, cli
 }
 
 // maybeDecrypt detects a JWE-shaped raw (5-segment compact form per
-// RFC 7516 §3.1) and decrypts it through the configured
-// [EncryptionResolver]. The plaintext is expected to be a JWS the
+// RFC 7516 §3.1) and peels every nested JWE layer through the
+// configured [EncryptionResolver] until the plaintext is no longer
+// JWE-shaped. The final non-JWE plaintext is expected to be a JWS the
 // downstream [Parse] consumes — OIDC §6.1 mandates a signed inner
 // payload, so a JWE wrapping plain JSON would fail at JWS parsing
 // regardless and the verifier does not special-case it.
 //
 // A 3-segment raw (compact JWS) is returned unchanged. Any other
 // segment count is left to [Parse] to reject as [ErrParse]; the
-// segment-count gate exists only so we do not call [jose.Decrypt]
+// segment-count gate exists only so we do not call [jose.DecryptChain]
 // against a JWS by mistake.
+//
+// Nested JWE-of-JWE-of-JWS chains are honoured up to a total of
+// [jose.MaxJOSENestingDepth] JOSE layers (counting both the JWE peels
+// and the inner JWS the caller parses). The chain budget passed to
+// [jose.DecryptChain] reserves one slot for the final JWS so a
+// JWE-of-JWS chain costs depth=2 and the boundary case sits at
+// 9 JWEs + 1 JWS = 10 layers. The 11th layer is rejected with
+// [jose.ErrJWENestingTooDeep], which collapses onto [ErrParse] so the
+// wire layer surfaces invalid_request_object uniformly.
 //
 // JWE-shaped raw without a configured resolver returns
 // [ErrEncryptionUnsupported] (the OP cannot honour the request
@@ -356,8 +366,9 @@ func (v *Verifier) Verify(ctx context.Context, raw, expectedClientID string, cli
 //     [ErrDecryptFailed] (kid-unknown is folded into the failure
 //     class so an attacker cannot enumerate the OP's encryption
 //     keyset through the wire response).
-//   - Every other JOSE sentinel maps to [ErrParse] so the wire layer
-//     surfaces invalid_request_object uniformly.
+//   - Every other JOSE sentinel — including [jose.ErrJWENestingTooDeep]
+//     — maps to [ErrParse] so the wire layer surfaces
+//     invalid_request_object uniformly.
 func (v *Verifier) maybeDecrypt(raw string) (string, error) {
 	dotCount := strings.Count(raw, ".")
 	if dotCount != 4 {
@@ -366,7 +377,12 @@ func (v *Verifier) maybeDecrypt(raw string) (string, error) {
 	if v.decrypter == nil {
 		return "", ErrEncryptionUnsupported
 	}
-	out, err := jose.Decrypt(raw, v.decrypter)
+	// Reserve one slot of [jose.MaxJOSENestingDepth] for the inner
+	// JWS [Parse] consumes after this function returns; the rest of
+	// the budget bounds how many JWE layers DecryptChain may peel.
+	// The boundary therefore lands at 9 JWE peels + 1 JWS parse =
+	// MaxJOSENestingDepth layers total.
+	out, err := jose.DecryptChain(raw, v.decrypter, jose.MaxJOSENestingDepth-1)
 	if err != nil {
 		return "", mapJWEError(err)
 	}
@@ -377,8 +393,14 @@ func (v *Verifier) maybeDecrypt(raw string) (string, error) {
 // wire-error taxonomy. The mapping mirrors the doc on
 // [Verifier.maybeDecrypt] and lives in one place so a future audit
 // can verify the wire-error envelope is uniform across kid-unknown,
-// decrypt-failed, and decrypt-succeeded-but-malformed-plaintext
-// paths.
+// decrypt-failed, decrypt-succeeded-but-malformed-plaintext, and
+// nesting-too-deep paths.
+//
+// [jose.ErrJWENestingTooDeep] folds onto [ErrParse] so the wire layer
+// surfaces invalid_request_object — a deeply nested JWE chain is a
+// malformed request object from the verifier's perspective, and
+// distinguishing it on the wire would only help an attacker
+// enumerate the depth cap.
 func mapJWEError(err error) error {
 	switch {
 	case errors.Is(err, jose.ErrJWEAlgNotAllowed),

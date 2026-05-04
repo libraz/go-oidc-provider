@@ -227,6 +227,63 @@ func tamperJWEAlg(t *testing.T, jwe, badAlg string) string {
 	return strings.Join(parts, ".")
 }
 
+// TestVerify_RejectsDeeplyNestedJWE pins the JAR-level mapping for
+// [jose.ErrJWENestingTooDeep]. The verifier reserves one of the
+// [jose.MaxJOSENestingDepth] slots for the inner JWS Parse, so the
+// JWE budget is MaxJOSENestingDepth-1. A chain of MaxJOSENestingDepth
+// JWE wrappers (one over the budget) MUST surface [jar.ErrParse] —
+// the wire layer then emits invalid_request_object, which is the
+// appropriate envelope for a malformed request object regardless of
+// where in the chain the depth ceiling fired (collapsing the failure
+// class is a deliberate defence against an attacker probing for the
+// cap value via wire-code variation).
+func TestVerify_RejectsDeeplyNestedJWE(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	inner, jwks := makeRequestObject(t, happyClaims(now))
+	priv := mustRSAKey(t)
+
+	// Wrap the JWS in MaxJOSENestingDepth JWE layers — one over the
+	// JWE budget the verifier passes to DecryptChain. The first
+	// MaxJOSENestingDepth-1 wrappers are within budget; the
+	// MaxJOSENestingDepth-th is the one that trips the cap.
+	payload := mustEncryptToJWE(t, inner, &priv.PublicKey, "enc-1")
+	for i := 0; i < jose.MaxJOSENestingDepth-1; i++ {
+		payload = mustEncryptToJWE(t, payload, &priv.PublicKey, "enc-1")
+	}
+
+	v := newJWEVerifier(t, now, jwks, &staticEncryptionResolver{kid: "enc-1", priv: priv})
+	_, err := v.Verify(context.Background(), payload, testClientID, newClient())
+	if !errors.Is(err, jar.ErrParse) {
+		t.Fatalf("err=%v want ErrParse (mapped from ErrJWENestingTooDeep)", err)
+	}
+}
+
+// TestVerify_AcceptsJWEAtBoundary confirms the boundary opposite to
+// [TestVerify_RejectsDeeplyNestedJWE]: a chain of (MaxJOSENestingDepth-1)
+// JWE layers wrapping a JWS sits exactly at the budget and MUST verify
+// successfully. The pair pins both sides of the inequality so a
+// regression flipping ">" to ">=" surfaces immediately.
+func TestVerify_AcceptsJWEAtBoundary(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	inner, jwks := makeRequestObject(t, happyClaims(now))
+	priv := mustRSAKey(t)
+
+	// (MaxJOSENestingDepth-1) total JWE layers + 1 JWS = MaxJOSENestingDepth.
+	payload := mustEncryptToJWE(t, inner, &priv.PublicKey, "enc-1")
+	for i := 0; i < jose.MaxJOSENestingDepth-2; i++ {
+		payload = mustEncryptToJWE(t, payload, &priv.PublicKey, "enc-1")
+	}
+
+	v := newJWEVerifier(t, now, jwks, &staticEncryptionResolver{kid: "enc-1", priv: priv})
+	if _, err := v.Verify(context.Background(), payload, testClientID, newClient()); err != nil {
+		t.Fatalf("Verify at depth boundary: %v", err)
+	}
+}
+
 // Compile-time assertion so the test file fails at build time if the
 // public [jar.EncryptionResolver] contract drifts.
 var _ jar.EncryptionResolver = (*staticEncryptionResolver)(nil)

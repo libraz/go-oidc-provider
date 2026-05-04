@@ -18,6 +18,23 @@ import (
 // large-payload denial-of-service attempts.
 const MaxJWEPlaintextSize = 1 << 20
 
+// MaxJOSENestingDepth bounds the total number of JOSE layers
+// [DecryptChain] is willing to traverse when peeling a nested
+// JWE-of-JWE-of-...-of-JWS chain. RFC 7519 §5.2 (`cty=JWT`) admits
+// arbitrary nesting in principle; in practice every shape the OP
+// receives or emits flattens to at most 2 layers (one JWE wrapping
+// one JWS). The 10-layer ceiling absorbs a generous future expansion
+// while keeping a malicious input from forcing the verifier into a
+// stack that the per-layer 1 MiB plaintext cap alone cannot bound
+// (10 layers × 1 MiB still fits a single request budget; an unbounded
+// chain does not).
+//
+// The counter increments once per JOSE layer the verifier traverses:
+// a single JWE wrapping a JWS counts as depth=2 (the JWE plus the
+// inner JWS), JWE-of-JWE-of-JWS counts as depth=3, and so on. The
+// 11th layer is rejected with [ErrJWENestingTooDeep].
+const MaxJOSENestingDepth = 10
+
 // JWE-related sentinel errors. Callers branch on these via
 // [errors.Is]; the wrapped detail is safe to log but MUST NOT be
 // returned to clients (per ADR 0030 §S.8).
@@ -65,6 +82,15 @@ var (
 	// and for `zip=DEF`-decompressed plaintext after go-jose's
 	// upstream cap is satisfied.
 	ErrJWEPlaintextTooLarge = errors.New("jose: JWE plaintext exceeds size cap")
+
+	// ErrJWENestingTooDeep indicates [DecryptChain] reached the
+	// [MaxJOSENestingDepth] ceiling while peeling nested JWE layers.
+	// The error fires on the 11th layer; the first 10 are accepted
+	// uniformly. The class exists so the JAR / PAR wire layer can
+	// surface invalid_request_object without an attacker learning
+	// (via timing or error-code variation) where in the chain the
+	// limit fired.
+	ErrJWENestingTooDeep = errors.New("jose: JWE nesting exceeds depth cap")
 )
 
 // EncryptionKeyResolver looks up a private encryption key by its
@@ -257,6 +283,86 @@ func decryptWithResolver(obj *josev4.JSONWebEncryption, resolver EncryptionKeyRe
 		return nil, fmt.Errorf("%w: kid-absent fallback", ErrJWEDecryptFailed)
 	}
 	return success, nil
+}
+
+// NestedDecryption is the result of a [DecryptChain] call. Plaintext
+// holds the bytes of the innermost layer (the bottom of the JWE-of-JWE
+// chain); JWELayers reports how many JWE layers were peeled to reach
+// it. The caller adds 1 (for the final non-JWE layer it parses, e.g.
+// a JWS) when comparing against [MaxJOSENestingDepth].
+//
+// Outermost is the protected-header view of the outermost JWE (the
+// layer the wire actually carried). Audit logs reference the outer
+// kid / alg / enc rather than any nested layer because the outer key
+// is the one the embedder routed to.
+type NestedDecryption struct {
+	Plaintext []byte
+	JWELayers int
+	Outermost DecryptedJWE
+}
+
+// DecryptChain peels nested JWE layers from raw, recursively decrypting
+// each layer through the same resolver. The function stops as soon as
+// the plaintext is no longer JWE-shaped (compact form with five
+// segments) and returns the bottom plaintext alongside the number of
+// JWE layers peeled.
+//
+// The total layer budget — JWE peels plus the caller's final non-JWE
+// parse — MUST NOT exceed [MaxJOSENestingDepth]. The caller passes the
+// remaining budget; DecryptChain decrements once per peel and rejects
+// the (budget+1)th JWE with [ErrJWENestingTooDeep]. budget MUST be
+// positive: a non-positive budget signals a programming bug and
+// returns [ErrJWENestingTooDeep] uniformly so the misuse fails closed.
+//
+// The JOSE-level error envelope mirrors [Decrypt] verbatim: every
+// failure surfaces a sentinel from [ErrJWEMalformed] / [ErrJWEAlgNotAllowed]
+// / [ErrJWEEncNotAllowed] / [ErrJWEKidUnknown] / [ErrJWEDecryptFailed]
+// / [ErrJWEPlaintextTooLarge] / [ErrJWENestingTooDeep]. The wrapped
+// detail is safe to log but MUST NOT be returned to clients.
+//
+// RFC 7519 §5.2 (Nested JWT) admits arbitrary cty=JWT chains; the cap
+// is a defence-in-depth measure on top of the per-layer 1 MiB
+// plaintext cap. A pathological chain of 1 MiB layers would otherwise
+// pin a request to ≥ N MiB of decrypt work for an attacker-chosen N.
+func DecryptChain(raw string, resolver EncryptionKeyResolver, budget int) (NestedDecryption, error) {
+	if budget <= 0 {
+		return NestedDecryption{}, fmt.Errorf("%w: budget exhausted", ErrJWENestingTooDeep)
+	}
+	var outermost DecryptedJWE
+	current := raw
+	layers := 0
+	for {
+		if !looksLikeJWE(current) {
+			return NestedDecryption{
+				Plaintext: []byte(current),
+				JWELayers: layers,
+				Outermost: outermost,
+			}, nil
+		}
+		if layers >= budget {
+			return NestedDecryption{}, fmt.Errorf(
+				"%w: peeled %d JWE layers (budget %d)", ErrJWENestingTooDeep, layers, budget,
+			)
+		}
+		dec, err := Decrypt(current, resolver)
+		if err != nil {
+			return NestedDecryption{}, err
+		}
+		if layers == 0 {
+			outermost = dec
+		}
+		layers++
+		current = string(dec.Plaintext)
+	}
+}
+
+// looksLikeJWE reports whether s is shaped like a compact-serialised
+// JWE (RFC 7516 §3.1: five base64url segments separated by "."). The
+// check is purely structural — a real JWE parse happens inside
+// [Decrypt]. Used by [DecryptChain] to decide whether to peel another
+// layer.
+func looksLikeJWE(s string) bool {
+	return strings.Count(s, ".") == 4
 }
 
 // allowedV4KeyAlgorithms returns the slice of go-jose v4
