@@ -1155,13 +1155,101 @@ func TestScenario_DEV_097_DeviceAuthGetReturnsMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestScenario_DEV_098_TokenSlowDownOnPollTooSoon is pending — the
-// slow_down ladder is implemented (internal/devicecode.DecidePoll) but
-// the test body has not been wired yet (requires a deterministic
-// clock plumbed through testkit). See catalog status=pending.
+// TestScenario_DEV_098_TokenSlowDownOnPollTooSoon pins the
+// RFC 8628 §3.5 slow_down ladder. The test drives three consecutive
+// /token polls against a Pending device_code: the first establishes
+// the LastPolledAt baseline, the second polls below the advertised
+// interval and triggers slow_down (the persisted Interval doubles),
+// and the third polls below the now-doubled interval and triggers
+// slow_down again (the persisted Interval doubles again). The test
+// reads the Interval back through the substore between polls so the
+// persistence half of the ladder is observed: a regression where
+// the OP returned slow_down on the wire but failed to persist the
+// doubled bar would let a malicious device keep hammering at the
+// original cadence indefinitely.
+//
+// Spec: RFC 8628 §3.5 (slow_down).
 func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DEV-098 (catalog row exists; clock plumbing deferred)")
+	p := newDevProvider(t, []string{"openid"})
+
+	deviceCode := p.issueDeviceCode(t, "openid")
+	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode (seed): %v", err)
+	}
+	seedInterval := rec.Interval
+	if seedInterval <= 0 {
+		t.Fatalf("seed Interval = %v, want positive", seedInterval)
+	}
+
+	// Poll #1: Pending record, no prior LastPolledAt. The polling
+	// discipline only escalates on a repeated poll, so the wire
+	// response is authorization_pending and the persisted Interval
+	// stays at the seed. The persisted LastPolledAt becomes the
+	// anchor the next poll's slow_down gate compares against.
+	status, body := p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("poll #1 status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "authorization_pending")
+	rec, err = p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after poll #1: %v", err)
+	}
+	if rec.Interval != seedInterval {
+		t.Errorf("after poll #1 (no slow_down): Interval = %v, want %v", rec.Interval, seedInterval)
+	}
+	if rec.LastPolledAt == nil {
+		t.Fatal("after poll #1: LastPolledAt is nil; RecordPoll did not persist the timestamp")
+	}
+
+	// Poll #2: arrives well within the advertised interval (we just
+	// polled). Decision is slow_down → persisted Interval doubles.
+	status, body = p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("poll #2 status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "slow_down")
+	rec, err = p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after poll #2: %v", err)
+	}
+	wantAfter2 := seedInterval * 2
+	if rec.Interval != wantAfter2 {
+		t.Errorf("after poll #2 (slow_down #1): Interval = %v, want %v (double of seed %v)",
+			rec.Interval, wantAfter2, seedInterval)
+	}
+
+	// Poll #3: arrives still within the now-doubled interval. Decision
+	// is slow_down again → persisted Interval doubles again. This is
+	// the assertion that pins the regression: prior to the fix, the
+	// OP returned slow_down on the wire but the persisted Interval
+	// never moved off the seed value, letting the device keep hitting
+	// the same bar indefinitely.
+	status, body = p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("poll #3 status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "slow_down")
+	rec, err = p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after poll #3: %v", err)
+	}
+	wantAfter3 := wantAfter2 * 2
+	if rec.Interval != wantAfter3 {
+		t.Errorf("after poll #3 (slow_down #2): Interval = %v, want %v (double of %v)",
+			rec.Interval, wantAfter3, wantAfter2)
+	}
 }
 
 // TestScenario_DEV_099_DiscoveryGrantTypesIncludesDeviceCode pins the

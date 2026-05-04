@@ -370,7 +370,7 @@ func (fakeDeviceCodeStore) Approve(context.Context, string, string) error { retu
 
 func (fakeDeviceCodeStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
 
-func (fakeDeviceCodeStore) RecordPoll(context.Context, string, time.Time) error {
+func (fakeDeviceCodeStore) RecordPoll(context.Context, string, time.Time, time.Duration) error {
 	return store.ErrNotFound
 }
 

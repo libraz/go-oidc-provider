@@ -122,10 +122,19 @@ func (s *deviceCodeStore) Deny(_ context.Context, deviceCode, reason string) err
 	})
 }
 
-func (s *deviceCodeStore) RecordPoll(_ context.Context, deviceCode string, when time.Time) error {
+func (s *deviceCodeStore) RecordPoll(_ context.Context, deviceCode string, when time.Time, nextInterval time.Duration) error {
 	return s.transition(deviceCode, func(rec *store.DeviceCode) error {
 		t := when
 		rec.LastPolledAt = &t
+		// Only escalate the bar; the library passes the existing
+		// Interval verbatim on non-slow_down decisions, so a value
+		// that does not raise the gate is intentionally a no-op on
+		// the Interval field. The atomic update of both fields under
+		// the same mutex is the contract concurrent pollers rely on
+		// (RFC 8628 §3.5).
+		if nextInterval > rec.Interval {
+			rec.Interval = nextInterval
+		}
 		return nil
 	})
 }

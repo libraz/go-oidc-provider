@@ -3,6 +3,9 @@ package inmem_test
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,7 +180,7 @@ func TestDeviceCodes_RecordPoll(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	when := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
-	if err := ds.RecordPoll(ctx, "poll-id", when); err != nil {
+	if err := ds.RecordPoll(ctx, "poll-id", when, rec.Interval); err != nil {
 		t.Fatalf("RecordPoll: %v", err)
 	}
 	got, err := ds.FindByDeviceCode(ctx, "poll-id")
@@ -189,6 +192,83 @@ func TestDeviceCodes_RecordPoll(t *testing.T) {
 	}
 	if !got.LastPolledAt.Equal(when) {
 		t.Errorf("LastPolledAt = %v, want %v", *got.LastPolledAt, when)
+	}
+}
+
+// TestDeviceCodes_RecordPollPersistsSlowDownLadder pins the
+// RFC 8628 §3.5 invariant: a poll that triggers slow_down MUST
+// raise the persisted Interval so subsequent polls observe the
+// elevated bar, and a non-slow_down poll MUST NOT lower the
+// existing Interval back down. Without this guarantee a malicious
+// device could keep hammering at the original cadence by ignoring
+// the elevated value the OP returned in audit only.
+func TestDeviceCodes_RecordPollPersistsSlowDownLadder(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	rec := makeDeviceCode("ladder-id", "LADDER-1", store.DeviceCodeStatusPending, time.Now().Add(time.Minute))
+	if err := ds.Save(ctx, rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// First slow_down: 5s → 10s.
+	t1 := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+	if err := ds.RecordPoll(ctx, "ladder-id", t1, 10*time.Second); err != nil {
+		t.Fatalf("RecordPoll #1: %v", err)
+	}
+	got, err := ds.FindByDeviceCode(ctx, "ladder-id")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode #1: %v", err)
+	}
+	if got.Interval != 10*time.Second {
+		t.Errorf("after first slow_down: Interval = %v, want 10s", got.Interval)
+	}
+
+	// Second slow_down: 10s → 20s.
+	t2 := t1.Add(time.Second)
+	if err := ds.RecordPoll(ctx, "ladder-id", t2, 20*time.Second); err != nil {
+		t.Fatalf("RecordPoll #2: %v", err)
+	}
+	got, err = ds.FindByDeviceCode(ctx, "ladder-id")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode #2: %v", err)
+	}
+	if got.Interval != 20*time.Second {
+		t.Errorf("after second slow_down: Interval = %v, want 20s", got.Interval)
+	}
+
+	// Non-slow_down poll: passing the existing Interval verbatim MUST
+	// NOT regress the bar. The library's call site passes rec.Interval
+	// on every non-slow_down decision, so this case is the common one.
+	t3 := t2.Add(30 * time.Second)
+	if err := ds.RecordPoll(ctx, "ladder-id", t3, 20*time.Second); err != nil {
+		t.Fatalf("RecordPoll #3: %v", err)
+	}
+	got, err = ds.FindByDeviceCode(ctx, "ladder-id")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode #3: %v", err)
+	}
+	if got.Interval != 20*time.Second {
+		t.Errorf("after non-escalating poll: Interval = %v, want 20s (no regression)", got.Interval)
+	}
+	if got.LastPolledAt == nil || !got.LastPolledAt.Equal(t3) {
+		t.Errorf("after non-escalating poll: LastPolledAt = %v, want %v", got.LastPolledAt, t3)
+	}
+
+	// Defensive: a smaller value (e.g. an embedder bug) does not
+	// downgrade the bar. The contract documents this as no-op on the
+	// Interval field.
+	t4 := t3.Add(30 * time.Second)
+	if err := ds.RecordPoll(ctx, "ladder-id", t4, 1*time.Second); err != nil {
+		t.Fatalf("RecordPoll #4: %v", err)
+	}
+	got, err = ds.FindByDeviceCode(ctx, "ladder-id")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode #4: %v", err)
+	}
+	if got.Interval != 20*time.Second {
+		t.Errorf("after sub-bar value: Interval = %v, want 20s (no downgrade)", got.Interval)
 	}
 }
 
@@ -209,3 +289,104 @@ func TestDeviceCodes_Expired(t *testing.T) {
 		t.Errorf("expired FindByUserCode: want ErrNotFound, got %v", err)
 	}
 }
+
+// TestDeviceCodes_Concurrent stresses the DeviceCodeStore state
+// machine under -race. The shape mirrors a busy device-flow OP:
+// many independent /device_authorization records persist in parallel,
+// the user-facing verify URL races the device polling /token, and
+// Approve/Deny race for each record. The per-record CAS in
+// devicecodes.go is the synchronisation point under test; this test
+// fails if the lock discipline drifts.
+func TestDeviceCodes_Concurrent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+
+	const records = 64
+	expires := time.Now().Add(time.Hour)
+	for i := range records {
+		rec := makeDeviceCode(concurrentDeviceID(i), concurrentUserCode(i), store.DeviceCodeStatusPending, expires)
+		if err := ds.Save(ctx, rec); err != nil {
+			t.Fatalf("Save[%d]: %v", i, err)
+		}
+	}
+
+	var (
+		wg       sync.WaitGroup
+		consumed atomic.Int64
+		conflict atomic.Int64
+	)
+	for i := range records {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 16 {
+				_, _ = ds.FindByDeviceCode(ctx, concurrentDeviceID(i))
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 16 {
+				_, _ = ds.FindByUserCode(ctx, concurrentUserCode(i))
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// IncrementUserCodeStrike acts on the user_code, not the
+			// device_code; it exercises the same locking discipline
+			// as the other transitions.
+			_, _ = ds.IncrementUserCodeStrike(ctx, concurrentUserCode(i))
+			_, _ = ds.IncrementUserCodeStrike(ctx, concurrentUserCode(i))
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := ds.Approve(ctx, concurrentDeviceID(i), "user-"+concurrentDeviceID(i))
+			switch {
+			case err == nil:
+			case errors.Is(err, store.ErrConflict):
+				conflict.Add(1)
+			default:
+				t.Errorf("Approve[%d]: %v", i, err)
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := ds.Deny(ctx, concurrentDeviceID(i), "concurrent-deny")
+			switch {
+			case err == nil:
+			case errors.Is(err, store.ErrConflict):
+				conflict.Add(1)
+			default:
+				t.Errorf("Deny[%d]: %v", i, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := conflict.Load(); got != records {
+		t.Errorf("Approve/Deny race: ErrConflict count = %d, want %d", got, records)
+	}
+
+	for i := range records {
+		_, err := ds.Consume(ctx, concurrentDeviceID(i))
+		switch {
+		case err == nil:
+			consumed.Add(1)
+		case errors.Is(err, store.ErrConflict):
+			// Denied; Consume rejects.
+		default:
+			t.Errorf("Consume[%d]: unexpected %v", i, err)
+		}
+	}
+	if got := consumed.Load(); got == 0 || got > int64(records) {
+		t.Errorf("Consume sweep: %d Approved consumes; want 1..%d", got, records)
+	}
+}
+
+func concurrentDeviceID(i int) string { return "concurrent-dev-" + strconv.Itoa(i) }
+func concurrentUserCode(i int) string { return "USER-" + strconv.Itoa(i) }

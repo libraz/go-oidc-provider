@@ -132,13 +132,19 @@ func applyPollDecision(
 		Denied:            rec.Status == store.DeviceCodeStatusDenied,
 		Consumed:          rec.Status == store.DeviceCodeStatusConsumed,
 	})
-	// Stamp the poll timestamp before any further branching so the
-	// next poll's slow_down ladder sees the current observation. A
-	// store fault here is non-fatal: the worst case is the next poll
-	// gets the same decision because LastPolledAt is stale, which is
-	// the correct fail-open behaviour for a transient substore
-	// outage.
-	_ = deps.DeviceCodes.RecordPoll(ctx, deviceCode, now)
+	// Stamp the poll timestamp AND the (possibly escalated) interval
+	// before any further branching so the next poll's slow_down ladder
+	// sees the current observation. On a non-slow_down decision the
+	// substore preserves the existing Interval (RecordPoll treats a
+	// non-escalating value as no-op on that field). A store fault here
+	// is non-fatal: the worst case is the next poll gets the same
+	// decision because LastPolledAt / Interval are stale, which is the
+	// correct fail-open behaviour for a transient substore outage.
+	nextInterval := rec.Interval
+	if decision.Decision == devicecode.PollDecisionSlowDown {
+		nextInterval = decision.NextInterval
+	}
+	_ = deps.DeviceCodes.RecordPoll(ctx, deviceCode, now, nextInterval)
 	switch decision.Decision {
 	case devicecode.PollDecisionAuthorizationPending:
 		emitDeviceCodeReject(ctx, deps, clientID, errAuthorizationPending)
@@ -147,7 +153,6 @@ func applyPollDecision(
 		return false
 	case devicecode.PollDecisionSlowDown:
 		emitDeviceCodeSlowDown(ctx, deps, clientID, rec.Interval, decision.NextInterval)
-		_ = persistNextInterval(ctx, deps, deviceCode, decision.NextInterval)
 		writeError(w, http.StatusBadRequest, errSlowDown,
 			"polling interval has been increased; back off and retry")
 		return false
@@ -444,23 +449,6 @@ func derefTime(t *time.Time) time.Time {
 		return time.Time{}
 	}
 	return *t
-}
-
-// persistNextInterval pushes the doubled interval onto the substore.
-// The interface does not expose a dedicated mutator; instead the
-// library mutates the record's Interval column transitively through
-// the slow_down ladder embedded in [DeviceCodeStore.RecordPoll]
-// — backends that retain the column observe the bump on the next
-// poll. The reference inmem implementation already performs the
-// ladder in-place; SQL / Redis adapters MAY follow the same posture.
-//
-// The function is a no-op when the substore lacks an explicit
-// "update interval" verb, which is the v0.9.1 baseline. A later
-// wave may extend [DeviceCodeStore] with a dedicated mutator; until
-// then the slow_down doubling is observable in audit but not on the
-// substore row.
-func persistNextInterval(_ context.Context, _ Deps, _ string, _ time.Duration) error {
-	return nil
 }
 
 // deviceCodeIssuedExtras bundles the audit extras the issuance path

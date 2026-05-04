@@ -232,12 +232,25 @@ type DeviceCodeStore interface {
 	// [ErrConflict] with the same semantics as Approve.
 	Deny(ctx context.Context, deviceCode, reason string) error
 
-	// RecordPoll updates [DeviceCode.LastPolledAt] to when. The
-	// library calls RecordPoll before checking the slow_down
-	// condition so the next poll's interval comparison sees the
-	// current timestamp. Returns [ErrNotFound] when the record
-	// does not exist; the library treats that as expired_token.
-	RecordPoll(ctx context.Context, deviceCode string, when time.Time) error
+	// RecordPoll atomically updates [DeviceCode.LastPolledAt] to
+	// when AND [DeviceCode.Interval] to nextInterval. The library
+	// calls RecordPoll on every poll arrival before deciding the
+	// wire response so the next poll's slow_down ladder observes
+	// the latest timestamp; on a slow_down decision the library
+	// passes the doubled interval per RFC 8628 §3.5 ("If the
+	// interval is more than 5 seconds, the client MUST honor the
+	// new value") so a misbehaving device cannot keep hammering
+	// at the original bar by ignoring the elevated interval.
+	// Implementations MUST persist both fields atomically — a
+	// concurrent poll observing only the timestamp update would
+	// see a stale interval and let the attacker re-arm the gate.
+	// A nextInterval value less than or equal to the record's
+	// current Interval is taken as "no escalation this poll" and
+	// the existing Interval is preserved (the library passes the
+	// existing value verbatim on non-slow_down decisions).
+	// Returns [ErrNotFound] when the record does not exist; the
+	// library treats that as expired_token.
+	RecordPoll(ctx context.Context, deviceCode string, when time.Time, nextInterval time.Duration) error
 
 	// IncrementUserCodeStrike increments [DeviceCode.UserCodeStrikes]
 	// by one and returns the new value. The verification page calls
