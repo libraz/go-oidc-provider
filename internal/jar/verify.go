@@ -165,7 +165,7 @@ type VerifierConfig struct {
 
 	// MaxLifetime, when positive, caps how far "exp" may lie in the
 	// future and how far "nbf" may lie in the past relative to "now".
-	// FAPI 2.0 Message Signing §5.6 mandates a 60-second window.
+	// FAPI 2.0 Message Signing §5.6 mandates a 60-minute window.
 	// Zero leaves the cap disabled (back-compat).
 	MaxLifetime time.Duration
 
@@ -593,7 +593,7 @@ func assertAudience(obj *Object, issuer string) error {
 // assertExp enforces a non-empty "exp" claim that has not already
 // passed. The verifier does not apply a skew tolerance here: an "exp"
 // in the past is unambiguous. When maxLifetime is positive (FAPI 2.0
-// Message Signing §5.6 imposes a 60s cap) the function additionally
+// Message Signing §5.6 imposes a 60-minute cap) the function additionally
 // rejects request objects whose "exp" lies further in the future than
 // that — the strict ceiling matches the OFCS conformance test
 // "ensure-request-object-with-exp-over-60-fails".
@@ -617,7 +617,7 @@ func assertExp(obj *Object, now time.Time, maxLifetime time.Duration) error {
 // rejected. When maxLifetime is positive the function also caps how
 // far in the past "nbf" may lie — RFC 9101 §6.1 phrases the window as
 // "request objects MUST be short-lived"; the OFCS test
-// "ensure-request-object-with-nbf-over-60-fails" pins 60s.
+// "ensure-request-object-with-nbf-over-60-fails" pins 60 minutes.
 func assertNbf(obj *Object, now time.Time, skew, maxLifetime time.Duration, requireNbf bool) error {
 	nbf, ok := claimSeconds(obj.Claims, "nbf")
 	if !ok {

@@ -295,13 +295,14 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 		return nil, nil
 	}
 	// FAPI 2.0 Message Signing §5.6 mandates "nbf" and a request-object
-	// lifetime no longer than 60 seconds. The library implements that
-	// bound symmetrically: exp must not be more than 60 seconds in the
-	// future, and nbf must not be more than 60 seconds in the past. The
-	// 60-second figure is the OFCS conformance suite floor — its
+	// lifetime no longer than 60 minutes. The library implements that
+	// bound symmetrically: exp must not be more than 60 minutes in the
+	// future, and nbf must not be more than 60 minutes in the past. The
+	// OFCS conformance modules
 	// "ensure-request-object-with-exp-over-60-fails" and
-	// "-with-nbf-over-60-fails" modules push the claim 70 seconds out
-	// and expect rejection. Baseline (where JAR is rarely exercised)
+	// "-with-nbf-over-60-fails" push the claim 70 minutes out and expect
+	// rejection, while the happy-flow shape (nbf=now, exp=now+5min) sits
+	// well within the cap. Baseline (where JAR is rarely exercised)
 	// inherits the same posture so a deployment that opts in to JAR
 	// without a Message-Signing-only switch still gets the bound. Other
 	// JAR-enabling profiles inherit the relaxed (back-compat) behaviour.
@@ -325,7 +326,7 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
-			maxLifetime = 60 * time.Second
+			maxLifetime = 60 * time.Minute
 		}
 		if isFAPIProfile(p) {
 			allowMissingJTI = false

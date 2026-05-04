@@ -122,16 +122,16 @@ func newFAPIFixture(t *testing.T) *fapiFixture {
 // happyRequestObjectClaims returns the canonical FAPI 2.0 Request
 // Object claim set every Request-Object scenario starts from. Tests
 // mutate the returned map (drop a claim, push exp out of window)
-// before signing. The exp window is held to 30 seconds so the
-// FAPI 2.0 Message Signing §5.6 60-second MaxLifetime cap (wired in
-// op_builders.go) does not reject the happy path; rows that need to
-// exceed the cap explicitly override exp.
+// before signing. The exp window is held to 5 minutes which sits
+// comfortably under the FAPI 2.0 Message Signing §5.6 60-minute
+// MaxLifetime cap (wired in op_builders.go); rows that need to exceed
+// the cap explicitly override exp (e.g. to 70 minutes).
 func (f *fapiFixture) happyRequestObjectClaims() map[string]any {
 	now := f.clock.t
 	return map[string]any{
 		"iss":                   f.clientID,
 		"aud":                   f.tk.Issuer,
-		"exp":                   now.Add(30 * time.Second).Unix(),
+		"exp":                   now.Add(5 * time.Minute).Unix(),
 		"iat":                   now.Unix(),
 		"nbf":                   now.Unix(),
 		"jti":                   freshFAPIJTI("ro"),
@@ -448,14 +448,15 @@ func TestScenario_FAPI_V2_023_RequestObjectRequiresExpAndNbf(t *testing.T) {
 }
 
 // TestScenario_FAPI_V2_024_RequestObjectExpNbfWindow pins the FAPI
-// 2.0 §5.3.2.1 / Message Signing §5.6 cap on (exp - nbf). The library
-// wires JAR's MaxLifetime to 60 seconds under any FAPI 2.0 profile
-// (op_builders.go); an exp 5 minutes past nbf exceeds the cap and the
-// JAR.assertExp gate surfaces ErrExpired with the "exp lies more than
-// ... in the future" detail, mapped to invalid_request_object by
-// writeJARError. The 5-minute target is well above the 60-second cap
-// while staying under the OFCS conformance "70-second" probe so the
-// rejection surface stays unambiguous.
+// 2.0 §5.3.2.1 / Message Signing §5.6 cap on the request object's
+// lifetime relative to "now". The library wires JAR's MaxLifetime to
+// 60 minutes under any FAPI 2.0 profile (op_builders.go); an exp 70
+// minutes ahead exceeds the cap and the JAR.assertExp gate surfaces
+// ErrExpired with the "exp lies more than ... in the future" detail,
+// mapped to invalid_request_object by writeJARError. The 70-minute
+// target matches the OFCS conformance "ensure-request-object-with-
+// exp-over-60-fails" probe so the rejection surface stays
+// unambiguous.
 //
 // Spec: FAPI 2.0 §5.3.2.1 / FAPI 2.0 Message Signing §5.6.
 func TestScenario_FAPI_V2_024_RequestObjectExpNbfWindow(t *testing.T) {
@@ -463,8 +464,8 @@ func TestScenario_FAPI_V2_024_RequestObjectExpNbfWindow(t *testing.T) {
 
 	f := newFAPIFixture(t)
 	claims := f.happyRequestObjectClaims()
-	// 5 minutes > 60 second cap → rejected by the FAPI MaxLifetime gate.
-	claims["exp"] = f.clock.t.Add(5 * time.Minute).Unix()
+	// 70 minutes > 60-minute cap → rejected by the FAPI MaxLifetime gate.
+	claims["exp"] = f.clock.t.Add(70 * time.Minute).Unix()
 	signed := f.signES256(t, claims)
 	form := url.Values{
 		"client_id": {f.clientID},
