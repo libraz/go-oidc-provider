@@ -42,6 +42,39 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   `grant_types_supported`. The `DeviceCodeStore` substore ships in
   the in-memory adapter; `op/storeadapter/{sql,redis}` follow in
   v0.9.2.
+- `op/devicecodekit` (new public sub-package) ships two embedder
+  helpers around the RFC 8628 verification page that the OP itself
+  never invokes (the verification UI lives in the embedder per
+  `op/interaction`):
+  - `devicecodekit.VerifyUserCode(ctx, deps, deviceCodeID,
+    submittedUserCode)` runs the per-record brute-force gate: it
+    canonicalises the submitted code, constant-time-compares it
+    against the stored `UserCode`, increments the strike counter on
+    mismatch, and transitions the record to Denied with reason
+    `"user_code_lockout"` after `devicecodekit.MaxUserCodeStrikes`
+    submissions (5). `op.AuditDeviceCodeUserCodeBruteForce` fires on
+    every strike; `op.AuditDeviceCodeVerificationDenied` fires on the
+    lockout transition. Submissions to a non-Pending record return
+    `ErrAlreadyDecided` without further side effects.
+  - `devicecodekit.Revoke(ctx, deps, deviceCodeID, reason)` wraps
+    `store.DeviceCodeStore.Deny` with the new
+    `op.AuditDeviceCodeRevoked` audit event. The wire-shape change is
+    a no-op (the existing `Deny` already transitions Pending →
+    Denied, and the next `/token` poll already returns
+    `access_denied`); the audit signal is the new piece. Embedders
+    who hold the user-trust posture "when a device authorization is
+    revoked, every access token issued from that device_code is
+    revoked alongside the row" subscribe to
+    `AuditDeviceCodeRevoked`, read the `device_code_id` extra, and
+    call `store.AccessTokenRegistry.RevokeByGrant(deviceCodeID)`
+    (the device_code's ID is stamped verbatim onto the GrantID
+    column of every issued access token at `Consume` time, so the
+    existing per-grant cascade is sufficient). v0.9.1 ships the
+    audit signal only; the library-side cascade walk (an
+    `IssuedAccessTokens(deviceCodeID) []string` substore extension
+    + an OP-side `RevokeByGrant` driver) is a v0.9.2 design task
+    tracked alongside the SQL / Redis substore wiring deferred from
+    v0.9.0.
 - `op.WithPairwiseSubject(salt)` and `op.WithSubjectGenerator(...)`
   (Wave O1, ADR 0029) add OIDC Core §8 pairwise subject derivation
   and an extensible generator seam. `internal/sector` resolves
@@ -75,6 +108,17 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 - `audit.introspection.error` event fires when an inbound token
   introspection request fails client authentication, completing the
   cross-endpoint authn-failure audit surface.
+- `op.PtrBool(v bool) *bool` is a small generic helper for the
+  pointer-to-bool opt-in pattern the public API uses for
+  unambiguously-tri-state fields (e.g. `TokenExchangeDecision.IssueRefreshToken`
+  defaults to nil = no refresh token, must be `op.PtrBool(true)` to
+  opt in).
+- `op.AuditTokenExchangeSubjectTokenRegistryError` event fires when
+  the in-tree RFC 8693 handler observed a non-NotFound fault from
+  `store.AccessTokenRegistry` while looking up subject_token /
+  actor_token. The wire response stays `invalid_grant`; this event
+  splits transient registry outages from real revocations so SOC
+  tooling can react separately.
 - CIBA poll mode (Wave N2). The OP now exposes the
   Client-Initiated Backchannel Authentication endpoint
   (`/oidc/bc-authorize`) and accepts
@@ -227,6 +271,43 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   original cadence indefinitely. The reference inmem adapter is
   updated; SQL / Redis adapters land in v0.9.2 and pick up the
   new contract there.
+- DCR (RFC 7591) JWE alg/enc validation across all five
+  encrypted-response client metadata families (id_token / userinfo /
+  request_object / authorization / introspection) now routes through
+  `internal/jose.ParseJWEAlg` / `ParseJWEEnc` instead of a hard-coded
+  local list. Future allowlist edits to the JOSE wrapper propagate
+  automatically; out-of-tree DCR drivers that bypass the validator
+  now share the same source of truth.
+- DCR registration also rejects half-pair alg/enc submissions
+  (e.g. `id_token_encrypted_response_alg=RSA-OAEP-256` without
+  `_enc`) with `invalid_client_metadata` instead of admitting at
+  registration and failing the first encrypted response at runtime.
+  Both-empty still admits (the client opts out of encryption for
+  that response type).
+- CIBA `/bc-authorize` hardening:
+  - Under `profile.FAPICIBA` a `requested_expiry > 600s` is now a
+    hard `invalid_request` (FAPI-CIBA-ID1 §5 / FAPI 2.0 §3.1.9
+    ten-minute cap). Vanilla CIBA keeps the existing silent-clamp
+    posture.
+  - The endpoint now validates each requested `acr_values` entry
+    against the OP's published `acr_values_supported` list whenever
+    the list is non-empty (`op.WithACRValuesSupported(...)`). An
+    empty advertised list keeps the legacy permissive posture.
+  - The endpoint now rejects a non-empty `user_code` parameter when
+    discovery advertises `backchannel_user_code_parameter_supported=false`
+    (the v0.9.1 default). Closes the silent admit-then-stamp gap.
+- Custom-grant dispatcher (`op.WithCustomGrant(...)`) now rejects a
+  non-empty `CustomGrantResponse.RefreshToken` with `server_error`.
+  Lineage-tracked persistence + rotation for handler-issued refresh
+  tokens needs design work that doesn't fit v0.9.1; until then the
+  field SHOULD be left empty. The in-tree token-exchange handler is
+  exempt — its grant_type URN is checked before the gate fires.
+- Pairwise mid-life subject-strategy gate now also probes a new
+  `__op_init` sentinel in the metadata substore so a re-used store
+  whose subject-mode marker was wiped (manual cleanup, truncate)
+  still rejects a non-public switch on the next `op.New` call. The
+  sentinel is written on every successful construction so
+  truly-fresh installs are unaffected.
 - **Breaking**: `op.WithInteraction` was renamed to
   `op.WithInteractionDriver` so the single-driver option no longer
   collides with `op.WithInteractions` (Step list).
