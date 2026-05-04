@@ -69,3 +69,29 @@ rows:
       request omits `max_age`, the issued ID Token MUST include
       `auth_time`.
     status: active
+
+  - id: AT-007
+    severity: P1
+    spec: OIDC Core §2 / RFC 8628 §3
+    behaviour: |
+      The id_token issued from a device_code redemption MUST carry the
+      `auth_time` claim populated from
+      [store.DeviceCode.AuthTime] — the wall-clock the substore stamped
+      at Approve. A zero AuthTime (legacy record / embedder did not
+      stamp one) leaves the claim absent, matching the encoder's
+      omit-on-zero posture; a client that sets `require_auth_time`
+      additionally surfaces the missing value as a 500 server_error so
+      the contract is not satisfied by silent omission.
+    status: active
+
+  - id: AT-008
+    severity: P1
+    spec: OIDC Core §2 / CIBA Core §11
+    behaviour: |
+      The id_token issued from a CIBA poll redemption MUST carry the
+      `auth_time` claim populated from
+      [store.CIBARequest.AuthTime] — the wall-clock the substore
+      stamped at Approve. A zero AuthTime leaves the claim absent
+      (omit-on-zero); a client that sets `require_auth_time`
+      additionally surfaces the missing value as a 500 server_error.
+    status: active

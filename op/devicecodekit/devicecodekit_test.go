@@ -352,7 +352,7 @@ func TestRevoke_AlreadyApprovedReturnsAlreadyDecided(t *testing.T) {
 	s := inmem.New()
 	ds := s.DeviceCodes()
 	makePendingRecord(t, ds, "dev-rev-2", "ABCDEFGH")
-	if err := ds.Approve(ctx, "dev-rev-2", "user-1"); err != nil {
+	if err := ds.Approve(ctx, "dev-rev-2", "user-1", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 

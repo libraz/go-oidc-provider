@@ -19,12 +19,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func simulateDeviceApproval(ctx context.Context, logger *slog.Logger, st *inmem.Store, authReqID string) error {
-	if err := st.CIBARequests().Approve(ctx, authReqID, demoSubject); err != nil {
+	if err := st.CIBARequests().Approve(ctx, authReqID, demoSubject, time.Now().UTC()); err != nil {
 		return err
 	}
 	logger.Info("device approved auth_req_id",

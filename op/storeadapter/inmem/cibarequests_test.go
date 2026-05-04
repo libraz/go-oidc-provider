@@ -78,10 +78,11 @@ func TestCIBARequests_ApproveDenyConsume(t *testing.T) {
 	if err := cs.Save(ctx, rec); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := cs.Approve(ctx, "ap-id", "user-42"); err != nil {
+	authTime := time.Now().UTC().Truncate(time.Second)
+	if err := cs.Approve(ctx, "ap-id", "user-42", authTime); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
-	if err := cs.Approve(ctx, "ap-id", "user-42"); !errors.Is(err, store.ErrConflict) {
+	if err := cs.Approve(ctx, "ap-id", "user-42", authTime); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("double Approve: want ErrConflict, got %v", err)
 	}
 	consumed, err := cs.Consume(ctx, "ap-id")
@@ -90,6 +91,9 @@ func TestCIBARequests_ApproveDenyConsume(t *testing.T) {
 	}
 	if consumed.Subject != "user-42" {
 		t.Errorf("Consume.Subject = %q, want user-42", consumed.Subject)
+	}
+	if !consumed.AuthTime.Equal(authTime) {
+		t.Errorf("Consume.AuthTime = %v, want %v", consumed.AuthTime, authTime)
 	}
 	if consumed.Status != store.CIBARequestStatusConsumed {
 		t.Errorf("Consume.Status = %v, want Consumed", consumed.Status)
@@ -256,7 +260,7 @@ func TestCIBARequests_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := cs.Approve(ctx, concurrentAuthReqID(i), "user-"+concurrentAuthReqID(i))
+			err := cs.Approve(ctx, concurrentAuthReqID(i), "user-"+concurrentAuthReqID(i), time.Time{})
 			switch {
 			case err == nil:
 			case errors.Is(err, store.ErrConflict):

@@ -352,13 +352,20 @@ func issueCIBAResponse(
 	if len(authorized.Audience) > 0 {
 		resource = authorized.Audience[0]
 	}
-	// auth_time threading: the substore does not retain a
-	// dedicated auth_time column today, so the issuance path
-	// threads zero (consistent with the encoder's omit-on-zero
-	// behaviour) and leaves the end-user-time precision for a
-	// follow-on column add. The same posture applies to the
-	// device flow.
-	authTime := int64(0)
+	// auth_time is the wall-clock at which the end user completed the
+	// authentication-device interaction —
+	// store.CIBARequestStore.Approve stamps it onto the record. A
+	// zero value means the substore did not retain an auth_time
+	// (legacy records persisted before the column was introduced);
+	// the encoder omits the claim in that case, matching OIDC Core
+	// 1.0 §2's "OPTIONAL unless the client requires it" posture.
+	// Clients that set RequireAuthTime block id_token issuance via
+	// requireAuthTimeForIDToken below when the value is zero.
+	if err := requireAuthTimeForIDToken(client, authorized.Scope, authTimeUnix(authorized.AuthTime)); err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		return
+	}
+	authTime := authTimeUnix(authorized.AuthTime)
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
@@ -382,6 +389,7 @@ func issueCIBAResponse(
 			ClientID:    client.ID,
 			AccessToken: accessToken,
 			Now:         now,
+			AuthTime:    authTime,
 			ACRValues:   authorized.ACRValues,
 		})
 		if err != nil {
@@ -438,6 +446,7 @@ type cibaIDTokenInput struct {
 	ClientID    string
 	AccessToken string
 	Now         time.Time
+	AuthTime    int64
 	ACRValues   []string
 }
 
@@ -447,7 +456,9 @@ type cibaIDTokenInput struct {
 // redemption and matches the spec's "ID Token issued from a
 // Token Endpoint" shape. c_hash is omitted because CIBA has no
 // authorization code to bind. nonce is omitted because the
-// v0.9.x substore does not retain one.
+// v0.9.x substore does not retain one. auth_time is populated
+// when the substore stamped a non-zero value at Approve time;
+// the encoder omits the claim on zero.
 func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {
 	claims := tokens.IDTokenClaims{
 		Issuer:    deps.Issuer,
@@ -456,6 +467,7 @@ func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {
 		IssuedAt:  in.Now.Unix(),
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
 		AtHash:    tokens.Hash(in.AccessToken),
+		AuthTime:  in.AuthTime,
 	}
 	if len(in.ACRValues) > 0 {
 		claims.ACR = in.ACRValues[0]

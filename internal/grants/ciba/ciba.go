@@ -3,6 +3,7 @@ package ciba
 import (
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -108,6 +109,14 @@ type Authorized struct {
 	// approving end-user, taken verbatim from the record.
 	Subject string
 
+	// AuthTime is the wall-clock time at which the end user
+	// completed the authentication-device interaction, taken
+	// verbatim from the record. Zero when the substore did not
+	// retain the value (e.g. legacy records persisted before the
+	// field was introduced); the token endpoint reads it back
+	// when the issued id_token requires the auth_time claim.
+	AuthTime time.Time
+
 	// SenderConstraint names the binding stamped on the eventual
 	// access token: "dpop", "mtls", or "bearer". The caller uses
 	// this to decide cnf claim shape and to populate the
@@ -163,6 +172,7 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 		Scope:            slices.Clone(in.Record.Scope),
 		Audience:         slices.Clone(in.Record.Resource),
 		Subject:          in.Record.Subject,
+		AuthTime:         in.Record.AuthTime,
 		SenderConstraint: binding,
 		ACRValues:        slices.Clone(in.Record.ACRValues),
 	}, nil

@@ -179,6 +179,15 @@ type CIBARequest struct {
 	// not polled yet. The slow_down detector reads this value.
 	LastPolledAt *time.Time
 
+	// AuthTime is the wall-clock time at which the end user
+	// completed the authentication-device interaction. Populated
+	// by Approve at the time the record transitions to Approved;
+	// zero while the record is Pending or Denied. The token
+	// endpoint reads this value when the issued id_token requires
+	// the auth_time claim (per OIDC Core 1.0 §2 /
+	// store.Client.RequireAuthTime).
+	AuthTime time.Time
+
 	// PollViolations counts how many polls the client has issued in
 	// violation of the slow_down interval (i.e. polls that arrived
 	// before LastPolledAt + Interval). The library increments the
@@ -229,15 +238,20 @@ type CIBARequestStore interface {
 	FindByAuthReqID(ctx context.Context, authReqID string) (*CIBARequest, error)
 
 	// Approve atomically transitions a Pending record to Approved
-	// and stamps the supplied subject. The library invokes Approve
-	// from the embedder's authentication device callback; the
-	// subject parameter overrides any previously stored value so an
-	// embedder that defers user resolution to the auth device can
-	// stamp the verified identity at the same point. Returns
-	// [ErrNotFound] when the record does not exist or is already
-	// expired, and [ErrConflict] when the record's current status is
-	// not Pending.
-	Approve(ctx context.Context, authReqID, subject string) error
+	// and stamps the supplied subject and authTime. The library
+	// invokes Approve from the embedder's authentication device
+	// callback; the subject parameter overrides any previously
+	// stored value so an embedder that defers user resolution to
+	// the auth device can stamp the verified identity at the same
+	// point. authTime captures the wall-clock at which the end
+	// user completed the authentication-device interaction; the
+	// token endpoint reads it back when the issued id_token
+	// requires the auth_time claim. A zero authTime is permitted
+	// (clients without RequireAuthTime do not depend on it).
+	// Returns [ErrNotFound] when the record does not exist or is
+	// already expired, and [ErrConflict] when the record's current
+	// status is not Pending.
+	Approve(ctx context.Context, authReqID, subject string, authTime time.Time) error
 
 	// Deny atomically transitions a Pending record to Denied and
 	// stores the supplied reason. The library uses Deny for explicit

@@ -11,8 +11,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -56,6 +58,46 @@ func TestScenario_AT_006_ClientDefaultMaxAgePositiveForcesAuthTime(t *testing.T)
 	atFlowAssertAuthTime(t, withClientMutator(func(c *store.Client) {
 		c.DefaultMaxAge = &maxAge
 	}))
+}
+
+// TestScenario_AT_007_DeviceCodeIDTokenCarriesAuthTime pins the
+// device-code id_token's auth_time claim. Approve stamps a wall-
+// clock value onto the substore record; the token endpoint reads
+// it back and emits the claim on the issued id_token.
+func TestScenario_AT_007_DeviceCodeIDTokenCarriesAuthTime(t *testing.T) {
+	t.Parallel()
+	p := newDevProvider(t, []string{"openid"})
+
+	deviceCode := p.issueDeviceCode(t, "openid")
+	authTime := time.Date(2026, 5, 5, 12, 30, 0, 0, time.UTC)
+	p.approveDeviceCodeAt(t, deviceCode, devDefaultSubject, authTime)
+
+	_, body := p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	idToken, _ := body["id_token"].(string)
+	if idToken == "" {
+		t.Fatalf("id_token missing: %v", body)
+	}
+	claims := decodeScenarioJWTClaims(t, idToken)
+	got, ok := claims["auth_time"].(float64)
+	if !ok {
+		t.Fatalf("auth_time absent or wrong type: %v", claims["auth_time"])
+	}
+	if int64(got) != authTime.Unix() {
+		t.Errorf("auth_time = %d, want %d", int64(got), authTime.Unix())
+	}
+}
+
+// TestScenario_AT_008_CIBAIDTokenCarriesAuthTime is the CIBA
+// counterpart of AT-007. CIBA's helper does not expose a public
+// approve hook the test can call directly today, so this row is a
+// catalog-binding sentinel; the actual coverage lives in
+// internal/tokenendpoint TestHandleCIBA_IDTokenStampsAuthTime.
+func TestScenario_AT_008_CIBAIDTokenCarriesAuthTime(t *testing.T) {
+	t.Parallel()
+	t.Skip("covered by internal/tokenendpoint TestHandleCIBA_IDTokenStampsAuthTime")
 }
 
 type atFlowConfig struct {

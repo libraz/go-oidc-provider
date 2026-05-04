@@ -328,15 +328,20 @@ func issueDeviceCodeResponse(
 	if len(authorized.Audience) > 0 {
 		resource = authorized.Audience[0]
 	}
-	// The device flow stamps an end-user authentication time when the
-	// verification ceremony approves: Approve writes Subject and the
-	// record's IssuedAt is the closest proxy for "time the user was
-	// in front of the OP". OIDC Core 1.0 §2 lists auth_time as
-	// OPTIONAL on id_token; the substore does not retain a separate
-	// auth_time column today, so the issuance path threads zero
-	// (consistent with the encoder's omit-on-zero behaviour) and
-	// leaves the end-user-time precision for a follow-on column add.
-	authTime := int64(0)
+	// auth_time is the wall-clock at which the end user completed the
+	// verification ceremony — store.DeviceCodeStore.Approve stamps it
+	// onto the record. A zero value means the substore did not retain
+	// an auth_time (legacy records persisted before the column was
+	// introduced); the encoder omits the claim in that case, matching
+	// OIDC Core 1.0 §2's "OPTIONAL unless the client requires it"
+	// posture. Clients that set RequireAuthTime block id_token
+	// issuance via requireAuthTimeForIDToken below when the value is
+	// zero.
+	if err := requireAuthTimeForIDToken(client, authorized.Scope, authTimeUnix(authorized.AuthTime)); err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		return
+	}
+	authTime := authTimeUnix(authorized.AuthTime)
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
@@ -360,6 +365,7 @@ func issueDeviceCodeResponse(
 			ClientID:    client.ID,
 			AccessToken: accessToken,
 			Now:         now,
+			AuthTime:    authTime,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -414,6 +420,7 @@ type deviceCodeIDTokenInput struct {
 	ClientID    string
 	AccessToken string
 	Now         time.Time
+	AuthTime    int64
 }
 
 // mintDeviceCodeIDToken signs the id_token issued in response to a
@@ -424,7 +431,9 @@ type deviceCodeIDTokenInput struct {
 // code to bind. nonce is omitted because RFC 8628 has no path for
 // the device to commit one at /device_authorization (the embedder
 // MAY surface one through the verification page, but the v0.9.1
-// substore does not retain it).
+// substore does not retain it). auth_time is populated when the
+// substore stamped a non-zero value at Approve time; the encoder
+// omits the claim on zero.
 func mintDeviceCodeIDToken(deps Deps, in deviceCodeIDTokenInput) (string, error) {
 	claims := tokens.IDTokenClaims{
 		Issuer:    deps.Issuer,
@@ -433,8 +442,20 @@ func mintDeviceCodeIDToken(deps Deps, in deviceCodeIDTokenInput) (string, error)
 		IssuedAt:  in.Now.Unix(),
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
 		AtHash:    tokens.Hash(in.AccessToken),
+		AuthTime:  in.AuthTime,
 	}
 	return tokens.SignIDToken(activeSigningKey(deps), claims)
+}
+
+// authTimeUnix collapses a wall-clock auth_time into the seconds-
+// since-epoch value the id_token claim encodes. A zero time
+// returns zero so the encoder's omit-on-zero behaviour stays
+// active and the claim is left absent on legacy records.
+func authTimeUnix(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
 }
 
 // derefTime returns the dereferenced value of t, or the zero time

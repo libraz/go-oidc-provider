@@ -68,13 +68,14 @@ func (s *cibaRequestStore) FindByAuthReqID(_ context.Context, authReqID string) 
 	return out, nil
 }
 
-func (s *cibaRequestStore) Approve(_ context.Context, authReqID, subject string) error {
+func (s *cibaRequestStore) Approve(_ context.Context, authReqID, subject string, authTime time.Time) error {
 	return s.transition(authReqID, func(rec *store.CIBARequest) error {
 		if rec.Status != store.CIBARequestStatusPending {
 			return store.ErrConflict
 		}
 		rec.Status = store.CIBARequestStatusApproved
 		rec.Subject = subject
+		rec.AuthTime = authTime
 		return nil
 	})
 }

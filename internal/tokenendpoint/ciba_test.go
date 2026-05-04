@@ -204,7 +204,7 @@ func TestHandleCIBA_ConsumedRecord_ExpiredToken(t *testing.T) {
 		Status: store.CIBARequestStatusPending,
 	})
 	// Approve then consume to land in the Consumed state.
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-consumed", "user-1"); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-consumed", "user-1", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	if _, err := f.store.CIBARequests().Consume(context.Background(), "auth-req-consumed"); err != nil {
@@ -230,7 +230,7 @@ func TestHandleCIBA_ApprovedRecord_HappyPath(t *testing.T) {
 		Scope:  []string{"openid", "profile"},
 		Status: store.CIBARequestStatusPending,
 	})
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-ok", "user-42"); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-ok", "user-42", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	form := url.Values{}
@@ -327,8 +327,8 @@ func (s recordPollFailingStore) FindByAuthReqID(ctx context.Context, id string) 
 	return s.inner.FindByAuthReqID(ctx, id)
 }
 
-func (s recordPollFailingStore) Approve(ctx context.Context, id, subject string) error {
-	return s.inner.Approve(ctx, id, subject)
+func (s recordPollFailingStore) Approve(ctx context.Context, id, subject string, authTime time.Time) error {
+	return s.inner.Approve(ctx, id, subject, authTime)
 }
 
 func (s recordPollFailingStore) Deny(ctx context.Context, id, reason string) error {
@@ -422,6 +422,77 @@ func TestHandleCIBA_RecordPollFault_EmitsWarn(t *testing.T) {
 	}
 }
 
+// TestHandleCIBA_IDTokenStampsAuthTime pins the auth_time wiring:
+// the wall-clock value the substore stamped at Approve flows
+// through the grant-side Authorized struct and onto the issued
+// id_token's auth_time claim. The substore-zero arm is covered by
+// TestHandleCIBA_RequireAuthTime_MissingAuthTimeFails.
+func TestHandleCIBA_IDTokenStampsAuthTime(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	authTime := f.clock.now.Add(-30 * time.Second).UTC()
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:     "auth-req-at",
+		Scope:  []string{"openid"},
+		Status: store.CIBARequestStatusPending,
+	})
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-at", "user-7", authTime); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "auth-req-at")
+	rec := f.post(t, form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		IDToken string `json:"id_token"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	claims := decodeIDTokenClaims(t, body.IDToken)
+	got, ok := claims["auth_time"].(float64)
+	if !ok {
+		t.Fatalf("auth_time absent or wrong type: %v", claims["auth_time"])
+	}
+	if int64(got) != authTime.Unix() {
+		t.Errorf("auth_time = %d, want %d", int64(got), authTime.Unix())
+	}
+}
+
+// TestHandleCIBA_RequireAuthTime_MissingAuthTimeFails pins the
+// gate that protects clients that set RequireAuthTime: when the
+// substore returns a zero AuthTime (legacy record / embedder did
+// not pass one) the issuance path MUST refuse to mint the id_token
+// rather than emit a claim-less response that satisfies the
+// per-client "auth_time required" contract by silent omission.
+func TestHandleCIBA_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	updated := *f.client
+	updated.RequireAuthTime = true
+	if err := f.store.UpdateClient(context.Background(), &updated); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:     "auth-req-need-at",
+		Scope:  []string{"openid"},
+		Status: store.CIBARequestStatusPending,
+	})
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-need-at", "user-x", time.Time{}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "auth-req-need-at")
+	rec := f.post(t, form)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestHandleCIBA_IDTokenStampsACRWithoutAMR pins the acr/amr
 // contract on the CIBA-issued id_token: when the persisted record
 // carries one or more requested ACR values, the issued id_token
@@ -439,7 +510,7 @@ func TestHandleCIBA_IDTokenStampsACRWithoutAMR(t *testing.T) {
 		Status:    store.CIBARequestStatusPending,
 		ACRValues: []string{"urn:mace:incommon:iap:bronze", "urn:mace:incommon:iap:silver"},
 	})
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-acr", "user-42"); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-acr", "user-42", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	form := url.Values{}

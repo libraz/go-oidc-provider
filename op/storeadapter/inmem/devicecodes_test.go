@@ -88,10 +88,11 @@ func TestDeviceCodes_ApproveDenyConsume(t *testing.T) {
 	if err := ds.Save(ctx, rec); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := ds.Approve(ctx, "ap-id", "user-42"); err != nil {
+	authTime := time.Now().UTC().Truncate(time.Second)
+	if err := ds.Approve(ctx, "ap-id", "user-42", authTime); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
-	if err := ds.Approve(ctx, "ap-id", "user-42"); !errors.Is(err, store.ErrConflict) {
+	if err := ds.Approve(ctx, "ap-id", "user-42", authTime); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("double Approve: want ErrConflict, got %v", err)
 	}
 	consumed, err := ds.Consume(ctx, "ap-id")
@@ -100,6 +101,9 @@ func TestDeviceCodes_ApproveDenyConsume(t *testing.T) {
 	}
 	if consumed.Subject != "user-42" {
 		t.Errorf("Consume.Subject = %q, want user-42", consumed.Subject)
+	}
+	if !consumed.AuthTime.Equal(authTime) {
+		t.Errorf("Consume.AuthTime = %v, want %v", consumed.AuthTime, authTime)
 	}
 	if consumed.Status != store.DeviceCodeStatusConsumed {
 		t.Errorf("Consume.Status = %v, want Consumed", consumed.Status)
@@ -344,7 +348,7 @@ func TestDeviceCodes_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := ds.Approve(ctx, concurrentDeviceID(i), "user-"+concurrentDeviceID(i))
+			err := ds.Approve(ctx, concurrentDeviceID(i), "user-"+concurrentDeviceID(i), time.Time{})
 			switch {
 			case err == nil:
 			case errors.Is(err, store.ErrConflict):

@@ -100,13 +100,14 @@ func (s *deviceCodeStore) FindByUserCode(_ context.Context, userCode string) (*s
 	return out, nil
 }
 
-func (s *deviceCodeStore) Approve(_ context.Context, deviceCode, subject string) error {
+func (s *deviceCodeStore) Approve(_ context.Context, deviceCode, subject string, authTime time.Time) error {
 	return s.transition(deviceCode, func(rec *store.DeviceCode) error {
 		if rec.Status != store.DeviceCodeStatusPending {
 			return store.ErrConflict
 		}
 		rec.Status = store.DeviceCodeStatusApproved
 		rec.Subject = subject
+		rec.AuthTime = authTime
 		return nil
 	})
 }

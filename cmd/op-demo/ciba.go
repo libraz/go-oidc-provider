@@ -72,7 +72,7 @@ func (a *autoApprovingCIBA) approveAfterDelay(authReqID, subject string) {
 	case <-a.ctx.Done():
 		return
 	}
-	err := a.inner.Approve(a.ctx, authReqID, subject)
+	err := a.inner.Approve(a.ctx, authReqID, subject, time.Now().UTC())
 	switch {
 	case err == nil:
 		a.log.Info("ciba auto-approved",
@@ -92,8 +92,8 @@ func (a *autoApprovingCIBA) FindByAuthReqID(ctx context.Context, id string) (*st
 	return a.inner.FindByAuthReqID(ctx, id)
 }
 
-func (a *autoApprovingCIBA) Approve(ctx context.Context, id, subject string) error {
-	return a.inner.Approve(ctx, id, subject)
+func (a *autoApprovingCIBA) Approve(ctx context.Context, id, subject string, authTime time.Time) error {
+	return a.inner.Approve(ctx, id, subject, authTime)
 }
 
 func (a *autoApprovingCIBA) Deny(ctx context.Context, id, reason string) error {

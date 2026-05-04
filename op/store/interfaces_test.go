@@ -366,7 +366,9 @@ func (fakeDeviceCodeStore) FindByUserCode(context.Context, string) (*store.Devic
 	return nil, store.ErrNotFound
 }
 
-func (fakeDeviceCodeStore) Approve(context.Context, string, string) error { return store.ErrNotFound }
+func (fakeDeviceCodeStore) Approve(context.Context, string, string, time.Time) error {
+	return store.ErrNotFound
+}
 
 func (fakeDeviceCodeStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
 
@@ -392,7 +394,9 @@ func (fakeCIBARequestStore) FindByAuthReqID(context.Context, string) (*store.CIB
 	return nil, store.ErrNotFound
 }
 
-func (fakeCIBARequestStore) Approve(context.Context, string, string) error { return store.ErrNotFound }
+func (fakeCIBARequestStore) Approve(context.Context, string, string, time.Time) error {
+	return store.ErrNotFound
+}
 
 func (fakeCIBARequestStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
 

@@ -189,9 +189,20 @@ func (p *devProvider) issueDeviceCode(t *testing.T, scope string) string {
 // the embedder (catalog rows DEV-060..DEV-090 OOS), so tests that
 // drive the polling path skip the form by writing the same status the
 // embedder's interaction.Driver would write after a confirm click.
+// AuthTime is stamped with the current wall clock; tests that assert
+// the id_token auth_time go through approveDeviceCodeAt to control
+// the stamped value directly.
 func (p *devProvider) approveDeviceCode(t *testing.T, deviceCode, subject string) {
 	t.Helper()
-	if err := p.tk.Store.DeviceCodes().Approve(context.Background(), deviceCode, subject); err != nil {
+	p.approveDeviceCodeAt(t, deviceCode, subject, time.Now().UTC())
+}
+
+// approveDeviceCodeAt is the deterministic variant of
+// [approveDeviceCode]: callers supply the AuthTime the substore
+// stamps so id_token auth_time assertions remain stable across runs.
+func (p *devProvider) approveDeviceCodeAt(t *testing.T, deviceCode, subject string, authTime time.Time) {
+	t.Helper()
+	if err := p.tk.Store.DeviceCodes().Approve(context.Background(), deviceCode, subject, authTime); err != nil {
 		t.Fatalf("DeviceCodes.Approve: %v", err)
 	}
 }

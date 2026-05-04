@@ -159,6 +159,14 @@ type DeviceCode struct {
 	// is Pending or Denied.
 	Subject string
 
+	// AuthTime is the wall-clock time at which the end user
+	// completed the verification ceremony. Populated by Approve at
+	// the time the record transitions to Approved; zero while the
+	// record is Pending or Denied. The token endpoint reads this
+	// value when the issued id_token requires the auth_time claim
+	// (per OIDC Core 1.0 §2 / store.Client.RequireAuthTime).
+	AuthTime time.Time
+
 	// DenyReason names the cause of denial when Status is
 	// DeviceCodeStatusDenied. The library populates this with
 	// "user_denied", "user_code_lockout", or an embedder-supplied
@@ -215,14 +223,19 @@ type DeviceCodeStore interface {
 	FindByUserCode(ctx context.Context, userCode string) (*DeviceCode, error)
 
 	// Approve atomically transitions a Pending record to Approved
-	// and stamps the supplied subject. Returns [ErrNotFound] when
-	// the record does not exist or is already expired, and
-	// [ErrConflict] when the record's current status is not
-	// Pending (a duplicate approval, a post-deny approval, or a
-	// post-consume approval all collapse to ErrConflict so the
-	// verification page can surface a single "already decided"
-	// message).
-	Approve(ctx context.Context, deviceCode, subject string) error
+	// and stamps the supplied subject and authTime. authTime
+	// captures the wall-clock at which the end user completed the
+	// verification ceremony; the library reads it back at the
+	// token endpoint when the issued id_token requires the
+	// auth_time claim. A zero authTime is permitted (clients
+	// without RequireAuthTime do not depend on it).
+	// Returns [ErrNotFound] when the record does not exist or is
+	// already expired, and [ErrConflict] when the record's current
+	// status is not Pending (a duplicate approval, a post-deny
+	// approval, or a post-consume approval all collapse to
+	// ErrConflict so the verification page can surface a single
+	// "already decided" message).
+	Approve(ctx context.Context, deviceCode, subject string, authTime time.Time) error
 
 	// Deny atomically transitions a Pending record to Denied and
 	// stores the supplied reason. The library uses Deny both for
