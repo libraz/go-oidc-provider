@@ -89,6 +89,7 @@ CLIENT_ID="demo-client"
 REDIRECT_URIS="\
 https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-basic/callback,\
 https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-config/callback,\
+https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-dynamic/callback,\
 https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-formpost/callback,\
 https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-rp-init-logout/callback,\
 https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-bc-logout/callback,\

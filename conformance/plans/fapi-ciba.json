@@ -29,10 +29,8 @@
   },
   "variant": {
     "client_auth_type": "private_key_jwt",
-    "sender_constrain": "dpop",
-    "fapi_profile": "plain_fapi",
+    "fapi_ciba_profile": "plain_fapi",
     "ciba_mode": "poll",
-    "fapi_request_method": "signed_non_repudiation",
     "client_registration": "static_client"
   },
   "browser": []

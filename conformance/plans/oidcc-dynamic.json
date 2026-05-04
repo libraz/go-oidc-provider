@@ -1,0 +1,20 @@
+{
+  "alias": "go-oidc-oidcc-dynamic",
+  "publish": "summary",
+  "description": "go-oidc-provider — oidcc-dynamic-certification (Discovery + Dynamic Client Registration)",
+  "consent": false,
+  "server": {
+    "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
+  },
+  "client": {
+    "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-dynamic/callback",
+    "scope": "openid profile email"
+  },
+  "client2": {
+    "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-dynamic/callback"
+  },
+  "variant": {
+    "response_type": "code"
+  },
+  "browser": []
+}

@@ -20,8 +20,14 @@ from .paths import BASELINES_DIR, PLAN_IDS_FILE, ROOT
 # single-config compromise that fails 2/3 plans by construction.
 _PLAN_PROFILE: dict[str, str] = {
     "oidcc-basic-certification-test-plan": "basic",
+    "oidcc-config-certification-test-plan": "basic",
+    "oidcc-dynamic-certification-test-plan": "basic",
+    "oidcc-formpost-basic-certification-test-plan": "basic",
+    "oidcc-rp-initiated-logout-certification-test-plan": "basic",
+    "oidcc-backchannel-rp-initiated-logout-certification-test-plan": "basic",
     "fapi2-security-profile-id2-test-plan": "fapi2-baseline",
     "fapi2-message-signing-id1-test-plan": "fapi2-message-signing",
+    "fapi-ciba-id1-test-plan": "fapi-ciba",
 }
 
 _DISCOVERY_URL = "https://127.0.0.1:9443/.well-known/openid-configuration"

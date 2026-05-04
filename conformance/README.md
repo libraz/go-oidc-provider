@@ -1,13 +1,14 @@
 # go-oidc-provider — OFCS Conformance Harness
 
 This directory carries the artifacts needed to run go-oidc-provider
-against the [OpenID Foundation Conformance Suite][ofcs]. Eight plans
+against the [OpenID Foundation Conformance Suite][ofcs]. Nine plans
 are scaffolded:
 
 | Plan file                               | Profile                  | What it exercises                            |
 | --------------------------------------- | ------------------------ | -------------------------------------------- |
 | `plans/oidcc-basic.json`                | `oidcc-basic`            | Authorization Code + PKCE, ID token, UserInfo |
 | `plans/oidcc-config.json`               | `oidcc-config`           | Discovery document + JWKS shape              |
+| `plans/oidcc-dynamic.json`              | `oidcc-dynamic`          | Discovery + Dynamic Client Registration      |
 | `plans/oidcc-formpost.json`             | `oidcc-formpost-basic`   | Authorization Code + `response_mode=form_post` |
 | `plans/oidcc-rp-initiated-logout.json`  | `oidcc-rp-init-logout`   | OpenID Connect RP-Initiated Logout 1.0       |
 | `plans/oidcc-back-channel-logout.json`  | `oidcc-back-channel-rp-initiated-logout` | RP-Initiated + back-channel `logout_token` |
@@ -154,6 +155,7 @@ conformance/
 └── plans/                ← OFCS plan templates (committed)
     ├── oidcc-basic.json
     ├── oidcc-config.json
+    ├── oidcc-dynamic.json
     ├── oidcc-formpost.json
     ├── oidcc-rp-initiated-logout.json
     ├── oidcc-back-channel-logout.json
@@ -186,6 +188,10 @@ flake is ruled out for any plan that didn't, and a final pass runs
 op-demo under the race detector with zero `WARNING: DATA RACE` hits".
 The ceremony is manual; CI does not gate on it because OFCS runtime
 exceeds the budget of a hobby-OSS pipeline.
+
+The OP_ENABLE_DCR=1 flag is required for `oidcc-dynamic` and
+`oidcc-back-channel-logout` (both use OFCS's dynamic_client variant
+to mint per-test client records).
 
 ### One-time setup per machine
 

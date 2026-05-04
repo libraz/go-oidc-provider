@@ -18,10 +18,7 @@
   },
   "variant": {
     "server_metadata": "discovery",
-    "client_registration": "static_client",
-    "response_type": "code",
-    "response_mode": "form_post",
-    "client_auth_type": "client_secret_basic"
+    "client_registration": "static_client"
   },
   "browser": []
 }

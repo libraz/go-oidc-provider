@@ -17,9 +17,10 @@ from .paths import CERTS, PLAN_IDS_FILE, PLANS_DIR
 _PLANS = [
     ("oidcc-basic.json", "oidcc-basic-certification-test-plan"),
     ("oidcc-config.json", "oidcc-config-certification-test-plan"),
+    ("oidcc-dynamic.json", "oidcc-dynamic-certification-test-plan"),
     ("oidcc-formpost.json", "oidcc-formpost-basic-certification-test-plan"),
     ("oidcc-rp-initiated-logout.json", "oidcc-rp-initiated-logout-certification-test-plan"),
-    ("oidcc-back-channel-logout.json", "oidcc-back-channel-rp-initiated-logout-certification-test-plan"),
+    ("oidcc-back-channel-logout.json", "oidcc-backchannel-rp-initiated-logout-certification-test-plan"),
     ("fapi2-baseline.json", "fapi2-security-profile-id2-test-plan"),
     ("fapi2-message-signing.json", "fapi2-message-signing-id1-test-plan"),
     ("fapi-ciba.json", "fapi-ciba-id1-test-plan"),
