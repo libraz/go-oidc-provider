@@ -8,13 +8,17 @@
   },
   "client": {
     "client_id": "demo-confidential",
-    "client_secret": "demo-confidential-secret",
+    "client_secret": "demo-confidential-secret-32-bytes-min",
     "redirect_uri": "https://localhost.emobix.co.uk:8443/test/a/go-oidc-oidcc-formpost/callback",
     "scope": "openid profile email"
   },
+  "client_secret_post": {
+    "client_id": "demo-confidential-post",
+    "client_secret": "demo-confidential-secret-32-bytes-min"
+  },
   "client2": {
     "client_id": "demo-confidential-2",
-    "client_secret": "demo-confidential-secret"
+    "client_secret": "demo-confidential-secret-32-bytes-min"
   },
   "variant": {
     "server_metadata": "discovery",

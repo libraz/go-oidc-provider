@@ -252,13 +252,18 @@ cmd_op_up() {
   echo "[op-up] building ${BINFILE}"
   ( cd "${ROOT}" && go build "${build_args[@]}" -o "${BINFILE}" ./cmd/op-demo )
 
-  # OP_ENABLE_DCR=1 turns on Dynamic Client Registration. Required by
+  # OP_ENABLE_DCR controls Dynamic Client Registration. Required by
   # the oidcc-dynamic plan and by oidcc-back-channel-rp-initiated-
-  # logout's dynamic_client variant. Op-demo prints the resulting IAT
-  # to stdout (captured in ${LOGFILE}) so the operator can paste it
-  # into OFCS.
+  # logout's dynamic_client variant; harmless to other plans because
+  # they ignore registration_endpoint when present in discovery. The
+  # default is therefore "1" (on) so a single op-up serves every
+  # seeded plan without the operator having to remember to set the
+  # env var per-plan. Set OP_ENABLE_DCR=0 to opt out (e.g. when
+  # measuring discovery surface against a non-DCR profile).
+  # Op-demo prints the resulting IAT to stdout (captured in ${LOGFILE})
+  # so the operator can paste it into OFCS.
   dcr_flag=()
-  if [[ "${OP_ENABLE_DCR:-}" == "1" ]]; then
+  if [[ "${OP_ENABLE_DCR:-1}" == "1" ]]; then
     dcr_flag+=(-enable-dcr)
   fi
 
@@ -269,7 +274,7 @@ cmd_op_up() {
   # WithProfile + the features the profile demands (PAR / DPoP).
   # OP_PROFILE=fapi-ciba activates the FAPI-CIBA profile and the
   # auto-approving CIBA substore wrapper.
-  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic}, dcr=${OP_ENABLE_DCR:-0})"
+  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic}, dcr=${OP_ENABLE_DCR:-1})"
   "${BINFILE}" \
     -listen "${LISTEN}" \
     -issuer "${ISSUER}" \
