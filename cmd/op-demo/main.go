@@ -24,6 +24,18 @@
 //	    -tls-cert ./localhost.pem \
 //	    -tls-key  ./localhost-key.pem
 //
+// To run a specific OFCS plan, pair the binary with the matching
+// -profile flag. The wiring each profile activates lives in its own
+// file so an implementer reproducing OFCS reads one place per plan:
+//
+//	-profile=fapi2-baseline         → cmd/op-demo/profile_fapi2.go
+//	-profile=fapi2-message-signing  → cmd/op-demo/profile_fapi2.go
+//	-profile=fapi-ciba              → cmd/op-demo/profile_fapi_ciba.go
+//
+// The reproduce recipe (which OFCS test plan, which alias, which
+// op-demo flags) lives at
+// https://go-oidc-provider.libraz.net/compliance/ofcs-reproduce.
+//
 // In production embedders read keys from a vault / KMS and persist
 // records in a real backend; this binary deliberately wires neither
 // so the moving parts stay visible.
@@ -48,7 +60,6 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
-	opgrant "github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -128,7 +139,7 @@ func mainErr() error {
 		// by -client-id alone is incompatible with those plans by
 		// design. Override either flag to reseed at startup.
 		confClientID  = flag.String("confidential-client-id", "demo-confidential", "client_id of the confidential seed client (client_secret_basic auth). Empty disables the confidential seed.")
-		confClientSec = flag.String("confidential-client-secret", "demo-confidential-secret", "client_secret for the confidential seed client. Empty disables the confidential seed.")
+		confClientSec = flag.String("confidential-client-secret", "demo-confidential-secret-32-bytes-min", "client_secret for the confidential seed client. Empty disables the confidential seed. The default is sized at 36 bytes (>= 32) so OFCS modules that derive an HS256-signed JWT from the secret (e.g. oidcc-rp-initiated-logout-bad-id-token-hint, which signs an id_token_hint with HS256) can satisfy RFC 7518 §3.2's 256-bit key requirement.")
 		profileFlag   = flag.String("profile", "", "security profile to activate. One of: \"\" (no profile, vanilla OIDC Core), \"fapi2-baseline\", \"fapi2-message-signing\", \"fapi-ciba\". Profiles auto-enable the features they require (PAR, DPoP, JAR).")
 		// FAPI test client JWKS paths. Each file holds the PUBLIC
 		// half (kty/crv/x/y/kid only — "d" is stripped if present)
@@ -291,9 +302,12 @@ func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op
 }
 
 // buildOptions assembles the [op.Option] slice [run] hands to op.New.
-// The helper exists so [run] stays under the gocognit budget; the
-// branch points (profile selection, FAPI-only DPoP enable, optional
-// confidential client seeding) live here, not inline.
+// The shape is "common base + profile-specific extras + DCR opt-in".
+// Profile-specific wiring is dispatched to per-profile files so each
+// plan's full configuration is readable in one place:
+//
+//   - fapi2-baseline / fapi2-message-signing → profile_fapi2.go
+//   - fapi-ciba → profile_fapi_ciba.go
 //
 // opStore is the [store.Store] passed to [op.WithStore] — typically
 // the in-memory store, optionally wrapped by [cibaAutoApproveStore]
@@ -306,11 +320,41 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore s
 	if err != nil {
 		return nil, err
 	}
-	prof, err := profileFor(cfg.profile)
+	opts := commonOptions(cfg, opStore, st, priv, cookieKey, logger, seeds)
+	profileOpts, err := profileOptions(ctx, cfg, st, logger)
 	if err != nil {
 		return nil, err
 	}
-	opts := []op.Option{
+	opts = append(opts, profileOpts...)
+	if cfg.enableDCR {
+		// Open registration is required because the OFCS oidcc-dynamic
+		// and oidcc-back-channel-rp-initiated-logout plans POST to
+		// /register without supplying an Initial Access Token; OFCS
+		// itself has no slot in the plan template for one. Op-demo is
+		// a developer binary, not a production deployment, so the
+		// open-registration trade-off (higher pre-auth surface, audit
+		// log noise) is acceptable here. Production embedders MUST
+		// leave [op.RegistrationOption.Open] at false and gate
+		// registration with the [Provider.IssueInitialAccessToken]
+		// flow op-demo prints to stdout below; the 24 h TTL and
+		// single-use cap keep that path usable for manual operator
+		// testing of the IAT-required dialect.
+		opts = append(opts, op.WithDynamicRegistration(op.RegistrationOption{
+			Open:    true,
+			IATTTL:  24 * time.Hour,
+			IATUses: 1,
+		}))
+	}
+	return opts, nil
+}
+
+// commonOptions returns the [op.Option] slice every profile shares —
+// issuer, store, keyset, cookie key, mount prefix, logger, the static
+// client seeds, the LoginFlow with PrimaryPassword, JAR, and the
+// claims_supported list. Profile-specific options are appended on top
+// in [buildOptions].
+func commonOptions(cfg runConfig, opStore store.Store, st *inmem.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger, seeds []op.ClientSeed) []op.Option {
+	return []op.Option{
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(opStore),
 		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
@@ -333,6 +377,16 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore s
 		// auto-enables JAR for FAPI 2.0; calling WithFeature here is
 		// idempotent under the auto-enable contract.
 		op.WithFeature(feature.JAR),
+		// OFCS hosts the runner-side JWKS / request_uri endpoints at
+		// localhost.emobix.co.uk, which resolves to 127.0.0.1 via the
+		// OFCS-provided /etc/hosts entry. The JWKS fetcher's default
+		// posture rejects loopback / RFC 1918 hosts to neutralise SSRF
+		// attacks via attacker-controlled jwks_uri values; the
+		// conformance harness is the documented exception, so the
+		// demo opts in to the relaxed deny-list. A production OP MUST
+		// NOT enable this.
+		op.WithAllowPrivateNetworkJWKS(),
+		op.WithAllowPrivateNetworkJAR(),
 		// Advertise the standard OIDC Core 1.0 §5 claims that
 		// seedDemoUser fills in. OFCS's claims-parameter test skips
 		// when claims_supported lists no standard claims, so listing
@@ -350,81 +404,35 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore s
 			"phone_number", "phone_number_verified",
 		),
 	}
-	if prof != 0 {
-		opts = append(opts, op.WithProfile(prof))
+}
+
+// profileOptions dispatches to the per-profile helper that returns the
+// options that profile activates. Returns nil for the empty / "basic"
+// profile (the common base IS the basic configuration).
+func profileOptions(ctx context.Context, cfg runConfig, st *inmem.Store, logger *slog.Logger) ([]op.Option, error) {
+	switch cfg.profile {
+	case "", "basic":
+		return nil, nil
+	case "fapi2-baseline":
+		return fapi2BaselineOptions(), nil
+	case "fapi2-message-signing":
+		return fapi2MessageSigningOptions(ctx, logger)
+	case "fapi-ciba":
+		return fapiCIBAOptions(st), nil
+	default:
+		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, fapi2-baseline, fapi2-message-signing, fapi-ciba)", cfg.profile)
 	}
-	if isFAPIProfile(cfg.profile) {
-		// FAPI 2.0 §3.1.4 mandates sender-constrained access tokens
-		// (DPoP OR mTLS). op-demo selects per profile: fapi-ciba uses
-		// mTLS because OFCS's fapi-ciba-id1 plan inherits FAPI 1.0's
-		// hardcoded tls_client_certificate_bound_access_tokens
-		// requirement (no sender_constrain variant exists to flip it
-		// to DPoP); the fapi2-* plans expose a sender_constrain
-		// variant and the OFCS templates ship `dpop`, so DPoP is the
-		// right pick there. Both choices satisfy WithProfile's
-		// "DPoP OR MTLS" disjunctive constraint.
-		if isCIBAProfile(cfg.profile) {
-			opts = append(opts, op.WithFeature(feature.MTLS))
-		} else {
-			opts = append(opts, op.WithFeature(feature.DPoP))
-		}
-	}
-	if needsDPoPNonceSource(cfg.profile) {
-		// FAPI 2.0 Message Signing §5.3.4 mandates a server-supplied
-		// DPoP nonce (RFC 9449 §8/§9). The option layer rejects
-		// op.New without a source under that profile, so wire the
-		// in-memory rotator that ships with the library.
-		nonces, err := op.NewInMemoryDPoPNonceSource(ctx, time.Minute,
-			op.WithInMemoryDPoPNonceLogger(logger))
-		if err != nil {
-			return nil, fmt.Errorf("dpop nonce source: %w", err)
-		}
-		opts = append(opts, op.WithDPoPNonceSource(nonces))
-	}
-	if isCIBAProfile(cfg.profile) {
-		opts = append(opts, op.WithCIBA(
-			op.WithCIBAHintResolver(demoHintResolver(st)),
-			// 1 s poll interval keeps the OFCS fapi-ciba plan moving;
-			// the auto-approve delay (default 3 s) is intentionally
-			// longer so the first poll lands authorization_pending.
-			op.WithCIBAPollInterval(time.Second),
-		))
-	}
-	if cfg.enableDCR {
-		// 24 h IAT TTL, 1-use cap — the production-grade default that
-		// op.RegistrationOption's zero value already encodes. Made
-		// explicit here so the demo's startup behaviour is obvious
-		// from the code without cross-referencing the registration
-		// option's godoc.
-		opts = append(opts, op.WithDynamicRegistration(op.RegistrationOption{
-			IATTTL:  24 * time.Hour,
-			IATUses: 1,
-		}))
-	}
-	return opts, nil
 }
 
 // buildOPStore returns the [store.Store] handed to [op.WithStore].
 // For non-CIBA profiles this is the bare [*inmem.Store]; for the
-// fapi-ciba profile it is a [cibaAutoApproveStore] that wraps
-// CIBARequests so Save schedules an out-of-band approval after
-// cfg.cibaAutoApproveDelay. The wrapper exists because OFCS drives
-// the fapi-ciba plan without a real authentication device — the
-// approval has to come from inside op-demo to make the flow
-// progress.
+// fapi-ciba profile it is wrapped so Save schedules an out-of-band
+// approval — see [wrapStoreForCIBA] in profile_fapi_ciba.go.
 func buildOPStore(ctx context.Context, cfg runConfig, st *inmem.Store, logger *slog.Logger) store.Store {
 	if !isCIBAProfile(cfg.profile) {
 		return st
 	}
-	return &cibaAutoApproveStore{
-		Store: st,
-		auto: &autoApprovingCIBA{
-			inner: st.CIBARequests(),
-			delay: cfg.cibaAutoApproveDelay,
-			ctx:   ctx,
-			log:   logger,
-		},
-	}
+	return wrapStoreForCIBA(ctx, cfg, st, logger)
 }
 
 // mintInitialAccessToken issues a single Initial Access Token and
@@ -450,23 +458,11 @@ func mintInitialAccessToken(ctx context.Context, p *op.Provider, logger *slog.Lo
 	return nil
 }
 
-// demoHintResolver returns a [op.HintResolver] that maps the
-// well-known login_hint "demo" (and the seed user's username) to the
-// seed subject. Any other hint resolves to op.ErrUnknownCIBAUser so
-// the OP returns the unknown_user_id wire code.
-func demoHintResolver(_ *inmem.Store) op.HintResolver {
-	return op.HintResolverFunc(func(_ context.Context, _ op.HintKind, value string) (string, error) {
-		switch value {
-		case demoUsername, demoSubject, "demo-user@example.com":
-			return demoSubject, nil
-		}
-		return "", op.ErrUnknownCIBAUser
-	})
-}
-
 // profileFor translates the -profile flag into a [profile.Profile] the
 // op.WithProfile option accepts. Returns 0 (the "no profile" sentinel)
-// for the empty/"basic" case so the OP runs vanilla OIDC Core.
+// for the empty/"basic" case so the OP runs vanilla OIDC Core. Used
+// only by tests; the runtime path goes through profileOptions, which
+// builds the option directly from the per-profile helper.
 func profileFor(name string) (profile.Profile, error) {
 	switch name {
 	case "", "basic":
@@ -482,30 +478,6 @@ func profileFor(name string) (profile.Profile, error) {
 	}
 }
 
-// isFAPIProfile reports whether the profile name selects a FAPI 2.0
-// posture (any of the three), which is the trigger for seeding the
-// private_key_jwt FAPI test clients and the FAPI TLS allowlist.
-func isFAPIProfile(name string) bool {
-	return name == "fapi2-baseline" || name == "fapi2-message-signing" || name == "fapi-ciba"
-}
-
-// isCIBAProfile reports whether the profile name selects FAPI-CIBA,
-// the trigger for seeding the CIBA-only client and the
-// auto-approving CIBARequestStore wrapper.
-func isCIBAProfile(name string) bool {
-	return name == "fapi-ciba"
-}
-
-// needsDPoPNonceSource reports whether the profile requires a
-// server-supplied DPoP nonce (RFC 9449 §8/§9). FAPI 2.0 Message
-// Signing §5.3.4 mandates one when DPoP is the binding mechanism;
-// FAPI-CIBA in this demo binds via mTLS (op-demo wires feature.MTLS
-// for fapi-ciba so it can satisfy OFCS fapi-ciba-id1's hardcoded
-// cert-bound check) and therefore does not consume a DPoP nonce.
-func needsDPoPNonceSource(name string) bool {
-	return name == "fapi2-message-signing"
-}
-
 // scopeCatalog is the OIDC Core scope set every demo client is
 // registered to request. The list is shared rather than duplicated so
 // a future scope addition lands across all seeds in one place.
@@ -513,20 +485,23 @@ func needsDPoPNonceSource(name string) bool {
 //nolint:gochecknoglobals // immutable demo seed; no per-instance tuning.
 var scopeCatalog = []string{"openid", "profile", "email", "address", "phone", "offline_access"}
 
-// fapiScopeCatalog drops the address/phone scopes from [scopeCatalog]:
-// the FAPI 2.0 conformance plans never request them, and trimming
-// keeps the registered scope set consistent with the plan templates.
-//
-//nolint:gochecknoglobals // immutable demo seed; no per-instance tuning.
-var fapiScopeCatalog = []string{"openid", "profile", "email", "offline_access"}
-
 // buildClientSeeds projects the runConfig onto the typed
 // [op.ClientSeed] slice [op.WithStaticClients] consumes. The function
-// is the H2 replacement for the per-client seedXxx helpers: the typed
-// builders enforce the per-shape invariants (auth method, secret
-// hashing, JWKS handling) so this layer only assembles the data.
+// returns the common seeds (public + confidential trio) and dispatches
+// to per-profile helpers for FAPI / CIBA additions.
 func buildClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
 	postLogoutURIs := derivePostLogoutURIs(cfg.redirectURIs)
+	seeds := commonClientSeeds(cfg, postLogoutURIs)
+	extras, err := profileClientSeeds(cfg, postLogoutURIs)
+	if err != nil {
+		return nil, err
+	}
+	return append(seeds, extras...), nil
+}
+
+// commonClientSeeds returns the public demo client and (when
+// configured) the confidential client trio that every profile shares.
+func commonClientSeeds(cfg runConfig, postLogoutURIs []string) []op.ClientSeed {
 	seeds := []op.ClientSeed{
 		// Public demo client used by manual flows (curl smoke
 		// tests, the OP-managed login UI). The library has no
@@ -573,77 +548,29 @@ func buildClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
 			},
 		)
 	}
-	if isFAPIProfile(cfg.profile) {
-		fapiSeeds, err := buildFAPIClientSeeds(cfg, postLogoutURIs)
+	return seeds
+}
+
+// profileClientSeeds dispatches to the per-profile seed helper so
+// FAPI / CIBA additions live with their respective profile wiring.
+// The FAPI 2.0 plans (Baseline + Message Signing) share the same
+// client set; FAPI-CIBA layers two CIBA-only clients on top.
+func profileClientSeeds(cfg runConfig, postLogoutURIs []string) ([]op.ClientSeed, error) {
+	switch cfg.profile {
+	case "fapi2-baseline", "fapi2-message-signing":
+		return fapi2ClientSeeds(cfg, postLogoutURIs)
+	case "fapi-ciba":
+		fapiSeeds, err := fapi2ClientSeeds(cfg, postLogoutURIs)
 		if err != nil {
 			return nil, err
 		}
-		seeds = append(seeds, fapiSeeds...)
-	}
-	return seeds, nil
-}
-
-// buildFAPIClientSeeds returns the FAPI test-client seeds (and, for
-// the fapi-ciba profile, a CIBA-only PrivateKeyJWTClient with no
-// redirect URIs). Split out of [buildClientSeeds] so the parent stays
-// under the gocognit budget.
-func buildFAPIClientSeeds(cfg runConfig, postLogoutURIs []string) ([]op.ClientSeed, error) {
-	fapiURIs := withFAPIDummyRedirectURIs(cfg.redirectURIs)
-	seeds := make([]op.ClientSeed, 0, 3)
-	for _, entry := range []struct {
-		id   string
-		path string
-	}{
-		{"demo-fapi", cfg.fapiClient1JWKS},
-		{"demo-fapi-2", cfg.fapiClient2JWKS},
-	} {
-		pub, err := op.LoadPublicJWKS(entry.path)
+		cibaSeeds, err := fapiCIBAClientSeeds(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("load JWKS %s: %w", entry.path, err)
+			return nil, err
 		}
-		seeds = append(seeds, op.PrivateKeyJWTClient{
-			ID:                     entry.id,
-			JWKS:                   pub,
-			RedirectURIs:           fapiURIs,
-			Scopes:                 fapiScopeCatalog,
-			PostLogoutRedirectURIs: postLogoutURIs,
-		})
+		return append(fapiSeeds, cibaSeeds...), nil
 	}
-	if isCIBAProfile(cfg.profile) {
-		// CIBA clients never visit /authorize; redirect_uri MUST be
-		// empty. The grant set is overridden so the registration
-		// only carries the CIBA URN. Two clients are seeded so the
-		// OFCS fapi-ciba "another-client-cannot-poll" / "another-
-		// client-cannot-token" tests have a distinct second identity
-		// to drive against; each reuses the matching FAPI JWKS so
-		// OFCS can sign with the same private_key_jwt material.
-		for _, entry := range []struct {
-			id   string
-			path string
-		}{
-			{"demo-fapi-ciba", cfg.fapiClient1JWKS},
-			{"demo-fapi-ciba-2", cfg.fapiClient2JWKS},
-		} {
-			pub, err := op.LoadPublicJWKS(entry.path)
-			if err != nil {
-				return nil, fmt.Errorf("load JWKS %s: %w", entry.path, err)
-			}
-			seeds = append(seeds, op.PrivateKeyJWTClient{
-				ID:     entry.id,
-				JWKS:   pub,
-				Scopes: fapiScopeCatalog,
-				// refresh_token is paired with the CIBA grant so a
-				// scope including offline_access yields a refresh
-				// token in the token response. The OFCS fapi-ciba
-				// happy-flow asserts on that envelope (and on the
-				// rt_hash claim downstream); without refresh_token
-				// in the registered grants list the OP correctly
-				// withholds the refresh token but the test fails.
-				GrantTypes: []string{opgrant.CIBA.String(), "refresh_token"},
-			})
-		}
-	}
-	return seeds, nil
+	return nil, nil
 }
 
 // derivePostLogoutURIs maps each redirect_uri ending in "/callback"
@@ -660,24 +587,6 @@ func derivePostLogoutURIs(redirectURIs []string) []string {
 			continue
 		}
 		out = append(out, strings.TrimSuffix(u, callbackSuffix)+logoutSuffix)
-	}
-	return out
-}
-
-// withFAPIDummyRedirectURIs returns base extended with the dummy-query
-// variants the OFCS happy-flow appends via AddDummyValuesToRedirectUri.
-// FAPI 2.0 / OAuth 2.1 require exact-string redirect_uri match, but the
-// OFCS happy-flow exercises a "second client with extra query params"
-// path that the AS is expected to accept. Pre-registering the variants
-// lets exact-match succeed without weakening the matcher.
-func withFAPIDummyRedirectURIs(base []string) []string {
-	const (
-		twoDummies   = "?dummy1=lorem&dummy2=ipsum"
-		threeDummies = "?dummy1=lorem&dummy2=ipsum&dummy3=dolor"
-	)
-	out := make([]string, 0, len(base)*3)
-	for _, u := range base {
-		out = append(out, u, u+twoDummies, u+threeDummies)
 	}
 	return out
 }

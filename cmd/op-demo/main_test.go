@@ -207,9 +207,6 @@ func TestProfileFor_AcceptsFAPICIBA(t *testing.T) {
 	if !isFAPIProfile("fapi-ciba") {
 		t.Error("isFAPIProfile(fapi-ciba) = false, want true")
 	}
-	if !needsDPoPNonceSource("fapi-ciba") {
-		t.Error("needsDPoPNonceSource(fapi-ciba) = false, want true")
-	}
 }
 
 // TestRun_DiscoveryAdvertisesDCRAndLogout boots run() with -enable-dcr
