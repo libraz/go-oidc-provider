@@ -148,7 +148,7 @@ func rotateAndUpdate(
 		// secret rotation is a separate operator-initiated action
 		// (out of scope for v1.0).
 		SecretHash:                        secretHash,
-		PublicClient:                      !confidential,
+		PublicClient:                      isPublicAuthMethod(m.TokenEndpointAuthMethod),
 		Source:                            store.ClientSourceDynamic,
 		ApplicationType:                   m.ApplicationType,
 		SubjectType:                       m.SubjectType,
