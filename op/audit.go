@@ -118,6 +118,19 @@ const (
 // Defensive events. Fire from request-validation paths that detect
 // abuse signals or operator-visible policy hits.
 const (
+	// AuditRateLimitExceeded and AuditRateLimitBypassed are reserved
+	// vocabulary for embedder-emitted events from operator-side
+	// rate-limit middleware (reverse proxy, gateway, Go handler
+	// chains). The library does NOT implement a generic per-IP /
+	// per-endpoint HTTP rate limit — that responsibility lives with
+	// the embedder per the project charter. The OP only owns the
+	// authentication-flow brute-force gate wired through
+	// [WithAuthnLockoutStore] (and the device-code user-code gate
+	// surfaced via [AuditDeviceCodeUserCodeBruteForce]); those paths
+	// emit their own dedicated events. These two constants exist so
+	// audit pipelines can ingest embedder-side throttle decisions
+	// under a vocabulary consistent with the rest of the OIDC
+	// audit catalog.
 	AuditRateLimitExceeded   = AuditEvent("rate_limit.exceeded")
 	AuditRateLimitBypassed   = AuditEvent("rate_limit.bypassed")
 	AuditPKCEViolation       = AuditEvent("pkce.violation")
