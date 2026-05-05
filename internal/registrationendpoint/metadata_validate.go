@@ -30,6 +30,7 @@ func validatePolicy(
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
 	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
+	canonical.Scope = defaultScopeIfEmpty(canonical.Scope, iatScopes, scopes)
 	checks := []func() error{
 		func() error {
 			return validateRedirectURIs(canonical.RedirectURIs, canonical.ApplicationType, hasImplicitResponseType(canonical.ResponseTypes), allowLocalhostLoopback)
@@ -80,6 +81,32 @@ func validateDefaultMaxAge(v *int64) error {
 		return errInvalidClientMetadata("default_max_age must be a non-negative integer")
 	}
 	return nil
+}
+
+// defaultScopeIfEmpty returns scope unchanged when non-empty; when
+// empty it returns the IAT-bound allowlist (if any), otherwise the
+// registry's public scope set, joined by spaces. OIDC Dynamic Client
+// Registration 1.0 §2 says "If omitted, an authorization server MAY
+// register a Client with a default set of scopes": defaulting to the
+// IAT-allowlist (or the OP's public catalog when the registration
+// path is open) lets the dynamically-registered client request any
+// scope it could legitimately have asked for had it spelled them out
+// in the DCR request, which is the behaviour OFCS' oidcc-dynamic plan
+// (and most production embedders) expect.
+func defaultScopeIfEmpty(scope string, iatScopes []string, scopes *scoperegistry.Registry) string {
+	if scope != "" {
+		return scope
+	}
+	if len(iatScopes) > 0 {
+		return strings.Join(iatScopes, " ")
+	}
+	if scopes != nil {
+		names := scopes.PublicNames()
+		if len(names) > 0 {
+			return strings.Join(names, " ")
+		}
+	}
+	return ""
 }
 
 // applyMetadataDefaults populates fields the client left blank with
@@ -235,7 +262,7 @@ func validateMetadataURIs(m ClientMetadata) error {
 		}
 	}
 	for _, raw := range m.RequestURIs {
-		if err := validateHTTPSAbsoluteURI("request_uris", raw); err != nil {
+		if err := validateRequestURI("request_uris", raw); err != nil {
 			return err
 		}
 	}
@@ -258,6 +285,31 @@ func validateHTTPSAbsoluteURI(field, raw string) error {
 	}
 	if u.Fragment != "" {
 		return errInvalidClientMetadata(field + " must not contain a fragment")
+	}
+	if u.Host == "" {
+		return errInvalidClientMetadata(field + " must include a host")
+	}
+	return nil
+}
+
+// validateRequestURI enforces the same https / absolute / host rules as
+// [validateHTTPSAbsoluteURI] but permits a URI fragment, because
+// OIDC Core §6.2 explicitly RECOMMENDS using the base64url-encoded
+// SHA-256 hash of the request file as the fragment so caches can detect
+// content changes.
+func validateRequestURI(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errInvalidClientMetadata(field + " is not a valid URL")
+	}
+	if !u.IsAbs() {
+		return errInvalidClientMetadata(field + " must be absolute")
+	}
+	if u.Scheme != "https" {
+		return errInvalidClientMetadata(field + " must use https")
 	}
 	if u.Host == "" {
 		return errInvalidClientMetadata(field + " must include a host")
