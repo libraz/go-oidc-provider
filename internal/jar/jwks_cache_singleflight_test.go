@@ -36,8 +36,8 @@ func TestJWKSCache_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	f.allowPrivate = true
+	f := NewFetcher(timex.SystemClock)
+	f.SetAllowPrivate(true)
 
 	const concurrent = 16
 	var (
@@ -54,7 +54,7 @@ func TestJWKSCache_SingleflightCollapsesConcurrentFetches(t *testing.T) {
 			// Wait for the launch signal so all goroutines pile in
 			// at the same time.
 			<-ready
-			_, err := f.fetch(ctx, srv.URL)
+			_, err := f.Fetch(ctx, srv.URL)
 			errs <- err
 		}()
 	}
@@ -91,11 +91,11 @@ func TestJWKSCache_NegativeCacheShortCircuits(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	f.allowPrivate = true
+	f := NewFetcher(timex.SystemClock)
+	f.SetAllowPrivate(true)
 	ctx := context.Background()
 
-	if _, err := f.fetch(ctx, srv.URL); !errors.Is(err, ErrJWKSFetch) {
+	if _, err := f.Fetch(ctx, srv.URL); !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("first fetch err=%v want ErrJWKSFetch", err)
 	}
 	first := hits.Load()
@@ -104,7 +104,7 @@ func TestJWKSCache_NegativeCacheShortCircuits(t *testing.T) {
 	}
 	// Second fetch within the negative-cache window MUST NOT hit the
 	// upstream.
-	if _, err := f.fetch(ctx, srv.URL); !errors.Is(err, ErrJWKSFetch) {
+	if _, err := f.Fetch(ctx, srv.URL); !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("second fetch err=%v want ErrJWKSFetch", err)
 	}
 	if got := hits.Load(); got != first {
@@ -131,22 +131,22 @@ func TestJWKSCache_NegativeCacheClearsOnSuccess(t *testing.T) {
 	defer srv.Close()
 
 	clock := &movableClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
-	f := newHTTPJWKSFetcher(clock)
-	f.allowPrivate = true
+	f := NewFetcher(clock)
+	f.SetAllowPrivate(true)
 	ctx := context.Background()
 
-	if _, err := f.fetch(ctx, srv.URL); !errors.Is(err, ErrJWKSFetch) {
+	if _, err := f.Fetch(ctx, srv.URL); !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("first fetch err=%v want ErrJWKSFetch", err)
 	}
 	// Roll the clock past the negative TTL so a second fetch retries
 	// the upstream rather than short-circuiting.
 	clock.now = clock.now.Add(2 * defaultJWKSNegativeTTL)
 	fail.Store(false)
-	if _, err := f.fetch(ctx, srv.URL); err != nil {
+	if _, err := f.Fetch(ctx, srv.URL); err != nil {
 		t.Fatalf("second fetch err=%v; want nil after upstream recovery", err)
 	}
 	// Third fetch should hit the positive cache.
-	if _, err := f.fetch(ctx, srv.URL); err != nil {
+	if _, err := f.Fetch(ctx, srv.URL); err != nil {
 		t.Fatalf("third fetch err=%v; want nil", err)
 	}
 }

@@ -683,17 +683,17 @@ func claimSeconds(claims map[string]any, key string) (int64, bool) {
 // from the client when present, fall back to JWKsURI, surface
 // [ErrJWKSConfigured] when neither is set.
 type defaultResolver struct {
-	fetcher *httpJWKSFetcher
+	fetcher *Fetcher
 }
 
 // NewDefaultResolver returns a resolver suitable for production. It
 // uses an in-process JWKS cache keyed by URL with a 5-minute default
 // TTL and applies the SSRF / body-cap / content-type protections in
-// [httpJWKSFetcher]. Apply [AllowPrivateNetwork] when the OP must
-// reach a JWKS endpoint on a private network — the deny-list rejects
-// loopback / link-local / RFC 1918 hosts otherwise.
+// [Fetcher]. Apply [AllowPrivateNetwork] when the OP must reach a
+// JWKS endpoint on a private network — the deny-list rejects loopback
+// / link-local / RFC 1918 hosts otherwise.
 func NewDefaultResolver(clock timex.Clock, opts ...ResolverOption) *DefaultResolver {
-	fetcher := newHTTPJWKSFetcher(clock)
+	fetcher := NewFetcher(clock)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(fetcher)
@@ -705,7 +705,7 @@ func NewDefaultResolver(clock timex.Clock, opts ...ResolverOption) *DefaultResol
 // ResolverOption customises a [DefaultResolver] at construction.
 // Applied in order; later values override earlier ones for the same
 // underlying field.
-type ResolverOption func(*httpJWKSFetcher)
+type ResolverOption func(*Fetcher)
 
 // AllowPrivateNetwork disables the SSRF deny-list on the JWKS fetcher
 // so the OP may reach RP JWKS endpoints whose hosts resolve to
@@ -713,7 +713,7 @@ type ResolverOption func(*httpJWKSFetcher)
 // because the default posture rejects every private network to
 // neutralise SSRF attacks via attacker-controlled jwks_uri values.
 func AllowPrivateNetwork() ResolverOption {
-	return func(f *httpJWKSFetcher) { f.allowPrivate = true }
+	return func(f *Fetcher) { f.SetAllowPrivate(true) }
 }
 
 // DefaultResolver is the exported wrapper around the package-private
@@ -739,7 +739,7 @@ func (r *defaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4
 		return keys, nil
 	}
 	if c.JWKsURI != "" {
-		return r.fetcher.fetch(ctx, c.JWKsURI)
+		return r.fetcher.Fetch(ctx, c.JWKsURI)
 	}
 	return nil, ErrJWKSConfigured
 }

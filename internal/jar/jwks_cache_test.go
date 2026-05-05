@@ -64,13 +64,13 @@ func TestJWKSCache_HitWithinTTL(t *testing.T) {
 	defer srv.Close()
 
 	clock := &movableClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
-	f := newHTTPJWKSFetcher(clock)
-	f.allowPrivate = true // httptest binds to 127.0.0.1.
-	if _, err := f.fetch(context.Background(), srv.URL); err != nil {
+	f := NewFetcher(clock)
+	f.SetAllowPrivate(true) // httptest binds to 127.0.0.1.
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
 		t.Fatalf("fetch 1: %v", err)
 	}
 	clock.now = clock.now.Add(30 * time.Second)
-	if _, err := f.fetch(context.Background(), srv.URL); err != nil {
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
 		t.Fatalf("fetch 2: %v", err)
 	}
 	if got := hits.Load(); got != 1 {
@@ -86,14 +86,14 @@ func TestJWKSCache_RevalidatesViaETag(t *testing.T) {
 	defer srv.Close()
 
 	clock := &movableClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
-	f := newHTTPJWKSFetcher(clock)
-	f.allowPrivate = true
-	if _, err := f.fetch(context.Background(), srv.URL); err != nil {
+	f := NewFetcher(clock)
+	f.SetAllowPrivate(true)
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
 		t.Fatalf("fetch 1: %v", err)
 	}
 	// Move past the cache TTL so the next fetch issues a conditional GET.
 	clock.now = clock.now.Add(time.Hour)
-	if _, err := f.fetch(context.Background(), srv.URL); err != nil {
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
 		t.Fatalf("fetch 2: %v", err)
 	}
 	if got := hits.Load(); got != 2 {
@@ -112,9 +112,9 @@ func TestJWKSCache_RejectsOversizeBody(t *testing.T) {
 		_, _ = fmt.Fprint(w, `]}`)
 	}))
 	defer srv.Close()
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	f.allowPrivate = true
-	_, err := f.fetch(context.Background(), srv.URL)
+	f := NewFetcher(timex.SystemClock)
+	f.SetAllowPrivate(true)
+	_, err := f.Fetch(context.Background(), srv.URL)
 	if !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
@@ -128,9 +128,9 @@ func TestJWKSCache_RejectsNonJSON(t *testing.T) {
 		_, _ = w.Write([]byte("<html></html>"))
 	}))
 	defer srv.Close()
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	f.allowPrivate = true
-	_, err := f.fetch(context.Background(), srv.URL)
+	f := NewFetcher(timex.SystemClock)
+	f.SetAllowPrivate(true)
+	_, err := f.Fetch(context.Background(), srv.URL)
 	if !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
@@ -143,9 +143,9 @@ func TestJWKSCache_RejectsNon2xx(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	f.allowPrivate = true
-	_, err := f.fetch(context.Background(), srv.URL)
+	f := NewFetcher(timex.SystemClock)
+	f.SetAllowPrivate(true)
+	_, err := f.Fetch(context.Background(), srv.URL)
 	if !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
@@ -154,8 +154,8 @@ func TestJWKSCache_RejectsNon2xx(t *testing.T) {
 func TestJWKSCache_RejectsLoopbackByDefault(t *testing.T) {
 	t.Parallel()
 
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	_, err := f.fetch(context.Background(), "http://127.0.0.1:1/jwks")
+	f := NewFetcher(timex.SystemClock)
+	_, err := f.Fetch(context.Background(), "http://127.0.0.1:1/jwks")
 	if !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
@@ -164,8 +164,8 @@ func TestJWKSCache_RejectsLoopbackByDefault(t *testing.T) {
 func TestJWKSCache_RejectsLocalhostByDefault(t *testing.T) {
 	t.Parallel()
 
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	_, err := f.fetch(context.Background(), "http://localhost/jwks")
+	f := NewFetcher(timex.SystemClock)
+	_, err := f.Fetch(context.Background(), "http://localhost/jwks")
 	if !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}
@@ -174,8 +174,8 @@ func TestJWKSCache_RejectsLocalhostByDefault(t *testing.T) {
 func TestJWKSCache_RejectsRFC1918ByDefault(t *testing.T) {
 	t.Parallel()
 
-	f := newHTTPJWKSFetcher(timex.SystemClock)
-	_, err := f.fetch(context.Background(), "http://10.0.0.1/jwks")
+	f := NewFetcher(timex.SystemClock)
+	_, err := f.Fetch(context.Background(), "http://10.0.0.1/jwks")
 	if !errors.Is(err, ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
 	}

@@ -167,18 +167,19 @@ func (c *jwksCache) getFailure(url string) (bool, error) {
 	return false, nil
 }
 
-// httpJWKSFetcher is the production [JWKSResolver] backing
-// [Verifier]. It enforces the SSRF deny-list, the timeout, the body
-// cap, and the strict content-type check before handing parsed keys
-// back to the verifier.
-type httpJWKSFetcher struct {
+// Fetcher fetches a JWKs document from a remote URL with caching,
+// singleflight collapsing, SSRF deny-list, body cap, and strict
+// content-type check. It is the production resolver behind
+// [Verifier] AND the JWKS source for client-assertion verification
+// in [internal/clientauth] when a client registers a jwks_uri.
+type Fetcher struct {
 	cache  *jwksCache
 	flight singleflight.Group
 
 	// clientOnce / clientHTTP wire the lazy client construction so
-	// tests can flip [allowPrivate] (or future netsec-shaping fields)
-	// after [newHTTPJWKSFetcher] returned but before the first fetch
-	// without us re-allocating the [*http.Client] on every fetch.
+	// callers can flip [allowPrivate] (or future netsec-shaping fields)
+	// after [NewFetcher] returned but before the first fetch without
+	// re-allocating the [*http.Client] on every fetch.
 	clientOnce sync.Once
 	clientHTTP *http.Client
 
@@ -188,20 +189,29 @@ type httpJWKSFetcher struct {
 	allowPrivate bool
 }
 
-// newHTTPJWKSFetcher returns a fetcher with the project defaults
-// applied. The supplied clock drives the cache; pass [timex.SystemClock]
-// (or nil — the cache normalises) when the OP is not under test.
-func newHTTPJWKSFetcher(clock timex.Clock) *httpJWKSFetcher {
-	return &httpJWKSFetcher{
+// NewFetcher returns a fetcher with the project defaults applied.
+// The supplied clock drives the cache; pass [timex.SystemClock] (or
+// nil — the cache normalises) when the OP is not under test.
+func NewFetcher(clock timex.Clock) *Fetcher {
+	return &Fetcher{
 		cache: newJWKSCache(clock),
 	}
+}
+
+// SetAllowPrivate toggles the SSRF deny-list. Pass true to permit
+// JWKS hosts that resolve to loopback / link-local / RFC 1918
+// addresses, which is the posture an embedder needs when the RP runs
+// inside the same private network as the OP. Cloud-metadata IPs
+// remain rejected unconditionally.
+func (f *Fetcher) SetAllowPrivate(b bool) {
+	f.allowPrivate = b
 }
 
 // netsecOptions returns the [netsec.Options] snapshot the fetcher
 // hands to the URL-time gate and the HTTP client. The function is the
 // single source of truth so the dial-time and URL-time checks always
 // agree on the AllowPrivate posture.
-func (f *httpJWKSFetcher) netsecOptions() netsec.Options {
+func (f *Fetcher) netsecOptions() netsec.Options {
 	return netsec.Options{
 		Timeout:      defaultJWKSTimeout,
 		AllowPrivate: f.allowPrivate,
@@ -212,14 +222,14 @@ func (f *httpJWKSFetcher) netsecOptions() netsec.Options {
 // initialisation lets [verify.go]'s [AllowPrivateNetwork] option
 // mutate [allowPrivate] after construction without rebuilding the
 // transport mid-fetch.
-func (f *httpJWKSFetcher) client() *http.Client {
+func (f *Fetcher) client() *http.Client {
 	f.clientOnce.Do(func() {
 		f.clientHTTP = netsec.NewHTTPClient(f.netsecOptions())
 	})
 	return f.clientHTTP
 }
 
-// fetch retrieves the parsed keyset for jwksURI. The cache is consulted
+// Fetch retrieves the parsed keyset for jwksURI. The cache is consulted
 // first; on a miss or expired entry the function performs the HTTP
 // round-trip, applies the security checks, and updates the cache.
 //
@@ -228,11 +238,7 @@ func (f *httpJWKSFetcher) client() *http.Client {
 // herd against the RP when the cache expires under load and stops a
 // hostile client from forcing N parallel JWKS fetches by replaying the
 // same JAR N times.
-//
-// The function is unexported because callers reach the JWKS through
-// [Verifier]; exposing it would let a future caller bypass the SSRF /
-// body-cap policy.
-func (f *httpJWKSFetcher) fetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKeySet, error) {
+func (f *Fetcher) Fetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKeySet, error) {
 	if entry, ok := f.cache.get(jwksURI); ok {
 		return entry.keys, nil
 	}
@@ -264,10 +270,10 @@ func (f *httpJWKSFetcher) fetch(ctx context.Context, jwksURI string) (*josev4.JS
 }
 
 // doFetch performs the HTTP round-trip and the response post-processing.
-// The function is split out from [fetch] so the singleflight collapses
+// The function is split out from [Fetch] so the singleflight collapses
 // only the network path, while the cache lookup and negative-cache
 // bookkeeping run on every caller.
-func (f *httpJWKSFetcher) doFetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKeySet, error) {
+func (f *Fetcher) doFetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKeySet, error) {
 	if err := netsec.AssertSafeURL(ctx, jwksURI, f.netsecOptions()); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrJWKSFetch, err)
 	}
