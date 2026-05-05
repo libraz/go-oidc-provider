@@ -54,6 +54,8 @@ type registrationResponse struct {
 	IntrospectionEncryptedResponseAlg string   `json:"introspection_encrypted_response_alg,omitempty"`
 	IntrospectionEncryptedResponseEnc string   `json:"introspection_encrypted_response_enc,omitempty"`
 	PostLogoutRedirectURIs            []string `json:"post_logout_redirect_uris,omitempty"`
+	BackchannelLogoutURI              string   `json:"backchannel_logout_uri,omitempty"`
+	BackchannelLogoutSessionRequired  bool     `json:"backchannel_logout_session_required,omitempty"`
 }
 
 // handleRegister implements POST /register (RFC 7591 §3). The function
@@ -183,6 +185,8 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
 		PostLogoutRedirectURIs:            slices.Clone(m.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:              m.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
 	}
 	if err := deps.Clients.RegisterClient(ctx, client); err != nil {
 		deps.logger().Error("dcr.client.register_failed", "err", err, "client_id", clientID)
@@ -251,6 +255,8 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
 		PostLogoutRedirectURIs:            m.PostLogoutRedirectURIs,
+		BackchannelLogoutURI:              m.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
 	})
 }
 

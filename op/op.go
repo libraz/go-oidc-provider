@@ -416,6 +416,8 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
 		PostLogoutRedirectURIs:            m.PostLogoutRedirectURIs,
+		BackchannelLogoutURI:              m.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
 	}
 }
 

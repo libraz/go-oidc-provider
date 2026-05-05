@@ -57,6 +57,8 @@ type ClientMetadata struct {
 	IntrospectionEncryptedResponseAlg string
 	IntrospectionEncryptedResponseEnc string
 	PostLogoutRedirectURIs            []string
+	BackchannelLogoutURI              string
+	BackchannelLogoutSessionRequired  bool
 }
 
 // metadataWire is the JSON shape RFC 7591 §2 / OIDC Dynamic Client
@@ -98,6 +100,8 @@ type metadataWire struct {
 	IntrospectionEncryptedResponseAlg string          `json:"introspection_encrypted_response_alg,omitempty"`
 	IntrospectionEncryptedResponseEnc string          `json:"introspection_encrypted_response_enc,omitempty"`
 	PostLogoutRedirectURIs            []string        `json:"post_logout_redirect_uris,omitempty"`
+	BackchannelLogoutURI              string          `json:"backchannel_logout_uri,omitempty"`
+	BackchannelLogoutSessionRequired  bool            `json:"backchannel_logout_session_required,omitempty"`
 
 	// SoftwareStatement is parsed only so the handler can detect its
 	// presence and reject with invalid_software_statement; v1.0 does
@@ -180,6 +184,8 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		IntrospectionEncryptedResponseAlg: w.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: w.IntrospectionEncryptedResponseEnc,
 		PostLogoutRedirectURIs:            cloneStrings(w.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:              w.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  w.BackchannelLogoutSessionRequired,
 	}
 	extras := metadataExtras{
 		SoftwareStatement: w.SoftwareStatement,

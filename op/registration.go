@@ -304,6 +304,22 @@ type ClientMetadata struct {
 	// per tenant). An empty slice means the client cannot use
 	// post_logout_redirect_uri at /end_session at all.
 	PostLogoutRedirectURIs []string
+
+	// BackchannelLogoutURI is the absolute https:// URL the OP POSTs
+	// a logout_token to when an OIDC Back-Channel Logout 1.0 §2 event
+	// fires for the registered client. Empty means the client did not
+	// register for back-channel logout delivery.
+	//
+	// Stable since v0.9.1.
+	BackchannelLogoutURI string
+
+	// BackchannelLogoutSessionRequired requests a "sid" claim on the
+	// logout_token (OIDC Back-Channel Logout 1.0 §2.5). The library
+	// honours the request only when the client has a session at the
+	// OP; back-channel delivery itself is independent of this flag.
+	//
+	// Stable since v0.9.1.
+	BackchannelLogoutSessionRequired bool
 }
 
 // InitialAccessTokenSpec configures the IAT issued by
