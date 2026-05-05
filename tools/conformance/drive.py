@@ -85,6 +85,57 @@ def _forward_implicit_bridge(redirect: str, callback_html: bytes | None) -> None
     sys.stdout.write(f"[drive forward] implicit_post={status}\n")
 
 
+_FORM_ACTION_RE = re.compile(rb'<form[^>]*action="([^"]+)"', re.IGNORECASE)
+_HIDDEN_INPUT_RE = re.compile(rb'name="([^"]+)" value="([^"]*)"')
+
+
+def _forward_form_post(body: bytes, cookies: CookieJar) -> None:
+    """Process an OIDC Core Form Post Response Mode 1.0 body.
+
+    The OP returns 200 with a self-submitting HTML form whose action is
+    the OFCS callback URL and whose hidden inputs are the authorization
+    response parameters (code/state/iss for success, error/* for
+    failure). A real browser auto-submits the form on load. This helper
+    replays that submit programmatically so the OFCS test driver
+    receives the parameters and can resume.
+    """
+    action_m = _FORM_ACTION_RE.search(body)
+    if not action_m:
+        sys.stdout.write("[drive form_post] no <form action> in body\n")
+        return
+    action = action_m.group(1).decode("utf-8").replace("&amp;", "&")
+    if not _OFCS_CALLBACK_RE.match(action):
+        sys.stdout.write(f"[drive form_post] action {action} is not an OFCS callback\n")
+        return
+    fields: dict[str, str] = {}
+    for m in _HIDDEN_INPUT_RE.finditer(body):
+        name = m.group(1).decode("utf-8")
+        if name in {"approved_scopes", "state_ref", "csrf_token"}:
+            continue
+        value = m.group(2).decode("utf-8").replace("&amp;", "&")
+        fields[name] = value
+    if not fields:
+        sys.stdout.write("[drive form_post] no hidden inputs found\n")
+        return
+    sys.stdout.write(f"[drive form_post] POST {action} fields={sorted(fields)}\n")
+    status, _, callback_body = ofcs.post_form(
+        action,
+        fields=fields,
+        cookies=cookies,
+        follow_redirects=True,
+    )
+    sys.stdout.write(f"[drive form_post] callback_post={status}\n")
+    if not callback_body:
+        sys.stdout.write("[drive form_post] callback body empty\n")
+        return
+    # Reuse the implicit-bridge logic. The callback URL is the alias
+    # base; use a pseudo-redirect that carries 'code=' so the bridge
+    # POST body matches what FAPI 2.0 condition RejectAuthCodeInUrlFragment
+    # expects (empty code/state pair keeps the JsonNull check happy).
+    pseudo_redirect = action + "?code=" + fields.get("code", "")
+    _forward_implicit_bridge(pseudo_redirect, callback_body)
+
+
 def drive(auth_url: str, opts: DriveOptions) -> None:
     """Walk one OFCS authorize URL through op-demo's SSR interaction."""
     # NB: empty CookieJar is falsy (its __len__ returns 0), so `or
@@ -166,7 +217,7 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         sys.stdout.write(
             f"[drive 2/2] POST consent (approved_scopes={initial_approved}) — session reused\n"
         )
-        reuse_status, reuse_location, _ = ofcs.post_form(
+        reuse_status, reuse_location, reuse_body = ofcs.post_form(
             interaction_url,
             fields={
                 "state_ref": state_ref,
@@ -177,6 +228,9 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
             cookies=cookies,
         )
         sys.stdout.write(f"[drive 2/2] response={reuse_status} {reuse_location or ''}\n")
+        if reuse_status == 200 and reuse_body and _FORM_ACTION_RE.search(reuse_body):
+            _forward_form_post(reuse_body, cookies)
+            return
         if not reuse_location or not _OFCS_CALLBACK_RE.match(reuse_location):
             sys.stdout.write("[drive] no OFCS callback redirect; aborting\n")
             return
@@ -184,7 +238,7 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         return
 
     sys.stdout.write(f"[drive 2/3] POST credentials (user={opts.user})\n")
-    _, pwd_location, pwd_body = ofcs.post_form(
+    pwd_status, pwd_location, pwd_body = ofcs.post_form(
         interaction_url,
         fields={
             "state_ref": state_ref,
@@ -199,6 +253,10 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         sys.stdout.write(f"[drive 2/3] OP skipped consent (silent approval) — redirect={pwd_location}\n")
         _forward_implicit_bridge(pwd_location, None)
         return
+    if pwd_status == 200 and pwd_body and _FORM_ACTION_RE.search(pwd_body) and not _extract_field(pwd_body, "state_ref"):
+        sys.stdout.write("[drive 2/3] OP skipped consent (silent approval) — form_post body\n")
+        _forward_form_post(pwd_body, cookies)
+        return
 
     if opts.runner_id:
         _save_render_html(opts.runner_id, "consent", pwd_body)
@@ -212,7 +270,7 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         return
 
     sys.stdout.write(f"[drive 3/3] POST consent (approved_scopes={approved})\n")
-    final_status, final_location, _ = ofcs.post_form(
+    final_status, final_location, final_body = ofcs.post_form(
         interaction_url,
         fields={
             "state_ref": state_ref2,
@@ -223,6 +281,11 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         cookies=cookies,
     )
     sys.stdout.write(f"[drive 3/3] response={final_status} {final_location or ''}\n")
+    if final_status == 200 and final_body and _FORM_ACTION_RE.search(final_body):
+        # Form Post Response Mode 1.0 — the OP returned the auto-submit
+        # body instead of a redirect.
+        _forward_form_post(final_body, cookies)
+        return
     if not final_location or not _OFCS_CALLBACK_RE.match(final_location):
         sys.stdout.write("[drive] no OFCS callback redirect; aborting\n")
         return
