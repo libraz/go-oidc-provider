@@ -73,7 +73,7 @@ func TestAuthorize_StatusGates(t *testing.T) {
 	cases := map[store.CIBARequestStatus]error{
 		store.CIBARequestStatusPending:  cgrant.ErrPendingApproval,
 		store.CIBARequestStatusDenied:   cgrant.ErrDenied,
-		store.CIBARequestStatusConsumed: cgrant.ErrExpiredOrConsumed,
+		store.CIBARequestStatusConsumed: cgrant.ErrAlreadyRedeemed,
 	}
 	for status, want := range cases {
 		_, err := cgrant.Authorize(cgrant.AuthorizeInput{

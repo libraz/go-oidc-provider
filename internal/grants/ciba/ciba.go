@@ -25,7 +25,8 @@ const grantTypeWire = "urn:openid:params:grant-type:ciba"
 //     a wire error here — the token-endpoint layer maps polling
 //     state to the matching CIBA Core §11 wire code).
 //   - ErrDenied                   → access_denied.
-//   - ErrExpiredOrConsumed        → expired_token.
+//   - ErrExpired                  → expired_token.
+//   - ErrAlreadyRedeemed          → invalid_grant.
 var (
 	// ErrGrantNotPermitted indicates the client is not registered
 	// for the CIBA grant. The check guards against a confidential
@@ -64,10 +65,18 @@ var (
 	// terminated the record.
 	ErrDenied = errors.New("ciba: authorization was denied")
 
-	// ErrExpiredOrConsumed signals the auth_req_id expired before
-	// the user approved, or the record was already consumed by an
-	// earlier successful poll.
-	ErrExpiredOrConsumed = errors.New("ciba: auth_req_id expired or already consumed")
+	// ErrExpired signals the auth_req_id's TTL elapsed before the
+	// user approved (or before any poll arrived). CIBA Core §11
+	// reserves the wire code expired_token for this case.
+	ErrExpired = errors.New("ciba: auth_req_id expired")
+
+	// ErrAlreadyRedeemed signals the auth_req_id was successfully
+	// redeemed by an earlier poll and the inbound request is a
+	// replay attempt. RFC 6749 §5.2 reserves invalid_grant for any
+	// reuse of an already-issued grant; OFCS' fapi-ciba "auth_req_id
+	// reuse" assertion (CIBA-11) pins this wire code distinct from
+	// expired_token, which CIBA Core §11 reserves for TTL expiry.
+	ErrAlreadyRedeemed = errors.New("ciba: auth_req_id was already redeemed")
 )
 
 // AuthorizeInput is the parameter bundle [Authorize] consumes.
@@ -135,8 +144,8 @@ type Authorized struct {
 //
 //  1. Client must list the CIBA grant in its registered grant_types.
 //  2. Record state must be Approved (Pending → pending wire code,
-//     Denied → denied, Expired/Consumed → expired_token; Authorize
-//     surfaces the cause via the matching sentinel).
+//     Denied → denied, Consumed → invalid_grant via ErrAlreadyRedeemed;
+//     Authorize surfaces the cause via the matching sentinel).
 //  3. cnf binding presented at /token must match the binding the
 //     consuming device committed to at /bc-authorize. Empty matches
 //     empty (bearer flow); a record-side binding without a request-
@@ -191,9 +200,15 @@ func mapStatusToError(s store.CIBARequestStatus) error {
 	case store.CIBARequestStatusDenied:
 		return ErrDenied
 	case store.CIBARequestStatusConsumed:
-		return ErrExpiredOrConsumed
+		return ErrAlreadyRedeemed
 	default:
-		return ErrExpiredOrConsumed
+		// Defensive: an uninitialised status indicates a substore bug.
+		// Surface it as a replay attempt rather than a TTL expiry so
+		// the wire code (invalid_grant) signals "this grant cannot be
+		// used" rather than "session is over and you should re-init",
+		// which would invite a polling client to retry a never-valid
+		// record.
+		return ErrAlreadyRedeemed
 	}
 }
 

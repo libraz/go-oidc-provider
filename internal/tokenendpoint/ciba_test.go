@@ -195,7 +195,7 @@ func TestHandleCIBA_DeniedRecord_AccessDenied(t *testing.T) {
 	}
 }
 
-func TestHandleCIBA_ConsumedRecord_ExpiredToken(t *testing.T) {
+func TestHandleCIBA_ConsumedRecord_InvalidGrant(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFixture(t)
 	f.seedCIBARequest(t, &store.CIBARequest{
@@ -217,8 +217,11 @@ func TestHandleCIBA_ConsumedRecord_ExpiredToken(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	if got := cibaDecodeError(t, rec.Body.Bytes()); got != "expired_token" {
-		t.Fatalf("error = %q, want expired_token", got)
+	// CIBA Core §11 reserves expired_token for TTL elapse only;
+	// auth_req_id replay maps to invalid_grant per RFC 6749 §5.2,
+	// which is what OFCS' fapi-ciba CIBA-11 assertion expects.
+	if got := cibaDecodeError(t, rec.Body.Bytes()); got != "invalid_grant" {
+		t.Fatalf("error = %q, want invalid_grant", got)
 	}
 }
 

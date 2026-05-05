@@ -181,7 +181,16 @@ func applyCIBAPollDecision(
 	case ciba.PollDecisionExpiredToken:
 		emitCIBAReject(ctx, deps, clientID, errExpiredToken)
 		writeError(w, http.StatusBadRequest, errExpiredToken,
-			"auth_req_id expired or already consumed")
+			"auth_req_id expired")
+		return false
+	case ciba.PollDecisionAlreadyRedeemed:
+		// CIBA Core §11 reserves expired_token for TTL elapse only;
+		// auth_req_id replay maps to invalid_grant per RFC 6749
+		// §5.2. OFCS' fapi-ciba CIBA-11 assertion pins this wire
+		// distinction.
+		emitCIBAReject(ctx, deps, clientID, errInvalidGrant)
+		writeError(w, http.StatusBadRequest, errInvalidGrant,
+			"auth_req_id was already redeemed")
 		return false
 	case ciba.PollDecisionEmit:
 		return true
@@ -257,7 +266,8 @@ func authorizeCIBAPoll(
 //   - ErrPendingApproval       → authorization_pending (defensive;
 //     [DecidePoll] should have caught this case already).
 //   - ErrDenied                → access_denied (same defensive note).
-//   - ErrExpiredOrConsumed     → expired_token (same defensive note).
+//   - ErrExpired               → expired_token (CIBA Core §11; TTL).
+//   - ErrAlreadyRedeemed       → invalid_grant (RFC 6749 §5.2; replay).
 //   - default                  → server_error (programmer bug).
 func writeCIBAAuthError(w http.ResponseWriter, err error) {
 	switch {
@@ -277,21 +287,28 @@ func writeCIBAAuthError(w http.ResponseWriter, err error) {
 	case errors.Is(err, cgrant.ErrDenied):
 		writeError(w, http.StatusBadRequest, errAccessDenied,
 			"authorization request was denied")
-	case errors.Is(err, cgrant.ErrExpiredOrConsumed):
+	case errors.Is(err, cgrant.ErrExpired):
 		writeError(w, http.StatusBadRequest, errExpiredToken,
-			"auth_req_id expired or already consumed")
+			"auth_req_id expired")
+	case errors.Is(err, cgrant.ErrAlreadyRedeemed):
+		writeError(w, http.StatusBadRequest, errInvalidGrant,
+			"auth_req_id was already redeemed")
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 	}
 }
 
 // consumeCIBARequest atomically transitions the record from
-// Approved to Consumed and returns the consumed snapshot. A
-// racing successful poll surfaces as [store.ErrAlreadyConsumed]
-// from the substore; the library maps that to expired_token
-// because CIBA Core §11 reserves the wire code for "the
-// auth_req_id has expired or has been consumed", which describes
-// the racing-poll case verbatim.
+// Approved to Consumed and returns the consumed snapshot. The
+// substore separates two failure modes the wire codes care about:
+//
+//   - [store.ErrAlreadyConsumed] is the replay path (the record
+//     exists but a prior poll already consumed it); RFC 6749 §5.2
+//     reserves invalid_grant for any reuse of an issued grant, and
+//     OFCS' fapi-ciba CIBA-11 assertion expects exactly that wire
+//     code on auth_req_id reuse.
+//   - [store.ErrNotFound] covers TTL elapse and unknown auth_req_id
+//     uniformly; CIBA Core §11 reserves expired_token for that.
 func consumeCIBARequest(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -301,10 +318,12 @@ func consumeCIBARequest(
 	consumed, err := deps.CIBARequests.Consume(ctx, authReqID)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrAlreadyConsumed),
-			errors.Is(err, store.ErrNotFound):
+		case errors.Is(err, store.ErrAlreadyConsumed):
+			writeError(w, http.StatusBadRequest, errInvalidGrant,
+				"auth_req_id was already redeemed")
+		case errors.Is(err, store.ErrNotFound):
 			writeError(w, http.StatusBadRequest, errExpiredToken,
-				"auth_req_id expired or already consumed")
+				"auth_req_id expired or unknown")
 		case errors.Is(err, store.ErrConflict):
 			writeError(w, http.StatusBadRequest, errInvalidGrant,
 				"auth_req_id is not in a consumable state")

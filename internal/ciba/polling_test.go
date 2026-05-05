@@ -26,7 +26,7 @@ func TestDecidePoll(t *testing.T) {
 				Approved:          true,
 				Consumed:          true,
 			},
-			want: ciba.PollOutput{Decision: ciba.PollDecisionExpiredToken},
+			want: ciba.PollOutput{Decision: ciba.PollDecisionAlreadyRedeemed},
 		},
 		{
 			name: "ttl gate fires before deny",
@@ -198,6 +198,7 @@ func TestPollDecision_String(t *testing.T) {
 		ciba.PollDecisionSlowDown:             "slow_down",
 		ciba.PollDecisionAccessDenied:         "access_denied",
 		ciba.PollDecisionExpiredToken:         "expired_token",
+		ciba.PollDecisionAlreadyRedeemed:      "invalid_grant",
 		ciba.PollDecisionInvalid:              "invalid",
 		ciba.PollDecision(99):                 "invalid",
 	}

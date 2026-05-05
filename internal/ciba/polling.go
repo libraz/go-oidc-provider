@@ -73,10 +73,17 @@ const (
 	PollDecisionAccessDenied
 
 	// PollDecisionExpiredToken means the auth_req_id's TTL has
-	// elapsed, the record has already been consumed by a previous
-	// successful poll, or the record disappeared from the
-	// substore. The wire form is expired_token per CIBA Core §11.
+	// elapsed or the record disappeared from the substore. The wire
+	// form is expired_token per CIBA Core §11.
 	PollDecisionExpiredToken
+
+	// PollDecisionAlreadyRedeemed means a previous successful poll
+	// already minted tokens against this record. The wire form is
+	// invalid_grant per RFC 6749 §5.2 (reuse of an already-issued
+	// grant); CIBA Core §11 reserves expired_token for TTL elapse
+	// only, and OFCS' fapi-ciba CIBA-11 assertion pins the two wire
+	// codes apart.
+	PollDecisionAlreadyRedeemed
 )
 
 // String returns the wire-friendly mnemonic for d, suitable for
@@ -93,6 +100,8 @@ func (d PollDecision) String() string {
 		return "access_denied"
 	case PollDecisionExpiredToken:
 		return "expired_token"
+	case PollDecisionAlreadyRedeemed:
+		return "invalid_grant"
 	case PollDecisionInvalid:
 		return "invalid"
 	default:
@@ -175,8 +184,10 @@ type PollOutput struct {
 // DecidePoll applies the polling discipline documented in the
 // package godoc. The decision tree:
 //
-//  1. Consumed → expired_token (token-replay guard).
-//  2. ExpiresAt ≤ Now → expired_token (TTL hard stop).
+//  1. Consumed → already_redeemed (token-replay guard,
+//     wire invalid_grant per RFC 6749 §5.2).
+//  2. ExpiresAt ≤ Now → expired_token (TTL hard stop,
+//     wire expired_token per CIBA Core §11).
 //  3. Denied → access_denied.
 //  4. PollViolations ≥ [MaxPollViolations] → access_denied
 //     (lockout — the caller MUST also Deny the record with
@@ -195,7 +206,7 @@ type PollOutput struct {
 // CIBA Core §11's "MUST" sequencing on token-endpoint errors.
 func DecidePoll(in PollInput) PollOutput {
 	if in.Consumed {
-		return PollOutput{Decision: PollDecisionExpiredToken}
+		return PollOutput{Decision: PollDecisionAlreadyRedeemed}
 	}
 	if !in.ExpiresAt.IsZero() && !in.Now.Before(in.ExpiresAt) {
 		return PollOutput{Decision: PollDecisionExpiredToken}
