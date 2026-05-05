@@ -34,6 +34,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -145,7 +146,7 @@ func mainErr() error {
 		// CIBA auto-approve delay. Long enough that the first /token
 		// poll observes authorization_pending under the 1 s poll
 		// interval the OFCS fapi-ciba plan drives.
-		cibaAutoApproveDelay = flag.Duration("ciba-autoapprove-delay", 3*time.Second, "delay before the auto-approving CIBA substore flips a Pending record to Approved. Only consulted when -profile=fapi-ciba; production embedders trigger Approve from the user's authentication device callback, never from inside the OP.")
+		cibaAutoApproveDelay = flag.Duration("ciba-autoapprove-delay", 15*time.Second, "delay before the auto-approving CIBA substore flips a Pending record to Approved. Only consulted when -profile=fapi-ciba; production embedders trigger Approve from the user's authentication device callback, never from inside the OP. The default is sized so the OFCS fapi-ciba poll loop sees authorization_pending on at least three consecutive polls before the flip — the test plan asserts on that intermediate state explicitly.")
 	)
 	flag.Parse()
 
@@ -201,6 +202,15 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 	}
 	if isFAPIProfile(cfg.profile) {
 		srv.TLSConfig = op.FAPITLSConfig()
+		// RequestClientCert (not RequireAndVerifyClientCert) so the OP
+		// admits requests without a cert — discovery / interaction
+		// pages stay accessible. RFC 8705 §3 binding fires only when a
+		// cert IS presented; the OFCS fapi-ciba plan presents one on
+		// every backchannel and token request, while bearer-only
+		// flows (oidcc-* plans sharing the same listener) keep working.
+		// Chain validation is intentionally skipped: the binding path
+		// only needs the leaf for the x5t#S256 thumbprint.
+		srv.TLSConfig.ClientAuth = tls.RequestClientCert
 	}
 
 	idleClosed := make(chan struct{})
@@ -344,18 +354,26 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore s
 		opts = append(opts, op.WithProfile(prof))
 	}
 	if isFAPIProfile(cfg.profile) {
-		// FAPI 2.0 mandates sender-constrained access tokens (DPoP
-		// or mTLS); op-demo selects DPoP. WithProfile does not
-		// auto-enable DPoP because mTLS satisfies the same
-		// requirement and which one to choose is a deployment call.
-		opts = append(opts, op.WithFeature(feature.DPoP))
+		// FAPI 2.0 §3.1.4 mandates sender-constrained access tokens
+		// (DPoP OR mTLS). op-demo selects per profile: fapi-ciba uses
+		// mTLS because OFCS's fapi-ciba-id1 plan inherits FAPI 1.0's
+		// hardcoded tls_client_certificate_bound_access_tokens
+		// requirement (no sender_constrain variant exists to flip it
+		// to DPoP); the fapi2-* plans expose a sender_constrain
+		// variant and the OFCS templates ship `dpop`, so DPoP is the
+		// right pick there. Both choices satisfy WithProfile's
+		// "DPoP OR MTLS" disjunctive constraint.
+		if isCIBAProfile(cfg.profile) {
+			opts = append(opts, op.WithFeature(feature.MTLS))
+		} else {
+			opts = append(opts, op.WithFeature(feature.DPoP))
+		}
 	}
 	if needsDPoPNonceSource(cfg.profile) {
-		// FAPI 2.0 Message Signing §5.3.4 and FAPI-CIBA both require
-		// the AS to issue a server-supplied DPoP nonce (RFC 9449
-		// §8/§9). The option layer rejects op.New without a source
-		// under these profiles, so wire the in-memory rotator that
-		// ships with the library.
+		// FAPI 2.0 Message Signing §5.3.4 mandates a server-supplied
+		// DPoP nonce (RFC 9449 §8/§9). The option layer rejects
+		// op.New without a source under that profile, so wire the
+		// in-memory rotator that ships with the library.
 		nonces, err := op.NewInMemoryDPoPNonceSource(ctx, time.Minute,
 			op.WithInMemoryDPoPNonceLogger(logger))
 		if err != nil {
@@ -480,10 +498,12 @@ func isCIBAProfile(name string) bool {
 
 // needsDPoPNonceSource reports whether the profile requires a
 // server-supplied DPoP nonce (RFC 9449 §8/§9). FAPI 2.0 Message
-// Signing §5.3.4 mandates one, and FAPI-CIBA inherits the
-// requirement through its baseline sender-constraint.
+// Signing §5.3.4 mandates one when DPoP is the binding mechanism;
+// FAPI-CIBA in this demo binds via mTLS (op-demo wires feature.MTLS
+// for fapi-ciba so it can satisfy OFCS fapi-ciba-id1's hardcoded
+// cert-bound check) and therefore does not consume a DPoP nonce.
 func needsDPoPNonceSource(name string) bool {
-	return name == "fapi2-message-signing" || name == "fapi-ciba"
+	return name == "fapi2-message-signing"
 }
 
 // scopeCatalog is the OIDC Core scope set every demo client is
@@ -609,10 +629,17 @@ func buildFAPIClientSeeds(cfg runConfig, postLogoutURIs []string) ([]op.ClientSe
 				return nil, fmt.Errorf("load JWKS %s: %w", entry.path, err)
 			}
 			seeds = append(seeds, op.PrivateKeyJWTClient{
-				ID:         entry.id,
-				JWKS:       pub,
-				Scopes:     fapiScopeCatalog,
-				GrantTypes: []string{opgrant.CIBA.String()},
+				ID:     entry.id,
+				JWKS:   pub,
+				Scopes: fapiScopeCatalog,
+				// refresh_token is paired with the CIBA grant so a
+				// scope including offline_access yields a refresh
+				// token in the token response. The OFCS fapi-ciba
+				// happy-flow asserts on that envelope (and on the
+				// rt_hash claim downstream); without refresh_token
+				// in the registered grants list the OP correctly
+				// withholds the refresh token but the test fails.
+				GrantTypes: []string{opgrant.CIBA.String(), "refresh_token"},
 			})
 		}
 	}

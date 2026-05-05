@@ -216,16 +216,21 @@ func wrapWithProfileMiddleware(mux http.Handler, cfg *config) http.Handler {
 	handler := mux
 	for _, p := range cfg.profiles {
 		switch p {
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:
+			// FAPI-CIBA-ID1 §6 inherits the FAPI 1.0 Advanced
+			// requirement that every response carry a stable
+			// x-fapi-interaction-id; the OFCS fapi-ciba modules
+			// EnsureMatchingFAPIInteractionId / CheckForFAPIInteractionId
+			// pin both the presence and the round-trip echo.
 			handler = httpx.InteractionIDMiddleware(handler)
-			// Once any FAPI2 profile has activated the echo we are
+			// Once any FAPI profile has activated the echo we are
 			// done — repeating it would stamp the header twice and
 			// hide the upstream client value behind a regenerated
 			// UUID. Other profiles will add their own middlewares
 			// here as the constraint set grows.
 			return handler
-		case profile.FAPICIBA, profile.IGovHigh:
-			// v1.x / v2+; no middleware contribution today.
+		case profile.IGovHigh:
+			// v2+; no middleware contribution today.
 		}
 	}
 	return handler

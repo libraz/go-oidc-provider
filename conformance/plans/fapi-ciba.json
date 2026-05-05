@@ -11,7 +11,7 @@
   },
   "client": {
     "client_id": "demo-fapi-ciba",
-    "scope": "openid profile",
+    "scope": "openid profile offline_access",
     "client_authentication_type": "private_key_jwt",
     "hint_type": "login_hint",
     "hint_value": "demo",
@@ -32,7 +32,7 @@
   },
   "client2": {
     "client_id": "demo-fapi-ciba-2",
-    "scope": "openid profile",
+    "scope": "openid profile offline_access",
     "client_authentication_type": "private_key_jwt",
     "hint_type": "login_hint",
     "hint_value": "demo",
