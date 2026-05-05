@@ -72,6 +72,7 @@ type Verifier struct {
 	maxFutureSkew time.Duration
 	maxAge        time.Duration
 	requireNbf    bool
+	requireIAT    bool
 	allowMissJTI  bool
 	jtis          store.ConsumedJTIStore
 	maxLifetime   time.Duration
@@ -132,6 +133,13 @@ type VerifierConfig struct {
 	// when an existing call site adds new fields above the
 	// RequireNbf entry.
 	AllowMissingNbf bool
+
+	// RequireIAT, when true, rejects request objects whose "iat"
+	// claim is absent. RFC 9101 §6.1 marks "iat" as OPTIONAL but
+	// FAPI-CIBA Profile §5.2.2 promotes it to MUST. The flag exists
+	// so the strict FAPI-CIBA posture lands on CIBA deployments
+	// without breaking the OIDC Core / FAPI 2.0 baseline default.
+	RequireIAT bool
 
 	// JTIs is the replay store the verifier consults for the
 	// request object's "jti" claim. RFC 9101 §10.8 names jti as
@@ -243,6 +251,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		maxFutureSkew: skew,
 		maxAge:        maxAge,
 		requireNbf:    requireNbf,
+		requireIAT:    cfg.RequireIAT,
 		allowMissJTI:  cfg.AllowMissingJTI,
 		jtis:          cfg.JTIs,
 		maxLifetime:   cfg.MaxLifetime,
@@ -534,7 +543,7 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 	if err := assertNbf(obj, now, v.maxFutureSkew, v.maxLifetime, v.requireNbf); err != nil {
 		return err
 	}
-	if err := assertIat(obj, now, v.maxFutureSkew, v.maxAge); err != nil {
+	if err := assertIat(obj, now, v.maxFutureSkew, v.maxAge, v.requireIAT); err != nil {
 		return err
 	}
 	return nil
@@ -638,12 +647,16 @@ func assertNbf(obj *Object, now time.Time, skew, maxLifetime time.Duration, requ
 
 // assertIat enforces a non-future "iat" within the configured skew, and
 // rejects request objects whose "iat" lies more than maxAge in the
-// past. An absent "iat" is permitted because RFC 9101 marks the claim
-// optional; the OP relies on "exp" + the per-request_uri TTL to bound
-// the replay window in that case.
-func assertIat(obj *Object, now time.Time, skew, maxAge time.Duration) error {
+// past. An absent "iat" is permitted unless requireIAT is set: RFC
+// 9101 marks the claim optional, but FAPI-CIBA Profile §5.2.2
+// promotes it to MUST so the OP-level wiring opts in for CIBA
+// deployments.
+func assertIat(obj *Object, now time.Time, skew, maxAge time.Duration, requireIAT bool) error {
 	iat, ok := claimSeconds(obj.Claims, "iat")
 	if !ok {
+		if requireIAT {
+			return ErrIATMissing
+		}
 		return nil
 	}
 	t := time.Unix(iat, 0)

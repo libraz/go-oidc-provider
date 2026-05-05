@@ -84,6 +84,13 @@ var (
 	// is set to admit legacy RPs.
 	ErrJTIMissing = errors.New("jar: request object missing jti")
 
+	// ErrIATMissing signals that the request object lacks an "iat"
+	// claim and the verifier was constructed with [VerifierConfig.RequireIAT].
+	// RFC 9101 §6.1 marks "iat" optional; FAPI-CIBA Profile §5.2.2
+	// promotes it to MUST, and the FAPI-CIBA-aware OP wiring sets
+	// the flag accordingly.
+	ErrIATMissing = errors.New("jar: request object missing iat")
+
 	// ErrJTIReplayed signals that the request object's "jti" claim
 	// has already been consumed within the configured window. The
 	// HTTP layer maps this onto invalid_request_object so an
