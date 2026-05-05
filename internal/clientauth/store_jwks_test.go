@@ -6,6 +6,8 @@ import (
 	"errors"
 	"testing"
 
+	josev4 "github.com/go-jose/go-jose/v4"
+
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -94,6 +96,80 @@ func TestStoreJWKSResolver_JWKsURIRejected(t *testing.T) {
 	_, err = r.JWKS(context.Background(), "url-only")
 	if !errors.Is(err, clientauth.ErrJWKSURIUnsupported) {
 		t.Errorf("err=%v, want ErrJWKSURIUnsupported", err)
+	}
+}
+
+// fakeURLFetcher returns a canned response (or canned error) regardless
+// of the URL. The test exercises the resolver's URLFetcher seam without
+// depending on any HTTP machinery.
+type fakeURLFetcher struct {
+	keys *josev4.JSONWebKeySet
+	err  error
+}
+
+func (f fakeURLFetcher) Fetch(_ context.Context, _ string) (*josev4.JSONWebKeySet, error) {
+	return f.keys, f.err
+}
+
+func TestStoreJWKSResolver_JWKsURIFetched(t *testing.T) {
+	t.Parallel()
+
+	var keys josev4.JSONWebKeySet
+	if err := json.Unmarshal([]byte(sampleJWK), &keys); err != nil {
+		t.Fatalf("seed JWKs: %v", err)
+	}
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"url-only": {ID: "url-only", JWKsURI: "https://client.example.com/jwks"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	r.SetURLFetcher(fakeURLFetcher{keys: &keys})
+	got, err := r.JWKS(context.Background(), "url-only")
+	if err != nil {
+		t.Fatalf("JWKS: %v", err)
+	}
+	if len(got.Keys) != 1 || got.Keys[0].KeyID != "k1" {
+		t.Errorf("got Keys=%+v", got.Keys)
+	}
+}
+
+func TestStoreJWKSResolver_JWKsURIFetchError(t *testing.T) {
+	t.Parallel()
+
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"url-only": {ID: "url-only", JWKsURI: "https://client.example.com/jwks"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	wantErr := errors.New("upstream timeout")
+	r.SetURLFetcher(fakeURLFetcher{err: wantErr})
+	_, err = r.JWKS(context.Background(), "url-only")
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err=%v, want wrapped %v", err, wantErr)
+	}
+}
+
+func TestStoreJWKSResolver_JWKsURIEmptyKeys(t *testing.T) {
+	t.Parallel()
+
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"url-only": {ID: "url-only", JWKsURI: "https://client.example.com/jwks"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	r.SetURLFetcher(fakeURLFetcher{keys: &josev4.JSONWebKeySet{}})
+	_, err = r.JWKS(context.Background(), "url-only")
+	if !errors.Is(err, clientauth.ErrJWKSNotConfigured) {
+		t.Errorf("err=%v, want ErrJWKSNotConfigured", err)
 	}
 }
 
