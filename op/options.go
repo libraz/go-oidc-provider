@@ -609,11 +609,15 @@ func newConfig(opts []Option) (*config, error) {
 	return c, nil
 }
 
-// WithIssuer sets the OP issuer URL. The value MUST be an absolute URL with a
-// non-empty authority (host), no trailing slash, and no query or fragment,
-// per OpenID Connect Discovery 1.0 §3 / FAPI 2.0 §5.4. The scheme MUST be
-// https; loopback IP literals (127.0.0.0/8 and [::1]) are exempted from the
-// https requirement so a development boot can use plain http. The textual
+// WithIssuer sets the OP issuer URL. The value MUST be the canonical form an
+// RP can use for byte-exact comparison under RFC 9207 mix-up defense: an
+// absolute URL with a non-empty lowercase authority (scheme and host),
+// no default port (:443 for https, :80 for http), no trailing slash,
+// no query, no fragment, and a canonical path (no "..", ".", or
+// duplicate slashes), per OpenID Connect Discovery 1.0 §3 /
+// RFC 8414 §3 / FAPI 2.0 §5.4. The scheme MUST be https; loopback IP
+// literals (127.0.0.0/8 and [::1]) are exempted from the https
+// requirement so a development boot can use plain http. The textual
 // host "localhost" is intentionally NOT exempted because it can be
 // DNS-hijacked (RFC 8252 §7.3 reasoning); a development boot binding
 // loopback uses the IP literal directly.

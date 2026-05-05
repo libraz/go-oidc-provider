@@ -38,6 +38,16 @@ func TestValidateIssuer(t *testing.T) {
 		{"http-private-ip", "http://10.0.0.1", true},
 		{"unknown-scheme", "ftp://idp.example.com", true},
 		{"relative", "/oidc", true},
+		{"https-uppercase-scheme", "HTTPS://idp.example.com", true},
+		{"https-mixedcase-scheme", "HtTpS://idp.example.com", true},
+		{"https-uppercase-host", "https://IDP.EXAMPLE.COM", true},
+		{"https-mixedcase-host-with-path", "https://IDP.example.com/oidc", true},
+		{"https-default-port", "https://idp.example.com:443", true},
+		{"https-default-port-with-path", "https://idp.example.com:443/oidc", true},
+		{"http-default-port-loopback", "http://127.0.0.1:80", true},
+		{"path-traversal", "https://idp.example.com/a/../b", true},
+		{"path-dot-segment", "https://idp.example.com/a/./b", true},
+		{"path-double-slash", "https://idp.example.com//oidc", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

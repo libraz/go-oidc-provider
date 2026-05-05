@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net"
 	"net/url"
+	"path"
 	"reflect"
 	"slices"
 	"strings"
@@ -214,16 +215,20 @@ type Features struct {
 }
 
 // ValidateIssuer enforces the OIDC Discovery 1.0 §3 / FAPI 2.0 §5.4
-// shape constraints on the issuer URL: an absolute https URL with no
-// trailing slash, no query, and no fragment. Loopback IP literals
-// (127.0.0.0/8 and [::1]) are exempted from the https requirement so
-// a development boot can use a plain-text scheme; production
-// deployments are still required to publish the issuer over TLS. The
-// textual host "localhost" is NOT in the carve-out because it can be
-// DNS-hijacked (RFC 8252 §7.3 reasoning).
+// shape constraints on the issuer URL. The accepted shape is the
+// canonical form an RP can use for byte-exact comparison under
+// RFC 9207 mix-up defense: an absolute https URL with a non-empty
+// lowercase authority, no default port, no query, no fragment, no
+// trailing slash, and a canonical path (no ".." / "." segments and
+// no duplicate slashes). Loopback IP literals (127.0.0.0/8 and
+// [::1]) are exempted from the https requirement so a development
+// boot can use a plain-text scheme; production deployments are
+// still required to publish the issuer over TLS. The textual host
+// "localhost" is NOT in the carve-out because it can be DNS-hijacked
+// (RFC 8252 §7.3 reasoning).
 //
 // The validator is invoked by [Build] (defense in depth: op.WithIssuer
-// performs a similar check at the option site, but a future regression
+// performs the same check at the option site, but a future regression
 // that loosens the option-layer rule must not silently land in the
 // wire metadata).
 func ValidateIssuer(raw string) error {
@@ -254,10 +259,38 @@ func ValidateIssuer(raw string) error {
 		// "/.well-known/..." to produce the configuration URI.
 		return fmt.Errorf("%w: must not end with a trailing slash", ErrIssuerInvalid)
 	}
+	// url.Parse normalizes u.Scheme to lowercase, so an uppercase
+	// scheme in raw input ("HTTPS://...") would slip past a u.Scheme
+	// check. Inspect the raw prefix instead.
+	if i := strings.Index(raw, ":"); i > 0 {
+		if rawScheme := raw[:i]; rawScheme != strings.ToLower(rawScheme) {
+			return fmt.Errorf("%w: scheme must be lowercase", ErrIssuerInvalid)
+		}
+	}
+	// u.Host preserves the raw host:port casing. Reject any uppercase
+	// in the authority so the published issuer matches the RFC 3986
+	// §3.2.2 / §6.2.2.1 normalized form an RP would compare against.
+	if u.Host != strings.ToLower(u.Host) {
+		return fmt.Errorf("%w: host must be lowercase", ErrIssuerInvalid)
+	}
+	if u.Path != "" {
+		// Reject ".." / "." segments and duplicate slashes. These
+		// confuse the issuer concatenation that produces the
+		// .well-known URI and defeat byte-exact comparison.
+		if cleaned := path.Clean(u.Path); cleaned != u.Path {
+			return fmt.Errorf("%w: path must be canonical (no '..', '.', or duplicate slashes)", ErrIssuerInvalid)
+		}
+	}
 	switch u.Scheme {
 	case "https":
+		if u.Port() == "443" {
+			return fmt.Errorf("%w: must omit the default https port (:443)", ErrIssuerInvalid)
+		}
 		return nil
 	case "http":
+		if u.Port() == "80" {
+			return fmt.Errorf("%w: must omit the default http port (:80)", ErrIssuerInvalid)
+		}
 		if isLoopbackHost(u.Hostname()) {
 			return nil
 		}
