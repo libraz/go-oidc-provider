@@ -324,10 +324,14 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   to wired-end-to-end. `op.New` now threads the recorded
   `mtls.ProxyConfig` into the verifier so the reverse-proxy header
   path works for every request.
-- JAR `AllowMissingJTI` is forced to `false` whenever any FAPI
-  profile (FAPI2Baseline / FAPI2MessageSigning / FAPICIBA) is
-  active; the strict RFC 9101 §10.8 posture is no longer
-  embedder-overridable in profile-active deployments.
+- JAR `AllowMissingJTI` stays at `true` for every profile, FAPI
+  profiles included (ADR 0032 amends ADR 0016). RFC 9101 §6.1 marks
+  `jti` OPTIONAL on the wire and FAPI 2.0 Security Profile / FAPI 2.0
+  Message Signing do not promote it to MUST; the §10.8 replay-defence
+  floor is preserved through the JTIs store, which the verifier still
+  consumes for every `jti` it does see. An embedder that needs the
+  strict reading can still construct the verifier directly with
+  `AllowMissingJTI=false`.
 - `internal/cookie/build.go` validate now rejects
   `SameSite=None` + `Secure=false` combinations at construction
   time. The default profiles already set Secure=true; the guard

@@ -229,21 +229,17 @@ func TestWithProfile_FAPI2MessageSigning_AcceptsFullStack(t *testing.T) {
 	}
 }
 
-// TestWithProfile_FAPI_JARVerifierStrictJTIPosture pins the wiring
-// rule that op.New flips the JAR verifier's AllowMissingJTI off
-// under any FAPI-family profile. The flag is internal-only — there
-// is no public option for an embedder to flip it back on — so the
-// test exercises the construction path through every FAPI profile
-// that admits JAR (FAPI 2.0 Baseline auto-enables JAR; FAPI 2.0
-// Message Signing inherits the same auto-enable; FAPI-CIBA also
-// auto-enables JAR through its RequiredFeatures table).
-//
-// A dedicated negative test ("FAPI profile + AllowMissingJTI=true
-// fails") cannot exist in the option layer because the surface does
-// not expose AllowMissingJTI. The Wave-1C report documents the
-// absence of an embedder path; the op.go wiring is the single
-// declaration site of the rule.
-func TestWithProfile_FAPI_JARVerifierStrictJTIPosture(t *testing.T) {
+// TestWithProfile_FAPI_JARVerifierConstructs pins that op.New under
+// any FAPI-family profile constructs a working JAR verifier. The
+// verifier admits jti-less request objects per RFC 9101 §6.1
+// (jti is OPTIONAL on the wire); the §10.8 replay-defence floor is
+// preserved through the JTIs store, which the verifier still consumes
+// for every jti it does see. The construction path is exercised
+// through every FAPI profile that admits JAR (FAPI 2.0 Baseline
+// auto-enables JAR; FAPI 2.0 Message Signing inherits the same
+// auto-enable; FAPI-CIBA also auto-enables JAR through its
+// RequiredFeatures table).
+func TestWithProfile_FAPI_JARVerifierConstructs(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {

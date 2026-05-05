@@ -307,29 +307,23 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	// without a Message-Signing-only switch still gets the bound. Other
 	// JAR-enabling profiles inherit the relaxed (back-compat) behaviour.
 	//
-	// FAPI profiles (FAPI2Baseline, FAPI2MessageSigning, FAPICIBA) also
-	// flip the JTI replay-defence gate to its strict posture: RFC 9101
-	// §10.8 mandates a jti-anchored replay defence, and a profile-active
-	// deployment MUST NOT admit jti-less request objects. The lax
-	// posture (AllowMissingJTI=true) is preserved for non-profile
-	// deployments so the OFCS-conformant request objects (which omit
-	// jti by spec right) keep flowing; the verifier still consumes
-	// every jti it does see, so the §10.8 floor is maintained either
-	// way. There is currently no embedder-facing option to flip this
-	// independently — the policy is OP-internal so an audit can locate
-	// the rule by its single declaration site here.
+	// AllowMissingJTI stays true for every profile (including FAPI):
+	// RFC 9101 §6.1 marks "jti" as OPTIONAL on the wire, RFC 9101 §10.8
+	// uses SHOULD (not MUST) for AS-side jti tracking, and the FAPI 2.0
+	// Security Profile / FAPI 2.0 Message Signing do not promote it to
+	// MUST either. Rejecting jti-less request objects refuses spec-
+	// conformant clients (the OpenID Foundation Conformance Suite emits
+	// jti-less request objects for fapi2-message-signing); the §10.8
+	// replay-defence floor is preserved through the JTIs store, which
+	// the verifier still consumes for every jti it does see.
 	var (
-		requireNbf      bool
-		maxLifetime     time.Duration
-		allowMissingJTI = true
+		requireNbf  bool
+		maxLifetime time.Duration
 	)
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
 			maxLifetime = 60 * time.Minute
-		}
-		if isFAPIProfile(p) {
-			allowMissingJTI = false
 		}
 	}
 	resolverOpts := []jar.ResolverOption{}
@@ -343,19 +337,8 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 		RequireNbf:         requireNbf,
 		JTIs:               cfg.store.ConsumedJTIs(),
 		EncryptionResolver: jarEncryptionResolver(encSet),
-		// RFC 9101 §6.1 marks "jti" as OPTIONAL; without an active FAPI
-		// profile, rejecting JARs that omit it would refuse spec-
-		// conformant request objects (e.g. the ones the OpenID
-		// Foundation Conformance Suite emits) on a contract that the
-		// spec does not anchor. The replay-defence gate at §10.8 still
-		// fires when jti is present (the JTIs store consumes every
-		// value it sees), so dropping the missing-jti reject preserves
-		// that floor while restoring spec-correct admission. With a
-		// FAPI profile active the loop above flips this to false so the
-		// stricter §10.8 reading applies — the profile's add-only
-		// posture forbids any embedder opt-out.
-		AllowMissingJTI: allowMissingJTI,
-		MaxLifetime:     maxLifetime,
+		AllowMissingJTI:    true,
+		MaxLifetime:        maxLifetime,
 	})
 	if err != nil {
 		return nil, &Error{

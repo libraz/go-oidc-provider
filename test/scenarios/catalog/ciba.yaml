@@ -397,11 +397,15 @@ rows:
 
   - id: CIBA-040
     severity: P0
-    spec: CIBA Core §7.1.1; RFC 7519 §4.1.7
+    spec: RFC 9101 §6.1; CIBA Core §7.1.1; RFC 7519 §4.1.7
     behaviour: |
-      Under FAPI-CIBA profile, a signed Request Object missing the
-      jti claim MUST be rejected with 400 invalid_request_object. The
-      JAR verifier flips AllowMissingJTI=false under any FAPI profile.
+      Under FAPI-CIBA profile, a signed Request Object that omits the
+      jti claim is accepted with 200 — RFC 9101 §6.1 marks jti as
+      OPTIONAL on the wire, and FAPI 2.0 Security Profile / FAPI 2.0
+      Message Signing do not promote it to MUST. The §10.8 replay-
+      defence floor is preserved through the JTIs store, which the
+      JAR verifier still consumes for every jti it does see (covered
+      by internal/jar/verify_jti_test.go).
     status: active
 
   - id: CIBA-041

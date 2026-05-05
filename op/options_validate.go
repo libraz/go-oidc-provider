@@ -384,11 +384,11 @@ func isFAPI2Profile(p profile.Profile) bool {
 
 // isFAPIProfile reports whether p is any FAPI-family profile (FAPI 2.0
 // Baseline, FAPI 2.0 Message Signing, or FAPI Client-Initiated
-// Backchannel Authentication). The wider predicate exists so the JAR
-// verifier wiring can apply the RFC 9101 §10.8 strict reading
-// (jti-anchored replay defence with no missing-jti opt-out) uniformly
-// across every FAPI profile, not just the Web-side FAPI 2.0 family;
-// FAPICIBA inherits the same mandate by reference.
+// Backchannel Authentication). The predicate exists so callers can
+// apply FAPI-uniform wiring (e.g. the 60-minute JAR lifetime cap
+// FAPI 2.0 Message Signing §5.6 imposes, the
+// x-fapi-interaction-id middleware) without re-listing the FAPI set
+// at each site.
 func isFAPIProfile(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:

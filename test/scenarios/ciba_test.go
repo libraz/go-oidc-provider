@@ -1262,14 +1262,16 @@ func TestScenario_CIBA_039_RequestObjectRequiresNbfClaim(t *testing.T) {
 	expectCIBAError(t, body, "invalid_request_object")
 }
 
-// TestScenario_CIBA_040_RequestObjectRequiresJtiClaim pins the FAPI-
-// CIBA jti-claim mandate: a signed Request Object missing jti is
-// rejected with 400 invalid_request_object. The JAR verifier flips
-// AllowMissingJTI=false when any FAPI profile is active so the
-// §10.8 anti-replay floor is enforced.
+// TestScenario_CIBA_040_RequestObjectAcceptsMissingJti pins the
+// FAPI-CIBA jti-claim posture: a signed Request Object that omits
+// jti is accepted with 200, mirroring RFC 9101 §6.1 (jti OPTIONAL
+// on the wire). The §10.8 replay-defence floor is preserved through
+// the JTIs store, which the verifier still consumes for every jti
+// it does see (covered by internal/jar/verify_jti_test.go).
 //
-// Spec: CIBA Core §7.1.1, RFC 7519 §4.1.7.
-func TestScenario_CIBA_040_RequestObjectRequiresJtiClaim(t *testing.T) {
+// Spec: RFC 9101 §6.1; CIBA Core §7.1.1; FAPI 2.0 Security Profile
+// (no jti MUST, only the §10.8 SHOULD); RFC 7519 §4.1.7.
+func TestScenario_CIBA_040_RequestObjectAcceptsMissingJti(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFAPIFixture(t)
 
@@ -1278,10 +1280,12 @@ func TestScenario_CIBA_040_RequestObjectRequiresJtiClaim(t *testing.T) {
 	signed := f.signES256(t, claims)
 
 	status, body := f.bcAuthorizeFAPIForm(t, url.Values{"request": {signed}})
-	if status != http.StatusBadRequest {
-		t.Fatalf("status=%d want 400 body=%v", status, body)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", status, body)
 	}
-	expectCIBAError(t, body, "invalid_request_object")
+	if id, _ := body["auth_req_id"].(string); id == "" {
+		t.Fatalf("expected auth_req_id in body=%v", body)
+	}
 }
 
 // TestScenario_CIBA_041_RequestObjectRequiresIatClaim is OOS — see catalog out_of_scope_reason.
