@@ -229,9 +229,10 @@ func TestServe_JAR_RequireSignedRejectsUnsigned(t *testing.T) {
 }
 
 // TestServe_JAR_NoVerifierRejectsRequest confirms that posting
-// "request" against a deps with JAR=nil surfaces
-// invalid_request_object — the OP advertises that JAR is off, so
-// any inbound signed request is a configuration mismatch.
+// "request" against a deps with JAR=nil surfaces invalid_request —
+// the OP advertises that JAR is off, so any inbound signed request
+// is a configuration mismatch. CIBA Core §13 limits BCA error codes
+// to a closed set that excludes invalid_request_object.
 func TestServe_JAR_NoVerifierRejectsRequest(t *testing.T) {
 	t.Parallel()
 	f := newJARFixture(t)
@@ -246,14 +247,14 @@ func TestServe_JAR_NoVerifierRejectsRequest(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequestObject {
-		t.Fatalf("error = %q, want %q", got, wireInvalidRequestObject)
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
 	}
 }
 
 // TestServe_JAR_BadSignature confirms that a request object whose
 // signature does not match the registered keyset is rejected with
-// invalid_request_object.
+// invalid_request (CIBA Core §13 closed list).
 func TestServe_JAR_BadSignature(t *testing.T) {
 	t.Parallel()
 	f := newJARFixture(t)
@@ -287,8 +288,8 @@ func TestServe_JAR_BadSignature(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequestObject {
-		t.Fatalf("error = %q, want %q", got, wireInvalidRequestObject)
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
 	}
 }
 
@@ -308,8 +309,8 @@ func TestServe_JAR_BadAudience(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequestObject {
-		t.Fatalf("error = %q, want %q", got, wireInvalidRequestObject)
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
 	}
 }
 
@@ -330,8 +331,8 @@ func TestServe_JAR_Expired(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
-	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequestObject {
-		t.Fatalf("error = %q, want %q", got, wireInvalidRequestObject)
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error = %q, want %q", got, wireInvalidRequest)
 	}
 }
 

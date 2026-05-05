@@ -149,7 +149,10 @@ type Deps struct {
 	// against the authenticated client's keyset and merges the
 	// claims onto the form values before parsing CIBA-specific
 	// parameters. A nil verifier rejects any request that
-	// carries a "request" parameter with invalid_request_object.
+	// carries a "request" parameter with invalid_request — CIBA
+	// Core §13 does not list invalid_request_object as a BCA error
+	// code, so all request-object failures collapse onto
+	// invalid_request.
 	JAR *jar.Verifier
 
 	// RequireSignedAuthRequest, when true, makes the handler
@@ -513,7 +516,8 @@ func verifyClientGrantTypeAllowed(ctx context.Context, w http.ResponseWriter, de
 // authenticated client and merges the claims onto the form values
 // per RFC 9101 §6.1 / FAPI-CIBA-ID1 §5.2.2. A nil [Deps.JAR] means
 // the OP has not enabled JAR; the request is rejected with
-// invalid_request_object.
+// invalid_request (CIBA Core §13 does not list
+// invalid_request_object as a BCA error code).
 //
 // When [Deps.RequireSignedAuthRequest] is true and "request" is
 // missing, the request is rejected with invalid_request because
@@ -557,7 +561,7 @@ func consumeJARRequestObject(
 				"reason": "request_object_invalid",
 			},
 		})
-		writeError(w, http.StatusBadRequest, errInvalidRequestObject,
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"request is not supported by this OP")
 		return nil, false
 	}
@@ -592,17 +596,15 @@ func consumeJARRequestObject(
 	return merged, true
 }
 
-// writeJARError translates a [jar] sentinel into the OAuth wire
-// envelope. The taxonomy mirrors the parendpoint surface (alg /
-// signature / claim failures map to invalid_request_object;
-// client_id mismatches map to invalid_request).
+// writeJARError translates a [jar] sentinel into the CIBA wire
+// envelope. CIBA Core §13 enumerates a closed set of BCA error
+// codes that does NOT include "invalid_request_object" (unlike the
+// /authorize endpoint, which does). Every JAR failure therefore
+// surfaces as "invalid_request" so OFCS' CIBA-13 negative tests see
+// the spec-mandated code; the human-readable description carries
+// the precise sentinel detail.
 func writeJARError(w http.ResponseWriter, err error) {
-	if errors.Is(err, jar.ErrClientIDMismatch) {
-		writeError(w, http.StatusBadRequest, errInvalidRequest,
-			"client_id mismatch in request object")
-		return
-	}
-	writeError(w, http.StatusBadRequest, errInvalidRequestObject,
+	writeError(w, http.StatusBadRequest, errInvalidRequest,
 		jarDescriptionFor(err))
 }
 
@@ -628,6 +630,7 @@ var jarDescriptions = []struct {
 	{jar.ErrJWKSConfigured, "client has no JWKs or JWKsURI"},
 	{jar.ErrJTIMissing, "request object missing jti"},
 	{jar.ErrJTIReplayed, "request object jti already consumed"},
+	{jar.ErrIATMissing, "request object missing iat"},
 	{jar.ErrEncryptionUnsupported, "encrypted request objects are not supported"},
 	{jar.ErrEncryptionAlgNotAllowed, "request object encryption alg/enc is not allowed"},
 	{jar.ErrDecryptFailed, "request object could not be decrypted"},

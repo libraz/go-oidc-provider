@@ -15,7 +15,6 @@ import (
 // and is omitted from this list.
 const (
 	errInvalidRequest        = "invalid_request"
-	errInvalidRequestObject  = "invalid_request_object"
 	errInvalidScope          = "invalid_scope"
 	errInvalidTarget         = "invalid_target"
 	errUnauthorizedClient    = "unauthorized_client"
