@@ -307,23 +307,37 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	// without a Message-Signing-only switch still gets the bound. Other
 	// JAR-enabling profiles inherit the relaxed (back-compat) behaviour.
 	//
-	// AllowMissingJTI stays true for every profile (including FAPI):
-	// RFC 9101 §6.1 marks "jti" as OPTIONAL on the wire, RFC 9101 §10.8
-	// uses SHOULD (not MUST) for AS-side jti tracking, and the FAPI 2.0
-	// Security Profile / FAPI 2.0 Message Signing do not promote it to
-	// MUST either. Rejecting jti-less request objects refuses spec-
-	// conformant clients (the OpenID Foundation Conformance Suite emits
-	// jti-less request objects for fapi2-message-signing); the §10.8
-	// replay-defence floor is preserved through the JTIs store, which
-	// the verifier still consumes for every jti it does see.
+	// AllowMissingJTI stays true for OIDC Core / FAPI 2.0 baseline /
+	// FAPI 2.0 Message Signing: RFC 9101 §6.1 marks "jti" as OPTIONAL on
+	// the wire, RFC 9101 §10.8 uses SHOULD (not MUST) for AS-side jti
+	// tracking, and the FAPI 2.0 Security Profile / FAPI 2.0 Message
+	// Signing do not promote it to MUST either. Rejecting jti-less
+	// request objects refuses spec-conformant clients (the OpenID
+	// Foundation Conformance Suite emits jti-less request objects for
+	// fapi2-message-signing); the §10.8 replay-defence floor is
+	// preserved through the JTIs store, which the verifier still
+	// consumes for every jti it does see.
+	//
+	// FAPI-CIBA flips the default: §5.2.2 of the FAPI-CIBA Profile
+	// promotes jti from OPTIONAL to MUST on the backchannel
+	// authentication request object, and OFCS' CIBA-13 row drives the
+	// negative test "ensure-request-object-missing-jti-fails" against
+	// it. The flag below tracks that requirement and applies only when
+	// no other profile loosened the constraint.
 	var (
-		requireNbf  bool
-		maxLifetime time.Duration
+		requireNbf      bool
+		requireIAT      bool
+		maxLifetime     time.Duration
+		allowMissingJTI = true
 	)
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
 			maxLifetime = 60 * time.Minute
+		}
+		if p == profile.FAPICIBA {
+			allowMissingJTI = false
+			requireIAT = true
 		}
 	}
 	resolverOpts := []jar.ResolverOption{}
@@ -335,9 +349,10 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 		Resolver:           jar.NewDefaultResolver(cfg.clock, resolverOpts...),
 		Clock:              cfg.clock,
 		RequireNbf:         requireNbf,
+		RequireIAT:         requireIAT,
 		JTIs:               cfg.store.ConsumedJTIs(),
 		EncryptionResolver: jarEncryptionResolver(encSet),
-		AllowMissingJTI:    true,
+		AllowMissingJTI:    allowMissingJTI,
 		MaxLifetime:        maxLifetime,
 	})
 	if err != nil {
@@ -399,10 +414,12 @@ func buildClientEncryptionResolver(cfg *config) *clientencjwks.Resolver {
 // request actually claims private_key_jwt.
 //
 // The verifier reads inline JWKs from [store.Client.JWKs] via
-// [clientauth.StoreJWKSResolver]. JWKsURI fetching is documented at
-// the resolver as a follow-up; until that lands an embedder whose
-// clients publish their keys via URL must pre-fetch them and write
-// the inline form into the client record.
+// [clientauth.StoreJWKSResolver] and falls back to fetching the
+// keyset from [store.Client.JWKsURI] using [jar.Fetcher] (the same
+// SSRF-gated, body-capped, ETag-revalidated fetcher backing JAR
+// verification). The fetcher's deny-list is widened by
+// [WithAllowPrivateNetworkJWKS] when the OP must reach RP keys on a
+// private network.
 //
 // Audience is the absolute token endpoint URL, per OIDC Core §9 / RFC
 // 7523 §3 — every assertion at /token, /par, /introspect, and /revoke
@@ -419,6 +436,11 @@ func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, err
 			Cause:       err,
 		}
 	}
+	jwksFetcher := jar.NewFetcher(cfg.clock)
+	if cfg.allowPrivateNetworkJWKS {
+		jwksFetcher.SetAllowPrivate(true)
+	}
+	resolver.SetURLFetcher(jwksFetcher)
 	return &clientauth.PrivateKeyJWTVerifier{
 		Resolver: resolver,
 		JTIStore: cfg.store.ConsumedJTIs(),
@@ -432,9 +454,14 @@ func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, err
 		// as-audience" module sets aud == PAR endpoint when the
 		// client_assertion lands at /par, and RFC 7523 §3's "value
 		// identifying the AS" leaves the specific URL up to the AS.
+		// The backchannel-authentication endpoint URL is accepted for
+		// CIBA Core 1.0 §7.1, which mandates the OP accept Issuer /
+		// Token Endpoint URL / Backchannel Authentication Endpoint
+		// URL as values that identify it as an intended audience.
 		AuxAudiences: []string{
 			cfg.issuer,
 			absoluteEndpointURL(cfg, cfg.endpoints.PAR),
+			absoluteEndpointURL(cfg, cfg.endpoints.Backchannel),
 		},
 		Clock: cfg.clock.Now,
 	}, nil
