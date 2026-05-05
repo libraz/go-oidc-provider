@@ -120,6 +120,38 @@ linters:
           deny:
             - pkg: crypto/rand
               desc: "crypto/rand is allow-listed; route randomness through internal/keys"
+        # go-jose/v4 is the only JOSE primitive in the module. Every
+        # signing / verification path is required to route through the
+        # closed-type Algorithm allow-list in internal/jose, so a new
+        # package gaining direct access to the underlying library would
+        # silently widen the attack surface (alg-confusion, "none",
+        # HS256-on-public-key). The allow-list pins the current callers;
+        # any new caller must be added here intentionally — at which
+        # point the security review naturally asks whether the new
+        # caller is also routing through internal/jose's Algorithm gate.
+        # Test infrastructure (testkit / scenariokit) and *_test.go are
+        # exempt so fixtures can build raw JWS / JWE payloads.
+        jose-isolation:
+          list-mode: lax
+          files:
+            - "!**/internal/jose/**"
+            - "!**/internal/keys/**"
+            - "!**/internal/dpop/**"
+            - "!**/internal/jar/**"
+            - "!**/internal/jarm/**"
+            - "!**/internal/mtls/**"
+            - "!**/internal/backchannel/**"
+            - "!**/internal/clientauth/**"
+            - "!**/internal/clientencjwks/**"
+            - "!**/internal/introspectendpoint/**"
+            - "!**/internal/tokens/**"
+            - "!**/internal/userinfo/**"
+            - "!**/op/testkit/**"
+            - "!**/test/scenarios/internal/scenariokit/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: github.com/go-jose/go-jose/v4
+              desc: "go-jose/v4 is allow-listed; new callers must route through internal/jose for the Algorithm gate"
         # Go's /internal/ path rule already blocks external imports of
         # internal/. This rule additionally blocks intra-module callers
         # outside op/ and internal/ (i.e. examples/, cmd/) from reaching
