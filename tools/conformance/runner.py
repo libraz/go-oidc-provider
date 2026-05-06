@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import ssl
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 from . import drive, ofcs, review, variants
+from .paths import ISSUER
 
 
 @dataclass
@@ -25,6 +29,75 @@ def _drive_flags_for(module: str) -> dict[str, str]:
         else "0",
     }
     return flags
+
+
+def _ciba_mode_for(module: str) -> str:
+    """Pick the op-demo CIBA test-mode override for a fapi-ciba module.
+
+    Most modules drive the happy-flow shape (auto-approve after the
+    short delay). Two modules need device-side outcomes op-demo cannot
+    derive from the request itself:
+
+    * user-rejects-authentication — operator denies on the device, the
+      OP must surface access_denied at the next /token poll.
+    * multiple-call-to-token-endpoint — OFCS asserts on several
+      authorization_pending polls before approval; the default 15 s
+      delay is too short, so the wrapper switches to a longer one.
+
+    Anything else returns "approve" so a stale "reject" left over from
+    a previous module cannot leak into the next one.
+    """
+    if "fapi-ciba" not in module:
+        return ""
+    if "user-rejects-authentication" in module:
+        return "reject"
+    if "multiple-call-to-token-endpoint" in module:
+        return "slow"
+    return "approve"
+
+
+# _CIBA_MODE_URL is the absolute URL the op-demo CIBA test-mode
+# handler is mounted at. The runner.py process runs on the host (the
+# OFCS server is the Docker side of this setup), so we hit the OP via
+# 127.0.0.1 rather than the host.docker.internal alias the plan files
+# use — host.docker.internal is a Docker Desktop convenience and is
+# not guaranteed to resolve from a plain host shell.
+#
+# OFCS_OP_PORT lets a custom -listen flag on op-demo override the
+# default 9443; ISSUER's port is parsed for the same reason so the
+# values stay in sync without a second source of truth.
+_CIBA_MODE_URL = (
+    "https://127.0.0.1:" + ISSUER.rsplit(":", 1)[-1].rstrip("/") + "/_test/ciba-mode"
+)
+
+
+def _set_ciba_mode(mode: str) -> None:
+    """POST mode to op-demo's /_test/ciba-mode endpoint.
+
+    The op-demo binary terminates TLS with a self-signed cert so the
+    Python client deliberately disables verification — this URL is the
+    runner-side control channel, not an RP credential, and the plan
+    server already pins the same listener via the trust store mounted
+    into the OFCS docker container. Network failures are logged but do
+    not abort the run: a stale mode means the test will fail loudly,
+    which is more useful than silently skipping it.
+    """
+    if not mode:
+        return
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    req = urllib.request.Request(
+        _CIBA_MODE_URL,
+        data=mode.encode("ascii"),
+        method="POST",
+        headers={"Content-Type": "text/plain"},
+    )
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+            resp.read()
+    except urllib.error.URLError as e:
+        sys.stdout.write(f"[runner] failed to set ciba mode {mode!r}: {e}\n")
 
 
 def _make_drive_opts(runner_id: str) -> drive.DriveOptions:
@@ -53,6 +126,7 @@ def run_one(plan: str, module: str) -> ModuleOutcome:
     out = ModuleOutcome()
     saved_env = {k: os.environ.get(k) for k in ("OFCS_DRIVE_REJECT", "OFCS_DRIVE_DOUBLE_VISIT")}
     os.environ.update(_drive_flags_for(module))
+    _set_ciba_mode(_ciba_mode_for(module))
     try:
         variant = variants.select(module, plan)
         start_ms = int(time.time() * 1000)
