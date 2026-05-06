@@ -55,10 +55,14 @@ import (
 //     and the FAPI alg lockdown.
 //   - op.WithFeature(feature.MTLS) — sender constraint; required by
 //     fapi-ciba-id1's hardcoded cert-bound check.
-//   - op.WithCIBA(WithCIBAHintResolver(...), WithCIBAPollInterval(1s)) —
-//     1 s poll keeps the OFCS plan moving; the auto-approve delay
-//     (cfg.cibaAutoApproveDelay) is intentionally longer so the first
-//     poll lands authorization_pending — the shape OFCS asserts on.
+//   - op.WithCIBA(WithCIBAHintResolver(...), WithCIBAPollInterval(1s),
+//     WithCIBAMaxPollViolations(50)) — 1 s poll keeps the OFCS plan
+//     moving; the auto-approve delay (cfg.cibaAutoApproveDelay) is
+//     intentionally longer so the first poll lands authorization_pending.
+//     The poll-abuse cap is raised because the OFCS
+//     multiple-call-to-token-endpoint module exercises the slow_down
+//     ladder more times than the default cap (5) permits, locking the
+//     record to access_denied mid-test under the production default.
 func fapiCIBAOptions(st *inmem.Store) []op.Option {
 	return []op.Option{
 		op.WithProfile(profile.FAPICIBA),
@@ -66,6 +70,7 @@ func fapiCIBAOptions(st *inmem.Store) []op.Option {
 		op.WithCIBA(
 			op.WithCIBAHintResolver(demoHintResolver(st)),
 			op.WithCIBAPollInterval(time.Second),
+			op.WithCIBAMaxPollViolations(50),
 		),
 	}
 }
