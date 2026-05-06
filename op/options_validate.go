@@ -382,23 +382,6 @@ func isFAPI2Profile(p profile.Profile) bool {
 	return false
 }
 
-// isFAPIProfile reports whether p is any FAPI-family profile (FAPI 2.0
-// Baseline, FAPI 2.0 Message Signing, or FAPI Client-Initiated
-// Backchannel Authentication). The predicate exists so callers can
-// apply FAPI-uniform wiring (e.g. the 60-minute JAR lifetime cap
-// FAPI 2.0 Message Signing §5.6 imposes, the
-// x-fapi-interaction-id middleware) without re-listing the FAPI set
-// at each site.
-func isFAPIProfile(p profile.Profile) bool {
-	switch p {
-	case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:
-		return true
-	case profile.IGovHigh:
-		return false
-	}
-	return false
-}
-
 // validateLocales rejects a [WithDefaultLocale] value that is not
 // served by any registered bundle. The seed en / ja bundles are
 // always available, so a default of "en" / "ja" never trips the
