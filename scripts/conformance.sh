@@ -64,6 +64,14 @@ CERT_FILE="${CERTS}/localhost.pem"
 KEY_FILE="${CERTS}/localhost-key.pem"
 CFG_FILE="${CERTS}/openssl.cnf"
 TRUSTSTORE_FILE="${CERTS}/truststore.jks"
+# OFCS_CA_FILE is the OFCS nginx self-signed cert, extracted via
+# `docker exec ... cat /etc/ssl/certs/nginx-selfsigned.crt`. op-up
+# passes this to op-demo's -extra-ca-bundle so the JWKS fetcher can
+# reach the runner-controlled jwks_uri values OFCS publishes at
+# https://localhost.emobix.co.uk:8443/test/<id>/jwks. Absent file
+# means oidcc-dynamic / FAPI tests that depend on jwks_uri fail with
+# a TLS verification error; the file is dev-only and gitignored.
+OFCS_CA_FILE="${CERTS}/ofcs-ca.pem"
 
 # Compose stack — pinned. The image tag lives in
 # conformance/docker-compose.yml's IMAGE_TAG default. We re-export it
@@ -267,6 +275,18 @@ cmd_op_up() {
     dcr_flag+=(-enable-dcr)
   fi
 
+  # OFCS publishes RP-side jwks_uri / request_uri endpoints behind its
+  # nginx self-signed cert. Without -extra-ca-bundle the JWKS fetcher's
+  # TLS dial rejects those URLs and the oidcc-registration-jwks-uri /
+  # oidcc-refresh-token-rp-key-rotation modules surface a verification
+  # error before they can complete. The file is optional: missing it
+  # silently keeps the system trust store unchanged so a non-OFCS
+  # smoke run still works.
+  ca_flag=()
+  if [[ -f "${OFCS_CA_FILE}" ]]; then
+    ca_flag+=(-extra-ca-bundle "${OFCS_CA_FILE}")
+  fi
+
   # OP_PROFILE selects the security profile op-demo runs under. The
   # default ("") = vanilla OIDC Core. Override with
   #   OP_PROFILE=fapi2-baseline scripts/conformance.sh op-up
@@ -287,6 +307,7 @@ cmd_op_up() {
     -fapi-client-jwks "${ROOT}/conformance/keys/fapi-client.jwks.json" \
     -fapi-client-2-jwks "${ROOT}/conformance/keys/fapi-client-2.jwks.json" \
     "${dcr_flag[@]}" \
+    "${ca_flag[@]}" \
     > "${LOGFILE}" 2>&1 &
   echo $! > "${PIDFILE}"
   sleep 1
