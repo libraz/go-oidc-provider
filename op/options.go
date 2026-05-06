@@ -525,6 +525,16 @@ type config struct {
 	// [ciba.DefaultInterval] (5s).
 	cibaPollInterval time.Duration
 
+	// cibaMaxPollViolations overrides the strike threshold above
+	// which the token endpoint locks a CIBA record by calling Deny
+	// with reason "poll_abuse". Zero falls back to the library
+	// default ([ciba.MaxPollViolations], currently 5). 255 disables
+	// the lockout effectively (the strike counter is uint8 and never
+	// wraps past 255). The knob exists because the OFCS
+	// fapi-ciba multiple-call-to-token-endpoint module exercises the
+	// slow_down ladder more times than the default cap permits.
+	cibaMaxPollViolations uint8
+
 	// encryptionKeyset carries the asymmetric private keys the OP
 	// uses to decrypt inbound JWE (request_object) and to encrypt
 	// outbound JWE addressed to RP keys (id_token / userinfo / JARM

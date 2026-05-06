@@ -303,6 +303,45 @@ func TestHandleCIBA_PollAbuseLockout(t *testing.T) {
 	}
 }
 
+// TestHandleCIBA_PollAbuseLockoutThresholdOverride confirms a
+// caller-supplied [Deps.CIBAMaxPollViolations] takes precedence over
+// the library default. The override exists so conformance harnesses
+// (e.g. the OFCS fapi-ciba multiple-call-to-token-endpoint module)
+// can exercise the slow_down ladder more times than the default cap
+// permits without prematurely tripping the access_denied lockout.
+func TestHandleCIBA_PollAbuseLockoutThresholdOverride(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	// Raise the cap above the default so two extra slow_down responses
+	// land before the lockout fires; the test then confirms the next
+	// poll past the override does fire.
+	const overrideCap uint8 = ciba.MaxPollViolations + 2
+	f.deps.CIBAMaxPollViolations = overrideCap
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:           "auth-req-override",
+		Scope:        []string{"openid"},
+		Status:       store.CIBARequestStatusPending,
+		Interval:     ciba.DefaultInterval,
+		LastPolledAt: ptrTime(f.clock.now.Add(-1 * time.Millisecond)),
+	})
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "auth-req-override")
+	for range int(overrideCap) {
+		_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-override", f.clock.now.Add(-1*time.Millisecond))
+		rec := f.post(t, form)
+		if got := cibaDecodeError(t, rec.Body.Bytes()); got != "slow_down" {
+			t.Fatalf("error = %q, want slow_down (override cap=%d)", got, overrideCap)
+		}
+	}
+	// One more poll past the override threshold should now lock out.
+	_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-override", f.clock.now.Add(-1*time.Millisecond))
+	rec := f.post(t, form)
+	if got := cibaDecodeError(t, rec.Body.Bytes()); got != "access_denied" {
+		t.Fatalf("error = %q, want access_denied after override cap exceeded", got)
+	}
+}
+
 // ptrTime returns &t. The helper exists so the seedCIBARequest
 // call sites stay readable; LastPolledAt is *time.Time so an
 // embedder can distinguish "never polled" from "polled at the

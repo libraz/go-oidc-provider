@@ -326,6 +326,27 @@ func TestWithCIBAPollInterval_RejectsNegative(t *testing.T) {
 	}
 }
 
+// TestWithCIBAMaxPollViolations_AcceptsValue confirms the option
+// constructs cleanly. The runtime effect is exercised by the
+// /token-endpoint integration tests; this case pins the option-layer
+// contract that any uint8 (including the 255 effectively-disabled
+// sentinel) is accepted without a configuration error.
+func TestWithCIBAMaxPollViolations_AcceptsValue(t *testing.T) {
+	t.Parallel()
+
+	for _, n := range []uint8{0, 5, 50, 255} {
+		_, err := op.New(append(validBaseOptsWithInmem(t),
+			op.WithCIBA(
+				op.WithCIBAHintResolver(stubHintResolver{}),
+				op.WithCIBAMaxPollViolations(n),
+			),
+		)...)
+		if err != nil {
+			t.Errorf("op.New with WithCIBAMaxPollViolations(%d) returned %v", n, err)
+		}
+	}
+}
+
 // TestWithCIBAHintResolver_RejectsNil pins the option's nil-resolver
 // rejection so a typo cannot silently disable hint resolution.
 func TestWithCIBAHintResolver_RejectsNil(t *testing.T) {

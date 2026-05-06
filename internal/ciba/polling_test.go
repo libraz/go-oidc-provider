@@ -168,6 +168,45 @@ func TestDecidePoll(t *testing.T) {
 	}
 }
 
+// TestDecidePoll_MaxPollViolationsOverride confirms a non-zero
+// [PollInput.MaxPollViolations] takes precedence over the package
+// default. The override exists so token-endpoint callers (and through
+// them, op-layer embedders) can raise or lower the lockout cap
+// without forking the polling discipline. The check exercises both
+// directions: a higher cap admits a strike count that would lock
+// under the default, and a lower cap locks earlier.
+func TestDecidePoll_MaxPollViolationsOverride(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+
+	// Higher cap: 6 strikes, raised cap of 8 → no lockout.
+	hi := ciba.DecidePoll(ciba.PollInput{
+		Now:               now,
+		LastPolledAt:      now.Add(-10 * time.Second),
+		EffectiveInterval: ciba.DefaultInterval,
+		ExpiresAt:         now.Add(time.Minute),
+		PollViolations:    ciba.MaxPollViolations + 1,
+		MaxPollViolations: ciba.MaxPollViolations + 3,
+	})
+	if hi.Decision == ciba.PollDecisionAccessDenied {
+		t.Errorf("higher cap: got access_denied, want authorization_pending")
+	}
+
+	// Lower cap: 2 strikes, lowered cap of 2 → lockout fires before
+	// the default (5) would have triggered.
+	lo := ciba.DecidePoll(ciba.PollInput{
+		Now:               now,
+		LastPolledAt:      now.Add(-10 * time.Second),
+		EffectiveInterval: ciba.DefaultInterval,
+		ExpiresAt:         now.Add(time.Minute),
+		PollViolations:    2,
+		MaxPollViolations: 2,
+	})
+	if lo.Decision != ciba.PollDecisionAccessDenied {
+		t.Errorf("lower cap: got %v, want access_denied", lo.Decision)
+	}
+}
+
 func TestDecidePoll_NextIntervalFallback(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)

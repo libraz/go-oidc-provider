@@ -327,6 +327,12 @@ type Deps struct {
 	// cannot reach the runtime nil-check.
 	CIBARequests store.CIBARequestStore
 
+	// CIBAMaxPollViolations overrides the strike threshold above which
+	// the token endpoint locks a CIBA record by calling Deny with
+	// reason "poll_abuse". Zero falls back to the library default
+	// ([ciba.MaxPollViolations], currently 5).
+	CIBAMaxPollViolations uint8
+
 	// ClientEncJWKs resolves the RP's encryption recipient when the
 	// client registered id_token_encrypted_response_alg / _enc. The
 	// resolver wraps an issued id_token in a JWE addressed to the

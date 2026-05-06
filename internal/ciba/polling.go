@@ -161,6 +161,14 @@ type PollInput struct {
 	// for invoking CIBARequestStore.Deny with reason="poll_abuse"
 	// in the same step.
 	PollViolations uint8
+
+	// MaxPollViolations overrides the strike threshold above which
+	// the discipline returns [PollDecisionAccessDenied]. Zero falls
+	// back to the package-level [MaxPollViolations] (currently 5);
+	// a non-zero value lets a caller (typically the token endpoint
+	// reading [tokenendpoint.Deps.CIBAMaxPollViolations]) raise or
+	// lower the cap without forking the polling logic.
+	MaxPollViolations uint8
 }
 
 // PollOutput captures the decision plus the next-interval the token
@@ -214,7 +222,11 @@ func DecidePoll(in PollInput) PollOutput {
 	if in.Denied {
 		return PollOutput{Decision: PollDecisionAccessDenied}
 	}
-	if in.PollViolations >= MaxPollViolations {
+	threshold := in.MaxPollViolations
+	if threshold == 0 {
+		threshold = MaxPollViolations
+	}
+	if in.PollViolations >= threshold {
 		return PollOutput{Decision: PollDecisionAccessDenied}
 	}
 	if !in.LastPolledAt.IsZero() {

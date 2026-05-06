@@ -158,6 +158,35 @@ func WithCIBAPollInterval(d time.Duration) CIBAOption {
 	})
 }
 
+// WithCIBAMaxPollViolations overrides the strike threshold above
+// which the /token endpoint locks a CIBA record by calling Deny with
+// reason "poll_abuse" (CIBA Core 1.0 §11 leaves the lockout cap
+// implementation-defined). Zero falls back to the library default
+// ([ciba.MaxPollViolations], currently 5).
+//
+// The knob exists for two reasons:
+//
+//  1. Conformance harnesses that exercise the slow_down ladder more
+//     times than the default cap permits (e.g. the OFCS fapi-ciba
+//     multiple-call-to-token-endpoint module) would otherwise see
+//     the request lock to access_denied mid-test.
+//  2. Embedders whose RP fleet legitimately races the slow_down
+//     interval (clock skew, retry storms after a transient outage)
+//     can raise the cap to absorb the bounce without revoking the
+//     auth_req_id.
+//
+// To disable the lockout effectively, pass 255 — the strike counter
+// is uint8 and never wraps past that value. Production embedders
+// SHOULD prefer a finite cap because the lockout is the only defence
+// against a client that ignores slow_down and burns through the
+// auth_req_id's TTL with rapid polls.
+func WithCIBAMaxPollViolations(n uint8) CIBAOption {
+	return cibaOptionFunc(func(c *config) error {
+		c.cibaMaxPollViolations = n
+		return nil
+	})
+}
+
 // WithCIBA enables the CIBA Core 1.0 grant
 // (urn:openid:params:grant-type:ciba). The option:
 //

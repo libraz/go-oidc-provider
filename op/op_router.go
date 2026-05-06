@@ -135,6 +135,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			CustomGrants:                   buildExtensionDispatcher(cfg, keySet),
 			DeviceCodes:                    deviceCodesFor(cfg),
 			CIBARequests:                   cibaRequestsFor(cfg),
+			CIBAMaxPollViolations:          cfg.cibaMaxPollViolations,
 			ClientEncJWKs:                  encResolver,
 		})),
 	)

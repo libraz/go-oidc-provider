@@ -125,6 +125,7 @@ func applyCIBAPollDecision(
 		Denied:            rec.Status == store.CIBARequestStatusDenied,
 		Consumed:          rec.Status == store.CIBARequestStatusConsumed,
 		PollViolations:    rec.PollViolations,
+		MaxPollViolations: deps.CIBAMaxPollViolations,
 	})
 	// Stamp the poll timestamp before any further branching so the
 	// next poll's slow_down ladder sees the current observation. A
@@ -156,7 +157,11 @@ func applyCIBAPollDecision(
 	case ciba.PollDecisionSlowDown:
 		emitCIBASlowDown(ctx, deps, clientID, rec.Interval, decision.NextInterval)
 		strikes, err := deps.CIBARequests.IncrementPollViolation(ctx, authReqID)
-		if err == nil && strikes >= ciba.MaxPollViolations {
+		threshold := deps.CIBAMaxPollViolations
+		if threshold == 0 {
+			threshold = ciba.MaxPollViolations
+		}
+		if err == nil && strikes >= threshold {
 			if denyErr := deps.CIBARequests.Deny(ctx, authReqID, "poll_abuse"); denyErr == nil {
 				deps.audit().Emit(ctx, audit.Event{
 					Name:     ciba.AuditPollAbuseLockout,
@@ -165,7 +170,7 @@ func applyCIBAPollDecision(
 					ClientID: clientID,
 					Extras: map[string]any{
 						"strikes":     int(strikes),
-						"max_strikes": int(ciba.MaxPollViolations),
+						"max_strikes": int(threshold),
 					},
 				})
 			}
