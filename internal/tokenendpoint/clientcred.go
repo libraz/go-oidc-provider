@@ -21,6 +21,15 @@ import (
 // Decomposing into named helpers mirrors [handleAuthorizationCode] and
 // keeps the cyclomatic complexity well under the project's cap.
 func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) {
+	// DPoP verification runs ahead of client authentication so the
+	// `use_dpop_nonce` challenge fires before any client_assertion jti
+	// is consumed. RFC 9449 §8 contemplates a verbatim retry of the
+	// client-side request body; recording the jti on the first
+	// attempt would force the OP to reject the retry as a replay.
+	dpopOut, ok := verifyTokenDPoP(w, r, deps)
+	if !ok {
+		return
+	}
 	ctx := r.Context()
 	client, _, ok := authenticate(ctx, w, r, deps)
 	if !ok {
@@ -34,10 +43,6 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 		return
 	}
 	authorized, ok := authorizeClientCreds(w, client, requested)
-	if !ok {
-		return
-	}
-	dpopOut, ok := verifyTokenDPoP(w, r, deps)
 	if !ok {
 		return
 	}

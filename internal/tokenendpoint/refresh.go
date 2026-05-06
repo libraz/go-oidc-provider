@@ -29,6 +29,16 @@ import (
 // DPoP, which RFC 9449 §5.2 allows to bind opportunistically on
 // first refresh).
 func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
+	// DPoP verification runs ahead of client authentication so the
+	// `use_dpop_nonce` challenge fires before any client_assertion jti
+	// is consumed. The bound-chain invariants (proof required when the
+	// presented refresh token was DPoP-bound, jkt match) depend on the
+	// exchange outcome and are enforced post-exchange via
+	// [enforceDPoPRefreshBinding]. Mirrors handleAuthorizationCode.
+	dpopOut, ok := verifyTokenDPoP(w, r, deps)
+	if !ok {
+		return
+	}
 	ctx := r.Context()
 	client, _, ok := authenticate(ctx, w, r, deps)
 	if !ok {
@@ -48,8 +58,7 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope) {
 		return
 	}
-	dpopOut, ok := requireDPoPMatch(w, r, deps, exchanged.DPoPJKT)
-	if !ok {
+	if !enforceDPoPRefreshBinding(w, deps, dpopOut, exchanged.DPoPJKT) {
 		return
 	}
 	if !requireMTLSMatch(w, r, deps, exchanged.MTLSCertThumbprint) {
@@ -381,8 +390,8 @@ func rotateRefreshToken(
 		// Chain was not previously bound: apply the issuance-time
 		// policy (public clients bind, confidential clients leave
 		// empty). When the chain is already bound, exchanged.DPoPJKT
-		// equals binding.DPoPJKT (requireDPoPMatch enforced match)
-		// and we keep that value so the chain stays bound.
+		// equals binding.DPoPJKT (enforceDPoPRefreshBinding enforced
+		// match) and we keep that value so the chain stays bound.
 		rotatedJKT = refreshDPoPJKT(client, binding.DPoPJKT)
 	}
 	token, err := issuer.Issue(ctx, refresh.IssueInput{

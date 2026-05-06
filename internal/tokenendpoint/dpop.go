@@ -52,46 +52,45 @@ func verifyTokenDPoP(w http.ResponseWriter, r *http.Request, deps Deps) (*dpopOu
 	return &dpopOutcome{JKT: res.JKT, JTI: res.JTI, Presented: true}, true
 }
 
-// requireDPoPMatch is the refresh-time variant of [verifyTokenDPoP].
-// When boundJKT is non-empty (the consumed refresh token was DPoP-
-// bound) the function REQUIRES a proof header AND verifies its
-// thumbprint matches. When boundJKT is empty (bearer chain) the
-// function accepts an absent proof; if a proof IS presented it is
-// still verified and the resulting jkt is propagated so the rotated
-// access token can be bound to the same key (RFC 9449 §5.2).
-func requireDPoPMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundJKT string) (*dpopOutcome, bool) {
+// enforceDPoPRefreshBinding reconciles the post-exchange DPoP state for
+// the refresh_token grant. Proof verification (signature, htu/htm, RFC
+// 9449 §8 nonce challenge) ran upfront in [verifyTokenDPoP] so the
+// use_dpop_nonce 400 fires before any client_assertion jti is consumed;
+// this helper only enforces the bound-chain invariants RFC 9449 §5.2
+// owes the rotation, which depend on data the exchange surfaces:
+//
+//   - DPoP feature off + chain bound  → invalid_grant. The OP was
+//     reconfigured between issuance and refresh; admitting the
+//     request would silently downgrade a sender-constrained chain to
+//     bearer.
+//   - No proof presented + chain bound → invalid_grant (proof required).
+//   - Proof presented + chain bound + jkt mismatch → invalid_grant
+//     (key mismatch).
+//   - Bearer chain (boundJKT == "") with or without proof → accepted;
+//     a presented proof opportunistically binds the rotated tokens.
+func enforceDPoPRefreshBinding(w http.ResponseWriter, deps Deps, out *dpopOutcome, boundJKT string) bool {
 	if deps.DPoP == nil {
-		// DPoP feature off but the chain claims a binding: the OP was
-		// reconfigured between issuance and refresh. The library's
-		// posture is "fail closed" — admitting the request would
-		// silently downgrade a sender-constrained chain to bearer.
 		if boundJKT != "" {
 			writeError(w, http.StatusBadRequest, errInvalidGrant,
 				"refresh token is DPoP-bound but DPoP is not enabled")
-			return nil, false
+			return false
 		}
-		return &dpopOutcome{}, true
+		return true
 	}
-	header := r.Header.Get("DPoP")
-	if header == "" {
+	if !out.Presented {
 		if boundJKT == "" {
-			return &dpopOutcome{}, true
+			return true
 		}
 		writeError(w, http.StatusBadRequest, errInvalidGrant,
 			"DPoP proof required for sender-constrained refresh token")
-		return nil, false
+		return false
 	}
-	res, err := deps.DPoP.VerifyHTTPRequest(r.Context(), r, "")
-	if err != nil {
-		writeDPoPError(w, deps, err)
-		return nil, false
-	}
-	if boundJKT != "" && res.JKT != boundJKT {
+	if boundJKT != "" && out.JKT != boundJKT {
 		writeError(w, http.StatusBadRequest, errInvalidGrant,
 			"DPoP proof key does not match the bound thumbprint")
-		return nil, false
+		return false
 	}
-	return &dpopOutcome{JKT: res.JKT, JTI: res.JTI, Presented: true}, true
+	return true
 }
 
 // writeDPoPError translates a [dpop.Err*] sentinel onto the wire form.
