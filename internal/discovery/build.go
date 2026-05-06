@@ -239,6 +239,18 @@ func ValidateIssuer(raw string) error {
 	if err != nil {
 		return fmt.Errorf("%w: parse: %w", ErrIssuerInvalid, err)
 	}
+	if err := validateIssuerStructure(u); err != nil {
+		return err
+	}
+	if err := validateIssuerCanonicalForm(raw, u); err != nil {
+		return err
+	}
+	return validateIssuerScheme(u)
+}
+
+// validateIssuerStructure enforces the URL-shape rules: absolute,
+// non-empty authority, no query, no fragment, no trailing slash.
+func validateIssuerStructure(u *url.URL) error {
 	if !u.IsAbs() {
 		return fmt.Errorf("%w: must be absolute", ErrIssuerInvalid)
 	}
@@ -259,6 +271,13 @@ func ValidateIssuer(raw string) error {
 		// "/.well-known/..." to produce the configuration URI.
 		return fmt.Errorf("%w: must not end with a trailing slash", ErrIssuerInvalid)
 	}
+	return nil
+}
+
+// validateIssuerCanonicalForm enforces RFC 3986 §3.2.2 / §6.2.2.1
+// normalisation: lowercase scheme, lowercase authority, canonical path
+// (no "..", ".", or duplicate slashes).
+func validateIssuerCanonicalForm(raw string, u *url.URL) error {
 	// url.Parse normalizes u.Scheme to lowercase, so an uppercase
 	// scheme in raw input ("HTTPS://...") would slip past a u.Scheme
 	// check. Inspect the raw prefix instead.
@@ -281,6 +300,12 @@ func ValidateIssuer(raw string) error {
 			return fmt.Errorf("%w: path must be canonical (no '..', '.', or duplicate slashes)", ErrIssuerInvalid)
 		}
 	}
+	return nil
+}
+
+// validateIssuerScheme enforces the scheme-specific rules: https with
+// no default port, or http restricted to loopback IP literals.
+func validateIssuerScheme(u *url.URL) error {
 	switch u.Scheme {
 	case "https":
 		if u.Port() == "443" {
