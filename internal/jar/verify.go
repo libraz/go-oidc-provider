@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -727,6 +728,15 @@ type ResolverOption func(*Fetcher)
 // neutralise SSRF attacks via attacker-controlled jwks_uri values.
 func AllowPrivateNetwork() ResolverOption {
 	return func(f *Fetcher) { f.SetAllowPrivate(true) }
+}
+
+// WithBaseTransport injects a [http.RoundTripper] the JWKS fetcher
+// will use instead of the package default. Forwards to
+// [Fetcher.SetBaseTransport]; see that doc comment for the semantics.
+// Used by embedders that need a custom TLS trust store (internal CA,
+// dev conformance harness with self-signed certs).
+func WithBaseTransport(rt http.RoundTripper) ResolverOption {
+	return func(f *Fetcher) { f.SetBaseTransport(rt) }
 }
 
 // DefaultResolver is the exported wrapper around the package-private

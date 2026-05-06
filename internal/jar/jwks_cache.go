@@ -187,6 +187,15 @@ type Fetcher struct {
 	// exception of cloud-metadata IPs, which remain rejected via
 	// [internal/netsec]).
 	allowPrivate bool
+
+	// baseTransport overrides the [http.RoundTripper] backing the lazy
+	// client. Production wiring leaves this nil so [netsec.NewHTTPClient]
+	// installs its own [http.Transport]; embedders that need a custom
+	// trust store (private CA, dev conformance harness with a
+	// self-signed cert) inject one here. The dial-time SSRF gate is
+	// still applied because [netsec.NewHTTPClient] re-wires
+	// DialContext on the supplied transport before returning.
+	baseTransport http.RoundTripper
 }
 
 // NewFetcher returns a fetcher with the project defaults applied.
@@ -207,14 +216,34 @@ func (f *Fetcher) SetAllowPrivate(b bool) {
 	f.allowPrivate = b
 }
 
+// SetBaseTransport injects a [http.RoundTripper] the fetcher will use
+// instead of [netsec.NewHTTPClient]'s default [http.Transport]. The
+// caller's transport is preserved verbatim except that the dial-time
+// SSRF gate is rewired onto its DialContext — passing a custom
+// transport does not bypass the SSRF protections.
+//
+// Embedders that need a private CA (an internal CA-issued client
+// JWKS endpoint, the OFCS conformance harness against a self-signed
+// runner cert) supply a transport with the matching TLSClientConfig.
+// Production deployments using publicly-trusted certs should leave
+// this nil so the package picks up Go's system trust store.
+//
+// The setter must be called before the first [Fetch]; once the lazy
+// client is constructed the transport is captured and later changes
+// are ignored.
+func (f *Fetcher) SetBaseTransport(rt http.RoundTripper) {
+	f.baseTransport = rt
+}
+
 // netsecOptions returns the [netsec.Options] snapshot the fetcher
 // hands to the URL-time gate and the HTTP client. The function is the
 // single source of truth so the dial-time and URL-time checks always
 // agree on the AllowPrivate posture.
 func (f *Fetcher) netsecOptions() netsec.Options {
 	return netsec.Options{
-		Timeout:      defaultJWKSTimeout,
-		AllowPrivate: f.allowPrivate,
+		Timeout:       defaultJWKSTimeout,
+		AllowPrivate:  f.allowPrivate,
+		BaseTransport: f.baseTransport,
 	}
 }
 

@@ -239,3 +239,41 @@ func TestParseJWKS_HappyPath(t *testing.T) {
 		t.Errorf("KeyID=%q want k1", jwk.KeyID)
 	}
 }
+
+// countingTransport is a [http.RoundTripper] that delegates to its
+// inner client but tags responses with the count of round-trips it
+// observed. The fetcher's lazy client construction picks up exactly
+// one transport, so a >0 count after a successful Fetch confirms the
+// injection point flowed through.
+type countingTransport struct {
+	inner http.RoundTripper
+	hits  atomic.Int32
+}
+
+func (c *countingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.hits.Add(1)
+	return c.inner.RoundTrip(r)
+}
+
+// TestFetcher_SetBaseTransport confirms the injected transport is the
+// one the lazy client uses. The test pairs SetBaseTransport with a
+// countingTransport so a >0 hit count rules out the package-default
+// transport silently winning under a misconfigured option layer.
+func TestFetcher_SetBaseTransport(t *testing.T) {
+	t.Parallel()
+
+	hits := &atomic.Int32{}
+	srv := httptest.NewServer(jwksHandler("max-age=60", "", hits))
+	defer srv.Close()
+
+	ct := &countingTransport{inner: http.DefaultTransport}
+	f := NewFetcher(timex.SystemClock)
+	f.SetAllowPrivate(true)
+	f.SetBaseTransport(ct)
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got := ct.hits.Load(); got == 0 {
+		t.Fatalf("custom transport saw 0 round-trips; injection lost")
+	}
+}
