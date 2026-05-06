@@ -176,7 +176,14 @@ func TestWithAccessTokenFormatPerAudience_RejectsEmptyKey(t *testing.T) {
 	}
 }
 
-func TestWithAccessTokenFormatPerAudience_RejectsNonCanonicalKeys(t *testing.T) {
+// TestWithAccessTokenFormatPerAudience_RejectsMalformedKeys pins the
+// structural-validation rejections the helper preserves. Keys whose
+// only flaw is non-canonical case / port / trailing slash are now
+// silently canonicalised (see
+// [TestWithAccessTokenFormatPerAudience_NormalisesNonCanonicalKey]),
+// so this table only enumerates the failure modes that survive the
+// normalisation pass: missing scheme / host, fragment, userinfo.
+func TestWithAccessTokenFormatPerAudience_RejectsMalformedKeys(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -184,9 +191,9 @@ func TestWithAccessTokenFormatPerAudience_RejectsNonCanonicalKeys(t *testing.T) 
 		key  string
 		want string
 	}{
-		{"uppercase scheme", "HTTPS://api.example.com", "lowercase"},
-		{"uppercase host", "https://API.example.com", "lowercase"},
 		{"fragment", "https://api.example.com#frag", "fragment"},
+		{"empty fragment", "https://api.example.com#", "fragment"},
+		{"userinfo", "https://user@api.example.com", "userinfo"},
 		{"relative", "/api", "absolute URI"},
 		{"bare host", "api.example.com", "absolute URI"},
 	}
@@ -203,6 +210,38 @@ func TestWithAccessTokenFormatPerAudience_RejectsNonCanonicalKeys(t *testing.T) 
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("err = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestWithAccessTokenFormatPerAudience_AcceptsCanonicalisableKeys
+// pins the new contract: keys whose only flaw is non-canonical shape
+// (uppercase scheme / host, default port, trailing slash) MUST be
+// silently normalised at construction time so the runtime lookup
+// matches a request whose resource value differs only by
+// canonicalisation. The previous "reject non-canonical" posture was
+// the source of the cross-endpoint divergence the helper now closes.
+func TestWithAccessTokenFormatPerAudience_AcceptsCanonicalisableKeys(t *testing.T) {
+	t.Parallel()
+
+	cases := []string{
+		"HTTPS://api.example.com",
+		"https://API.example.com",
+		"https://api.example.com:443",
+		"https://api.example.com/",
+		"https://API.Example.COM/orders/",
+	}
+	for _, key := range cases {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOptsWithInmem(t),
+				op.WithAccessTokenFormatPerAudience(map[string]op.AccessTokenFormat{
+					key: op.AccessTokenFormatOpaque,
+				}),
+			)...)
+			if err != nil {
+				t.Fatalf("op.New rejected canonicalisable key %q: %v", key, err)
 			}
 		})
 	}

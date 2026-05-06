@@ -299,43 +299,41 @@ func (s *Store) Interactions() store.InteractionStore { return s.interactionsImp
 // ConsumedJTIs returns the [store.ConsumedJTIStore] handle.
 func (s *Store) ConsumedJTIs() store.ConsumedJTIStore { return s.jtisImpl }
 
-// The accessors below panic when invoked. Composite never calls them
-// for a Kind routed elsewhere, so the panic only fires when an embedder
-// uses Redis without composite (unsupported) or routes an out-of-scope
-// Kind to Redis (a configuration error). Failing loudly is preferable
-// to silently corrupting state — returning a "no-op" substore would
-// let the library issue tokens that nothing remembers, which is the
-// scenario the panic is designed to prevent.
+// The accessors below return nil for substores the Redis adapter
+// does not implement. Composite never calls them for a Kind routed
+// elsewhere; embedders that wire Redis directly into [op.WithStore]
+// rely on op.New's substore validation to surface a fail-fast
+// configuration error rather than a runtime panic on the first
+// request. Returning a "no-op" substore is intentionally avoided —
+// silently issuing tokens that nothing remembers would be far
+// worse than the construction-time rejection.
 //
-// The forbidigo allow-list is wired explicitly per accessor with this
-// rationale; see the package godoc on [Store] for the broader scope
-// note.
-//
-// InitialAccessTokens and RegistrationAccessTokens return nil instead
-// of panicking so the library's op.WithDynamicRegistration nil-check
-// correctly surfaces "DCR not available" when only Redis is wired.
+// The unified nil-return policy mirrors the existing
+// InitialAccessTokens / RegistrationAccessTokens / OpaqueAccessTokens
+// / GrantRevocations behaviour: every nil return surfaces at
+// op.New through a substore presence check tied to the active
+// grant / feature set.
 
-// Clients implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) Clients() store.ClientStore { panic(unimplemented("Clients")) }
+// Clients implements [store.Store]; out-of-scope on Redis. Returns
+// nil so op.New surfaces "ClientStore not implemented by store
+// backend" before the first request lands.
+func (s *Store) Clients() store.ClientStore { return nil }
 
-// AuthorizationCodes implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) AuthorizationCodes() store.AuthorizationCodeStore {
-	panic(unimplemented("AuthorizationCodes"))
-}
+// AuthorizationCodes implements [store.Store]; out-of-scope on
+// Redis. Returns nil; op.New rejects the config when
+// [grant.AuthorizationCode] is active without a backing substore.
+func (s *Store) AuthorizationCodes() store.AuthorizationCodeStore { return nil }
 
-// RefreshTokens implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) RefreshTokens() store.RefreshTokenStore { panic(unimplemented("RefreshTokens")) }
+// RefreshTokens implements [store.Store]; out-of-scope on Redis.
+// Returns nil; op.New rejects the config when [grant.RefreshToken]
+// (or any flow that issues refresh tokens) is active without a
+// backing substore.
+func (s *Store) RefreshTokens() store.RefreshTokenStore { return nil }
 
-// Grants implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) Grants() store.GrantStore { panic(unimplemented("Grants")) }
+// Grants implements [store.Store]; out-of-scope on Redis. Returns
+// nil; op.New rejects the config because every interactive grant
+// type requires the substore.
+func (s *Store) Grants() store.GrantStore { return nil }
 
 // Metadata implements [store.Store] against a Redis hash. The
 // substore is the persistence path for coarse construction-time
@@ -343,23 +341,15 @@ func (s *Store) Grants() store.GrantStore { panic(unimplemented("Grants")) }
 // same surface without further interface change).
 func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s) }
 
-// DeviceCodes implements [store.Store] but the Redis adapter does
-// not yet ship a [store.DeviceCodeStore] implementation. Embedders
-// requiring device_code support route the substore to a
-// device-code-capable backend (the in-memory adapter or a future
-// SQL/Redis implementation) via op/storeadapter/composite.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) DeviceCodes() store.DeviceCodeStore { panic(unimplemented("DeviceCodes")) }
+// DeviceCodes implements [store.Store]; out-of-scope on Redis.
+// Returns nil; op.New rejects the config when
+// [grant.DeviceCode] is active without a backing substore.
+func (s *Store) DeviceCodes() store.DeviceCodeStore { return nil }
 
-// CIBARequests implements [store.Store] but the Redis adapter does
-// not yet ship a [store.CIBARequestStore] implementation. Embedders
-// requiring CIBA support route the substore to a CIBA-capable backend
-// (the in-memory adapter or a future SQL/Redis implementation) via
-// op/storeadapter/composite.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) CIBARequests() store.CIBARequestStore { panic(unimplemented("CIBARequests")) }
+// CIBARequests implements [store.Store]; out-of-scope on Redis.
+// Returns nil; op.New rejects the config when [grant.CIBA] is
+// active without a backing substore.
+func (s *Store) CIBARequests() store.CIBARequestStore { return nil }
 
 // Sessions returns the [store.SessionStore] handle. Sessions are an
 // in-scope substore for the Redis adapter: the OP does not
@@ -368,17 +358,15 @@ func (s *Store) CIBARequests() store.CIBARequestStore { panic(unimplemented("CIB
 // with the other Kinds via op/storeadapter/composite.
 func (s *Store) Sessions() store.SessionStore { return s.sessionsImpl }
 
-// PushedAuthRequests implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) PushedAuthRequests() store.PushedAuthRequestStore {
-	panic(unimplemented("PushedAuthRequests"))
-}
+// PushedAuthRequests implements [store.Store]; out-of-scope on
+// Redis. Returns nil; op.New rejects the config when [feature.PAR]
+// is active without a backing substore.
+func (s *Store) PushedAuthRequests() store.PushedAuthRequestStore { return nil }
 
-// Users implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) Users() store.UserStore { panic(unimplemented("Users")) }
+// Users implements [store.Store]; out-of-scope on Redis. Returns
+// nil; op.New rejects the config when an authenticator that needs
+// the substore is wired without a backing implementation.
+func (s *Store) Users() store.UserStore { return nil }
 
 // InitialAccessTokens returns nil. See the accessor block doc.
 func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore { return nil }
@@ -386,10 +374,10 @@ func (s *Store) InitialAccessTokens() store.InitialAccessTokenStore { return nil
 // RegistrationAccessTokens returns nil. See the accessor block doc.
 func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore { return nil }
 
-// AccessTokens implements [store.Store]; see accessor doc above.
-//
-//nolint:forbidigo // out-of-scope substore; misconfiguration MUST surface loudly.
-func (s *Store) AccessTokens() store.AccessTokenRegistry { panic(unimplemented("AccessTokens")) }
+// AccessTokens implements [store.Store]; out-of-scope on Redis.
+// Returns nil; op.New rejects the config when the JWT-AT registry
+// or JWT revocation strategy is active without a backing substore.
+func (s *Store) AccessTokens() store.AccessTokenRegistry { return nil }
 
 // OpaqueAccessTokens implements [store.Store] (ADR 0024). Redis cannot
 // host the transactional cluster on its own — the opaque-AT save must
@@ -414,7 +402,3 @@ func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
 // tombstone strategy compose this adapter with
 // op/storeadapter/composite + a SQL anchor.
 func (s *Store) GrantRevocations() store.GrantRevocationStore { return nil }
-
-func unimplemented(kind string) string {
-	return fmt.Sprintf("oidcredis: %s is out of scope; route this substore via composite to a durable backend", kind)
-}

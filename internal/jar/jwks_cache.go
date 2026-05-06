@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -176,12 +177,12 @@ type Fetcher struct {
 	cache  *jwksCache
 	flight singleflight.Group
 
-	// clientOnce / clientHTTP wire the lazy client construction so
-	// callers can flip [allowPrivate] (or future netsec-shaping fields)
-	// after [NewFetcher] returned but before the first fetch without
-	// re-allocating the [*http.Client] on every fetch.
-	clientOnce sync.Once
-	clientHTTP *http.Client
+	// clientOnce / clientFetch wire the lazy [*securefetch.Client]
+	// construction so callers can flip [allowPrivate] (or the base
+	// transport) after [NewFetcher] returned but before the first
+	// fetch without re-allocating the client on every fetch.
+	clientOnce  sync.Once
+	clientFetch *securefetch.Client
 
 	// allowPrivate, when true, disables the SSRF deny-list (with the
 	// exception of cloud-metadata IPs, which remain rejected via
@@ -189,12 +190,12 @@ type Fetcher struct {
 	allowPrivate bool
 
 	// baseTransport overrides the [http.RoundTripper] backing the lazy
-	// client. Production wiring leaves this nil so [netsec.NewHTTPClient]
+	// client. Production wiring leaves this nil so [securefetch.NewClient]
 	// installs its own [http.Transport]; embedders that need a custom
 	// trust store (private CA, dev conformance harness with a
 	// self-signed cert) inject one here. The dial-time SSRF gate is
-	// still applied because [netsec.NewHTTPClient] re-wires
-	// DialContext on the supplied transport before returning.
+	// still applied because [securefetch] re-wires DialContext on the
+	// supplied transport before returning.
 	baseTransport http.RoundTripper
 }
 
@@ -217,7 +218,7 @@ func (f *Fetcher) SetAllowPrivate(b bool) {
 }
 
 // SetBaseTransport injects a [http.RoundTripper] the fetcher will use
-// instead of [netsec.NewHTTPClient]'s default [http.Transport]. The
+// instead of [securefetch.NewClient]'s default [http.Transport]. The
 // caller's transport is preserved verbatim except that the dial-time
 // SSRF gate is rewired onto its DialContext — passing a custom
 // transport does not bypass the SSRF protections.
@@ -235,27 +236,29 @@ func (f *Fetcher) SetBaseTransport(rt http.RoundTripper) {
 	f.baseTransport = rt
 }
 
-// netsecOptions returns the [netsec.Options] snapshot the fetcher
-// hands to the URL-time gate and the HTTP client. The function is the
-// single source of truth so the dial-time and URL-time checks always
-// agree on the AllowPrivate posture.
-func (f *Fetcher) netsecOptions() netsec.Options {
-	return netsec.Options{
-		Timeout:       defaultJWKSTimeout,
-		AllowPrivate:  f.allowPrivate,
-		BaseTransport: f.baseTransport,
+// policy returns the [securefetch.Policy] snapshot the fetcher uses
+// to construct its lazy client. The function is the single source of
+// truth so the URL-time and dial-time gates always agree on the
+// AllowPrivate posture.
+func (f *Fetcher) policy() securefetch.Policy {
+	return securefetch.Policy{
+		AllowPrivateNetwork: f.allowPrivate,
+		MaxBodyBytes:        defaultJWKSMaxBody,
+		Timeout:             defaultJWKSTimeout,
+		BaseTransport:       f.baseTransport,
+		AcceptContentTypes:  []string{"application/json", "application/jwk-set+json"},
 	}
 }
 
-// client returns the lazily-constructed [*http.Client]. The lazy
-// initialisation lets [verify.go]'s [AllowPrivateNetwork] option
+// client returns the lazily-constructed [*securefetch.Client]. The
+// lazy initialisation lets [verify.go]'s [AllowPrivateNetwork] option
 // mutate [allowPrivate] after construction without rebuilding the
 // transport mid-fetch.
-func (f *Fetcher) client() *http.Client {
+func (f *Fetcher) client() *securefetch.Client {
 	f.clientOnce.Do(func() {
-		f.clientHTTP = netsec.NewHTTPClient(f.netsecOptions())
+		f.clientFetch = securefetch.NewClient(f.policy())
 	})
-	return f.clientHTTP
+	return f.clientFetch
 }
 
 // Fetch retrieves the parsed keyset for jwksURI. The cache is consulted
@@ -302,12 +305,19 @@ func (f *Fetcher) Fetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKey
 // The function is split out from [Fetch] so the singleflight collapses
 // only the network path, while the cache lookup and negative-cache
 // bookkeeping run on every caller.
+//
+// The conditional-GET / 304 branch precludes using the canonical
+// [securefetch.Client.Get] helper (the helper rejects non-2xx as
+// [securefetch.ErrUnexpectedStatus]); the function instead builds the
+// request through [securefetch.Client.NewRequest] (which runs the
+// URL-time gate) and dispatches it via [securefetch.Client.DoRaw]
+// (which goes through the dial-time gate but skips the response
+// gates), then re-implements the body cap / status / content-type
+// checks inline so the 304 branch can short-circuit before the body
+// read.
 func (f *Fetcher) doFetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKeySet, error) {
-	if err := netsec.AssertSafeURL(ctx, jwksURI, f.netsecOptions()); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrJWKSFetch, err)
-	}
 	cached, _ := f.cache.get(jwksURI)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURI, http.NoBody)
+	req, err := f.client().NewRequest(ctx, http.MethodGet, jwksURI, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrJWKSFetch, err)
 	}
@@ -315,7 +325,7 @@ func (f *Fetcher) doFetch(ctx context.Context, jwksURI string) (*josev4.JSONWebK
 	if cached != nil && cached.etag != "" {
 		req.Header.Set("If-None-Match", cached.etag)
 	}
-	resp, err := f.client().Do(req)
+	resp, err := f.client().DoRaw(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrJWKSFetch, err)
 	}

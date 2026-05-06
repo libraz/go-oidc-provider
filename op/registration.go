@@ -87,6 +87,26 @@ type RegistrationOption struct {
 	// values are rejected at construction time.
 	IATUses int
 
+	// OpenRegistrationDefaultScopes is the scope default applied to
+	// open-registration POSTs ([RegistrationOption.Open] = true) that
+	// omit the scope field. The slice is space-joined into the
+	// response and persisted on the [store.Client.Scopes] record so
+	// the registered client can request those scopes at /authorize.
+	//
+	// The zero value is an empty slice — open registrations that omit
+	// scope are persisted with no scopes, and any subsequent
+	// /authorize request that spells out scopes the client did not
+	// register for is rejected as invalid_scope. Embedders that need
+	// a wider default — for example, "fall through to all public
+	// scopes" — set this explicitly to {"openid"} or the discovery
+	// scope list. The IAT-bound path is unchanged: when an IAT is
+	// presented, [store.InitialAccessToken.AllowedScopes] still wins
+	// over this option.
+	//
+	// Each entry MUST be a registered scope at [New] time;
+	// unrecognised values are rejected as a configuration error.
+	OpenRegistrationDefaultScopes []string
+
 	// OnClientDeleted is the optional cascade hook invoked after a
 	// successful DELETE /register/{client_id} (RFC 7592 §2.3). The
 	// library removes the client and the registration access token
@@ -438,6 +458,7 @@ func WithDynamicRegistration(o RegistrationOption) Option {
 		copyCfg := o
 		copyCfg.AllowedGrantTypes = slices.Clone(o.AllowedGrantTypes)
 		copyCfg.AllowedResponseTypes = slices.Clone(o.AllowedResponseTypes)
+		copyCfg.OpenRegistrationDefaultScopes = slices.Clone(o.OpenRegistrationDefaultScopes)
 		c.dcr = &copyCfg
 		// Implicitly enable the feature flag so discovery and routing
 		// lookups can use the same predicate as every other feature.

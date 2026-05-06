@@ -148,6 +148,36 @@ func TestVerify_NoCodesOnEmptyBatch(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsOversizedBatch pins audit finding S-10's batch
+// amplification gate: a persisted batch carrying more than the
+// in-tree maxBatchSize (16) is treated as store corruption and
+// refused before any argon2id derivation runs. Without the gate, a
+// single verify call would invoke argon2id once per slot, turning
+// the batch length into a CPU / memory amplifier.
+func TestVerify_RejectsOversizedBatch(t *testing.T) {
+	t.Parallel()
+
+	// Build a 17-slot batch. Each slot's Hash is a placeholder PHC —
+	// it never gets parsed because the cap fires first. The string
+	// MUST not be empty so a buggy gate that walks the slots would
+	// at least try to derive (and the test would observe a hang).
+	const placeholder = "$argon2id$v=19$m=19456,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE"
+	slots := make([]store.RecoveryCode, 17)
+	for i := range slots {
+		slots[i] = store.RecoveryCode{Hash: placeholder}
+	}
+	batch := &store.RecoveryBatch{Subject: "user-alice", Codes: slots}
+
+	v := &recovery.Verifier{}
+	res, err := v.Verify(context.Background(), batch, "anything")
+	if !errors.Is(err, recovery.ErrBatchOversized) {
+		t.Fatalf("err=%v want ErrBatchOversized", err)
+	}
+	if res.Outcome != recovery.OutcomeInvalid {
+		t.Errorf("outcome=%v want OutcomeInvalid", res.Outcome)
+	}
+}
+
 func TestVerify_NormalisesUserInput(t *testing.T) {
 	t.Parallel()
 

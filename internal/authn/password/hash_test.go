@@ -105,3 +105,63 @@ func TestVerify_AcceptsAlternateParameters(t *testing.T) {
 		t.Fatalf("Verify with m=32MiB,t=2,p=2: %v", err)
 	}
 }
+
+// TestVerify_RejectsBelowOWASPFloor pins the new behaviour the
+// 2026-05-07 audit (S-02 / S-03) flagged: the password verifier
+// MUST refuse a stored hash whose Argon2id parameters fall below
+// the OWASP 2024 floor (m≥19MiB, t≥2). Pre-audit the password
+// path admitted such hashes silently, while the client_secret path
+// already rejected them — the migration to the shared
+// internal/argon2id helper closes the gap.
+func TestVerify_RejectsBelowOWASPFloor(t *testing.T) {
+	t.Parallel()
+	salt := []byte("0123456789abcdef")
+	cases := map[string]struct {
+		mem  uint32
+		iter uint32
+		par  uint8
+	}{
+		"memory-below-min":     {18 * 1024, 2, 1}, // < 19 MiB
+		"iterations-below-min": {19 * 1024, 1, 1}, // < 2
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			enc := hashWith(t, "pw", tc.mem, tc.iter, tc.par, salt)
+			if err := password.Verify(enc, "pw"); !errors.Is(err, password.ErrInvalidHash) {
+				t.Fatalf("Verify(%s) err=%v want ErrInvalidHash", name, err)
+			}
+		})
+	}
+}
+
+// TestVerify_RejectsOversizedSalt confirms the policy clamp catches
+// a stored hash whose salt exceeds the [argon2id.DefaultPolicy] cap.
+// Without the bound, a corrupted store could feed the verifier a
+// kilobyte salt and burn unbounded memory inside [argon2.IDKey].
+func TestVerify_RejectsOversizedSalt(t *testing.T) {
+	t.Parallel()
+	bigSalt := make([]byte, 256) // > MaxSaltLength=128
+	for i := range bigSalt {
+		bigSalt[i] = byte(i)
+	}
+	enc := hashWith(t, "pw", 19*1024, 2, 1, bigSalt)
+	if err := password.Verify(enc, "pw"); !errors.Is(err, password.ErrInvalidHash) {
+		t.Fatalf("Verify(oversized-salt) err=%v want ErrInvalidHash", err)
+	}
+}
+
+// TestVerify_RejectsDuplicateParameter confirms the parser refuses a
+// PHC that re-declares m / t / p with a different value (m=64,m=128).
+// Pre-audit the parser's last-value-wins behaviour produced an
+// ambiguous wire shape; the shared parser now returns
+// [argon2id.ErrEncoding] (collapsed onto [password.ErrInvalidHash]).
+func TestVerify_RejectsDuplicateParameter(t *testing.T) {
+	t.Parallel()
+	salt := []byte("0123456789abcdef")
+	good := string(hashWith(t, "pw", 19*1024, 2, 1, salt))
+	bogus := strings.Replace(good, "m=19456,t=2,p=1", "m=19456,m=20000,t=2,p=1", 1)
+	if err := password.Verify([]byte(bogus), "pw"); !errors.Is(err, password.ErrInvalidHash) {
+		t.Fatalf("Verify(duplicate-m) err=%v want ErrInvalidHash", err)
+	}
+}

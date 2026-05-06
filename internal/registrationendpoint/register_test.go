@@ -345,6 +345,121 @@ func TestRegister_HappyPath_PublicClient_OmitsSecret(t *testing.T) {
 	}
 }
 
+// TestRegister_OpenRegistration_DefaultsScopeEmpty pins the rule
+// that open registration which omits the "scope" field MUST land
+// the dynamically-registered client with an empty scope set, not
+// the OP's full public scope catalog. The minimum-privilege
+// baseline keeps a scope-omitted DCR from silently widening to
+// every public scope the embedder configured; broadening is
+// available behind
+// [op.RegistrationOption.OpenRegistrationDefaultScopes].
+func TestRegister_OpenRegistration_DefaultsScopeEmpty(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{Open: true})
+
+	resp := f.post(t, minimalMetadata(), "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	body := decodeBody(t, resp)
+	if got, ok := body["scope"]; ok {
+		if s, _ := got.(string); s != "" {
+			t.Errorf("scope echo=%q want empty/absent", s)
+		}
+	}
+	clientID, _ := body["client_id"].(string)
+	if clientID == "" {
+		t.Fatal("client_id missing")
+	}
+	got, err := f.prov.Store.GetClient(context.Background(), clientID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if len(got.Scopes) != 0 {
+		t.Errorf("client.Scopes=%v want empty", got.Scopes)
+	}
+}
+
+// TestRegister_OpenRegistration_DefaultsScopeFromOption confirms
+// the embedder opt-in escape hatch: when
+// [op.RegistrationOption.OpenRegistrationDefaultScopes] is set, an
+// open registration that omits the scope field receives the
+// configured default verbatim. The list is space-joined into the
+// response and persisted on [store.Client.Scopes] so subsequent
+// /authorize requests against the registered scopes succeed.
+func TestRegister_OpenRegistration_DefaultsScopeFromOption(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{
+		Open:                          true,
+		OpenRegistrationDefaultScopes: []string{"openid", "profile"},
+	})
+
+	resp := f.post(t, minimalMetadata(), "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	body := decodeBody(t, resp)
+	if got, _ := body["scope"].(string); got != "openid profile" {
+		t.Errorf("scope echo=%q want %q", got, "openid profile")
+	}
+	clientID, _ := body["client_id"].(string)
+	if clientID == "" {
+		t.Fatal("client_id missing")
+	}
+	got, err := f.prov.Store.GetClient(context.Background(), clientID)
+	if err != nil {
+		t.Fatalf("GetClient: %v", err)
+	}
+	if !slicesEqual(got.Scopes, []string{"openid", "profile"}) {
+		t.Errorf("client.Scopes=%v want [openid profile]", got.Scopes)
+	}
+}
+
+// TestRegister_OpenRegistration_ExplicitScopeOverridesDefault confirms
+// that an embedder-configured open-registration default never replaces
+// a scope value the RP spelled out: an open registration POST that
+// carries a "scope" field is persisted verbatim, and the configured
+// default is not added on top.
+func TestRegister_OpenRegistration_ExplicitScopeOverridesDefault(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{
+		Open:                          true,
+		OpenRegistrationDefaultScopes: []string{"openid", "profile", "email"},
+	})
+
+	body := minimalMetadata()
+	body["scope"] = "openid"
+	resp := f.post(t, body, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	got := decodeBody(t, resp)
+	if scope, _ := got["scope"].(string); scope != "openid" {
+		t.Errorf("scope echo=%q want %q", scope, "openid")
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // TestRegister_OpenRegistration_AcceptedAndLogged confirms Open=true
 // admits the registration without an IAT and emits a WARN frame so the
 // degraded posture is observable in audit logs.
@@ -731,6 +846,42 @@ func TestRegister_MalformedJSON_AfterIAT(t *testing.T) {
 	got := decodeBody(t, resp)
 	if got["error"] != "invalid_client_metadata" {
 		t.Errorf("error=%v want invalid_client_metadata", got["error"])
+	}
+}
+
+// TestRegister_TrailingJSONDocument_Rejected pins the rule that a
+// DCR body which carries a second JSON document after the metadata
+// object MUST be rejected. Silently consuming only the first object
+// is a parser-confusion vector against reverse proxies / WAFs /
+// audit pipelines that scan the entire body.
+func TestRegister_TrailingJSONDocument_Rejected(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "double-object", body: `{"redirect_uris":["https://rp.test.invalid/cb"]} {"client_name":"ignored"}`},
+		{name: "object-then-array", body: `{"redirect_uris":["https://rp.test.invalid/cb"]}[]`},
+		{name: "object-then-newline-object", body: "{\"redirect_uris\":[\"https://rp.test.invalid/cb\"]}\n{\"x\":1}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, op.RegistrationOption{})
+			_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+
+			resp := f.post(t, tc.body, iat)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+			}
+			got := decodeBody(t, resp)
+			if got["error"] != "invalid_client_metadata" {
+				t.Errorf("error=%v want invalid_client_metadata", got["error"])
+			}
+		})
 	}
 }
 

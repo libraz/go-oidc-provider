@@ -77,3 +77,32 @@ func TestJSONDriver_ParseSubmissionRejectsEmptyBody(t *testing.T) {
 		t.Fatalf("err = %v, want ErrSubmissionMalformed", err)
 	}
 }
+
+// TestJSONDriver_ParseSubmissionRejectsTrailingJSON pins the rule
+// that a body which carries a second JSON document after the first
+// MUST be rejected as malformed. Letting the trailing object
+// through is a parser-confusion vector — a reverse proxy / WAF that
+// reads the entire body sees a different shape than the OP
+// consumed.
+func TestJSONDriver_ParseSubmissionRejectsTrailingJSON(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "double-object", body: `{"state_ref":"ref-1","values":{}} {"state_ref":"ref-2","values":{}}`},
+		{name: "object-then-array", body: `{"state_ref":"ref-1","values":{}}[]`},
+		{name: "object-then-newline-object", body: "{\"state_ref\":\"ref-1\",\"values\":{}}\n{\"x\":1}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := httptest.NewRequestWithContext(context.Background(), "POST", "/interaction/u-1", strings.NewReader(tc.body))
+			_, err := (interaction.JSONDriver{}).ParseSubmission(r)
+			if !errors.Is(err, interaction.ErrSubmissionMalformed) {
+				t.Fatalf("err = %v, want ErrSubmissionMalformed", err)
+			}
+		})
+	}
+}

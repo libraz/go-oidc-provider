@@ -2,14 +2,13 @@ package recovery
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"golang.org/x/crypto/argon2"
+
+	"github.com/libraz/go-oidc-provider/internal/argon2id"
 )
 
 // argon2idParams carries the parameter set used for every recovery
@@ -42,18 +41,12 @@ var argon2idDefaults = argon2idParams{
 	keyLength:   32,
 }
 
-// maxKeyLength is a defensive cap on the derived-key length the
-// verifier accepts. A legitimate encoding emitted by [hashCode] stays
-// well under this; a malformed stored value claiming a giant key is
-// rejected before invoking [argon2.IDKey].
-const maxKeyLength = 1024
-
 // ErrInvalidHash is returned when [verifyCode] is given a stored hash
-// it cannot parse. The verifier collapses every structural issue
-// (wrong number of segments, unknown algorithm, non-integer parameter,
-// malformed base64) onto this single sentinel so a caller cannot
-// distinguish "you tampered with the encoding" from "you tampered with
-// the parameters" through the error type.
+// it cannot parse, or whose Argon2id parameters violate the
+// [argon2id.DefaultPolicy] fence the verifier enforces. The verifier
+// collapses every structural and policy issue onto this single sentinel
+// so a caller cannot distinguish "you tampered with the encoding" from
+// "you tampered with the parameters" through the error type.
 var ErrInvalidHash = errors.New("recovery: hash encoding is invalid")
 
 // hashCode derives an argon2id encoding of plain using the package's
@@ -82,110 +75,29 @@ func hashCode(plain string) (string, error) {
 // verifyCode reports whether plain matches the supplied modular-crypt
 // argon2id encoding. The plaintext is canonicalised through [normalise]
 // first so user input formatting differences (case, hyphen, spaces)
-// don't matter. Structural issues with the encoded value collapse onto
-// [ErrInvalidHash]; a parsed-but-mismatched comparison returns
-// [ErrCodeInvalid] so the caller can branch on user-visible error
-// messages without leaking which way the comparison failed.
+// don't matter. Structural issues — and parameter values that violate
+// [argon2id.DefaultPolicy] — collapse onto [ErrInvalidHash]; a
+// parsed-but-mismatched comparison returns [ErrCodeInvalid] so the
+// caller can branch on user-visible error messages without leaking
+// which way the comparison failed.
 //
 // The comparison is constant-time: a partial match cannot leak the
 // prefix length through timing.
+//
+// A corrupted store cannot drive one verify into an unbounded CPU /
+// memory burst because [argon2id.DefaultPolicy] clamps the m / t /
+// p / salt / key parameters before [argon2.IDKey] runs.
 func verifyCode(plain, encoded string) error {
-	parsed, err := parseArgon2idEncoding(encoded)
-	if err != nil {
-		return err
-	}
-	keyLen := len(parsed.hash)
-	// argon2.IDKey accepts uint32 for the key length; the parser caps
-	// the hash bytes at the maximum the encoder can emit (a few hundred
-	// bytes), so the conversion below is safe. The bound check is
-	// defensive: a malformed encoding could in theory carry a
-	// pathological length.
-	if keyLen <= 0 || keyLen > maxKeyLength {
+	canonical := normalise(plain)
+	switch err := argon2id.Verify([]byte(canonical), encoded, argon2id.DefaultPolicy()); {
+	case err == nil:
+		return nil
+	case errors.Is(err, argon2id.ErrMismatch):
+		return ErrCodeInvalid
+	case errors.Is(err, argon2id.ErrEncoding),
+		errors.Is(err, argon2id.ErrPolicy):
+		return ErrInvalidHash
+	default:
 		return ErrInvalidHash
 	}
-	canonical := normalise(plain)
-	candidate := argon2.IDKey([]byte(canonical), parsed.salt, parsed.iterations, parsed.memory, parsed.parallelism, uint32(keyLen))
-	if subtle.ConstantTimeCompare(candidate, parsed.hash) != 1 {
-		return ErrCodeInvalid
-	}
-	return nil
-}
-
-// argon2idHash is the parsed view of a stored argon2id encoding.
-type argon2idHash struct {
-	memory      uint32
-	iterations  uint32
-	parallelism uint8
-	salt        []byte
-	hash        []byte
-}
-
-// parseArgon2idEncoding parses the modular-crypt format produced by
-// [hashCode]. It returns [ErrInvalidHash] on any structural issue so
-// the verifier never leaks why a comparison failed.
-func parseArgon2idEncoding(s string) (argon2idHash, error) {
-	parts := strings.Split(s, "$")
-	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
-		return argon2idHash{}, ErrInvalidHash
-	}
-	if !strings.HasPrefix(parts[2], "v=") {
-		return argon2idHash{}, ErrInvalidHash
-	}
-	version, err := strconv.Atoi(parts[2][2:])
-	if err != nil || version != argon2.Version {
-		return argon2idHash{}, ErrInvalidHash
-	}
-	mem, iter, par, err := parseArgon2idParams(parts[3])
-	if err != nil {
-		return argon2idHash{}, err
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
-		return argon2idHash{}, ErrInvalidHash
-	}
-	hash, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
-		return argon2idHash{}, ErrInvalidHash
-	}
-	return argon2idHash{
-		memory:      mem,
-		iterations:  iter,
-		parallelism: par,
-		salt:        salt,
-		hash:        hash,
-	}, nil
-}
-
-// parseArgon2idParams extracts the m/t/p triple from the parameter
-// segment ("m=...,t=...,p=...") of an argon2id modular-crypt encoding.
-// Errors collapse onto [ErrInvalidHash] so the caller cannot tell
-// which sub-field tripped the parse.
-func parseArgon2idParams(seg string) (mem, iter uint32, par uint8, err error) {
-	for _, kv := range strings.Split(seg, ",") {
-		k, v, ok := strings.Cut(kv, "=")
-		if !ok {
-			return 0, 0, 0, ErrInvalidHash
-		}
-		n, parseErr := strconv.ParseUint(v, 10, 32)
-		if parseErr != nil {
-			return 0, 0, 0, ErrInvalidHash
-		}
-		switch k {
-		case "m":
-			mem = uint32(n)
-		case "t":
-			iter = uint32(n)
-		case "p":
-			if n > 255 {
-				return 0, 0, 0, ErrInvalidHash
-			}
-			par = uint8(n)
-		default:
-			return 0, 0, 0, ErrInvalidHash
-		}
-	}
-	if mem == 0 || iter == 0 || par == 0 {
-		return 0, 0, 0, ErrInvalidHash
-	}
-	return mem, iter, par, nil
 }

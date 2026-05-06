@@ -20,6 +20,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -442,16 +443,17 @@ func parseScope(w http.ResponseWriter, form url.Values, client *store.Client) ([
 }
 
 // parseResource extracts the RFC 8707 resource indicators from the
-// form. The function rejects relative URIs (RFC 8707 §2 mandates
-// absolute) and normalises each value (lowercase scheme + host,
-// trailing-slash stripped) so the persisted record carries the
-// canonical form. Each surviving value MUST appear in the client's
-// registered Resources allowlist; the same rule the authorize and
-// client-credentials paths enforce. The current issuance pipeline
-// honours a single audience entry, so a request carrying more than
-// one non-empty resource is rejected with invalid_target — the
-// handler refuses to accept input the issuance side would silently
-// truncate.
+// form. The function delegates parsing / validation / canonicalisation
+// to [resourceindicator.Canonicalize] so the device endpoint shares the
+// same policy as authorize / token / CIBA. Each surviving value MUST
+// appear in the client's registered Resources allowlist; the allowlist
+// match also goes through the shared helper
+// ([resourceindicator.Contains]) so historical registrations that
+// pre-date canonicalisation still match a canonical request. The
+// current issuance pipeline honours a single audience entry, so a
+// request carrying more than one non-empty resource is rejected with
+// invalid_target — the handler refuses to accept input the issuance
+// side would silently truncate.
 func parseResource(w http.ResponseWriter, form url.Values, client *store.Client) ([]string, bool) {
 	raw := form["resource"]
 	if len(raw) == 0 {
@@ -463,13 +465,13 @@ func parseResource(w http.ResponseWriter, form url.Values, client *store.Client)
 		if r == "" {
 			continue
 		}
-		canonical, err := normaliseResource(r)
+		canonical, err := resourceindicator.Canonicalize(r)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, errInvalidTarget,
 				"resource parameter is not a valid absolute URI")
 			return nil, false
 		}
-		if !slices.Contains(client.Resources, canonical) {
+		if !resourceindicator.Contains(client.Resources, canonical) {
 			writeError(w, http.StatusBadRequest, errInvalidTarget,
 				"resource is not registered for this client")
 			return nil, false
@@ -482,23 +484,6 @@ func parseResource(w http.ResponseWriter, form url.Values, client *store.Client)
 		return nil, false
 	}
 	return out, true
-}
-
-// normaliseResource canonicalises a single resource indicator per
-// RFC 8707 §2: lowercase scheme + host, trailing-slash stripped.
-// Returns an error when the value is not an absolute URI.
-func normaliseResource(raw string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	if u.Scheme == "" || u.Host == "" {
-		return "", errors.New("devicecodeendpoint: relative resource URI")
-	}
-	u.Scheme = strings.ToLower(u.Scheme)
-	u.Host = strings.ToLower(u.Host)
-	u.Path = strings.TrimRight(u.Path, "/")
-	return u.String(), nil
 }
 
 // persistInput bundles the parameters [persist] consumes. The

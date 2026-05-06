@@ -63,6 +63,18 @@ var (
 	// attacker with a partial code list distinguish used-vs-unused
 	// codes by polling.
 	ErrCodeInvalid = errors.New("recovery: code did not match")
+
+	// ErrBatchOversized is returned when the persisted batch carries
+	// more than [maxBatchSize] slots. The library never generates such
+	// a batch, so the condition is treated as store corruption — the
+	// verifier refuses to walk the oversized list because each
+	// unmatched slot would trigger an argon2id derivation, and an
+	// unbounded slot count is the amplification vector flagged by the
+	// 2026-05-07 system review (S-10). The outcome equals
+	// [OutcomeInvalid] so the orchestrator routes the failure through
+	// the same "this is broken, alert the operator" path it uses for
+	// hash-format faults.
+	ErrBatchOversized = errors.New("recovery: batch exceeds maxBatchSize")
 )
 
 // Result is the verdict bundle [Verifier.Verify] returns. The Batch
@@ -126,6 +138,14 @@ type Verifier struct {
 func (v *Verifier) Verify(_ context.Context, batch *store.RecoveryBatch, presented string) (*Result, error) {
 	if batch == nil || len(batch.Codes) == 0 {
 		return &Result{Outcome: OutcomeNoCodes, Batch: batch, Index: -1}, ErrNoCodes
+	}
+	if len(batch.Codes) > maxBatchSize {
+		// A batch that claims more than maxBatchSize slots is store
+		// corruption — the generator never emits one. Refusing to walk
+		// it before any argon2id derivation runs means a corrupted
+		// persistence layer cannot be turned into a CPU / memory
+		// amplifier through one verify call.
+		return &Result{Outcome: OutcomeInvalid, Batch: batch, Index: -1}, ErrBatchOversized
 	}
 
 	anyUnconsumed := false

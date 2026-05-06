@@ -210,6 +210,148 @@ func TestWithStaticClients_ConfidentialEmptySecret(t *testing.T) {
 	}
 }
 
+// TestWithStaticClients_RejectsBadRedirectURI pins the construction-
+// time refusal of an http:// redirect_uri on a non-loopback host. The
+// validator shares its rule set with DCR's /register handler, so a
+// static seed and a dynamically registered client see the same shape
+// of error (the wire code lives on the wrapped
+// [registrationendpoint.StaticClientValidationError]).
+func TestWithStaticClients_RejectsBadRedirectURI(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithStaticClients(op.PublicClient{
+			ID:           "demo-spa",
+			RedirectURIs: []string{"http://app.example.com/cb"},
+			Scopes:       []string{"openid"},
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("expected configuration error for plaintext redirect_uri, got nil")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("err = %v, want server-class configuration error", err)
+	}
+	if !strings.Contains(err.Error(), "WithStaticClients[0]") {
+		t.Errorf("err = %v, want it to carry the seed index", err)
+	}
+	if !strings.Contains(err.Error(), "demo-spa") {
+		t.Errorf("err = %v, want it to mention the offending client_id", err)
+	}
+}
+
+// TestWithStaticClients_RejectsBadBackchannelLogoutURI pins the
+// construction-time refusal of a non-https backchannel_logout_uri. The
+// rule mirrors the DCR validator so an embedder cannot persist a
+// plaintext logout endpoint via WithStaticClients that the /register
+// handler would refuse.
+func TestWithStaticClients_RejectsBadBackchannelLogoutURI(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithStaticClients(op.PublicClient{
+			ID:                   "demo-spa",
+			RedirectURIs:         []string{"https://app.example.com/cb"},
+			Scopes:               []string{"openid"},
+			BackchannelLogoutURI: "http://rp.example.com/logout",
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("expected configuration error for plaintext backchannel_logout_uri, got nil")
+	}
+	if !strings.Contains(err.Error(), "backchannel_logout_uri") {
+		t.Errorf("err = %v, want it to mention the offending field", err)
+	}
+}
+
+// TestWithStaticClients_RejectsUnknownGrantType pins the construction-
+// time refusal of a grant_type that falls outside the configured
+// AllowedGrantTypes whitelist. The validator inherits the whitelist
+// from the DCR configuration when [WithDynamicRegistration] is set;
+// otherwise it falls back to the library default
+// {"authorization_code", "refresh_token"}.
+func TestWithStaticClients_RejectsUnknownGrantType(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithStaticClients(op.PublicClient{
+			ID:           "demo-spa",
+			RedirectURIs: []string{"https://app.example.com/cb"},
+			Scopes:       []string{"openid"},
+			GrantTypes:   []string{"password"},
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("expected configuration error for unknown grant_type, got nil")
+	}
+	if !strings.Contains(err.Error(), "grant_type") {
+		t.Errorf("err = %v, want it to mention grant_type", err)
+	}
+}
+
+// TestWithStaticClients_RejectsBackchannelSessionRequiredWithoutURI
+// pins the construction-time refusal of a client that opts into
+// session-bound back-channel logout semantics without registering a
+// delivery URI. The rule is RFC 7591-adjacent (the spec leaves the
+// coupling implicit) but matches the DCR validator's posture so a
+// static seed and a /register payload share the same envelope.
+func TestWithStaticClients_RejectsBackchannelSessionRequiredWithoutURI(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithStaticClients(op.PublicClient{
+			ID:                               "demo-spa",
+			RedirectURIs:                     []string{"https://app.example.com/cb"},
+			Scopes:                           []string{"openid"},
+			BackchannelLogoutSessionRequired: true,
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("expected configuration error for session_required without backchannel_logout_uri, got nil")
+	}
+	if !strings.Contains(err.Error(), "backchannel_logout") {
+		t.Errorf("err = %v, want it to mention the offending field", err)
+	}
+}
+
+// TestWithStaticClients_AcceptsLoopbackWithOptIn confirms that the
+// textual "http://localhost" host is admitted when the embedder opted
+// in via [op.WithAllowLocalhostLoopback]. Without the option the URI
+// would be rejected because RFC 8252 §7.3 only carves out IP literals
+// (127.0.0.1 / [::1]) by default.
+func TestWithStaticClients_AcceptsLoopbackWithOptIn(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithAllowLocalhostLoopback(),
+		op.WithStaticClients(op.PublicClient{
+			ID:           "demo-native",
+			RedirectURIs: []string{"http://localhost:8080/cb"},
+			Scopes:       []string{"openid"},
+		}),
+	)...); err != nil {
+		t.Fatalf("WithStaticClients rejected http://localhost under WithAllowLocalhostLoopback: %v", err)
+	}
+}
+
+// TestWithStaticClients_AcceptsLoopbackIPLiteral confirms that the
+// IP-literal loopback redirect_uri (127.0.0.1) is admitted without
+// the explicit opt-in: RFC 8252 §7.3 reserves the carve-out for IP
+// literals so the OP accepts the URI by default.
+func TestWithStaticClients_AcceptsLoopbackIPLiteral(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithStaticClients(op.PublicClient{
+			ID:           "demo-native",
+			RedirectURIs: []string{"http://127.0.0.1:8080/cb"},
+			Scopes:       []string{"openid"},
+		}),
+	)...); err != nil {
+		t.Fatalf("WithStaticClients rejected http://127.0.0.1 redirect_uri: %v", err)
+	}
+}
+
 func TestWithFirstPartyClients_RejectsUnknownID(t *testing.T) {
 	t.Parallel()
 

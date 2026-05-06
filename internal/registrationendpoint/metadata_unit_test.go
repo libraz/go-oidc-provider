@@ -14,7 +14,7 @@ func TestValidatePolicy_RejectsJWKSAndJWKSURI(t *testing.T) {
 		RedirectURIs: []string{"https://rp.test.invalid/cb"},
 		JWKs:         []byte(`{"keys":[]}`),
 		JWKsURI:      "https://rp.test.invalid/jwks.json",
-	}, []string{"authorization_code"}, []string{"code"}, nil, nil, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -26,7 +26,7 @@ func TestValidatePolicy_RejectsHTTPClientURI(t *testing.T) {
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs: []string{"https://rp.test.invalid/cb"},
 		ClientURI:    "http://rp.test.invalid",
-	}, []string{"authorization_code"}, []string{"code"}, nil, nil, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -38,7 +38,7 @@ func TestValidatePolicy_RejectsUnsupportedRequestObjectSigningAlg(t *testing.T) 
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
 		RequestObjectSigningAlg: "HS256",
-	}, []string{"authorization_code"}, []string{"code"}, nil, nil, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -74,7 +74,7 @@ func TestValidatePolicy_AcceptsRequestObjectEncryption(t *testing.T) {
 				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
 				RequestObjectEncryptionAlg: tc.alg,
 				RequestObjectEncryptionEnc: tc.enc,
-			}, []string{"authorization_code"}, []string{"code"}, nil, nil, false, false)
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
 			if err != nil {
 				t.Fatalf("validatePolicy: %v", err)
 			}
@@ -105,7 +105,7 @@ func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testin
 				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
 				RequestObjectEncryptionAlg: tc.alg,
 				RequestObjectEncryptionEnc: tc.enc,
-			}, []string{"authorization_code"}, []string{"code"}, nil, nil, false, false)
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
@@ -192,7 +192,7 @@ func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 				p.set(&m, c.alg, c.enc)
 				if _, err := validatePolicy(m,
 					[]string{"authorization_code"}, []string{"code"},
-					nil, nil, false, false); err != nil {
+					nil, false, nil, nil, false, false); err != nil {
 					t.Fatalf("validatePolicy: %v", err)
 				}
 			})
@@ -272,7 +272,7 @@ func TestValidatePolicy_RejectsResponseEncryptionOutsideAllowlist(t *testing.T) 
 				p.applyAlg(&m, c.alg, c.enc)
 				_, err := validatePolicy(m,
 					[]string{"authorization_code"}, []string{"code"},
-					nil, nil, false, false)
+					nil, false, nil, nil, false, false)
 				if err == nil {
 					t.Fatal("expected validation error, got nil")
 				}
@@ -300,7 +300,7 @@ func TestValidatePolicy_RejectsPairwiseMultiHostWithoutSectorIdentifier(t *testi
 			"https://b.example.com/cb",
 		},
 		SubjectType: "pairwise",
-	}, []string{"authorization_code"}, []string{"code"}, nil, nil, true, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, true, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -314,7 +314,7 @@ func TestValidatePolicy_RejectsCodeResponseTypeWithoutAuthorizationCodeGrant(t *
 		GrantTypes:      []string{"implicit"},
 		ResponseTypes:   []string{"code"},
 		ApplicationType: "web",
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, nil, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -327,7 +327,7 @@ func TestValidatePolicy_RejectsImplicitResponseTypeWithoutImplicitGrant(t *testi
 		RedirectURIs:  []string{"https://rp.test.invalid/cb"},
 		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"id_token"},
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, nil, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -340,7 +340,7 @@ func TestValidatePolicy_RejectsHybridResponseTypeWithoutImplicitGrant(t *testing
 		RedirectURIs:  []string{"https://rp.test.invalid/cb"},
 		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"code id_token"},
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token", "code id_token"}, nil, nil, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token", "code id_token"}, nil, false, nil, nil, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -461,6 +461,149 @@ func TestValidatePostLogoutRedirectURIs(t *testing.T) {
 	}
 }
 
+// TestValidateMetadataURIs_RejectsUserinfo pins the rule that every
+// metadata URL the OP fetches or audits MUST refuse a URL that
+// embeds userinfo (`https://trusted.example@evil.example/...`).
+// Go's `url.Parse` resolves the host to `evil.example` while a
+// human or alternative parser can read `trusted.example` — exactly
+// the kind of parser-confusion the SSRF / allowlist policy must
+// short-circuit.
+//
+// The matrix walks every field guarded by [validateHTTPSAbsoluteURI]
+// plus the [validateRequestURI] paths (request_uris); the
+// fragment-allowed quirk of request_uris does not relax the userinfo
+// rule.
+func TestValidateMetadataURIs_RejectsUserinfo(t *testing.T) {
+	t.Parallel()
+
+	const evilURL = "https://trusted.example@evil.example/foo"
+	const evilFragmentURL = "https://trusted.example@evil.example/req#sha256-xyz"
+
+	cases := []struct {
+		name string
+		mut  func(*ClientMetadata)
+	}{
+		{"client_uri", func(m *ClientMetadata) { m.ClientURI = evilURL }},
+		{"logo_uri", func(m *ClientMetadata) { m.LogoURI = evilURL }},
+		{"policy_uri", func(m *ClientMetadata) { m.PolicyURI = evilURL }},
+		{"tos_uri", func(m *ClientMetadata) { m.TosURI = evilURL }},
+		{"jwks_uri", func(m *ClientMetadata) { m.JWKsURI = evilURL }},
+		{"sector_identifier_uri", func(m *ClientMetadata) { m.SectorIdentifierURI = evilURL }},
+		{"initiate_login_uri", func(m *ClientMetadata) { m.InitiateLoginURI = evilURL }},
+		{"request_uris", func(m *ClientMetadata) { m.RequestURIs = []string{evilFragmentURL} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := ClientMetadata{RedirectURIs: []string{"https://rp.test.invalid/cb"}}
+			tc.mut(&m)
+			_, err := validatePolicy(m,
+				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+			if err == nil {
+				t.Fatalf("%s: expected validation error for userinfo URL %q", tc.name, evilURL)
+			}
+			var ve *validationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("%s: error %v is not *validationError", tc.name, err)
+			}
+			if ve.code != codeInvalidClientMetadata {
+				t.Errorf("%s: code=%q want %q", tc.name, ve.code, codeInvalidClientMetadata)
+			}
+			if !strings.Contains(ve.description, "must not contain userinfo") {
+				t.Errorf("%s: description=%q want it to mention userinfo", tc.name, ve.description)
+			}
+			if !strings.Contains(ve.description, tc.name) {
+				t.Errorf("%s: description=%q want it to mention the field name", tc.name, ve.description)
+			}
+		})
+	}
+}
+
+// TestValidateBackchannelLogoutURI pins the rule that DCR / RM
+// MUST validate `backchannel_logout_uri` at registration time so a
+// plaintext / fragment-bearing / userinfo-bearing logout endpoint is
+// rejected before the deliverer ever loads it. The check shares the
+// same [validateHTTPSAbsoluteURI] helper with client_uri / jwks_uri
+// / sector_identifier_uri so the URL-safety policy is uniform.
+//
+// The matrix also pins the `backchannel_logout_session_required`
+// coupling: the session-bound flag is meaningless without a delivery
+// URL, so a true flag with an empty URI MUST surface as
+// invalid_client_metadata at registration time rather than failing
+// silently at logout time.
+func TestValidateBackchannelLogoutURI(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		mut     func(*ClientMetadata)
+		wantErr string
+	}{
+		{
+			name: "https-host",
+			mut: func(m *ClientMetadata) {
+				m.BackchannelLogoutURI = "https://rp.example.com/logout"
+			},
+		},
+		{
+			name: "http-rejected",
+			mut: func(m *ClientMetadata) {
+				m.BackchannelLogoutURI = "http://rp.example.com/logout"
+			},
+			wantErr: "must use https",
+		},
+		{
+			name: "fragment-rejected",
+			mut: func(m *ClientMetadata) {
+				m.BackchannelLogoutURI = "https://rp.example.com/logout#x"
+			},
+			wantErr: "must not contain a fragment",
+		},
+		{
+			name: "userinfo-rejected",
+			mut: func(m *ClientMetadata) {
+				m.BackchannelLogoutURI = "https://trusted.example@evil.example/logout"
+			},
+			wantErr: "must not contain userinfo",
+		},
+		{
+			name: "session-required-without-uri-rejected",
+			mut: func(m *ClientMetadata) {
+				m.BackchannelLogoutSessionRequired = true
+			},
+			wantErr: "backchannel_logout_uri",
+		},
+		{
+			name: "session-required-with-uri-accepted",
+			mut: func(m *ClientMetadata) {
+				m.BackchannelLogoutURI = "https://rp.example.com/logout"
+				m.BackchannelLogoutSessionRequired = true
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := ClientMetadata{RedirectURIs: []string{"https://rp.test.invalid/cb"}}
+			tc.mut(&m)
+			_, err := validatePolicy(m,
+				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validatePolicy unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("validatePolicy: expected %q in error, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q must contain %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 // TestValidatePostLogoutRedirectURIs_EmptySliceAccepted confirms the
 // helper treats an absent post_logout_redirect_uris list as "no
 // post-logout target" rather than an error: the field is optional per
@@ -470,5 +613,39 @@ func TestValidatePostLogoutRedirectURIs_EmptySliceAccepted(t *testing.T) {
 	t.Parallel()
 	if err := validatePostLogoutRedirectURIs(nil, "web", false); err != nil {
 		t.Fatalf("validatePostLogoutRedirectURIs(nil, web) unexpected error: %v", err)
+	}
+}
+
+// TestDefaultScopeIfEmpty_OpenRegistrationDefault pins the
+// selection order at the unit level: open-registration
+// scope-omitted requests receive the embedder default (empty when
+// unset, the configured list when set), the IAT-bound allowlist
+// always wins when present, and the public-catalog fallback fires
+// only on the IAT-without-allowlist branch.
+func TestDefaultScopeIfEmpty_OpenRegistrationDefault(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name             string
+		scope            string
+		iatScopes        []string
+		openRegistration bool
+		openDefault      []string
+		want             string
+	}{
+		{name: "explicit-scope-wins", scope: "openid", iatScopes: []string{"profile"}, openRegistration: true, openDefault: []string{"email"}, want: "openid"},
+		{name: "iat-allowlist-wins-over-open-default", iatScopes: []string{"openid"}, openRegistration: true, openDefault: []string{"email"}, want: "openid"},
+		{name: "open-no-default-empty", openRegistration: true, want: ""},
+		{name: "open-with-default", openRegistration: true, openDefault: []string{"openid", "profile"}, want: "openid profile"},
+		{name: "iat-without-allowlist-no-fallback-when-registry-nil", openRegistration: false, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := defaultScopeIfEmpty(tc.scope, tc.iatScopes, tc.openRegistration, tc.openDefault, nil)
+			if got != tc.want {
+				t.Errorf("defaultScopeIfEmpty=%q want %q", got, tc.want)
+			}
+		})
 	}
 }

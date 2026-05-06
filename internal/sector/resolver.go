@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -171,8 +171,9 @@ func withResolverLookupHook(fn func(ctx context.Context, host string) ([]net.IPA
 // type is safe for concurrent use; cache reads and writes serialise
 // through an internal RWMutex.
 type Resolver struct {
-	cfg   resolverConfig
-	cache *cache
+	cfg    resolverConfig
+	cache  *cache
+	client *securefetch.Client
 }
 
 // New returns a [Resolver] configured by the supplied options. The
@@ -192,21 +193,22 @@ func New(opts ...Option) *Resolver {
 	if cfg.clock == nil {
 		cfg.clock = timex.SystemClock
 	}
-	if cfg.httpClient == nil {
-		cfg.httpClient = netsec.NewHTTPClient(netsec.Options{
-			Timeout:      cfg.timeout,
-			AllowPrivate: cfg.allowPrivate,
-			// Force HTTPS for the sector_identifier_uri scheme; the
-			// fetcher refuses http:// upstream of this point but
-			// pinning the scheme allow-list keeps the dial layer
-			// aligned with the syntactic gate.
-			AllowedSchemes: []string{"https"},
-		})
+	policy := securefetch.Policy{
+		AllowPrivateNetwork: cfg.allowPrivate,
+		AllowedSchemes:      []string{"https"},
+		MaxBodyBytes:        cfg.maxBody,
+		AcceptContentTypes:  []string{jsonContentType},
+		Timeout:             cfg.timeout,
+		LookupHook:          cfg.resolverLookupHook,
+		CheckRedirect:       refuseRedirect,
 	}
-	cfg.httpClient.CheckRedirect = refuseRedirect
+	if cfg.httpClient != nil {
+		policy = policy.WithHTTPClientForTest(cfg.httpClient)
+	}
 	return &Resolver{
-		cfg:   cfg,
-		cache: newCache(cfg.clock),
+		cfg:    cfg,
+		cache:  newCache(cfg.clock),
+		client: securefetch.NewClient(policy),
 	}
 }
 
@@ -259,29 +261,19 @@ func (r *Resolver) Resolve(ctx context.Context, sectorIdentifierURI string, regi
 // is unexported because Resolve's bookkeeping (cache lookup, subset
 // check, hash compare) only makes sense as a unit; exposing the raw
 // fetch would let a future caller skip the cache-poisoning gate.
+//
+// Status, Content-Type, body cap, and SSRF gates are applied by the
+// shared [*securefetch.Client]; this function only adds the JSON
+// parse and the canonicalisation / hashing of the resulting URI list.
 func (r *Resolver) doFetch(ctx context.Context, sectorIdentifierURI string) ([]string, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sectorIdentifierURI, http.NoBody)
+	req, err := r.client.NewRequest(ctx, http.MethodGet, sectorIdentifierURI, nil)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: build request: %w", ErrSectorFetch, err)
+		return nil, "", classifyFetchError(err)
 	}
 	req.Header.Set("Accept", jsonContentType)
-	resp, err := r.cfg.httpClient.Do(req)
+	body, _, err := r.client.Do(req) //nolint:bodyclose // securefetch.Do drains and closes the body internally.
 	if err != nil {
-		return nil, "", classifyTransportError(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode/100 != 2 {
-		return nil, "", fmt.Errorf("%w: status %d", ErrSectorFetch, resp.StatusCode)
-	}
-	if !isJSONContentType(resp.Header.Get("Content-Type")) {
-		return nil, "", fmt.Errorf("%w: content-type %q is not JSON", ErrSectorFetch, resp.Header.Get("Content-Type"))
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, r.cfg.maxBody+1))
-	if err != nil {
-		return nil, "", fmt.Errorf("%w: read body: %w", ErrSectorFetch, err)
-	}
-	if int64(len(body)) > r.cfg.maxBody {
-		return nil, "", fmt.Errorf("%w: body exceeds %d bytes", ErrSectorFetch, r.cfg.maxBody)
+		return nil, "", classifyFetchError(err)
 	}
 	uris, err := parseSectorDocument(body)
 	if err != nil {
@@ -301,7 +293,7 @@ func (r *Resolver) doFetch(ctx context.Context, sectorIdentifierURI string) ([]s
 // taxonomy ([ErrSectorPrivateAddress] / [ErrSectorFetch]) so callers
 // can branch with [errors.Is] against the existing sentinels.
 //
-// The dial-time check installed by [netsec.NewHTTPClient] re-runs the
+// The dial-time check installed by [internal/netsec.NewHTTPClient] re-runs the
 // same deny-list against the kernel-resolved address, so a TOCTOU
 // rebinding between this gate and [http.Client.Do] cannot escape.
 // Cloud-metadata IPs (169.254.169.254 et al) remain rejected even
@@ -312,13 +304,7 @@ func (r *Resolver) assertSafeURL(ctx context.Context, raw string) (string, error
 		return "", fmt.Errorf("%w: parse url: %w", ErrSectorFetch, err)
 	}
 	host := u.Hostname()
-	opts := netsec.Options{
-		AllowPrivate:   r.cfg.allowPrivate,
-		AllowedSchemes: []string{"https"},
-		Timeout:        r.cfg.timeout,
-		LookupHook:     r.cfg.resolverLookupHook,
-	}
-	if err := netsec.AssertSafeURLParsed(ctx, u, opts); err != nil {
+	if err := r.client.AssertSafeURLParsed(ctx, u); err != nil {
 		return "", classifyNetsecError(err)
 	}
 	return strings.ToLower(host), nil
@@ -339,6 +325,27 @@ func classifyNetsecError(err error) error {
 	}
 }
 
+// classifyFetchError maps an error returned from the
+// [*securefetch.Client] (transport failure, status / content-type
+// rejection, refused redirect) onto the sector taxonomy. The mapping
+// preserves the historical errors.Is matrix the resolver tests pin:
+// a refused redirect surfaces as [ErrSectorRedirectFollowed]; an
+// SSRF rejection flowing through the gate at request-build time
+// reuses [classifyNetsecError]; everything else falls through to
+// [ErrSectorFetch].
+func classifyFetchError(err error) error {
+	if errors.Is(err, ErrSectorRedirectFollowed) {
+		return err
+	}
+	if errors.Is(err, netsec.ErrPrivateNetworkBlocked) ||
+		errors.Is(err, netsec.ErrCloudMetadataBlocked) ||
+		errors.Is(err, netsec.ErrSchemeNotAllowed) ||
+		errors.Is(err, netsec.ErrMissingHost) {
+		return classifyNetsecError(err)
+	}
+	return fmt.Errorf("%w: %w", ErrSectorFetch, err)
+}
+
 // refuseRedirect is the [http.Client.CheckRedirect] hook installed on
 // every fetcher. The OIDC Core 1.0 §5 sector document is fetched
 // against a public, RP-controlled URL; an upstream redirect almost
@@ -347,20 +354,6 @@ func classifyNetsecError(err error) error {
 // disposition was not validated. Both are refused.
 func refuseRedirect(*http.Request, []*http.Request) error {
 	return fmt.Errorf("%w: %w", ErrSectorFetch, ErrSectorRedirectFollowed)
-}
-
-// classifyTransportError maps the raw error the http client returned
-// into the package-level family. The function exists so a network
-// failure (DNS, TCP, TLS) carries the same outer wrap as a status /
-// content-type rejection; callers checking errors.Is(err, ErrSectorFetch)
-// see a consistent surface. Redirect refusals are detected by
-// inspecting the wrapped chain so the caller can distinguish them
-// from generic transport errors.
-func classifyTransportError(err error) error {
-	if errors.Is(err, ErrSectorRedirectFollowed) {
-		return err
-	}
-	return fmt.Errorf("%w: %w", ErrSectorFetch, err)
 }
 
 // parseSectorDocument decodes body into the OIDC Core 1.0 §5 array
@@ -439,21 +432,6 @@ func verifySubset(upstream, registered []string) error {
 		}
 	}
 	return nil
-}
-
-// isJSONContentType reports whether ct is a JSON-ish media type.
-// Sector documents are pure JSON arrays per OIDC Core 1.0 §5;
-// application/json is the only Accept type the resolver advertises
-// and the only one it accepts.
-func isJSONContentType(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	ct = strings.TrimSpace(strings.ToLower(ct))
-	return ct == jsonContentType
 }
 
 // cache is a tiny thread-safe TTL cache keyed by sector_identifier_uri.

@@ -13,6 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/redact"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -593,10 +594,24 @@ func (c *config) acrValuesSupportedCopy() []string {
 // [AccessTokenFormatJWT]. The empty resource string flows through to
 // the global default; the option-layer validator forbids the empty key
 // in the per-audience map specifically so that branch is unambiguous.
+//
+// Defence in depth: every grant endpoint canonicalises the request's
+// resource value through [internal/resourceindicator.Canonicalize]
+// before the wire layer reaches this lookup. The canonicalisation here
+// is a second pass so an embedder who reaches into the issuance call
+// site directly still gets a correct hit for a request whose verbatim
+// bytes differ from the registered key only by case or trailing slash.
+// A malformed resource (validation should have rejected it before this
+// point) collapses onto the global default.
 func (c *config) formatForAudience(resource string) store.AccessTokenFormat {
 	if resource != "" && c.accessTokenFormatPerAudience != nil {
 		if f, ok := c.accessTokenFormatPerAudience[resource]; ok {
 			return f
+		}
+		if canonical, err := resourceindicator.Canonicalize(resource); err == nil {
+			if f, ok := c.accessTokenFormatPerAudience[canonical]; ok {
+				return f
+			}
 		}
 	}
 	return c.accessTokenFormat

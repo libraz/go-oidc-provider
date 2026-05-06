@@ -376,6 +376,16 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore s
 			Open:    true,
 			IATTTL:  24 * time.Hour,
 			IATUses: 1,
+			// OFCS oidcc-dynamic POSTs to /register without a scope
+			// field and then runs /authorize with the OP's full
+			// catalog. Mirror op-demo's published scope set here so
+			// the conformance plan keeps working without the RP
+			// having to spell scopes out at register time.
+			// Production embedders SHOULD leave this empty and
+			// either issue IATs (whose AllowedScopes restriction
+			// wins over the open default) or instruct RPs to
+			// request scopes explicitly during DCR.
+			OpenRegistrationDefaultScopes: append([]string(nil), scopeCatalog...),
 		}))
 	}
 	return opts, nil

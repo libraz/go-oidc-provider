@@ -22,6 +22,8 @@ func validatePolicy(
 	allowedGrantTypes []string,
 	allowedResponseTypes []string,
 	iatScopes []string,
+	openRegistration bool,
+	openRegistrationDefaultScopes []string,
 	scopes *scoperegistry.Registry,
 	pairwiseEnabled bool,
 	allowLocalhostLoopback bool,
@@ -30,7 +32,7 @@ func validatePolicy(
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
 	}
 	canonical := applyMetadataDefaults(m, allowedGrantTypes, allowedResponseTypes)
-	canonical.Scope = defaultScopeIfEmpty(canonical.Scope, iatScopes, scopes)
+	canonical.Scope = defaultScopeIfEmpty(canonical.Scope, iatScopes, openRegistration, openRegistrationDefaultScopes, scopes)
 	checks := []func() error{
 		func() error {
 			return validateRedirectURIs(canonical.RedirectURIs, canonical.ApplicationType, hasImplicitResponseType(canonical.ResponseTypes), allowLocalhostLoopback)
@@ -84,21 +86,43 @@ func validateDefaultMaxAge(v *int64) error {
 }
 
 // defaultScopeIfEmpty returns scope unchanged when non-empty; when
-// empty it returns the IAT-bound allowlist (if any), otherwise the
-// registry's public scope set, joined by spaces. OIDC Dynamic Client
-// Registration 1.0 §2 says "If omitted, an authorization server MAY
-// register a Client with a default set of scopes": defaulting to the
-// IAT-allowlist (or the OP's public catalog when the registration
-// path is open) lets the dynamically-registered client request any
-// scope it could legitimately have asked for had it spelled them out
-// in the DCR request, which is the behaviour OFCS' oidcc-dynamic plan
-// (and most production embedders) expect.
-func defaultScopeIfEmpty(scope string, iatScopes []string, scopes *scoperegistry.Registry) string {
+// empty it returns the registration-path default joined by spaces.
+//
+// The selection order is:
+//  1. iatScopes — the IAT-bound allowlist
+//     ([store.InitialAccessToken.AllowedScopes]). Operator-issued IAT
+//     restrictions win over every other default so a tightly-scoped
+//     IAT cannot be widened by a defaulting rule.
+//  2. openRegistrationDefaultScopes when openRegistration is true —
+//     the embedder-supplied default for open registration. Empty (the
+//     zero value) means "no default": the registered client gets
+//     [store.Client.Scopes] empty and must request scope explicitly
+//     on subsequent /authorize calls.
+//  3. scopes.PublicNames() — the registry's public catalog, applied
+//     only on the IAT-bound path when the IAT carried no AllowedScopes
+//     restriction. The IAT issuer is operator-supplied code so the
+//     broader default is acceptable.
+//  4. Empty string when no default applies.
+//
+// The minimum-privilege baseline for open registration is
+// deliberate: prior to the
+// [op.RegistrationOption.OpenRegistrationDefaultScopes] surface,
+// open mode fell through to the registry's full public scope list,
+// which silently widened every dynamically registered client.
+// Embedders that rely on a wider default opt in explicitly through
+// the option.
+func defaultScopeIfEmpty(scope string, iatScopes []string, openRegistration bool, openRegistrationDefaultScopes []string, scopes *scoperegistry.Registry) string {
 	if scope != "" {
 		return scope
 	}
 	if len(iatScopes) > 0 {
 		return strings.Join(iatScopes, " ")
+	}
+	if openRegistration {
+		if len(openRegistrationDefaultScopes) > 0 {
+			return strings.Join(openRegistrationDefaultScopes, " ")
+		}
+		return ""
 	}
 	if scopes != nil {
 		names := scopes.PublicNames()
@@ -256,15 +280,38 @@ func validateMetadataURIs(m ClientMetadata) error {
 		{name: "jwks_uri", raw: m.JWKsURI},
 		{name: "sector_identifier_uri", raw: m.SectorIdentifierURI},
 		{name: "initiate_login_uri", raw: m.InitiateLoginURI},
+		{name: "backchannel_logout_uri", raw: m.BackchannelLogoutURI},
 	} {
 		if err := validateHTTPSAbsoluteURI(field.name, field.raw); err != nil {
 			return err
 		}
 	}
+	if err := validateBackchannelLogoutCoupling(m); err != nil {
+		return err
+	}
 	for _, raw := range m.RequestURIs {
 		if err := validateRequestURI("request_uris", raw); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateBackchannelLogoutCoupling enforces the rule that a client
+// opting into back-channel logout's session-bound semantics
+// (`backchannel_logout_session_required=true`) MUST register a
+// non-empty `backchannel_logout_uri`. The session-bound flag is
+// meaningful only as a directive to the OP about the contents of the
+// logout token; without a delivery URL the directive is a dangling
+// promise the OP cannot honour at logout time. RFC 7591 says nothing
+// about the coupling, so we treat it as a structural-validation
+// error (invalid_client_metadata) rather than a runtime delivery
+// failure — it is the kind of misconfiguration that should surface
+// at registration time, not at the next session expiry.
+func validateBackchannelLogoutCoupling(m ClientMetadata) error {
+	if m.BackchannelLogoutSessionRequired && m.BackchannelLogoutURI == "" {
+		return errInvalidClientMetadata(
+			"backchannel_logout_session_required requires backchannel_logout_uri")
 	}
 	return nil
 }
@@ -289,6 +336,9 @@ func validateHTTPSAbsoluteURI(field, raw string) error {
 	if u.Host == "" {
 		return errInvalidClientMetadata(field + " must include a host")
 	}
+	if u.User != nil {
+		return errInvalidClientMetadata(field + " must not contain userinfo")
+	}
 	return nil
 }
 
@@ -297,6 +347,13 @@ func validateHTTPSAbsoluteURI(field, raw string) error {
 // OIDC Core §6.2 explicitly RECOMMENDS using the base64url-encoded
 // SHA-256 hash of the request file as the fragment so caches can detect
 // content changes.
+//
+// The userinfo rejection mirrors [validateHTTPSAbsoluteURI]: a URL of
+// the shape `https://trusted.example@evil.example/...` parses with
+// host=evil.example in Go but reads as host=trusted.example in many
+// human / parser passes. The OP fetches request_uri payloads, so the
+// audit / SSRF / allowlist boundary refuses parser-confusion URLs
+// uniformly across every metadata field that accepts an https URL.
 func validateRequestURI(field, raw string) error {
 	if raw == "" {
 		return nil
@@ -313,6 +370,9 @@ func validateRequestURI(field, raw string) error {
 	}
 	if u.Host == "" {
 		return errInvalidClientMetadata(field + " must include a host")
+	}
+	if u.User != nil {
+		return errInvalidClientMetadata(field + " must not contain userinfo")
 	}
 	return nil
 }

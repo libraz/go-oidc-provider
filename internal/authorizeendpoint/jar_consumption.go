@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/jar"
+	"github.com/libraz/go-oidc-provider/internal/netsec"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -103,10 +103,24 @@ func resolveJARRequestIfNeeded(
 //   - Membership in the client's preregistered RequestURIs allowlist
 //     (RFC 9101 §5.2.2 / FAPI 2.0 Message Signing). The OP is strict:
 //     no preregistration means the URI is not honoured.
-//   - The same SSRF deny-list, body cap, and content-type policy the
-//     JWKS fetcher applies. The body is permitted to be either
-//     application/oauth-authz-req+jwt (RFC 9101 §10.6) or text/plain
-//     because some IdPs publish bare JWS bodies.
+//   - The same SSRF deny-list (URL-time + dial-time), body cap, and
+//     content-type policy that backs the JWKS / sector_identifier_uri
+//     fetchers. The implementation goes through [internal/netsec] so
+//     a DNS-rebinding peer cannot pivot between the URL gate and the
+//     dial; cloud-metadata IPs remain rejected even when AllowPrivate
+//     is enabled.
+//   - HTTPS-only by default. http:// is admitted only when
+//     [op.WithAllowPrivateNetworkJAR] is set so loopback fixtures keep
+//     working without weakening the production posture.
+//   - No redirects. RFC 9101 leaves the matter open, but a 30x is the
+//     easiest way an attacker upstream of the RP could pivot the OP
+//     onto a different host whose SSRF disposition was not validated.
+//   - Content-Type whitelist. The body is permitted to declare
+//     application/oauth-authz-req+jwt (RFC 9101 §10.6),
+//     application/jwt, text/plain, or be absent (some IdPs publish
+//     bare JWS bodies without a Content-Type); anything else is
+//     rejected so a misrouted captive-portal HTML / octet-stream
+//     cannot be parsed as a JWS by accident.
 //
 // The function writes the response envelope on every failure path; the
 // boolean is false in that case and true on success.
@@ -122,28 +136,46 @@ func fetchJARRequestURI(
 			"request_uri is not preregistered for this client")
 		return "", false
 	}
-	if err := assertJARRequestURISafe(ctx, uri, allowPrivate); err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI, err.Error())
+	netsecOpts := jarRequestURINetsecOptions(allowPrivate)
+	if err := netsec.AssertSafeURL(ctx, uri, netsecOpts); err != nil {
+		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
+			classifyJARRequestURISSRFError(err))
 		return "", false
 	}
-	httpClient := &http.Client{Timeout: jarRequestURITimeout}
+	httpClient := netsec.NewHTTPClient(netsecOpts)
 	// The URL came from the client's preregistered allowlist and has
-	// passed the SSRF deny-list above; the gosec G107 / taint warning
-	// is acknowledged here and not surfaced as a real risk.
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, http.NoBody) //nolint:gosec // see assertJARRequestURISafe.
+	// passed both the URL-time SSRF gate above and the dial-time gate
+	// installed by [netsec.NewHTTPClient]; the gosec G107/G704 SSRF
+	// taint warning is acknowledged here as covered by the deny-list.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, http.NoBody) //nolint:gosec // see netsec gates above.
 	if err != nil {
 		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI, "request_uri is malformed")
 		return "", false
 	}
-	resp, err := httpClient.Do(req) //nolint:gosec // see assertJARRequestURISafe.
+	req.Header.Set("Accept", "application/oauth-authz-req+jwt, application/jwt, text/plain;q=0.5")
+	resp, err := httpClient.Do(req) //nolint:gosec // see netsec gates above.
 	if err != nil {
-		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI, "request_uri fetch failed")
+		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
+			classifyJARRequestURIDoError(err))
 		return "", false
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// MaxRedirects=0 in netsec.Options collapses every 30x onto
+	// http.ErrUseLastResponse, so a redirect surfaces here as a non-2xx
+	// status. We refuse the response rather than follow the location.
+	if resp.StatusCode/100 == 3 {
+		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
+			"request_uri must not redirect")
+		return "", false
+	}
 	if resp.StatusCode/100 != 2 {
 		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
 			fmt.Sprintf("request_uri responded with status %d", resp.StatusCode))
+		return "", false
+	}
+	if !isJARRequestObjectContentType(resp.Header.Get("Content-Type")) {
+		renderJSONError(w, http.StatusBadRequest, errInvalidRequestURI,
+			fmt.Sprintf("request_uri content-type %q is not a JWS media type", resp.Header.Get("Content-Type")))
 		return "", false
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxJARRequestURIBody+1))
@@ -159,6 +191,91 @@ func fetchJARRequestURI(
 	return strings.TrimSpace(string(body)), true
 }
 
+// jarRequestURINetsecOptions returns the [netsec.Options] snapshot the
+// JAR request_uri fetcher uses for the URL-time gate and the HTTP
+// client. The function is the single source of truth so the URL gate
+// and the dial gate cannot drift apart.
+//
+// HTTPS-only is the production posture; AllowPrivate widens the scheme
+// allow-list to include http so loopback fixtures keep working. Cloud
+// metadata IPs remain rejected unconditionally — that gate is enforced
+// by [netsec.AssertSafeURLParsed] and the dial-control hook regardless
+// of AllowPrivate.
+func jarRequestURINetsecOptions(allowPrivate bool) netsec.Options {
+	schemes := []string{"https"}
+	if allowPrivate {
+		schemes = []string{"http", "https"}
+	}
+	return netsec.Options{
+		AllowPrivate:   allowPrivate,
+		AllowedSchemes: schemes,
+		Timeout:        jarRequestURITimeout,
+		// MaxRedirects=0 (default) makes [netsec] refuse every 30x;
+		// the Do call below surfaces the redirect as a non-2xx status.
+	}
+}
+
+// isJARRequestObjectContentType reports whether ct is a recognised
+// JAR request-object media type. RFC 9101 §10.6 SHOULDs
+// application/oauth-authz-req+jwt; in practice some IdPs emit
+// application/jwt or text/plain for bare JWS bodies. An absent
+// Content-Type is also accepted because the same RFC clause is a
+// SHOULD, not a MUST. Anything else (text/html captive portal,
+// application/octet-stream from a misrouted CDN) is rejected so a
+// non-JWS body cannot be fed into the verifier.
+func isJARRequestObjectContentType(ct string) bool {
+	if ct == "" {
+		return true
+	}
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	ct = strings.TrimSpace(strings.ToLower(ct))
+	switch ct {
+	case "application/oauth-authz-req+jwt",
+		"application/jwt",
+		"text/plain":
+		return true
+	}
+	return false
+}
+
+// classifyJARRequestURISSRFError maps a [netsec] sentinel raised by
+// the URL-time gate onto a short operator-friendly description. The
+// description is what the wire envelope surfaces; we never echo the
+// wrapped error verbatim to the client because the wrap may carry the
+// internal hostname.
+func classifyJARRequestURISSRFError(err error) string {
+	switch {
+	case errors.Is(err, netsec.ErrCloudMetadataBlocked):
+		return "request_uri target is blocked by the cloud-metadata gate"
+	case errors.Is(err, netsec.ErrPrivateNetworkBlocked):
+		return "request_uri target is blocked by the private-network gate"
+	case errors.Is(err, netsec.ErrSchemeNotAllowed):
+		return "request_uri scheme is not allowed"
+	case errors.Is(err, netsec.ErrMissingHost):
+		return "request_uri is missing host"
+	}
+	return "request_uri is not safe to fetch"
+}
+
+// classifyJARRequestURIDoError maps the error [http.Client.Do] returns
+// from the wrapped netsec client into one of the wire descriptions the
+// fetcher emits. SSRF rejections raised from the dial-time hook or
+// the [urlGateRoundTripper] arrive wrapped in a transport error; we
+// recognise them so the operator-facing wording matches the URL-time
+// rejection above instead of collapsing onto "fetch failed".
+func classifyJARRequestURIDoError(err error) string {
+	switch {
+	case errors.Is(err, netsec.ErrCloudMetadataBlocked),
+		errors.Is(err, netsec.ErrPrivateNetworkBlocked):
+		return "request_uri target resolves to a blocked network"
+	case errors.Is(err, netsec.ErrRedirectBlocked):
+		return "request_uri must not redirect"
+	}
+	return "request_uri fetch failed"
+}
+
 // isPreregisteredRequestURI reports whether uri appears verbatim in
 // the client's RequestURIs allowlist. RFC 9101 §5.2.2 leaves matching
 // semantics to the OP; we apply byte-equal comparison so an attacker
@@ -171,50 +288,6 @@ func isPreregisteredRequestURI(c *store.Client, uri string) bool {
 		}
 	}
 	return false
-}
-
-// assertJARRequestURISafe enforces the SSRF-style deny-list on a JAR
-// request_uri before the HTTP fetcher dials. The list mirrors the
-// JWKS fetcher in [internal/jar]: only http / https schemes, no
-// loopback or RFC 1918 hosts. When allowPrivate is true the deny-list
-// is suppressed so embedders fronting their RPs with private DNS can
-// opt in via op.WithAllowPrivateNetworkJAR.
-func assertJARRequestURISafe(ctx context.Context, raw string, allowPrivate bool) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return errors.New("request_uri is not a parseable URL")
-	}
-	if u.Scheme != "https" && u.Scheme != "http" {
-		return fmt.Errorf("request_uri scheme %q is not allowed", u.Scheme)
-	}
-	host := u.Hostname()
-	if host == "" {
-		return errors.New("request_uri is missing host")
-	}
-	if allowPrivate {
-		return nil
-	}
-	if jar.IsLocalHostname(host) {
-		return fmt.Errorf("request_uri host %q is loopback", host)
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if jar.IsPrivateIP(ip) {
-			return fmt.Errorf("request_uri host %q is loopback / private", host)
-		}
-		return nil
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, jarRequestURITimeout)
-	defer cancel()
-	addrs, lookupErr := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
-	if lookupErr != nil {
-		return fmt.Errorf("request_uri host %q cannot be resolved", host)
-	}
-	for _, addr := range addrs {
-		if jar.IsPrivateIP(addr.IP) {
-			return fmt.Errorf("request_uri host %q resolves to a private IP", host)
-		}
-	}
-	return nil
 }
 
 // writeJAREnvelopeError translates a [jar] sentinel into the OAuth

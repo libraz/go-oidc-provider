@@ -28,7 +28,11 @@ type Request struct {
 	Scope []string
 
 	// Resource is the RFC 8707 resource indicator. Empty means the
-	// request omitted the parameter.
+	// request omitted the parameter. After [Request.Validate] succeeds
+	// the field carries the canonical form (lowercase scheme + host,
+	// default port stripped, trailing slash normalised) per
+	// [internal/resourceindicator.Canonicalize]; the wire-side bytes
+	// are not preserved on the validated value.
 	Resource string
 
 	// State is the OAuth state parameter, verbatim.

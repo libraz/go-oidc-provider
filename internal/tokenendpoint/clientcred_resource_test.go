@@ -192,3 +192,145 @@ func TestClientCredentials_Resource(t *testing.T) {
 		})
 	}
 }
+
+// TestClientCredentials_Resource_Canonicalisation pins the
+// system-wide canonicalisation policy: a request whose resource value
+// differs from the registered allowlist entry only by a non-canonical
+// shape (mixed-case host, trailing slash, default port) MUST still
+// match, and the issued access token's aud claim MUST carry the
+// canonical form. Fragment-bearing and userinfo-bearing requests MUST
+// be rejected before the allowlist check runs.
+func TestClientCredentials_Resource_Canonicalisation(t *testing.T) {
+	t.Parallel()
+
+	const registered = "https://api.example.com/orders"
+
+	cases := []struct {
+		name       string
+		clientID   string
+		request    string
+		wantStatus int
+		wantAud    string
+		wantError  string
+	}{
+		{
+			name:       "mixed-case host accepted",
+			clientID:   "client-cc-canon-mixedcase",
+			request:    "https://API.Example.COM/orders",
+			wantStatus: http.StatusOK,
+			wantAud:    registered,
+		},
+		{
+			name:       "trailing slash accepted",
+			clientID:   "client-cc-canon-trailing",
+			request:    "https://api.example.com/orders/",
+			wantStatus: http.StatusOK,
+			wantAud:    registered,
+		},
+		{
+			name:       "default port stripped",
+			clientID:   "client-cc-canon-port",
+			request:    "https://api.example.com:443/orders",
+			wantStatus: http.StatusOK,
+			wantAud:    registered,
+		},
+		{
+			name:       "fragment rejected",
+			clientID:   "client-cc-canon-fragment",
+			request:    "https://api.example.com/orders#x",
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_target",
+		},
+		{
+			name:       "userinfo rejected",
+			clientID:   "client-cc-canon-userinfo",
+			request:    "https://user@api.example.com/orders",
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_target",
+		},
+		{
+			name:       "relative URI rejected",
+			clientID:   "client-cc-canon-relative",
+			request:    "/orders",
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_target",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			client, secret := clientCredsClientWithResources(
+				t, f.prov, tc.clientID,
+				[]string{"read"},
+				[]string{registered},
+			)
+
+			form := url.Values{}
+			form.Set("grant_type", "client_credentials")
+			form.Set("scope", "read")
+			form.Set("resource", tc.request)
+
+			resp := f.post(t, form, client.ID, secret)
+			defer resp.Body.Close()
+
+			if resp.StatusCode != tc.wantStatus {
+				t.Fatalf("status=%d want %d body=%v",
+					resp.StatusCode, tc.wantStatus, decodeJSON(t, resp))
+			}
+			body := decodeJSON(t, resp)
+			if tc.wantError != "" {
+				if got, _ := body["error"].(string); got != tc.wantError {
+					t.Errorf("error=%v want %q", body["error"], tc.wantError)
+				}
+				return
+			}
+
+			at, _ := body["access_token"].(string)
+			if at == "" {
+				t.Fatal("access_token missing on success path")
+			}
+			verifier := &tokens.AccessTokenVerifier{
+				Keys: mustKeySet(t, f.prov), Issuer: f.prov.Issuer, Clock: f.clock,
+			}
+			parsed, _, err := verifier.Verify(at)
+			if err != nil {
+				t.Fatalf("AccessTokenVerifier.Verify: %v", err)
+			}
+			if len(parsed.Audience) != 1 || parsed.Audience[0] != tc.wantAud {
+				t.Errorf("aud=%v want [%q] (canonical form must surface in aud)",
+					parsed.Audience, tc.wantAud)
+			}
+		})
+	}
+}
+
+// TestClientCredentials_Resource_RegisteredNonCanonical confirms that
+// a registered allowlist entry written before the canonicalisation
+// policy existed (mixed-case host, trailing slash) still matches a
+// canonical request. The Resources field on store.Client is treated
+// as the source of truth and re-canonicalised on every lookup so
+// historical records continue to work without an explicit migration.
+func TestClientCredentials_Resource_RegisteredNonCanonical(t *testing.T) {
+	t.Parallel()
+
+	const canonical = "https://api.example.com/orders"
+	f := newFixture(t)
+	client, secret := clientCredsClientWithResources(
+		t, f.prov, "client-cc-legacy-registered",
+		[]string{"read"},
+		[]string{"https://API.Example.COM/orders/"},
+	)
+
+	form := url.Values{}
+	form.Set("grant_type", "client_credentials")
+	form.Set("scope", "read")
+	form.Set("resource", canonical)
+
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+}

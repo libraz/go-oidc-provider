@@ -496,3 +496,35 @@ type stubCIBAHintResolver struct{}
 func (stubCIBAHintResolver) Resolve(_ context.Context, _ op.HintKind, _ string) (string, error) {
 	return "user-stub", nil
 }
+
+// TestWithAccessTokenFormatPerAudience_RejectsCanonicalCollision
+// confirms that two map keys whose canonical forms collide (one
+// mixed-case, one trailing-slash, both reducing to the same canonical
+// audience) fail [op.New]. The collision is a configuration mistake
+// the embedder must see at startup rather than the wire layer
+// silently picking whichever entry hashed first. The two values are
+// both JWT so the test does not also require an OpaqueAccessTokens
+// substore wired into the stub store.
+//
+// The remaining option-site coverage (canonicalisable keys accepted,
+// fragment / userinfo / relative-URI keys rejected, empty-map and
+// empty-key gates, per-audience-wins-over-global lookup) lives in
+// access_token_format_test.go alongside the rest of the access-token-
+// format option suite.
+func TestWithAccessTokenFormatPerAudience_RejectsCanonicalCollision(t *testing.T) {
+	t.Parallel()
+
+	keys := map[string]op.AccessTokenFormat{
+		"https://api.example.com/orders":  op.AccessTokenFormatJWT,
+		"https://API.Example.COM/orders/": op.AccessTokenFormatJWT,
+	}
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithAccessTokenFormatPerAudience(keys),
+	)...)
+	if err == nil {
+		t.Fatal("expected configuration error for canonical-form collision, got nil")
+	}
+	if !strings.Contains(err.Error(), "canonicalise") {
+		t.Errorf("err = %v, want it to mention canonical-form collision", err)
+	}
+}

@@ -59,4 +59,12 @@ const (
 	// [maxStateBytes]. The single message conflates both bounds so
 	// the response is not an oracle for which limit fired.
 	descRequestTooLarge = "logout request exceeds permitted size"
+
+	// descDuplicateParameter is rendered when a single-valued
+	// parameter (id_token_hint / client_id /
+	// post_logout_redirect_uri / state / logout_hint / ui_locales)
+	// appears more than once in the request. The shape mirrors the
+	// duplicate-parameter rejection installed at the token / PAR /
+	// CIBA endpoints so the input-shape policy is uniform.
+	descDuplicateParameter = "duplicate single-valued parameter"
 )

@@ -88,6 +88,20 @@ type Deps struct {
 	// registration emits a per-request WARN log.
 	Open bool
 
+	// OpenRegistrationDefaultScopes is the scope list applied as the
+	// default when an open-registration POST omits the scope field.
+	// A nil/empty slice means "no default" — clients that did not
+	// request scope are persisted with [store.Client.Scopes] empty,
+	// and any subsequent /authorize request that spells out scopes
+	// the client did not register for is rejected as invalid_scope.
+	//
+	// The IAT-bound path is unaffected: when an IAT is presented
+	// without [store.InitialAccessToken.AllowedScopes] the default
+	// remains the registry's public scope list (the IAT issuer is
+	// trusted operator code, so the broader default is acceptable
+	// there).
+	OpenRegistrationDefaultScopes []string
+
 	// AllowedGrantTypes whitelists the grant_types a registration
 	// may request. Empty applies the library default {auth code,
 	// refresh}. The op layer resolves this before threading the
@@ -163,6 +177,18 @@ type Deps struct {
 	// [store.RevokeByClient] during the delete cascade. A nil substore
 	// opts out of the in-tree cascade for grants.
 	Grants store.GrantStore
+
+	// AccessTokens is the optional JWT access-token registry the
+	// handler probes for [store.RevokeByClient] during the delete
+	// cascade. A nil substore opts out of the in-tree JWT-AT
+	// cascade; the embedder's [OnClientDeleted] hook takes over.
+	AccessTokens store.AccessTokenRegistry
+
+	// OpaqueAccessTokens is the optional opaque access-token substore
+	// the handler probes for [store.RevokeByClient] during the delete
+	// cascade. A nil substore opts out of the in-tree opaque-AT
+	// cascade.
+	OpaqueAccessTokens store.OpaqueAccessTokenStore
 }
 
 // Handler returns the HTTP handler the OP mounts at /register and

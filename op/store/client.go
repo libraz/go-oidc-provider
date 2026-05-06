@@ -77,10 +77,12 @@ type Client struct {
 	// Logout Token to when this client's session terminates (OpenID
 	// Connect Back-Channel Logout 1.0 §2.5). An empty value disables
 	// back-channel logout for this client; the library does not invent
-	// a target. The URL MUST be HTTPS in production deployments — the
-	// validator at registration time enforces that — but the storage
-	// layer keeps it opaque so test fixtures can exercise http:// hosts
-	// served by httptest.
+	// a target. DCR / RM / static-client validators enforce
+	// scheme=https, host required, no fragment, and no embedded
+	// userinfo at registration time; the storage layer keeps the
+	// field opaque so test fixtures and historical embedders that
+	// wrote plaintext targets continue to load, with the deliverer's
+	// SSRF gate as defence-in-depth.
 	BackchannelLogoutURI string
 
 	// BackchannelLogoutSessionRequired reports whether the OP MUST

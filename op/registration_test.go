@@ -255,6 +255,57 @@ func TestWithDynamicRegistration_RejectsNonCodeResponseType(t *testing.T) {
 	}
 }
 
+// TestWithDynamicRegistration_RejectsUnknownOpenDefaultScope pins
+// the construction-time guard: an OpenRegistrationDefaultScopes
+// entry that names a scope no [WithScope] call (or the
+// standard-scope auto-fill) registered MUST fail [op.New] rather
+// than silently producing a runtime invalid_client_metadata on
+// every open registration.
+func TestWithDynamicRegistration_RejectsUnknownOpenDefaultScope(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{
+			Open:                          true,
+			OpenRegistrationDefaultScopes: []string{"openid", "definitely-not-registered"},
+		}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for unknown scope in OpenRegistrationDefaultScopes")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("unknown scope must surface as server configuration error: %v", err)
+	}
+}
+
+// TestWithDynamicRegistration_RejectsEmptyOpenDefaultScope pins the
+// invariant that an embedder who supplies
+// OpenRegistrationDefaultScopes MUST not include the empty string —
+// the registry has no anonymous entry, and a silent skip would mask
+// a typo.
+func TestWithDynamicRegistration_RejectsEmptyOpenDefaultScope(t *testing.T) {
+	t.Parallel()
+
+	clock := dcrFixedClock()
+	s := inmem.New(inmem.WithClock(clock))
+	opts := append(dcrBaseOpts(t, s, clock),
+		op.WithDynamicRegistration(op.RegistrationOption{
+			Open:                          true,
+			OpenRegistrationDefaultScopes: []string{"openid", ""},
+		}),
+	)
+	_, err := op.New(opts...)
+	if err == nil {
+		t.Fatal("expected configuration error for empty scope entry")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("empty scope must surface as server configuration error: %v", err)
+	}
+}
+
 func TestWithDynamicRegistration_RejectsDuplicate(t *testing.T) {
 	t.Parallel()
 

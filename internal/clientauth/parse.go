@@ -6,7 +6,30 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
+
+// credentialSingleValuedParams is the closed list of credential-bearing
+// form fields the shared parser consumes. RFC 6749 §3.2 forbids any of
+// these from appearing more than once; the rule is enforced here so
+// every endpoint that calls [Parse] (token, PAR, introspection,
+// revocation, plus any future endpoint) inherits the same wire shape.
+//
+// The token endpoint additionally rejects duplicate dispatch parameters
+// at its own boundary — the duplicated check is intentional. A future
+// endpoint that wires [Parse] without its own dispatcher gate still
+// gets the credential ambiguity closed; the token endpoint's gate is
+// for the non-credential parameters [Parse] does not see (grant_type,
+// code, refresh_token, etc.).
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var credentialSingleValuedParams = []string{
+	"client_id",
+	"client_secret",
+	"client_assertion_type",
+	"client_assertion",
+}
 
 // Credentials is the parsed view of a token-endpoint request's
 // authentication material. Exactly one of the SecretBasic / SecretPost /
@@ -59,6 +82,9 @@ func Parse(r *http.Request) (*Credentials, error) {
 	form, err := readForm(r)
 	if err != nil {
 		return nil, err
+	}
+	if _, ok := httpx.FirstDuplicateParameter(form, credentialSingleValuedParams); !ok {
+		return nil, ErrAmbiguousCredentials
 	}
 	parsed := extractFormCredentials(form)
 	if err := validateCredentialChannels(hasBasic, parsed); err != nil {

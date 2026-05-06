@@ -12,6 +12,20 @@ import (
 // embedders.
 const batchSize = 10
 
+// maxBatchSize is the upper cap [Verifier.Verify] applies to
+// [store.RecoveryBatch.Codes] before walking the slot list. The
+// generator only ever emits [batchSize] entries; a stored batch
+// claiming more is treated as store-integrity corruption rather than
+// a legitimate state, because each unmatched slot triggers an
+// argon2id derivation under [argon2id.DefaultPolicy] and an unbounded
+// slot count would let one verify call burn unbounded CPU / memory.
+//
+// The cap is deliberately loose (1.6× the generator size) so a
+// future revision that adjusts [batchSize] does not silently make
+// every existing verifier reject pre-bump batches; tightening to
+// exactly [batchSize] is a v1.x conversation, not a v1.0 invariant.
+const maxBatchSize = 16
+
 // codeChars is the number of alphabet characters in a single code,
 // excluding the formatting hyphen. Ten characters of base32 entropy
 // gives 50 bits per code; a successful guess against an unconsumed

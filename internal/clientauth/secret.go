@@ -5,15 +5,15 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math/big"
-	"strconv"
-	"strings"
 	"sync"
 
 	"golang.org/x/crypto/argon2"
+
+	"github.com/libraz/go-oidc-provider/internal/argon2id"
 )
 
 // SecretVerifier is the pluggable contract for verifying a presented
@@ -111,36 +111,23 @@ func (a *Argon2id) Hash(secret string) (string, error) {
 }
 
 // Verify implements [SecretVerifier]. It rejects malformed encodings,
-// version mismatches, and parameter values that fall below the OWASP
-// 2024 minima ([Argon2idMinMemory] / [Argon2idMinIterations]); otherwise
-// it derives the candidate key and compares it in constant time.
+// version mismatches, and parameter values that violate
+// [argon2id.DefaultPolicy] (which encodes the OWASP 2024 minima);
+// otherwise it derives the candidate key and compares it in constant
+// time. Every failure path collapses onto [ErrCredentialsInvalid] so
+// an attacker probing with synthetic stored values cannot fingerprint
+// the parser.
 func (a *Argon2id) Verify(presented, stored string) error {
-	parsed, err := parseArgon2idEncoding(stored)
-	if err != nil {
-		return err
-	}
-	if parsed.memory < Argon2idMinMemory || parsed.iterations < Argon2idMinIterations {
-		// A stored hash whose Argon2id parameters fall below the OWASP
-		// floor would let an attacker that has compromised the database
-		// brute-force credentials cheaply. Refusing to verify against
-		// such a hash forces an operator to re-hash on next login
-		// rather than silently accept the weak material.
+	switch err := argon2id.Verify([]byte(presented), stored, Argon2idPolicy()); {
+	case err == nil:
+		return nil
+	case errors.Is(err, argon2id.ErrMismatch),
+		errors.Is(err, argon2id.ErrEncoding),
+		errors.Is(err, argon2id.ErrPolicy):
+		return ErrCredentialsInvalid
+	default:
 		return ErrCredentialsInvalid
 	}
-	keyLen := len(parsed.hash)
-	// argon2.IDKey accepts uint32 for the key length; the parser caps
-	// the hash bytes at the maximum the encoder can emit (a few hundred
-	// bytes), so the conversion below is safe in practice. The bound
-	// check is defensive: a malformed encoding could in theory carry a
-	// pathological length.
-	if keyLen <= 0 || keyLen > maxArgon2idKeyLength {
-		return ErrCredentialsInvalid
-	}
-	candidate := argon2.IDKey([]byte(presented), parsed.salt, parsed.iterations, parsed.memory, parsed.parallelism, uint32(keyLen))
-	if subtle.ConstantTimeCompare(candidate, parsed.hash) != 1 {
-		return ErrCredentialsInvalid
-	}
-	return nil
 }
 
 // Argon2idMinMemory is the OWASP 2024 minimum memory cost for
@@ -154,89 +141,14 @@ const Argon2idMinMemory uint32 = 19 * 1024
 // "t=" parameter is below this floor.
 const Argon2idMinIterations uint32 = 2
 
-// maxArgon2idKeyLength is a defensive cap on the derived-key length the
-// verifier accepts. A legitimate encoding emitted by [Argon2id.Hash]
-// stays well under this; a malformed stored value claiming a giant key
-// is rejected before invoking [argon2.IDKey].
-const maxArgon2idKeyLength = 1024
-
-// argon2idHash is the parsed view of a stored Argon2id encoding.
-type argon2idHash struct {
-	memory      uint32
-	iterations  uint32
-	parallelism uint8
-	salt        []byte
-	hash        []byte
-}
-
-// parseArgon2idEncoding parses the modular crypt format produced by
-// [Argon2id.Hash]. It returns [ErrCredentialsInvalid] on any structural
-// issue so the verifier never leaks why a comparison failed.
-func parseArgon2idEncoding(s string) (argon2idHash, error) {
-	parts := strings.Split(s, "$")
-	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
-		return argon2idHash{}, ErrCredentialsInvalid
-	}
-	if !strings.HasPrefix(parts[2], "v=") {
-		return argon2idHash{}, ErrCredentialsInvalid
-	}
-	version, err := strconv.Atoi(parts[2][2:])
-	if err != nil || version != argon2.Version {
-		return argon2idHash{}, ErrCredentialsInvalid
-	}
-	mem, iter, par, err := parseArgon2idParams(parts[3])
-	if err != nil {
-		return argon2idHash{}, err
-	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
-		return argon2idHash{}, ErrCredentialsInvalid
-	}
-	hash, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil {
-		return argon2idHash{}, ErrCredentialsInvalid
-	}
-	return argon2idHash{
-		memory:      mem,
-		iterations:  iter,
-		parallelism: par,
-		salt:        salt,
-		hash:        hash,
-	}, nil
-}
-
-// parseArgon2idParams extracts the m/t/p triple from the parameter
-// segment ("m=...,t=...,p=...") of an Argon2id modular crypt encoding.
-// Errors collapse onto [ErrCredentialsInvalid] so the caller cannot tell
-// which sub-field tripped the parse.
-func parseArgon2idParams(seg string) (mem, iter uint32, par uint8, err error) {
-	for _, kv := range strings.Split(seg, ",") {
-		k, v, ok := strings.Cut(kv, "=")
-		if !ok {
-			return 0, 0, 0, ErrCredentialsInvalid
-		}
-		n, parseErr := strconv.ParseUint(v, 10, 32)
-		if parseErr != nil {
-			return 0, 0, 0, ErrCredentialsInvalid
-		}
-		switch k {
-		case "m":
-			mem = uint32(n)
-		case "t":
-			iter = uint32(n)
-		case "p":
-			if n > 255 {
-				return 0, 0, 0, ErrCredentialsInvalid
-			}
-			par = uint8(n)
-		default:
-			return 0, 0, 0, ErrCredentialsInvalid
-		}
-	}
-	if mem == 0 || iter == 0 || par == 0 {
-		return 0, 0, 0, ErrCredentialsInvalid
-	}
-	return mem, iter, par, nil
+// Argon2idPolicy is the [argon2id.Policy] this verifier applies to
+// stored client_secret hashes. The bounds inherit from
+// [argon2id.DefaultPolicy] (OWASP 2024 minima + practical upper caps);
+// embedders that interoperate with an external hash store can read the
+// returned struct to align their migration tooling with the verifier's
+// fence.
+func Argon2idPolicy() argon2id.Policy {
+	return argon2id.DefaultPolicy()
 }
 
 // ensure compile-time interface satisfaction.

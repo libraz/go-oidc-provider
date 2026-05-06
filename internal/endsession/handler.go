@@ -9,11 +9,31 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// endSessionSingleValuedParams enumerates the request parameters
+// OIDC RP-Initiated Logout 1.0 §2 lists with single-valued
+// semantics, plus the confirmation-token field the hint-less POST
+// branch reads from the double-submit cookie. RFC 6749 §3.2 forbids
+// duplicates for these names; the /end_session endpoint joins the
+// same input-shape policy as the token / PAR / CIBA surfaces by
+// rejecting any repeat at the dispatcher level.
+//
+//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
+var endSessionSingleValuedParams = []string{
+	"id_token_hint",
+	"client_id",
+	"post_logout_redirect_uri",
+	"state",
+	"logout_hint",
+	"ui_locales",
+	confirmTokenField,
+}
 
 // maxFormBytes caps the size of a POST /end_session request body. The
 // endpoint accepts only the form-encoded shape; even a generously
@@ -198,6 +218,10 @@ type request struct {
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	values, ok := readValues(w, r)
 	if !ok {
+		return
+	}
+	if _, single := httpx.FirstDuplicateParameter(values, endSessionSingleValuedParams); !single {
+		writeLogoutError(w, http.StatusBadRequest, descDuplicateParameter)
 		return
 	}
 	req := parseRequest(values)

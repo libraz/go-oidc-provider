@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
 // dcrCreated bundles the result of a successful POST /register so
@@ -794,6 +798,440 @@ func equalJSON(a, b any) bool {
 		return true
 	}
 	return false
+}
+
+// TestManage_RoundTrip_PreservesBackchannelLogout pins the rule
+// that `backchannel_logout_uri` and
+// `backchannel_logout_session_required` MUST survive a POST →
+// GET → PUT → GET round-trip. The check is wired through the
+// existing [checkProfileFields] helper so a regression that drops
+// the fields from `clientToResponse` or the response struct fails
+// the same way other RFC 7592 round-trip rows do.
+func TestManage_RoundTrip_PreservesBackchannelLogout(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+
+	original := map[string]any{
+		"redirect_uris":                       []string{"https://rp.test.invalid/cb"},
+		"backchannel_logout_uri":              "https://rp.test.invalid/logout",
+		"backchannel_logout_session_required": true,
+	}
+	resp := f.post(t, original, iat)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST status=%d want 201 body=%s", resp.StatusCode, raw)
+	}
+	created := decodeBody(t, resp)
+	clientID, _ := created["client_id"].(string)
+	rat, _ := created["registration_access_token"].(string)
+	if clientID == "" || rat == "" {
+		t.Fatalf("malformed POST response: %+v", created)
+	}
+	checkProfileFields(t, "POST", created, original)
+
+	getResp := f.manage(t, http.MethodGet, f.endpoint+"/"+clientID, rat, nil)
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status=%d want 200", getResp.StatusCode)
+	}
+	checkProfileFields(t, "GET", decodeBody(t, getResp), original)
+
+	// PUT a different logout endpoint and confirm the new value
+	// (not the old one, and not an empty value) round-trips.
+	updated := map[string]any{
+		"redirect_uris":                       []string{"https://rp.test.invalid/cb"},
+		"backchannel_logout_uri":              "https://rp.test.invalid/logout-v2",
+		"backchannel_logout_session_required": true,
+	}
+	putResp := f.manage(t, http.MethodPut, f.endpoint+"/"+clientID, rat, updated)
+	defer putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(putResp.Body)
+		t.Fatalf("PUT status=%d want 200 body=%s", putResp.StatusCode, raw)
+	}
+	putBody := decodeBody(t, putResp)
+	rotatedRAT, _ := putBody["registration_access_token"].(string)
+	if rotatedRAT == "" {
+		t.Fatalf("PUT must rotate the RAT")
+	}
+	checkProfileFields(t, "PUT", putBody, updated)
+
+	finalResp := f.manage(t, http.MethodGet, f.endpoint+"/"+clientID, rotatedRAT, nil)
+	defer finalResp.Body.Close()
+	if finalResp.StatusCode != http.StatusOK {
+		t.Fatalf("final GET status=%d want 200", finalResp.StatusCode)
+	}
+	checkProfileFields(t, "final GET", decodeBody(t, finalResp), updated)
+}
+
+// TestManage_Update_RatPutFailureRollsBackMetadata pins the rule
+// that when the rotated RAT cannot be persisted, the management
+// update path MUST best-effort restore the prior client metadata so
+// a partial write (new metadata + missing rotated RAT) never lands.
+//
+// The register-path symmetry is to delete the freshly inserted
+// client; the management-path symmetry restores the existing
+// snapshot via UpdateClient. Without the rollback the handler would
+// surface 500 with the new metadata still in the registry, leaving
+// the operator with a recovery puzzle the library could close on
+// its own.
+//
+// The test uses a thin wrapper around [inmem.Store] that fails the
+// next RAT Put once and then passes through. The choice to inject a
+// failure via a wrapper (rather than a global flag) keeps the
+// testkit-default store reusable so a parallel test suite cannot
+// observe the failure.
+func TestManage_Update_RatPutFailureRollsBackMetadata(t *testing.T) {
+	t.Parallel()
+
+	st := inmem.New()
+	wrap := &failingRATStore{Store: st, failNextPut: 1}
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	logBuf := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithStore(wrap),
+			op.WithLogger(logger),
+		),
+	)
+	f := &dcrFixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/register",
+		clock:    clock,
+		logBuf:   logBuf,
+	}
+	// Register a client first; the wrapper lets the initial RAT Put
+	// through (failNextPut starts at 1 — the register path uses 1 RAT
+	// Put, the management path uses another).
+	wrap.failNextPut = 0 // permit POST /register
+	created := f.register(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+		"client_name":   "RAT Rollback Test Client",
+	})
+	wrap.failNextPut = 1 // arm failure for the next PUT
+
+	// Snapshot the persisted metadata before the PUT.
+	before, err := st.Clients().GetClient(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("FindByID(before): %v", err)
+	}
+	if before.ClientName != "RAT Rollback Test Client" {
+		t.Fatalf("pre-PUT name=%q want %q", before.ClientName, "RAT Rollback Test Client")
+	}
+
+	// PUT a metadata change — the RAT Put will fail mid-flight.
+	put := map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+		"client_name":   "Should Not Persist",
+	}
+	resp := f.manage(t, http.MethodPut, f.endpoint+"/"+created.clientID, created.registrationAccessToken, put)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 500 body=%s", resp.StatusCode, raw)
+	}
+
+	// The metadata MUST have been rolled back to the pre-PUT snapshot.
+	after, err := st.Clients().GetClient(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("FindByID(after): %v", err)
+	}
+	if after.ClientName != before.ClientName {
+		t.Errorf("post-rollback client_name=%q want %q (rollback did not restore prior metadata)",
+			after.ClientName, before.ClientName)
+	}
+}
+
+// failingRATStore wraps an [inmem.Store] and fails the next N RAT Put
+// calls. The struct embeds *inmem.Store so every other substore
+// passes through unchanged.
+//
+// failNextPut is read and decremented by the wrapped Put; tests set
+// it to 0 to disarm the failure (the embedded inmem store's Put then
+// runs normally).
+type failingRATStore struct {
+	*inmem.Store
+	failNextPut int
+}
+
+// errInjected is the canned error the failing wrapper surfaces. The
+// concrete value lets the handler's logger record a deterministic
+// reason without the test having to inspect the wire body.
+var errInjected = errors.New("injected RAT put failure")
+
+func (s *failingRATStore) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
+	return &failingRATSubstore{inner: s.Store.RegistrationAccessTokens(), parent: s}
+}
+
+type failingRATSubstore struct {
+	inner  store.RegistrationAccessTokenStore
+	parent *failingRATStore
+}
+
+func (s *failingRATSubstore) Put(ctx context.Context, t *store.RegistrationAccessToken) error {
+	if s.parent.failNextPut > 0 {
+		s.parent.failNextPut--
+		return errInjected
+	}
+	return s.inner.Put(ctx, t)
+}
+
+func (s *failingRATSubstore) GetByClientID(ctx context.Context, clientID string) (*store.RegistrationAccessToken, error) {
+	return s.inner.GetByClientID(ctx, clientID)
+}
+
+func (s *failingRATSubstore) Delete(ctx context.Context, clientID string) error {
+	return s.inner.Delete(ctx, clientID)
+}
+
+// TestRegister_ClientRegisterFailureDoesNotConsumeIAT pins the rule
+// that when [Clients.RegisterClient] fails, the IAT MUST NOT be
+// consumed. The IAT IncrementUses must not run ahead of credential
+// generation or persistence; otherwise a transient crypto/rand or
+// registry-write fault would produce "IAT used, no client".
+//
+// The test injects a one-shot failure into RegisterClient, drives a
+// POST /register, and asserts the IAT's Uses counter is unchanged.
+// A subsequent retry under the same IAT then succeeds — proving the
+// IAT was preserved for the recovery path.
+func TestRegister_ClientRegisterFailureDoesNotConsumeIAT(t *testing.T) {
+	t.Parallel()
+
+	st := inmem.New()
+	wrap := &failingRegisterStore{Store: st}
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	logBuf := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithStore(wrap),
+			op.WithLogger(logger),
+		),
+	)
+	f := &dcrFixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/register",
+		clock:    clock,
+		logBuf:   logBuf,
+	}
+	// Mint an IAT with MaxUses=1 so the test pins the "single-use"
+	// invariant. Pre-fix the IAT was consumed by the failed register
+	// and the retry got 401.
+	issued, err := prov.OP.IssueInitialAccessToken(context.Background(), op.InitialAccessTokenSpec{MaxUses: 1})
+	if err != nil {
+		t.Fatalf("IssueInitialAccessToken: %v", err)
+	}
+
+	// Arm RegisterClient to fail once.
+	wrap.failNext = 1
+	resp := f.post(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	}, issued.Value)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("first POST status=%d want 500 body=%s", resp.StatusCode, raw)
+	}
+
+	// IAT MUST still be usable: retry without re-issuing.
+	wrap.failNext = 0
+	retry := f.post(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	}, issued.Value)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(retry.Body)
+		t.Fatalf("retry POST status=%d want 201 body=%s (IAT was burned by the failed register)",
+			retry.StatusCode, raw)
+	}
+}
+
+// failingRegisterStore wraps an [inmem.Store] and fails the next N
+// RegisterClient calls.
+type failingRegisterStore struct {
+	*inmem.Store
+	failNext int
+}
+
+func (s *failingRegisterStore) RegisterClient(ctx context.Context, c *store.Client) error {
+	if s.failNext > 0 {
+		s.failNext--
+		return errInjected
+	}
+	return s.Store.RegisterClient(ctx, c)
+}
+
+// TestManage_Delete_CascadesAccessTokenRevocation pins the rule
+// that DELETE /register/{client_id} MUST cascade through every
+// substore that implements [store.RevokeByClient], including the
+// JWT access-token registry and the opaque access-token store.
+//
+// The test seeds one record per substore directly, runs DELETE, and
+// asserts every record is revoked afterwards. Refresh and grant
+// cascades are covered by older tests; this test extends the matrix
+// to AT / opaque AT so a regression that drops the new probe rows
+// fails here.
+func TestManage_Delete_CascadesAccessTokenRevocation(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, nil)
+	ctx := context.Background()
+
+	// Seed an access-token registry row for the client.
+	atRec := store.AccessTokenRecord{
+		JTI:       "at-jti-1",
+		GrantID:   "grant-1",
+		Subject:   "user-1",
+		ClientID:  created.clientID,
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	if err := f.prov.Store.AccessTokens().Register(ctx, atRec); err != nil {
+		t.Fatalf("AccessTokens.Register: %v", err)
+	}
+
+	// Seed an opaque access-token row for the client. The ID is the
+	// raw (pre-hash) value the inmem store hashes internally before
+	// indexing — Find / RevokeByID accept the same raw form.
+	oat := &store.OpaqueAccessToken{
+		ID:        "oat-1",
+		ClientID:  created.clientID,
+		Subject:   "user-1",
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	if err := f.prov.Store.OpaqueAccessTokens().Save(ctx, oat); err != nil {
+		t.Fatalf("OpaqueAccessTokens.Save: %v", err)
+	}
+
+	// DELETE the client.
+	resp := f.manage(t, http.MethodDelete, created.registrationClientURI, created.registrationAccessToken, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("DELETE status=%d want 204 body=%s", resp.StatusCode, raw)
+	}
+
+	// JWT AT registry row must be revoked.
+	gotAT, err := f.prov.Store.AccessTokens().Find(ctx, atRec.JTI)
+	if err != nil {
+		t.Fatalf("AccessTokens.Find: %v", err)
+	}
+	if gotAT == nil {
+		t.Fatal("AT row vanished — expected revoked-but-present (inmem mark-revoked semantics)")
+	}
+	if !gotAT.Revoked {
+		t.Errorf("AT row revoked=%v want true (cascade did not reach AccessTokens)", gotAT.Revoked)
+	}
+
+	// Opaque AT row must be revoked.
+	gotOAT, err := f.prov.Store.OpaqueAccessTokens().Find(ctx, oat.ID)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find: %v", err)
+	}
+	if gotOAT == nil {
+		t.Fatal("opaque AT row vanished — expected revoked-but-present")
+	}
+	if !gotOAT.Revoked {
+		t.Errorf("opaque AT row revoked=%v want true (cascade did not reach OpaqueAccessTokens)", gotOAT.Revoked)
+	}
+}
+
+// TestManage_Delete_ClientDeleteFailureRetainsRATForRetry pins the
+// invariant that when DELETE /register/{client_id} fails because
+// the client record cannot be removed (transient store fault), the
+// RAT MUST remain valid so the RP can retry. The reverse order
+// would strand the client behind a 500 with no path back to the
+// management endpoint.
+func TestManage_Delete_ClientDeleteFailureRetainsRATForRetry(t *testing.T) {
+	t.Parallel()
+
+	st := inmem.New()
+	wrap := &failingClientStore{Store: st}
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	logBuf := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithDynamicRegistration(op.RegistrationOption{}),
+			op.WithStore(wrap),
+			op.WithLogger(logger),
+		),
+	)
+	f := &dcrFixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/register",
+		clock:    clock,
+		logBuf:   logBuf,
+	}
+	created := f.register(t, map[string]any{
+		"redirect_uris": []string{"https://rp.test.invalid/cb"},
+	})
+
+	// Arm the failure for DeleteClient.
+	wrap.failNextDelete = 1
+	resp := f.manage(t, http.MethodDelete, f.endpoint+"/"+created.clientID, created.registrationAccessToken, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 500 body=%s", resp.StatusCode, raw)
+	}
+
+	// The client record MUST still exist (delete failed).
+	if _, err := st.Clients().GetClient(context.Background(), created.clientID); err != nil {
+		t.Fatalf("client should still exist after failed delete: %v", err)
+	}
+	// The RAT MUST still exist so the RP can retry the management
+	// call. Pre-fix the RAT was removed before the client delete.
+	rat, err := st.RegistrationAccessTokens().GetByClientID(context.Background(), created.clientID)
+	if err != nil {
+		t.Fatalf("RAT should still exist for retry: %v", err)
+	}
+	if rat == nil || rat.ClientID != created.clientID {
+		t.Fatalf("RAT lookup returned %+v want non-nil for client %q", rat, created.clientID)
+	}
+
+	// A retry (with the failure disarmed) MUST succeed using the same RAT.
+	wrap.failNextDelete = 0
+	retry := f.manage(t, http.MethodDelete, f.endpoint+"/"+created.clientID, created.registrationAccessToken, nil)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusNoContent {
+		raw, _ := io.ReadAll(retry.Body)
+		t.Fatalf("retry status=%d want 204 body=%s", retry.StatusCode, raw)
+	}
+}
+
+// failingClientStore wraps an [inmem.Store] and fails the next N
+// DeleteClient calls. The library obtains the writable
+// [store.ClientRegistry] view by asserting on the entire Store
+// (see [op.resolveClientRegistry]), so embedding the inmem store
+// here exposes RegisterClient / UpdateClient / DeleteClient directly
+// — the wrapper only needs to override DeleteClient.
+type failingClientStore struct {
+	*inmem.Store
+	failNextDelete int
+}
+
+// DeleteClient overrides the embedded [inmem.Store] method so the
+// next failNextDelete invocations return [errInjected]. After the
+// counter drains the call passes through to the in-memory store so
+// the test can verify retry semantics under the same wrapper.
+func (s *failingClientStore) DeleteClient(ctx context.Context, id string) error {
+	if s.failNextDelete > 0 {
+		s.failNextDelete--
+		return errInjected
+	}
+	return s.Store.DeleteClient(ctx, id)
 }
 
 // TestManage_NotAllowedMethods rejects non-GPDP verbs with 405.

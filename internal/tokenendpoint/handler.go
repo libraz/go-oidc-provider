@@ -17,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
@@ -72,6 +73,35 @@ const (
 	// inputs (gosec G120).
 	maxFormBytes = 64 * 1024
 )
+
+// tokenSingleValuedParams is the closed list of /token form parameters
+// RFC 6749 §3.2 forbids from appearing more than once. The list spans
+// every grant the dispatcher routes (authorization_code, refresh_token,
+// device_code, ciba, client_credentials) plus the credentials the
+// shared [clientauth] parser consumes; running the duplicate check
+// before grant dispatch closes the wire-shape gap independent of which
+// grant the request claims.
+//
+// "resource" is intentionally absent — RFC 8707 §2 allows the resource
+// indicator to repeat — and any unknown form key is silently tolerated
+// so a future profile that adds a multi-valued parameter does not have
+// to plumb through a separate allow-list.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var tokenSingleValuedParams = []string{
+	"grant_type",
+	"client_id",
+	"client_secret",
+	"client_assertion_type",
+	"client_assertion",
+	"code",
+	"redirect_uri",
+	"code_verifier",
+	"refresh_token",
+	"scope",
+	"device_code",
+	"auth_req_id",
+}
 
 // Clock is the package-local view of the wall clock. It mirrors the
 // userinfo handler's posture: a structurally-typed interface so a value
@@ -370,6 +400,11 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		return
+	}
+	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, tokenSingleValuedParams); !ok {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"parameter "+name+" must not be repeated")
 		return
 	}
 	grantType := r.PostForm.Get("grant_type")

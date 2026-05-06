@@ -279,6 +279,96 @@ func TestHandler_UnknownGrantType(t *testing.T) {
 	assertCacheControl(t, resp)
 }
 
+// TestHandler_DuplicateSingleValuedParameter pins the rule that
+// every single-valued parameter the dispatcher / grant handlers /
+// shared client-auth parser read MUST be rejected when it appears
+// more than once. The check fires before grant_type dispatch so the
+// rejection is uniform regardless of which grant the request claims.
+//
+// The matrix exercises every name in
+// [tokenendpoint.tokenSingleValuedParams] (asserted indirectly: a
+// regression that drops a row stops failing this row but the wire
+// shape it allows is exactly the parser-confusion vector this
+// guard exists to close).
+func TestHandler_DuplicateSingleValuedParameter(t *testing.T) {
+	t.Parallel()
+
+	// Every standard credential / dispatch parameter the spec marks
+	// single-valued. "resource" is intentionally absent — RFC 8707
+	// §2 lets it repeat — and a separate row below pins that posture.
+	cases := []struct {
+		name  string
+		param string
+	}{
+		{"grant_type", "grant_type"},
+		{"client_id", "client_id"},
+		{"client_secret", "client_secret"},
+		{"client_assertion_type", "client_assertion_type"},
+		{"client_assertion", "client_assertion"},
+		{"code", "code"},
+		{"redirect_uri", "redirect_uri"},
+		{"code_verifier", "code_verifier"},
+		{"refresh_token", "refresh_token"},
+		{"scope", "scope"},
+		{"device_code", "device_code"},
+		{"auth_req_id", "auth_req_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t)
+			form := url.Values{}
+			// Always set a valid grant_type so the duplicate row that is
+			// not grant_type cannot bypass the gate by being rejected
+			// downstream.
+			form.Set("grant_type", "authorization_code")
+			form.Add(tc.param, "value-1")
+			form.Add(tc.param, "value-2")
+			resp := f.post(t, form, "", "")
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status=%d want 400", resp.StatusCode)
+			}
+			body := decodeJSON(t, resp)
+			if body["error"] != "invalid_request" {
+				t.Errorf("error=%v want invalid_request", body["error"])
+			}
+			if desc, _ := body["error_description"].(string); !strings.Contains(desc, tc.param) {
+				t.Errorf("error_description=%q want it to name %q", desc, tc.param)
+			}
+			assertCacheControl(t, resp)
+		})
+	}
+}
+
+// TestHandler_DuplicateResourceAccepted pins the dual to the
+// single-valued matrix: RFC 8707 §2 explicitly permits the "resource"
+// parameter to repeat, so the dispatcher MUST forward the request to
+// the grant handler. We use an unknown grant_type so the duplicate
+// "resource" survives long enough to land on the
+// unsupported_grant_type wire envelope (which is downstream of the
+// duplicate gate).
+func TestHandler_DuplicateResourceAccepted(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	form := url.Values{}
+	form.Set("grant_type", "urn:example:not-a-real-grant-type")
+	form.Add("resource", "https://api-a.example.com")
+	form.Add("resource", "https://api-b.example.com")
+	resp := f.post(t, form, "", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "unsupported_grant_type" {
+		t.Errorf("error=%v want unsupported_grant_type (duplicate-resource MUST pass the gate)", body["error"])
+	}
+}
+
 // Compile-time check that op.Clock and the tokenendpoint Clock are
 // structurally compatible.
 var _ interface{ Now() time.Time } = fixedClock{}

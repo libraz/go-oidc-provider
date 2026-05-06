@@ -190,6 +190,65 @@ func TestParse_AssertionWithoutClientID_OversizedAssertionRejected(t *testing.T)
 	}
 }
 
+// TestParse_DuplicateCredentialParameter pins the rule that the
+// shared client-authentication parser MUST refuse a request that
+// repeats a credential-bearing single-valued field (RFC 6749 §3.2).
+// The defence is layered with the per-endpoint duplicate gates the
+// token / PAR / introspection / revocation handlers also install:
+// a future endpoint that wires [Parse] without its own gate still
+// gets the credential ambiguity closed here, and the parser
+// surfaces the canonical [ErrAmbiguousCredentials] sentinel so the
+// wire response reads the same as the existing Basic+body /
+// Basic+assertion ambiguity rows.
+func TestParse_DuplicateCredentialParameter(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		param string
+		valA  string
+		valB  string
+	}{
+		{"client_id", "client_id", "client-1", "client-2"},
+		{"client_secret", "client_secret", "good", "bad"},
+		{"client_assertion_type", "client_assertion_type", clientauth.AssertionType, "urn:bogus"},
+		{"client_assertion", "client_assertion", "header.body.sig", "other.body.sig"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			form := url.Values{}
+			form.Add(tc.param, tc.valA)
+			form.Add(tc.param, tc.valB)
+			req := newPostRequest(t, form, "", "")
+			_, err := clientauth.Parse(req)
+			if !errors.Is(err, clientauth.ErrAmbiguousCredentials) {
+				t.Fatalf("dup %s err=%v want ErrAmbiguousCredentials", tc.param, err)
+			}
+		})
+	}
+}
+
+// TestParse_DuplicateByteEqualParameterStillRejected pins the
+// posture: even when the repeated values are byte-equal, the parser
+// MUST reject. The wire ambiguity exists regardless of value
+// agreement (proxy / WAF / audit tooling that disagrees with the OP
+// on duplicate handling is the threat we close), and the audit
+// observer cannot reason about what the parser "really meant" if it
+// silently accepts collisions.
+func TestParse_DuplicateByteEqualParameterStillRejected(t *testing.T) {
+	t.Parallel()
+
+	form := url.Values{}
+	form.Add("client_id", "client-1")
+	form.Add("client_id", "client-1")
+	req := newPostRequest(t, form, "", "")
+	_, err := clientauth.Parse(req)
+	if !errors.Is(err, clientauth.ErrAmbiguousCredentials) {
+		t.Fatalf("byte-equal dup err=%v want ErrAmbiguousCredentials", err)
+	}
+}
+
 // TestParse_AssertionWithoutClientID_NormalSizedAssertionParsed pins
 // the legitimate companion behaviour: an assertion within the cap
 // whose unverified body carries a recoverable "iss" claim still

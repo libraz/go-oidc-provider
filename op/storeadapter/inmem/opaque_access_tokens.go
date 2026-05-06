@@ -135,6 +135,24 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(_ context.Context, grantID string
 	return n, nil
 }
 
+// RevokeByClient implements [store.RevokeByClient]. The DCR delete
+// cascade probes for it so a deleted client takes its outstanding
+// opaque access-token rows with it. A non-existent client is a
+// no-op.
+func (s *opaqueAccessTokenStore) RevokeByClient(_ context.Context, clientID string) error {
+	if clientID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rec := range s.m {
+		if rec.ClientID == clientID && !rec.Revoked {
+			rec.Revoked = true
+		}
+	}
+	return nil
+}
+
 // GC implements [store.OpaqueAccessTokenStore]. Drops every record
 // whose ExpiresAt is strictly before cutoff. Records whose ExpiresAt
 // is the zero time opt out of GC so callers cannot inadvertently drop

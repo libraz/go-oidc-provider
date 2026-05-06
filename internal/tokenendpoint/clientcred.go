@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/grants/clientcred"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -70,6 +70,13 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 // posture (see [internal/authorize.singleValue]). Repeated identical
 // values are tolerated so an HTTP middleware that re-emits the body
 // does not break the handler.
+//
+// The returned resource string is the canonical form per
+// [resourceindicator.Canonicalize] so downstream lookups (the
+// per-audience access-token format map, the access-token aud claim)
+// see the same bytes regardless of the wire-side casing or trailing
+// slash. Malformed values surface as 400 invalid_target before the
+// allowlist check runs.
 func parseClientCredsRequest(w http.ResponseWriter, r *http.Request) ([]string, string, bool) {
 	scope := oidcscope.Parse(r.PostForm.Get("scope"))
 	values := r.PostForm["resource"]
@@ -84,7 +91,13 @@ func parseClientCredsRequest(w http.ResponseWriter, r *http.Request) ([]string, 
 			return nil, "", false
 		}
 	}
-	return scope, first, true
+	canonical, err := resourceindicator.Canonicalize(first)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, errInvalidTarget,
+			"resource parameter is not a valid absolute URI")
+		return nil, "", false
+	}
+	return scope, canonical, true
 }
 
 // validateClientCredsResource enforces the RFC 8707 §3 allowlist for
@@ -94,11 +107,15 @@ func parseClientCredsRequest(w http.ResponseWriter, r *http.Request) ([]string, 
 // issuer audience. The error code matches [internal/authorize.ErrResourceNotAllowed]
 // verbatim so a client porting a request from /authorize sees the same
 // wire shape on /token.
+//
+// The allowlist check uses [resourceindicator.Contains] so a registered
+// entry that pre-dates the canonicalisation policy still matches a
+// canonical request without an explicit migration step.
 func validateClientCredsResource(w http.ResponseWriter, client *store.Client, resource string) bool {
 	if resource == "" {
 		return true
 	}
-	if client == nil || !slices.Contains(client.Resources, resource) {
+	if client == nil || !resourceindicator.Contains(client.Resources, resource) {
 		writeError(w, http.StatusBadRequest, errInvalidTarget,
 			"resource indicator is missing, or unknown")
 		return false

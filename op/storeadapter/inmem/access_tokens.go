@@ -96,6 +96,24 @@ func (s *accessTokenStore) RevokeByGrant(_ context.Context, grantID string) (int
 	return n, nil
 }
 
+// RevokeByClient implements [store.RevokeByClient]. The DCR delete
+// cascade probes for it so a deleted client takes its outstanding
+// JWT access-token registry rows with it. A non-existent client is
+// a no-op.
+func (s *accessTokenStore) RevokeByClient(_ context.Context, clientID string) error {
+	if clientID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, rec := range s.m {
+		if rec.ClientID == clientID && !rec.Revoked {
+			rec.Revoked = true
+		}
+	}
+	return nil
+}
+
 // GC implements [store.AccessTokenRegistry]. Drops every record whose
 // ExpiresAt is strictly before cutoff. The zero time is treated as
 // "no expiry" and is never collected; callers that need the original

@@ -69,7 +69,9 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		metadata,
 		deps.AllowedGrantTypes,
 		deps.AllowedResponseTypes,
-		nil, // PUT path does not re-check IAT scopes (the IAT was consumed at creation).
+		nil,   // PUT path does not re-check IAT scopes (the IAT was consumed at creation).
+		false, // PUT is RAT-authenticated, never the open-registration flow.
+		nil,   // PUT path does not apply the open-registration default scope.
 		deps.Scopes,
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,
@@ -179,6 +181,8 @@ func rotateAndUpdate(
 		IntrospectionEncryptedResponseAlg: m.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: m.IntrospectionEncryptedResponseEnc,
 		PostLogoutRedirectURIs:            slices.Clone(m.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:              m.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  m.BackchannelLogoutSessionRequired,
 	}
 	if err := deps.Clients.UpdateClient(ctx, updated); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -201,6 +205,19 @@ func rotateAndUpdate(
 	}
 	if err := deps.RegistrationAccessTokens.Put(ctx, ratRec); err != nil {
 		deps.logger().Error("dcr.rat.put_failed", "err", err, "client_id", existing.ID)
+		// Best-effort rollback of the metadata update so a partial
+		// write (new metadata + missing rotated RAT) does not
+		// silently land. The register path runs the symmetric
+		// rollback by deleting the freshly inserted client; the
+		// management path restores the prior `existing` snapshot
+		// because the client_id was already in the registry. Errors
+		// here are logged but not surfaced to the caller — the
+		// original 500 is the source of truth and a double failure
+		// is the rare path operator audit must reconcile manually.
+		if rollbackErr := deps.Clients.UpdateClient(ctx, existing); rollbackErr != nil {
+			deps.logger().Error("dcr.client.update_rollback_failed",
+				"err", rollbackErr, "client_id", existing.ID)
+		}
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return rotatedRegistration{}, false
 	}
@@ -285,15 +302,28 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	if _, ok := verifyRAT(ctx, w, r, deps, clientID); !ok {
 		return
 	}
-	if err := deps.RegistrationAccessTokens.Delete(ctx, clientID); err != nil && !errors.Is(err, store.ErrNotFound) {
-		deps.logger().Error("dcr.rat.delete_failed", "err", err, "client_id", clientID)
-		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
-		return
-	}
+	// Delete the client record first, then the RAT. The reverse
+	// order produces the unrecoverable state "RAT gone, client
+	// alive": the RP gets a 500 but can no longer invoke the
+	// management endpoint to retry. This order keeps the client /
+	// RAT pair recoverable in every failure shape:
+	//   - client delete fails  → nothing else touched, RP retries.
+	//   - client delete OK,
+	//     RAT delete fails     → client is gone (the goal); the RAT row
+	//                             is harmless garbage because no client
+	//                             can authenticate to it. Logged so the
+	//                             operator garbage-collects on schedule.
 	if err := deps.Clients.DeleteClient(ctx, clientID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		deps.logger().Error("dcr.client.delete_failed", "err", err, "client_id", clientID)
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
 		return
+	}
+	if err := deps.RegistrationAccessTokens.Delete(ctx, clientID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		// Client is already gone; logging the orphan RAT lets the
+		// operator clean it up out-of-band. The RP still observes
+		// the 204 because the registration is, from its perspective,
+		// fully removed.
+		deps.logger().Error("dcr.rat.delete_failed_orphan", "err", err, "client_id", clientID)
 	}
 	// In-tree cascade (H-G5): probe optional [store.RevokeByClient]
 	// implementations on the supplied refresh / grant substores so a
@@ -367,5 +397,7 @@ func clientToResponse(c *store.Client, deps Deps, rotatedRAT, rawSecret string) 
 		IntrospectionEncryptedResponseAlg: c.IntrospectionEncryptedResponseAlg,
 		IntrospectionEncryptedResponseEnc: c.IntrospectionEncryptedResponseEnc,
 		PostLogoutRedirectURIs:            slices.Clone(c.PostLogoutRedirectURIs),
+		BackchannelLogoutURI:              c.BackchannelLogoutURI,
+		BackchannelLogoutSessionRequired:  c.BackchannelLogoutSessionRequired,
 	}
 }

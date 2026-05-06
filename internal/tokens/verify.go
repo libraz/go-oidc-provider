@@ -96,6 +96,23 @@ type AccessTokenVerifier struct {
 	// by RFC 7519 §4.1.4; the verifier does not enforce a maximum
 	// because resource-server policy varies.
 	Leeway time.Duration
+
+	// RequireJTI, when true, makes [AccessTokenVerifier.Verify]
+	// reject a token whose "jti" claim is missing or empty. The
+	// option is wired by callers whose revocation strategy keys on
+	// jti (registry / denylist) — without a jti those callers
+	// cannot tell a revoked token from a fresh one, so accepting
+	// the token would silently bypass revocation.
+	//
+	// The flag is opt-in (rather than the default) because the
+	// "none" revocation strategy and operator-managed deployments
+	// that key revocation off the grant tombstone do not need a
+	// jti, and the spec (RFC 9068 §2.2) lists jti as RECOMMENDED
+	// rather than REQUIRED. A future major release may flip the
+	// default; v1.x keeps the safer "explicit opt-in" posture so a
+	// caller that constructs the verifier without configuring
+	// revocation does not start refusing tokens it used to accept.
+	RequireJTI bool
 }
 
 // Verify parses raw, validates its signature, issuer, and time-bound
@@ -151,6 +168,10 @@ func (v *AccessTokenVerifier) Verify(raw string) (*AccessTokenClaims, string, er
 		return nil, "", fmt.Errorf("%w: %w", ErrAccessTokenMalformed, err)
 	}
 
+	if err := v.requireClaims(claims); err != nil {
+		return nil, "", err
+	}
+
 	if v.Issuer != "" && claims.Issuer != v.Issuer {
 		return nil, "", ErrAccessTokenIssuerMismatch
 	}
@@ -158,20 +179,59 @@ func (v *AccessTokenVerifier) Verify(raw string) (*AccessTokenClaims, string, er
 	now := v.now()
 	leeway := v.Leeway
 
-	if claims.ExpiresAt > 0 {
-		exp := time.Unix(claims.ExpiresAt, 0).Add(leeway)
-		if now.After(exp) {
-			return nil, "", ErrAccessTokenExpired
-		}
+	exp := time.Unix(claims.ExpiresAt, 0).Add(leeway)
+	if now.After(exp) {
+		return nil, "", ErrAccessTokenExpired
 	}
-	if claims.IssuedAt > 0 {
-		iat := time.Unix(claims.IssuedAt, 0)
-		if iat.After(now.Add(leeway)) {
-			return nil, "", fmt.Errorf("%w: iat in the future", ErrAccessTokenMalformed)
-		}
+	iat := time.Unix(claims.IssuedAt, 0)
+	if iat.After(now.Add(leeway)) {
+		return nil, "", fmt.Errorf("%w: iat in the future", ErrAccessTokenMalformed)
 	}
 
 	return claims, kid, nil
+}
+
+// requireClaims enforces that a JWT-shaped access token carries iss,
+// sub, aud, client_id, iat, and exp. A production-issued token under
+// the OP's signing key always populates these (RFC 9068 §2.2 marks
+// them REQUIRED), so a missing claim indicates either a malformed
+// token or an internal bug in a custom grant — both of which the
+// verifier MUST refuse rather than silently degrade. The check
+// fires before the issuer / time-bound comparisons so a verifier
+// wired against a custom-grant bug surfaces the missing field
+// instead of the downstream "issuer mismatch" / "expired" red
+// herring.
+//
+// jti is governed by [AccessTokenVerifier.RequireJTI] because RFC 9068
+// §2.2 marks it RECOMMENDED rather than REQUIRED; callers whose
+// revocation strategy keys on jti opt in explicitly so a verifier
+// constructed without revocation wiring continues to accept the
+// tokens it used to accept.
+//
+// Every failure surface collapses onto [ErrAccessTokenMalformed]
+// (NOT [ErrAccessTokenSignature]) so the resource-server response
+// stays at the RFC 6750 §3.1 invalid_token taxonomy without leaking
+// which specific claim was missing. The wrapped cause names the
+// claim for log diagnosis only.
+func (v *AccessTokenVerifier) requireClaims(c *AccessTokenClaims) error {
+	switch {
+	case c.Issuer == "":
+		return fmt.Errorf("%w: iss claim missing", ErrAccessTokenMalformed)
+	case c.Subject == "":
+		return fmt.Errorf("%w: sub claim missing", ErrAccessTokenMalformed)
+	case len(c.Audience) == 0:
+		return fmt.Errorf("%w: aud claim missing", ErrAccessTokenMalformed)
+	case c.ClientID == "":
+		return fmt.Errorf("%w: client_id claim missing", ErrAccessTokenMalformed)
+	case c.IssuedAt <= 0:
+		return fmt.Errorf("%w: iat claim missing", ErrAccessTokenMalformed)
+	case c.ExpiresAt <= 0:
+		return fmt.Errorf("%w: exp claim missing", ErrAccessTokenMalformed)
+	}
+	if v.RequireJTI && c.JTI == "" {
+		return fmt.Errorf("%w: jti claim missing", ErrAccessTokenMalformed)
+	}
+	return nil
 }
 
 // accessTokenTypHeaderMatches reports whether sig carries the canonical

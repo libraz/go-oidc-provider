@@ -648,6 +648,105 @@ func TestVerify_RejectsMissingTypHeader(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsMissingRequiredClaim pins the rule that every
+// claim RFC 9068 §2.2 marks REQUIRED for an at+jwt access token
+// (iss / sub / aud / client_id / iat / exp) MUST cause the verifier
+// to refuse the token as malformed. The wrapped cause names the
+// offending claim for log diagnosis but never reaches the wire
+// envelope (RFC 6750 §3.1 invalid_token).
+//
+// The matrix builds otherwise-valid tokens with one claim removed
+// at a time so the failure attribution is unambiguous: a regression
+// that drops a row stops failing exactly that row, and the audit
+// log stops naming the missing claim.
+func TestVerify_RejectsMissingRequiredClaim(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-1")
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	full := tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"client-1"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "required-claim",
+	}
+	mutators := []struct {
+		name string
+		mut  func(*tokens.AccessTokenClaims)
+	}{
+		{"missing-iss", func(c *tokens.AccessTokenClaims) { c.Issuer = "" }},
+		{"missing-sub", func(c *tokens.AccessTokenClaims) { c.Subject = "" }},
+		{"missing-aud", func(c *tokens.AccessTokenClaims) { c.Audience = nil }},
+		{"missing-client_id", func(c *tokens.AccessTokenClaims) { c.ClientID = "" }},
+		{"missing-iat", func(c *tokens.AccessTokenClaims) { c.IssuedAt = 0 }},
+		{"missing-exp", func(c *tokens.AccessTokenClaims) { c.ExpiresAt = 0 }},
+	}
+	for _, tc := range mutators {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			claims := full
+			tc.mut(&claims)
+			jws := signed(t, entry, claims)
+			v := &tokens.AccessTokenVerifier{
+				Keys:   set,
+				Issuer: "https://op.example.com",
+				Clock:  fakeClock{now: now},
+			}
+			_, _, err := v.Verify(jws)
+			if !errors.Is(err, tokens.ErrAccessTokenMalformed) {
+				t.Fatalf("%s err=%v want ErrAccessTokenMalformed", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestVerify_RequireJTIRejectsMissingJTI pins the opt-in jti
+// requirement. RFC 9068 §2.2 marks jti RECOMMENDED rather than
+// REQUIRED, so the default verifier accepts a jti-less token; a
+// caller whose revocation strategy keys on jti (registry / denylist)
+// MUST flip [AccessTokenVerifier.RequireJTI] to true so the
+// pre-revocation gate refuses the wire-shape that would silently
+// bypass revocation.
+func TestVerify_RequireJTIRejectsMissingJTI(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-1")
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jws := signed(t, entry, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"client-1"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		// JTI omitted on purpose.
+	})
+
+	// Default verifier (RequireJTI=false) accepts.
+	v := &tokens.AccessTokenVerifier{
+		Keys:   set,
+		Issuer: "https://op.example.com",
+		Clock:  fakeClock{now: now},
+	}
+	if _, _, err := v.Verify(jws); err != nil {
+		t.Fatalf("RequireJTI=false err=%v want nil", err)
+	}
+
+	// Opt-in verifier rejects.
+	strict := &tokens.AccessTokenVerifier{
+		Keys:       set,
+		Issuer:     "https://op.example.com",
+		Clock:      fakeClock{now: now},
+		RequireJTI: true,
+	}
+	if _, _, err := strict.Verify(jws); !errors.Is(err, tokens.ErrAccessTokenMalformed) {
+		t.Fatalf("RequireJTI=true err=%v want ErrAccessTokenMalformed", err)
+	}
+}
+
 func TestVerify_NilClockUsesSystemClock(t *testing.T) {
 	t.Parallel()
 
@@ -655,15 +754,18 @@ func TestVerify_NilClockUsesSystemClock(t *testing.T) {
 	// panicking. The test cannot observe System time directly (lint
 	// forbids time.Now() in non-timex callers), so we sign a token whose
 	// exp is decades in the future to be robust against scheduling
-	// jitter and clock skew on slower CI runners.
+	// jitter and clock skew on slower CI runners. iat is anchored at
+	// a fixed past timestamp (2000-01-01) so the iat-future gate is
+	// satisfied and the required-iat check passes.
 	set, entry := mustKeySet(t, "kid-1")
 	farFuture := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+	farPast := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
 	jws := signed(t, entry, tokens.AccessTokenClaims{
 		Issuer:    "https://op.example.com",
 		Subject:   "user-1",
 		Audience:  []string{"client-1"},
 		ClientID:  "client-1",
-		IssuedAt:  0, // skip iat-future check
+		IssuedAt:  farPast,
 		ExpiresAt: farFuture,
 		JTI:       "no-clock",
 	})

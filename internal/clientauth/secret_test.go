@@ -116,3 +116,24 @@ func TestArgon2id_VerifyRejectsWeakParams(t *testing.T) {
 		t.Errorf("weak iterations Verify=%v want ErrCredentialsInvalid", err)
 	}
 }
+
+// TestArgon2id_VerifyRejectsDuplicateParameter pins the parser
+// invariant the audit-2026-05-07 review (S-03) flagged: a stored
+// PHC that re-declares m / t / p MUST be refused outright. Pre-audit
+// the parsers (one per credential surface) all walked the
+// "m=64,m=128,..." segment with last-value-wins semantics; the
+// shared internal/argon2id parser now rejects the duplicate so an
+// audit log cannot disagree with the actual derivation.
+func TestArgon2id_VerifyRejectsDuplicateParameter(t *testing.T) {
+	t.Parallel()
+
+	v := &clientauth.Argon2id{}
+	good, err := v.Hash("dup-test")
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	bogus := strings.Replace(good, "m=65536", "m=65536,m=131072", 1)
+	if err := v.Verify("dup-test", bogus); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
+		t.Fatalf("Verify(duplicate-m) err=%v want ErrCredentialsInvalid", err)
+	}
+}

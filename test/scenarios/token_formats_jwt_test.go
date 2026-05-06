@@ -392,7 +392,12 @@ func TestScenario_TFJ_030_ClientCredentialsJWTPayloadShape(t *testing.T) {
 
 	const (
 		clientID = "rp-tfj-030"
-		resource = "https://api.tfj-030.example/"
+		// resourceRequest carries the trailing slash the RP types into
+		// the form. The OP canonicalises it before binding the JWT
+		// access token's aud claim (resourceindicator strips a trailing
+		// "/"); the canonical form is the value the test asserts on.
+		resourceRequest   = "https://api.tfj-030.example/"
+		resourceCanonical = "https://api.tfj-030.example"
 	)
 	//nolint:gosec // G101: test fixture, not a real credential.
 	const clientSecret = "rp-tfj-030-secret"
@@ -408,7 +413,7 @@ func TestScenario_TFJ_030_ClientCredentialsJWTPayloadShape(t *testing.T) {
 		ID:                      clientID,
 		SecretHash:              hash,
 		Scopes:                  []string{"read"},
-		Resources:               []string{resource},
+		Resources:               []string{resourceRequest},
 		GrantTypes:              []string{"client_credentials"},
 		TokenEndpointAuthMethod: "client_secret_basic",
 	})
@@ -416,7 +421,7 @@ func TestScenario_TFJ_030_ClientCredentialsJWTPayloadShape(t *testing.T) {
 	form := url.Values{
 		"grant_type": {"client_credentials"},
 		"scope":      {"read"},
-		"resource":   {resource},
+		"resource":   {resourceRequest},
 	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
 		tk.Server.URL+"/oidc/token", strings.NewReader(form.Encode()))
@@ -482,19 +487,19 @@ func TestScenario_TFJ_030_ClientCredentialsJWTPayloadShape(t *testing.T) {
 	}
 	switch aud := payload["aud"].(type) {
 	case string:
-		if aud != resource {
-			t.Errorf("payload aud=%q want %q (RFC 8707 §3 binds the resource indicator)", aud, resource)
+		if aud != resourceCanonical {
+			t.Errorf("payload aud=%q want %q (RFC 8707 §3 binds the canonical resource indicator)", aud, resourceCanonical)
 		}
 	case []any:
 		found := false
 		for _, v := range aud {
-			if s, _ := v.(string); s == resource {
+			if s, _ := v.(string); s == resourceCanonical {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("payload aud=%v missing resource %q", aud, resource)
+			t.Errorf("payload aud=%v missing resource %q", aud, resourceCanonical)
 		}
 	default:
 		t.Errorf("payload aud=%v (%T) want string or []any", payload["aud"], payload["aud"])

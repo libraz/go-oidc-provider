@@ -315,6 +315,120 @@ func TestRequest_Validate_AllowsRegisteredResource(t *testing.T) {
 	}
 }
 
+// TestRequest_Validate_ResourceCanonicalisation pins the system-wide
+// canonicalisation policy at the authorize endpoint: a request whose
+// resource value differs from the registered allowlist entry only by
+// non-canonical shape (mixed-case host, trailing slash, default port)
+// MUST still match. After Validate the [authorize.Request.Resource]
+// field carries the canonical form so downstream code paths (the
+// persisted Grant, the access-token aud claim, the per-audience
+// access-token format selector at /token) see one shape regardless of
+// what the wire carried.
+func TestRequest_Validate_ResourceCanonicalisation(t *testing.T) {
+	t.Parallel()
+
+	const registered = "https://api.example.com/orders"
+
+	cases := []struct {
+		name      string
+		request   string
+		want      string
+		wantErr   error
+		registry  []string
+		clientNil bool
+	}{
+		{
+			name:    "mixed-case host accepted, canonical surfaces",
+			request: "https://API.Example.COM/orders",
+			want:    registered,
+		},
+		{
+			name:    "trailing slash accepted, canonical surfaces",
+			request: "https://api.example.com/orders/",
+			want:    registered,
+		},
+		{
+			name:    "default port stripped",
+			request: "https://api.example.com:443/orders",
+			want:    registered,
+		},
+		{
+			name:    "fragment rejected",
+			request: "https://api.example.com/orders#frag",
+			wantErr: authorize.ErrResourceInvalid,
+		},
+		{
+			name:    "userinfo rejected",
+			request: "https://user@api.example.com/orders",
+			wantErr: authorize.ErrResourceInvalid,
+		},
+		{
+			name:    "relative URI rejected",
+			request: "/orders",
+			wantErr: authorize.ErrResourceInvalid,
+		},
+		{
+			name:     "registered allowlist with non-canonical entry still matches canonical request",
+			request:  registered,
+			want:     registered,
+			registry: []string{"https://API.Example.COM/orders/"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			values := goodValues()
+			values.Set("resource", tc.request)
+
+			client := goodClient()
+			if tc.registry != nil {
+				client.Resources = tc.registry
+			} else {
+				client.Resources = []string{registered}
+			}
+
+			req, parseErr := authorize.ParseValues(values)
+			if parseErr != nil {
+				t.Fatalf("ParseValues: %v", parseErr)
+			}
+			err := req.Validate(client, nil, authorize.Policy{PKCERequired: true})
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err=%v want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if req.Resource != tc.want {
+				t.Errorf("req.Resource=%q want %q (canonical form must surface on validated value)",
+					req.Resource, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequest_Validate_DuplicateResourceParameters confirms that the
+// authorize-side parser admits multiple "resource" entries on the wire
+// (RFC 8707 §2 explicitly allows the parameter to repeat). The
+// validator surface only sees the first value today; the duplicate-
+// parameter audit (S-14) keeps "resource" off the single-valued list
+// so this contract stays compatible with RFC 8707.
+func TestRequest_Validate_DuplicateResourceParameters(t *testing.T) {
+	t.Parallel()
+
+	values := goodValues()
+	values["resource"] = []string{"https://api.example.com", "https://api.example.com"}
+	client := goodClient()
+	client.Resources = []string{"https://api.example.com"}
+
+	if _, err := authorize.ParseValues(values); err != nil {
+		t.Fatalf("ParseValues rejected duplicate resource entries: %v", err)
+	}
+}
+
 // TestRequest_Validate_RedirectURIAttackVariants enumerates the
 // attacker-supplied redirect_uri shapes that exact-byte matching MUST
 // reject. The library's posture is the strictest one in the OAuth

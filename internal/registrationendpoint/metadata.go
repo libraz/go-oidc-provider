@@ -2,6 +2,7 @@ package registrationendpoint
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -148,6 +149,15 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&w); err != nil {
 		return ClientMetadata{}, metadataExtras{}, fmt.Errorf("registrationendpoint: decode metadata: %w", err)
+	}
+	// Reject any trailing JSON document. Multiple objects in one
+	// body is a parser-confusion vector — a reverse proxy / WAF /
+	// audit sink that scans the full body sees a different shape
+	// than the OP consumed. Mirrors [httpx.DecodeJSON]'s `dec.More()`
+	// policy; DCR predates the shared helper so the check is
+	// duplicated rather than imported.
+	if dec.More() {
+		return ClientMetadata{}, metadataExtras{}, errors.New("registrationendpoint: decode metadata: trailing JSON document")
 	}
 	m := ClientMetadata{
 		RedirectURIs:                      cloneStrings(w.RedirectURIs),

@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/pkce"
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -206,20 +207,29 @@ func (req *Request) validateScope(client *store.Client, scopes *scoperegistry.Re
 	return nil
 }
 
+// validateResource enforces RFC 8707 §2 (the value MUST be an absolute
+// URI without a fragment) plus the OP-side allowlist. The check
+// delegates parsing / canonicalisation to
+// [resourceindicator.Canonicalize] and REPLACES the request's Resource
+// field with the canonical form so downstream code paths (the
+// persisted [store.Grant], the access-token aud claim, the
+// per-audience format selector consulted at /token) see the same bytes
+// regardless of the wire-side casing or trailing slash. The allowlist
+// match also goes through the shared helper
+// ([resourceindicator.Contains]) so a registration that pre-dates the
+// canonicalisation policy still matches a canonical request.
 func (req *Request) validateResource(client *store.Client) error {
 	if req.Resource == "" {
 		return nil
 	}
-	resourceURI, err := url.Parse(req.Resource)
-	if err != nil || resourceURI == nil || !resourceURI.IsAbs() {
+	canonical, err := resourceindicator.Canonicalize(req.Resource)
+	if err != nil {
 		return ErrResourceInvalid
 	}
-	if resourceURI.Fragment != "" {
-		return ErrResourceInvalid
-	}
-	if client == nil || !slices.Contains(client.Resources, req.Resource) {
+	if client == nil || !resourceindicator.Contains(client.Resources, canonical) {
 		return ErrResourceNotAllowed
 	}
+	req.Resource = canonical
 	return nil
 }
 

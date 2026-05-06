@@ -109,12 +109,35 @@ type Options struct {
 	DialControlHook func(network, address string, c syscall.RawConn) error
 
 	// BaseTransport overrides the [http.RoundTripper] base. The
-	// package installs its own [http.Transport] when this is nil; a
-	// caller that already maintains an instrumented transport
-	// (otelhttp wrap, custom dial pool) injects it here. The package
-	// re-wires [http.Transport.DialContext] / [http.Transport.Dial]
-	// so the deny-list still fires regardless of the supplied base.
+	// package installs its own [http.Transport] when this is nil.
+	//
+	// When a non-nil value is supplied, the dial-time SSRF gate is
+	// only installed if the value is a [*http.Transport]: the package
+	// clones it and replaces [http.Transport.DialContext] so the
+	// deny-list fires at kernel-resolution time. For any other
+	// [http.RoundTripper] (otelhttp wrap, in-process round-tripper,
+	// recording transport for tests) the package CANNOT reach the
+	// dialer, so it falls back to a per-RoundTrip URL re-check that
+	// runs [AssertSafeURLParsed] before delegating. The fallback
+	// catches gross URL-level SSRF (private literal IP, cloud metadata
+	// host) but does not protect against a DNS-rebinding peer that
+	// hands out a public address at gate-time and a private one at
+	// dial-time. Embedders requiring full dial-time protection MUST
+	// supply a [*http.Transport].
 	BaseTransport http.RoundTripper
+
+	// Proxy is the per-request proxy resolver installed on the default
+	// transport. The zero value (nil) means "no proxy"; the SSRF
+	// posture is therefore independent of the [HTTP_PROXY] /
+	// [HTTPS_PROXY] environment variables that [http.ProxyFromEnvironment]
+	// would otherwise honour. Embedders that need an outbound proxy
+	// pass [http.ProxyFromEnvironment] (or a custom resolver)
+	// explicitly so the trust boundary is visible at the call site
+	// rather than implied by the deployment environment.
+	//
+	// The field is consulted only when [BaseTransport] is nil; a
+	// caller-supplied transport carries its own proxy configuration.
+	Proxy func(*http.Request) (*url.URL, error)
 }
 
 // allowedSchemes returns the resolved scheme allow-list, applying the
@@ -265,6 +288,22 @@ func schemeAllowed(scheme string, allowed []string) bool {
 // against the deny-list. A redirect target whose host fails the gate
 // surfaces as [ErrRedirectBlocked]; otherwise the redirect count is
 // capped at [Options.MaxRedirects].
+//
+// When [Options.BaseTransport] is a non-nil [http.RoundTripper] that
+// is NOT a [*http.Transport], the package cannot reach the dialer.
+// In that case the function wraps the supplied round-tripper with a
+// per-request [AssertSafeURLParsed] re-check — the kernel-level
+// dial gate is unreachable, but URL-level SSRF (private IP literal,
+// cloud metadata host, scheme outside the allow-list) still fires
+// before the round-trip is delegated. Embedders that require the
+// dial-time gate MUST pass a [*http.Transport] (or leave the field
+// nil so the package builds its own).
+//
+// The default [http.Transport] is built with [Options.Proxy] (nil
+// by default — no proxy). Callers that need an outbound proxy pass
+// [http.ProxyFromEnvironment] (or a custom resolver) explicitly so
+// the trust boundary is visible at the call site rather than implied
+// by the deployment environment.
 func NewHTTPClient(opts Options) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   opts.resolveDialTimeout(),
@@ -275,9 +314,11 @@ func NewHTTPClient(opts Options) *http.Client {
 	if transport == nil {
 		// Mirror http.DefaultTransport's posture but install our own
 		// dialer and sharpen the connection budgets so a misbehaving
-		// peer cannot starve the OP's outbound pool.
+		// peer cannot starve the OP's outbound pool. Proxy resolution
+		// is opt-in via [Options.Proxy] so the SSRF model does not
+		// silently inherit HTTP_PROXY / HTTPS_PROXY from the env.
 		transport = &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
+			Proxy:                 opts.Proxy,
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          16,
 			IdleConnTimeout:       60 * time.Second,
@@ -286,13 +327,18 @@ func NewHTTPClient(opts Options) *http.Client {
 			DialContext:           dialer.DialContext,
 		}
 	} else if t, ok := transport.(*http.Transport); ok {
-		// Clone so we do not mutate the caller's transport. Replacing
-		// DialContext is the only way the deny-list reaches the
-		// kernel-level resolution; the clone preserves the caller's
-		// other settings (proxy, TLS config) verbatim.
+		// Clone so we do not mutate the caller's transport.
+		// Replacing DialContext is the only way the deny-list
+		// reaches the kernel-level resolution; the clone preserves
+		// the caller's other settings (proxy, TLS config) verbatim.
 		clone := t.Clone()
 		clone.DialContext = dialer.DialContext
 		transport = clone
+	} else {
+		// The supplied round-tripper is not a [*http.Transport],
+		// so we cannot reach the dialer. Wrap it so [AssertSafeURLParsed]
+		// re-runs on every outbound request URL before delegating.
+		transport = &urlGateRoundTripper{base: transport, opts: opts}
 	}
 
 	return &http.Client{
@@ -300,6 +346,27 @@ func NewHTTPClient(opts Options) *http.Client {
 		Timeout:       opts.resolveTimeout(),
 		CheckRedirect: makeCheckRedirect(opts),
 	}
+}
+
+// urlGateRoundTripper wraps a caller-supplied [http.RoundTripper]
+// that is not a [*http.Transport]. It re-runs [AssertSafeURLParsed]
+// on every outbound request URL before delegating so the URL-level
+// deny-list fires regardless of the underlying transport's dialer.
+//
+// The wrap is the fallback the package installs when the dial-time
+// gate is unreachable; see [NewHTTPClient]'s godoc for the trade-off
+// versus the *http.Transport path.
+type urlGateRoundTripper struct {
+	base http.RoundTripper
+	opts Options
+}
+
+// RoundTrip implements [http.RoundTripper].
+func (r *urlGateRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := AssertSafeURLParsed(req.Context(), req.URL, r.opts); err != nil {
+		return nil, err
+	}
+	return r.base.RoundTrip(req)
 }
 
 // makeDialControl returns a [Dialer.Control] hook that rejects

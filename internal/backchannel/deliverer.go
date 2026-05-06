@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 )
 
 // DefaultTimeout is the per-RP request budget the [HTTPDeliverer]
@@ -47,10 +48,13 @@ type Target struct {
 	ClientID string
 
 	// URL is the absolute endpoint registered via
-	// [op/store.Client.BackchannelLogoutURI]. The library does not
-	// re-validate the scheme here — the registration validator has
-	// already enforced HTTPS in production deployments — so the
-	// deliverer accepts whatever the store hands back.
+	// [op/store.Client.BackchannelLogoutURI]. The DCR / RM /
+	// static-client validators reject any non-https / userinfo-bearing
+	// / fragment-bearing URL at registration time, so production
+	// stores never hand a plaintext URL here. The deliverer's SSRF
+	// gate ([HTTPDeliverer.assertSafeURL]) remains as defence-in-depth
+	// for the loopback / private-network carve-outs and for stores
+	// populated by older builds.
 	URL string
 }
 
@@ -61,10 +65,10 @@ type Target struct {
 // The deliverer never follows redirects: the spec requires a direct
 // POST to the registered URI, and a redirect is the easiest way an
 // adversary upstream of the RP could trick the OP into sending a
-// signed logout token to an unintended endpoint. The custom
-// CheckRedirect returns http.ErrUseLastResponse so the response is
-// surfaced verbatim and the coordinator records the unexpected 3xx
-// as a delivery failure.
+// signed logout token to an unintended endpoint. The shared
+// [*securefetch.Client] surfaces a redirect as a non-2xx status (the
+// underlying [netsec] client sets MaxRedirects=0 and returns
+// http.ErrUseLastResponse, leaving the 30x for the status gate).
 //
 // The deliverer also enforces an SSRF deny-list on every Target.URL:
 // loopback / link-local / RFC 1918 / IPv6 ULA destinations are
@@ -97,18 +101,26 @@ type HTTPDeliverer struct {
 	// tests inject a stub so the SSRF guard can be exercised without a
 	// real DNS round-trip.
 	Resolver *net.Resolver
+
+	// fetchOnce / fetchClient wire the lazy [*securefetch.Client]
+	// construction so callers may flip [AllowPrivateNetwork] (or
+	// inject a stub [Resolver]) after [NewHTTPDeliverer] returned but
+	// before the first Deliver. The captured policy is fixed at the
+	// moment of first use; mutations after that point are ignored.
+	fetchOnce   sync.Once
+	fetchClient *securefetch.Client
 }
 
 // NewHTTPDeliverer returns an [HTTPDeliverer] with the supplied
 // timeout. Passing zero substitutes [DefaultTimeout]. The constructed
-// value carries no pre-built [*http.Client]: [Deliver] builds one
-// lazily from [internal/netsec.NewHTTPClient] on first use so a
-// caller that flips [HTTPDeliverer.AllowPrivateNetwork] (or wires a
-// stub [HTTPDeliverer.Resolver]) after construction sees the change
+// value carries no pre-built [*securefetch.Client]: [Deliver] builds
+// one lazily on first use so a caller that flips
+// [HTTPDeliverer.AllowPrivateNetwork] (or wires a stub
+// [HTTPDeliverer.Resolver]) after construction sees the change
 // reflected in the dial-time deny-list. Callers that want to inject
-// a fully-custom client may set [HTTPDeliverer.Client] directly but
-// MUST install the same redirect policy or accept the security
-// trade-off.
+// a fully-custom [*http.Client] may set [HTTPDeliverer.Client]
+// directly but MUST install the same redirect / timeout policy or
+// accept the security trade-off.
 //
 // The dial-time hook in [internal/netsec.NewHTTPClient] re-checks the
 // kernel-resolved address against the same deny-list that fires at
@@ -122,21 +134,27 @@ func NewHTTPDeliverer(timeout time.Duration) *HTTPDeliverer {
 	return &HTTPDeliverer{Timeout: timeout}
 }
 
-// resolveClient returns the [*http.Client] [Deliver] should use. The
-// helper honours an embedder-supplied [HTTPDeliverer.Client] when set
-// and otherwise builds one from [internal/netsec.NewHTTPClient] using
-// the current [HTTPDeliverer.AllowPrivateNetwork] flag.
-func (d *HTTPDeliverer) resolveClient() *http.Client {
-	if d.Client != nil {
-		return d.Client
-	}
-	return netsec.NewHTTPClient(netsec.Options{
-		Timeout:      d.timeoutOrDefault(),
-		AllowPrivate: d.AllowPrivateNetwork,
-		// Default MaxRedirects=0 makes [netsec] return
-		// http.ErrUseLastResponse on the first 30x; [Deliver] sees the
-		// 3xx as a non-2xx and surfaces a delivery failure.
+// resolveClient returns the [*securefetch.Client] [Deliver] should
+// use. The helper honours an embedder-supplied [HTTPDeliverer.Client]
+// when set (forwarding it through the policy's
+// WithHTTPClientForTest seam) and otherwise constructs the hardened
+// envelope from scratch using the current [HTTPDeliverer.AllowPrivateNetwork]
+// flag.
+func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
+	d.fetchOnce.Do(func() {
+		policy := securefetch.Policy{
+			AllowPrivateNetwork: d.AllowPrivateNetwork,
+			AllowedSchemes:      []string{"http", "https"},
+			MaxBodyBytes:        maxResponseBytes,
+			Timeout:             d.timeoutOrDefault(),
+			Resolver:            d.Resolver,
+		}
+		if d.Client != nil {
+			policy = policy.WithHTTPClientForTest(d.Client)
+		}
+		d.fetchClient = securefetch.NewClient(policy)
 	})
+	return d.fetchClient
 }
 
 // Deliver implements [Deliverer]. The function returns a non-nil
@@ -159,23 +177,18 @@ func (d *HTTPDeliverer) Deliver(ctx context.Context, target Target, logoutToken 
 	if err := d.assertSafeURL(ctx, target.URL); err != nil {
 		return err
 	}
+	client := d.resolveClient()
 	form := url.Values{"logout_token": {logoutToken}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL,
+	req, err := client.NewRequest(ctx, http.MethodPost, target.URL,
 		strings.NewReader(form.Encode()))
 	if err != nil {
-		return fmt.Errorf("backchannel: build request: %w", err)
+		return classifyDeliverError(target.URL, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json, text/plain;q=0.5")
 
-	resp, err := d.resolveClient().Do(req)
-	if err != nil {
-		return fmt.Errorf("backchannel: POST %s: %w", target.URL, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("backchannel: %s returned status %d", target.URL, resp.StatusCode)
+	if _, err := client.DoAndDiscard(req); err != nil { //nolint:bodyclose // securefetch.DoAndDiscard drains and closes the body internally.
+		return classifyDeliverError(target.URL, err)
 	}
 	return nil
 }
@@ -195,9 +208,9 @@ var ErrPrivateNetworkBlocked = errors.New("backchannel: target resolves to a den
 // deny-listed address, or a cloud-metadata IP) wraps
 // [ErrPrivateNetworkBlocked] so callers can branch with [errors.Is].
 //
-// The check delegates to [internal/netsec.AssertSafeURL]; the same
-// helper backs the JAR JWKS fetcher and the sector_identifier_uri
-// fetcher so the three OP-side SSRF gates cannot drift apart. The
+// The check delegates to the shared [*securefetch.Client]; the same
+// envelope backs the JAR JWKS fetcher and the sector_identifier_uri
+// fetcher so the OP-side SSRF gates cannot drift apart. The
 // dial-time check installed by [internal/netsec.NewHTTPClient]
 // re-runs the deny-list against the kernel-resolved address so a DNS
 // rebinding peer cannot pivot between gate and dial.
@@ -209,13 +222,7 @@ func (d *HTTPDeliverer) assertSafeURL(ctx context.Context, raw string) error {
 	if err != nil {
 		return fmt.Errorf("backchannel: parse Target.URL %q: %w", raw, err)
 	}
-	opts := netsec.Options{
-		AllowPrivate:   d.AllowPrivateNetwork,
-		AllowedSchemes: []string{"http", "https"},
-		Timeout:        d.timeoutOrDefault(),
-		Resolver:       d.Resolver,
-	}
-	if err := netsec.AssertSafeURLParsed(ctx, u, opts); err != nil {
+	if err := d.resolveClient().AssertSafeURLParsed(ctx, u); err != nil {
 		return classifyNetsecError(raw, err)
 	}
 	return nil
@@ -247,6 +254,25 @@ func classifyNetsecError(raw string, err error) error {
 	default:
 		return fmt.Errorf("backchannel: %q: %w", raw, err)
 	}
+}
+
+// classifyDeliverError maps an error from the
+// [*securefetch.Client] (transport failure, status / size rejection,
+// SSRF refusal at request-build time) onto the historical
+// "backchannel: ..." surface plus the deny-list sentinel where
+// applicable. The mapping preserves the [errors.Is] matrix the
+// deliverer's tests pin.
+func classifyDeliverError(rawURL string, err error) error {
+	if errors.Is(err, netsec.ErrPrivateNetworkBlocked) ||
+		errors.Is(err, netsec.ErrCloudMetadataBlocked) ||
+		errors.Is(err, netsec.ErrSchemeNotAllowed) ||
+		errors.Is(err, netsec.ErrMissingHost) {
+		return classifyNetsecError(rawURL, err)
+	}
+	if errors.Is(err, securefetch.ErrUnexpectedStatus) {
+		return fmt.Errorf("backchannel: %s: %w", rawURL, err)
+	}
+	return fmt.Errorf("backchannel: POST %s: %w", rawURL, err)
 }
 
 // DelivererFunc lets a plain function satisfy [Deliverer]. The

@@ -77,6 +77,15 @@ func (stubStore) DeviceCodes() store.DeviceCodeStore { return nil }
 // when the substore is missing.
 func (stubStore) CIBARequests() store.CIBARequestStore { return nil }
 
+// noClientsStore wraps [stubStore] and returns nil from Clients() so
+// the substore-presence validator at op.New time can be exercised.
+// Single-backend adapters (oidcredis when wired without composite)
+// produce the same shape; the test confirms the validator catches
+// every such config before the first request lands.
+type noClientsStore struct{ stubStore }
+
+func (noClientsStore) Clients() store.ClientStore { return nil }
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }
@@ -279,6 +288,29 @@ func TestNew_RequiresStore(t *testing.T) {
 	}
 	if !op.IsServerError(err) {
 		t.Fatal("ErrStoreRequired should be classified as a server-side configuration error")
+	}
+}
+
+// TestNew_RejectsMissingClientStore pins the rule that a store
+// returning nil from Clients() MUST surface a configuration error
+// at op.New rather than crashing the first request that touches
+// the substore. The check is the unified replacement for the
+// per-adapter panic policy that single-backend stores (e.g. the
+// Redis adapter for out-of-scope substores) used to ship.
+func TestNew_RejectsMissingClientStore(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append([]op.Option{
+		op.WithIssuer(validIssuer),
+		op.WithStore(noClientsStore{}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	}, []op.Option{}...)...)
+	if err == nil {
+		t.Fatal("expected configuration error for missing ClientStore")
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing ClientStore must surface as server configuration error: %v", err)
 	}
 }
 

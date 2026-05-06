@@ -1,10 +1,10 @@
 package op
 
 import (
-	"net/url"
-	"strings"
+	"errors"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -210,15 +210,23 @@ func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
 // default audience) fall back to [WithAccessTokenFormat] or, if that
 // option is also absent, [AccessTokenFormatJWT].
 //
-// Map keys MUST be canonical resource indicators per RFC 3986 §6:
+// Map keys MUST be valid resource indicators per RFC 8707 §2 and
+// RFC 3986 §6:
 //   - absolute URI with a non-empty scheme and host;
-//   - scheme and host in lowercase form;
 //   - no fragment;
+//   - no userinfo;
 //   - empty-string keys are rejected — the global default belongs in
 //     [WithAccessTokenFormat].
 //
-// Non-canonical keys (mixed-case scheme / host, fragment present, …)
-// fail at [New] so an embedder cannot ship a typo that silently
+// Each key is canonicalised at construction time (scheme + host
+// lowercased, default port stripped, trailing slash normalised) and
+// stored in canonical form. The token endpoint canonicalises the
+// request's resource parameter through the same helper before the map
+// lookup, so a wire-form value that differs from the registered key
+// only by case or trailing slash still selects the correct format.
+//
+// Non-canonical keys that the helper cannot resolve to an absolute
+// URI fail at [New] so an embedder cannot ship a typo that silently
 // disables the policy. Map values MUST be one of the documented
 // constants ([AccessTokenFormatJWT] or [AccessTokenFormatOpaque]);
 // unknown values are rejected with the same "fail-fast at
@@ -244,108 +252,73 @@ func WithAccessTokenFormatPerAudience(m map[string]store.AccessTokenFormat) Opti
 		}
 		out := make(map[string]store.AccessTokenFormat, len(m))
 		for raw, f := range m {
-			if raw == "" {
-				return &Error{
-					Code: codeConfiguration,
-					Description: "WithAccessTokenFormatPerAudience: empty key is " +
-						"reserved; use WithAccessTokenFormat for the default audience",
-				}
-			}
-			if !f.IsValid() {
-				return &Error{
-					Code: codeConfiguration,
-					Description: "WithAccessTokenFormatPerAudience[" + raw +
-						"]: unknown AccessTokenFormat value",
-				}
-			}
-			if err := validateResourceIndicator(raw); err != nil {
+			canonical, err := canonicalAudienceEntry(raw, f, out)
+			if err != nil {
 				return err
 			}
-			out[raw] = f
+			out[canonical] = f
 		}
 		c.accessTokenFormatPerAudience = out
 		return nil
 	})
 }
 
-// validateResourceIndicator enforces the canonical-form rules
-// [WithAccessTokenFormatPerAudience] applies to its map keys. The
-// check runs against the raw string (not the [url.URL] view) because
-// the issuance path keys the per-audience map directly off the
-// request's verbatim resource parameter; a key whose lowercase /
-// fragment-stripped re-rendering differs from the raw bytes would
-// silently miss every lookup.
-//
-// The helper is split out so a future option that consumes resource
-// indicators (e.g. a per-audience TTL knob) can reuse the same
-// invariants without re-deriving the parse.
-func validateResourceIndicator(raw string) error {
-	// Reject obvious non-URI / mixed-case forms before url.Parse so
-	// the diagnostic points at the actual source bytes rather than
-	// the normalised form Go produces.
-	if raw != strings.ToLower(raw) && hasUppercaseSchemeOrHost(raw) {
-		return &Error{
+// canonicalAudienceEntry validates one (raw, format) pair from
+// [WithAccessTokenFormatPerAudience] and returns the canonical key.
+// Splitting this out keeps the option's cognitive complexity below the
+// linter's gocognit ceiling.
+func canonicalAudienceEntry(raw string, f store.AccessTokenFormat, out map[string]store.AccessTokenFormat) (string, error) {
+	if raw == "" {
+		return "", &Error{
 			Code: codeConfiguration,
-			Description: "WithAccessTokenFormatPerAudience[" + raw +
-				"]: scheme and host must be lowercase",
+			Description: "WithAccessTokenFormatPerAudience: empty key is " +
+				"reserved; use WithAccessTokenFormat for the default audience",
 		}
 	}
-	u, err := url.Parse(raw)
+	if !f.IsValid() {
+		return "", &Error{
+			Code: codeConfiguration,
+			Description: "WithAccessTokenFormatPerAudience[" + raw +
+				"]: unknown AccessTokenFormat value",
+		}
+	}
+	canonical, err := canonicalAudienceKey(raw)
 	if err != nil {
-		return &Error{
+		return "", err
+	}
+	if _, dup := out[canonical]; dup {
+		return "", &Error{
 			Code: codeConfiguration,
-			Description: "WithAccessTokenFormatPerAudience[" + raw +
-				"]: not a valid URI",
-			Cause: err,
+			Description: "WithAccessTokenFormatPerAudience: " +
+				"two keys canonicalise to the same value (" + canonical + ")",
 		}
 	}
-	if !u.IsAbs() || u.Scheme == "" || u.Host == "" {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithAccessTokenFormatPerAudience[" + raw +
-				"]: must be an absolute URI with scheme and host",
-		}
-	}
-	if u.Fragment != "" || u.RawFragment != "" || strings.Contains(raw, "#") {
-		return &Error{
-			Code: codeConfiguration,
-			Description: "WithAccessTokenFormatPerAudience[" + raw +
-				"]: fragment is not permitted",
-		}
-	}
-	return nil
+	return canonical, nil
 }
 
-// hasUppercaseSchemeOrHost reports whether raw carries a non-lowercase
-// ASCII letter before the start of the path / query / fragment. The
-// function is conservative — it triggers on any uppercase byte in the
-// scheme + authority — so callers receive a clear diagnostic instead
-// of the silent-canonical surprise [url.Parse] produces (Go normalises
-// the scheme to lowercase at parse time, hiding caller mistakes from
-// a post-parse comparison).
-//
-// The scan terminates at the first '/' that starts the path component
-// (the boundary after "scheme://authority") or the first '?' / '#'
-// that starts query / fragment; URI-path bytes can be case-sensitive,
-// so they are not inspected, and a fragment-only mismatch surfaces
-// through the dedicated fragment check rather than this helper.
-func hasUppercaseSchemeOrHost(raw string) bool {
-	end := len(raw)
-	if idx := strings.Index(raw, "://"); idx >= 0 {
-		// raw = "scheme://authority[/path|?query|#fragment]"; scan
-		// stops at the first byte that ends the authority component.
-		rest := raw[idx+3:]
-		if j := strings.IndexAny(rest, "/?#"); j >= 0 {
-			end = idx + 3 + j
-		}
-	} else if j := strings.IndexAny(raw, "/?#"); j >= 0 {
-		end = j
+// canonicalAudienceKey runs the supplied raw audience identifier
+// through [resourceindicator.Canonicalize] and translates the typed
+// validation error onto a [Error] suitable for [New] to return. The
+// helper exists so the map-build loop above stays at one screen and
+// so a future per-audience knob (TTL, format hints, …) reuses the
+// same canonicalisation invariants.
+func canonicalAudienceKey(raw string) (string, error) {
+	canonical, err := resourceindicator.Canonicalize(raw)
+	if err == nil {
+		return canonical, nil
 	}
-	for i := range end {
-		c := raw[i]
-		if c >= 'A' && c <= 'Z' {
-			return true
-		}
+	desc := "WithAccessTokenFormatPerAudience[" + raw + "]: "
+	switch {
+	case errors.Is(err, resourceindicator.ErrFragment):
+		desc += "fragment is not permitted"
+	case errors.Is(err, resourceindicator.ErrUserinfo):
+		desc += "userinfo is not permitted"
+	case errors.Is(err, resourceindicator.ErrNotAbsolute):
+		desc += "must be an absolute URI with scheme and host"
+	case errors.Is(err, resourceindicator.ErrParse):
+		desc += "not a valid URI"
+	default:
+		desc += err.Error()
 	}
-	return false
+	return "", &Error{Code: codeConfiguration, Description: desc, Cause: err}
 }

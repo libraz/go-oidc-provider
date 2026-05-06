@@ -10,6 +10,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -93,18 +94,21 @@ func New(cfg Config) *Resolver {
 		maxBody = defaultMaxBodyBytes
 	}
 
-	f := &fetcher{
-		client: newSSRFClientWithTimeout(
-			cfg.AllowPrivateNetwork,
-			cfg.BaseTransport,
-			httpTimeout,
-		),
-		maxBodyBytes: maxBody,
-		allowPrivate: cfg.AllowPrivateNetwork,
-	}
+	// The fetcher uses the shared hardened envelope. We do not pin a
+	// content-type allow-list here because the historical posture
+	// accepted any content type the upstream returned (the JSON parse
+	// at [parseJWKS] catches a wrong shape); preserving that posture
+	// avoids a behaviour change for embedders whose RPs serve JWKS
+	// from caching layers that emit application/octet-stream.
+	client := securefetch.NewClient(securefetch.Policy{
+		AllowPrivateNetwork: cfg.AllowPrivateNetwork,
+		MaxBodyBytes:        maxBody,
+		Timeout:             httpTimeout,
+		BaseTransport:       cfg.BaseTransport,
+	})
 	return &Resolver{
 		cache:   newJWKSCache(cfg.Clock, cfg.JWKSCacheTTL),
-		fetcher: f,
+		fetcher: &fetcher{client: client},
 	}
 }
 
@@ -240,18 +244,4 @@ func pickEncryptionKey(keys *josev4.JSONWebKeySet, alg jose.JWEAlg) (josev4.JSON
 		return k, true
 	}
 	return josev4.JSONWebKey{}, false
-}
-
-// newSSRFClientWithTimeout returns an [*http.Client] hardened with
-// the SSRF deny-list and the supplied per-request timeout. The
-// timeout lives on the client (not the transport) so it covers the
-// full request lifecycle including TLS handshake and body read.
-func newSSRFClientWithTimeout(
-	allowPrivate bool,
-	base http.RoundTripper,
-	timeout time.Duration,
-) *http.Client {
-	c := newSSRFClient(allowPrivate, base)
-	c.Timeout = timeout
-	return c
 }

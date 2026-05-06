@@ -3,11 +3,14 @@ package op
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -42,6 +45,8 @@ func (c *config) validate() error {
 		c.validateDeviceCodeGrant,
 		c.validateCIBAGrant,
 		c.validateEncryptionKeyset,
+		c.validateStaticClients,
+		c.validateStoreCapabilities,
 	} {
 		if err := fn(); err != nil {
 			return err
@@ -147,6 +152,97 @@ func (c *config) validateFirstPartyClients() error {
 		}
 	}
 	return nil
+}
+
+// validateStaticClients runs the same structural validator DCR drives
+// on inbound /register payloads against every embedder-supplied static
+// seed. The check closes the gap where an invalid redirect_uri /
+// backchannel_logout_uri / grant_type / response_type / subject_type
+// value persisted by [WithStaticClients] would only surface at the
+// first request that touched the offending field; running the
+// validator at construction time forces the misconfiguration to land
+// at op.New so embedders see it during boot.
+//
+// Scope catalogue checks are intentionally skipped — the embedder
+// authoritatively names the scopes their static clients carry, and
+// the runtime intersection at /authorize already rejects unregistered
+// values.
+//
+// The seam between this method and the registration-endpoint package
+// flows through a thin shim function so internal/* never imports op/
+// while op/ continues to own the wire-error wrapping.
+func (c *config) validateStaticClients() error {
+	if len(c.staticClients) == 0 {
+		return nil
+	}
+	opts := registrationendpoint.StaticClientValidationOptions{
+		AllowedGrantTypes:      c.staticClientAllowedGrantTypes(),
+		AllowedResponseTypes:   c.staticClientAllowedResponseTypes(),
+		PairwiseEnabled:        c.pairwiseEnabled(),
+		AllowLocalhostLoopback: c.allowLocalhostLoopback,
+	}
+	for i := range c.staticClients {
+		seed := c.staticClients[i]
+		if err := registrationendpoint.ValidateStaticClient(seed, opts); err != nil {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithStaticClients[" + strconv.Itoa(i) +
+					"] (client_id " + seed.ID + "): " + err.Error(),
+				Cause: err,
+			}
+		}
+	}
+	return nil
+}
+
+// staticClientAllowedGrantTypes returns the grant_type whitelist the
+// static-client validator runs against. Static clients are trusted
+// configuration: the embedder authoritatively names the grants their
+// clients participate in. The validator therefore admits every
+// library-known grant_type plus any custom grant the embedder wired
+// through [WithCustomGrant], so a seed listing
+// `["authorization_code", "refresh_token"]` flows through cleanly even
+// when the OP only mounts the CIBA grant at runtime — the runtime
+// dispatcher rejects an unsupported grant on the wire side, and the
+// static-client gate stays focused on structural rules (malformed
+// values, unknown wire form).
+//
+// [config.applyDefaults] populates [config.grants] before [config.validate]
+// runs, so the slice is always non-empty by the time the static-client
+// gate consults it.
+func (c *config) staticClientAllowedGrantTypes() []string {
+	allowed := []string{
+		grant.AuthorizationCode.String(),
+		grant.RefreshToken.String(),
+		grant.ClientCredentials.String(),
+		grant.DeviceCode.String(),
+		grant.CIBA.String(),
+		// Token exchange (RFC 8693) is admitted unconditionally
+		// because the dispatcher gates the runtime path through
+		// [config.tokenExchangePolicy]; a static seed listing the
+		// URN without the policy still receives unsupported_grant_type
+		// at /token, which is the right surface for the
+		// "configured-without-policy" diagnostic.
+		"urn:ietf:params:oauth:grant-type:token-exchange",
+	}
+	for _, h := range c.customGrants {
+		if h == nil {
+			continue
+		}
+		name := h.Name()
+		if name != "" && !slices.Contains(allowed, name) {
+			allowed = append(allowed, name)
+		}
+	}
+	return allowed
+}
+
+// staticClientAllowedResponseTypes returns the response_type whitelist
+// the static-client validator runs against. v1.0 ships with "code"
+// only at the authorization endpoint, so the helper hard-codes the
+// single value.
+func (c *config) staticClientAllowedResponseTypes() []string {
+	return []string{"code"}
 }
 
 // validateOpenIDScopeOptional rejects the combination of
@@ -662,6 +758,20 @@ func (c *config) validateRegistration() error {
 			Description: "Store does not implement ClientRegistry; dynamic registration requires write access",
 		}
 	}
+	for _, name := range c.dcr.OpenRegistrationDefaultScopes {
+		if name == "" {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDynamicRegistration: OpenRegistrationDefaultScopes contains an empty entry",
+			}
+		}
+		if _, ok := c.scopeIndex[name]; !ok {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDynamicRegistration: OpenRegistrationDefaultScopes contains unknown scope " + name,
+			}
+		}
+	}
 	return nil
 }
 
@@ -699,6 +809,117 @@ func (c *config) validateScopes() error {
 		c.scopeIndex[s.Name] = s
 	}
 	return nil
+}
+
+// validateStoreCapabilities enforces fail-fast detection of substores
+// the configured store does not implement. Single-backend adapters
+// such as oidcredis return nil from accessors that fall outside their
+// scope; without this check the OP would defer the failure to the
+// first request that touches the missing substore (or, for stores
+// that previously panicked, crash the process). The check is keyed on
+// the active grant / feature set so an embedder who runs only the
+// flows their backend supports never sees a spurious rejection.
+//
+// Substore-specific validators (validateAccessTokenFormat,
+// validateAccessTokenRevocation, validateRegistration, ...) keep
+// their existing checks; this function fills the gap for the
+// always-on substores (Clients, AuthorizationCodes, RefreshTokens,
+// Grants) and the grant-gated specialty substores (DeviceCodes,
+// CIBARequests, PushedAuthRequests).
+func (c *config) validateStoreCapabilities() error {
+	for _, check := range []struct {
+		need    bool
+		got     any
+		desc    string
+		because string
+	}{
+		{
+			need:    true,
+			got:     c.store.Clients(),
+			desc:    "ClientStore",
+			because: "every client lookup at the authorize / token endpoints requires it",
+		},
+		{
+			need:    slices.Contains(c.grants, grant.AuthorizationCode),
+			got:     c.store.AuthorizationCodes(),
+			desc:    "AuthorizationCodeStore",
+			because: "grant.AuthorizationCode is enabled",
+		},
+		{
+			need:    slices.Contains(c.grants, grant.RefreshToken),
+			got:     c.store.RefreshTokens(),
+			desc:    "RefreshTokenStore",
+			because: "grant.RefreshToken is enabled",
+		},
+		{
+			need:    needsGrantStore(c.grants),
+			got:     c.store.Grants(),
+			desc:    "GrantStore",
+			because: "an interactive grant that issues consent records is enabled",
+		},
+		{
+			need:    slices.Contains(c.grants, grant.DeviceCode),
+			got:     c.store.DeviceCodes(),
+			desc:    "DeviceCodeStore",
+			because: "grant.DeviceCode is enabled",
+		},
+		{
+			need:    slices.Contains(c.grants, grant.CIBA),
+			got:     c.store.CIBARequests(),
+			desc:    "CIBARequestStore",
+			because: "grant.CIBA is enabled",
+		},
+		{
+			need:    slices.Contains(c.features, feature.PAR),
+			got:     c.store.PushedAuthRequests(),
+			desc:    "PushedAuthRequestStore",
+			because: "feature.PAR is enabled",
+		},
+	} {
+		if !check.need {
+			continue
+		}
+		if isNilSubstore(check.got) {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "Store." + check.desc + "() returned nil but " +
+					check.because,
+			}
+		}
+	}
+	return nil
+}
+
+// needsGrantStore reports whether the configured grant set requires a
+// non-nil [store.GrantStore]. Every interactive grant in the v0.x
+// matrix issues a grant record, so the predicate is "any grant other
+// than client_credentials".
+func needsGrantStore(grants []grant.Type) bool {
+	for _, g := range grants {
+		if g == grant.ClientCredentials {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// isNilSubstore reports whether the supplied accessor return value is
+// the typed-nil shape Go interfaces produce when a *T receiver
+// returns nil from an interface-typed method. A direct `== nil`
+// comparison fails on typed nils because the interface still carries
+// the concrete type pointer.
+func isNilSubstore(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }
 
 // validateCookieKeys runs the same shape checks as [cookie.NewCodec] but

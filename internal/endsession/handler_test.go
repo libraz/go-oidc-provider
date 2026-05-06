@@ -1068,3 +1068,80 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 		t.Error("Allow header missing")
 	}
 }
+
+// TestHandler_DuplicateSingleValuedParameter pins the rule that
+// /end_session MUST refuse a request that repeats any of the
+// single-valued parameters defined by OIDC RP-Initiated Logout 1.0
+// §2 (id_token_hint, client_id, post_logout_redirect_uri, state,
+// logout_hint, ui_locales) plus the double-submit confirmation
+// token field. The check shares the [httpx.FirstDuplicateParameter]
+// helper with the token / PAR / CIBA endpoints so the input-shape
+// policy is uniform across the whole OP. Both GET and POST paths
+// flow through the same gate.
+func TestHandler_DuplicateSingleValuedParameter(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		key  string
+		v1   string
+		v2   string
+	}{
+		{name: "id_token_hint", key: "id_token_hint", v1: "tok-a", v2: "tok-b"},
+		{name: "client_id", key: "client_id", v1: "client-a", v2: "client-b"},
+		{name: "post_logout_redirect_uri", key: "post_logout_redirect_uri", v1: "https://rp.example.com/a", v2: "https://rp.example.com/b"},
+		{name: "state", key: "state", v1: "s1", v2: "s2"},
+		{name: "logout_hint", key: "logout_hint", v1: "h1", v2: "h2"},
+		{name: "ui_locales", key: "ui_locales", v1: "en", v2: "ja"},
+	}
+
+	for _, tc := range cases {
+		t.Run("GET/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			values := url.Values{}
+			values.Add(tc.key, tc.v1)
+			values.Add(tc.key, tc.v2)
+			resp := h.doGET(t, values, "")
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				body := readBody(t, resp)
+				t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
+			}
+		})
+		t.Run("POST/"+tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			values := url.Values{}
+			values.Add(tc.key, tc.v1)
+			values.Add(tc.key, tc.v2)
+			resp := h.doPOST(t, values, "")
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				body := readBody(t, resp)
+				t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+// TestHandler_DuplicateConfirmTokenRejected pins the rule that the
+// double-submit "logout_csrf" form field is also single-valued.
+// The audit calls out the confirm-token first-value-wins as the
+// same kind of parser-confusion vector as the protocol parameters,
+// so the gate fires uniformly across every named field the
+// dispatcher reads.
+func TestHandler_DuplicateConfirmTokenRejected(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	values := url.Values{}
+	values.Add("logout_csrf", "tok-a")
+	values.Add("logout_csrf", "tok-b")
+	resp := h.doPOST(t, values, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		body := readBody(t, resp)
+		t.Fatalf("status=%d want 400; body=%s", resp.StatusCode, body)
+	}
+}

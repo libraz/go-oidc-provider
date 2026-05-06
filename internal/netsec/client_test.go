@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -329,5 +330,150 @@ func TestMakeDialControl_HookFires(t *testing.T) {
 	}
 	if !called.Load() {
 		t.Fatal("DialControlHook was not invoked")
+	}
+}
+
+// TestNewHTTPClient_DefaultProxyIsNil pins the default-Transport
+// posture: [Options.Proxy] zero means the SSRF model does not silently
+// inherit HTTP_PROXY / HTTPS_PROXY from the deployment environment.
+// Embedders that need an outbound proxy must opt in explicitly.
+func TestNewHTTPClient_DefaultProxyIsNil(t *testing.T) {
+	t.Parallel()
+
+	c := NewHTTPClient(Options{})
+	t1, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("default transport is %T, want *http.Transport", c.Transport)
+	}
+	if t1.Proxy != nil {
+		t.Fatal("default transport carries a non-nil Proxy; SSRF model must not depend on env proxy")
+	}
+}
+
+// TestNewHTTPClient_ProxyOptionIsHonoured confirms that when
+// [Options.Proxy] is set, the constructed transport carries the same
+// resolver. The probe is identity-based: we set a sentinel proxy
+// resolver and check that the field on the built transport invokes it.
+func TestNewHTTPClient_ProxyOptionIsHonoured(t *testing.T) {
+	t.Parallel()
+
+	called := atomic.Bool{}
+	sentinel, _ := url.Parse("http://proxy.test:3128")
+	opts := Options{
+		Proxy: func(_ *http.Request) (*url.URL, error) {
+			called.Store(true)
+			return sentinel, nil
+		},
+	}
+	c := NewHTTPClient(opts)
+	t1, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport is %T, want *http.Transport", c.Transport)
+	}
+	if t1.Proxy == nil {
+		t.Fatal("Options.Proxy was not propagated onto the default transport")
+	}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://example.com/", http.NoBody)
+	got, err := t1.Proxy(req)
+	if err != nil {
+		t.Fatalf("proxy resolver returned err=%v", err)
+	}
+	if got == nil || got.Host != sentinel.Host {
+		t.Fatalf("proxy resolver returned %v, want sentinel %v", got, sentinel)
+	}
+	if !called.Load() {
+		t.Fatal("the supplied proxy resolver was not invoked through the transport")
+	}
+}
+
+// TestNewHTTPClient_BaseTransportHTTPGetsDialGate confirms that a
+// caller-supplied [*http.Transport] gets cloned and the kernel-level
+// dial gate is rewired onto the clone. The probe inspects the cloned
+// transport's DialContext is non-nil and exercises makeDialControl
+// directly to assert the gate fires.
+func TestNewHTTPClient_BaseTransportHTTPGetsDialGate(t *testing.T) {
+	t.Parallel()
+
+	caller := &http.Transport{TLSHandshakeTimeout: 9 * time.Second}
+	c := NewHTTPClient(Options{BaseTransport: caller})
+	clone, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport is %T, want *http.Transport", c.Transport)
+	}
+	if clone == caller {
+		t.Fatal("BaseTransport was used verbatim; expected a clone")
+	}
+	if clone.DialContext == nil {
+		t.Fatal("clone is missing DialContext; dial-time gate not installed")
+	}
+	if clone.TLSHandshakeTimeout != 9*time.Second {
+		t.Fatalf("clone lost the caller's TLSHandshakeTimeout: %v", clone.TLSHandshakeTimeout)
+	}
+}
+
+// recordingRoundTripper captures the request URL and either succeeds
+// (returning a synthesised 204) or surfaces an error. The type lives
+// only in tests so we can assert that the URL-gate fallback fires
+// before delegating to a non-*http.Transport.
+type recordingRoundTripper struct {
+	hits atomic.Int32
+}
+
+func (r *recordingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
+	r.hits.Add(1)
+	return &http.Response{
+		StatusCode: http.StatusNoContent,
+		Body:       http.NoBody,
+		Header:     http.Header{},
+	}, nil
+}
+
+// TestNewHTTPClient_BaseTransportRoundTripperGetsURLGate confirms the
+// fallback path: when [Options.BaseTransport] is a non-*http.Transport
+// round-tripper, the package wraps it with a per-RoundTrip
+// [AssertSafeURLParsed] check. A request to a private literal IP MUST
+// be refused before the wrapped transport is invoked.
+func TestNewHTTPClient_BaseTransportRoundTripperGetsURLGate(t *testing.T) {
+	t.Parallel()
+
+	rec := &recordingRoundTripper{}
+	c := NewHTTPClient(Options{BaseTransport: rec})
+
+	// Public URL passes; the underlying RT MUST be invoked.
+	publicReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://1.1.1.1/", http.NoBody)
+	resp, err := c.Transport.RoundTrip(publicReq)
+	if err != nil {
+		t.Fatalf("public URL: err=%v", err)
+	}
+	_ = resp.Body.Close()
+	if rec.hits.Load() != 1 {
+		t.Fatalf("delegated round-trips=%d, want 1 for public URL", rec.hits.Load())
+	}
+
+	// Private URL is refused before the underlying RT is called.
+	privateReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://127.0.0.1/", http.NoBody)
+	privResp, err := c.Transport.RoundTrip(privateReq)
+	if !errors.Is(err, ErrPrivateNetworkBlocked) {
+		t.Fatalf("private URL: err=%v want ErrPrivateNetworkBlocked", err)
+	}
+	if privResp != nil {
+		_ = privResp.Body.Close()
+	}
+	if rec.hits.Load() != 1 {
+		t.Fatalf("private URL leaked through wrap: hits=%d, want 1", rec.hits.Load())
+	}
+
+	// Cloud metadata is refused even if AllowPrivate is set.
+	allowC := NewHTTPClient(Options{AllowPrivate: true, BaseTransport: rec})
+	metaReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://169.254.169.254/", http.NoBody)
+	metaResp, err := allowC.Transport.RoundTrip(metaReq)
+	if !errors.Is(err, ErrCloudMetadataBlocked) {
+		t.Fatalf("cloud-metadata via custom RT with AllowPrivate=true: err=%v want ErrCloudMetadataBlocked", err)
+	}
+	if metaResp != nil {
+		_ = metaResp.Body.Close()
+	}
+	if rec.hits.Load() != 1 {
+		t.Fatal("cloud-metadata leaked through wrap")
 	}
 }

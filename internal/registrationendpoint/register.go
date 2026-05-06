@@ -92,6 +92,8 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 		deps.AllowedGrantTypes,
 		deps.AllowedResponseTypes,
 		iatScopes,
+		ver.Open,
+		deps.OpenRegistrationDefaultScopes,
 		deps.Scopes,
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,
@@ -110,17 +112,25 @@ func handleRegister(w http.ResponseWriter, r *http.Request, deps Deps) {
 			return
 		}
 	}
-	if !consumeIAT(ctx, w, deps, ver) {
-		return
-	}
-	persistRegistration(ctx, w, deps, canonical)
+	persistRegistration(ctx, w, deps, canonical, ver)
 }
 
 // persistRegistration mints credentials, persists the client, and
 // writes the success envelope. The function is split out of
 // [handleRegister] so the top-level flow stays readable; it is the
 // only call site that issues client_id / client_secret / RAT.
-func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, m ClientMetadata) {
+//
+// The IAT increment is performed last, after every credential
+// generation and persistence step succeeds, so a transient entropy
+// or store fault never consumes a one-time IAT without producing a
+// client. The remaining race window — IAT-consume succeeds for a
+// second concurrent caller while we are still mid-flight — is
+// bounded by rolling back both the client and RAT on the
+// [store.ErrConflict] branch of consumeIAT. The recovery path is
+// best-effort: a double failure surfaces a 500 to the caller and an
+// audit log entry the operator reconciles by dropping the orphan
+// client / RAT pair.
+func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, m ClientMetadata, ver iatVerification) {
 	clientID, err := newOpaqueID(clientIDBytes)
 	if err != nil {
 		deps.logger().Error("dcr.client_id.generate_failed", "err", err)
@@ -208,6 +218,22 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 			deps.logger().Error("dcr.client.rollback_failed", "err", delErr, "client_id", clientID)
 		}
 		writeRegistrationError(w, http.StatusInternalServerError, codeServerError, "")
+		return
+	}
+	// IAT consumption fires last, after the client and RAT have
+	// been persisted, so an upstream entropy / store failure cannot
+	// burn the IAT without producing a client. The remaining loss
+	// window is the IAT-race after a successful registration: the
+	// second concurrent caller sees [store.ErrConflict] in
+	// IncrementUses; we roll back both the client and the RAT so
+	// the wire 500 matches a no-op store state.
+	if !consumeIAT(ctx, w, deps, ver) {
+		if delErr := deps.RegistrationAccessTokens.Delete(ctx, clientID); delErr != nil {
+			deps.logger().Error("dcr.rat.iat_rollback_failed", "err", delErr, "client_id", clientID)
+		}
+		if delErr := deps.Clients.DeleteClient(ctx, clientID); delErr != nil {
+			deps.logger().Error("dcr.client.iat_rollback_failed", "err", delErr, "client_id", clientID)
+		}
 		return
 	}
 	deps.audit().Emit(ctx, audit.Event{

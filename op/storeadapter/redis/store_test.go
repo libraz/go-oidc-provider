@@ -3,6 +3,7 @@ package oidcredis
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -79,55 +80,49 @@ func TestValidateScheme(t *testing.T) {
 	}
 }
 
-func TestStore_StubAccessorsPanic(t *testing.T) {
+// TestStore_OutOfScopeAccessorsReturnNil pins the rule that every
+// out-of-scope substore accessor returns nil (not a typed-nil
+// wrapper, not a panic). Returning nil lets op.New surface a
+// fail-fast configuration error instead of crashing the process on
+// the first request that touches the missing substore.
+func TestStore_OutOfScopeAccessorsReturnNil(t *testing.T) {
 	t.Parallel()
-	// We cannot invoke New successfully without a live redis, so we
-	// exercise the panic path by constructing a Store value directly.
-	// The panicking accessors do not touch s.client and so are
-	// callable on a zero-initialised Store.
 	s := &Store{prefix: DefaultKeyPrefix}
 
 	cases := []struct {
 		name string
-		fn   func()
+		got  any
 	}{
-		{"Clients", func() { s.Clients() }},
-		{"AuthorizationCodes", func() { s.AuthorizationCodes() }},
-		{"RefreshTokens", func() { s.RefreshTokens() }},
-		{"Grants", func() { s.Grants() }},
-		{"PushedAuthRequests", func() { s.PushedAuthRequests() }},
-		{"Users", func() { s.Users() }},
-		{"AccessTokens", func() { s.AccessTokens() }},
+		{"Clients", s.Clients()},
+		{"AuthorizationCodes", s.AuthorizationCodes()},
+		{"RefreshTokens", s.RefreshTokens()},
+		{"Grants", s.Grants()},
+		{"DeviceCodes", s.DeviceCodes()},
+		{"CIBARequests", s.CIBARequests()},
+		{"PushedAuthRequests", s.PushedAuthRequests()},
+		{"Users", s.Users()},
+		{"AccessTokens", s.AccessTokens()},
+		{"InitialAccessTokens", s.InitialAccessTokens()},
+		{"RegistrationAccessTokens", s.RegistrationAccessTokens()},
+		{"OpaqueAccessTokens", s.OpaqueAccessTokens()},
+		{"GrantRevocations", s.GrantRevocations()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			defer func() {
-				r := recover()
-				if r == nil {
-					t.Fatalf("%s: want panic, got none", tc.name)
+			if tc.got == nil {
+				return
+			}
+			rv := reflect.ValueOf(tc.got)
+			switch rv.Kind() {
+			case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+				if !rv.IsNil() {
+					t.Fatalf("%s: want nil substore, got %T", tc.name, tc.got)
 				}
-				msg, ok := r.(string)
-				if !ok || !strings.Contains(msg, tc.name) {
-					t.Fatalf("%s: panic message missing kind name: %v", tc.name, r)
-				}
-			}()
-			tc.fn()
+			default:
+				t.Fatalf("%s: want nil substore, got %T", tc.name, tc.got)
+			}
 		})
-	}
-}
-
-func TestStore_NilStubsForRegistration(t *testing.T) {
-	t.Parallel()
-	s := &Store{prefix: DefaultKeyPrefix}
-	if s.InitialAccessTokens() != nil {
-		t.Fatalf("InitialAccessTokens: want nil, got non-nil")
-	}
-	if s.RegistrationAccessTokens() != nil {
-		t.Fatalf("RegistrationAccessTokens: want nil, got non-nil")
-	}
-	if s.OpaqueAccessTokens() != nil {
-		t.Fatalf("OpaqueAccessTokens: want nil (composite-only routing), got non-nil")
 	}
 }
 
