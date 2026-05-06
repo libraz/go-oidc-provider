@@ -225,20 +225,23 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		return err
 	}
 
-	// The CIBA test-mode handler is mounted under /_test/ so the OFCS
-	// runner harness can pre-load a per-module override of the
-	// auto-approve shape. The path is dev-only — production embedders
-	// MUST NOT mount it. When the active profile is anything other
-	// than fapi-ciba the handler is harmless (no goroutine consults
-	// the mode) but also unused; mounting it unconditionally keeps the
-	// op-demo listener layout stable across plans.
-	mux := http.NewServeMux()
-	mux.Handle("/_test/ciba-mode", CIBATestModeHandler())
-	mux.Handle("/", provider)
+	// Non-CIBA profiles serve the bare provider so the listener layout
+	// is the minimal shape an embedder would copy. Under -profile=fapi-ciba
+	// the OFCS runner needs the /_test/ciba-mode override (see
+	// profile_fapi_ciba_testmode.go) so a thin mux wraps the provider
+	// just for that case. The /_test/ surface is dev-only — production
+	// embedders MUST NOT mount it.
+	var handler http.Handler = provider
+	if isCIBAProfile(cfg.profile) {
+		mux := http.NewServeMux()
+		mux.Handle("/_test/ciba-mode", CIBATestModeHandler())
+		mux.Handle("/", provider)
+		handler = mux
+	}
 
 	srv := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if isFAPIProfile(cfg.profile) {

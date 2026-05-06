@@ -23,6 +23,10 @@
 //     simulate a device callback. Production embedders MUST trigger
 //     Approve from the user's actual device callback, never from
 //     inside the OP process.
+//
+// OFCS-only test-mode scaffolding (the /_test/ciba-mode handler, the
+// reject / slow override scheduler) lives in profile_fapi_ciba_testmode.go
+// so an embedder reading this file sees only production-shaped wiring.
 
 package main
 
@@ -30,11 +34,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
@@ -109,106 +109,29 @@ func fapiCIBAClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
 // The wrapper exists because OFCS drives the fapi-ciba plan without a
 // real authentication device — the approval has to come from inside
 // op-demo to make the flow progress.
+//
+// The post-save scheduler is [scheduleHarness] (defined in
+// profile_fapi_ciba_testmode.go) so the OFCS runner can override
+// device-side outcomes per module via /_test/ciba-mode. With no
+// override posted the behaviour matches [scheduleApprove] — the
+// production-shaped reference an embedder would copy.
 func wrapStoreForCIBA(ctx context.Context, cfg runConfig, st *inmem.Store, logger *slog.Logger) store.Store {
 	return &cibaAutoApproveStore{
 		Store: st,
 		auto: &autoApprovingCIBA{
-			inner: st.CIBARequests(),
-			delay: cfg.cibaAutoApproveDelay,
-			ctx:   ctx,
-			log:   logger,
+			inner:    st.CIBARequests(),
+			delay:    cfg.cibaAutoApproveDelay,
+			ctx:      ctx,
+			log:      logger,
+			postSave: scheduleHarness,
 		},
 	}
 }
 
-// cibaTestMode is the next-action override the OFCS conformance harness
-// posts to /_test/ciba-mode before driving fapi-ciba modules that
-// require a non-default device-side outcome (deny instead of approve,
-// or a longer delay so several /token polls observe authorization_pending
-// before approval lands). The default empty value preserves the
-// auto-approve happy-flow shape every other CIBA module relies on.
-//
-// The atomic carries a string ("approve" | "reject" | "slow") because
-// the value is written from one goroutine (the test handler) and read
-// from many (the goroutines autoApprovingCIBA spawns per Save). A
-// regular variable + mutex would work too; atomic.Value reads the
-// mode without locking on the hot path.
-//
-//nolint:gochecknoglobals // dev-only test-control switch; no per-instance tuning.
-var cibaTestMode atomic.Value
-
-// cibaTestModeApprove / cibaTestModeReject / cibaTestModeSlow are the
-// values [cibaTestMode] accepts. The constants are package-private so
-// the harness POST handler validates the wire string against the same
-// vocabulary the wrapper consumes.
-const (
-	cibaTestModeApprove = "approve"
-	cibaTestModeReject  = "reject"
-	cibaTestModeSlow    = "slow"
-)
-
-// cibaTestSlowDelay is the Approve delay the wrapper applies when
-// [cibaTestMode] holds [cibaTestModeSlow]. The value is sized so the
-// 240 s wall-clock cap in tools/conformance/runner.py allows the OP
-// to land 30+ authorization_pending polls under the 1 s plan interval
-// before the timer fires — the shape OFCS' multiple-call-to-token
-// module asserts on.
-const cibaTestSlowDelay = 60 * time.Second
-
-// loadCIBATestMode returns the current override or [cibaTestModeApprove]
-// when none has been posted. The helper centralises the type assertion
-// so callers do not have to handle the atomic.Value-reads-untyped-nil
-// edge case.
-func loadCIBATestMode() string {
-	v, _ := cibaTestMode.Load().(string)
-	if v == "" {
-		return cibaTestModeApprove
-	}
-	return v
-}
-
-// CIBATestModeHandler returns an [http.Handler] that lets the OFCS
-// runner.py harness pre-load a per-test override of the auto-approve
-// shape. POST /_test/ciba-mode body "approve" / "reject" / "slow"
-// flips [cibaTestMode]; GET returns the current value. The handler is
-// mounted in [main.run] under a fixed path so the runner does not need
-// to discover it.
-//
-// The handler is dev-only — production embedders must NOT mount it
-// because it lets any caller flip user-decision shape without
-// authentication. Keeping the path under "/_test/" keeps the surface
-// out of every production deployment by convention.
-func CIBATestModeHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = io.WriteString(w, loadCIBATestMode()+"\n")
-		case http.MethodPost:
-			body, err := io.ReadAll(io.LimitReader(r.Body, 64))
-			if err != nil {
-				http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			mode := strings.TrimSpace(string(body))
-			switch mode {
-			case cibaTestModeApprove, cibaTestModeReject, cibaTestModeSlow:
-				cibaTestMode.Store(mode)
-				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				_, _ = io.WriteString(w, mode+"\n")
-			default:
-				http.Error(w, "mode must be approve|reject|slow", http.StatusBadRequest)
-			}
-		default:
-			w.Header().Set("Allow", "GET, POST")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
-}
-
 // isCIBAProfile reports whether the profile name selects FAPI-CIBA.
-// The predicate gates store wrapping in [buildOPStore] and CIBA-only
-// client seeding in [buildClientSeeds].
+// The predicate gates store wrapping in [buildOPStore], CIBA-only
+// client seeding in [buildClientSeeds], and the conditional mount of
+// the OFCS test-mode handler in [main.run].
 func isCIBAProfile(name string) bool {
 	return name == "fapi-ciba"
 }
@@ -248,60 +171,53 @@ func (s *cibaAutoApproveStore) CIBARequests() store.CIBARequestStore {
 	return s.auto
 }
 
-// autoApprovingCIBA wraps store.CIBARequestStore. Save schedules a
-// goroutine that calls Approve(req.ID, req.Subject) after delay,
-// simulating an authentication device approving the request. Every
-// other method delegates to the inner store unchanged.
+// autoApprovingCIBA wraps store.CIBARequestStore. Save delegates to the
+// inner substore and, on success, dispatches postSave in a goroutine
+// to simulate a device callback. The default postSave
+// ([scheduleApprove]) waits a.delay then approves — the shape a
+// production embedder would copy. op-demo installs [scheduleHarness]
+// instead so OFCS can drive deny / slow outcomes; with no override
+// posted scheduleHarness behaves identically to scheduleApprove.
 //
-// The delay defaults long enough that the first /token poll lands
-// authorization_pending — the shape the OFCS fapi-ciba plan asserts
-// on. ctx is the parent op-demo context: when run() returns, pending
+// ctx is the parent op-demo context: when run() returns, pending
 // approvals abort instead of leaking goroutines.
 type autoApprovingCIBA struct {
 	inner store.CIBARequestStore
 	delay time.Duration
 	ctx   context.Context //nolint:containedctx // dev-only binary; lifetime is bounded to run().
 	log   *slog.Logger
+
+	// postSave runs in a goroutine after every successful Save. nil
+	// falls back to [scheduleApprove]. The OFCS harness installs
+	// [scheduleHarness] (see profile_fapi_ciba_testmode.go).
+	postSave func(*autoApprovingCIBA, string, string)
 }
 
-// Save delegates to the inner substore and, on success, schedules an
-// out-of-band action after a delay. The action is steered by
-// [cibaTestMode] which the OFCS runner harness posts to before each
-// fapi-ciba module needing non-default shape: the default empty
-// (or "approve") schedules Approve after a.delay; "reject" schedules
-// Deny after a.delay; "slow" approves after [cibaTestSlowDelay] so
-// OFCS' multiple-call-to-token-endpoint test sees enough
-// authorization_pending polls before approval. The goroutine aborts
-// if the op-demo parent context cancels first.
+// Save delegates to the inner substore and, on success, schedules the
+// configured post-save action in a goroutine.
 func (a *autoApprovingCIBA) Save(ctx context.Context, req *store.CIBARequest) error {
 	if err := a.inner.Save(ctx, req); err != nil {
 		return err
 	}
-	authReqID := req.ID
-	subject := req.Subject
-	mode := loadCIBATestMode()
-	go a.actAfterDelay(authReqID, subject, mode)
+	sched := a.postSave
+	if sched == nil {
+		sched = scheduleApprove
+	}
+	go sched(a, req.ID, req.Subject)
 	return nil
 }
 
-// actAfterDelay sleeps for the mode-specific delay and dispatches the
-// matching device-side outcome. ErrConflict (record already moved out
-// of Pending) and ErrNotFound (record expired before the timer fired)
-// are benign and not logged at warn level.
-func (a *autoApprovingCIBA) actAfterDelay(authReqID, subject, mode string) {
-	delay := a.delay
-	if mode == cibaTestModeSlow {
-		delay = cibaTestSlowDelay
-	}
-	timer := time.NewTimer(delay)
+// scheduleApprove is the production-shaped post-save scheduler: wait
+// a.delay, then call Approve on the inner store. Production embedders
+// implement the equivalent shape on their authentication-device callback
+// path; this helper simulates that callback for op-demo because there
+// is no real device under the OFCS conformance harness.
+func scheduleApprove(a *autoApprovingCIBA, authReqID, subject string) {
+	timer := time.NewTimer(a.delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
 	case <-a.ctx.Done():
-		return
-	}
-	if mode == cibaTestModeReject {
-		a.runDeny(authReqID)
 		return
 	}
 	a.runApprove(authReqID, subject)
@@ -324,23 +240,6 @@ func (a *autoApprovingCIBA) runApprove(authReqID, subject string) {
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
 	default:
 		a.log.Warn("ciba auto-approve failed",
-			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
-			slog.String("err", err.Error()))
-	}
-}
-
-// runDeny calls Deny with the fixed reason "user-rejected-test"; the
-// CIBA token endpoint maps Denied → access_denied so the wire shape
-// matches what the OFCS user-rejects-authentication module expects.
-func (a *autoApprovingCIBA) runDeny(authReqID string) {
-	err := a.inner.Deny(a.ctx, authReqID, "user-rejected-test")
-	switch {
-	case err == nil:
-		a.log.Info("ciba auto-denied",
-			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)))
-	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
-	default:
-		a.log.Warn("ciba auto-deny failed",
 			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
 			slog.String("err", err.Error()))
 	}
