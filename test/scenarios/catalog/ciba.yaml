@@ -239,11 +239,17 @@ rows:
 
   - id: CIBA-023
     severity: P1
-    spec: CIBA Core §7.1.1
+    spec: CIBA Core §7.1.1, §13
     behaviour: |
       /bc-authorize MUST reject a "request" form parameter when the
-      JAR feature is off with 400 invalid_request_object and the
-      description "request is not supported by this OP".
+      JAR feature is off with 400 invalid_request and the description
+      "request is not supported by this OP". CIBA Core §13 enumerates
+      a closed wire-error list (invalid_request, invalid_scope,
+      invalid_client, expired_login_hint_token, unknown_user_id,
+      unauthorized_client, missing_user_code, invalid_user_code,
+      invalid_binding_message, transaction_failed, access_denied) —
+      invalid_request_object is NOT on that list, so JAR-side failures
+      surface as the closest §13 entry, invalid_request.
     status: active
 
   - id: CIBA-024
@@ -379,33 +385,37 @@ rows:
 
   - id: CIBA-038
     severity: P0
-    spec: CIBA Core §7.1.1; RFC 9101 §10.8
+    spec: CIBA Core §7.1.1, §13; RFC 9101 §10.8
     behaviour: |
       Under FAPI-CIBA profile, a signed Request Object missing the
-      exp claim MUST be rejected with 400 invalid_request_object.
+      exp claim MUST be rejected with 400 invalid_request. The
+      cibaendpoint handler collapses every JAR sentinel onto
+      invalid_request because CIBA Core §13's closed wire-error list
+      does not name invalid_request_object.
     status: active
 
   - id: CIBA-039
     severity: P0
-    spec: CIBA Core §7.1.1; FAPI-CIBA §5.2.2
+    spec: CIBA Core §7.1.1, §13; FAPI-CIBA §5.2.2
     behaviour: |
       Under FAPI-CIBA profile, a signed Request Object missing the
-      nbf claim MUST be rejected with 400 invalid_request_object. The
-      JAR verifier flips RequireNbf=true under FAPI-CIBA per
-      FAPI 2.0 Message Signing §5.6.
+      nbf claim MUST be rejected with 400 invalid_request. The JAR
+      verifier flips RequireNbf=true under FAPI-CIBA per FAPI 2.0
+      Message Signing §5.6; the cibaendpoint handler collapses every
+      JAR sentinel onto invalid_request per CIBA Core §13.
     status: active
 
   - id: CIBA-040
     severity: P0
-    spec: RFC 9101 §6.1; CIBA Core §7.1.1; RFC 7519 §4.1.7
+    spec: FAPI-CIBA §5.2.2; CIBA Core §7.1.1, §13; RFC 9101 §10.8; RFC 7519 §4.1.7
     behaviour: |
-      Under FAPI-CIBA profile, a signed Request Object that omits the
-      jti claim is accepted with 200 — RFC 9101 §6.1 marks jti as
-      OPTIONAL on the wire, and FAPI 2.0 Security Profile / FAPI 2.0
-      Message Signing do not promote it to MUST. The §10.8 replay-
-      defence floor is preserved through the JTIs store, which the
-      JAR verifier still consumes for every jti it does see (covered
-      by internal/jar/verify_jti_test.go).
+      Under FAPI-CIBA profile, a signed Request Object missing the
+      jti claim is rejected with 400 invalid_request. FAPI-CIBA §5.2.2
+      promotes jti from OPTIONAL (RFC 9101 §6.1 / FAPI 2.0 Security
+      Profile baseline) to MUST on the backchannel-authentication
+      request object; the JAR verifier flips AllowMissingJTI=false
+      under profile.FAPICIBA, and the cibaendpoint handler collapses
+      every JAR sentinel onto invalid_request per CIBA Core §13.
     status: active
 
   - id: CIBA-041

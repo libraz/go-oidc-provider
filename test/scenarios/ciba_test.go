@@ -948,10 +948,16 @@ func TestScenario_CIBA_022_BackchannelRejectsNonFormBody(t *testing.T) {
 
 // TestScenario_CIBA_023_BackchannelRejectsRequestWithoutJAR pins that
 // /bc-authorize rejects a "request" form parameter when the JAR
-// feature is off: 400 invalid_request_object with the description
-// "request is not supported by this OP".
+// feature is off: 400 invalid_request with the description
+// "request is not supported by this OP". CIBA Core §13 enumerates a
+// closed wire-error list for the backchannel-authentication endpoint
+// (invalid_request, invalid_scope, invalid_client, expired_login_hint_token,
+// unknown_user_id, unauthorized_client, missing_user_code, invalid_user_code,
+// invalid_binding_message, invalid_client, transaction_failed, access_denied);
+// invalid_request_object is NOT on that list, so any JAR-side failure
+// surfaces as the closest §13 entry — invalid_request.
 //
-// Spec: CIBA Core §7.1.1.
+// Spec: CIBA Core §7.1.1, §13.
 func TestScenario_CIBA_023_BackchannelRejectsRequestWithoutJAR(t *testing.T) {
 	t.Parallel()
 	p := newCIBAProvider(t, []string{"openid"}) // JAR feature off
@@ -964,7 +970,7 @@ func TestScenario_CIBA_023_BackchannelRejectsRequestWithoutJAR(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 body=%v", status, body)
 	}
-	expectCIBAError(t, body, "invalid_request_object")
+	expectCIBAError(t, body, "invalid_request")
 }
 
 // ---------------------------------------------------------------------
@@ -1220,11 +1226,12 @@ func TestScenario_CIBA_037_BackchannelRequiresSignedRequestObject(t *testing.T) 
 
 // TestScenario_CIBA_038_RequestObjectRequiresExpClaim pins the FAPI-
 // CIBA exp-claim mandate: a signed Request Object missing exp is
-// rejected with 400 invalid_request_object. The JAR verifier flags
-// the absence via ErrExpired, which the handler maps to
-// invalid_request_object on the wire.
+// rejected with 400 invalid_request. The JAR verifier flags the
+// absence via ErrExpired; the cibaendpoint handler collapses every
+// JAR sentinel onto invalid_request because CIBA Core §13's closed
+// error list does not name invalid_request_object.
 //
-// Spec: CIBA Core §7.1.1, RFC 9101 §10.8.
+// Spec: CIBA Core §7.1.1, §13, RFC 9101 §10.8.
 func TestScenario_CIBA_038_RequestObjectRequiresExpClaim(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFAPIFixture(t)
@@ -1237,16 +1244,18 @@ func TestScenario_CIBA_038_RequestObjectRequiresExpClaim(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 body=%v", status, body)
 	}
-	expectCIBAError(t, body, "invalid_request_object")
+	expectCIBAError(t, body, "invalid_request")
 }
 
 // TestScenario_CIBA_039_RequestObjectRequiresNbfClaim pins the FAPI-
 // CIBA nbf-claim mandate: a signed Request Object missing nbf is
-// rejected with 400 invalid_request_object. The JAR verifier flips
+// rejected with 400 invalid_request. The JAR verifier flips
 // RequireNbf=true when any FAPI profile is active per FAPI 2.0
-// Message Signing §5.6 (FAPI-CIBA inherits the same rule).
+// Message Signing §5.6 (FAPI-CIBA inherits the same rule); the
+// cibaendpoint handler collapses every JAR sentinel onto
+// invalid_request per CIBA Core §13.
 //
-// Spec: CIBA Core §7.1.1, FAPI-CIBA §5.2.2.
+// Spec: CIBA Core §7.1.1, §13, FAPI-CIBA §5.2.2.
 func TestScenario_CIBA_039_RequestObjectRequiresNbfClaim(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFAPIFixture(t)
@@ -1259,19 +1268,20 @@ func TestScenario_CIBA_039_RequestObjectRequiresNbfClaim(t *testing.T) {
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 body=%v", status, body)
 	}
-	expectCIBAError(t, body, "invalid_request_object")
+	expectCIBAError(t, body, "invalid_request")
 }
 
-// TestScenario_CIBA_040_RequestObjectAcceptsMissingJti pins the
-// FAPI-CIBA jti-claim posture: a signed Request Object that omits
-// jti is accepted with 200, mirroring RFC 9101 §6.1 (jti OPTIONAL
-// on the wire). The §10.8 replay-defence floor is preserved through
-// the JTIs store, which the verifier still consumes for every jti
-// it does see (covered by internal/jar/verify_jti_test.go).
+// TestScenario_CIBA_040_RequestObjectRequiresJtiClaim pins the FAPI-
+// CIBA jti-claim mandate: a signed Request Object missing jti is
+// rejected with 400 invalid_request. FAPI-CIBA §5.2.2 promotes jti
+// from OPTIONAL (RFC 9101 §6.1 / FAPI 2.0 Security Profile baseline)
+// to MUST on the backchannel-authentication request object; the JAR
+// verifier flips AllowMissingJTI=false under profile.FAPICIBA, and
+// the cibaendpoint handler collapses every JAR sentinel onto
+// invalid_request per CIBA Core §13.
 //
-// Spec: RFC 9101 §6.1; CIBA Core §7.1.1; FAPI 2.0 Security Profile
-// (no jti MUST, only the §10.8 SHOULD); RFC 7519 §4.1.7.
-func TestScenario_CIBA_040_RequestObjectAcceptsMissingJti(t *testing.T) {
+// Spec: FAPI-CIBA §5.2.2; CIBA Core §7.1.1, §13; RFC 9101 §10.8.
+func TestScenario_CIBA_040_RequestObjectRequiresJtiClaim(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFAPIFixture(t)
 
@@ -1280,12 +1290,10 @@ func TestScenario_CIBA_040_RequestObjectAcceptsMissingJti(t *testing.T) {
 	signed := f.signES256(t, claims)
 
 	status, body := f.bcAuthorizeFAPIForm(t, url.Values{"request": {signed}})
-	if status != http.StatusOK {
-		t.Fatalf("status=%d want 200 body=%v", status, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
 	}
-	if id, _ := body["auth_req_id"].(string); id == "" {
-		t.Fatalf("expected auth_req_id in body=%v", body)
-	}
+	expectCIBAError(t, body, "invalid_request")
 }
 
 // TestScenario_CIBA_041_RequestObjectRequiresIatClaim is OOS — see catalog out_of_scope_reason.
