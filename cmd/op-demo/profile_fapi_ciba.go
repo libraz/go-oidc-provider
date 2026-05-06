@@ -30,7 +30,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
@@ -117,6 +121,91 @@ func wrapStoreForCIBA(ctx context.Context, cfg runConfig, st *inmem.Store, logge
 	}
 }
 
+// cibaTestMode is the next-action override the OFCS conformance harness
+// posts to /_test/ciba-mode before driving fapi-ciba modules that
+// require a non-default device-side outcome (deny instead of approve,
+// or a longer delay so several /token polls observe authorization_pending
+// before approval lands). The default empty value preserves the
+// auto-approve happy-flow shape every other CIBA module relies on.
+//
+// The atomic carries a string ("approve" | "reject" | "slow") because
+// the value is written from one goroutine (the test handler) and read
+// from many (the goroutines autoApprovingCIBA spawns per Save). A
+// regular variable + mutex would work too; atomic.Value reads the
+// mode without locking on the hot path.
+//
+//nolint:gochecknoglobals // dev-only test-control switch; no per-instance tuning.
+var cibaTestMode atomic.Value
+
+// cibaTestModeApprove / cibaTestModeReject / cibaTestModeSlow are the
+// values [cibaTestMode] accepts. The constants are package-private so
+// the harness POST handler validates the wire string against the same
+// vocabulary the wrapper consumes.
+const (
+	cibaTestModeApprove = "approve"
+	cibaTestModeReject  = "reject"
+	cibaTestModeSlow    = "slow"
+)
+
+// cibaTestSlowDelay is the Approve delay the wrapper applies when
+// [cibaTestMode] holds [cibaTestModeSlow]. The value is sized so the
+// 240 s wall-clock cap in tools/conformance/runner.py allows the OP
+// to land 30+ authorization_pending polls under the 1 s plan interval
+// before the timer fires — the shape OFCS' multiple-call-to-token
+// module asserts on.
+const cibaTestSlowDelay = 60 * time.Second
+
+// loadCIBATestMode returns the current override or [cibaTestModeApprove]
+// when none has been posted. The helper centralises the type assertion
+// so callers do not have to handle the atomic.Value-reads-untyped-nil
+// edge case.
+func loadCIBATestMode() string {
+	v, _ := cibaTestMode.Load().(string)
+	if v == "" {
+		return cibaTestModeApprove
+	}
+	return v
+}
+
+// CIBATestModeHandler returns an [http.Handler] that lets the OFCS
+// runner.py harness pre-load a per-test override of the auto-approve
+// shape. POST /_test/ciba-mode body "approve" / "reject" / "slow"
+// flips [cibaTestMode]; GET returns the current value. The handler is
+// mounted in [main.run] under a fixed path so the runner does not need
+// to discover it.
+//
+// The handler is dev-only — production embedders must NOT mount it
+// because it lets any caller flip user-decision shape without
+// authentication. Keeping the path under "/_test/" keeps the surface
+// out of every production deployment by convention.
+func CIBATestModeHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = io.WriteString(w, loadCIBATestMode()+"\n")
+		case http.MethodPost:
+			body, err := io.ReadAll(io.LimitReader(r.Body, 64))
+			if err != nil {
+				http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			mode := strings.TrimSpace(string(body))
+			switch mode {
+			case cibaTestModeApprove, cibaTestModeReject, cibaTestModeSlow:
+				cibaTestMode.Store(mode)
+				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+				_, _ = io.WriteString(w, mode+"\n")
+			default:
+				http.Error(w, "mode must be approve|reject|slow", http.StatusBadRequest)
+			}
+		default:
+			w.Header().Set("Allow", "GET, POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+}
+
 // isCIBAProfile reports whether the profile name selects FAPI-CIBA.
 // The predicate gates store wrapping in [buildOPStore] and CIBA-only
 // client seeding in [buildClientSeeds].
@@ -175,36 +264,57 @@ type autoApprovingCIBA struct {
 	log   *slog.Logger
 }
 
-// Save delegates to the inner substore and, on success, schedules
-// out-of-band approval after a.delay. The goroutine aborts if the
-// op-demo parent context cancels first.
+// Save delegates to the inner substore and, on success, schedules an
+// out-of-band action after a delay. The action is steered by
+// [cibaTestMode] which the OFCS runner harness posts to before each
+// fapi-ciba module needing non-default shape: the default empty
+// (or "approve") schedules Approve after a.delay; "reject" schedules
+// Deny after a.delay; "slow" approves after [cibaTestSlowDelay] so
+// OFCS' multiple-call-to-token-endpoint test sees enough
+// authorization_pending polls before approval. The goroutine aborts
+// if the op-demo parent context cancels first.
 func (a *autoApprovingCIBA) Save(ctx context.Context, req *store.CIBARequest) error {
 	if err := a.inner.Save(ctx, req); err != nil {
 		return err
 	}
 	authReqID := req.ID
 	subject := req.Subject
-	go a.approveAfterDelay(authReqID, subject)
+	mode := loadCIBATestMode()
+	go a.actAfterDelay(authReqID, subject, mode)
 	return nil
 }
 
-// approveAfterDelay sleeps for a.delay and calls Approve. ErrConflict
-// (record already moved out of Pending) is treated as benign because
-// the auth_req_id may have been Denied or expired before the timer
-// fired; ErrNotFound is similarly benign for an expired record.
-func (a *autoApprovingCIBA) approveAfterDelay(authReqID, subject string) {
-	timer := time.NewTimer(a.delay)
+// actAfterDelay sleeps for the mode-specific delay and dispatches the
+// matching device-side outcome. ErrConflict (record already moved out
+// of Pending) and ErrNotFound (record expired before the timer fired)
+// are benign and not logged at warn level.
+func (a *autoApprovingCIBA) actAfterDelay(authReqID, subject, mode string) {
+	delay := a.delay
+	if mode == cibaTestModeSlow {
+		delay = cibaTestSlowDelay
+	}
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-timer.C:
 	case <-a.ctx.Done():
 		return
 	}
-	// authTime is left zero: this binary is a smoke-test fixture
-	// driven by OFCS, not a production OP, and the project's
-	// forbidigo gate blocks direct time.Now in cmd/. A zero AuthTime
-	// omits the auth_time claim, which suits a demo that never
-	// asserts the value.
+	if mode == cibaTestModeReject {
+		a.runDeny(authReqID)
+		return
+	}
+	a.runApprove(authReqID, subject)
+}
+
+// runApprove calls Approve on the inner substore and logs the outcome
+// at the level matching its severity: Info on success, Warn on a real
+// failure, silent on the conflict/not-found shapes that a parallel
+// state change can produce. authTime is left zero: this binary is a
+// smoke-test fixture, the forbidigo gate blocks direct time.Now in
+// cmd/, and a zero AuthTime omits the auth_time claim — which suits a
+// demo that never asserts the value.
+func (a *autoApprovingCIBA) runApprove(authReqID, subject string) {
 	err := a.inner.Approve(a.ctx, authReqID, subject, time.Time{})
 	switch {
 	case err == nil:
@@ -212,10 +322,25 @@ func (a *autoApprovingCIBA) approveAfterDelay(authReqID, subject string) {
 			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
 			slog.String("subject", subject))
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
-		// Benign: the record changed state (denied / expired /
-		// already approved) before the auto-approve timer fired.
 	default:
 		a.log.Warn("ciba auto-approve failed",
+			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
+			slog.String("err", err.Error()))
+	}
+}
+
+// runDeny calls Deny with the fixed reason "user-rejected-test"; the
+// CIBA token endpoint maps Denied → access_denied so the wire shape
+// matches what the OFCS user-rejects-authentication module expects.
+func (a *autoApprovingCIBA) runDeny(authReqID string) {
+	err := a.inner.Deny(a.ctx, authReqID, "user-rejected-test")
+	switch {
+	case err == nil:
+		a.log.Info("ciba auto-denied",
+			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)))
+	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
+	default:
+		a.log.Warn("ciba auto-deny failed",
 			slog.String("auth_req_id_prefix", safeAuthReqIDPrefix(authReqID)),
 			slog.String("err", err.Error()))
 	}

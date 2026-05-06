@@ -47,6 +47,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -111,6 +112,13 @@ type runConfig struct {
 	// lands authorization_pending under the 1 s default poll
 	// interval — the shape the OFCS fapi-ciba plan asserts on.
 	cibaAutoApproveDelay time.Duration
+	// extraCAs is the trust pool the JWKS fetcher uses for outbound
+	// HTTPS to RP-controlled jwks_uri endpoints. Nil means "use the
+	// Go default system trust store"; embedders running against the
+	// OFCS conformance harness or behind an internal CA load PEM
+	// bundles via -extra-ca-bundle so the fetcher accepts those
+	// certs without disabling chain validation.
+	extraCAs *x509.CertPool
 }
 
 func main() {
@@ -158,6 +166,10 @@ func mainErr() error {
 		// poll observes authorization_pending under the 1 s poll
 		// interval the OFCS fapi-ciba plan drives.
 		cibaAutoApproveDelay = flag.Duration("ciba-autoapprove-delay", 15*time.Second, "delay before the auto-approving CIBA substore flips a Pending record to Approved. Only consulted when -profile=fapi-ciba; production embedders trigger Approve from the user's authentication device callback, never from inside the OP. The default is sized so the OFCS fapi-ciba poll loop sees authorization_pending on at least three consecutive polls before the flip — the test plan asserts on that intermediate state explicitly.")
+		// extraCABundle is a colon-separated list of PEM files merged
+		// into the JWKS fetcher's trust pool. Empty leaves Go's system
+		// trust store untouched.
+		extraCABundle = flag.String("extra-ca-bundle", "", "colon-separated PEM file paths merged into the JWKS fetcher's TLS trust pool. Empty leaves Go's system trust store untouched. Used to reach RP JWKS endpoints behind an internal CA, or — under the OFCS conformance harness — to admit the runner's self-signed cert without disabling chain validation.")
 	)
 	flag.Parse()
 
@@ -165,6 +177,12 @@ func mainErr() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	pool, err := loadCABundles(*extraCABundle)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "op-demo: %v\n", err)
+		return err
+	}
 
 	cfg := runConfig{
 		listen:               *listen,
@@ -181,6 +199,7 @@ func mainErr() error {
 		fapiClient2JWKS:      *fapiClient2JWKS,
 		enableDCR:            *enableDCR,
 		cibaAutoApproveDelay: *cibaAutoApproveDelay,
+		extraCAs:             pool,
 	}
 	if err := run(ctx, cfg, logger); err != nil {
 		logger.Error("op-demo: fatal", "err", err)
@@ -206,9 +225,20 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		return err
 	}
 
+	// The CIBA test-mode handler is mounted under /_test/ so the OFCS
+	// runner harness can pre-load a per-module override of the
+	// auto-approve shape. The path is dev-only — production embedders
+	// MUST NOT mount it. When the active profile is anything other
+	// than fapi-ciba the handler is harmless (no goroutine consults
+	// the mode) but also unused; mounting it unconditionally keeps the
+	// op-demo listener layout stable across plans.
+	mux := http.NewServeMux()
+	mux.Handle("/_test/ciba-mode", CIBATestModeHandler())
+	mux.Handle("/", provider)
+
 	srv := &http.Server{
 		Addr:              cfg.listen,
-		Handler:           provider,
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	if isFAPIProfile(cfg.profile) {
@@ -354,7 +384,7 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore s
 // claims_supported list. Profile-specific options are appended on top
 // in [buildOptions].
 func commonOptions(cfg runConfig, opStore store.Store, st *inmem.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger, seeds []op.ClientSeed) []op.Option {
-	return []op.Option{
+	opts := []op.Option{
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(opStore),
 		op.WithKeyset(op.Keyset{{KeyID: "op-demo-1", Signer: priv}}),
@@ -404,6 +434,20 @@ func commonOptions(cfg runConfig, opStore store.Store, st *inmem.Store, priv *ec
 			"phone_number", "phone_number_verified",
 		),
 	}
+	if cfg.extraCAs != nil {
+		// The transport is constructed locally so the dial-time SSRF
+		// gate the JWKS fetcher relies on can rewire DialContext on a
+		// fresh *http.Transport rather than mutating
+		// http.DefaultTransport. The TLSClientConfig only widens trust;
+		// chain validation stays on (InsecureSkipVerify is left false).
+		opts = append(opts, op.WithJWKSHTTPTransport(&http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				RootCAs:    cfg.extraCAs,
+			},
+		}))
+	}
+	return opts
 }
 
 // profileOptions dispatches to the per-profile helper that returns the
@@ -665,6 +709,39 @@ func seedDemoUser(st *inmem.Store) error {
 		UpdatedAt: updatedAt,
 	}, demoUsername, hash)
 	return nil
+}
+
+// loadCABundles merges the system trust store with every PEM file in
+// raw (colon-separated, mirroring SSL_CERT_FILE conventions). Empty
+// raw returns nil so the OP keeps the package-default behaviour
+// (system trust store via [crypto/tls]'s lazy initialisation). Each
+// supplied path MUST contain at least one PEM-encoded certificate; a
+// silent miss would defeat the whole point of the flag.
+func loadCABundles(raw string) (*x509.CertPool, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil //nolint:nilnil // documented "no extra CAs" signal.
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		// SystemCertPool returns (nil, error) on Windows pre-Go 1.18;
+		// fall back to a fresh pool so the embedder's bundle is still
+		// honoured without crashing op-demo.
+		pool = x509.NewCertPool()
+	}
+	for _, path := range strings.Split(raw, ":") {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		pem, err := os.ReadFile(path) //nolint:gosec // path is operator-supplied dev flag.
+		if err != nil {
+			return nil, fmt.Errorf("read CA bundle %q: %w", path, err)
+		}
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("CA bundle %q contained no valid PEM certificates", path)
+		}
+	}
+	return pool, nil
 }
 
 // parseRedirectURIs splits the -redirect-uri flag on commas and trims

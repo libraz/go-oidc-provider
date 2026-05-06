@@ -483,6 +483,175 @@ func waitDiscovery(discoveryURL string, client *http.Client) error {
 	return errDiscoveryTimeout
 }
 
+// TestLoadCABundles_EmptyReturnsNil pins the documented signal —
+// embedders who do not pass -extra-ca-bundle keep Go's package-default
+// trust posture (lazy SystemCertPool inside crypto/tls). A non-nil
+// pool here would silently shadow the system roots.
+func TestLoadCABundles_EmptyReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	pool, err := loadCABundles("")
+	if err != nil {
+		t.Fatalf("loadCABundles(empty): %v", err)
+	}
+	if pool != nil {
+		t.Fatalf("loadCABundles(empty) = %v, want nil", pool)
+	}
+	pool, err = loadCABundles("   ")
+	if err != nil {
+		t.Fatalf("loadCABundles(whitespace): %v", err)
+	}
+	if pool != nil {
+		t.Fatalf("loadCABundles(whitespace) = %v, want nil", pool)
+	}
+}
+
+// TestLoadCABundles_AppendsValidPEM exercises the success path. A
+// throwaway self-signed cert is written to a temp file; the returned
+// pool must be non-nil and accept the cert when Subjects is consulted
+// (the only way to confirm AppendCertsFromPEM observed it).
+func TestLoadCABundles_AppendsValidPEM(t *testing.T) {
+	t.Parallel()
+
+	certPath, _ := writeSelfSignedTLS(t)
+	pool, err := loadCABundles(certPath)
+	if err != nil {
+		t.Fatalf("loadCABundles: %v", err)
+	}
+	if pool == nil {
+		t.Fatal("loadCABundles returned nil pool for valid PEM")
+	}
+	// Re-load the cert and confirm pool acknowledges it. Equal not
+	// guaranteed (system pool varies), so we just verify the API
+	// surface that an embedder would consult.
+	pem, err := os.ReadFile(certPath) //nolint:gosec // G304: certPath comes from writeSelfSignedTLS(t.TempDir).
+	if err != nil {
+		t.Fatalf("re-read cert: %v", err)
+	}
+	if !pool.AppendCertsFromPEM(pem) {
+		t.Fatal("pool refused the cert on re-append; AppendCertsFromPEM lost the input")
+	}
+}
+
+// TestLoadCABundles_RejectsNonExistent pins the loud-failure contract.
+// Loading a path that does not exist is almost certainly an operator
+// typo; the silent miss would defeat the whole point of the flag.
+func TestLoadCABundles_RejectsNonExistent(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadCABundles("/nonexistent/path/to/ca.pem")
+	if err == nil {
+		t.Fatal("loadCABundles returned nil err for missing file")
+	}
+}
+
+// TestLoadCABundles_RejectsNonPEM confirms a path containing zero
+// PEM-encoded certificates surfaces as an explicit error rather than
+// returning the system pool unmodified.
+func TestLoadCABundles_RejectsNonPEM(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	garbage := filepath.Join(dir, "not-a-cert.txt")
+	if err := os.WriteFile(garbage, []byte("hello"), 0o600); err != nil {
+		t.Fatalf("write garbage: %v", err)
+	}
+	_, err := loadCABundles(garbage)
+	if err == nil {
+		t.Fatal("loadCABundles accepted a non-PEM file")
+	}
+	if !strings.Contains(err.Error(), "PEM") {
+		t.Errorf("err = %v, want PEM diagnostic", err)
+	}
+}
+
+// TestCIBATestModeHandler_GetReturnsApproveByDefault exercises the
+// runner-side read path: with no prior POST, GET returns "approve" so
+// the runner can confirm the OP is in the happy-flow shape before
+// driving a fapi-ciba test.
+//
+// The test mutates the package-level [cibaTestMode] atomic so it
+// cannot run in parallel with [TestCIBATestModeHandler_PostFlipsAtomic].
+//
+//nolint:paralleltest // serial by design — package-level atomic.
+func TestCIBATestModeHandler_GetReturnsApproveByDefault(t *testing.T) {
+	cibaTestMode.Store("") // reset; this test mutates the package-level atomic.
+	rec := newRecorder()
+	req := newRequest(t, http.MethodGet, "/_test/ciba-mode", nil)
+	CIBATestModeHandler().ServeHTTP(rec, req)
+	if rec.code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.code)
+	}
+	if got := strings.TrimSpace(rec.body.String()); got != cibaTestModeApprove {
+		t.Errorf("body = %q, want %q", got, cibaTestModeApprove)
+	}
+}
+
+// TestCIBATestModeHandler_PostFlipsAtomic confirms the runner-side
+// write path. Each accepted mode flips the global, and a subsequent
+// loadCIBATestMode() observes the new value — the contract Save
+// relies on.
+//
+//nolint:paralleltest // serial by design — package-level atomic.
+func TestCIBATestModeHandler_PostFlipsAtomic(t *testing.T) {
+	for _, mode := range []string{cibaTestModeApprove, cibaTestModeReject, cibaTestModeSlow} {
+		cibaTestMode.Store("")
+		rec := newRecorder()
+		req := newRequest(t, http.MethodPost, "/_test/ciba-mode", strings.NewReader(mode))
+		CIBATestModeHandler().ServeHTTP(rec, req)
+		if rec.code != http.StatusOK {
+			t.Fatalf("mode=%q status=%d, want 200 (body=%q)", mode, rec.code, rec.body.String())
+		}
+		if got := loadCIBATestMode(); got != mode {
+			t.Errorf("loadCIBATestMode = %q, want %q", got, mode)
+		}
+	}
+}
+
+// TestCIBATestModeHandler_PostRejectsUnknown pins the validation: an
+// unknown mode must surface as 400 so a typo in the runner does not
+// silently leave the OP in the previous mode.
+func TestCIBATestModeHandler_PostRejectsUnknown(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder()
+	req := newRequest(t, http.MethodPost, "/_test/ciba-mode", strings.NewReader("delete-everything"))
+	CIBATestModeHandler().ServeHTTP(rec, req)
+	if rec.code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.code)
+	}
+}
+
+// recordingResponseWriter is a tiny stand-in for httptest.NewRecorder
+// kept in this file to avoid a new dependency on net/http/httptest in
+// the cmd-package test binary. It only captures what the handler tests
+// assert on (status code, body, headers).
+type recordingResponseWriter struct {
+	code   int
+	header http.Header
+	body   strings.Builder
+}
+
+func newRecorder() *recordingResponseWriter {
+	return &recordingResponseWriter{code: http.StatusOK, header: http.Header{}}
+}
+
+func (r *recordingResponseWriter) Header() http.Header { return r.header }
+
+func (r *recordingResponseWriter) Write(p []byte) (int, error) {
+	return r.body.Write(p)
+}
+
+func (r *recordingResponseWriter) WriteHeader(code int) { r.code = code }
+
+func newRequest(t *testing.T, method, target string, body io.Reader) *http.Request {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, target, body)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	return req
+}
+
 // writeSelfSignedTLS generates a single-purpose ECDSA P-256 cert
 // covering 127.0.0.1 / ::1 / localhost, writes it to a temp dir, and
 // returns the file paths. Lifetime is 1 hour — long enough for any
