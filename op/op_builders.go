@@ -344,6 +344,9 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	if cfg.allowPrivateNetworkJWKS {
 		resolverOpts = append(resolverOpts, jar.AllowPrivateNetwork())
 	}
+	if cfg.jwksHTTPTransport != nil {
+		resolverOpts = append(resolverOpts, jar.WithBaseTransport(cfg.jwksHTTPTransport))
+	}
 	v, err := jar.NewVerifier(jar.VerifierConfig{
 		Issuer:             cfg.issuer,
 		Resolver:           jar.NewDefaultResolver(cfg.clock, resolverOpts...),
@@ -439,6 +442,9 @@ func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, err
 	jwksFetcher := jar.NewFetcher(cfg.clock)
 	if cfg.allowPrivateNetworkJWKS {
 		jwksFetcher.SetAllowPrivate(true)
+	}
+	if cfg.jwksHTTPTransport != nil {
+		jwksFetcher.SetBaseTransport(cfg.jwksHTTPTransport)
 	}
 	resolver.SetURLFetcher(jwksFetcher)
 	return &clientauth.PrivateKeyJWTVerifier{

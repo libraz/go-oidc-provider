@@ -365,3 +365,43 @@ func WithAllowLocalhostLoopback() Option {
 		return nil
 	})
 }
+
+// WithJWKSHTTPTransport injects an [http.RoundTripper] the OP uses
+// when fetching RP-controlled JWKS endpoints — both the signed
+// request-object resolver (RFC 9101) and the private_key_jwt client-
+// assertion verifier (RFC 7523) share one fetcher type. The default
+// nil leaves [internal/netsec.NewHTTPClient] to construct a transport
+// backed by Go's system trust store; embedders that front their RPs
+// with an internal CA, or run the OP under a conformance harness
+// with a self-signed runner cert, supply a transport with the
+// matching TLSClientConfig.
+//
+// The supplied transport's DialContext is rewired by the package so
+// the dial-time SSRF gate continues to fire — passing a custom
+// transport widens trust, not the SSRF surface. The option is
+// independent of [WithAllowPrivateNetworkJWKS] and
+// [WithAllowPrivateNetworkJAR]; embedders typically pair it with one
+// of those when their RP runs on a private network behind the
+// internal CA.
+//
+// At most one transport may be registered; a second
+// [WithJWKSHTTPTransport] call fails [New].
+// Stable since v0.x.
+func WithJWKSHTTPTransport(rt http.RoundTripper) Option {
+	return optionFunc(func(c *config) error {
+		if rt == nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithJWKSHTTPTransport received nil http.RoundTripper",
+			}
+		}
+		if c.jwksHTTPTransport != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithJWKSHTTPTransport may be called at most once",
+			}
+		}
+		c.jwksHTTPTransport = rt
+		return nil
+	})
+}

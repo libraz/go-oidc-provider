@@ -252,6 +252,18 @@ type config struct {
 	// http://localhost) opt in via [WithAllowLocalhostLoopback].
 	allowLocalhostLoopback bool
 
+	// jwksHTTPTransport is the [http.RoundTripper] [WithJWKSHTTPTransport]
+	// passes to the JWKS fetcher (both the JAR resolver and the
+	// client-assertion verifier share one fetcher type). Nil means
+	// "use the package default" — [internal/netsec.NewHTTPClient]
+	// constructs an [http.Transport] backed by Go's system trust
+	// store. Embedders that need a private CA (an internal CA-issued
+	// RP JWKS endpoint, the OFCS conformance harness against a
+	// self-signed runner cert) inject one here. The dial-time SSRF
+	// gate is preserved because [netsec.NewHTTPClient] re-wires
+	// DialContext on the supplied transport.
+	jwksHTTPTransport http.RoundTripper
+
 	// Login flow / UI / static-clients.
 	// loginFlow stores the [LoginFlow] supplied through
 	// [WithLoginFlow]. The zero value (Primary == nil) signals

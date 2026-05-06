@@ -622,6 +622,59 @@ func TestWithACRValuesSupported_RejectsEmptyValue(t *testing.T) {
 	}
 }
 
+// TestWithJWKSHTTPTransport_RejectsNil pins the construction-time
+// refusal of a nil [http.RoundTripper]. The option's contract is
+// "swap the transport"; a nil value is never the embedder's intent
+// and would silently leave the package-default behaviour in place,
+// which would surprise an operator wiring an internal CA bundle.
+func TestWithJWKSHTTPTransport_RejectsNil(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithJWKSHTTPTransport(nil))...)
+	if err == nil {
+		t.Fatal("expected error for nil transport, got nil")
+	}
+	if !strings.Contains(err.Error(), "WithJWKSHTTPTransport") {
+		t.Errorf("err = %v, want it to name the option", err)
+	}
+}
+
+// TestWithJWKSHTTPTransport_RejectsDouble pins the once-only contract.
+// An embedder calling the option twice almost certainly has a wiring
+// bug — two transports cannot both back the same fetcher — so the
+// library refuses construction rather than silently keeping the
+// later value.
+func TestWithJWKSHTTPTransport_RejectsDouble(t *testing.T) {
+	t.Parallel()
+
+	rt := &http.Transport{}
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithJWKSHTTPTransport(rt),
+		op.WithJWKSHTTPTransport(rt),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for two WithJWKSHTTPTransport calls, got nil")
+	}
+	if !strings.Contains(err.Error(), "at most once") {
+		t.Errorf("err = %v, want at-most-once diagnostic", err)
+	}
+}
+
+// TestWithJWKSHTTPTransport_AcceptsCustom exercises the success path:
+// a non-nil transport on a fresh provider constructs cleanly. The
+// transport itself is exercised by the [internal/jar] fetcher tests;
+// at the option layer we only need to confirm wiring does not
+// regress.
+func TestWithJWKSHTTPTransport_AcceptsCustom(t *testing.T) {
+	t.Parallel()
+
+	if _, err := op.New(append(validBaseOpts(t),
+		op.WithJWKSHTTPTransport(&http.Transport{}),
+	)...); err != nil {
+		t.Fatalf("op.New rejected a valid WithJWKSHTTPTransport: %v", err)
+	}
+}
+
 // fetchDiscoveryRaw issues a GET to /.well-known/openid-configuration
 // against the provided handler and decodes the response body into a
 // generic map so individual tests can probe presence / absence of
