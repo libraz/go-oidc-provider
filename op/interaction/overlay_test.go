@@ -229,6 +229,42 @@ func TestTemplateOverlay_OverrideChooserRendersTemplate(t *testing.T) {
 	}
 }
 
+// TestTemplateOverlay_TemplateExecutionErrorDoesNotCommitResponse
+// confirms template execution errors surface before response headers or
+// a partial body are written. The authorize endpoint can then treat the
+// render as failed instead of leaking a broken 200 HTML response.
+func TestTemplateOverlay_TemplateExecutionErrorDoesNotCommitResponse(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("consent").
+		Option("missingkey=error").
+		Parse(`before {{.MissingField}} after`))
+	overlay := interaction.TemplateOverlayDriver{
+		Inner:           interaction.HTMLDriver{},
+		ConsentTemplate: tmpl,
+	}
+
+	rec := &commitRecorder{header: make(http.Header)}
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/oidc/interaction/u-1", nil)
+	prompt := interaction.Prompt{
+		Type: "consent.scope",
+		Data: interaction.ConsentScopePromptData{},
+	}
+	err := overlay.Render(rec, req, prompt)
+	if err == nil {
+		t.Fatal("Render error = nil, want template execution error")
+	}
+	if rec.status != 0 {
+		t.Errorf("status committed = %d, want 0", rec.status)
+	}
+	if rec.body.String() != "" {
+		t.Errorf("body committed = %q, want empty", rec.body.String())
+	}
+	if got := rec.header.Get("Content-Type"); got != "" {
+		t.Errorf("Content-Type = %q, want empty before successful render", got)
+	}
+}
+
 // TestTemplateOverlay_InnerNilRender confirms that Render returns
 // [interaction.ErrTemplateOverlayInnerNil] when dispatch falls through
 // to a nil Inner.
@@ -329,4 +365,25 @@ func TestTemplateOverlay_SubmitActionReflectsRequestURL(t *testing.T) {
 	if !strings.Contains(body, "METHOD=POST") {
 		t.Errorf("SubmitMethod = POST not in body: %s", body)
 	}
+}
+
+type commitRecorder struct {
+	header http.Header
+	status int
+	body   strings.Builder
+}
+
+func (r *commitRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *commitRecorder) WriteHeader(status int) {
+	r.status = status
+}
+
+func (r *commitRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.body.Write(p)
 }

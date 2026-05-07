@@ -1,6 +1,7 @@
 package interaction
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"html/template"
@@ -114,10 +115,12 @@ func (d TemplateOverlayDriver) renderConsent(w http.ResponseWriter, r *http.Requ
 		SubmitMethod:        "POST",
 		SubmitAction:        r.URL.RequestURI(),
 	}
-	stampOverlayHeaders(w)
-	w.WriteHeader(http.StatusOK)
-	if err := d.ConsentTemplate.Execute(w, td); err != nil {
+	var body bytes.Buffer
+	if err := d.ConsentTemplate.Execute(&body, td); err != nil {
 		return fmt.Errorf("interaction: render consent template: %w", err)
+	}
+	if err := writeOverlayResponse(w, &body); err != nil {
+		return err
 	}
 	return nil
 }
@@ -134,10 +137,24 @@ func (d TemplateOverlayDriver) renderChooser(w http.ResponseWriter, r *http.Requ
 		SubmitMethod:   "POST",
 		SubmitAction:   r.URL.RequestURI(),
 	}
+	var body bytes.Buffer
+	if err := d.ChooserTemplate.Execute(&body, td); err != nil {
+		return fmt.Errorf("interaction: render chooser template: %w", err)
+	}
+	if err := writeOverlayResponse(w, &body); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeOverlayResponse commits a successfully rendered template body.
+// Template execution is buffered by the callers so an execution error
+// cannot leak a partial 200 response before the endpoint can react.
+func writeOverlayResponse(w http.ResponseWriter, body *bytes.Buffer) error {
 	stampOverlayHeaders(w)
 	w.WriteHeader(http.StatusOK)
-	if err := d.ChooserTemplate.Execute(w, td); err != nil {
-		return fmt.Errorf("interaction: render chooser template: %w", err)
+	if _, err := body.WriteTo(w); err != nil {
+		return fmt.Errorf("interaction: write template response: %w", err)
 	}
 	return nil
 }
