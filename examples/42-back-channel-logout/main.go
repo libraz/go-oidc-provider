@@ -67,16 +67,23 @@ func main() {
 	keys := devkeys.MustEphemeral("bcl-1")
 
 	provider, err := op.New(
-		op.WithIssuer("http://localhost"+opAddr),
+		op.WithIssuer("http://127.0.0.1"+opAddr),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		op.WithAllowLocalhostLoopback(),
+		// Dev / CI-only: admit the http://127.0.0.1 backchannel_logout_uri
+		// below and disable the deliverer's SSRF gate so the in-process
+		// stub RP receives the logout token POST. Production deployments
+		// leave this off; OIDC Back-Channel Logout 1.0 §2.2 requires
+		// https for backchannel_logout_uri on the public Internet.
+		op.WithAllowInsecureBackchannelLogoutForDev(),
 		op.WithStaticClients(op.ConfidentialClient{
 			ID:                               clientID,
 			Secret:                           "bcl-demo-secret-rotate-me",
-			RedirectURIs:                     []string{"http://localhost:5173/callback"},
+			RedirectURIs:                     []string{"http://127.0.0.1:5173/callback"},
 			Scopes:                           []string{"openid", "profile"},
-			BackchannelLogoutURI:             "http://localhost" + rpAddr + "/backchannel-logout",
+			BackchannelLogoutURI:             "http://127.0.0.1" + rpAddr + "/backchannel-logout",
 			BackchannelLogoutSessionRequired: true,
 			ApplicationType:                  "web",
 		}),
@@ -117,7 +124,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Printf("OP listening on %s — client %q registered with backchannel_logout_uri=http://localhost%s/backchannel-logout",
+	log.Printf("OP listening on %s — client %q registered with backchannel_logout_uri=http://127.0.0.1%s/backchannel-logout (dev-mode http loopback)",
 		opAddr, clientID, rpAddr)
 	log.Println("drive /authorize → /token to seed a session, then call /oidc/end_session with the id_token_hint to fire delivery")
 	if err := serve.Listen(opAddr, mux); err != nil {

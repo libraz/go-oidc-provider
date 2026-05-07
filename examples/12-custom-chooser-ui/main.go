@@ -107,6 +107,8 @@ func main() {
 		op.WithStore(memStore),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
+		op.WithAllowLocalhostLoopback(),
 		// HTMLDriver is the orchestrator default; setting it explicitly
 		// makes this example self-documenting (compare with example 13,
 		// which opts into JSONDriver for a SPA front-end).

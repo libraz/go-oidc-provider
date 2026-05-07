@@ -24,12 +24,12 @@
 // Drive the OAuth-only path end-to-end:
 //
 //	# 1) start the example, then visit
-//	open 'http://localhost:8080/oidc/auth?client_id=oauth-cli&response_type=code&redirect_uri=http://localhost:5173/cb&scope=api:read&state=xyz&code_challenge=E9Melhoa2OoLrgRBe5dh8nlEpV-vH4qlHWAHfsmrCzs&code_challenge_method=S256'
+//	open 'http://127.0.0.1:8080/oidc/auth?client_id=oauth-cli&response_type=code&redirect_uri=http://localhost:5173/cb&scope=api:read&state=xyz&code_challenge=E9Melhoa2OoLrgRBe5dh8nlEpV-vH4qlHWAHfsmrCzs&code_challenge_method=S256'
 //
 //	# 2) after the consent screen, exchange the returned code:
 //	curl -u oauth-cli:oauth2-only-demo-secret-rotate-me \
 //	     -d 'grant_type=authorization_code&code=<CODE>&redirect_uri=http://localhost:5173/cb&code_verifier=<VERIFIER>' \
-//	     http://localhost:8080/oidc/token | jq
+//	     http://127.0.0.1:8080/oidc/token | jq
 //
 // The /token response carries access_token but NOT id_token because
 // the granted scope (api:read) does not include "openid".
@@ -54,23 +54,38 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
+	"github.com/libraz/go-oidc-provider/examples/internal/opkit"
 	"github.com/libraz/go-oidc-provider/examples/internal/serve"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 func main() {
 	keys := devkeys.MustEphemeral("oauth2-only-1")
 
+	st := inmem.New()
+	if err := seedDemoUser(st); err != nil {
+		log.Fatalf("seed: %v", err)
+	}
+
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
-		op.WithStore(inmem.New()),
+		op.WithIssuer("http://127.0.0.1:8080"),
+		op.WithStore(st),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// Admit the textual "localhost" host alongside 127.0.0.1
+		// loopback literals so the demo's redirect_uri parses.
+		op.WithAllowLocalhostLoopback(),
+		// The OIDC client still needs an interactive password prompt
+		// for /authorize; the OAuth-only client uses the same login
+		// flow because both sit behind the same /authorize endpoint.
+		op.WithLoginFlow(opkit.DefaultLoginFlow(st.UserPasswords())),
 		// The single option that flips the OIDC default. With it
 		// absent, the second client below would fail at /authorize
 		// with invalid_scope (missing openid).
@@ -110,10 +125,25 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", provider)
 
-	log.Println("oauth2-only example listening on :8080 (issuer https://op.example.com)")
+	log.Println("oauth2-only example listening on :8080 (issuer http://127.0.0.1:8080)")
 	log.Println("OIDC client:   oidc-rp   (scope=openid profile email → id_token issued)")
 	log.Println("OAuth client:  oauth-cli (scope=api:read              → no id_token)")
 	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+}
+
+func seedDemoUser(st *inmem.Store) error {
+	hash, err := op.HashPassword("demo")
+	if err != nil {
+		return err
+	}
+	st.PutUserWithPassword(context.Background(), &store.User{
+		Subject: "demo-user",
+		Claims: map[string]any{
+			"name":  "Demo User",
+			"email": "demo@example.com",
+		},
+	}, "demo", hash)
+	return nil
 }

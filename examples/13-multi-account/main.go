@@ -80,6 +80,8 @@ func main() {
 		op.WithStore(memStore),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
+		op.WithAllowLocalhostLoopback(),
 		// JSONDriver renders prompts (chooser, consent, factor) as JSON
 		// envelopes a SPA can consume directly. A server-rendered
 		// embedder swaps to interaction.HTMLDriver and supplies a

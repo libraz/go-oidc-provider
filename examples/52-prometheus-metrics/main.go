@@ -80,6 +80,8 @@ func main() {
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
+		// Admit "localhost" as a redirect_uri host alongside 127.0.0.1.
+		op.WithAllowLocalhostLoopback(),
 		op.WithPrometheus(registry),
 		op.WithStaticClients(
 			op.PublicClient{

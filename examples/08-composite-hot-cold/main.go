@@ -110,6 +110,11 @@ func run() error {
 	// Production embedders swap SQLite for MySQL or Postgres here; the
 	// composite.With(...) calls below do not depend on the engine.
 	dbPath := filepath.Join(os.TempDir(), "oidc-example-08.db")
+	// Pre-v1 schemas can evolve between checkouts; remove any prior file
+	// so a re-run under the new layout never collides with a stale DDL.
+	// Production embedders track schema versions through their own
+	// migration tooling instead of throwing the database away.
+	_ = os.Remove(dbPath)
 	dsn := "file:" + dbPath + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := databasesql.Open("sqlite", dsn)
 	if err != nil {

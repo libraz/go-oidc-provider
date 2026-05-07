@@ -70,7 +70,12 @@ func main() {
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
-		// WithProfile(FAPI2Baseline) auto-enables PAR / JAR / DPoP.
+		// FAPI 2.0 Baseline mandates a sender-constrained access token,
+		// satisfied here by DPoP. WithProfile auto-enables PAR / JAR
+		// (RequiredFeatures) and picks DPoP as the default sender-binding
+		// mechanism (RequiredAnyOf {DPoP, MTLS} → first member). An
+		// embedder who instead terminates mTLS at the OP opts in via
+		// op.WithFeature(feature.MTLS) and the DPoP default steps aside.
 		op.WithProfile(profile.FAPI2Baseline),
 	)
 	if err != nil {

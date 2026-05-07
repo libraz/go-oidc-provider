@@ -18,12 +18,16 @@
 //   - :8080 — the OP, with the SPA bundle at /login.
 //   - :9090 — the RP, exposing /, /login, /callback, /me.
 //
-// The seeded "demo" user clicks through the chain pwd → TOTP →
-// /me; consent is auto-skipped because [op.WithFirstPartyClients]
-// marks the demo RP as first-party. The captcha rule
-// ([op.RuleAfterFailedAttempts]) is wired but only fires after five
-// consecutive password failures in the same session, so the happy
-// path does not see it.
+// The seeded "demo" user clicks through the chain pwd → TOTP → /me.
+// [op.WithFirstPartyClients] marks the demo RP as first-party, so the
+// OP creates the consent grant on the user's behalf and skips the
+// consent screen on every subsequent /authorize round-trip;
+// [op.AuditConsentGrantedFirstParty] fires in the audit stream so SOC
+// tooling can correlate the auto-grant with the code mint. Example 40
+// ([examples/40-first-party-skip-consent]) covers the option in
+// isolation. The captcha rule ([op.RuleAfterFailedAttempts]) is wired
+// but only fires after five consecutive password failures in the same
+// session, so the happy path does not see it.
 //
 // Operator setup:
 //
