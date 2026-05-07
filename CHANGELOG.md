@@ -55,6 +55,15 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 - `profile.FAPICIBA` graduates from placeholder to enforced
   (JAR + DPoP-or-MTLS, 10-minute access-token cap, FAPI 2.0
   client-authentication set, mandatory access-token revocation).
+- New first-party auto-consent path
+  (`op.WithFirstPartyClients` + the `consent.granted.first_party`
+  audit event), a profile-level `RequiredAnyOf` auto-default that
+  lets `WithProfile(FAPI2Baseline)` activate DPoP with no further
+  wiring, automatic CORS allowlisting of static-client redirect URI
+  origins, locale-resolver fallback for
+  `ui_locales_supported`, and a
+  `WithAllowInsecureBackchannelLogoutForDev` dev opt-in for
+  loopback http back-channel logout.
 - Breaking option renames (`op.WithInteraction` →
   `op.WithInteractionDriver`) and removal of the
   single-key wrappers (`op.WithCookieKey`, `op.WithMFAEncryptionKey`)
@@ -300,6 +309,30 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   these fields before `Driver.Render`; SPAs read them on
   /oidc/interaction/{uid} to set `<html lang>` and build language
   pickers without re-running the chain or re-fetching discovery.
+- `op.WithAllowInsecureBackchannelLogoutForDev(true)` is a new
+  dev / CI-only opt-in that admits plain-http URLs whose host is a
+  loopback identity (`127.0.0.1`, `[::1]`, `localhost`) for the
+  `backchannel_logout_uri` client-metadata field. The default posture
+  continues to enforce the OIDC Back-Channel Logout 1.0 §2.2
+  https-only rule for every other host. `op.New` emits a loud
+  audit-stream warning when the flag is set so the opt-in cannot
+  silently survive a promotion to production. Both the static-client
+  validator and the DCR registration path honour the carve-out.
+- First-party clients registered via `op.WithFirstPartyClients(...)`
+  now skip the consent prompt automatically when an active session
+  exists and the request did not carry `prompt=consent`. The OP mints
+  the authorization code silently, upserts the consent grant on the
+  user's behalf, and emits the new
+  `op.AuditConsentGrantedFirstParty` audit event
+  (`"consent.granted.first_party"`) so SOC tooling can correlate
+  every auto-grant with the matching code mint. Dynamic-client
+  registrations are excluded; the gate also respects
+  `prompt=consent` as a per-request override that forces the
+  prompt regardless of the first-party list.
+- Discovery's `ui_locales_supported` now falls back to every locale
+  the runtime resolver knows (seed bundles + `WithLocale(...)`) when
+  `DiscoveryMetadata.UILocalesSupported` is empty. Embedders who ship
+  internal-only locales still hide them via `WithDiscoveryMetadata`.
 
 ### Changed
 
@@ -425,6 +458,23 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   godoc spell out the multi-replica deployment expectation
   (distributed nonce / TOTP store required when running > 1 OP
   process).
+- `profile.RequiredAnyOf` now documents and pins an order contract:
+  the first element of each disjunctive set is the canonical default
+  the option layer auto-enables when no member of the set is already
+  configured. For the FAPI 2.0 family this means
+  `WithProfile(FAPI2Baseline)` alone now activates DPoP without
+  further wiring; an embedder who picks mTLS via
+  `WithFeature(feature.MTLS)` keeps DPoP suppressed regardless of
+  whether mTLS is layered before or after `WithProfile`. The
+  defaulting pass runs after every option has been applied so the
+  ordering between `WithProfile` and `WithFeature` is observably
+  irrelevant.
+- The CORS origin allowlist now admits the canonical origin of every
+  static-client `redirect_uri` automatically, so a SPA that POSTs to
+  `/token` from its callback page no longer needs to repeat the
+  origin in `WithCORSOrigins`. Non-web schemes (custom-scheme
+  native-app callbacks) are skipped silently. Dynamic-client
+  registrations continue to flow through `WithCORSOrigins` only.
 
 ### Fixed
 
