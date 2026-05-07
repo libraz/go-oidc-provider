@@ -191,16 +191,39 @@ func issuerHost(issuer string) string {
 //
 //   - explicit entries from [WithCORSOrigins] (cfg.corsOrigins);
 //   - the OP's own canonical origin derived from cfg.issuer, so same-origin
-//     fetches from the OP's hosted login UI never need to be enumerated.
+//     fetches from the OP's hosted login UI never need to be enumerated;
+//   - the canonical origin of every redirect_uri attached to a
+//     [WithStaticClients] entry. SPAs commonly post to /token and /userinfo
+//     from the same origin that hosts their `redirect_uri` callback page,
+//     so admitting that origin keeps the CORS allowlist in lock-step with
+//     the registered redirect URIs without forcing the embedder to repeat
+//     them in [WithCORSOrigins]. Dynamically-registered clients are not
+//     covered here; their origins must be enumerated through
+//     [WithCORSOrigins] (or a future per-request CORS hook).
 //
 // The helper is idempotent: it tolerates a nil/empty list (= "deny all
 // cross-origin", the safe default) and silently skips an issuer that fails
 // canonicalisation (a malformed issuer is rejected earlier by config.validate,
-// so the skip path is defensive only).
+// so the skip path is defensive only). Redirect URIs that fail canonicalisation
+// (custom schemes such as `com.example.app:/cb`, opaque URIs, …) are skipped
+// silently — the option layer already validated them at registration time and
+// the allowlist only cares about web-style http(s) origins anyway.
 func buildOriginAllowlist(cfg *config) (*csrf.Allowlist, error) {
 	allowOrigins := append([]string(nil), cfg.corsOrigins...)
 	if origin, oerr := csrf.CanonicalOrigin(cfg.issuer); oerr == nil {
 		allowOrigins = append(allowOrigins, origin)
+	}
+	for i := range cfg.staticClients {
+		for _, ru := range cfg.staticClients[i].RedirectURIs {
+			origin, oerr := csrf.CanonicalOrigin(ru)
+			if oerr != nil {
+				// Non-web schemes (e.g. native-app custom schemes) are
+				// fine on the redirect path but have no origin in the
+				// CORS sense; skip them silently.
+				continue
+			}
+			allowOrigins = append(allowOrigins, origin)
+		}
 	}
 	allow, err := csrf.NewAllowlist(allowOrigins)
 	if err != nil {
@@ -584,6 +607,16 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 	if cfg.backchannelLogoutHTTPClient != nil {
 		deliverer.Client = cfg.backchannelLogoutHTTPClient
 	}
+	// The deliverer's SSRF gate refuses loopback / private-network
+	// destinations by default. The dev opt-in suppresses the gate so
+	// the in-process examples and CI fixtures can POST a logout token
+	// at a stub RP bound to 127.0.0.1; the
+	// [WithBackchannelAllowPrivateNetwork] knob retains its existing
+	// service-mesh meaning. Either flag widens the gate, mirroring the
+	// validator's accept-set.
+	if cfg.allowInsecureBackchannelLogoutForDev || cfg.BackchannelAllowsPrivateNetwork() {
+		deliverer.AllowPrivateNetwork = true
+	}
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
 		Issuer:                   cfg.issuer,
 		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
@@ -720,7 +753,7 @@ func buildBuiltInInteractions(cfg *config, sessMgr *sessions.Manager) []Interact
 
 // buildDiscoveryInput converts the public [config] to the internal
 // [discovery.Input] the discovery builder consumes.
-func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.Input {
+func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i18n.Resolver) discovery.Input {
 	customNames := customGrantNamesFor(cfg)
 	grantStrings := make([]string, 0, len(cfg.grants)+len(customNames))
 	for _, g := range cfg.grants {
@@ -731,6 +764,22 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 	// dispatcher rejected built-in collisions at registration time so
 	// the append cannot create a duplicate entry.
 	grantStrings = append(grantStrings, customNames...)
+	uiLocales := cfg.discoveryMetadata.UILocalesSupported
+	if len(uiLocales) == 0 && locales != nil {
+		// Fall back to the registered locale set so the resolver and
+		// the discovery surface stay in lock-step: the OP advertises
+		// every tag for which a bundle has been registered (seed +
+		// [WithLocale]). Embedders that need an explicit list — e.g.
+		// hiding a locale they ship internally but do not expose to
+		// RPs — keep the override path through [WithDiscoveryMetadata].
+		available := locales.Available()
+		if len(available) > 0 {
+			uiLocales = make([]string, len(available))
+			for i, t := range available {
+				uiLocales[i] = string(t)
+			}
+		}
+	}
 	return discovery.Input{
 		Issuer:      cfg.issuer,
 		MountPrefix: cfg.mountPrefix,
@@ -763,7 +812,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry) discovery.
 			ServiceDocumentation: cfg.discoveryMetadata.ServiceDocumentation,
 			OPPolicyURI:          cfg.discoveryMetadata.OPPolicyURI,
 			OPTermsOfServiceURI:  cfg.discoveryMetadata.OPTermsOfServiceURI,
-			UILocalesSupported:   cfg.discoveryMetadata.UILocalesSupported,
+			UILocalesSupported:   uiLocales,
 			MTLSEndpointAliases:  cfg.discoveryMetadata.MTLSEndpointAliases,
 			Extra:                cfg.discoveryMetadata.Extra,
 		},
@@ -842,6 +891,23 @@ func buildSubjectProjector(cfg *config) func(ctx context.Context, raw string, cl
 		}
 		return string(sub), nil
 	}
+}
+
+// firstPartyClientSet materialises the [WithFirstPartyClients] slice
+// into the O(1) lookup map the authorize endpoint consults on every
+// request. The validator already rejects unknown ids and combinations
+// with FAPI 2.0 profiles, so the returned set is safe to consult
+// without further filtering. An empty slice yields a nil map so the
+// downstream lookup short-circuits without allocating.
+func firstPartyClientSet(cfg *config) map[string]struct{} {
+	if len(cfg.firstPartyClients) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(cfg.firstPartyClients))
+	for _, id := range cfg.firstPartyClients {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 // buildDiscoveryFeatures composes the discovery feature flags from

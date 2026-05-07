@@ -169,7 +169,12 @@ type DiscoveryMetadata struct {
 	// UILocalesSupported lists the BCP 47 language tags the OP's
 	// human-facing UI supports (OpenID Connect Discovery 1.0 §3 /
 	// RFC 8414 §2 "ui_locales_supported"). Nil and empty are
-	// equivalent — the field is omitted from the wire.
+	// equivalent — when omitted, the discovery builder falls back to
+	// every locale registered with the runtime resolver (seed
+	// bundles plus [WithLocale] additions). An explicit non-empty
+	// list overrides the auto-derivation, so embedders that ship a
+	// bundle for internal use without exposing it to RPs can keep the
+	// shorter wire-form.
 	UILocalesSupported []string
 
 	// MTLSEndpointAliases publishes alternative URLs at which the OP
@@ -367,6 +372,16 @@ func WithACRPolicy(p ACRPolicy) Option {
 // layer [WithFeature] before or after [WithProfile] without surprise.
 // The auto-enable is intentionally add-only: WithProfile never removes
 // a flag the embedder already set.
+//
+// Disjunctive profile constraints ([profile.RequiredAnyOf]) are also
+// fulfilled with a sensible default: when none of the listed flags is
+// already enabled, the FIRST member of each set is auto-enabled. For
+// the FAPI 2.0 family this means [WithProfile](FAPI2Baseline) alone
+// activates DPoP — picked because it has no infrastructure
+// prerequisite — while an embedder who wants mTLS opts in via
+// [WithFeature](feature.MTLS) and the auto-enable steps aside (the
+// AnyOf is already satisfied). The defaulting is order-independent:
+// it runs after every option has been applied.
 // Stable since v0.1.
 func WithProfile(p profile.Profile) Option {
 	return optionFunc(func(c *config) error {

@@ -211,8 +211,11 @@ func TestWithDiscoveryMetadata_RejectsOPControlledOverride(t *testing.T) {
 
 // TestWithDiscoveryMetadata_OmitsDefaultMetadata pins the no-metadata
 // posture: when the option is absent, the discovery document MUST NOT
-// advertise any of the four named static fields. Embedders that do not
-// own a privacy-policy URL get a clean wire shape by default.
+// advertise the embedder-owned static fields (service_documentation,
+// op_policy_uri, op_tos_uri). The ui_locales_supported field is
+// auto-derived from the registered locale resolver (seed bundles plus
+// [WithLocale]) so it is asserted separately — its presence is honest
+// advertisement, not embedder-supplied metadata.
 func TestWithDiscoveryMetadata_OmitsDefaultMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -242,12 +245,82 @@ func TestWithDiscoveryMetadata_OmitsDefaultMetadata(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	for _, key := range []string{
-		"service_documentation", "op_policy_uri",
-		"op_tos_uri", "ui_locales_supported",
+		"service_documentation", "op_policy_uri", "op_tos_uri",
 	} {
 		if _, present := wire[key]; present {
 			t.Errorf("wire %q must be absent without WithDiscoveryMetadata", key)
 		}
+	}
+	// ui_locales_supported is auto-derived from the resolver. The seed
+	// bundles guarantee at least the canonical "en" tag is registered,
+	// so the wire MUST advertise a non-empty array even without an
+	// explicit WithDiscoveryMetadata or WithLocale call.
+	locales, ok := wire["ui_locales_supported"].([]any)
+	if !ok {
+		t.Fatalf("ui_locales_supported missing or not a JSON array: %T (%v)",
+			wire["ui_locales_supported"], wire["ui_locales_supported"])
+	}
+	if len(locales) == 0 {
+		t.Errorf("ui_locales_supported is empty; want the seed locales")
+	}
+}
+
+// TestDiscovery_UILocalesSupported_DerivedFromResolver pins the
+// auto-derivation rule documented on
+// [DiscoveryMetadata.UILocalesSupported]: when the embedder does not
+// supply an explicit list, the discovery document advertises every
+// locale registered with the runtime resolver — seed bundles plus any
+// [WithLocale] additions. The test registers a custom French bundle
+// and asserts "fr" appears in the wire array alongside the seed
+// locales.
+func TestDiscovery_UILocalesSupported_DerivedFromResolver(t *testing.T) {
+	t.Parallel()
+
+	french, err := op.LocaleBundleFromMap("fr", map[string]string{
+		"login.title": "Connexion",
+	})
+	if err != nil {
+		t.Fatalf("LocaleBundleFromMap(fr): %v", err)
+	}
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(french))...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	srv := httptest.NewServer(provider)
+	defer srv.Close()
+
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		srv.URL+"/.well-known/openid-configuration", http.NoBody)
+	if reqErr != nil {
+		t.Fatalf("NewRequest: %v", reqErr)
+	}
+	resp, doErr := srv.Client().Do(req)
+	if doErr != nil {
+		t.Fatalf("GET discovery: %v", doErr)
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		t.Fatalf("read body: %v", readErr)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	locales, ok := wire["ui_locales_supported"].([]any)
+	if !ok {
+		t.Fatalf("ui_locales_supported missing or not a JSON array: %T (%v)",
+			wire["ui_locales_supported"], wire["ui_locales_supported"])
+	}
+	sawFR := false
+	for _, l := range locales {
+		if s, _ := l.(string); s == "fr" {
+			sawFR = true
+			break
+		}
+	}
+	if !sawFR {
+		t.Errorf("ui_locales_supported = %v, want it to include the WithLocale-registered \"fr\"", locales)
 	}
 }
 

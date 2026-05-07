@@ -42,7 +42,7 @@ import (
 // grants.
 func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
-	doc := discovery.Build(buildDiscoveryInput(cfg, scopes))
+	doc := discovery.Build(buildDiscoveryInput(cfg, scopes, locales))
 	discHandler, err := discovery.Handler(doc)
 	if err != nil {
 		return nil, &Error{
@@ -183,29 +183,30 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		return
 	}
 	deps := registrationendpoint.Deps{
-		Issuer:                        cfg.issuer,
-		MountPrefix:                   cfg.mountPrefix,
-		RegisterPath:                  cfg.endpoints.Register,
-		Clock:                         cfg.clock,
-		Clients:                       registry,
-		InitialAccessTokens:           cfg.store.InitialAccessTokens(),
-		RegistrationAccessTokens:      cfg.store.RegistrationAccessTokens(),
-		Scopes:                        scopes,
-		Open:                          cfg.dcr.Open,
-		OpenRegistrationDefaultScopes: append([]string(nil), cfg.dcr.OpenRegistrationDefaultScopes...),
-		AllowedGrantTypes:             append([]string(nil), cfg.dcr.AllowedGrantTypes...),
-		AllowedResponseTypes:          append([]string(nil), cfg.dcr.AllowedResponseTypes...),
-		PairwiseEnabled:               cfg.pairwiseEnabled(),
-		AllowLocalhostLoopback:        cfg.allowLocalhostLoopback,
-		SectorResolver:                buildSectorResolver(cfg),
-		ValidateMetadata:              wrapValidateMetadata(cfg.dcr.ValidateMetadata),
-		Logger:                        cfg.logger,
-		Audit:                         cfg.effectiveAuditEmitter(),
-		OnClientDeleted:               cfg.dcr.OnClientDeleted,
-		RefreshTokens:                 cfg.store.RefreshTokens(),
-		Grants:                        cfg.store.Grants(),
-		AccessTokens:                  cfg.store.AccessTokens(),
-		OpaqueAccessTokens:            cfg.store.OpaqueAccessTokens(),
+		Issuer:                               cfg.issuer,
+		MountPrefix:                          cfg.mountPrefix,
+		RegisterPath:                         cfg.endpoints.Register,
+		Clock:                                cfg.clock,
+		Clients:                              registry,
+		InitialAccessTokens:                  cfg.store.InitialAccessTokens(),
+		RegistrationAccessTokens:             cfg.store.RegistrationAccessTokens(),
+		Scopes:                               scopes,
+		Open:                                 cfg.dcr.Open,
+		OpenRegistrationDefaultScopes:        append([]string(nil), cfg.dcr.OpenRegistrationDefaultScopes...),
+		AllowedGrantTypes:                    append([]string(nil), cfg.dcr.AllowedGrantTypes...),
+		AllowedResponseTypes:                 append([]string(nil), cfg.dcr.AllowedResponseTypes...),
+		PairwiseEnabled:                      cfg.pairwiseEnabled(),
+		AllowLocalhostLoopback:               cfg.allowLocalhostLoopback,
+		AllowInsecureBackchannelLogoutForDev: cfg.allowInsecureBackchannelLogoutForDev,
+		SectorResolver:                       buildSectorResolver(cfg),
+		ValidateMetadata:                     wrapValidateMetadata(cfg.dcr.ValidateMetadata),
+		Logger:                               cfg.logger,
+		Audit:                                cfg.effectiveAuditEmitter(),
+		OnClientDeleted:                      cfg.dcr.OnClientDeleted,
+		RefreshTokens:                        cfg.store.RefreshTokens(),
+		Grants:                               cfg.store.Grants(),
+		AccessTokens:                         cfg.store.AccessTokens(),
+		OpaqueAccessTokens:                   cfg.store.OpaqueAccessTokens(),
 	}
 	handler := strictCORS.Handler(registrationendpoint.Handler(deps))
 	registerPath := joinPath(cfg.mountPrefix, cfg.endpoints.Register)
@@ -413,6 +414,8 @@ func mountAuthorizeHandlers(
 		SubjectProjector:        buildSubjectProjector(cfg),
 		ProxyTrust:              proxyTrust,
 		ClientEncJWKs:           encResolver,
+		FirstPartyClients:       firstPartyClientSet(cfg),
+		Audit:                   cfg.effectiveAuditEmitter(),
 	})
 	mux.Handle(authorizePath, handler)
 	if spaLoginMount == "" {

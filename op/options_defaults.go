@@ -6,8 +6,10 @@ import (
 
 	internallog "github.com/libraz/go-oidc-provider/internal/log"
 	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
 // DefaultAccessTokenTTL is the lifetime applied to issued access
@@ -96,6 +98,57 @@ func (c *config) applyDefaults() {
 	if c.refreshTokenTTL == 0 {
 		c.refreshTokenTTL = DefaultRefreshTokenTTL
 	}
+	c.applyProfileAnyOfDefaults()
+}
+
+// applyProfileAnyOfDefaults auto-enables the canonical default member
+// of every disjunctive profile constraint ([profile.RequiredAnyOf])
+// when the embedder did not already pick one. The canonical example
+// is FAPI 2.0 §3.1.4's "DPoP OR mTLS" sender-constrained-token rule:
+// when neither feature is configured, [profile.RequiredAnyOf] returns
+// {{DPoP, MTLS}} and this fill-in selects DPoP because it has no
+// infrastructure prerequisite (mTLS requires terminator passthrough
+// of the client certificate). An embedder who wants mTLS calls
+// [WithFeature](MTLS) and the loop here treats the AnyOf as already
+// satisfied — DPoP is NOT added on top.
+//
+// The fill runs after every option has been applied, so the order in
+// which the embedder lists [WithFeature] and [WithProfile] does not
+// affect the outcome: an explicit MTLS opt-in suppresses the DPoP
+// default regardless of whether it precedes or follows the profile.
+//
+// Profiles that mandate additional plumbing on top of DPoP (e.g.
+// FAPI 2.0 Message Signing's WithDPoPNonceSource requirement) still
+// surface their gating error from [config.validate] when the support
+// is missing; the auto-enable only chooses the default sender-binding
+// mechanism, not the surrounding wiring.
+func (c *config) applyProfileAnyOfDefaults() {
+	for _, p := range c.profiles {
+		for _, anyOf := range profile.RequiredAnyOf(p) {
+			c.fillAnyOfDefault(anyOf)
+		}
+	}
+}
+
+// fillAnyOfDefault appends the canonical default member of one
+// disjunctive constraint when the embedder has not already enabled
+// any member. Empty groups and groups whose first member is invalid
+// are no-ops; the caller iterates over every group reported by
+// [profile.RequiredAnyOf].
+func (c *config) fillAnyOfDefault(anyOf []feature.Flag) {
+	if len(anyOf) == 0 {
+		return
+	}
+	for _, member := range anyOf {
+		if featureEnabled(c.features, member) {
+			return
+		}
+	}
+	defaultFlag := anyOf[0]
+	if !defaultFlag.IsValid() {
+		return
+	}
+	c.features = append(c.features, defaultFlag)
 }
 
 // applyRegistrationDefaults fills in [RegistrationOption] zero-value
@@ -175,5 +228,14 @@ func isStandardScope(name string) bool {
 func (c *config) emitPartialWiringWarnings() {
 	if c.logger == nil {
 		return
+	}
+	if c.allowInsecureBackchannelLogoutForDev {
+		c.logger.Warn(
+			"WithAllowInsecureBackchannelLogoutForDev admits plain-http "+
+				"loopback URLs for backchannel_logout_uri and disables "+
+				"the SSRF gate on the deliverer; never enable this in "+
+				"production",
+			"option", "WithAllowInsecureBackchannelLogoutForDev",
+		)
 	}
 }

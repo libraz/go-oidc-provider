@@ -425,6 +425,81 @@ func TestWithCORSOrigins_AppendsAcrossCalls(t *testing.T) {
 	}
 }
 
+// TestStaticClientRedirectURI_AddsToCORSAllowlist pins the
+// auto-derivation rule documented on [WithStaticClients]: every
+// redirect_uri origin attached to a registered client is admitted by
+// the CORS gate without the embedder repeating it in
+// [WithCORSOrigins]. The check goes through the live
+// /.well-known/openid-configuration endpoint via a CORS preflight
+// from the SPA's redirect_uri origin — a 204 response with a matching
+// Access-Control-Allow-Origin header proves the allowlist was widened,
+// while a 403 from a sibling origin proves the widening did not turn
+// into an "allow all" mistake.
+func TestStaticClientRedirectURI_AddsToCORSAllowlist(t *testing.T) {
+	t.Parallel()
+
+	provider, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithStaticClients(op.PublicClient{
+			ID:           "spa",
+			RedirectURIs: []string{"https://spa.example.com/callback"},
+			Scopes:       []string{"openid", "profile"},
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	srv := httptest.NewServer(provider)
+	t.Cleanup(srv.Close)
+
+	cases := []struct {
+		name       string
+		origin     string
+		wantStatus int
+		wantAllow  bool
+	}{
+		{
+			name:       "redirect_uri origin admitted",
+			origin:     "https://spa.example.com",
+			wantStatus: http.StatusNoContent,
+			wantAllow:  true,
+		},
+		{
+			name:       "untrusted origin rejected",
+			origin:     "https://evil.example.com",
+			wantStatus: http.StatusForbidden,
+			wantAllow:  false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodOptions,
+				srv.URL+"/oidc/token", http.NoBody)
+			if reqErr != nil {
+				t.Fatalf("NewRequest: %v", reqErr)
+			}
+			req.Header.Set("Origin", tc.origin)
+			req.Header.Set("Access-Control-Request-Method", "POST")
+			resp, doErr := srv.Client().Do(req)
+			if doErr != nil {
+				t.Fatalf("preflight: %v", doErr)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
+			}
+			gotAllow := resp.Header.Get("Access-Control-Allow-Origin")
+			if tc.wantAllow {
+				if gotAllow != tc.origin {
+					t.Errorf("Access-Control-Allow-Origin = %q, want %q", gotAllow, tc.origin)
+				}
+			} else if gotAllow != "" {
+				t.Errorf("Access-Control-Allow-Origin = %q, want empty", gotAllow)
+			}
+		})
+	}
+}
+
 // TestWithScope_RejectsStandardScopeNonPublic enforces the
 // construction-time guard: every OIDC standard scope MUST stay in the
 // discovery document, so registering one with Public:false is a
