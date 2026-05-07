@@ -2,6 +2,7 @@ package op_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,17 +157,91 @@ func TestWithProfile_FAPI2Baseline_AutoEnablesRequiredFeatures(t *testing.T) {
 	}
 }
 
-func TestWithProfile_FAPI2Baseline_RequiresSenderConstrainedToken(t *testing.T) {
+func TestWithProfile_FAPI2Baseline_AutoEnablesDPoPDefault(t *testing.T) {
 	t.Parallel()
 
-	// PAR and JAR are auto-enabled by [op.WithProfile]; the
+	// PAR / JAR are auto-enabled via [profile.RequiredFeatures]; the
 	// disjunctive DPoP/MTLS requirement (profile.RequiredAnyOf) is
-	// the only remaining flag the embedder must supply.
-	_, err := op.New(append(validBaseOpts(t),
+	// satisfied by [config.applyProfileAnyOfDefaults] auto-enabling the
+	// first member (DPoP) when the embedder did not pick MTLS. The
+	// wired DPoP path needs the inmem substores [stubStore] panics on,
+	// so the test uses [validBaseOptsWithInmem].
+	_, err := op.New(append(validBaseOptsWithInmem(t),
 		op.WithProfile(profile.FAPI2Baseline),
 	)...)
-	if err == nil {
-		t.Fatal("expected error when neither DPoP nor MTLS is enabled, got nil")
+	if err != nil {
+		t.Fatalf("WithProfile(FAPI2Baseline) alone must succeed via DPoP auto-enable: %v", err)
+	}
+}
+
+// TestWithProfile_FAPI2Baseline_ExplicitMTLSSuppressesDPoPDefault
+// confirms that an embedder who picks mTLS as the sender-binding
+// mechanism does not also have DPoP silently auto-enabled. The
+// auto-enable in [config.applyProfileAnyOfDefaults] only fires when
+// no member of the disjunctive set is already configured; with
+// MTLS in the feature list the AnyOf is already satisfied. The
+// observation surface here is the OP discovery document — a config
+// where DPoP was auto-defaulted advertises
+// dpop_signing_alg_values_supported, while a config where mTLS
+// owns the sender binding does not.
+//
+// The order of options is intentionally varied: the test asserts
+// that whether [WithFeature](MTLS) precedes or follows
+// [WithProfile], the result is the same — DPoP advertisement stays
+// absent, mTLS-bound-tokens advertisement stays present.
+func TestWithProfile_FAPI2Baseline_ExplicitMTLSSuppressesDPoPDefault(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		opts []op.Option
+	}{
+		{
+			name: "mtls-then-profile",
+			opts: []op.Option{
+				op.WithFeature(feature.MTLS),
+				op.WithProfile(profile.FAPI2Baseline),
+			},
+		},
+		{
+			name: "profile-then-mtls",
+			opts: []op.Option{
+				op.WithProfile(profile.FAPI2Baseline),
+				op.WithFeature(feature.MTLS),
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			provider, err := op.New(append(validBaseOptsWithInmem(t), tc.opts...)...)
+			if err != nil {
+				t.Fatalf("op.New failed: %v", err)
+			}
+			srv := httptest.NewServer(provider)
+			t.Cleanup(srv.Close)
+			req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet,
+				srv.URL+"/.well-known/openid-configuration", http.NoBody)
+			if reqErr != nil {
+				t.Fatalf("NewRequest: %v", reqErr)
+			}
+			resp, doErr := srv.Client().Do(req)
+			if doErr != nil {
+				t.Fatalf("GET discovery: %v", doErr)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				t.Fatalf("read body: %v", readErr)
+			}
+			doc := string(body)
+			if strings.Contains(doc, "dpop_signing_alg_values_supported") {
+				t.Errorf("discovery advertises DPoP support but the embedder picked MTLS only:\n%s", doc)
+			}
+			if !strings.Contains(doc, "tls_client_certificate_bound_access_tokens") {
+				t.Errorf("discovery does not advertise mTLS sender binding:\n%s", doc)
+			}
+		})
 	}
 }
 
@@ -405,13 +480,19 @@ func TestWithProfile_AutoEnableSilentlySkipsExisting(t *testing.T) {
 // pins the FAPI-CIBA build-time validation contract:
 //
 //   - WithProfile(FAPICIBA) auto-enables JAR (RequiredFeatures);
-//   - the disjunctive DPoP / MTLS sender-constraint
-//     requirement (RequiredAnyOf) MUST be supplied manually;
-//   - either DPoP or MTLS satisfies the gate.
+//   - the disjunctive DPoP / MTLS sender-constraint requirement
+//     ([profile.RequiredAnyOf]) is satisfied by the auto-enable
+//     default (DPoP) when neither flag is supplied — but FAPICIBA
+//     also forces a [WithDPoPNonceSource], so a nonce-less call still
+//     fails with a config error pointing at that missing wiring;
+//   - either explicit DPoP (with nonce source) or explicit MTLS
+//     satisfies the disjunctive gate without further objections.
 //
 // FAPI-CIBA does NOT auto-enable PAR (CIBA does not flow through
-// /authorize) or DPoP / MTLS (the sender-constrained requirement
-// is disjunctive).
+// /authorize). The disjunctive sender-constrained requirement is
+// auto-defaulted to DPoP via [config.applyProfileAnyOfDefaults]; an
+// embedder picking MTLS instead opts in via [WithFeature](MTLS) and
+// the default steps aside.
 func TestWithProfile_FAPICIBA_AutoEnablesJAR_RequiresSenderConstraint(t *testing.T) {
 	t.Parallel()
 
@@ -424,19 +505,20 @@ func TestWithProfile_FAPICIBA_AutoEnablesJAR_RequiresSenderConstraint(t *testing
 		}
 	}
 
-	t.Run("missing-sender-constraint-fails", func(t *testing.T) {
+	t.Run("auto-default-still-needs-nonce-source", func(t *testing.T) {
 		t.Parallel()
 		opts := append(validBaseOptsWithInmem(t), cibaCommon()...)
 		opts = append(opts, op.WithProfile(profile.FAPICIBA))
 		_, err := op.New(opts...)
 		if err == nil {
-			t.Fatal("expected error when neither DPoP nor MTLS is enabled, got nil")
+			t.Fatal("expected error when DPoP is auto-enabled without WithDPoPNonceSource, got nil")
 		}
-		// The error message lists the disjunctive flags via
-		// feature.Flag.String() — "dpop" and "mtls" lowercase per
-		// the canonical discovery identifiers.
-		if !strings.Contains(err.Error(), "dpop") || !strings.Contains(err.Error(), "mtls") {
-			t.Errorf("err = %v, want it to mention dpop and mtls", err)
+		// DPoP is auto-defaulted (sender-constraint AnyOf satisfied),
+		// so the validator now points at the FAPI 2.0 §5.3.4 nonce
+		// source FAPI-CIBA inherits — the resulting error message
+		// names WithDPoPNonceSource rather than dpop/mtls.
+		if !strings.Contains(err.Error(), "WithDPoPNonceSource") {
+			t.Errorf("err = %v, want it to mention WithDPoPNonceSource", err)
 		}
 	})
 

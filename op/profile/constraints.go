@@ -54,6 +54,13 @@ func RequiredFeatures(p Profile) []feature.Flag {
 // stronger "DPoP AND MTLS" — pinning a single binding mechanism would
 // reject conformant deployments that picked the other. FAPI-CIBA
 // inherits the FAPI 2.0 §3.1.4 mandate verbatim (FAPI-CIBA-ID1 §5).
+//
+// Order is significant: callers that want a default for the
+// disjunctive set (the option layer auto-enables it when no member
+// is already configured) treat the FIRST element as the canonical
+// pick. For the FAPI family DPoP is listed first because it has no
+// infrastructure prerequisite — embedders requiring mTLS opt in via
+// [feature.MTLS] explicitly so the default steps aside.
 func RequiredAnyOf(p Profile) [][]feature.Flag {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
