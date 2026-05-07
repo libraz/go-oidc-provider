@@ -191,9 +191,9 @@ type Deps struct {
 	// /interaction/{uid} surface with a SPA-friendly mount tree:
 	//
 	//   GET    SPALoginMount/{uid}             — SPA shell (index.html)
-	//   GET    SPALoginMount/{uid}/state       — prompt JSON
-	//   POST   SPALoginMount/{uid}/state       — submission
-	//   DELETE SPALoginMount/{uid}/state       — cancel
+	//   GET    SPALoginMount/state/{uid}       — prompt JSON
+	//   POST   SPALoginMount/state/{uid}       — submission
+	//   DELETE SPALoginMount/state/{uid}       — cancel
 	//   GET    SPALoginMount/assets/{path...}  — static asset fan-out
 	//
 	// The shell + asset routes are mounted only when [Deps.SPAStaticDir]
