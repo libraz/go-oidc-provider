@@ -21,18 +21,30 @@
 // Curated counters surfaced by the library (canonical names; labels
 // vary per metric — see internal/metrics/collector.go for shape):
 //
-//   - oidc_token_issued_total               counter
-//   - oidc_login_attempts_total             counter
-//   - oidc_refresh_replay_detected_total    counter
-//   - oidc_code_replay_detected_total       counter
+//   - oidc_token_issued_total                       counter
+//   - oidc_tokens_refreshed_total                   counter
+//   - oidc_login_attempts_total                     counter
+//   - oidc_refresh_replay_detected_total            counter
+//   - oidc_code_replay_detected_total               counter
+//   - oidc_client_authn_failures_total              counter
+//   - oidc_dcr_events_total                         counter
+//   - oidc_device_authorization_events_total        counter
+//   - oidc_device_code_events_total                 counter
+//   - oidc_ciba_events_total                        counter
+//   - oidc_token_exchange_events_total              counter
+//   - oidc_back_channel_logout_total                counter
+//   - oidc_introspection_errors_total               counter
+//   - oidc_token_revoke_failures_total              counter
+//   - oidc_dpop_loose_method_case_admitted_total    counter
+//   - oidc_key_retired_kid_presented_total          counter
 //
 // The set is intentionally narrow — these are the events whose
 // counters are not derivable from HTTP request logs and whose
 // rate / total carries operational signal (refresh-token theft, brute
-// force, code re-use). Embedders that want HTTP-level metrics
-// (oidc_http_requests_total etc.) wrap the OP handler with
-// promhttp.InstrumentHandlerCounter or otelhttp's middleware; the
-// library deliberately does not do that itself.
+// force, code re-use, DCR/device-flow abuse). Embedders that want
+// HTTP-level metrics (oidc_http_requests_total etc.) wrap the OP
+// handler with promhttp.InstrumentHandlerCounter or otelhttp's
+// middleware; the library deliberately does not do that itself.
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.

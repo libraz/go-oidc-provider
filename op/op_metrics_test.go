@@ -74,9 +74,21 @@ func TestProvider_WithPrometheus_RegistersCuratedMetrics(t *testing.T) {
 	_ = metricNames(t, reg)
 	for _, name := range []string{
 		"oidc_token_issued_total",
+		"oidc_tokens_refreshed_total",
 		"oidc_login_attempts_total",
 		"oidc_refresh_replay_detected_total",
 		"oidc_code_replay_detected_total",
+		"oidc_client_authn_failures_total",
+		"oidc_dcr_events_total",
+		"oidc_device_authorization_events_total",
+		"oidc_device_code_events_total",
+		"oidc_ciba_events_total",
+		"oidc_token_exchange_events_total",
+		"oidc_back_channel_logout_total",
+		"oidc_introspection_errors_total",
+		"oidc_token_revoke_failures_total",
+		"oidc_dpop_loose_method_case_admitted_total",
+		"oidc_key_retired_kid_presented_total",
 	} {
 		probe := prometheus.NewCounter(prometheus.CounterOpts{Name: name, Help: "probe"})
 		if err := reg.Register(probe); err == nil {

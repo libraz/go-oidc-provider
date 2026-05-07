@@ -250,3 +250,227 @@ func TestBridge_NilNext_AcceptsAndDoesNotPanic(t *testing.T) {
 	// reaching here without panic is the assertion; the discard
 	// downstream is internal so there is nothing else to inspect.
 }
+
+func TestBridge_TokenRefreshed_StaticClientLabelEmitted(t *testing.T) {
+	t.Parallel()
+
+	c, reg := newTestCollector(t, metrics.Options{
+		StaticClientIDs: map[string]struct{}{"client-1": {}},
+	})
+	b := metrics.NewBridge(c, nil)
+
+	b.Emit(context.Background(), audit.Event{
+		Name:     "token.refreshed",
+		ClientID: "client-1",
+	})
+	b.Emit(context.Background(), audit.Event{
+		Name:     "token.refreshed",
+		ClientID: "dynamic-99",
+	})
+
+	families, _ := reg.Gather()
+	if got := counterValue(t, families, "oidc_tokens_refreshed_total", map[string]string{"client_id": "client-1"}); got != 1 {
+		t.Errorf("static client counter = %v, want 1", got)
+	}
+	if got := counterValue(t, families, "oidc_tokens_refreshed_total", map[string]string{"client_id": ""}); got != 1 {
+		t.Errorf("dynamic client (empty bucket) counter = %v, want 1", got)
+	}
+	if leaked := counterValue(t, families, "oidc_tokens_refreshed_total", map[string]string{"client_id": "dynamic-99"}); leaked != 0 {
+		t.Errorf("dynamic client_id leaked into label: counter = %v", leaked)
+	}
+}
+
+func TestBridge_ClientAuthnFailure_LabelsFromExtras(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		extras     map[string]any
+		wantMethod string
+		wantReason string
+	}{
+		{
+			name: "with_method_and_reason",
+			extras: map[string]any{
+				"method": "client_secret_basic",
+				"reason": "invalid_client_credentials",
+			},
+			wantMethod: "client_secret_basic",
+			wantReason: "invalid_client_credentials",
+		},
+		{
+			name:       "missing_method_collapses_to_empty",
+			extras:     map[string]any{"reason": "no_credentials"},
+			wantMethod: "",
+			wantReason: "no_credentials",
+		},
+		{
+			name:       "non_string_extras_collapse_to_empty",
+			extras:     map[string]any{"method": 42, "reason": []string{"foo"}},
+			wantMethod: "",
+			wantReason: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, reg := newTestCollector(t, metrics.Options{})
+			b := metrics.NewBridge(c, nil)
+			b.Emit(context.Background(), audit.Event{
+				Name:   "client_authn.failure",
+				Extras: tc.extras,
+			})
+			families, _ := reg.Gather()
+			got := counterValue(t, families, "oidc_client_authn_failures_total", map[string]string{
+				"auth_method": tc.wantMethod,
+				"reason":      tc.wantReason,
+			})
+			if got != 1 {
+				t.Fatalf("counter = %v, want 1", got)
+			}
+		})
+	}
+}
+
+func TestBridge_PrefixDispatch_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		eventName  string
+		metricName string
+		wantEvent  string
+	}{
+		// DCR
+		{"dcr.client.registered", "oidc_dcr_events_total", "client.registered"},
+		{"dcr.client.deleted", "oidc_dcr_events_total", "client.deleted"},
+		{"dcr.iat.invalid", "oidc_dcr_events_total", "iat.invalid"},
+		{"dcr.iat.expired", "oidc_dcr_events_total", "iat.expired"},
+		{"dcr.rat.invalid", "oidc_dcr_events_total", "rat.invalid"},
+		{"dcr.metadata.validation_failed", "oidc_dcr_events_total", "metadata.validation_failed"},
+		{"dcr.open_registration_used", "oidc_dcr_events_total", "open_registration_used"},
+		// Device authorization
+		{"device_authorization.issued", "oidc_device_authorization_events_total", "issued"},
+		{"device_authorization.rejected", "oidc_device_authorization_events_total", "rejected"},
+		{"device_authorization.unbound_rejected", "oidc_device_authorization_events_total", "unbound_rejected"},
+		// Device code
+		{"device_code.token.issued", "oidc_device_code_events_total", "token.issued"},
+		{"device_code.token.rejected", "oidc_device_code_events_total", "token.rejected"},
+		{"device_code.token.slow_down", "oidc_device_code_events_total", "token.slow_down"},
+		{"device_code.verification.approved", "oidc_device_code_events_total", "verification.approved"},
+		{"device_code.verification.denied", "oidc_device_code_events_total", "verification.denied"},
+		{"device_code.verification.user_code_brute_force", "oidc_device_code_events_total", "verification.user_code_brute_force"},
+		{"device_code.revoked", "oidc_device_code_events_total", "revoked"},
+		// CIBA
+		{"ciba.authorization.issued", "oidc_ciba_events_total", "authorization.issued"},
+		{"ciba.authorization.rejected", "oidc_ciba_events_total", "authorization.rejected"},
+		{"ciba.authorization.unbound_rejected", "oidc_ciba_events_total", "authorization.unbound_rejected"},
+		{"ciba.token.issued", "oidc_ciba_events_total", "token.issued"},
+		{"ciba.token.rejected", "oidc_ciba_events_total", "token.rejected"},
+		{"ciba.token.slow_down", "oidc_ciba_events_total", "token.slow_down"},
+		{"ciba.poll_abuse.lockout", "oidc_ciba_events_total", "poll_abuse.lockout"},
+		{"ciba.poll_observation.failed", "oidc_ciba_events_total", "poll_observation.failed"},
+		{"ciba.auth_device.approved", "oidc_ciba_events_total", "auth_device.approved"},
+		{"ciba.auth_device.denied", "oidc_ciba_events_total", "auth_device.denied"},
+		// Token exchange
+		{"token_exchange.granted", "oidc_token_exchange_events_total", "granted"},
+		{"token_exchange.policy_denied", "oidc_token_exchange_events_total", "policy_denied"},
+		{"token_exchange.policy_error", "oidc_token_exchange_events_total", "policy_error"},
+		{"token_exchange.scope_inflation_blocked", "oidc_token_exchange_events_total", "scope_inflation_blocked"},
+		{"token_exchange.audience_blocked", "oidc_token_exchange_events_total", "audience_blocked"},
+		{"token_exchange.subject_token_invalid", "oidc_token_exchange_events_total", "subject_token_invalid"},
+		// Back-channel logout (prefix dispatch)
+		{"logout.back_channel.delivered", "oidc_back_channel_logout_total", "delivered"},
+		{"logout.back_channel.failed", "oidc_back_channel_logout_total", "failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.eventName, func(t *testing.T) {
+			t.Parallel()
+			c, reg := newTestCollector(t, metrics.Options{})
+			b := metrics.NewBridge(c, nil)
+			b.Emit(context.Background(), audit.Event{Name: tc.eventName})
+			families, _ := reg.Gather()
+			got := counterValue(t, families, tc.metricName, map[string]string{"event": tc.wantEvent})
+			if got != 1 {
+				// back_channel_logout_total uses "result" rather than "event"
+				if tc.metricName == "oidc_back_channel_logout_total" {
+					got = counterValue(t, families, tc.metricName, map[string]string{"result": tc.wantEvent})
+					if got == 1 {
+						return
+					}
+				}
+				t.Fatalf("%s{event=%q} = %v, want 1", tc.metricName, tc.wantEvent, got)
+			}
+		})
+	}
+}
+
+func TestBridge_BackChannelLogout_NoSessions_RoutesToResultLabel(t *testing.T) {
+	t.Parallel()
+
+	c, reg := newTestCollector(t, metrics.Options{})
+	b := metrics.NewBridge(c, nil)
+
+	b.Emit(context.Background(), audit.Event{Name: "bcl.no_sessions_for_subject"})
+
+	families, _ := reg.Gather()
+	got := counterValue(t, families, "oidc_back_channel_logout_total", map[string]string{
+		"result": "no_sessions_for_subject",
+	})
+	if got != 1 {
+		t.Fatalf("counter = %v, want 1", got)
+	}
+}
+
+func TestBridge_TokenRevokeFailures_KindLabel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		eventName string
+		wantKind  string
+	}{
+		{"token.revoke_failed", "token"},
+		{"refresh.chain_revoke_failed", "refresh_chain"},
+		{"refresh.grant_revoke_failed", "refresh_grant"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.eventName, func(t *testing.T) {
+			t.Parallel()
+			c, reg := newTestCollector(t, metrics.Options{})
+			b := metrics.NewBridge(c, nil)
+			b.Emit(context.Background(), audit.Event{Name: tc.eventName})
+			families, _ := reg.Gather()
+			got := counterValue(t, families, "oidc_token_revoke_failures_total", map[string]string{
+				"kind": tc.wantKind,
+			})
+			if got != 1 {
+				t.Fatalf("counter = %v, want 1", got)
+			}
+		})
+	}
+}
+
+func TestBridge_ScalarCounters(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		eventName  string
+		metricName string
+	}{
+		{"introspection.error", "oidc_introspection_errors_total"},
+		{"dpop.loose_method_case_admitted", "oidc_dpop_loose_method_case_admitted_total"},
+		{"key.retired_kid_presented", "oidc_key_retired_kid_presented_total"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.eventName, func(t *testing.T) {
+			t.Parallel()
+			c, reg := newTestCollector(t, metrics.Options{})
+			b := metrics.NewBridge(c, nil)
+			b.Emit(context.Background(), audit.Event{Name: tc.eventName})
+			families, _ := reg.Gather()
+			got := counterValue(t, families, tc.metricName, map[string]string{})
+			if got != 1 {
+				t.Fatalf("counter = %v, want 1", got)
+			}
+		})
+	}
+}

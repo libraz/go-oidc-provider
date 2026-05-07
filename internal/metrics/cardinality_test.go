@@ -20,6 +20,10 @@ var labelAllowlist = map[string]struct{}{
 	"client_id":     {},
 	"result":        {},
 	"authenticator": {},
+	"auth_method":   {},
+	"reason":        {},
+	"event":         {},
+	"kind":          {},
 }
 
 func TestCardinality_LabelAllowlist(t *testing.T) {
@@ -49,6 +53,11 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 			},
 		},
 		{
+			Name:     "token.refreshed",
+			ClientID: "dynamic-deadbeef-1234",
+			Extras:   map[string]any{"grant_id": "g-99"},
+		},
+		{
 			Name:     "login.success",
 			ClientID: "dynamic-deadbeef-1234",
 			ActorID:  "user-xyz",
@@ -60,6 +69,31 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 		},
 		{Name: "refresh.replay_detected"},
 		{Name: "code.replay_detected"},
+		{
+			Name: "client_authn.failure",
+			Extras: map[string]any{
+				"method": "client_secret_basic",
+				"reason": "invalid_client_credentials",
+			},
+		},
+		{Name: "dcr.client.registered"},
+		{Name: "dcr.iat.invalid"},
+		{Name: "device_authorization.issued"},
+		{Name: "device_code.token.issued"},
+		{Name: "device_code.verification.user_code_brute_force"},
+		{Name: "ciba.authorization.issued"},
+		{Name: "ciba.poll_abuse.lockout"},
+		{Name: "token_exchange.granted"},
+		{Name: "token_exchange.policy_denied"},
+		{Name: "logout.back_channel.delivered"},
+		{Name: "logout.back_channel.failed"},
+		{Name: "bcl.no_sessions_for_subject"},
+		{Name: "introspection.error"},
+		{Name: "token.revoke_failed"},
+		{Name: "refresh.chain_revoke_failed"},
+		{Name: "refresh.grant_revoke_failed"},
+		{Name: "dpop.loose_method_case_admitted"},
+		{Name: "key.retired_kid_presented"},
 	} {
 		bridge.Emit(context.Background(), ev)
 	}
