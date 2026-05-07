@@ -40,6 +40,15 @@
 //     open http://127.0.0.1:9090/
 //     # sign in as demo / demo, approve consent
 //
+// Manual verification:
+//
+//  1. Open http://127.0.0.1:9090/ and click "Log in via the OP".
+//  2. Sign in as username "demo" / password "demo".
+//  3. Approve consent. The browser lands on /me with verified ID
+//     Token claims, proving the SQL transactional cluster and the
+//     volatile interaction store cooperated through the full code
+//     flow.
+//
 // The example creates a fresh SQLite database under the OS temp
 // directory so it boots without external dependencies. Production
 // embedders point op/storeadapter/sql at MySQL or Postgres (see

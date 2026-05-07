@@ -57,6 +57,7 @@ it boots with `go run -tags example ./examples/08-composite-hot-cold`.
 | drive login / consent / logout from a SPA | [`10-react-login`](10-react-login/main.go) |
 | customise the consent screen | [`11-custom-consent-ui`](11-custom-consent-ui/main.go) |
 | support `prompt=select_account` (multi-account) | [`13-multi-account`](13-multi-account/main.go) |
+| customise the account chooser (HTML template) | [`24-custom-chooser-ui`](24-custom-chooser-ui/main.go) |
 | serve a SPA from a different origin (CORS) | [`14-cors-spa`](14-cors-spa/main.go) |
 | translate prompts (i18n) | [`16-i18n-locale`](16-i18n-locale/main.go) |
 | split public-discoverable from internal-only scopes | [`12-scopes-public-private`](12-scopes-public-private/main.go) |

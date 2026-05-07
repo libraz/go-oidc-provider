@@ -1,0 +1,9 @@
+<!doctype html><html><body>
+<h1>Authorize Demo Client</h1>
+<form method="POST" action="/oidc/interaction/abc?step=1">
+<input type="hidden" name="state_ref" value="state-ref-FIXED">
+<input type="hidden" name="csrf_token" value="csrf-FIXED">
+<label><input type="checkbox" name="approved_scopes" value="openid" checked disabled> Sign you in</label><label><input type="checkbox" name="approved_scopes" value="profile"> Your profile</label><label><input type="checkbox" name="approved_scopes" value="email"> Your email</label>
+<button type="submit">Approve</button>
+</form>
+</body></html>

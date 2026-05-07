@@ -103,6 +103,16 @@ type BeginInput struct {
 	// chains, non-authorize entry points).
 	RequestedScopes []string
 
+	// Client is the read-only projection of the requesting client.
+	// The HTTP layer populates it from the store.Client lookup; the
+	// orchestrator forwards it through every BeginInput so the
+	// built-in consent interaction can populate
+	// [interaction.ConsentTemplateData.Client] without re-querying
+	// the client store. Empty for chains that did not resolve a
+	// client (legacy code paths; production /authorize always
+	// populates this field).
+	Client interaction.ClientView
+
 	// ChooserGroupID is the active session cookie's chooser-group
 	// identifier. The built-in account chooser interaction reads it
 	// to enumerate live accounts; every other factor / interaction

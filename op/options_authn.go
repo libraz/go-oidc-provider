@@ -366,9 +366,10 @@ type ConsentUI struct {
 
 // ChooserUI declares the template the [Provider] uses to render the
 // account chooser screen when prompt=select_account fires for a
-// session that already has a chooser group. Mutually exclusive with
-// [WithSPAUI]; supplying both fails [New] with a structured
-// configuration error. The struct field set is intentionally narrow:
+// session that already has a chooser group. Composes with [WithSPAUI]
+// per ADR 0015 §SPA mode — the chooser template is silently shadowed
+// by the SPA's JSON state envelope and [op.New] emits a single
+// structured warning. The struct field set is intentionally narrow:
 // the chooser screen has a fixed data model (Accounts, AddAccountURL,
 // CSRFToken) and the embedder supplies an [*template.Template] that
 // consumes it.
@@ -460,11 +461,6 @@ func WithLoginFlow(flow LoginFlow) Option {
 //   - StaticDir MAY be empty; when set the directory MUST exist at
 //     construction time (an [os.Stat] check) so a typo fails [New]
 //     rather than the first request.
-//
-// Reserved public shape: the option validates its input eagerly so
-// typos surface at the option boundary, but [op.New] rejects any
-// configuration that uses it until the Provider-side mount wiring
-// lands. Embedders must serve their SPA externally for now.
 func WithSPAUI(ui SPAUI) Option {
 	return optionFunc(func(c *config) error {
 		if err := checkSPAUIPrecondition(c); err != nil {
@@ -478,6 +474,15 @@ func WithSPAUI(ui SPAUI) Option {
 		}
 		c.spaUI = ui
 		c.spaUISet = true
+		// ADR 0015 §SPA mode: the SPA owns the chooser surface via
+		// the JSON state envelope, so a chooser template configured
+		// alongside SPA mode is silently ignored. Stash the intent
+		// here so applyDefaults can emit a structured warning once
+		// the logger is materialised, regardless of the option
+		// invocation order.
+		if c.chooserUISet {
+			c.chooserUIShadowedBySPA = true
+		}
 		return nil
 	})
 }
@@ -486,6 +491,12 @@ func WithSPAUI(ui SPAUI) Option {
 // [WithConsentUI] mutual-exclusion case. Split out so [WithSPAUI]
 // stays under the gocognit ceiling now that mount / StaticDir checks
 // also live in helpers.
+//
+// The chooser↔SPA combination is permitted: ADR 0015 §SPA mode treats
+// the chooser HTML template as silently shadowed by the SPA's JSON
+// state envelope. [WithSPAUI] / [WithChooserUI] coordinate the
+// `chooserUIShadowedBySPA` flag so [config.applyDefaults] can emit a
+// single structured warning regardless of option order.
 func checkSPAUIPrecondition(c *config) error {
 	if c.spaUISet {
 		return &Error{
@@ -497,12 +508,6 @@ func checkSPAUIPrecondition(c *config) error {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "WithSPAUI is mutually exclusive with WithConsentUI",
-		}
-	}
-	if c.chooserUISet {
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI is mutually exclusive with WithChooserUI",
 		}
 	}
 	return nil
@@ -568,9 +573,6 @@ func validateSPAUIStaticDir(dir string) error {
 // Validation:
 //   - Template MUST be non-nil.
 //   - Repeated [WithConsentUI] calls are rejected.
-//
-// Reserved public shape: [op.New] rejects any configuration that uses
-// this option until the consent renderer wiring lands.
 func WithConsentUI(ui ConsentUI) Option {
 	return optionFunc(func(c *config) error {
 		if c.consentUISet {
@@ -598,27 +600,21 @@ func WithConsentUI(ui ConsentUI) Option {
 }
 
 // WithChooserUI registers the [ChooserUI] template the HTML driver
-// uses for the account chooser screen. Mutually exclusive with
-// [WithSPAUI]; supplying both fails [New] with a structured
-// configuration error.
+// uses for the account chooser screen. The option composes with
+// [WithSPAUI] per ADR 0015 §SPA mode: when both are configured the
+// chooser template is silently shadowed (the SPA's JSON state
+// envelope renders the chooser surface) and [op.New] emits a single
+// structured warning. The chooser↔consent relationship is unchanged
+// — both can be set together, both render through the overlay.
 // Validation:
 //   - Template MUST be non-nil.
 //   - Repeated [WithChooserUI] calls are rejected.
-//
-// Reserved public shape: [op.New] rejects any configuration that uses
-// this option until the chooser renderer wiring lands.
 func WithChooserUI(ui ChooserUI) Option {
 	return optionFunc(func(c *config) error {
 		if c.chooserUISet {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithChooserUI may be called at most once",
-			}
-		}
-		if c.spaUISet {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithChooserUI is mutually exclusive with WithSPAUI",
 			}
 		}
 		if ui.Template == nil {
@@ -629,6 +625,13 @@ func WithChooserUI(ui ChooserUI) Option {
 		}
 		c.chooserUI = ui
 		c.chooserUISet = true
+		// ADR 0015 §SPA mode: SPA owns the chooser surface via the
+		// JSON state envelope when [WithSPAUI] is also active. Stash
+		// the intent for applyDefaults regardless of which option was
+		// called first.
+		if c.spaUISet {
+			c.chooserUIShadowedBySPA = true
+		}
 		return nil
 	})
 }

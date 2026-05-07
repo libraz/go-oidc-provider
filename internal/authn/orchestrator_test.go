@@ -201,6 +201,52 @@ func TestTickSinglePasswordSuccess(t *testing.T) {
 	}
 }
 
+// TestTickPropagatesClientView pins the plan 016 §3.2 wiring:
+// State.Client (the read-only [interaction.ClientView] populated by
+// the HTTP layer) MUST surface verbatim on every BeginInput.Client
+// the orchestrator hands a registered Authenticator. The check is one
+// positive test — the propagation path is the same shape as ClientID
+// / RequestedScopes, both of which already have round-trip coverage.
+func TestTickPropagatesClientView(t *testing.T) {
+	t.Parallel()
+
+	want := interaction.ClientView{
+		ClientID: "rp-1",
+		Name:     "Acme Console",
+		LogoURL:  "https://acme.example.com/logo.png",
+	}
+	var got interaction.ClientView
+	pw := &stubAuthenticator{
+		typeID:  op.FactorPassword,
+		aal:     op.AAL1,
+		amr:     "pwd",
+		prompts: []string{"auth.password"},
+		beginFn: func(_ context.Context, in op.BeginInput) (interaction.Step, error) {
+			got = in.Client
+			return interaction.Step{Prompt: passwordPrompt()}, nil
+		},
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+		},
+	}
+	o, err := authn.New(authn.Config{
+		Authenticators: []op.Authenticator{pw},
+		StateRefSigner: newSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	state := initialState()
+	state.Client = want
+	if _, _, err := o.Tick(context.Background(), state, authn.Input{Now: fakeNow()}); err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if got != want {
+		t.Errorf("BeginInput.Client = %+v, want %+v", got, want)
+	}
+}
+
 // 2. Multi-step factor (email OTP). Begin emits send-prompt; submit
 // email -> verify-prompt; submit code -> Result.
 func TestTickMultiStepEmailOTP(t *testing.T) {

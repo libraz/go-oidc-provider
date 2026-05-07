@@ -550,6 +550,7 @@ func (o *Orchestrator) runLoginFlowStep(ctx context.Context, st State, step comp
 		ClientID:        st.ClientID,
 		AuthTime:        now,
 		RequestedScopes: st.RequestedScopes,
+		Client:          st.Client,
 	})
 	if err != nil {
 		return st, interaction.Step{}, err

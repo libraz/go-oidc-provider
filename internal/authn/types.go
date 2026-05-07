@@ -67,6 +67,14 @@ type State struct {
 	// started the authorization request.
 	ClientID string
 
+	// Client is the read-only projection of the requesting client.
+	// The HTTP layer populates it once when initialising the chain;
+	// the orchestrator forwards it through every
+	// [BeginInput.Client]. Empty for chains created before this
+	// field was added (no schema migration required because Go's
+	// json.Unmarshal tolerates missing fields).
+	Client interaction.ClientView `json:"client,omitempty"`
+
 	// RemoteIP is the client IP after trusted-proxy normalisation.
 	// The orchestrator never invents a value here; it must have been
 	// written by the HTTP layer before the first [Tick].

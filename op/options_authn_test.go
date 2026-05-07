@@ -1,8 +1,10 @@
 package op_test
 
 import (
+	"bytes"
 	"context"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -267,14 +269,14 @@ func TestWithLoginFlow_AbsentLeavesNoError(t *testing.T) {
 func TestWithSPAUI_AcceptsValid(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.New(append(validBaseOpts(t),
+	provider, err := op.New(append(validBaseOpts(t),
 		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
 	)...)
-	if err == nil {
-		t.Fatal("expected fail-fast for WithSPAUI, got nil")
+	if err != nil {
+		t.Fatalf("op.New with WithSPAUI: %v", err)
 	}
-	if !strings.Contains(err.Error(), "WithSPAUI is not implemented yet") {
-		t.Errorf("err = %v, want not-implemented diagnostic", err)
+	if provider == nil {
+		t.Fatal("expected non-nil Provider")
 	}
 }
 
@@ -327,14 +329,14 @@ func TestWithSPAUI_AcceptsExistingStaticDir(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	_, err := op.New(append(validBaseOpts(t),
+	provider, err := op.New(append(validBaseOpts(t),
 		op.WithSPAUI(op.SPAUI{LoginMount: "/login", StaticDir: dir}),
 	)...)
-	if err == nil {
-		t.Fatal("expected fail-fast for WithSPAUI with existing StaticDir, got nil")
+	if err != nil {
+		t.Fatalf("op.New with WithSPAUI(StaticDir=%q): %v", dir, err)
 	}
-	if !strings.Contains(err.Error(), "WithSPAUI is not implemented yet") {
-		t.Errorf("err = %v, want not-implemented diagnostic", err)
+	if provider == nil {
+		t.Fatal("expected non-nil Provider")
 	}
 }
 
@@ -372,14 +374,14 @@ func TestWithConsentUI_AcceptsValid(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("consent").Parse("hi"))
-	_, err := op.New(append(validBaseOpts(t),
+	provider, err := op.New(append(validBaseOpts(t),
 		op.WithConsentUI(op.ConsentUI{Template: tmpl}),
 	)...)
-	if err == nil {
-		t.Fatal("expected fail-fast for WithConsentUI, got nil")
+	if err != nil {
+		t.Fatalf("op.New with WithConsentUI: %v", err)
 	}
-	if !strings.Contains(err.Error(), "WithConsentUI is not implemented yet") {
-		t.Errorf("err = %v, want not-implemented diagnostic", err)
+	if provider == nil {
+		t.Fatal("expected non-nil Provider")
 	}
 }
 
@@ -399,18 +401,18 @@ func TestWithConsentUI_RejectsSPAUICombination(t *testing.T) {
 	}
 }
 
-func TestWithChooserUI_AcceptsValidButFailsFast(t *testing.T) {
+func TestWithChooserUI_AcceptsValid(t *testing.T) {
 	t.Parallel()
 
 	tmpl := template.Must(template.New("chooser").Parse("hi"))
-	_, err := op.New(append(validBaseOpts(t),
+	provider, err := op.New(append(validBaseOpts(t),
 		op.WithChooserUI(op.ChooserUI{Template: tmpl}),
 	)...)
-	if err == nil {
-		t.Fatal("expected fail-fast for WithChooserUI, got nil")
+	if err != nil {
+		t.Fatalf("op.New with WithChooserUI: %v", err)
 	}
-	if !strings.Contains(err.Error(), "WithChooserUI is not implemented yet") {
-		t.Errorf("err = %v, want not-implemented diagnostic", err)
+	if provider == nil {
+		t.Fatal("expected non-nil Provider")
 	}
 }
 
@@ -457,19 +459,84 @@ func TestNew_WithInteractionDriverWinsOverDefault(t *testing.T) {
 	// op.New error is the assertion.
 }
 
+// TestWithChooserUI_AcceptsAlongsideSPAUI pins the ADR 0015 §SPA mode
+// posture: WithChooserUI composes with WithSPAUI without rejection;
+// applyDefaults emits a single structured slog.Warn that records the
+// shadowed-template intent. The order-independence assertion (chooser
+// first vs SPA first) defends against a regression where only one of
+// the option setters wires the shadow flag.
+func TestWithChooserUI_AcceptsAlongsideSPAUI(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		opts func(tb testing.TB, logger *slog.Logger) []op.Option
+	}{
+		{
+			name: "SPA first, chooser second",
+			opts: func(tb testing.TB, logger *slog.Logger) []op.Option {
+				tb.Helper()
+				tmpl := template.Must(template.New("chooser").Parse("hi"))
+				return append(validBaseOpts(tb),
+					op.WithLogger(logger),
+					op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
+					op.WithChooserUI(op.ChooserUI{Template: tmpl}),
+				)
+			},
+		},
+		{
+			name: "chooser first, SPA second",
+			opts: func(tb testing.TB, logger *slog.Logger) []op.Option {
+				tb.Helper()
+				tmpl := template.Must(template.New("chooser").Parse("hi"))
+				return append(validBaseOpts(tb),
+					op.WithLogger(logger),
+					op.WithChooserUI(op.ChooserUI{Template: tmpl}),
+					op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
+				)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			provider, err := op.New(tc.opts(t, logger)...)
+			if err != nil {
+				t.Fatalf("op.New: %v", err)
+			}
+			if provider == nil {
+				t.Fatal("expected non-nil Provider")
+			}
+			out := buf.String()
+			if !strings.Contains(out, "chooser template will not be rendered") {
+				t.Errorf("logger output = %q, want a chooser-shadowed warning", out)
+			}
+		})
+	}
+}
+
 func TestNew_WithSPAUISuppressesDefaultDriver(t *testing.T) {
 	t.Parallel()
 
-	// The option shape is public but runtime wiring has not landed yet,
-	// so op.New must fail fast rather than accepting a configuration the
-	// Provider cannot actually serve.
-	_, err := op.New(append(validBaseOpts(t),
+	// With WithSPAUI active, the default-driver fall-back in
+	// applyDefaults short-circuits — the embedder's SPA owns
+	// rendering and the JSON state endpoints stay the only
+	// protocol surface. The black-box check that this delegation
+	// short-circuit fired is "op.New succeeds with no other driver
+	// option supplied", which previously was masked by the gate's
+	// fail-fast rejection. Once the gate is gone we can simply
+	// assert successful construction.
+	provider, err := op.New(append(validBaseOpts(t),
 		op.WithSPAUI(op.SPAUI{LoginMount: "/login"}),
 	)...)
-	if err == nil {
-		t.Fatal("expected fail-fast for WithSPAUI, got nil")
+	if err != nil {
+		t.Fatalf("op.New with WithSPAUI: %v", err)
 	}
-	if !strings.Contains(err.Error(), "WithSPAUI is not implemented yet") {
-		t.Errorf("err = %v, want not-implemented diagnostic", err)
+	if provider == nil {
+		t.Fatal("expected non-nil Provider")
 	}
 }

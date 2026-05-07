@@ -65,6 +65,43 @@ func TestInteraction_BeginEmitsPromptWithCatalogProjection(t *testing.T) {
 	}
 }
 
+// TestInteraction_BeginPropagatesClient pins the plan 016 §3.2 wiring:
+// the read-only [interaction.ClientView] passed in via BeginInput.Client
+// MUST surface verbatim on [interaction.ConsentScopePromptData.Client]
+// so the overlay's [interaction.ConsentTemplateData] can render
+// {{.Client.Name}} / {{.Client.LogoURL}} without re-querying the client
+// store.
+func TestInteraction_BeginPropagatesClient(t *testing.T) {
+	t.Parallel()
+
+	want := interaction.ClientView{
+		ClientID:  "rp-1",
+		Name:      "Acme Console",
+		LogoURL:   "https://acme.example.com/logo.png",
+		ClientURI: "https://acme.example.com/",
+		PolicyURI: "https://acme.example.com/privacy",
+		TosURI:    "https://acme.example.com/tos",
+	}
+	i := consent.New(sampleCatalog())
+	step, err := i.Begin(context.Background(), authn.BeginInput{
+		Subject:         "user-1",
+		ClientID:        want.ClientID,
+		AuthTime:        time.Now(),
+		RequestedScopes: []string{"openid"},
+		Client:          want,
+	})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	data, ok := step.Prompt.Data.(interaction.ConsentScopePromptData)
+	if !ok {
+		t.Fatalf("Prompt.Data type = %T, want ConsentScopePromptData", step.Prompt.Data)
+	}
+	if data.Client != want {
+		t.Errorf("Prompt.Data.Client = %+v, want %+v", data.Client, want)
+	}
+}
+
 func TestInteraction_BeginRendersUnknownScopeMinimally(t *testing.T) {
 	t.Parallel()
 

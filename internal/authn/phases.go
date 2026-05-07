@@ -116,6 +116,7 @@ func (o *Orchestrator) advanceInteractions(ctx context.Context, st State, now ti
 			ClientID:        st.ClientID,
 			AuthTime:        now,
 			RequestedScopes: st.RequestedScopes,
+			Client:          st.Client,
 			ChooserGroupID:  st.ChooserGroupID,
 		})
 		if err != nil {
@@ -174,6 +175,7 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 		ClientID:        st.ClientID,
 		AuthTime:        now,
 		RequestedScopes: st.RequestedScopes,
+		Client:          st.Client,
 		ChooserGroupID:  st.ChooserGroupID,
 	})
 	if err != nil {

@@ -309,6 +309,17 @@ type config struct {
 	// chooserUISet records whether [WithChooserUI] was invoked.
 	chooserUISet bool
 
+	// chooserUIShadowedBySPA records that both [WithSPAUI] and
+	// [WithChooserUI] are configured. The combination is permitted
+	// per ADR 0015 §SPA mode (SPA owns the chooser surface via the
+	// JSON state envelope); the chooser HTML template is silently
+	// ignored. The flag is set in either order — by [WithChooserUI]
+	// when SPA is already configured, or by [WithSPAUI] when the
+	// chooser is already configured — so [config.applyDefaults]
+	// can emit a single structured warning regardless of option
+	// invocation order.
+	chooserUIShadowedBySPA bool
+
 	// staticClients carries the [store.Client] records produced by
 	// every [WithStaticClients] call (in invocation order, in seed
 	// order within each call). The slice is the H1-D orchestrator's

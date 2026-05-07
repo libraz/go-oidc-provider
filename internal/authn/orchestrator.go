@@ -339,6 +339,7 @@ func (o *Orchestrator) softRetryAuthFactor(ctx context.Context, st State, auth A
 		Subject:  st.Subject,
 		ClientID: st.ClientID,
 		AuthTime: st.AuthTime,
+		Client:   st.Client,
 	})
 	if berr != nil || retry.Prompt == nil {
 		return st, interaction.Step{}, origErr

@@ -34,7 +34,6 @@ func (c *config) validate() error {
 		c.validateRegistration,
 		c.validateAuthenticators,
 		c.validateInteractions,
-		c.validateUIOptionsImplemented,
 		c.validateLocales,
 		c.validateFirstPartyClients,
 		c.validateOpenIDScopeOptional,
@@ -532,33 +531,6 @@ func (c *config) validateProfiles() error {
 		}
 	}
 	return nil
-}
-
-// validateUIOptionsImplemented rejects UI options whose public shape
-// shipped ahead of their runtime wiring. Earlier v0.x builds accepted
-// them and logged a warning, which let embedders believe the Provider
-// would serve mounts / templates it never actually used. Failing at
-// construction time is the safer contract until the handlers land.
-func (c *config) validateUIOptionsImplemented() error {
-	switch {
-	case c.spaUISet:
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithSPAUI is not implemented yet; mount your SPA outside op.New for now",
-		}
-	case c.consentUISet:
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithConsentUI is not implemented yet",
-		}
-	case c.chooserUISet:
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithChooserUI is not implemented yet",
-		}
-	default:
-		return nil
-	}
 }
 
 // validateProfile checks one [profile.Profile] against the enabled

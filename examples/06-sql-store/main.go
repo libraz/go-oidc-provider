@@ -17,6 +17,14 @@
 // runs the schema through their own migration tooling and persists
 // the database where it belongs.
 //
+// Manual verification:
+//
+//  1. Start the example and note the "sqlite store at ..." log line.
+//  2. Open http://127.0.0.1:8080/.well-known/openid-configuration
+//     to confirm the OP is serving from the SQL-backed store.
+//  3. Inspect the logged SQLite path if you want to see the v1
+//     schema tables the adapter created for the demo database.
+//
 // PRODUCTION CAVEATS:
 //   - Keys: key derivation uses a hardcoded ephemeral value for the demo; production must derive the signing key from a vault / KMS.
 //   - Store: the sqlite DSN here uses a local file; production uses Postgres / MySQL via op/storeadapter/sql, runs schema migrations through the embedder's tooling, and persists the database where it belongs.

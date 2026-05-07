@@ -62,6 +62,62 @@ func TestApplyDefaults_SPAUISuppressesDefaultDriver(t *testing.T) {
 	}
 }
 
+// TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet pins the
+// overlay wiring contract from plan 016 §3.2.2: when WithConsentUI
+// or WithChooserUI is configured (and SPA is not), applyDefaults
+// wraps the resolved interaction.Driver with TemplateOverlayDriver
+// composed against the HTMLDriver default. With WithSPAUI the
+// overlay is NOT composed — SPA mode owns the consent / chooser
+// surface via the JSON envelope per ADR 0015 §SPA mode and ADR 0008
+// §3.5.
+func TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		seed     func(*config)
+		wantWrap bool
+	}{
+		{
+			name:     "WithConsentUI only wraps overlay",
+			seed:     func(c *config) { c.consentUISet = true; c.consentUI = ConsentUI{} },
+			wantWrap: true,
+		},
+		{
+			name:     "WithChooserUI only wraps overlay",
+			seed:     func(c *config) { c.chooserUISet = true; c.chooserUI = ChooserUI{} },
+			wantWrap: true,
+		},
+		{
+			name:     "WithSPAUI suppresses overlay even when chooser is set",
+			seed:     func(c *config) { c.spaUISet = true; c.chooserUISet = true; c.chooserUI = ChooserUI{} },
+			wantWrap: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := &config{}
+			tc.seed(c)
+			c.applyDefaults()
+			overlay, ok := c.interactionD.(interaction.TemplateOverlayDriver)
+			if tc.wantWrap {
+				if !ok {
+					t.Fatalf("interactionD = %T, want interaction.TemplateOverlayDriver", c.interactionD)
+				}
+				if _, isHTML := overlay.Inner.(interaction.HTMLDriver); !isHTML {
+					t.Errorf("overlay.Inner = %T, want interaction.HTMLDriver", overlay.Inner)
+				}
+				return
+			}
+			if ok {
+				t.Fatalf("unexpected overlay wrap under SPA mode: %T", c.interactionD)
+			}
+		})
+	}
+}
+
 // TestWithStaticClients_StoresSeededClients pins the H1-E aggregate
 // behaviour: every seed projected through [ClientSeed.seed] is
 // appended to [config.staticClients] in the order seeds appear. The

@@ -18,6 +18,16 @@
 // the SPA without rendering a consent prompt. A third-party client
 // (not listed here) would still see the consent screen.
 //
+// Manual verification:
+//
+//  1. Open http://127.0.0.1:8080/.well-known/openid-configuration
+//     to confirm the OP is serving.
+//  2. Read the WithFirstPartyClients call below: only
+//     "first-party-app" is on the consent-skip list.
+//  3. In a full browser flow, that client proceeds from login
+//     directly to the redirect URI; "third-party-integration" still
+//     receives the normal consent prompt.
+//
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.

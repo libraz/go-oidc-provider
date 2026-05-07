@@ -26,6 +26,17 @@
 //
 //	go run -tags example ./examples/04-custom-interaction
 //
+// Manual verification:
+//
+//  1. Open http://127.0.0.1:8080/.well-known/openid-configuration
+//     to confirm the OP is serving.
+//  2. Use this file as the reference for the custom Driver shape:
+//     Render receives the resolved interaction.Prompt.Locale and
+//     ParseSubmission delegates to the JSON contract unchanged.
+//  3. To see the Content-Language header on real prompts, wire the
+//     same localeAwareDriver into an example with a full browser
+//     round-trip such as 10-react-login.
+//
 // PRODUCTION CAVEATS:
 //   - Keys: this example uses an ephemeral signing key from devkeys.MustEphemeral; production deployments MUST supply a persistent KMS-backed signing key via op.WithKeyset.
 //   - Store: the in-memory store loses all state on restart; use op/storeadapter/sql or composite for production.

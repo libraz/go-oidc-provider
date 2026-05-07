@@ -21,6 +21,16 @@
 // not a FAPI rejection of TLS 1.3 — operators wanting TLS 1.3 build
 // their own *tls.Config and forfeit the cipher pinning.
 //
+// Manual verification:
+//
+//  1. Place a JWKS at ./client.jwks.json and start the example. If
+//     the set contains private "d" parameters, LoadPublicJWKS strips
+//     them before the bytes would be registered on a client.
+//  2. Set FAPI_CERT and FAPI_KEY to a local certificate/key pair to
+//     start the TLS listener on :8443.
+//  3. Run `openssl s_client -connect 127.0.0.1:8443 -tls1_2` and
+//     inspect the negotiated TLS 1.2 cipher.
+//
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
 //   - Store: in-memory; use op/storeadapter/sql or composite.

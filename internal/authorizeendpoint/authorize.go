@@ -468,6 +468,7 @@ func startInteraction(
 	authnState := authn.State{
 		InteractionUID:  uid,
 		ClientID:        client.ID,
+		Client:          projectClientView(client),
 		Subject:         currentSubject(active),
 		RemoteIP:        clientIPFromRequest(r, deps),
 		UserAgent:       truncateUserAgent(r.UserAgent()),
@@ -558,6 +559,25 @@ func currentSubject(active *sessions.Active) string {
 		return ""
 	}
 	return active.Session.Subject
+}
+
+// projectClientView builds the read-only template projection of
+// [store.Client]. The function intentionally ships the field set
+// fixed by [interaction.ClientView] — adding a field here is a
+// deliberate widening of the template trust boundary and requires
+// its own ADR.
+func projectClientView(c *store.Client) interaction.ClientView {
+	if c == nil {
+		return interaction.ClientView{}
+	}
+	return interaction.ClientView{
+		ClientID:  c.ID,
+		Name:      c.ClientName,
+		LogoURL:   c.LogoURI,
+		ClientURI: c.ClientURI,
+		PolicyURI: c.PolicyURI,
+		TosURI:    c.TosURI,
+	}
 }
 
 // mintAndRedirect persists a fresh authorization code bound to the existing

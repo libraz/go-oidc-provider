@@ -124,6 +124,43 @@ type CaptchaPromptData struct {
 
 func (CaptchaPromptData) isPromptData() {}
 
+// ClientView is the read-only projection of the requesting client
+// the consent template surface receives. It exposes only the fields a
+// consent or chooser screen needs to render a recognisable
+// affordance, and intentionally omits every secret-bearing or
+// otherwise unrelated field of the underlying registration record:
+//
+//   - client_secret / hashed secret — never exposed
+//   - JWKS (raw keys / jwks_uri) — never exposed
+//   - contacts / sector_identifier_uri — never exposed
+//   - token_endpoint_auth_method, response_types, grant_types,
+//     scopes, redirect_uris — irrelevant to consent rendering
+//
+// Adding a field here is a deliberate widening of the template trust
+// boundary and requires its own ADR.
+type ClientView struct {
+	// ClientID is the registered client_id (RFC 7591 §2).
+	ClientID string
+
+	// Name is the human-friendly label (RFC 7591 client_name). May
+	// be empty; templates fall back to ClientID in that case.
+	Name string
+
+	// LogoURL is the RFC 7591 logo_uri. May be empty.
+	LogoURL string
+
+	// ClientURI is the RFC 7591 client_uri (homepage). May be empty.
+	ClientURI string
+
+	// PolicyURI is the RFC 7591 policy_uri (privacy policy). May be
+	// empty.
+	PolicyURI string
+
+	// TosURI is the RFC 7591 tos_uri (terms of service). May be
+	// empty.
+	TosURI string
+}
+
 // ConsentScope is the slim view of an OAuth scope the consent screen
 // renders. The struct is intentionally a flat copy of the §A.5
 // scope-catalog entry: keeping it in [interaction] avoids an import
@@ -147,13 +184,61 @@ type ConsentScope struct {
 // ConsentScopePromptData backs Prompt.Type "consent.scope". The
 // shape mirrors §A.5 of the product design — the SPA renders one
 // row per [ConsentScope] in display order.
+//
+// Note: the Client field was added in v0.x; the JSON shape gains six
+// new keys (the [ClientView] fields). Embedders pinning the JSON
+// envelope through golden tests must refresh their fixtures.
 type ConsentScopePromptData struct {
 	// Scopes is the list of scopes the user is being asked to grant.
 	// Order matches the orchestrator's display order.
 	Scopes []ConsentScope
+
+	// Client is the read-only projection of the requesting client.
+	// The built-in consent template overlay reads this field; SPAs
+	// may also surface the client_name without a separate discovery
+	// call.
+	Client ClientView
 }
 
 func (ConsentScopePromptData) isPromptData() {}
+
+// ConsentTemplateData is the data context [TemplateOverlayDriver]
+// passes to ConsentTemplate.Execute. Templates reference fields
+// via the standard [text/template] dot-notation, e.g.
+// {{.Client.Name}} or {{range .Scopes}}{{.Name}}{{end}}.
+type ConsentTemplateData struct {
+	// Client is the projection of the requesting client_id.
+	Client ClientView
+
+	// Scopes is the list of scopes the user is being asked to grant.
+	// Order matches the orchestrator's display order.
+	Scopes []ConsentScope
+
+	// StateRef is the orchestrator's interaction state token. The
+	// template MUST echo it as a hidden form field so the POST
+	// round-trips through the same /oidc/interaction/{uid} path.
+	StateRef string
+
+	// CSRFToken is the per-request CSRF token. The template MUST
+	// echo it as a hidden form field; the orchestrator rejects
+	// submissions whose token does not match.
+	CSRFToken string
+
+	// ApprovedScopesField is the form field name the SPA submits
+	// the approved scopes under. Always equal to
+	// [ConsentApprovedScopesField] ("approved_scopes"); exposed as a
+	// field so templates do not hard-code the literal.
+	ApprovedScopesField string
+
+	// SubmitMethod is the HTTP method the form must POST with.
+	// Always "POST".
+	SubmitMethod string
+
+	// SubmitAction is the URL the form must POST to. The
+	// orchestrator computes it relative to the current
+	// /oidc/interaction/{uid} request.
+	SubmitAction string
+}
 
 // ChooserAccount is a single row in the account chooser screen.
 // The struct intentionally exposes only the fields a chooser UI
@@ -204,6 +289,44 @@ type ChooserPromptData struct {
 }
 
 func (ChooserPromptData) isPromptData() {}
+
+// ChooserTemplateData is the data context [TemplateOverlayDriver]
+// passes to ChooserTemplate.Execute. Templates reference fields via
+// the standard [text/template] dot-notation, e.g.
+// {{range .Accounts}}{{.Subject}}{{end}}.
+type ChooserTemplateData struct {
+	// Accounts is the live chooser-group membership in
+	// orchestrator-defined display order (most-recently-used
+	// first). An empty slice indicates no live accounts; the
+	// template typically renders an "add account" CTA only.
+	Accounts []ChooserAccount
+
+	// AddAccountURL is the URL the template renders for the
+	// "Add another account" link. Typically the same /authorize
+	// request with prompt=login appended.
+	AddAccountURL string
+
+	// StateRef is the orchestrator's interaction state token. The
+	// template MUST echo it as a hidden form field.
+	StateRef string
+
+	// CSRFToken is the per-request CSRF token. The template MUST
+	// echo it as a hidden form field.
+	CSRFToken string
+
+	// SessionIDField is the form field name the SPA submits the
+	// chosen session under. Always equal to
+	// [ChooserSessionIDField] ("session_id"); exposed as a field so
+	// templates do not hard-code the literal.
+	SessionIDField string
+
+	// SubmitMethod is the HTTP method the form must POST with.
+	// Always "POST".
+	SubmitMethod string
+
+	// SubmitAction is the URL the form must POST to.
+	SubmitAction string
+}
 
 // FieldKind enumerates the input kinds a [FieldSpec] may declare.
 // The set is intentionally small: the orchestrator validates length /

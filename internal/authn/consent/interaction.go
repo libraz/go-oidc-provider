@@ -114,7 +114,10 @@ func (i *Interaction) Begin(_ context.Context, in authn.BeginInput) (interaction
 	return interaction.Step{
 		Prompt: &interaction.Prompt{
 			Type: PromptType,
-			Data: interaction.ConsentScopePromptData{Scopes: scopes},
+			Data: interaction.ConsentScopePromptData{
+				Client: in.Client,
+				Scopes: scopes,
+			},
 			Inputs: []interaction.FieldSpec{{
 				Name:     ApprovedScopesField,
 				Kind:     interaction.FieldText,
