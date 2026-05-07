@@ -27,6 +27,7 @@ func validatePolicy(
 	scopes *scoperegistry.Registry,
 	pairwiseEnabled bool,
 	allowLocalhostLoopback bool,
+	allowInsecureBackchannelLogoutForDev bool,
 ) (ClientMetadata, error) {
 	if len(m.RedirectURIs) == 0 {
 		return ClientMetadata{}, errInvalidRedirectURI("redirect_uris is required")
@@ -46,7 +47,7 @@ func validatePolicy(
 		func() error { return validateSubjectType(canonical.SubjectType, pairwiseEnabled) },
 		func() error { return validateIDTokenAlg(canonical.IDTokenSignedResponseAlg) },
 		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
-		func() error { return validateMetadataURIs(canonical) },
+		func() error { return validateMetadataURIs(canonical, allowInsecureBackchannelLogoutForDev) },
 		func() error { return validateJWKSConfiguration(canonical) },
 		func() error { return validateRequestObjectSigningAlg(canonical.RequestObjectSigningAlg) },
 		func() error {
@@ -268,7 +269,7 @@ func validateRequestedScopes(scope string, iatAllowed []string, scopes *scopereg
 	return nil
 }
 
-func validateMetadataURIs(m ClientMetadata) error {
+func validateMetadataURIs(m ClientMetadata, allowInsecureBackchannelLogoutForDev bool) error {
 	for _, field := range []struct {
 		name string
 		raw  string
@@ -280,11 +281,13 @@ func validateMetadataURIs(m ClientMetadata) error {
 		{name: "jwks_uri", raw: m.JWKsURI},
 		{name: "sector_identifier_uri", raw: m.SectorIdentifierURI},
 		{name: "initiate_login_uri", raw: m.InitiateLoginURI},
-		{name: "backchannel_logout_uri", raw: m.BackchannelLogoutURI},
 	} {
 		if err := validateHTTPSAbsoluteURI(field.name, field.raw); err != nil {
 			return err
 		}
+	}
+	if err := validateBackchannelLogoutURI(m.BackchannelLogoutURI, allowInsecureBackchannelLogoutForDev); err != nil {
+		return err
 	}
 	if err := validateBackchannelLogoutCoupling(m); err != nil {
 		return err
@@ -295,6 +298,60 @@ func validateMetadataURIs(m ClientMetadata) error {
 		}
 	}
 	return nil
+}
+
+// validateBackchannelLogoutURI mirrors [validateHTTPSAbsoluteURI]
+// for the `backchannel_logout_uri` field, with one carve-out gated
+// on [op.WithAllowInsecureBackchannelLogoutForDev]: under the dev
+// opt-in, plain-http URLs whose host is a loopback identity
+// (127.0.0.1, [::1], or "localhost") are admitted so the
+// in-process examples and CI fixtures can run without TLS. The
+// production posture (allowDevLoopback=false) is unchanged from the
+// shared https-only rule.
+func validateBackchannelLogoutURI(raw string, allowDevLoopback bool) error {
+	if raw == "" {
+		return nil
+	}
+	if !allowDevLoopback {
+		return validateHTTPSAbsoluteURI("backchannel_logout_uri", raw)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errInvalidClientMetadata("backchannel_logout_uri is not a valid URL")
+	}
+	if !u.IsAbs() {
+		return errInvalidClientMetadata("backchannel_logout_uri must be absolute")
+	}
+	if u.Fragment != "" {
+		return errInvalidClientMetadata("backchannel_logout_uri must not contain a fragment")
+	}
+	if u.Host == "" {
+		return errInvalidClientMetadata("backchannel_logout_uri must include a host")
+	}
+	if u.User != nil {
+		return errInvalidClientMetadata("backchannel_logout_uri must not contain userinfo")
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" && isLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	return errInvalidClientMetadata(
+		"backchannel_logout_uri must use https (or http with a loopback host under WithAllowInsecureBackchannelLogoutForDev)")
+}
+
+// isLoopbackHost reports whether host is one of the dev-mode
+// loopback identities WithAllowInsecureBackchannelLogoutForDev
+// admits over plain http: the textual "localhost", or the IP
+// literals 127.0.0.1 and [::1].
+func isLoopbackHost(host string) bool {
+	host = strings.ToLower(host)
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // validateBackchannelLogoutCoupling enforces the rule that a client

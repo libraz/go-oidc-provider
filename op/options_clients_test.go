@@ -264,6 +264,85 @@ func TestWithStaticClients_RejectsBadBackchannelLogoutURI(t *testing.T) {
 	}
 }
 
+// TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn
+// pins the dev / CI carve-out introduced by
+// [op.WithAllowInsecureBackchannelLogoutForDev]: a static seed
+// carrying a plain-http loopback `backchannel_logout_uri` constructs
+// successfully when the option is configured, while production
+// posture (option absent) keeps rejecting the same URL.
+func TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn(t *testing.T) {
+	t.Parallel()
+
+	loopbackHosts := []string{
+		"http://127.0.0.1:9090/backchannel-logout",
+		"http://[::1]:9090/backchannel-logout",
+		"http://localhost:9090/backchannel-logout",
+	}
+	for _, raw := range loopbackHosts {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+
+			// Without the opt-in the URL is rejected.
+			_, err := op.New(append(validBaseOptsWithInmem(t),
+				op.WithStaticClients(op.ConfidentialClient{
+					ID:                   "demo-rp",
+					Secret:               "rotate-me",
+					AuthMethod:           op.AuthClientSecretBasic,
+					RedirectURIs:         []string{"https://rp.example.com/cb"},
+					Scopes:               []string{"openid"},
+					BackchannelLogoutURI: raw,
+				}),
+			)...)
+			if err == nil {
+				t.Fatal("expected configuration error for plaintext backchannel_logout_uri without opt-in, got nil")
+			}
+
+			// With the opt-in the URL is accepted.
+			_, err = op.New(append(validBaseOptsWithInmem(t),
+				op.WithAllowInsecureBackchannelLogoutForDev(),
+				op.WithStaticClients(op.ConfidentialClient{
+					ID:                   "demo-rp",
+					Secret:               "rotate-me",
+					AuthMethod:           op.AuthClientSecretBasic,
+					RedirectURIs:         []string{"https://rp.example.com/cb"},
+					Scopes:               []string{"openid"},
+					BackchannelLogoutURI: raw,
+				}),
+			)...)
+			if err != nil {
+				t.Fatalf("WithAllowInsecureBackchannelLogoutForDev rejected loopback %q: %v", raw, err)
+			}
+		})
+	}
+}
+
+// TestWithStaticClients_RejectsHTTPNonLoopbackBackchannelEvenWithDevOptIn
+// pins the upper bound of the dev opt-out: it admits plain-http only
+// for the loopback identities (127.0.0.1, [::1], localhost). A public
+// host over plain http is still refused so a misconfiguration cannot
+// turn the dev convenience into a production-time mistake.
+func TestWithStaticClients_RejectsHTTPNonLoopbackBackchannelEvenWithDevOptIn(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithAllowInsecureBackchannelLogoutForDev(),
+		op.WithStaticClients(op.ConfidentialClient{
+			ID:                   "demo-rp",
+			Secret:               "rotate-me",
+			AuthMethod:           op.AuthClientSecretBasic,
+			RedirectURIs:         []string{"https://rp.example.com/cb"},
+			Scopes:               []string{"openid"},
+			BackchannelLogoutURI: "http://rp.example.com/logout",
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("expected configuration error for plaintext non-loopback backchannel_logout_uri, got nil")
+	}
+	if !strings.Contains(err.Error(), "backchannel_logout_uri") {
+		t.Errorf("err = %v, want it to mention the offending field", err)
+	}
+}
+
 // TestWithStaticClients_RejectsUnknownGrantType pins the construction-
 // time refusal of a grant_type that falls outside the configured
 // AllowedGrantTypes whitelist. The validator inherits the whitelist

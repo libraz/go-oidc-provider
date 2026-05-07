@@ -358,10 +358,44 @@ func WithAllowPrivateNetworkSector() Option {
 // resolved it once. Native-app SDKs that bind their loopback listener
 // to the textual "localhost" hostname (the most common default) opt
 // in via this option.
+//
+// Many of the example demos under examples/ register
+// http://127.0.0.1 redirect URIs and refuse to start without this
+// opt-in; production embedders typically leave it off and instead
+// front their RPs over https.
 // Stable since v0.x.
 func WithAllowLocalhostLoopback() Option {
 	return optionFunc(func(c *config) error {
 		c.allowLocalhostLoopback = true
+		return nil
+	})
+}
+
+// WithAllowInsecureBackchannelLogoutForDev is a dev / CI-only
+// opt-out that admits plain-http loopback URLs for the
+// `backchannel_logout_uri` client metadata field. The default
+// posture rejects every non-https value at registration time
+// (OpenID Connect Back-Channel Logout 1.0 §2.2), and the runtime
+// SSRF gate refuses to POST a logout token at a loopback / private-
+// network destination — both correct for production where the OP
+// MUST reach RPs over the public Internet on TLS.
+//
+// The opt-in flips both gates ONLY for the loopback hosts
+// 127.0.0.1, [::1], and "localhost". Public IP literals and
+// non-loopback DNS names continue to require https; the SSRF
+// gate's link-local / RFC 1918 / IPv6 ULA deny-list keeps every
+// other private destination blocked. The option emits a loud
+// audit-stream warning at op.New so a deployment cannot silently
+// leave it on after promoting from CI to production.
+//
+// Use this option for the in-process demos under examples/ and for
+// CI fixtures that bind a stub RP on a loopback port; never combine
+// it with a non-development WithIssuer.
+//
+// Stable since v0.x.
+func WithAllowInsecureBackchannelLogoutForDev() Option {
+	return optionFunc(func(c *config) error {
+		c.allowInsecureBackchannelLogoutForDev = true
 		return nil
 	})
 }

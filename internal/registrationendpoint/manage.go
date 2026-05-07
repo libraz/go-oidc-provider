@@ -75,6 +75,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		deps.Scopes,
 		deps.PairwiseEnabled,
 		deps.AllowLocalhostLoopback,
+		deps.AllowInsecureBackchannelLogoutForDev,
 	)
 	if err != nil {
 		writeMetadataValidationError(ctx, w, deps, err, clientID)

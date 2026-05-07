@@ -253,6 +253,15 @@ type config struct {
 	// http://localhost) opt in via [WithAllowLocalhostLoopback].
 	allowLocalhostLoopback bool
 
+	// allowInsecureBackchannelLogoutForDev is the
+	// [WithAllowInsecureBackchannelLogoutForDev] dev-only opt-out: it
+	// admits http:// loopback (127.0.0.1, [::1], localhost) for
+	// backchannel_logout_uri at static-client and DCR validation, and
+	// suppresses the deliverer's SSRF gate so the demo round-trip
+	// completes against a local RP stub. The default false keeps the
+	// production posture (https-only, public-network-only) intact.
+	allowInsecureBackchannelLogoutForDev bool
+
 	// jwksHTTPTransport is the [http.RoundTripper] [WithJWKSHTTPTransport]
 	// passes to the JWKS fetcher (both the JAR resolver and the
 	// client-assertion verifier share one fetcher type). Nil means

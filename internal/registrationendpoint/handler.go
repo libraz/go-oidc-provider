@@ -128,6 +128,16 @@ type Deps struct {
 	// [op.WithAllowLocalhostLoopback] at construction.
 	AllowLocalhostLoopback bool
 
+	// AllowInsecureBackchannelLogoutForDev admits plain-http
+	// loopback URLs (127.0.0.1, [::1], localhost) for the
+	// `backchannel_logout_uri` field at static-client and DCR
+	// validation time. The default false enforces the
+	// OpenID Connect Back-Channel Logout 1.0 §2.2 https-only rule.
+	// Embedders flip the bit by passing
+	// [op.WithAllowInsecureBackchannelLogoutForDev] for dev/CI
+	// fixtures only — production deployments leave it off.
+	AllowInsecureBackchannelLogoutForDev bool
+
 	// SectorResolver is the SSRF-defended sector_identifier_uri fetcher
 	// the validator drives at registration time (OIDC Core 1.0 §5 /
 	// §8.1). A nil value falls back to a zero-config [sector.Resolver]

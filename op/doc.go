@@ -26,6 +26,22 @@
 //	}
 //	http.ListenAndServe(":8080", handler)
 //
+// # Local development
+//
+// The defaults are tuned for production (https-only, public-network-only).
+// Two opt-in options widen the gates for demos and CI fixtures bound to
+// the loopback interface:
+//
+//   - [WithAllowLocalhostLoopback] admits the textual "localhost" host in
+//     redirect_uri values (the IP literals 127.0.0.1 and [::1] are always
+//     admitted on the http loopback carve-out).
+//   - [WithAllowInsecureBackchannelLogoutForDev] admits http:// loopback
+//     URLs for backchannel_logout_uri at registration time and disables
+//     the deliverer's SSRF gate so a stub RP on 127.0.0.1 can receive the
+//     logout token POST.
+//
+// Production embedders leave both off and front their RPs over TLS.
+//
 // # Standards
 //
 // The library targets OpenID Connect Core 1.0, OAuth 2.0 (RFC 6749) and the

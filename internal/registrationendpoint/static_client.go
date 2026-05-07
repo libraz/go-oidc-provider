@@ -36,6 +36,14 @@ type StaticClientValidationOptions struct {
 	// literals 127.0.0.1 and [::1]. The default false keeps the
 	// IP-only posture.
 	AllowLocalhostLoopback bool
+
+	// AllowInsecureBackchannelLogoutForDev mirrors
+	// [Deps.AllowInsecureBackchannelLogoutForDev]: under the dev
+	// opt-in plain-http loopback URLs are admitted for the
+	// `backchannel_logout_uri` field so example demos can boot
+	// without TLS termination. The default false keeps the
+	// production https-only posture.
+	AllowInsecureBackchannelLogoutForDev bool
 }
 
 // StaticClientValidationError reports a structural rule violation a
@@ -121,6 +129,7 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 		// authoritatively names the scopes their static clients carry.
 		opts.PairwiseEnabled,
 		opts.AllowLocalhostLoopback,
+		opts.AllowInsecureBackchannelLogoutForDev,
 	)
 	if err == nil {
 		return nil

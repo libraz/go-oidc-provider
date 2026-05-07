@@ -14,7 +14,7 @@ func TestValidatePolicy_RejectsJWKSAndJWKSURI(t *testing.T) {
 		RedirectURIs: []string{"https://rp.test.invalid/cb"},
 		JWKs:         []byte(`{"keys":[]}`),
 		JWKsURI:      "https://rp.test.invalid/jwks.json",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -26,7 +26,7 @@ func TestValidatePolicy_RejectsHTTPClientURI(t *testing.T) {
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs: []string{"https://rp.test.invalid/cb"},
 		ClientURI:    "http://rp.test.invalid",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -38,7 +38,7 @@ func TestValidatePolicy_RejectsUnsupportedRequestObjectSigningAlg(t *testing.T) 
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
 		RequestObjectSigningAlg: "HS256",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -74,7 +74,7 @@ func TestValidatePolicy_AcceptsRequestObjectEncryption(t *testing.T) {
 				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
 				RequestObjectEncryptionAlg: tc.alg,
 				RequestObjectEncryptionEnc: tc.enc,
-			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 			if err != nil {
 				t.Fatalf("validatePolicy: %v", err)
 			}
@@ -105,7 +105,7 @@ func TestValidatePolicy_RejectsRequestObjectEncryptionOutsideAllowlist(t *testin
 				RedirectURIs:               []string{"https://rp.test.invalid/cb"},
 				RequestObjectEncryptionAlg: tc.alg,
 				RequestObjectEncryptionEnc: tc.enc,
-			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
@@ -192,7 +192,7 @@ func TestValidatePolicy_AcceptsResponseEncryption(t *testing.T) {
 				p.set(&m, c.alg, c.enc)
 				if _, err := validatePolicy(m,
 					[]string{"authorization_code"}, []string{"code"},
-					nil, false, nil, nil, false, false); err != nil {
+					nil, false, nil, nil, false, false, false); err != nil {
 					t.Fatalf("validatePolicy: %v", err)
 				}
 			})
@@ -272,7 +272,7 @@ func TestValidatePolicy_RejectsResponseEncryptionOutsideAllowlist(t *testing.T) 
 				p.applyAlg(&m, c.alg, c.enc)
 				_, err := validatePolicy(m,
 					[]string{"authorization_code"}, []string{"code"},
-					nil, false, nil, nil, false, false)
+					nil, false, nil, nil, false, false, false)
 				if err == nil {
 					t.Fatal("expected validation error, got nil")
 				}
@@ -300,7 +300,7 @@ func TestValidatePolicy_RejectsPairwiseMultiHostWithoutSectorIdentifier(t *testi
 			"https://b.example.com/cb",
 		},
 		SubjectType: "pairwise",
-	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, true, false)
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, true, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -314,7 +314,7 @@ func TestValidatePolicy_RejectsCodeResponseTypeWithoutAuthorizationCodeGrant(t *
 		GrantTypes:      []string{"implicit"},
 		ResponseTypes:   []string{"code"},
 		ApplicationType: "web",
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -327,7 +327,7 @@ func TestValidatePolicy_RejectsImplicitResponseTypeWithoutImplicitGrant(t *testi
 		RedirectURIs:  []string{"https://rp.test.invalid/cb"},
 		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"id_token"},
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token"}, nil, false, nil, nil, false, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -340,7 +340,7 @@ func TestValidatePolicy_RejectsHybridResponseTypeWithoutImplicitGrant(t *testing
 		RedirectURIs:  []string{"https://rp.test.invalid/cb"},
 		GrantTypes:    []string{"authorization_code"},
 		ResponseTypes: []string{"code id_token"},
-	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token", "code id_token"}, nil, false, nil, nil, false, false)
+	}, []string{"authorization_code", "implicit"}, []string{"code", "id_token", "code id_token"}, nil, false, nil, nil, false, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
 	}
@@ -498,7 +498,7 @@ func TestValidateMetadataURIs_RejectsUserinfo(t *testing.T) {
 			m := ClientMetadata{RedirectURIs: []string{"https://rp.test.invalid/cb"}}
 			tc.mut(&m)
 			_, err := validatePolicy(m,
-				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 			if err == nil {
 				t.Fatalf("%s: expected validation error for userinfo URL %q", tc.name, evilURL)
 			}
@@ -587,7 +587,7 @@ func TestValidateBackchannelLogoutURI(t *testing.T) {
 			m := ClientMetadata{RedirectURIs: []string{"https://rp.test.invalid/cb"}}
 			tc.mut(&m)
 			_, err := validatePolicy(m,
-				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false)
+				[]string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("validatePolicy unexpected error: %v", err)

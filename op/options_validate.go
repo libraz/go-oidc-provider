@@ -175,10 +175,11 @@ func (c *config) validateStaticClients() error {
 		return nil
 	}
 	opts := registrationendpoint.StaticClientValidationOptions{
-		AllowedGrantTypes:      c.staticClientAllowedGrantTypes(),
-		AllowedResponseTypes:   c.staticClientAllowedResponseTypes(),
-		PairwiseEnabled:        c.pairwiseEnabled(),
-		AllowLocalhostLoopback: c.allowLocalhostLoopback,
+		AllowedGrantTypes:                    c.staticClientAllowedGrantTypes(),
+		AllowedResponseTypes:                 c.staticClientAllowedResponseTypes(),
+		PairwiseEnabled:                      c.pairwiseEnabled(),
+		AllowLocalhostLoopback:               c.allowLocalhostLoopback,
+		AllowInsecureBackchannelLogoutForDev: c.allowInsecureBackchannelLogoutForDev,
 	}
 	for i := range c.staticClients {
 		seed := c.staticClients[i]
