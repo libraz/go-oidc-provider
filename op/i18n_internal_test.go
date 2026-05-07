@@ -112,7 +112,7 @@ func TestBuildLocaleResolver_LayeredOverlaysComposeLastWins(t *testing.T) {
 // TestBuildLocaleResolver_NewLocaleRegisteredAsIs verifies that a
 // locale the seed catalogue does not ship is registered verbatim — no
 // merge happens because there is nothing to merge with. This pins the
-// example/16-i18n-locale shape (French registered fresh) against
+// example/15-i18n-locale shape (French registered fresh) against
 // future regressions.
 func TestBuildLocaleResolver_NewLocaleRegisteredAsIs(t *testing.T) {
 	t.Parallel()

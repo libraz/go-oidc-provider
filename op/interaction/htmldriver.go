@@ -41,7 +41,7 @@ const htmlSubmissionContentType = "application/x-www-form-urlencoded"
 //
 // Embedders that want branding or CSS replace the driver via
 // [op.WithInteractionDriver]; the canonical examples for that path live
-// under examples/04-custom-interaction/ and 10-react-login/.
+// under examples/16-custom-interaction/ and 10-react-login/.
 //
 // HTMLDriver carries no state and is safe for concurrent use.
 type HTMLDriver struct{}

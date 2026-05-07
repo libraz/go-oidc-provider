@@ -61,8 +61,8 @@ example-01:
 example-03:
 	cd examples/03-fapi2 && go run -tags example .
 
-example-17:
-	cd examples/17-claims-request && go run -tags example .
+example-61:
+	cd examples/61-claims-request && go run -tags example .
 
 example-41:
 	cd examples/41-dynamic-registration && go run -tags example .
