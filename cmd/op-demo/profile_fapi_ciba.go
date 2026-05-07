@@ -55,6 +55,8 @@ import (
 //     and the FAPI alg lockdown.
 //   - op.WithFeature(feature.MTLS) — sender constraint; required by
 //     fapi-ciba-id1's hardcoded cert-bound check.
+//   - op.WithGrants(grant.CIBA, grant.RefreshToken) — advertises both
+//     the CIBA polling grant and refresh-token rotation in discovery.
 //   - op.WithCIBA(WithCIBAHintResolver(...), WithCIBAPollInterval(1s),
 //     WithCIBAMaxPollViolations(50)) — 1 s poll keeps the OFCS plan
 //     moving; the auto-approve delay (cfg.cibaAutoApproveDelay) is
@@ -67,6 +69,7 @@ func fapiCIBAOptions(st *inmem.Store) []op.Option {
 	return []op.Option{
 		op.WithProfile(profile.FAPICIBA),
 		op.WithFeature(feature.MTLS),
+		op.WithGrants(opgrant.CIBA, opgrant.RefreshToken),
 		op.WithCIBA(
 			op.WithCIBAHintResolver(demoHintResolver(st)),
 			op.WithCIBAPollInterval(time.Second),
