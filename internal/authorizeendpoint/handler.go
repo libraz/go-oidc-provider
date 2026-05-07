@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -364,6 +365,26 @@ type Deps struct {
 	// the validator rejects at registration time when both halves are
 	// configured but the OP cannot honour the wrap.
 	ClientEncJWKs *clientencjwks.Resolver
+
+	// FirstPartyClients is the set of client_id values the embedder
+	// marked as first party via [op.WithFirstPartyClients]. When the
+	// dispatcher would otherwise prompt for consent, a client whose
+	// id appears here AND whose [store.Client.Source] is
+	// [store.ClientSourceStatic] or [store.ClientSourceAdmin] gets an
+	// auto-grant covering the requested scope, followed by a silent
+	// authorization-code mint. Dynamic-source clients (RFC 7591) are
+	// excluded structurally — the wiring layer never adds them. When
+	// the request carries prompt=consent the skip is suppressed (the
+	// RP explicitly asked for re-consent), and FAPI 2.0 profiles
+	// reject the option at construction time so this field is empty
+	// under those profiles.
+	FirstPartyClients map[string]struct{}
+
+	// Audit is the [audit.Emitter] the handler raises events on. The
+	// authorize surface emits [op.AuditConsentGrantedFirstParty]
+	// when the first-party skip applies. A nil value collapses
+	// every emit to a no-op, matching the rest of the code base.
+	Audit audit.Emitter
 }
 
 // resolved is the post-default copy of [Deps] used during request handling.
@@ -414,6 +435,27 @@ func (r resolved) now() time.Time {
 		return timex.SystemClock.Now()
 	}
 	return r.Clock.Now()
+}
+
+// isFirstPartyClient reports whether clientID was registered as first
+// party via [op.WithFirstPartyClients]. The membership lookup runs in
+// O(1) because the wiring layer materialises the slice into a set.
+func (r resolved) isFirstPartyClient(clientID string) bool {
+	if len(r.FirstPartyClients) == 0 {
+		return false
+	}
+	_, ok := r.FirstPartyClients[clientID]
+	return ok
+}
+
+// auditEmitter returns a non-nil [audit.Emitter]. A zero-value Deps gets
+// the no-op emitter so the handler can call audit() unconditionally
+// without per-call nil checks.
+func (r resolved) auditEmitter() audit.Emitter {
+	if r.Audit == nil {
+		return audit.Discard()
+	}
+	return r.Audit
 }
 
 // Handler returns the HTTP handler the OP mounts at its authorize and

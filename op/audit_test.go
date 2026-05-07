@@ -238,6 +238,27 @@ func TestAuditEvent_ClientAuthnMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_FirstPartyMirror keeps the public
+// op.AuditConsentGrantedFirstParty constant aligned with the raw
+// string the authorize endpoint emits when the [WithFirstPartyClients]
+// auto-consent path fires. The internal handler cannot import op/, so
+// the value is duplicated as a string
+// (opAuditConsentGrantedFirstParty in
+// internal/authorizeendpoint/authorize.go) and this test pins them
+// together.
+func TestAuditEvent_FirstPartyMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"consent.granted.first_party": op.AuditConsentGrantedFirstParty,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_DCRMirror keeps the public op.AuditDCR* constants
 // aligned with the strings that the registration endpoint emits.
 // The internal handler cannot reference op.AuditEvent (no

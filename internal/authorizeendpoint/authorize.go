@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
@@ -21,6 +22,13 @@ import (
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// opAuditConsentGrantedFirstParty mirrors the public
+// op.AuditConsentGrantedFirstParty constant. The internal package
+// cannot import op (one-way import graph), so the value is duplicated
+// here and pinned by TestAuditEvent_FirstPartyMirror in
+// op/audit_test.go.
+const opAuditConsentGrantedFirstParty = "consent.granted.first_party"
 
 // maxAuthorizeFormBytes caps POST /authorize request body size. Authorize
 // requests are tiny in practice; this ceiling is well above any legitimate
@@ -271,6 +279,13 @@ func dispatchAuthorize(
 		clearCookie(w, cookie.SessionProfile)
 	}
 	hint := computeAuthorizeHint(r.Context(), deps, req, client, active, now)
+	if firstPartyShouldSkipConsent(hint, req, client, active, deps) {
+		newHint, ok := applyFirstPartySkip(w, r, deps, req, client, active, hint)
+		if !ok {
+			return
+		}
+		hint = newHint
+	}
 	switch hint.decision {
 	case decisionLoginRequired:
 		emitAuthorizeError(w, r, deps, req, errLoginRequired, "user authentication is required")
@@ -283,6 +298,110 @@ func dispatchAuthorize(
 	case decisionMint:
 		mintAndRedirect(w, r, deps, req, client, active, hint.grant)
 	}
+}
+
+// firstPartyShouldSkipConsent reports whether the dispatcher's pending
+// outcome (a consent prompt or a prompt=none consent_required error)
+// should instead be auto-resolved through the first-party skip path
+// configured by [op.WithFirstPartyClients]. The four preconditions:
+//
+//  1. The client_id appears in [Deps.FirstPartyClients]. The wiring
+//     layer materialises this set only for static / admin clients;
+//     dynamic-source clients (RFC 7591) are excluded structurally.
+//  2. The pending decision would otherwise prompt the user for
+//     consent — either an interactive consent prompt or the
+//     prompt=none consent_required error. Login / chooser / silent-
+//     mint outcomes pass through unchanged.
+//  3. An active session exists. With no session there is no subject
+//     to bind the grant to; the first-party skip never invents one.
+//  4. The request did NOT carry prompt=consent. An RP that explicitly
+//     asks for re-consent always gets the prompt; the first-party
+//     flag is the OP's posture, not the RP's override.
+//
+// The [store.Client.Source] guard is enforced by the wiring layer
+// (see [firstPartyClientSet]); this helper trusts that contract.
+func firstPartyShouldSkipConsent(
+	hint authorizeHint,
+	req *authorize.Request,
+	client *store.Client,
+	active *sessions.Active,
+	deps resolved,
+) bool {
+	if active == nil || client == nil {
+		return false
+	}
+	if !deps.isFirstPartyClient(client.ID) {
+		return false
+	}
+	if containsString(req.Prompt, interaction.PromptConsent) {
+		return false
+	}
+	switch hint.decision {
+	case decisionInteract:
+		return hint.prompt == interaction.PromptConsent
+	case decisionConsentRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyFirstPartySkip persists (or extends) the grant the dispatcher
+// would otherwise have asked the user to confirm and rewrites the hint
+// so the switch in [dispatchAuthorize] mints a code silently. The
+// returned bool reports whether processing should continue: false
+// means the helper already wrote the response (auto-grant failed and
+// surfaced an error redirect).
+//
+// The grant subject is the projected (post-[op.SubjectGenerator])
+// value, mirroring what [interaction.go] persists at the end of an
+// interactive consent ceremony. AuthTime / ACR / AMR are pulled from
+// the active session record so the grant reflects the most recent
+// authentication on this device, identical to the interactive path.
+func applyFirstPartySkip(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	client *store.Client,
+	active *sessions.Active,
+	hint authorizeHint,
+) (authorizeHint, bool) {
+	ctx := r.Context()
+	grantSubject, err := projectGrantSubject(ctx, deps, active.Session.Subject, client.ID)
+	if err != nil {
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not derive subject")
+		return hint, false
+	}
+	g, err := upsertGrant(ctx, deps, grantUpsert{
+		Subject:  grantSubject,
+		ClientID: client.ID,
+		Scope:    append([]string(nil), req.Scope...),
+		AuthTime: active.Session.AuthTime,
+		ACR:      active.Session.ACR,
+		AMR:      append([]string(nil), active.Session.AMR...),
+		Claims:   req.Claims,
+		Now:      deps.now(),
+	})
+	if err != nil {
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not record first-party grant")
+		return hint, false
+	}
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:      opAuditConsentGrantedFirstParty,
+		Level:     audit.LevelInfo,
+		Message:   "first-party consent auto-granted",
+		ActorID:   grantSubject,
+		ClientID:  client.ID,
+		SessionID: active.Session.ID,
+		IP:        clientIPFromRequest(r, deps).String(),
+		UserAgent: truncateUserAgent(r.UserAgent()),
+		Extras: map[string]any{
+			"grant_id": g.ID,
+			"scope":    append([]string(nil), req.Scope...),
+		},
+	})
+	return authorizeHint{decision: decisionMint, grant: g}, true
 }
 
 // authorizeHint bundles the outcome of the decision matrix together with
