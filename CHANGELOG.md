@@ -14,16 +14,55 @@ The main module and the storage-adapter sub-modules
 tag. Embedders pull each sub-module independently:
 
 ```
+# v0.9.1 (latest)
+go get github.com/libraz/go-oidc-provider@v0.9.1
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.1
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.1
+
+# v0.9.0 (initial public release)
 go get github.com/libraz/go-oidc-provider@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
-## [Unreleased]
+## [v0.9.1] — 2026-05-07
+
+### Highlights
+
+- CIBA poll mode (OpenID Connect Client-Initiated Backchannel
+  Authentication Core 1.0): `/oidc/bc-authorize` endpoint, the
+  `urn:openid:params:grant-type:ciba` token grant, and a new
+  `op.CIBARequestStore` substore. Push and ping delivery modes are
+  deferred to v2+.
+- RFC 8693 token-exchange grant_type via `op.RegisterTokenExchange`
+  with audience normalisation (RFC 8707 §2), act-claim chain assembly,
+  and DPoP / mTLS cnf rebinding on the issued token.
+- RFC 8628 device-authorization grant via `op.WithDeviceCode(...)`,
+  plus the new `op/devicecodekit` sub-package for embedder-side
+  user_code verification with a per-record brute-force lockout.
+- OIDC Core §8 pairwise subject derivation
+  (`op.WithPairwiseSubject(salt)` / `op.WithSubjectGenerator(...)`)
+  with hardened `sector_identifier_uri` resolution and
+  mid-life-strategy switching rejected at `op.New`.
+- RFC 7516 JWE encryption for inbound JAR / PAR request objects and
+  outbound `id_token`, JWT-shape `userinfo`, JARM authorization
+  responses, and RFC 9701 introspection responses, advertised via the
+  five matching `*_encryption_alg_values_supported` discovery fields.
+- Stable custom-grant dispatcher: `op.WithCustomGrant(...)` graduates
+  out of its experimental marker, with a documented cnf-binding
+  contract and a `BoundAccessToken` helper for DPoP / mTLS-bound
+  handler responses.
+- `profile.FAPICIBA` graduates from placeholder to enforced
+  (JAR + DPoP-or-MTLS, 10-minute access-token cap, FAPI 2.0
+  client-authentication set, mandatory access-token revocation).
+- Breaking option renames (`op.WithInteraction` →
+  `op.WithInteractionDriver`) and removal of the
+  single-key wrappers (`op.WithCookieKey`, `op.WithMFAEncryptionKey`)
+  and the no-op `op.WithPasskeyAttestation` stub.
 
 ### Added
 
-- `op.WithCustomGrant(...)` (Wave N0, ADR 0027) graduates from the
+- `op.WithCustomGrant(...)` (ADR 0027) graduates from the
   experimental marker introduced in v0.9.0 to a stable surface:
   `CustomGrantHandler` interface (`Name` / `ParamPolicy` / `Handle`)
   + `BoundAccessToken` helper that mints a cnf-bound `at+jwt` access
@@ -33,7 +72,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   embedding `cnf` when the request carries DPoP / mTLS proof.
   Openid-scoped custom grants emit an id_token signed from
   `ExtraClaims` after reserved-claim filtering.
-- `op.WithDeviceCode(...)` (Wave N1, RFC 8628) wires the OP for
+- `op.WithDeviceCode(...)` (RFC 8628) wires the OP for
   device-authorization grant: `/device_authorization` endpoint,
   token-endpoint dispatcher honoring `authorization_pending` /
   `slow_down` / `access_denied` / `expired_token`, and discovery
@@ -76,7 +115,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
     tracked alongside the SQL / Redis substore wiring deferred from
     v0.9.0.
 - `op.WithPairwiseSubject(salt)` and `op.WithSubjectGenerator(...)`
-  (Wave O1, ADR 0029) add OIDC Core §8 pairwise subject derivation
+  (ADR 0029) add OIDC Core §8 pairwise subject derivation
   and an extensible generator seam. `internal/sector` resolves
   `sector_identifier_uri` with HTTPS-only enforcement, RFC 1918 /
   loopback / link-local rejection, redirect-target re-validation,
@@ -119,7 +158,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   actor_token. The wire response stays `invalid_grant`; this event
   splits transient registry outages from real revocations so SOC
   tooling can react separately.
-- CIBA poll mode (Wave N2). The OP now exposes the
+- CIBA poll mode. The OP now exposes the
   Client-Initiated Backchannel Authentication endpoint
   (`/oidc/bc-authorize`) and accepts
   `urn:openid:params:grant-type:ciba` at the token endpoint.
@@ -133,7 +172,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
     embedder calling `store.CIBARequestStore.Approve` /
     `Deny` directly from the authentication device's callback handler;
     the OP never pushes to the authentication device itself
-    (`examples/31-ciba-pos/` shows the substore-direct shape).
+    (`examples/32-ciba-pos/` shows the substore-direct shape).
   - `op.CIBARequestStore` is a new substore in the public store
     interface; the in-memory adapter ships, SQL / Redis adapters
     follow in v0.9.2.
@@ -150,31 +189,31 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
     `RequiresAccessTokenRevocation=true`. JAR enforcement on the
     /bc-authorize side requires `iss` / `aud` / `exp` / `nbf` and
     caps the request-object lifetime at 60 seconds.
-  - `examples/31-ciba-pos/` ships a paired OP+RP demo (POS terminal
+  - `examples/32-ciba-pos/` ships a paired OP+RP demo (POS terminal
     initiates `/bc-authorize`, the staff phone approves,
     end-to-end in roughly one second).
-- v0.9.1 example backfill — paired OP+RP demos for the four Waves
-  whose example slot was reserved in `008` §5.0 but unfilled:
-  - `examples/19-custom-grant/` (Wave N0) — embedder defines
+- New paired OP+RP example demos covering the new grants and
+  subject mode:
+  - `examples/30-custom-grant/` — embedder defines
     `urn:example:libraz:service-token-exchange`, the OP routes it via
     `op.WithCustomGrant`, and the handler returns a `BoundAccessToken`
     so the dispatcher mints a JWT access token bound to the
     request's DPoP / mTLS confirmation.
-  - `examples/30-device-code-cli/` (Wave N1) — terminal CLI drives the
+  - `examples/31-device-code-cli/` — terminal CLI drives the
     RFC 8628 device-authorization grant against the OP, prints the
     boxed user_code panel + `verification_uri_complete` shortcut,
     and polls `/token` honoring `slow_down` and
     `authorization_pending`.
-  - `examples/32-token-exchange-delegation/` (Wave N3) — frontend →
+  - `examples/33-token-exchange-delegation/` — frontend →
     service-a → service-b cross-client impersonation triggers the
     OP-side `act` claim chain (ADR 0028); service-b's RS-side
     verifier walks `act.sub` and accepts only delegated tokens.
-  - `examples/33-pairwise-saas/` (Wave O1) — `WithPairwiseSubject`
+  - `examples/34-pairwise-saas/` — `WithPairwiseSubject`
     salt with two tenants in distinct sectors observes `A != B`
     (different sector → different sub) and `A1 == A2` (same
     sector + same user → identical sub), satisfying both the
     privacy and determinism properties of OIDC Core §8.1.
-- JWE encryption (Wave T1, ADR 0030). The OP now decrypts JWE-shaped
+- JWE encryption (ADR 0030). The OP now decrypts JWE-shaped
   request objects (JAR / PAR) and wraps outbound `id_token`,
   `userinfo` (JWT-shape), JARM authorization responses, and
   RFC 9701 JWT introspection responses in a JWE addressed to the
@@ -198,7 +237,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   - `userinfo_signing_alg_values_supported` is now published
     unconditionally (`ES256`); the JWT-shape userinfo path is
     always available via `Accept: application/jwt`.
-  - `examples/34-encrypted-id-token` ships a paired OP+RP demo of
+  - `examples/35-encrypted-id-token` ships a paired OP+RP demo of
     RSA-OAEP-256 / A256GCM id_token encryption (client metadata +
     JWKS distribution + RP-side decrypt).
 - RFC 8693 token-exchange grant_type via `op.RegisterTokenExchange`.
@@ -249,7 +288,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   `WithMFARules` so example boilerplate around `op.New` shrinks.
   Examples 01 / 20 / 21 use the helpers.
 - `op.WithPreferredLocaleStore` registers an embedder hook the locale
-  resolver consults at the head of the §L.2 priority chain (before
+  resolver consults at the head of the priority chain (before
   ui_locales / cookie / Accept-Language / default).
 - `op.Provider.LocaleResolver()` exposes the configured resolver so
   embedders can render emails, server-rendered admin pages, or other
@@ -345,7 +384,8 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   every adapter exercises the same `AssertConcurrentRotate`
   contract assertion.
 - `internal/authn/orchestrator.go` shrank from 1,210 to ~492 lines;
-  Phase / Risk / Audit responsibilities moved into
+  authentication-flow, risk-evaluation, and audit-emission
+  responsibilities moved into
   `internal/authn/{phases.go, risk_*, audit_*}` and the new
   `internal/authn/{risk,audit}` sub-packages.
 - `op/options.go` (3,268 → 2,374 lines) and `op/op.go` (2,073 → 992
@@ -370,12 +410,12 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   / Accept-Language / authorize ui_locales for layers 2–4; the cookie
   write endpoint (`POST /oidc/session/locale`) remains unimplemented
   and is scheduled for a follow-up plan.
-- Example 16-i18n-locale now runs an in-process self-verify probe
+- Example 04-i18n-locale now runs an in-process self-verify probe
   before the listener starts so `go run -tags example` prints a
-  PASS / FAIL summary for each row of the §L.2 chain.
+  PASS / FAIL summary for each row of the locale-resolver chain.
 - Example 10-react-login's SPA stamps the OP-resolved locale onto
   `document.documentElement.lang` on every prompt render.
-- Example 04-custom-interaction now ships a thin locale-aware Driver
+- Example 15-custom-interaction now ships a thin locale-aware Driver
   wrapper that copies `Prompt.Locale` into the `Content-Language`
   response header, demonstrating the embedder pattern.
 - Examples 04 / 05 / 06 now carry the standard `PRODUCTION CAVEATS`
@@ -421,5 +461,6 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.1...HEAD
+[v0.9.1]: https://github.com/libraz/go-oidc-provider/compare/v0.9.0...v0.9.1
 [v0.9.0]: https://github.com/libraz/go-oidc-provider/releases/tag/v0.9.0

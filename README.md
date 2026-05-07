@@ -61,6 +61,22 @@ End-to-end startup (key generation, store wiring, graceful shutdown) lives in
 [Quick Start](https://go-oidc-provider.libraz.net/getting-started/install) and
 [Required options](https://go-oidc-provider.libraz.net/getting-started/required-options).
 
+### Local development
+
+The defaults are tuned for production (https-only, public-network-only). When
+you boot against `http://127.0.0.1` or a stub RP on the loopback interface, two
+opt-ins keep the validators from rejecting the demo wiring:
+
+```go
+op.WithAllowLocalhostLoopback(),                 // admit textual "localhost" hosts
+op.WithAllowInsecureBackchannelLogoutForDev(),   // admit http://localhost backchannel_logout_uri
+```
+
+Both options are dev / CI-only — production embedders leave them off and front
+their RPs over TLS. Every example under [`examples/`](examples) that binds a
+loopback listener uses these options; an embedder porting one of the demos
+into a production stack drops the lines.
+
 ### FAPI 2.0 Baseline in one switch
 
 ```go
