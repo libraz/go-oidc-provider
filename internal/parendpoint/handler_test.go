@@ -269,6 +269,25 @@ func TestHandler_NoAuth_Rejected(t *testing.T) {
 	}
 }
 
+func TestHandler_ConfidentialClientIDOnlyRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, _ := f.confidentialClient(t)
+	form := goodAuthorizeForm(client.ID, client.RedirectURIs[0])
+
+	resp := f.post(t, form, "", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_client" {
+		t.Errorf("error=%v want invalid_client", body["error"])
+	}
+}
+
 // TestHandler_BadSecret_Rejected returns 401 invalid_client and a Basic
 // challenge when the request used Basic with a wrong secret.
 func TestHandler_BadSecret_Rejected(t *testing.T) {
