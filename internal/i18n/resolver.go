@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const maxLocaleCookieLen = 64
+
 // Resolver picks a [Tag] for an inbound request by walking the
 // priority chain from design 002 §L.2. The resolver is constructed
 // once at OP startup; it is safe for concurrent use.
@@ -136,8 +138,10 @@ func (r *Resolver) Resolve(ctx context.Context, in Request) Tag {
 			return matched
 		}
 	}
-	if matched, ok := r.match(ParseTag(in.Cookie)); ok {
-		return matched
+	if validLocaleCookie(in.Cookie) {
+		if matched, ok := r.match(ParseTag(in.Cookie)); ok {
+			return matched
+		}
 	}
 	for _, raw := range parseAcceptLanguage(in.AcceptLanguage) {
 		if matched, ok := r.match(ParseTag(raw)); ok {
@@ -165,6 +169,24 @@ func (r *Resolver) match(tag Tag) (Tag, bool) {
 		return lang, true
 	}
 	return "", false
+}
+
+func validLocaleCookie(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || len(raw) > maxLocaleCookieLen {
+		return false
+	}
+	for i := range len(raw) {
+		c := raw[i]
+		if (c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') ||
+			c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // parseAcceptLanguage extracts the language tags from the raw

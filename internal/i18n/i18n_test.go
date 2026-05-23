@@ -3,6 +3,7 @@ package i18n_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/i18n"
@@ -295,6 +296,42 @@ func TestResolver_PreferredLocaleErrorIsIgnored(t *testing.T) {
 	})
 	if got != i18n.Japanese {
 		t.Fatalf("error should fall through to ui_locales, got %q", got)
+	}
+}
+
+func TestResolver_RejectsMalformedLocaleCookie(t *testing.T) {
+	t.Parallel()
+
+	en, _ := i18n.NewBundle(i18n.English, nil)
+	poison, _ := i18n.NewBundle(i18n.Tag("ja<script>"), nil)
+	r, err := i18n.NewResolver(i18n.English, en, poison)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	got := r.Resolve(context.Background(), i18n.Request{
+		Cookie:         "ja<script>",
+		AcceptLanguage: "en",
+	})
+	if got != i18n.English {
+		t.Fatalf("Resolve=%q want en; malformed cookie must be ignored", got)
+	}
+}
+
+func TestResolver_RejectsOverlongLocaleCookie(t *testing.T) {
+	t.Parallel()
+
+	en, _ := i18n.NewBundle(i18n.English, nil)
+	longTag := i18n.Tag("en-" + strings.Repeat("a", 80))
+	poison, _ := i18n.NewBundle(longTag, nil)
+	r, err := i18n.NewResolver(i18n.English, en, poison)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	got := r.Resolve(context.Background(), i18n.Request{Cookie: longTag.String()})
+	if got != i18n.English {
+		t.Fatalf("Resolve=%q want en; overlong cookie must be ignored", got)
 	}
 }
 
