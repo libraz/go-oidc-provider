@@ -2,6 +2,8 @@ package op
 
 import (
 	"maps"
+	"net"
+	"net/url"
 	"slices"
 	"strconv"
 
@@ -247,10 +249,67 @@ func WithDiscoveryMetadata(meta DiscoveryMetadata) Option {
 		if err := validateDiscoveryMetadataExtra(meta.Extra); err != nil {
 			return err
 		}
+		if err := validateDiscoveryMetadataURLs(meta); err != nil {
+			return err
+		}
 		c.discoveryMetadata = cloneDiscoveryMetadata(meta)
 		c.discoveryMetadataSet = true
 		return nil
 	})
+}
+
+func validateDiscoveryMetadataURLs(meta DiscoveryMetadata) error {
+	for field, raw := range map[string]string{
+		"service_documentation": meta.ServiceDocumentation,
+		"op_policy_uri":         meta.OPPolicyURI,
+		"op_tos_uri":            meta.OPTermsOfServiceURI,
+	} {
+		if raw == "" {
+			continue
+		}
+		if !isDiscoveryHTTPSURL(raw) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDiscoveryMetadata: " + field + " must be an absolute https URL (http is allowed only for loopback development hosts)",
+			}
+		}
+	}
+	for key, raw := range meta.MTLSEndpointAliases {
+		if key == "" {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDiscoveryMetadata: mtls_endpoint_aliases contains an empty key",
+			}
+		}
+		if !isDiscoveryHTTPSURL(raw) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDiscoveryMetadata: mtls_endpoint_aliases[" + key + "] must be an absolute https URL (http is allowed only for loopback development hosts)",
+			}
+		}
+	}
+	return nil
+}
+
+func isDiscoveryHTTPSURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 // validateDiscoveryMetadataExtra rejects empty Extra keys and any key

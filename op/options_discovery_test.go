@@ -390,6 +390,71 @@ func TestWithDiscoveryMetadata_EmptyServiceDocumentationOmitted(t *testing.T) {
 	}
 }
 
+func TestWithDiscoveryMetadata_RejectsUnsafeURLs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		meta op.DiscoveryMetadata
+	}{
+		{
+			name: "service documentation javascript",
+			meta: op.DiscoveryMetadata{ServiceDocumentation: "javascript:alert(1)"},
+		},
+		{
+			name: "policy relative",
+			meta: op.DiscoveryMetadata{OPPolicyURI: "/policy"},
+		},
+		{
+			name: "tos public http",
+			meta: op.DiscoveryMetadata{OPTermsOfServiceURI: "http://idp.example.com/tos"},
+		},
+		{
+			name: "mtls alias public http",
+			meta: op.DiscoveryMetadata{MTLSEndpointAliases: map[string]string{
+				"token_endpoint": "http://internal-host/token",
+			}},
+		},
+		{
+			name: "mtls alias empty key",
+			meta: op.DiscoveryMetadata{MTLSEndpointAliases: map[string]string{
+				"": "https://mtls.example.com/token",
+			}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOpts(t), op.WithDiscoveryMetadata(tc.meta))...)
+			if err == nil {
+				t.Fatal("expected configuration error, got nil")
+			}
+			var typed *op.Error
+			if !errors.As(err, &typed) {
+				t.Fatalf("err = %v, want *op.Error", err)
+			}
+		})
+	}
+}
+
+func TestWithDiscoveryMetadata_AllowsLoopbackHTTPForDevelopment(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithDiscoveryMetadata(op.DiscoveryMetadata{
+			ServiceDocumentation: "http://localhost:8080/docs",
+			OPPolicyURI:          "http://127.0.0.1:8080/policy",
+			OPTermsOfServiceURI:  "https://idp.example.com/tos",
+			MTLSEndpointAliases: map[string]string{
+				"token_endpoint": "http://[::1]:8080/token",
+			},
+		}),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+}
+
 // TestWithDiscoveryMetadata_RejectsEmptyExtraKey confirms that a
 // blank string under Extra fails fast — silently accepting it would
 // produce a "":value entry on the wire, which no RP can address.
