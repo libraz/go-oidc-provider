@@ -69,17 +69,12 @@ func TestArgon2id_CustomParamsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestArgon2id_VerifyRejectsWeakParams pins the OWASP 2024 floor: a
-// stored hash whose Argon2id m= parameter falls below
-// [Argon2idMinMemory] or whose t= parameter falls below
-// [Argon2idMinIterations] MUST be rejected as if the secret did not
-// match. The defence catches database leaks made worse by a legacy
-// hashing configuration the verifier no longer trusts.
-func TestArgon2id_VerifyRejectsWeakParams(t *testing.T) {
+// TestArgon2id_HashRejectsWeakParams pins the OWASP 2024 floor on the
+// write path: the reference hasher must not emit a PHC string its verifier
+// would later reject as too weak.
+func TestArgon2id_HashRejectsWeakParams(t *testing.T) {
 	t.Parallel()
 
-	// Hash with deliberately weak parameters; the encoded string is
-	// well-formed, so only the floor check should reject Verify.
 	weakMemory := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
 		Memory:      clientauth.Argon2idMinMemory - 1024,
 		Iterations:  clientauth.Argon2idMinIterations,
@@ -87,13 +82,8 @@ func TestArgon2id_VerifyRejectsWeakParams(t *testing.T) {
 		SaltLength:  8,
 		KeyLength:   16,
 	}}
-	weakHash, err := weakMemory.Hash("hello")
-	if err != nil {
-		t.Fatalf("Hash (weak memory): %v", err)
-	}
-	verifier := &clientauth.Argon2id{}
-	if err := verifier.Verify("hello", weakHash); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
-		t.Errorf("weak memory Verify=%v want ErrCredentialsInvalid", err)
+	if _, err := weakMemory.Hash("hello"); !errors.Is(err, clientauth.ErrInsecureParams) {
+		t.Fatalf("weak memory Hash err=%v want ErrInsecureParams", err)
 	}
 
 	weakIter := &clientauth.Argon2id{Params: clientauth.Argon2idParams{
@@ -108,12 +98,8 @@ func TestArgon2id_VerifyRejectsWeakParams(t *testing.T) {
 		// floor is already 1; skip the iter half of the test in that case.
 		return
 	}
-	weakIterHash, err := weakIter.Hash("hello")
-	if err != nil {
-		t.Fatalf("Hash (weak iter): %v", err)
-	}
-	if err := verifier.Verify("hello", weakIterHash); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
-		t.Errorf("weak iterations Verify=%v want ErrCredentialsInvalid", err)
+	if _, err := weakIter.Hash("hello"); !errors.Is(err, clientauth.ErrInsecureParams) {
+		t.Fatalf("weak iterations Hash err=%v want ErrInsecureParams", err)
 	}
 }
 

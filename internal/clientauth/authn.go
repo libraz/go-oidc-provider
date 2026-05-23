@@ -97,6 +97,10 @@ var (
 	// occurred.
 	ErrCredentialsInvalid = errors.New("authn: credentials did not verify")
 
+	// ErrInsecureParams means the built-in Argon2id hasher was configured
+	// below the verifier's OWASP-aligned policy floor.
+	ErrInsecureParams = errors.New("authn: argon2id parameters are below policy floor")
+
 	// ErrAssertionMalformed indicates the private_key_jwt assertion
 	// failed structural validation (parsing, header, claims, exp/iat).
 	ErrAssertionMalformed = errors.New("authn: client_assertion malformed")

@@ -96,6 +96,9 @@ func (p Argon2idParams) resolved() Argon2idParams {
 // configured parameters. The salt is sourced from crypto/rand.
 func (a *Argon2id) Hash(secret string) (string, error) {
 	p := a.Params.resolved()
+	if err := validateHashParams(p); err != nil {
+		return "", err
+	}
 	salt := make([]byte, p.SaltLength)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("authn: read salt: %w", err)
@@ -108,6 +111,24 @@ func (a *Argon2id) Hash(secret string) (string, error) {
 		base64.RawStdEncoding.EncodeToString(key),
 	)
 	return enc, nil
+}
+
+func validateHashParams(p Argon2idParams) error {
+	policy := Argon2idPolicy()
+	switch {
+	case p.Memory < policy.MinMemory:
+		return fmt.Errorf("%w: memory %d KiB below %d KiB", ErrInsecureParams, p.Memory, policy.MinMemory)
+	case p.Iterations < policy.MinIterations:
+		return fmt.Errorf("%w: iterations %d below %d", ErrInsecureParams, p.Iterations, policy.MinIterations)
+	case p.Parallelism < policy.MinParallelism:
+		return fmt.Errorf("%w: parallelism %d below %d", ErrInsecureParams, p.Parallelism, policy.MinParallelism)
+	case int(p.SaltLength) < policy.MinSaltLength:
+		return fmt.Errorf("%w: salt length %d below %d", ErrInsecureParams, p.SaltLength, policy.MinSaltLength)
+	case int(p.KeyLength) < policy.MinKeyLength:
+		return fmt.Errorf("%w: key length %d below %d", ErrInsecureParams, p.KeyLength, policy.MinKeyLength)
+	default:
+		return nil
+	}
 }
 
 // Verify implements [SecretVerifier]. It rejects malformed encodings,
