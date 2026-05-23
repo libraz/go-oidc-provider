@@ -20,6 +20,10 @@ type fakeClock struct{ now time.Time }
 
 func (c fakeClock) Now() time.Time { return c.now }
 
+type mutableClock struct{ now time.Time }
+
+func (c *mutableClock) Now() time.Time { return c.now }
+
 // newFactory returns a [contract.Factory] that builds a fresh inmem store
 // pinned to the supplied reference time. The harness invokes the factory once
 // per sub-test, so each sub-test gets an isolated backend.
@@ -507,6 +511,36 @@ func TestRefresh_HashOnStore_RawValueAbsent(t *testing.T) {
 	}
 	if got.ConsumedAt == nil {
 		t.Errorf("child not revoked: %+v", got)
+	}
+}
+
+func TestPAR_SaveSweepsExpiredRecords(t *testing.T) {
+	t.Parallel()
+
+	clk := &mutableClock{now: contract.Reference}
+	s := inmem.New(inmem.WithClock(clk))
+	ctx := context.Background()
+	const uri = "urn:ietf:params:oauth:request_uri:stale"
+	if err := s.PushedAuthRequests().Save(ctx, &store.PushedAuthRequest{
+		URI:       uri,
+		ClientID:  "client-1",
+		RawParams: []byte("response_type=code"),
+		ExpiresAt: clk.now.Add(-time.Second),
+		CreatedAt: clk.now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("Save expired: %v", err)
+	}
+	if _, err := s.PushedAuthRequests().Find(ctx, uri); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find expired err=%v want ErrNotFound", err)
+	}
+	if err := s.PushedAuthRequests().Save(ctx, &store.PushedAuthRequest{
+		URI:       uri,
+		ClientID:  "client-1",
+		RawParams: []byte("response_type=code&scope=openid"),
+		ExpiresAt: clk.now.Add(time.Minute),
+		CreatedAt: clk.now,
+	}); err != nil {
+		t.Fatalf("Save replacement after expiry: %v", err)
 	}
 }
 

@@ -37,9 +37,9 @@
 // configured [Clock] on every Find/Consume. A record whose ExpiresAt is
 // strictly before [Clock.Now()] is treated as absent: the lookup returns
 // [store.ErrNotFound] and Consume returns the same. The records remain in
-// the map for diagnostic purposes; production backends typically run a
-// sweeper, but the reference implementation deliberately omits one to keep
-// the surface tiny.
+// the map for diagnostic purposes. PAR Save additionally sweeps expired PAR
+// rows before inserting, so a client that keeps pushing requests cannot grow
+// that map solely with already-dead request_uri records.
 package inmem
 
 import (
@@ -752,10 +752,13 @@ func cloneSession(s *store.Session) *store.Session {
 // --- PushedAuthRequestStore --------------------------------------------------
 
 type parStore struct {
-	mu    sync.RWMutex
-	clock Clock
-	m     map[string]*store.PushedAuthRequest
+	mu           sync.RWMutex
+	clock        Clock
+	m            map[string]*store.PushedAuthRequest
+	savesSinceGC uint32
 }
+
+const parFullGCSaveInterval uint32 = 64
 
 func newPARStore(c Clock) *parStore {
 	return &parStore{clock: c, m: make(map[string]*store.PushedAuthRequest)}
@@ -767,7 +770,10 @@ func (s *parStore) Save(_ context.Context, par *store.PushedAuthRequest) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.clock.Now()
 	key := hashKey(par.URI)
+	s.deleteExpiredKeyLocked(key, now)
+	s.maybeGCLocked(now)
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
@@ -833,6 +839,33 @@ func clonePAR(p *store.PushedAuthRequest) *store.PushedAuthRequest {
 	return &out
 }
 
+func (s *parStore) gcLocked(now time.Time) {
+	for key, rec := range s.m {
+		if !rec.ExpiresAt.IsZero() && now.UTC().After(rec.ExpiresAt.UTC()) {
+			delete(s.m, key)
+		}
+	}
+	s.savesSinceGC = 0
+}
+
+func (s *parStore) maybeGCLocked(now time.Time) {
+	s.savesSinceGC++
+	if s.savesSinceGC < parFullGCSaveInterval {
+		return
+	}
+	s.gcLocked(now)
+}
+
+func (s *parStore) deleteExpiredKeyLocked(key string, now time.Time) {
+	rec, ok := s.m[key]
+	if !ok {
+		return
+	}
+	if !rec.ExpiresAt.IsZero() && now.UTC().After(rec.ExpiresAt.UTC()) {
+		delete(s.m, key)
+	}
+}
+
 // --- InteractionStore --------------------------------------------------------
 
 type interactionStore struct {
@@ -890,10 +923,13 @@ func cloneInteraction(i *store.Interaction) *store.Interaction {
 // --- ConsumedJTIStore --------------------------------------------------------
 
 type jtiStore struct {
-	mu    sync.RWMutex
-	clock Clock
-	m     map[string]time.Time
+	mu           sync.RWMutex
+	clock        Clock
+	m            map[string]time.Time
+	marksSinceGC uint32
 }
+
+const jtiFullGCMarkInterval uint32 = 64
 
 func newJTIStore(c Clock) *jtiStore {
 	return &jtiStore{clock: c, m: make(map[string]time.Time)}
@@ -909,12 +945,15 @@ func (s *jtiStore) Mark(_ context.Context, jti string, expiresAt time.Time) erro
 	digest := patterns.Digest(jti)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.clock.Now()
 	if existing, ok := s.m[digest]; ok {
 		// Treat expired entries as absent so a fresh mark may succeed.
-		if !isExpired(existing, s.clock) {
+		if !isExpiredAt(existing, now) {
 			return store.ErrAlreadyConsumed
 		}
+		delete(s.m, digest)
 	}
+	s.maybeGCJTILocked(now)
 	s.m[digest] = expiresAt
 	return nil
 }
@@ -931,6 +970,23 @@ func (s *jtiStore) Has(_ context.Context, jti string) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+func (s *jtiStore) maybeGCJTILocked(now time.Time) {
+	s.marksSinceGC++
+	if s.marksSinceGC < jtiFullGCMarkInterval {
+		return
+	}
+	for digest, expiresAt := range s.m {
+		if isExpiredAt(expiresAt, now) {
+			delete(s.m, digest)
+		}
+	}
+	s.marksSinceGC = 0
+}
+
+func isExpiredAt(expiresAt, now time.Time) bool {
+	return !expiresAt.IsZero() && !now.UTC().Before(expiresAt.UTC())
 }
 
 // --- UserStore ---------------------------------------------------------------

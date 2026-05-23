@@ -3,6 +3,7 @@ package inmem //nolint:testpackage // touches package-private map fields to asse
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -69,5 +70,32 @@ func TestConsumedJTIs_DuplicateMarkSurfacesAlreadyConsumed(t *testing.T) {
 	err := s.ConsumedJTIs().Mark(context.Background(), raw, exp)
 	if !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Errorf("second Mark err=%v want ErrAlreadyConsumed", err)
+	}
+}
+
+func TestConsumedJTIs_MarkAmortizesExpiredSweep(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+	clk := &parTestClock{now: now}
+	s := New(WithClock(clk))
+	ctx := context.Background()
+
+	if err := s.ConsumedJTIs().Mark(ctx, "expired-jti", now.Add(-time.Second)); err != nil {
+		t.Fatalf("Mark expired: %v", err)
+	}
+	if len(s.jtis.m) != 1 {
+		t.Fatalf("after first Mark len=%d want 1", len(s.jtis.m))
+	}
+	for i := uint32(1); i < jtiFullGCMarkInterval; i++ {
+		if err := s.ConsumedJTIs().Mark(ctx, "fresh-jti-"+strconv.Itoa(int(i)), now.Add(time.Minute)); err != nil {
+			t.Fatalf("Mark fresh #%d: %v", i, err)
+		}
+	}
+	if _, exists := s.jtis.m[patterns.Digest("expired-jti")]; exists {
+		t.Fatal("expired JTI survived the amortized full sweep")
+	}
+	if s.jtis.marksSinceGC != 0 {
+		t.Fatalf("marksSinceGC=%d want 0 after sweep", s.jtis.marksSinceGC)
 	}
 }
