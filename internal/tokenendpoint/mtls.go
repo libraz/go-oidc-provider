@@ -21,8 +21,7 @@ type mtlsOutcome struct {
 	Thumbprint string
 
 	// Cert is the parsed leaf certificate the verifier extracted
-	// from the request. Nil when no cert was presented or when the
-	// caller skipped the mTLS lookup (DPoP-bound path). Exposed so
+	// from the request. Nil when no cert was presented. Exposed so
 	// downstream consumers (e.g. custom-grant dispatch) can include
 	// the certificate in audit emission without re-parsing the
 	// request.
@@ -41,18 +40,11 @@ type mtlsOutcome struct {
 // payload (a header was supplied but did not parse); a missing cert is
 // the bearer / DPoP path and yields (&mtlsOutcome{}, true).
 //
-// dpopJKT is the thumbprint extracted from any DPoP proof on the same
-// request. When non-empty the function deliberately skips the mTLS
-// binding so a single token never carries both cnf.jkt and
-// cnf.x5t#S256: mixing the two collapses the §6 cnf semantics for
-// every downstream consumer.
-func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps, dpopJKT string) (*mtlsOutcome, bool) {
+// The dpopJKT parameter is retained for call-site symmetry with older
+// releases; DPoP presence no longer suppresses mTLS extraction because an
+// issued token may carry both cnf.jkt and cnf.x5t#S256.
+func verifyTokenMTLS(w http.ResponseWriter, r *http.Request, deps Deps, _ string) (*mtlsOutcome, bool) {
 	if deps.MTLS == nil {
-		return &mtlsOutcome{}, true
-	}
-	if dpopJKT != "" {
-		// DPoP wins; the access token will carry cnf.jkt. Skipping
-		// the mTLS lookup avoids a redundant cert read too.
 		return &mtlsOutcome{}, true
 	}
 	cert, err := deps.MTLS.CertificateFromRequest(r)

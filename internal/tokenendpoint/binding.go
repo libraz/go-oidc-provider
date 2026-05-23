@@ -22,14 +22,17 @@ type tokenBinding struct {
 // 7800 §3 prescribes. An empty binding returns nil so the access-
 // token mint can guard the cnf assignment with a non-nil check.
 func (b tokenBinding) confirmation() map[string]string {
-	switch {
-	case b.DPoPJKT != "":
-		return map[string]string{"jkt": b.DPoPJKT}
-	case b.MTLSThumbprint != "":
-		return map[string]string{"x5t#S256": b.MTLSThumbprint}
-	default:
+	if b.DPoPJKT == "" && b.MTLSThumbprint == "" {
 		return nil
 	}
+	out := make(map[string]string, 2)
+	if b.DPoPJKT != "" {
+		out["jkt"] = b.DPoPJKT
+	}
+	if b.MTLSThumbprint != "" {
+		out["x5t#S256"] = b.MTLSThumbprint
+	}
+	return out
 }
 
 // tokenTypeFor returns the "token_type" wire value: "DPoP" when a DPoP
@@ -52,10 +55,10 @@ func (b tokenBinding) constrained() bool {
 }
 
 // refreshDPoPJKT returns the JKT to persist on a refresh-token record
-// for the given client. Public clients (TokenEndpointAuthMethod="none")
-// MUST have refresh tokens DPoP-bound per RFC 9449 §5.4. Confidential
-// clients ([private_key_jwt], [client_secret_*], [tls_client_auth])
-// MAY bind or not (RFC 9449 §5.0); the library leaves them unbound so
+// for the given client. Public clients MUST have refresh tokens DPoP-bound
+// per RFC 9449 §5.4. Confidential clients ([private_key_jwt],
+// [client_secret_*], [tls_client_auth]) MAY bind or not (RFC 9449 §5.0);
+// the library leaves them unbound so
 // the client can rotate its DPoP key across refresh requests, which
 // is the OFCS conformance suite's expectation for FAPI 2.0 plans.
 //
@@ -67,7 +70,7 @@ func refreshDPoPJKT(client *store.Client, dpopJKT string) string {
 	if dpopJKT == "" {
 		return ""
 	}
-	if client != nil && client.TokenEndpointAuthMethod != "none" {
+	if client != nil && !client.PublicClient && client.TokenEndpointAuthMethod != "none" {
 		return ""
 	}
 	return dpopJKT

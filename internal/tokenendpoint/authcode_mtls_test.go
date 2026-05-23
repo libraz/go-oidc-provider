@@ -251,10 +251,10 @@ func TestAuthCode_MTLS_NoCertBearer(t *testing.T) {
 	}
 }
 
-// TestAuthCode_MTLS_DPoPWinsOverMTLS checks the documented preference:
-// when both a DPoP proof AND a client cert are presented, the access
-// token carries cnf.jkt (DPoP) and NOT cnf.x5t#S256.
-func TestAuthCode_MTLS_DPoPWinsOverMTLS(t *testing.T) {
+// TestAuthCode_MTLS_DPoPAndMTLSBothPopulateCnf checks that when both a
+// DPoP proof AND a client cert are presented, the access token carries both
+// sender-constraint thumbprints.
+func TestAuthCode_MTLS_DPoPAndMTLSBothPopulateCnf(t *testing.T) {
 	t.Parallel()
 
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
@@ -317,7 +317,7 @@ func TestAuthCode_MTLS_DPoPWinsOverMTLS(t *testing.T) {
 	}
 	body := decodeMTLSResp(t, resp)
 	if got := body["token_type"]; got != "DPoP" {
-		t.Errorf("token_type=%v want DPoP (DPoP wins over mTLS)", got)
+		t.Errorf("token_type=%v want DPoP", got)
 	}
 	at, _ := body["access_token"].(string)
 	keySet := mustKeySet(t, prov)
@@ -329,7 +329,8 @@ func TestAuthCode_MTLS_DPoPWinsOverMTLS(t *testing.T) {
 	if got := parsed.Confirmation["jkt"]; got != dpopKey.jkt {
 		t.Errorf("cnf.jkt=%q want %q", got, dpopKey.jkt)
 	}
-	if _, ok := parsed.Confirmation["x5t#S256"]; ok {
-		t.Errorf("cnf.x5t#S256 must NOT be present when DPoP wins")
+	wantThumb := mtls.Thumbprint(cert)
+	if got := parsed.Confirmation["x5t#S256"]; got != wantThumb {
+		t.Errorf("cnf.x5t#S256=%q want %q", got, wantThumb)
 	}
 }
