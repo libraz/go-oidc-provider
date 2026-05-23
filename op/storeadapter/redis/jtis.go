@@ -18,6 +18,8 @@ type jtiStore struct {
 	parent *Store
 }
 
+const minJTITTL = 60 * time.Second
+
 func newJTIStore(parent *Store) *jtiStore { return &jtiStore{parent: parent} }
 
 // jtiKey hashes the supplied jti so the key length is bounded. JTI
@@ -37,7 +39,7 @@ func (j *jtiStore) jtiKey(jti string) string {
 // expiresAt in the past returns nil without writing (per the contract,
 // already-expired records may be treated as absent on subsequent reads).
 func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) error {
-	ttl := expiresAt.Sub(j.parent.clock.Now())
+	ttl := jtiTTL(j.parent.clock.Now(), expiresAt)
 	if ttl <= 0 {
 		// Past-dated marker: nothing to record, since any subsequent
 		// Has call would treat the entry as absent anyway.
@@ -51,6 +53,17 @@ func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 		return store.ErrAlreadyConsumed
 	}
 	return nil
+}
+
+func jtiTTL(now, expiresAt time.Time) time.Duration {
+	ttl := expiresAt.Sub(now)
+	if ttl <= 0 {
+		return ttl
+	}
+	if ttl < minJTITTL {
+		return minJTITTL
+	}
+	return ttl
 }
 
 // Has reports whether jti has previously been marked. Redis evicts
