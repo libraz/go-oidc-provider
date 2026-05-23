@@ -440,6 +440,41 @@ func TestHandler_POSTLogoutNoHintForeignOrigin(t *testing.T) {
 	}
 }
 
+func TestHandler_POSTLogoutNoHintMissingOriginAndReferer(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, sessionID := h.issueSession(t)
+	getResp := h.doGET(t, url.Values{}, cookieValue)
+	defer getResp.Body.Close()
+	tok := readConfirmCookie(getResp)
+	if tok == "" {
+		t.Fatal("interstitial GET did not set the confirmation cookie")
+	}
+
+	form := url.Values{"logout_csrf": {tok}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	r.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: tok})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400; missing Origin/Referer must be rejected", resp.StatusCode)
+	}
+	if _, err := h.store.Sessions().Find(context.Background(), sessionID); err != nil {
+		t.Errorf("session record terminated by rejected POST: err=%v", err)
+	}
+}
+
 // hasConfirmCookie reports whether resp carries a Set-Cookie header
 // that installs the interstitial CSRF cookie. The match is on name
 // only because the value is opaque (random per render).

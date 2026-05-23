@@ -209,12 +209,9 @@ func validateOriginOrReferer(r *http.Request) bool {
 	if ref := r.Header.Get("Referer"); ref != "" {
 		return hostHeaderForReferer(ref) == host
 	}
-	// Neither header is present. Modern browsers always emit Origin
-	// on cross-origin POST submissions; the absence is consistent
-	// with a same-origin form post or a non-browser client. Accept
-	// the request — the cookie + token gate has already proven the
-	// caller possesses both halves of the double-submit token, which
-	// a cross-site script cannot achieve under the cookie's
-	// SameSite=Strict policy.
-	return true
+	// Neither header is present. Treat the request as unverifiable:
+	// the confirmation POST is browser-facing and should carry one of
+	// these provenance headers before the double-submit token is
+	// honoured.
+	return false
 }

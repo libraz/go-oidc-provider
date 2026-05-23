@@ -272,6 +272,7 @@ func TestScenario_ES_005_RedirectViaClientID(t *testing.T) {
 		t.Fatalf("build POST %s: %v", target, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", tk.Server.URL)
 	req.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: csrfCookie.Value})
 	postResp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
