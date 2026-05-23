@@ -17,6 +17,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -279,7 +280,7 @@ func dispatchAuthorize(
 		clearCookie(w, cookie.SessionProfile)
 	}
 	hint := computeAuthorizeHint(r.Context(), deps, req, client, active, now)
-	if firstPartyShouldSkipConsent(hint, req, client, active, deps) {
+	if firstPartyShouldSkipConsent(r, hint, req, client, active, deps) {
 		newHint, ok := applyFirstPartySkip(w, r, deps, req, client, active, hint)
 		if !ok {
 			return
@@ -321,6 +322,7 @@ func dispatchAuthorize(
 // The [store.Client.Source] guard is enforced by the wiring layer
 // (see [firstPartyClientSet]); this helper trusts that contract.
 func firstPartyShouldSkipConsent(
+	r *http.Request,
 	hint authorizeHint,
 	req *authorize.Request,
 	client *store.Client,
@@ -333,13 +335,31 @@ func firstPartyShouldSkipConsent(
 	if !deps.isFirstPartyClient(client.ID) {
 		return false
 	}
+	if !firstPartyAutoGrantRequestTrusted(r) {
+		return false
+	}
 	if containsString(req.Prompt, interaction.PromptConsent) {
+		return false
+	}
+	if oidcscope.ContainsOfflineAccess(req.Scope) {
 		return false
 	}
 	switch hint.decision {
 	case decisionInteract:
 		return hint.prompt == interaction.PromptConsent
 	case decisionConsentRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func firstPartyAutoGrantRequestTrusted(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "same-site":
 		return true
 	default:
 		return false

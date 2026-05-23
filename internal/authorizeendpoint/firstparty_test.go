@@ -61,7 +61,7 @@ func newFirstPartyHarness(t *testing.T) *firstPartyHarness {
 		RedirectURIs:            []string{"https://rp.example.com/cb"},
 		GrantTypes:              []string{"authorization_code"},
 		ResponseTypes:           []string{"code"},
-		Scopes:                  []string{"openid", "profile", "email"},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
 		TokenEndpointAuthMethod: "client_secret_basic",
 		Source:                  store.ClientSourceStatic,
 	}); err != nil {
@@ -146,6 +146,22 @@ func newFirstPartyHarness(t *testing.T) *firstPartyHarness {
 func TestAuthorize_FirstParty_SkipsConsentAndMintsCode(t *testing.T) {
 	t.Parallel()
 
+	testAuthorizeFirstPartySkipsConsentAndMintsCode(t, "same-origin")
+}
+
+// TestAuthorize_FirstParty_SameSiteSkipsConsentAndMintsCode covers the
+// common deployment shape where the OP and first-party RP live on sibling
+// hosts under the same registrable domain, e.g. id.example.jp and
+// ec.example.jp. Browsers classify that navigation as Sec-Fetch-Site:
+// same-site, not same-origin.
+func TestAuthorize_FirstParty_SameSiteSkipsConsentAndMintsCode(t *testing.T) {
+	t.Parallel()
+
+	testAuthorizeFirstPartySkipsConsentAndMintsCode(t, "same-site")
+}
+
+func testAuthorizeFirstPartySkipsConsentAndMintsCode(t *testing.T, secFetchSite string) {
+	t.Helper()
 	h := newFirstPartyHarness(t)
 	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
 		Subject:  "user-fp",
@@ -159,6 +175,7 @@ func TestAuthorize_FirstParty_SkipsConsentAndMintsCode(t *testing.T) {
 
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", secFetchSite)
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
 	w := httptest.NewRecorder()
 	h.handler.ServeHTTP(w, r)
@@ -257,6 +274,7 @@ func TestAuthorize_FirstParty_PromptConsentSuppressesSkip(t *testing.T) {
 	v.Set("prompt", "consent")
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
 	w := httptest.NewRecorder()
 	h.handler.ServeHTTP(w, r)
@@ -323,6 +341,7 @@ func TestAuthorize_FirstParty_PromptNoneSilentMint(t *testing.T) {
 	v.Set("prompt", "none")
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
 	w := httptest.NewRecorder()
 	h.handler.ServeHTTP(w, r)
@@ -370,5 +389,85 @@ func TestAuthorize_FirstParty_NotInSetGoesThroughInteraction(t *testing.T) {
 	loc := mustParseLocation(t, resp)
 	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
 		t.Fatalf("Location=%s; non-first-party clients must still see consent prompt", loc.String())
+	}
+}
+
+// TestAuthorize_FirstParty_CrossSiteFetchMetadataSuppressesSkip pins the
+// CSRF boundary around first-party auto-consent. A cross-site top-level
+// navigation to /authorize is a normal OAuth entry point, but it must not
+// silently mint a code when consent would otherwise be the only user
+// interaction gate.
+func TestAuthorize_FirstParty_CrossSiteFetchMetadataSuppressesSkip(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t)
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-fp",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	r.Header.Set("Sec-Fetch-Mode", "navigate")
+	r.Header.Set("Sec-Fetch-Dest", "document")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302", resp.StatusCode)
+	}
+	loc := mustParseLocation(t, resp)
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Fatalf("Location=%s want interaction redirect (cross-site request must not auto-grant)", loc.String())
+	}
+	for _, ev := range h.emitter.snapshot() {
+		if ev.Name == "consent.granted.first_party" {
+			t.Fatalf("first-party audit fired for cross-site request: %+v", ev)
+		}
+	}
+}
+
+// TestAuthorize_FirstParty_OfflineAccessSuppressesSkip keeps long-lived
+// credentials behind an explicit consent ceremony even for first-party
+// clients.
+func TestAuthorize_FirstParty_OfflineAccessSuppressesSkip(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t)
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-fp",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	v := goodAuthorizeValues()
+	v.Set("scope", "openid profile offline_access")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302", resp.StatusCode)
+	}
+	loc := mustParseLocation(t, resp)
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Fatalf("Location=%s want interaction redirect (offline_access must not auto-grant)", loc.String())
+	}
+	for _, ev := range h.emitter.snapshot() {
+		if ev.Name == "consent.granted.first_party" {
+			t.Fatalf("first-party audit fired for offline_access request: %+v", ev)
+		}
 	}
 }
