@@ -50,6 +50,9 @@ func TestHandler_GetReturnsJWKSJSON(t *testing.T) {
 	if got := resp.Header.Get("Cache-Control"); got != jwks.CacheControl {
 		t.Errorf("Cache-Control=%q want %q", got, jwks.CacheControl)
 	}
+	if jwks.CacheControl != "public, max-age=3600, stale-while-revalidate=3600" {
+		t.Fatalf("CacheControl = %q, want 1h default cache", jwks.CacheControl)
+	}
 
 	var payload struct {
 		Keys []map[string]any `json:"keys"`
@@ -213,7 +216,7 @@ func TestHandler_IfNoneMatchMismatchReturns200(t *testing.T) {
 
 // TestHandler_RotationAwareCacheControl pins the L-JOSE-CACHE remediation:
 // while RotationActive is true the handler emits the short
-// Cache-Control header so RPs revalidate before the 24h default
+// Cache-Control header so RPs revalidate before the normal default
 // expires; once the predicate flips back to false the long-cache
 // header returns.
 func TestHandler_RotationAwareCacheControl(t *testing.T) {

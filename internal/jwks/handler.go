@@ -12,10 +12,9 @@ import (
 
 // CacheControl is the value the handler stamps on every successful
 // response when no key rotation is currently in progress. It targets a
-// 24-hour cache with a 1-hour stale-while-revalidate window, which
-// lets RP caches absorb a normal day of traffic without repeatedly
-// hitting the OP.
-const CacheControl = "public, max-age=86400, stale-while-revalidate=3600"
+// 1-hour cache with a 1-hour stale-while-revalidate window, keeping
+// normal traffic cacheable without delaying key rollouts for a full day.
+const CacheControl = "public, max-age=3600, stale-while-revalidate=3600"
 
 // CacheControlRotating is the value the handler stamps on responses
 // while a key rotation overlap window is active. It shortens the cache
