@@ -404,6 +404,38 @@ func TestBridge_PrefixDispatch_TableDriven(t *testing.T) {
 	}
 }
 
+func TestBridge_PrefixDispatch_UnknownNamesCollapse(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		eventName  string
+		metricName string
+		labelName  string
+	}{
+		{"dcr.attacker_controlled_1", "oidc_dcr_events_total", "event"},
+		{"device_authorization.attacker_controlled_2", "oidc_device_authorization_events_total", "event"},
+		{"device_code.attacker_controlled_3", "oidc_device_code_events_total", "event"},
+		{"ciba.attacker_controlled_4", "oidc_ciba_events_total", "event"},
+		{"token_exchange.attacker_controlled_5", "oidc_token_exchange_events_total", "event"},
+		{"logout.back_channel.attacker_controlled_6", "oidc_back_channel_logout_total", "result"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.eventName, func(t *testing.T) {
+			t.Parallel()
+			c, reg := newTestCollector(t, metrics.Options{})
+			b := metrics.NewBridge(c, nil)
+			for range 100 {
+				b.Emit(context.Background(), audit.Event{Name: tc.eventName})
+			}
+			families, _ := reg.Gather()
+			got := counterValue(t, families, tc.metricName, map[string]string{tc.labelName: "unknown"})
+			if got != 100 {
+				t.Fatalf("%s{%s=unknown} = %v, want 100", tc.metricName, tc.labelName, got)
+			}
+		})
+	}
+}
+
 func TestBridge_BackChannelLogout_NoSessions_RoutesToResultLabel(t *testing.T) {
 	t.Parallel()
 

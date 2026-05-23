@@ -68,18 +68,95 @@ func (b *Bridge) update(ev audit.Event) {
 	case b.updateFlowEvents(ev):
 	case b.updateOperationalEvents(ev):
 	case strings.HasPrefix(ev.Name, "dcr."):
-		b.c.dcrEvents.WithLabelValues(strings.TrimPrefix(ev.Name, "dcr.")).Inc()
+		b.c.dcrEvents.WithLabelValues(allowlistedEventLabel(ev.Name, "dcr.", dcrEventLabels)).Inc()
 	case strings.HasPrefix(ev.Name, "device_authorization."):
-		b.c.deviceAuthorizationEvents.WithLabelValues(strings.TrimPrefix(ev.Name, "device_authorization.")).Inc()
+		b.c.deviceAuthorizationEvents.WithLabelValues(allowlistedEventLabel(ev.Name, "device_authorization.", deviceAuthorizationEventLabels)).Inc()
 	case strings.HasPrefix(ev.Name, "device_code."):
-		b.c.deviceCodeEvents.WithLabelValues(strings.TrimPrefix(ev.Name, "device_code.")).Inc()
+		b.c.deviceCodeEvents.WithLabelValues(allowlistedEventLabel(ev.Name, "device_code.", deviceCodeEventLabels)).Inc()
 	case strings.HasPrefix(ev.Name, "ciba."):
-		b.c.cibaEvents.WithLabelValues(strings.TrimPrefix(ev.Name, "ciba.")).Inc()
+		b.c.cibaEvents.WithLabelValues(allowlistedEventLabel(ev.Name, "ciba.", cibaEventLabels)).Inc()
 	case strings.HasPrefix(ev.Name, "token_exchange."):
-		b.c.tokenExchangeEvents.WithLabelValues(strings.TrimPrefix(ev.Name, "token_exchange.")).Inc()
+		b.c.tokenExchangeEvents.WithLabelValues(allowlistedEventLabel(ev.Name, "token_exchange.", tokenExchangeEventLabels)).Inc()
 	case strings.HasPrefix(ev.Name, "logout.back_channel."):
-		b.c.backChannelLogout.WithLabelValues(strings.TrimPrefix(ev.Name, "logout.back_channel.")).Inc()
+		b.c.backChannelLogout.WithLabelValues(allowlistedEventLabel(ev.Name, "logout.back_channel.", backChannelLogoutLabels)).Inc()
 	}
+}
+
+const unknownEventLabel = "unknown"
+
+var (
+	dcrEventLabels = map[string]struct{}{
+		"client.registered":                         {},
+		"client.metadata_read":                      {},
+		"client.metadata_updated":                   {},
+		"client.deleted":                            {},
+		"iat.consumed":                              {},
+		"iat.expired":                               {},
+		"iat.invalid":                               {},
+		"rat.invalid":                               {},
+		"metadata.validation_failed":                {},
+		"open_registration_used":                    {},
+		"cascade.refresh_revoke_failed":             {},
+		"cascade.grant_revoke_failed":               {},
+		"cascade.access_token_revoke_failed":        {},
+		"cascade.opaque_access_token_revoke_failed": {},
+	}
+	deviceAuthorizationEventLabels = map[string]struct{}{
+		"issued":           {},
+		"rejected":         {},
+		"unbound_rejected": {},
+	}
+	deviceCodeEventLabels = map[string]struct{}{
+		"token.issued":                       {},
+		"token.rejected":                     {},
+		"token.slow_down":                    {},
+		"verification.approved":              {},
+		"verification.denied":                {},
+		"verification.user_code_brute_force": {},
+		"revoked":                            {},
+	}
+	cibaEventLabels = map[string]struct{}{
+		"authorization.issued":           {},
+		"authorization.rejected":         {},
+		"authorization.unbound_rejected": {},
+		"auth_device.approved":           {},
+		"auth_device.denied":             {},
+		"poll_abuse.lockout":             {},
+		"poll_observation.failed":        {},
+		"token.issued":                   {},
+		"token.rejected":                 {},
+		"token.slow_down":                {},
+	}
+	tokenExchangeEventLabels = map[string]struct{}{
+		"requested":                    {},
+		"granted":                      {},
+		"policy_denied":                {},
+		"policy_error":                 {},
+		"scope_inflation_blocked":      {},
+		"audience_blocked":             {},
+		"ttl_capped":                   {},
+		"act_chain_too_deep":           {},
+		"empty_scope_rejected":         {},
+		"actor_equals_subject":         {},
+		"subject_token_external":       {},
+		"actor_token_external":         {},
+		"subject_token_invalid":        {},
+		"refresh_issued":               {},
+		"self_exchange":                {},
+		"subject_token_registry_error": {},
+	}
+	backChannelLogoutLabels = map[string]struct{}{
+		"delivered": {},
+		"failed":    {},
+	}
+)
+
+func allowlistedEventLabel(name, prefix string, allowed map[string]struct{}) string {
+	label := strings.TrimPrefix(name, prefix)
+	if _, ok := allowed[label]; ok {
+		return label
+	}
+	return unknownEventLabel
 }
 
 // updateFlowEvents handles token / login flow events. The split from

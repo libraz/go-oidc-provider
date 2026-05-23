@@ -97,6 +97,9 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 	} {
 		bridge.Emit(context.Background(), ev)
 	}
+	for i := range 100 {
+		bridge.Emit(context.Background(), audit.Event{Name: "token_exchange.attacker_controlled_" + string(rune('a'+i%26))})
+	}
 
 	families, err := reg.Gather()
 	if err != nil {
@@ -110,6 +113,14 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 					t.Errorf("metric %s carries label %q outside the allowlist", fam.GetName(), name)
 				}
 			}
+		}
+	}
+	for _, fam := range families {
+		if fam.GetName() != "oidc_token_exchange_events_total" {
+			continue
+		}
+		if got, max := len(fam.GetMetric()), 3; got > max {
+			t.Fatalf("token_exchange metrics = %d, want <= %d after attacker-controlled names", got, max)
 		}
 	}
 }
