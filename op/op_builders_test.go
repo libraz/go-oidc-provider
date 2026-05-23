@@ -7,9 +7,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
+
+type builderTestClock struct{ now time.Time }
+
+func (c builderTestClock) Now() time.Time { return c.now }
 
 // TestBuildProxyTrust_NilWhenNoCIDRs confirms the documented "no proxy
 // trusted" sentinel: when [WithTrustedProxies] was never invoked, the
@@ -25,6 +32,70 @@ func TestBuildProxyTrust_NilWhenNoCIDRs(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("trust=%v want nil for empty CIDRs", got)
+	}
+}
+
+// TestBuildAssertionVerifiers_EndpointScopedAudience pins that a
+// private_key_jwt assertion minted for PAR is not also accepted at token /
+// revoke / introspection / device endpoints. Issuer remains an accepted
+// alias for FAPI 2.0, but endpoint URLs are scoped to the endpoint that
+// receives the assertion.
+func TestBuildAssertionVerifiers_EndpointScopedAudience(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cfg := &config{
+		issuer: "https://op.example.com",
+		store:  inmem.New(inmem.WithClock(builderTestClock{now: now})),
+		clock:  builderTestClock{now: now},
+	}
+	cfg.applyDefaults()
+
+	verifiers, err := buildAssertionVerifiers(cfg)
+	if err != nil {
+		t.Fatalf("buildAssertionVerifiers: %v", err)
+	}
+
+	tokenAud := absoluteEndpointURL(cfg, cfg.endpoints.Token)
+	parAud := absoluteEndpointURL(cfg, cfg.endpoints.PAR)
+	backchannelAud := absoluteEndpointURL(cfg, cfg.endpoints.Backchannel)
+
+	assertVerifierAudiences(t, "token", verifiers.Token, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
+	assertVerifierAudiences(t, "par", verifiers.PAR, parAud, []string{cfg.issuer}, []string{tokenAud, backchannelAud})
+	assertVerifierAudiences(t, "introspect", verifiers.Introspect, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
+	assertVerifierAudiences(t, "revoke", verifiers.Revoke, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
+	assertVerifierAudiences(t, "device", verifiers.Device, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
+	assertVerifierAudiences(t, "backchannel", verifiers.Backchannel, backchannelAud, []string{cfg.issuer, tokenAud}, []string{parAud})
+}
+
+func assertVerifierAudiences(
+	t *testing.T,
+	name string,
+	v *clientauth.PrivateKeyJWTVerifier,
+	wantAudience string,
+	wantAux []string,
+	forbidden []string,
+) {
+	t.Helper()
+	if v == nil {
+		t.Fatalf("%s verifier nil", name)
+	}
+	if v.Audience != wantAudience {
+		t.Errorf("%s Audience=%q want %q", name, v.Audience, wantAudience)
+	}
+	aux := make(map[string]bool, len(v.AuxAudiences))
+	for _, aud := range v.AuxAudiences {
+		aux[aud] = true
+	}
+	for _, aud := range wantAux {
+		if !aux[aud] {
+			t.Errorf("%s AuxAudiences=%v missing %q", name, v.AuxAudiences, aud)
+		}
+	}
+	for _, aud := range forbidden {
+		if aux[aud] || v.Audience == aud {
+			t.Errorf("%s accepts forbidden endpoint audience %q (Audience=%q Aux=%v)", name, aud, v.Audience, v.AuxAudiences)
+		}
 	}
 }
 

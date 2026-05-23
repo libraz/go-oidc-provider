@@ -429,34 +429,30 @@ func buildClientEncryptionResolver(cfg *config) *clientencjwks.Resolver {
 	})
 }
 
-// buildAssertionVerifier constructs the [clientauth.PrivateKeyJWTVerifier]
-// the OP installs at every endpoint that authenticates clients
-// (/token, /par, /introspect, /revoke). The verifier is unconditional
-// — discovery advertises private_key_jwt as a supported auth method
-// and the FAPI 2.0 §3.1.3 allow-list lists it as preferred — so the
-// OP wiring layer does not gate it on a feature flag. Embedders that
-// register a client with a different [TokenEndpointAuthMethod] are
-// unaffected: the verifier is consulted only when the inbound
-// request actually claims private_key_jwt.
+type assertionVerifiers struct {
+	Token       *clientauth.PrivateKeyJWTVerifier
+	PAR         *clientauth.PrivateKeyJWTVerifier
+	Introspect  *clientauth.PrivateKeyJWTVerifier
+	Revoke      *clientauth.PrivateKeyJWTVerifier
+	Device      *clientauth.PrivateKeyJWTVerifier
+	Backchannel *clientauth.PrivateKeyJWTVerifier
+}
+
+// buildAssertionVerifiers constructs endpoint-scoped
+// [clientauth.PrivateKeyJWTVerifier] instances for every endpoint that
+// authenticates clients. All instances share the same JWKS resolver and
+// consumed-JTI store, but each endpoint gets its own expected audience
+// set so an assertion minted for PAR cannot be replayed at revoke,
+// introspection, device authorization, or token.
 //
-// The verifier reads inline JWKs from [store.Client.JWKs] via
-// [clientauth.StoreJWKSResolver] and falls back to fetching the
-// keyset from [store.Client.JWKsURI] using [jar.Fetcher] (the same
-// SSRF-gated, body-capped, ETag-revalidated fetcher backing JAR
-// verification). The fetcher's deny-list is widened by
-// [WithAllowPrivateNetworkJWKS] when the OP must reach RP keys on a
-// private network.
-//
-// Audience is the absolute token endpoint URL, per OIDC Core §9 / RFC
-// 7523 §3 — every assertion at /token, /par, /introspect, and /revoke
-// MUST set "aud" to that URL. The library reuses the same value across
-// the four endpoints so an RP that signs once can authenticate
-// anywhere; spec-strict embedders who want endpoint-scoped audiences
-// can swap the verifier through the public store.
-func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, error) {
+// The AS issuer remains accepted as an alias on every endpoint for FAPI
+// 2.0 / RFC 7523bis compatibility. CIBA additionally accepts the token
+// endpoint URL because CIBA Core 1.0 §7.1 explicitly permits issuer,
+// token endpoint URL, and backchannel authentication endpoint URL.
+func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
 	resolver, err := clientauth.NewStoreJWKSResolver(cfg.store.Clients())
 	if err != nil {
-		return nil, &Error{
+		return assertionVerifiers{}, &Error{
 			Code:        codeConfiguration,
 			Description: "private_key_jwt JWKS resolver construction failed",
 			Cause:       err,
@@ -470,30 +466,32 @@ func buildAssertionVerifier(cfg *config) (*clientauth.PrivateKeyJWTVerifier, err
 		jwksFetcher.SetBaseTransport(cfg.jwksHTTPTransport)
 	}
 	resolver.SetURLFetcher(jwksFetcher)
-	return &clientauth.PrivateKeyJWTVerifier{
-		Resolver: resolver,
-		JTIStore: cfg.store.ConsumedJTIs(),
-		Audience: absoluteEndpointURL(cfg, cfg.endpoints.Token),
-		// FAPI 2.0 §5.2.2 mandates aud == issuer; OIDC Core §9
-		// mandates aud == token endpoint URL. RFC 7523 §3 leaves the
-		// choice to the AS. Accepting both lets the same OP serve
-		// OIDC Core and FAPI 2.0 clients without forcing a per-
-		// profile verifier swap. The PAR endpoint URL is also
-		// accepted because OFCS' "par-test-pushed-authorization-url-
-		// as-audience" module sets aud == PAR endpoint when the
-		// client_assertion lands at /par, and RFC 7523 §3's "value
-		// identifying the AS" leaves the specific URL up to the AS.
-		// The backchannel-authentication endpoint URL is accepted for
-		// CIBA Core 1.0 §7.1, which mandates the OP accept Issuer /
-		// Token Endpoint URL / Backchannel Authentication Endpoint
-		// URL as values that identify it as an intended audience.
-		AuxAudiences: []string{
-			cfg.issuer,
-			absoluteEndpointURL(cfg, cfg.endpoints.PAR),
-			absoluteEndpointURL(cfg, cfg.endpoints.Backchannel),
-		},
-		Clock: cfg.clock.Now,
+	tokenAud := absoluteEndpointURL(cfg, cfg.endpoints.Token)
+	parAud := absoluteEndpointURL(cfg, cfg.endpoints.PAR)
+	backchannelAud := absoluteEndpointURL(cfg, cfg.endpoints.Backchannel)
+	return assertionVerifiers{
+		Token:       buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
+		PAR:         buildAssertionVerifier(cfg, resolver, parAud, []string{cfg.issuer}),
+		Introspect:  buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
+		Revoke:      buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
+		Device:      buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
+		Backchannel: buildAssertionVerifier(cfg, resolver, backchannelAud, []string{cfg.issuer, tokenAud}),
 	}, nil
+}
+
+func buildAssertionVerifier(
+	cfg *config,
+	resolver clientauth.JWKSResolver,
+	audience string,
+	auxAudiences []string,
+) *clientauth.PrivateKeyJWTVerifier {
+	return &clientauth.PrivateKeyJWTVerifier{
+		Resolver:     resolver,
+		JTIStore:     cfg.store.ConsumedJTIs(),
+		Audience:     audience,
+		AuxAudiences: append([]string(nil), auxAudiences...),
+		Clock:        cfg.clock.Now,
+	}
 }
 
 // absoluteEndpointURL composes the OP's issuer with the mount prefix

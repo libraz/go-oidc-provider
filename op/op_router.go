@@ -59,7 +59,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if err != nil {
 		return nil, err
 	}
-	assertionVerifier, err := buildAssertionVerifier(cfg)
+	assertionVerifiers, err := buildAssertionVerifiers(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			DPoP:                           dpopVerifier,
 			DPoPNonces:                     cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
 			MTLS:                           mtlsVerifier,
-			AssertionVerifier:              assertionVerifier,
+			AssertionVerifier:              assertionVerifiers.Token,
 			AccessTokenTTL:                 cfg.accessTokenTTL,
 			RefreshTokenTTL:                cfg.refreshTokenTTL,
 			RefreshTokenOfflineTTL:         cfg.refreshTokenOfflineTTL,
@@ -145,17 +145,17 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			ClientEncJWKs:                  encResolver,
 		})),
 	)
-	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
-	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifier, jarVerifier, strictCORS)
+	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifier, strictCORS)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
 	}
-	if err := mountPAREndpoint(mux, cfg, scopes, jarVerifier, assertionVerifier, dpopVerifier, strictCORS); err != nil {
+	if err := mountPAREndpoint(mux, cfg, scopes, jarVerifier, assertionVerifiers.PAR, dpopVerifier, strictCORS); err != nil {
 		return nil, err
 	}
-	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifier, strictCORS)
-	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifier, strictCORS)
+	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
+	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifiers.Revoke, strictCORS)
 	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS)
 	bcc, err := buildBackchannelCoordinator(cfg, keySet)
 	if err != nil {
@@ -277,6 +277,7 @@ func mountIntrospectionEndpoint(
 	keySet *keys.Set,
 	encResolver *clientencjwks.Resolver,
 	assertionVerifier clientauth.AssertionVerifier,
+	subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error),
 	strictCORS *cors.Strict,
 ) {
 	if !featureEnabled(cfg.features, feature.Introspect) {
@@ -301,6 +302,7 @@ func mountIntrospectionEndpoint(
 			RevocationStrategy:         cfg.atRevocation,
 			Audit:                      cfg.effectiveAuditEmitter(),
 			ClientEncJWKs:              encResolver,
+			SubjectProjector:           subjectProjector,
 		})),
 	)
 }
