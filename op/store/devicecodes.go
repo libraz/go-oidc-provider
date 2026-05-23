@@ -178,6 +178,13 @@ type DeviceCode struct {
 	// counter on every mismatch and triggers the lockout transition
 	// at the package-defined cap.
 	UserCodeStrikes uint8
+
+	// PollViolations is the count of token-endpoint polls that
+	// arrived inside the effective interval and produced slow_down.
+	// The token endpoint increments this counter and denies the
+	// record with reason "poll_abuse" when it reaches the package
+	// cap.
+	PollViolations uint8
 }
 
 // DeviceCodeStore is the substore for RFC 8628 device-authorization
@@ -272,6 +279,13 @@ type DeviceCodeStore interface {
 	// "user_code_lockout". Returns [ErrNotFound] when the record
 	// does not exist.
 	IncrementUserCodeStrike(ctx context.Context, deviceCode string) (uint8, error)
+
+	// IncrementPollViolation increments [DeviceCode.PollViolations]
+	// by one and returns the new value. The token endpoint calls this
+	// after a slow_down decision so it can lock out clients that keep
+	// polling despite repeated backoff responses. Returns
+	// [ErrNotFound] when the record does not exist.
+	IncrementPollViolation(ctx context.Context, deviceCode string) (uint8, error)
 
 	// Consume atomically transitions an Approved record to
 	// Consumed and returns the record. The library calls Consume

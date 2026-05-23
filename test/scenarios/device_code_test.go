@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/devicecodekit"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -1373,6 +1374,61 @@ func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 		t.Errorf("after poll #3 (slow_down #2): Interval = %v, want %v (double of %v)",
 			rec.Interval, wantAfter3, wantAfter2)
 	}
+}
+
+// TestScenario_DEV_098B_TokenPollAbuseLockout pins the polling-channel
+// brute-force gate. A client that keeps polling inside the effective
+// interval receives slow_down while the OP accumulates strikes; at the
+// package cap the record is denied with reason "poll_abuse", and the
+// next poll surfaces access_denied.
+//
+// Spec: RFC 8628 §3.5, RFC 8628 §5.2.
+func TestScenario_DEV_098B_TokenPollAbuseLockout(t *testing.T) {
+	t.Parallel()
+	p := newDevProvider(t, []string{"openid"})
+
+	deviceCode := p.issueDeviceCode(t, "openid")
+	status, body := p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("baseline poll status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "authorization_pending")
+
+	for i := 1; i <= int(devicecode.MaxPollViolations); i++ {
+		status, body = p.tokenForm(t, url.Values{
+			"grant_type":  {devURNDeviceCode},
+			"device_code": {deviceCode},
+		})
+		if status != http.StatusBadRequest {
+			t.Fatalf("slow_down poll #%d status=%d want 400 body=%v", i, status, body)
+		}
+		expectError(t, body, "slow_down")
+	}
+	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after poll-abuse cap: %v", err)
+	}
+	if rec.PollViolations != devicecode.MaxPollViolations {
+		t.Errorf("PollViolations = %d, want %d", rec.PollViolations, devicecode.MaxPollViolations)
+	}
+	if rec.Status != store.DeviceCodeStatusDenied {
+		t.Errorf("Status = %v, want Denied", rec.Status)
+	}
+	if rec.DenyReason != "poll_abuse" {
+		t.Errorf("DenyReason = %q, want poll_abuse", rec.DenyReason)
+	}
+
+	status, body = p.tokenForm(t, url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("post-lockout poll status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "access_denied")
 }
 
 // TestScenario_DEV_099_DiscoveryGrantTypesIncludesDeviceCode pins the

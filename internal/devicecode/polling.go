@@ -29,6 +29,11 @@ const (
 	// still accommodates a distracted user finding a secondary
 	// device.
 	DefaultExpiresIn = 600 * time.Second
+
+	// MaxPollViolations is the default number of slow_down offences
+	// tolerated before the token endpoint locks the record with
+	// reason="poll_abuse".
+	MaxPollViolations uint8 = 5
 )
 
 // PollDecision is the closed sum returned by [DecidePoll] naming
@@ -137,6 +142,15 @@ type PollInput struct {
 	// expired_token to prevent token-replay across the
 	// approve→consume race window.
 	Consumed bool
+
+	// PollViolations is the current slow_down strike count from the
+	// substore record. When it reaches [MaxPollViolations],
+	// [DecidePoll] returns access_denied.
+	PollViolations uint8
+
+	// MaxPollViolations overrides the default strike threshold. Zero
+	// falls back to [MaxPollViolations].
+	MaxPollViolations uint8
 }
 
 // PollOutput captures the decision plus the next-interval the token
@@ -145,8 +159,9 @@ type PollInput struct {
 // [PollDecisionSlowDown]; it is the doubled value the next poll's
 // gate compares against.
 type PollOutput struct {
-	Decision     PollDecision
-	NextInterval time.Duration
+	Decision             PollDecision
+	NextInterval         time.Duration
+	CountThisAsViolation bool
 }
 
 // DecidePoll applies the polling discipline documented in ADR 0031
@@ -155,12 +170,13 @@ type PollOutput struct {
 //  1. Consumed → expired_token (token-replay guard).
 //  2. ExpiresAt ≤ Now → expired_token (TTL hard stop).
 //  3. Denied → access_denied.
-//  4. Now − LastPolledAt < FastPollFloor (only when a previous
+//  4. PollViolations ≥ [MaxPollViolations] → access_denied.
+//  5. Now − LastPolledAt < FastPollFloor (only when a previous
 //     poll exists) → slow_down (doubling applies).
-//  5. Now − LastPolledAt < EffectiveInterval (only when a previous
+//  6. Now − LastPolledAt < EffectiveInterval (only when a previous
 //     poll exists) → slow_down (doubling applies).
-//  6. Approved → emit.
-//  7. Otherwise → authorization_pending.
+//  7. Approved → emit.
+//  8. Otherwise → authorization_pending.
 //
 // The order matters: the TTL gate runs before the deny gate so a
 // late poll on a denied-then-expired record still surfaces as
@@ -177,12 +193,20 @@ func DecidePoll(in PollInput) PollOutput {
 	if in.Denied {
 		return PollOutput{Decision: PollDecisionAccessDenied}
 	}
+	threshold := in.MaxPollViolations
+	if threshold == 0 {
+		threshold = MaxPollViolations
+	}
+	if in.PollViolations >= threshold {
+		return PollOutput{Decision: PollDecisionAccessDenied}
+	}
 	if !in.LastPolledAt.IsZero() {
 		gap := in.Now.Sub(in.LastPolledAt)
 		if gap < FastPollFloor || gap < in.EffectiveInterval {
 			return PollOutput{
-				Decision:     PollDecisionSlowDown,
-				NextInterval: nextInterval(in.EffectiveInterval),
+				Decision:             PollDecisionSlowDown,
+				NextInterval:         nextInterval(in.EffectiveInterval),
+				CountThisAsViolation: true,
 			}
 		}
 	}

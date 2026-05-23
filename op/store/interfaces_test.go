@@ -380,6 +380,10 @@ func (fakeDeviceCodeStore) IncrementUserCodeStrike(context.Context, string) (uin
 	return 0, store.ErrNotFound
 }
 
+func (fakeDeviceCodeStore) IncrementPollViolation(context.Context, string) (uint8, error) {
+	return 0, store.ErrNotFound
+}
+
 func (fakeDeviceCodeStore) Consume(context.Context, string) (*store.DeviceCode, error) {
 	return nil, store.ErrNotFound
 }

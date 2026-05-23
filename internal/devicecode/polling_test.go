@@ -95,6 +95,24 @@ func TestDecidePoll_SlowDownDoubles(t *testing.T) {
 	if out.NextInterval != 10*time.Second {
 		t.Errorf("next interval: got %v, want 10s (double of 5s)", out.NextInterval)
 	}
+	if !out.CountThisAsViolation {
+		t.Error("slow_down should count as a poll violation")
+	}
+}
+
+func TestDecidePoll_PollViolationLockout(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
+	out := devicecode.DecidePoll(devicecode.PollInput{
+		Now:               now,
+		EffectiveInterval: 5 * time.Second,
+		ExpiresAt:         now.Add(time.Minute),
+		Approved:          true,
+		PollViolations:    devicecode.MaxPollViolations,
+	})
+	if out.Decision != devicecode.PollDecisionAccessDenied {
+		t.Errorf("poll violations at cap: got %v, want access_denied", out.Decision)
+	}
 }
 
 func TestDecidePoll_FastPollFloor(t *testing.T) {

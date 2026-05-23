@@ -159,6 +159,23 @@ func (s *deviceCodeStore) IncrementUserCodeStrike(_ context.Context, deviceCode 
 	return strikes, nil
 }
 
+func (s *deviceCodeStore) IncrementPollViolation(_ context.Context, deviceCode string) (uint8, error) {
+	var violations uint8
+	err := s.transition(deviceCode, func(rec *store.DeviceCode) error {
+		if rec.PollViolations == 255 {
+			violations = rec.PollViolations
+			return nil
+		}
+		rec.PollViolations++
+		violations = rec.PollViolations
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return violations, nil
+}
+
 func (s *deviceCodeStore) Consume(_ context.Context, deviceCode string) (*store.DeviceCode, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

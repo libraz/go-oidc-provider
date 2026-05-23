@@ -174,6 +174,26 @@ func TestDeviceCodes_StrikeAccumulation(t *testing.T) {
 	}
 }
 
+func TestDeviceCodes_PollViolationAccumulation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	rec := makeDeviceCode("poll-violate-id", "POLL-V1", store.DeviceCodeStatusPending, time.Now().Add(time.Minute))
+	if err := ds.Save(ctx, rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	for i := 1; i <= 5; i++ {
+		got, err := ds.IncrementPollViolation(ctx, "poll-violate-id")
+		if err != nil {
+			t.Fatalf("IncrementPollViolation #%d: %v", i, err)
+		}
+		if int(got) != i {
+			t.Errorf("IncrementPollViolation #%d returned %d, want %d", i, got, i)
+		}
+	}
+}
+
 func TestDeviceCodes_RecordPoll(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -131,6 +131,7 @@ func applyPollDecision(
 		Approved:          rec.Status == store.DeviceCodeStatusApproved,
 		Denied:            rec.Status == store.DeviceCodeStatusDenied,
 		Consumed:          rec.Status == store.DeviceCodeStatusConsumed,
+		PollViolations:    rec.PollViolations,
 	})
 	// Stamp the poll timestamp AND the (possibly escalated) interval
 	// before any further branching so the next poll's slow_down ladder
@@ -153,6 +154,12 @@ func applyPollDecision(
 		return false
 	case devicecode.PollDecisionSlowDown:
 		emitDeviceCodeSlowDown(ctx, deps, clientID, rec.Interval, decision.NextInterval)
+		if decision.CountThisAsViolation {
+			strikes, err := deps.DeviceCodes.IncrementPollViolation(ctx, deviceCode)
+			if err == nil && strikes >= devicecode.MaxPollViolations {
+				_ = deps.DeviceCodes.Deny(ctx, deviceCode, "poll_abuse")
+			}
+		}
 		writeError(w, http.StatusBadRequest, errSlowDown,
 			"polling interval has been increased; back off and retry")
 		return false
@@ -445,16 +452,21 @@ type deviceCodeIDTokenInput struct {
 // substore stamped a non-zero value at Approve time; the encoder
 // omits the claim on zero.
 func mintDeviceCodeIDToken(deps Deps, in deviceCodeIDTokenInput) (string, error) {
+	key := activeSigningKey(deps)
+	atHash, err := tokens.HashForAlg(in.AccessToken, key.Alg)
+	if err != nil {
+		return "", err
+	}
 	claims := tokens.IDTokenClaims{
 		Issuer:    deps.Issuer,
 		Subject:   in.Subject,
 		Audience:  []string{in.ClientID},
 		IssuedAt:  in.Now.Unix(),
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
-		AtHash:    tokens.Hash(in.AccessToken),
+		AtHash:    atHash,
 		AuthTime:  in.AuthTime,
 	}
-	return tokens.SignIDToken(activeSigningKey(deps), claims)
+	return tokens.SignIDToken(key, claims)
 }
 
 // authTimeUnix collapses a wall-clock auth_time into the seconds-
