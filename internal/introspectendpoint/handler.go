@@ -208,6 +208,16 @@ type Deps struct {
 	// response in a JWE addressed to the RP's `use=enc` key. A nil
 	// value disables outbound introspection encryption.
 	ClientEncJWKs *clientencjwks.Resolver
+
+	// SubjectProjector, when non-nil, converts the OP-internal raw
+	// subject from an opaque-AT or refresh-token store record into the
+	// per-client pairwise value the introspection response surfaces.
+	// JWT access tokens already carry the projected value in "sub"
+	// (the token endpoint stamps it at mint time so RS-visible "sub"
+	// matches id_token "sub" per RFC 9068 §3) and bypass this hook.
+	// A nil value leaves the raw subject on the wire, which is the
+	// correct posture when the OP is not configured for pairwise.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 }
 
 // Handler returns the HTTP handler the OP mounts at its introspection

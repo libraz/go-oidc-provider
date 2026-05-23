@@ -247,7 +247,11 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 		// is inactive from this client's point of view.
 		return response{}, false
 	}
-	return projectRefreshToken(rec), true
+	publicSubject, ok := projectIntrospectionSubject(ctx, deps, rec.Subject, rec.ClientID)
+	if !ok {
+		return response{}, false
+	}
+	return projectRefreshToken(rec, publicSubject), true
 }
 
 // resolveOpaqueAccessToken looks token up in the opaque-access-token
@@ -281,18 +285,53 @@ func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClien
 		// client is inactive from this client's point of view.
 		return response{}, false
 	}
-	return projectOpaqueAccessToken(rec), true
+	publicSubject, ok := projectIntrospectionSubject(ctx, deps, rec.Subject, rec.ClientID)
+	if !ok {
+		return response{}, false
+	}
+	return projectOpaqueAccessToken(rec, publicSubject), true
+}
+
+// projectIntrospectionSubject converts the OP-internal raw subject on
+// an opaque-access-token or refresh-token record into the per-client
+// pairwise value the introspection response carries. A nil
+// SubjectProjector (the OP is not configured for pairwise) returns the
+// raw value verbatim. A configured projector that errors, returns the
+// empty string, or fails to resolve the client collapses onto inactive
+// per RFC 7662 §2.2 — leaking a 5xx (or a partially-projected response)
+// would reveal that the token does descend from a live record.
+func projectIntrospectionSubject(ctx context.Context, deps Deps, rawSubject, clientID string) (string, bool) {
+	if deps.SubjectProjector == nil {
+		return rawSubject, true
+	}
+	if deps.Clients == nil {
+		return "", false
+	}
+	client, err := deps.Clients.GetClient(ctx, clientID)
+	if err != nil || client == nil {
+		return "", false
+	}
+	projected, err := deps.SubjectProjector(ctx, rawSubject, client)
+	if err != nil || projected == "" {
+		return "", false
+	}
+	return projected, true
 }
 
 // projectOpaqueAccessToken builds an active introspection response
 // from a live opaque-access-token record. Fields the record does not
 // carry stay zero-valued and are dropped by omitempty on the wire.
-func projectOpaqueAccessToken(rec *store.OpaqueAccessToken) response {
+// publicSubject is the per-client pairwise value (or rec.Subject when
+// no SubjectProjector is configured) that the wire response carries;
+// the caller resolves it through [projectIntrospectionSubject] so the
+// "sub" returned here matches what the JWT access-token branch would
+// emit for the same chain (RFC 9068 §3 / OIDC Core §8.1).
+func projectOpaqueAccessToken(rec *store.OpaqueAccessToken, publicSubject string) response {
 	out := response{
 		Active:    true,
 		ClientID:  rec.ClientID,
 		TokenType: tokenTypeBearer,
-		Sub:       rec.Subject,
+		Sub:       publicSubject,
 		ACR:       rec.ACR,
 	}
 	if !rec.IssuedAt.IsZero() {
@@ -340,13 +379,15 @@ func opaqueAccessTokenCnf(rec *store.OpaqueAccessToken) map[string]string {
 // projectRefreshToken builds an active introspection response from a
 // live refresh-token record. "iat" mirrors the record's CreatedAt and
 // "exp" mirrors ExpiresAt; the response carries cnf when the token
-// chain is sender-constrained.
-func projectRefreshToken(rec *store.RefreshToken) response {
+// chain is sender-constrained. publicSubject is the per-client pairwise
+// value resolved by [projectIntrospectionSubject], so the "sub" on the
+// wire matches the JWT access-token branch (RFC 9068 §3 / OIDC §8.1).
+func projectRefreshToken(rec *store.RefreshToken, publicSubject string) response {
 	out := response{
 		Active:    true,
 		ClientID:  rec.ClientID,
 		TokenType: tokenTypeBearer,
-		Sub:       rec.Subject,
+		Sub:       publicSubject,
 		Exp:       rec.ExpiresAt.Unix(),
 	}
 	if !rec.CreatedAt.IsZero() {
