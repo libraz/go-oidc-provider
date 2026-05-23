@@ -360,6 +360,9 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
+	if !parseClientNotificationToken(w, merged.Get("client_notification_token")) {
+		return
+	}
 	persist(r.Context(), w, deps, persistInput{
 		Client:         client,
 		Subject:        subject,
@@ -958,6 +961,15 @@ func parseUserCode(w http.ResponseWriter, raw string) (string, bool) {
 	writeError(w, http.StatusBadRequest, errInvalidRequest,
 		"user_code parameter is not supported")
 	return "", false
+}
+
+func parseClientNotificationToken(w http.ResponseWriter, raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	writeError(w, http.StatusBadRequest, errInvalidRequest,
+		"client_notification_token parameter is not supported")
+	return false
 }
 
 // persistInput bundles the parameters [persist] consumes. The

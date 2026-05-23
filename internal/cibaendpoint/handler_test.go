@@ -553,6 +553,28 @@ func TestServe_RejectsDuplicateSingleValuedParams(t *testing.T) {
 	}
 }
 
+func TestServe_RejectsClientNotificationToken(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("client_notification_token", "client-callback-token")
+
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidRequest {
+		t.Fatalf("error=%q want %q", got, wireInvalidRequest)
+	}
+}
+
 // TestServe_RejectsDuplicateScope pins that the space-delimited
 // "scope" parameter is single-occurrence on the wire even though
 // each occurrence is itself a list. RFC 6749 §3.3 mandates the
