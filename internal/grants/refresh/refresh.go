@@ -514,13 +514,14 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 	}
 	rec, err := e.store.Find(ctx, in.Token)
 	if err != nil || rec == nil {
-		// Find errors here are intentionally swallowed: tryGrace is
-		// the speculative branch, and a Find miss / store fault
-		// re-surfaces under the regular Consume path that follows
-		// (where the same error becomes the canonical replay /
-		// not-found classification). nilerr is OK because
-		// "speculative miss" is the contract.
-		return nil, false, nil //nolint:nilerr // speculative branch absorbs Find errors; canonical path re-surfaces them.
+		if err == nil || errors.Is(err, store.ErrNotFound) {
+			// A miss means the token cannot be proven inside the grace
+			// window; fall through to the replay path.
+			return nil, false, nil
+		}
+		// Transport faults are not replay evidence. Surface them as
+		// server-side failures instead of revoking a healthy chain.
+		return nil, true, fmt.Errorf("refresh: grace lookup: %w", err)
 	}
 	if !e.withinGraceWindow(rec) {
 		return nil, false, nil
@@ -676,9 +677,15 @@ func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID strin
 // record whose ParentID is nil; chainWalkLimit caps the iteration count.
 func (e *Exchanger) findChainRoot(ctx context.Context, startID string) (string, bool) {
 	current := startID
+	var clientID string
 	for range chainWalkLimit {
 		rec, err := e.store.Find(ctx, current)
 		if err != nil || rec == nil {
+			return "", false
+		}
+		if clientID == "" {
+			clientID = rec.ClientID
+		} else if rec.ClientID != clientID {
 			return "", false
 		}
 		if rec.ParentID == nil {

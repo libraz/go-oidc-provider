@@ -550,11 +550,13 @@ func refreshChainRevocationStore(deps Deps) store.GrantRevocationStore {
 // tombstone disappears. The grace covers clock skew between the OP
 // and resource servers consulting [store.GrantRevocationStore.IsRevoked];
 // 5 minutes is the same floor the access-token registry GC uses. A
-// zero value flows through to [refresh.ExchangerConfig.GrantTombstoneTTL]
-// and disables GC, which is safe but unbounded in storage.
+// zero/negative [Deps.AccessTokenTTL] is normalised to the token endpoint
+// default here as a defensive backstop so a partially constructed Deps value
+// cannot accidentally disable tombstone GC.
 func refreshChainTombstoneTTL(deps Deps) time.Duration {
-	if deps.AccessTokenTTL <= 0 {
-		return 0
+	ttl := deps.AccessTokenTTL
+	if ttl <= 0 {
+		ttl = defaultAccessTokenTTL
 	}
-	return deps.AccessTokenTTL + 5*time.Minute
+	return ttl + 5*time.Minute
 }

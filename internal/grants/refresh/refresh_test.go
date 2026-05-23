@@ -248,6 +248,60 @@ func TestExchange_ReplayRevokesEntireChain(t *testing.T) {
 	}
 }
 
+func TestExchange_ReplayDoesNotRevokeCrossClientParentLink(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	ctx := context.Background()
+	st := newAlwaysAliveRefreshStoreWithClock(func() time.Time { return t0 })
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store:    st,
+		Clock:    func() time.Time { return t0 },
+		GraceTTL: -1,
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	parentID := "victim-root"
+	consumedAt := t0.Add(-2 * time.Minute)
+	if err := st.Save(ctx, &store.RefreshToken{
+		ID:        parentID,
+		ClientID:  "victim-client",
+		Subject:   "victim-user",
+		GrantID:   "victim-grant",
+		Scope:     []string{"openid"},
+		ExpiresAt: t0.Add(time.Hour),
+		CreatedAt: t0.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("Save parent: %v", err)
+	}
+	if err := st.Save(ctx, &store.RefreshToken{
+		ID:         "attacker-child",
+		ClientID:   "client-1",
+		Subject:    "user-1",
+		GrantID:    "grant-1",
+		Scope:      []string{"openid"},
+		ParentID:   &parentID,
+		ConsumedAt: &consumedAt,
+		ExpiresAt:  t0.Add(time.Hour),
+		CreatedAt:  t0.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("Save child: %v", err)
+	}
+
+	_, err = exc.Exchange(ctx, refresh.ExchangeInput{Token: "attacker-child", ClientID: "client-1"})
+	if !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("Exchange err=%v want ErrTokenReplayed", err)
+	}
+	parent, err := st.Find(ctx, parentID)
+	if err != nil {
+		t.Fatalf("Find parent: %v", err)
+	}
+	if parent.ConsumedAt != nil {
+		t.Fatalf("cross-client parent was revoked at %v", parent.ConsumedAt)
+	}
+}
+
 func TestExchange_ScopeNarrowingAccepted(t *testing.T) {
 	t.Parallel()
 
@@ -837,6 +891,29 @@ func TestExchange_GraceWindow_ExpiredTokenSurfacesExpired(t *testing.T) {
 	}
 }
 
+func TestExchange_GraceWindow_FindFaultDoesNotRevokeChain(t *testing.T) {
+	t.Parallel()
+
+	st := &graceFindFaultStore{err: errors.New("redis unavailable")}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store: st,
+		Clock: func() time.Time {
+			return time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+
+	_, err = exc.Exchange(context.Background(), refresh.ExchangeInput{Token: "rt-1", ClientID: "client-1"})
+	if err == nil || errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("Exchange err=%v want non-replay store fault", err)
+	}
+	if st.revoked {
+		t.Fatal("grace lookup transport fault triggered RevokeChain")
+	}
+}
+
 // recordingEmitter is a test-local audit.Emitter that captures every
 // emitted event for inspection.
 type recordingEmitter struct {
@@ -871,6 +948,28 @@ type failingChainStore struct {
 func (s *failingChainStore) RevokeChain(_ context.Context, _ string) error {
 	return s.err
 }
+
+type graceFindFaultStore struct {
+	err     error
+	revoked bool
+}
+
+func (s *graceFindFaultStore) Save(context.Context, *store.RefreshToken) error { return nil }
+
+func (s *graceFindFaultStore) Find(context.Context, string) (*store.RefreshToken, error) {
+	return nil, s.err
+}
+
+func (s *graceFindFaultStore) Consume(context.Context, string) (*store.RefreshToken, error) {
+	return nil, store.ErrAlreadyConsumed
+}
+
+func (s *graceFindFaultStore) RevokeChain(context.Context, string) error {
+	s.revoked = true
+	return nil
+}
+
+func (s *graceFindFaultStore) RevokeByGrant(context.Context, string) error { return nil }
 
 // TestExchange_ChainRevokeFailure_EmitsAuditEvent pins H-A2: when the
 // post-replay chain revoke encounters a transport fault the
