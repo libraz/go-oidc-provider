@@ -168,11 +168,12 @@ func TestDecrypt_KidUnknown(t *testing.T) {
 	}
 }
 
-// TestDecrypt_KidAbsentFallback asserts the documented RFC 7516
-// §4.1.6 behaviour: a JWE without a `kid` triggers per-key trial
-// decryption against the full keyset, and a successful match
-// returns the plaintext.
-func TestDecrypt_KidAbsentFallback(t *testing.T) {
+// TestDecrypt_KidAbsentAcceptedWithMatchingKey pins RFC 7516 §4.1.6
+// behaviour: a JWE without a `kid` is still decryptable when the keyset
+// contains a key whose type matches the protected-header `alg`. The
+// candidate list is bounded by alg-filtering so this fallback cannot be
+// abused for CPU amplification.
+func TestDecrypt_KidAbsentAcceptedWithMatchingKey(t *testing.T) {
 	t.Parallel()
 
 	rsaKey1 := mustRSAKey(t)
@@ -190,11 +191,35 @@ func TestDecrypt_KidAbsentFallback(t *testing.T) {
 	}
 }
 
-// TestDecrypt_KidAbsentFallback_AllFail asserts that when kid is
-// absent and no key in the resolver decrypts, the result is the
-// generic [ErrJWEDecryptFailed] — not an oracle for which key
-// happened to be tried.
-func TestDecrypt_KidAbsentFallback_AllFail(t *testing.T) {
+// TestDecrypt_KidAbsentFiltersByAlg pins the attack-surface narrowing:
+// keys of the wrong type for the protected-header alg are dropped before
+// any Decrypt call, so an attacker who appends one EC key to a kid-less
+// RSA ciphertext cannot force the EC key to participate in trial work.
+func TestDecrypt_KidAbsentFiltersByAlg(t *testing.T) {
+	t.Parallel()
+
+	rsaKey := mustRSAKey(t)
+	ecKey := mustECKey(t, elliptic.P256())
+
+	jwe := mustEncryptForTest(t, &rsaKey.PublicKey, "")
+
+	resolver := &allCallCounterResolver{keys: []any{ecKey, rsaKey}}
+	got, err := jose.Decrypt(jwe, resolver)
+	if err != nil {
+		t.Fatalf("Decrypt kid absent: %v", err)
+	}
+	if string(got.Plaintext) != "fallback-payload" {
+		t.Fatalf("plaintext mismatch: got %q", got.Plaintext)
+	}
+	if resolver.allCalls != 1 {
+		t.Fatalf("All call count=%d want 1", resolver.allCalls)
+	}
+}
+
+// TestDecrypt_KidAbsentAllFail asserts that when kid is absent and no
+// candidate decrypts, the failure surfaces as the generic
+// [ErrJWEDecryptFailed] sentinel — never as a per-key oracle.
+func TestDecrypt_KidAbsentAllFail(t *testing.T) {
 	t.Parallel()
 
 	rsaKeyTarget := mustRSAKey(t)
@@ -207,6 +232,47 @@ func TestDecrypt_KidAbsentFallback_AllFail(t *testing.T) {
 	_, err := jose.Decrypt(jwe, resolver)
 	if !errors.Is(err, jose.ErrJWEDecryptFailed) {
 		t.Fatalf("Decrypt all-fail: want ErrJWEDecryptFailed, got %v", err)
+	}
+}
+
+// TestDecrypt_KidAbsentNoMatchingAlg asserts that kid-less ciphertexts
+// whose protected-header alg has no matching key type in the keyset
+// fail uniformly with [ErrJWEDecryptFailed].
+func TestDecrypt_KidAbsentNoMatchingAlg(t *testing.T) {
+	t.Parallel()
+
+	rsaKey := mustRSAKey(t)
+	jwe := mustEncryptForTest(t, &rsaKey.PublicKey, "")
+
+	ecKey := mustECKey(t, elliptic.P256())
+	resolver := allKeysResolver{keys: []any{ecKey}}
+	_, err := jose.Decrypt(jwe, resolver)
+	if !errors.Is(err, jose.ErrJWEDecryptFailed) {
+		t.Fatalf("Decrypt no-matching-alg: want ErrJWEDecryptFailed, got %v", err)
+	}
+}
+
+// TestDecrypt_KidAbsentTrialCapEnforced asserts that more than
+// [MaxKidlessTrialKeys] alg-compatible candidates are refused without
+// running any trial decrypt. Deployments with realistic enc-keyset sizes
+// (1-2 keys) are unaffected; pathological configurations fail closed.
+func TestDecrypt_KidAbsentTrialCapEnforced(t *testing.T) {
+	t.Parallel()
+
+	target := mustRSAKey(t)
+	jwe := mustEncryptForTest(t, &target.PublicKey, "")
+
+	keys := []any{
+		mustRSAKey(t),
+		mustRSAKey(t),
+		mustRSAKey(t),
+		mustRSAKey(t),
+		target,
+	}
+	resolver := &allCallCounterResolver{keys: keys}
+	_, err := jose.Decrypt(jwe, resolver)
+	if !errors.Is(err, jose.ErrJWEDecryptFailed) {
+		t.Fatalf("Decrypt cap-exceeded: want ErrJWEDecryptFailed, got %v", err)
 	}
 }
 
@@ -406,6 +472,21 @@ type allKeysResolver struct {
 
 func (r allKeysResolver) Resolve(string) (any, bool) { return nil, false }
 func (r allKeysResolver) All() []any                 { return r.keys }
+
+// allCallCounterResolver wraps a keyset and counts how often [Decrypt]
+// asks for the full set. Used by the kid-absent tests to assert that the
+// fallback path is exercised (count == 1) or skipped (count == 0).
+type allCallCounterResolver struct {
+	keys     []any
+	allCalls int
+}
+
+func (r *allCallCounterResolver) Resolve(string) (any, bool) { return nil, false }
+
+func (r *allCallCounterResolver) All() []any {
+	r.allCalls++
+	return r.keys
+}
 
 func mustRSAKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()

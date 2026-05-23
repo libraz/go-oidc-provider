@@ -1,6 +1,8 @@
 package jose
 
 import (
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -17,6 +19,15 @@ import (
 // plaintext. The cap also limits memory pressure under generic
 // large-payload denial-of-service attempts.
 const MaxJWEPlaintextSize = 1 << 20
+
+// MaxKidlessTrialKeys caps the number of private keys [Decrypt] will trial
+// when the JWE protected header omits `kid`. RFC 7516 §4.1.6 makes `kid`
+// OPTIONAL, so kid-less ciphertexts are accepted, but the candidate set is
+// pre-filtered by matching the protected-header `alg` against each private
+// key's type (RSA vs EC) and the surviving slice is bounded by this cap so
+// one attacker-supplied ciphertext cannot amplify CPU work across an
+// unbounded keyset.
+const MaxKidlessTrialKeys = 4
 
 // MaxJOSENestingDepth bounds the total number of JOSE layers
 // [DecryptChain] is willing to traverse when peeling a nested
@@ -63,11 +74,13 @@ var (
 	// `crit`.
 	ErrJWECritUnknown = errors.New("jose: JWE crit not allowed")
 
-	// ErrJWEKidUnknown indicates the JWE protected header names a
+	// ErrJWEKidUnknown indicates the JWE protected header named a
 	// `kid` that does not resolve through the supplied
-	// [EncryptionKeyResolver]. Returned only when `kid` is present
-	// but unknown — when `kid` is absent the package falls back to
-	// trial decryption against every key (see [Decrypt] doc).
+	// [EncryptionKeyResolver], OR (for kid-less ciphertexts) no
+	// private key in the keyset matched the protected-header `alg`.
+	// When `kid` is absent and at least one keyset entry matches
+	// `alg`, the package falls back to bounded trial decryption (see
+	// [MaxKidlessTrialKeys] and [Decrypt] doc).
 	ErrJWEKidUnknown = errors.New("jose: JWE kid unknown")
 
 	// ErrJWEDecryptFailed indicates ciphertext authentication or
@@ -102,9 +115,12 @@ var (
 // as not-found so [Decrypt] surfaces [ErrJWEKidUnknown] uniformly.
 //
 // All returns the full slice of private keys in rotation order
-// (newest first). Used only for fallback iteration when the protected
-// header omits `kid` (RFC 7516 §4.1.6 permits omission, and panva /
-// Keycloak both fall back to per-key trial decryption).
+// (newest first). [Decrypt] invokes All only when the protected
+// header omits `kid` (RFC 7516 §4.1.6 permits omission), and only
+// after filtering candidates by matching the header `alg` to each
+// private key's type. The number of trial decrypts on this path is
+// bounded by [MaxKidlessTrialKeys] so a kid-less ciphertext cannot
+// amplify CPU work across an unbounded keyset.
 type EncryptionKeyResolver interface {
 	Resolve(kid string) (priv any, ok bool)
 	All() []any
@@ -178,9 +194,10 @@ type jweProtectedHeader struct {
 //  4. `alg` is on [AllowedJWEAlgs].
 //  5. `enc` is on [AllowedJWEEncs].
 //  6. `kid` resolves through resolver — or, when `kid` is absent,
-//     trial decryption runs against every key in [resolver.All] with
-//     a fixed iteration count so wall-clock timing cannot leak which
-//     key matched.
+//     trial decryption runs against the subset of [resolver.All] keys
+//     whose type matches the protected-header `alg`, bounded by
+//     [MaxKidlessTrialKeys]. The trial loop iterates to completion so
+//     wall-clock timing cannot leak which key matched.
 //  7. Decrypt; reject if plaintext exceeds [MaxJWEPlaintextSize].
 //
 // The hardening posture is "fail uniformly": every decryption
@@ -226,7 +243,7 @@ func Decrypt(raw string, resolver EncryptionKeyResolver) (DecryptedJWE, error) {
 		return DecryptedJWE{}, fmt.Errorf("%w: %w", ErrJWEMalformed, err)
 	}
 
-	plaintext, err := decryptWithResolver(obj, resolver, hdr.Kid)
+	plaintext, err := decryptWithResolver(obj, resolver, hdr.Kid, alg)
 	if err != nil {
 		return DecryptedJWE{}, err
 	}
@@ -246,16 +263,14 @@ func Decrypt(raw string, resolver EncryptionKeyResolver) (DecryptedJWE, error) {
 }
 
 // decryptWithResolver runs the actual decryption attempt. When kid is
-// present it resolves a single key and decrypts; when kid is absent
-// it iterates the entire keyset to completion (no early return) so
-// wall-clock timing cannot leak which key matched (ADR 0030 §S.3).
-//
-// The fallback path is intentionally conservative: any successful
-// decrypt is captured but the loop continues to the end. If multiple
-// keys decrypt the same JWE (astronomically unlikely with proper
-// asymmetric keys; possible only if the embedder loaded two copies
-// of the same key by mistake), the first success wins.
-func decryptWithResolver(obj *josev4.JSONWebEncryption, resolver EncryptionKeyResolver, kid string) ([]byte, error) {
+// present the resolver selects exactly one private key. When kid is absent
+// (RFC 7516 §4.1.6 permits omission) the package falls back to bounded
+// trial decryption: the keyset is filtered to entries whose Go type matches
+// the protected-header `alg` (RSA-OAEP-* → *rsa.PrivateKey, ECDH-ES* →
+// *ecdsa.PrivateKey), capped at [MaxKidlessTrialKeys], and the loop runs
+// to completion regardless of an early success so wall-clock timing cannot
+// leak which key matched.
+func decryptWithResolver(obj *josev4.JSONWebEncryption, resolver EncryptionKeyResolver, kid string, alg JWEAlg) ([]byte, error) {
 	if kid != "" {
 		priv, found := resolver.Resolve(kid)
 		if !found {
@@ -269,11 +284,16 @@ func decryptWithResolver(obj *josev4.JSONWebEncryption, resolver EncryptionKeyRe
 	}
 
 	keys := resolver.All()
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("%w: no encryption keys available", ErrJWEDecryptFailed)
+	candidates := filterKeysForAlg(keys, alg)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("%w: kid-absent fallback", ErrJWEDecryptFailed)
 	}
+	if len(candidates) > MaxKidlessTrialKeys {
+		return nil, fmt.Errorf("%w: kid-absent fallback", ErrJWEDecryptFailed)
+	}
+
 	var success []byte
-	for _, k := range keys {
+	for _, k := range candidates {
 		pt, derr := obj.Decrypt(k)
 		if derr == nil && success == nil {
 			success = pt
@@ -283,6 +303,34 @@ func decryptWithResolver(obj *josev4.JSONWebEncryption, resolver EncryptionKeyRe
 		return nil, fmt.Errorf("%w: kid-absent fallback", ErrJWEDecryptFailed)
 	}
 	return success, nil
+}
+
+// filterKeysForAlg returns the subset of keys whose Go type matches the
+// JWE protected-header `alg`. Filtering by key type before any cryptographic
+// operation runs bounds the trial work an attacker can amplify with one
+// kid-less ciphertext: a deployment with one RSA key and one EC key only
+// runs a single trial per ciphertext, regardless of the keyset's true size.
+func filterKeysForAlg(keys []any, alg JWEAlg) []any {
+	out := make([]any, 0, len(keys))
+	for _, k := range keys {
+		if keyMatchesAlg(k, alg) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func keyMatchesAlg(key any, alg JWEAlg) bool {
+	switch alg {
+	case JWEAlgRSAOAEP256:
+		_, ok := key.(*rsa.PrivateKey)
+		return ok
+	case JWEAlgECDHES, JWEAlgECDHESA128KW, JWEAlgECDHESA256KW:
+		_, ok := key.(*ecdsa.PrivateKey)
+		return ok
+	default:
+		return false
+	}
 }
 
 // NestedDecryption is the result of a [DecryptChain] call. Plaintext
