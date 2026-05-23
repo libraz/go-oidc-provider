@@ -122,6 +122,24 @@ func (s *memJTIStore) Has(_ context.Context, jti string) (bool, error) {
 	return ok, nil
 }
 
+type captureJTIStore struct {
+	jti       string
+	expiresAt time.Time
+}
+
+func (s *captureJTIStore) Mark(_ context.Context, jti string, expiresAt time.Time) error {
+	if s.jti == jti {
+		return store.ErrAlreadyConsumed
+	}
+	s.jti = jti
+	s.expiresAt = expiresAt
+	return nil
+}
+
+func (s *captureJTIStore) Has(_ context.Context, jti string) (bool, error) {
+	return s.jti == jti, nil
+}
+
 // fixedClock is the test-side wall clock pinned to a single Now() value.
 type fixedClock struct{ now time.Time }
 

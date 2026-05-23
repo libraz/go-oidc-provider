@@ -43,6 +43,8 @@ func TestCanonicalEqual_Table(t *testing.T) {
 		{"scheme_mixed", "Https://op.example/oidc/token", "https://op.example/oidc/token", true},
 		{"host_uppercase", "https://OP.EXAMPLE/oidc/token", "https://op.example/oidc/token", true},
 		{"host_mixed", "https://Op.Example/oidc/token", "https://op.example/oidc/token", true},
+		{"host_trailing_dot", "https://op.example./oidc/token", "https://op.example/oidc/token", true},
+		{"request_host_trailing_dot", "https://op.example/oidc/token", "https://op.example./oidc/token", true},
 		// Path is case-sensitive per RFC 3986 §6.2.2.1.
 		{"path_uppercase_distinct", "https://op.example/oidc/Token", "https://op.example/oidc/token", false},
 		{"path_mixed_distinct", "https://op.example/OIDC/token", "https://op.example/oidc/token", false},

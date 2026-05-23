@@ -233,9 +233,17 @@ func canonicalEqual(htu, request string) bool {
 	b.RawQuery, b.Fragment = "", ""
 	a.Scheme = strings.ToLower(a.Scheme)
 	b.Scheme = strings.ToLower(b.Scheme)
-	a.Host = stripDefaultPort(strings.ToLower(a.Host), a.Scheme)
-	b.Host = stripDefaultPort(strings.ToLower(b.Host), b.Scheme)
+	a.Host = normalizeHost(strings.ToLower(a.Host), a.Scheme)
+	b.Host = normalizeHost(strings.ToLower(b.Host), b.Scheme)
 	return a.String() == b.String()
+}
+
+func normalizeHost(host, scheme string) string {
+	host = stripDefaultPort(host, scheme)
+	if strings.HasSuffix(host, ".") {
+		return strings.TrimSuffix(host, ".")
+	}
+	return host
 }
 
 // stripDefaultPort returns host with any default port for scheme

@@ -138,6 +138,36 @@ func TestVerify_Replay(t *testing.T) {
 	}
 }
 
+func TestVerify_JTIExpiryAnchoredToProofIAT(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	iat := now.Add(-30 * time.Second)
+	key := newES256Key(t)
+	raw := signProof(t, key, goodClaims(iat), "")
+	jtis := &captureJTIStore{}
+	v, err := dpop.NewVerifier(dpop.VerifierConfig{
+		JTIs:      jtis,
+		Clock:     fixedClock{now: now},
+		IatWindow: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if _, err := v.Verify(context.Background(), dpop.VerifyInput{
+		ProofHeader: raw,
+		Method:      "POST",
+		URL:         mustParseURL(t, "https://op.example/oidc/token"),
+		TLS:         true,
+	}); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	want := iat.Add(time.Minute)
+	if !jtis.expiresAt.Equal(want) {
+		t.Fatalf("jti expiresAt=%s want %s", jtis.expiresAt, want)
+	}
+}
+
 func TestVerify_ATHRequired(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)

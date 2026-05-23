@@ -314,7 +314,7 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 	// htu / iat / ath / nonce) never reach this point, preserving
 	// the "malformed proof never advances the table" property the
 	// previous ordering relied on.
-	expiresAt := now.Add(v.replayLeew)
+	expiresAt := time.Unix(parsed.claims.IssuedAt, 0).Add(v.replayLeew)
 	if err := v.jtis.Mark(ctx, parsed.claims.JTI, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return nil, ErrProofReplayed
