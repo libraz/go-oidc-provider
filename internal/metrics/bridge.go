@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -35,10 +36,28 @@ func NewBridge(c *Collector, next audit.Emitter) *Bridge {
 // forwards the event downstream. Events outside the curated subset
 // are forwarded verbatim without touching any counter.
 func (b *Bridge) Emit(ctx context.Context, ev audit.Event) {
-	if b.c != nil {
-		b.update(ev)
-	}
 	b.next.Emit(ctx, ev)
+	if b.c != nil {
+		b.safeUpdate(ev)
+	}
+}
+
+func (b *Bridge) safeUpdate(ev audit.Event) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		// A panic in collector update would otherwise vanish silently and
+		// hide a real metric-side bug. Log via slog.Default so the trace
+		// reaches whichever sink the embedder installed, without taking
+		// the audit forwarding path down with it.
+		slog.Default().Warn("metrics bridge: collector update panicked",
+			slog.String("event", ev.Name),
+			slog.Any("panic", r),
+		)
+	}()
+	b.update(ev)
 }
 
 // update is the dispatch entrypoint. The body is a small router that
