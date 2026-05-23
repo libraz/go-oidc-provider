@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -33,9 +34,13 @@ type userInfoFixture struct {
 }
 
 func newUserInfoFixture(tb testing.TB) *userInfoFixture {
+	return newUserInfoFixtureWithOptions(tb)
+}
+
+func newUserInfoFixtureWithOptions(tb testing.TB, opts ...op.Option) *userInfoFixture {
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
-	prov := testkit.NewProvider(tb, testkit.WithClock(clock))
+	prov := testkit.NewProvider(tb, testkit.WithClock(clock), testkit.WithOptions(opts...))
 	return &userInfoFixture{
 		prov:     prov,
 		endpoint: prov.Server.URL + "/oidc/userinfo",
@@ -158,6 +163,41 @@ func TestHandler_HappyPath_OpenIDEmail(t *testing.T) {
 	}
 	if _, ok := body["name"]; ok {
 		t.Errorf("name must NOT be released without profile scope")
+	}
+}
+
+func TestHandler_PairwiseJWTWithoutGrantIDRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixtureWithOptions(t, op.WithPairwiseSubject([]byte("userinfo-pairwise-fixed-salt-32b")))
+	f.prov.RegisterClient(t, testkit.ClientFixture{
+		ID:          "client-1",
+		SubjectType: "pairwise",
+	})
+	f.putUser(t, "pairwise-user-1", map[string]any{
+		"email": "pairwise@example.com",
+	})
+	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.Subject = "pairwise-user-1"
+		c.GrantID = ""
+		c.Scope = []string{"openid", "email"}
+	})
+
+	resp := f.doRequest(t, f.newGet(t, token))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401", resp.StatusCode)
+	}
+	got := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(got, `error="invalid_token"`) {
+		t.Fatalf("WWW-Authenticate=%q want invalid_token", got)
+	}
+	if !strings.Contains(got, "The access token is invalid") {
+		t.Fatalf("WWW-Authenticate=%q must use the generic invalid description", got)
+	}
+	if strings.Contains(got, "grant unknown") {
+		t.Fatalf("WWW-Authenticate=%q must not expose grant existence", got)
 	}
 }
 
@@ -375,8 +415,11 @@ func TestHandler_SubjectDeleted_ReturnsInvalidToken(t *testing.T) {
 	if !strings.Contains(got, `error="invalid_token"`) {
 		t.Fatalf("WWW-Authenticate=%q must declare invalid_token", got)
 	}
-	if !strings.Contains(got, "subject unknown") {
-		t.Fatalf("WWW-Authenticate=%q must identify the subject-unknown case", got)
+	if !strings.Contains(got, "The access token is invalid") {
+		t.Fatalf("WWW-Authenticate=%q must use the generic invalid description", got)
+	}
+	if strings.Contains(got, "subject unknown") {
+		t.Fatalf("WWW-Authenticate=%q must not expose subject existence", got)
 	}
 	assertNoClaimLeak(t, resp)
 }

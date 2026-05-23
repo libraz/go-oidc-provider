@@ -358,8 +358,11 @@ func TestScenario_UI_009_AccountGoneReturnsInvalidToken(t *testing.T) {
 	if !strings.Contains(wwwAuth, `error="invalid_token"`) {
 		t.Errorf("WWW-Authenticate=%q must carry error=\"invalid_token\"", wwwAuth)
 	}
-	if !strings.Contains(wwwAuth, `error_description="subject unknown"`) {
-		t.Errorf("WWW-Authenticate=%q must carry error_description=\"subject unknown\"", wwwAuth)
+	if !strings.Contains(wwwAuth, `error_description="The access token is invalid"`) {
+		t.Errorf("WWW-Authenticate=%q must carry generic invalid_token description", wwwAuth)
+	}
+	if strings.Contains(wwwAuth, "subject unknown") {
+		t.Errorf("WWW-Authenticate=%q must not expose subject existence", wwwAuth)
 	}
 }
 

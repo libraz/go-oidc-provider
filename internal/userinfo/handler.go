@@ -259,8 +259,7 @@ func dispatchUserInfoResponse(
 	// ErrNoEncryptionConfigured).
 	if _, ok := resolveClient(r.Context(), deps, clientID); !ok {
 		// Client was deleted between AT issuance and the userinfo call.
-		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "subject unknown"))
-		w.WriteHeader(http.StatusUnauthorized)
+		respondGenericInvalidToken(w)
 		return
 	}
 	writeUserInfoJWT(r.Context(), w, deps, clientID, body)
@@ -645,11 +644,18 @@ func enforceRevocationStatus(
 // leak which sub-class of signature / parse failure produced any other
 // rejection.
 func respondInvalidToken(w http.ResponseWriter, err error) {
-	desc := "The access token is invalid"
+	desc := invalidTokenDescription
 	if errors.Is(err, tokens.ErrAccessTokenExpired) {
 		desc = "The access token expired"
 	}
 	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", desc))
+	w.WriteHeader(http.StatusUnauthorized)
+}
+
+const invalidTokenDescription = "The access token is invalid"
+
+func respondGenericInvalidToken(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", invalidTokenDescription))
 	w.WriteHeader(http.StatusUnauthorized)
 }
 
@@ -680,8 +686,7 @@ func assembleClaims(
 	user, err := deps.UserStore.FindBySubject(ctx, rawSubject)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "subject unknown"))
-			w.WriteHeader(http.StatusUnauthorized)
+			respondGenericInvalidToken(w)
 			return nil, false
 		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -735,12 +740,12 @@ func resolveRawSubject(
 		return claims.Subject, true
 	}
 	if claims.GrantID == "" || deps.Grants == nil {
-		return claims.Subject, true
+		respondGenericInvalidToken(w)
+		return "", false
 	}
 	g, err := deps.Grants.Find(ctx, claims.GrantID)
 	if err != nil || g == nil {
-		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "grant unknown"))
-		w.WriteHeader(http.StatusUnauthorized)
+		respondGenericInvalidToken(w)
 		return "", false
 	}
 	if g.Subject == "" {
@@ -761,8 +766,7 @@ func projectResponseSubject(
 	}
 	client, ok := resolveClient(ctx, deps, clientID)
 	if !ok {
-		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "subject unknown"))
-		w.WriteHeader(http.StatusUnauthorized)
+		respondGenericInvalidToken(w)
 		return "", false
 	}
 	projected, err := deps.SubjectProjector(ctx, rawSubject, client)
