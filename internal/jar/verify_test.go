@@ -155,6 +155,30 @@ func TestVerify_AcceptsAudArrayWithIssuer(t *testing.T) {
 	}
 }
 
+func TestVerify_StrictAudienceRejectsAudArray(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	c := happyClaims(now)
+	c["nbf"] = now.Unix()
+	c["aud"] = []string{testIssuer}
+	raw, keys := makeRequestObject(t, c)
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:                testIssuer,
+		Resolver:              &staticResolver{keys: keys},
+		Clock:                 fakeClock{now: now},
+		RequireNbf:            true,
+		RequireSingleAudience: true,
+		AllowMissingJTI:       true,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); !errors.Is(err, jar.ErrAudMismatch) {
+		t.Fatalf("err=%v want ErrAudMismatch", err)
+	}
+}
+
 func TestVerify_RejectsExpired(t *testing.T) {
 	t.Parallel()
 

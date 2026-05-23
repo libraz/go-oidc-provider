@@ -190,6 +190,11 @@ func (s *Signer) Sign(p Payload) (string, error) {
 	}
 	if p.State != "" {
 		claims["state"] = p.State
+		sHash, herr := tokens.HashForAlg(p.State, string(s.alg))
+		if herr != nil {
+			return "", fmt.Errorf("%w: s_hash: %w", ErrEncode, herr)
+		}
+		claims["s_hash"] = sHash
 	}
 	if p.Code != "" {
 		claims["code"] = p.Code

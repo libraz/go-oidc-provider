@@ -77,6 +77,7 @@ type Verifier struct {
 	allowMissJTI  bool
 	jtis          store.ConsumedJTIStore
 	maxLifetime   time.Duration
+	singleAud     bool
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier].
@@ -178,6 +179,12 @@ type VerifierConfig struct {
 	// Zero leaves the cap disabled (back-compat).
 	MaxLifetime time.Duration
 
+	// RequireSingleAudience rejects JWT array-form "aud" claims and
+	// requires a byte-exact string equal to Issuer. FAPI-family profiles
+	// enable this to avoid cross-AS confusion; non-FAPI deployments retain
+	// RFC 7519's string-or-array compatibility posture.
+	RequireSingleAudience bool
+
 	// EncryptionResolver, when non-nil, enables JWE-shaped request
 	// objects (compact form with five base64url segments). The
 	// verifier decrypts the JWE through [internal/jose.Decrypt],
@@ -256,6 +263,7 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		allowMissJTI:  cfg.AllowMissingJTI,
 		jtis:          cfg.JTIs,
 		maxLifetime:   cfg.MaxLifetime,
+		singleAud:     cfg.RequireSingleAudience,
 	}, nil
 }
 
@@ -454,7 +462,7 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string)
 		// AllowMissingJTI=true with no store: skip the gate.
 		return nil
 	}
-	expiresAt, ok := jtiExpiry(obj.Claims, v.clock.Now())
+	expiresAt, ok := jtiExpiry(obj.Claims, v.clock.Now(), v.maxAge, v.maxFutureSkew)
 	if !ok {
 		// "exp" was already validated upstream; reaching this branch
 		// means the claim disappeared between the two reads, which is
@@ -471,20 +479,25 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string)
 	return nil
 }
 
-// jtiExpiry reads the request object's "exp" claim and projects it
-// onto the wall clock the verifier is using. The value bounds the
-// jti record's TTL in the consumed-jti store; readers eviction
-// triggers off the same value.
-func jtiExpiry(claims map[string]any, now time.Time) (time.Time, bool) {
+// jtiExpiry reads the request object's "exp" claim and projects it onto the
+// wall clock the verifier is using. The consumed-jti row is retained at least
+// through the verifier's max-age window plus clock skew so coarse TTL
+// backends cannot evict a just-accepted jti before every still-valid replay
+// candidate has aged out.
+func jtiExpiry(claims map[string]any, now time.Time, maxAge, skew time.Duration) (time.Time, bool) {
 	exp, ok := claimSeconds(claims, "exp")
 	if !ok {
 		return time.Time{}, false
 	}
-	t := time.Unix(exp, 0)
-	if !t.After(now) {
+	expAt := time.Unix(exp, 0)
+	if !expAt.After(now) {
 		return time.Time{}, false
 	}
-	return t, true
+	floor := now.Add(maxAge)
+	if floor.After(expAt) {
+		return floor.Add(skew), true
+	}
+	return expAt.Add(skew), true
 }
 
 // decodeVerifiedClaims is the post-signature variant of
@@ -534,7 +547,7 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 	if err := assertIssuer(obj, expectedClientID); err != nil {
 		return err
 	}
-	if err := assertAudience(obj, v.issuer); err != nil {
+	if err := assertAudience(obj, v.issuer, v.singleAud); err != nil {
 		return err
 	}
 	now := v.clock.Now()
@@ -576,10 +589,9 @@ func assertIssuer(obj *Object, expectedClientID string) error {
 	return nil
 }
 
-// assertAudience enforces "aud" containing the OP issuer. The claim
-// may be a single string or an array per RFC 7519 §4.1.3; the verifier
-// accepts either shape.
-func assertAudience(obj *Object, issuer string) error {
+// assertAudience enforces "aud" containing the OP issuer. Unless single is
+// set, the claim may be a single string or an array per RFC 7519 §4.1.3.
+func assertAudience(obj *Object, issuer string, single bool) error {
 	switch v := obj.Claims["aud"].(type) {
 	case nil:
 		return fmt.Errorf("%w: missing", ErrAudMismatch)
@@ -589,6 +601,9 @@ func assertAudience(obj *Object, issuer string) error {
 		}
 		return nil
 	case []any:
+		if single {
+			return fmt.Errorf("%w: aud array not allowed", ErrAudMismatch)
+		}
 		for _, raw := range v {
 			if s, ok := raw.(string); ok && s == issuer {
 				return nil

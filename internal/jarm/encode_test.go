@@ -114,6 +114,9 @@ func TestSigner_SignSuccessClaims(t *testing.T) {
 	if got := claims["state"]; got != "state-xyz" {
 		t.Errorf("state=%v", got)
 	}
+	if got := claims["s_hash"]; got != tokens.Hash("state-xyz") {
+		t.Errorf("s_hash=%v want %s", got, tokens.Hash("state-xyz"))
+	}
 	if _, hasErr := claims["error"]; hasErr {
 		t.Errorf("error claim present on success path")
 	}

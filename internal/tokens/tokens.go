@@ -28,6 +28,7 @@ package tokens
 import (
 	"crypto"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -49,13 +50,19 @@ type SigningKey struct {
 
 	// Signer is the private key. v1.0 requires ECDSA P-256.
 	Signer crypto.Signer
+
+	// Alg is the JWS signing algorithm advertised on every emitted JWS and
+	// used to select the matching SHA digest for [HashForAlg]. Empty
+	// defaults to "ES256" (the v0.x single-alg policy), so older callers
+	// that build a SigningKey directly stay correct.
+	Alg string
 }
 
 // fromInternalEntry converts an [internal/keys.Entry] to the package-
 // local [SigningKey]. The conversion is trivial; the helper exists so
 // the HTTP layer can keep the conversion in one place.
 func fromInternalEntry(e keys.Entry) SigningKey {
-	return SigningKey{KeyID: e.KeyID, Signer: e.Signer}
+	return SigningKey{KeyID: e.KeyID, Signer: e.Signer, Alg: string(josev4.ES256)}
 }
 
 // IDTokenClaims is the OIDC Core 1.0 §2 claim set. Fields with omitempty
@@ -131,6 +138,10 @@ type AccessTokenClaims struct {
 // asked to sign with a SigningKey whose Signer is nil.
 var ErrSignerInvalid = errors.New("tokens: SigningKey has nil Signer")
 
+// ErrHashAlgUnsupported is returned by [HashForAlg] when no OIDC hash-claim
+// digest is defined for the supplied JWS signing algorithm.
+var ErrHashAlgUnsupported = errors.New("tokens: unsupported hash-claim alg")
+
 // idTokenTypeHeader is the value of the "typ" JOSE header for ID Tokens
 // (OIDC Core 1.0 §2). RP libraries that strict-check the type expect
 // the legacy "JWT" value here.
@@ -189,14 +200,34 @@ func SignAccessToken(key SigningKey, claims AccessTokenClaims) (string, error) {
 	return serializeJWT(signer, merged)
 }
 
-// Hash computes the at_hash / c_hash digest the spec asks for: the
-// left-most half of the SHA-256 digest of the input, base64url-encoded
-// without padding (OIDC Core 1.0 §3.1.3.6). The implementation pins
-// SHA-256 because v1.0 only signs with ES256; alg-dependent hash
-// selection becomes relevant when RS512 / ES384 are added in v1.x.
+// Hash is a convenience for tests and fixtures pinned to the v0.x ES256
+// signing policy; production callers MUST go through [HashForAlg] with the
+// active SigningKey.Alg so the digest follows the signing algorithm if
+// future versions admit anything beyond ES256 (OIDC Core 1.0 §3.1.3.6).
 func Hash(input string) string {
-	sum := sha256.Sum256([]byte(input))
-	return base64.RawURLEncoding.EncodeToString(sum[:len(sum)/2])
+	out, _ := HashForAlg(input, "ES256")
+	return out
+}
+
+// HashForAlg computes the at_hash / c_hash digest OIDC Core 1.0 §3.1.3.6
+// asks for: hash the input with the digest implied by the JWS signing
+// algorithm, take the left-most half, and base64url-encode without padding.
+func HashForAlg(input, alg string) (string, error) {
+	var sum []byte
+	switch {
+	case strings.HasSuffix(alg, "256"):
+		raw := sha256.Sum256([]byte(input))
+		sum = raw[:]
+	case strings.HasSuffix(alg, "384"):
+		raw := sha512.Sum384([]byte(input))
+		sum = raw[:]
+	case strings.HasSuffix(alg, "512"):
+		raw := sha512.Sum512([]byte(input))
+		sum = raw[:]
+	default:
+		return "", fmt.Errorf("%w: %q", ErrHashAlgUnsupported, alg)
+	}
+	return base64.RawURLEncoding.EncodeToString(sum[:len(sum)/2]), nil
 }
 
 // idTokenStandardKeys is the set of claim names [SignIDToken] manages
@@ -390,12 +421,16 @@ func joinScope(scopes []string) string {
 // returned interface is intentional: josev4.Signer is the third-party
 // package's contract for stateful JWS signing.
 func newSigner(key SigningKey, typ string) (josev4.Signer, error) {
+	alg := josev4.SignatureAlgorithm(key.Alg)
+	if alg == "" {
+		alg = josev4.ES256
+	}
 	sk := josev4.SigningKey{
-		Algorithm: josev4.ES256,
+		Algorithm: alg,
 		Key: josev4.JSONWebKey{
 			Key:       key.Signer,
 			KeyID:     key.KeyID,
-			Algorithm: string(josev4.ES256),
+			Algorithm: string(alg),
 			Use:       "sig",
 		},
 	}

@@ -12,6 +12,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jar"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -193,6 +194,38 @@ func TestVerify_ScopesJTIPerClient(t *testing.T) {
 	}
 }
 
+func TestVerify_JTIReplayTTLHasMaxAgeAndSkewFloor(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jtis := &captureJTIStore{}
+	priv, keys := jtiKey(t, testKID)
+	c := happyClaims(now)
+	c["nbf"] = now.Unix()
+	c["jti"] = "short-exp"
+	c["exp"] = now.Add(time.Second).Unix()
+	raw := signClaims(t, priv, testKID, c, josev4.ES256)
+
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:        testIssuer,
+		Resolver:      &staticResolver{keys: keys},
+		Clock:         fakeClock{now: now},
+		MaxAge:        2 * time.Minute,
+		MaxFutureSkew: 5 * time.Second,
+		JTIs:          jtis,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	want := now.Add(2*time.Minute + 5*time.Second)
+	if !jtis.expiresAt.Equal(want) {
+		t.Fatalf("jti expiresAt=%s want %s", jtis.expiresAt, want)
+	}
+}
+
 // TestNewVerifier_RequiresJTIStoreOrOptOut asserts the construction-
 // time guard: a JAR verifier built without a JTIs store and without
 // AllowMissingJTI fails fast at startup.
@@ -205,4 +238,22 @@ func TestNewVerifier_RequiresJTIStoreOrOptOut(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected NewVerifier to reject missing JTIs store")
 	}
+}
+
+type captureJTIStore struct {
+	key       string
+	expiresAt time.Time
+}
+
+func (s *captureJTIStore) Mark(_ context.Context, key string, expiresAt time.Time) error {
+	if s.key == key {
+		return store.ErrAlreadyConsumed
+	}
+	s.key = key
+	s.expiresAt = expiresAt
+	return nil
+}
+
+func (s *captureJTIStore) Has(_ context.Context, key string) (bool, error) {
+	return s.key == key, nil
 }

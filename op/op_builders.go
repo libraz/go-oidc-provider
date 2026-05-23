@@ -348,14 +348,16 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	// it. The flag below tracks that requirement and applies only when
 	// no other profile loosened the constraint.
 	var (
-		requireNbf      bool
-		requireIAT      bool
-		maxLifetime     time.Duration
-		allowMissingJTI = true
+		requireNbf            bool
+		requireIAT            bool
+		requireSingleAudience bool
+		maxLifetime           time.Duration
+		allowMissingJTI       = true
 	)
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
+			requireSingleAudience = true
 			maxLifetime = 60 * time.Minute
 		}
 		if p == profile.FAPICIBA {
@@ -371,15 +373,16 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 		resolverOpts = append(resolverOpts, jar.WithBaseTransport(cfg.jwksHTTPTransport))
 	}
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:             cfg.issuer,
-		Resolver:           jar.NewDefaultResolver(cfg.clock, resolverOpts...),
-		Clock:              cfg.clock,
-		RequireNbf:         requireNbf,
-		RequireIAT:         requireIAT,
-		JTIs:               cfg.store.ConsumedJTIs(),
-		EncryptionResolver: jarEncryptionResolver(encSet),
-		AllowMissingJTI:    allowMissingJTI,
-		MaxLifetime:        maxLifetime,
+		Issuer:                cfg.issuer,
+		Resolver:              jar.NewDefaultResolver(cfg.clock, resolverOpts...),
+		Clock:                 cfg.clock,
+		RequireNbf:            requireNbf,
+		RequireIAT:            requireIAT,
+		JTIs:                  cfg.store.ConsumedJTIs(),
+		EncryptionResolver:    jarEncryptionResolver(encSet),
+		AllowMissingJTI:       allowMissingJTI,
+		MaxLifetime:           maxLifetime,
+		RequireSingleAudience: requireSingleAudience,
 	})
 	if err != nil {
 		return nil, &Error{

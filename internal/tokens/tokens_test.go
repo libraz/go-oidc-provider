@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -351,6 +352,47 @@ func TestHash_AtHashLeftHalfBase64URL(t *testing.T) {
 	}
 	if len(b) != 16 {
 		t.Errorf("decoded len=%d want 16", len(b))
+	}
+}
+
+func TestHashForAlg_SelectsDigestBySigningAlg(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		alg     string
+		rawLen  int
+		wireLen int
+	}{
+		{alg: "ES256", rawLen: 16, wireLen: 22},
+		{alg: "RS384", rawLen: 24, wireLen: 32},
+		{alg: "PS512", rawLen: 32, wireLen: 43},
+	}
+	for _, tc := range cases {
+		t.Run(tc.alg, func(t *testing.T) {
+			t.Parallel()
+			got, err := tokens.HashForAlg("hello", tc.alg)
+			if err != nil {
+				t.Fatalf("HashForAlg: %v", err)
+			}
+			if len(got) != tc.wireLen {
+				t.Fatalf("len=%d want %d", len(got), tc.wireLen)
+			}
+			raw, err := base64.RawURLEncoding.DecodeString(got)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(raw) != tc.rawLen {
+				t.Fatalf("decoded len=%d want %d", len(raw), tc.rawLen)
+			}
+		})
+	}
+}
+
+func TestHashForAlg_RejectsUnknownAlg(t *testing.T) {
+	t.Parallel()
+
+	if _, err := tokens.HashForAlg("hello", "EdDSA"); !errors.Is(err, tokens.ErrHashAlgUnsupported) {
+		t.Fatalf("err=%v want ErrHashAlgUnsupported", err)
 	}
 }
 
