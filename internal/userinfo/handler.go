@@ -186,7 +186,7 @@ func Handler(deps HandlerDeps) http.Handler {
 // individual function stays under the lint budget.
 func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, verifier *tokens.AccessTokenVerifier) {
 	if !methodAllowed(r.Method) {
-		w.Header().Set("Allow", "GET, POST")
+		w.Header().Set("Allow", "GET, HEAD, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -430,7 +430,7 @@ func respondMTLSInvalid(w http.ResponseWriter, description string) {
 // methodAllowed reports whether method is one of the two verbs the
 // /userinfo endpoint accepts (OIDC Core 1.0 §5.3).
 func methodAllowed(method string) bool {
-	return method == http.MethodGet || method == http.MethodPost
+	return method == http.MethodGet || method == http.MethodHead || method == http.MethodPost
 }
 
 // bearerError discriminates the three RFC 6750 §3 failure shapes the

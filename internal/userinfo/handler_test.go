@@ -438,8 +438,27 @@ func TestHandler_PUT_ReturnsMethodNotAllowed(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("status=%d want 405", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Allow"); got != "GET, POST" {
-		t.Errorf("Allow=%q want \"GET, POST\"", got)
+	if got := resp.Header.Get("Allow"); got != "GET, HEAD, POST" {
+		t.Errorf("Allow=%q want \"GET, HEAD, POST\"", got)
+	}
+}
+
+func TestHandler_HEAD_Accepted(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodHead, f.endpoint, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	resp := f.doRequest(t, req)
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		t.Fatalf("HEAD returned 405")
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401 without bearer credentials", resp.StatusCode)
 	}
 }
 
