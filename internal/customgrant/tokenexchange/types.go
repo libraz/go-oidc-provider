@@ -66,8 +66,10 @@ type TokenView struct {
 	Act map[string]any
 }
 
-// Confirmation mirrors op.ConfirmationProof for the internal layer.
-// At most one of [JKT] and [X5tS256] is non-empty.
+// Confirmation mirrors op.ConfirmationProof for the internal layer. A
+// token carrying both [JKT] and [X5tS256] is admitted (RFC 7800 §3 allows
+// multiple confirmation methods); callers MUST verify every populated
+// method against the request rather than short-circuiting on the first.
 type Confirmation struct {
 	JKT     string
 	X5tS256 string

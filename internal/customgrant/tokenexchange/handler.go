@@ -205,6 +205,12 @@ func (h *Handler) parseAndVerify(ctx context.Context, req customgrant.Request) (
 		return TokenView{}, nil, h.translateLookupErr(ctx, req.Client, err, subjectResult, true)
 	}
 	subjectView := subjectResult.view
+	if err := requireIDTokenAudience(req.Client.ID, subjectView); err != nil {
+		return TokenView{}, nil, err
+	}
+	if err := requireMatchingSenderConstraint(req, subjectView); err != nil {
+		return TokenView{}, nil, err
+	}
 	var actorView *TokenView
 	if actorRaw != "" {
 		actorResult, aerr := h.lookupToken(ctx, actorRaw, actorType)
@@ -212,6 +218,12 @@ func (h *Handler) parseAndVerify(ctx context.Context, req customgrant.Request) (
 			return TokenView{}, nil, h.translateLookupErr(ctx, req.Client, aerr, actorResult, false)
 		}
 		v := actorResult.view
+		if err := requireIDTokenAudience(req.Client.ID, v); err != nil {
+			return TokenView{}, nil, err
+		}
+		if err := requireMatchingSenderConstraint(req, v); err != nil {
+			return TokenView{}, nil, err
+		}
 		actorView = &v
 	}
 	if actorView != nil && actorView.Subject == subjectView.Subject {

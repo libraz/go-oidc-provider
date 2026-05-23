@@ -139,7 +139,10 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 	}
 	scope := splitScope(idClaims.Scope)
 	aud := decodeAudience(idClaims.AudienceRaw)
-	clientID := idClaims.ClientID
+	clientID := idClaims.AuthorizedParty
+	if clientID == "" {
+		clientID = idClaims.ClientID
+	}
 	if clientID == "" && len(aud) == 1 {
 		clientID = aud[0]
 	}
@@ -334,13 +337,14 @@ func decodeAudience(raw json.RawMessage) []string {
 // idTokenClaims is the minimal projection of the OIDC Core 1.0 §2
 // id_token claim set the lookup needs.
 type idTokenClaims struct {
-	Issuer       string            `json:"iss"`
-	Subject      string            `json:"sub"`
-	AudienceRaw  json.RawMessage   `json:"aud"`
-	ClientID     string            `json:"client_id"`
-	IssuedAt     int64             `json:"iat"`
-	ExpiresAt    int64             `json:"exp"`
-	Scope        string            `json:"scope"`
-	Confirmation map[string]string `json:"cnf"`
-	Act          json.RawMessage   `json:"act"`
+	Issuer          string            `json:"iss"`
+	Subject         string            `json:"sub"`
+	AudienceRaw     json.RawMessage   `json:"aud"`
+	AuthorizedParty string            `json:"azp"`
+	ClientID        string            `json:"client_id"`
+	IssuedAt        int64             `json:"iat"`
+	ExpiresAt       int64             `json:"exp"`
+	Scope           string            `json:"scope"`
+	Confirmation    map[string]string `json:"cnf"`
+	Act             json.RawMessage   `json:"act"`
 }

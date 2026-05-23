@@ -672,19 +672,12 @@ func TestScenario_TX_018_SelfExchangeDoesNotAddActEntry(t *testing.T) {
 	}
 }
 
-func TestScenario_TX_019_DPoPRebindingOnExchange(t *testing.T) {
+func TestScenario_TX_019_DPoPBoundSubjectRequiresMatchingProof(t *testing.T) {
 	t.Parallel()
-	// DPoP rebinding requires a verified proof on the exchange
-	// request. The DPoP verifier is wired only when feature.DPoP is
-	// active; a full proof-shaped harness lives in the DPoP test
-	// suite. For TX-019 we pin the structural contract: when the
-	// handler does not see a DPoP proof, the issued access token
-	// has no cnf.jkt — the token-exchange path does not re-use the
-	// subject_token's binding (the rebinding rule).
+	// A DPoP-bound subject_token cannot be exchanged through a bearer
+	// token-exchange request. Otherwise a stolen sender-constrained
+	// token could be silently re-bound to the attacker's proof.
 	p := newTXProvider(t, txAllowAllPolicy{})
-	// Subject_token carries cnf.jkt so we can detect the rebinding
-	// posture: no proof on the exchange request → no cnf on the
-	// issued token (NOT inheritance of the subject_token's binding).
 	subjectClaims := p.defaultSubjectClaims("tx-019-jti")
 	subjectClaims.Confirmation = map[string]string{"jkt": "subject-jkt-original"}
 	subjectJWS := p.mintSubjectToken(t, subjectClaims)
@@ -693,24 +686,18 @@ func TestScenario_TX_019_DPoPRebindingOnExchange(t *testing.T) {
 		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
 	}
 	status, body := p.postTokenExchange(t, form)
-	if status != http.StatusOK {
-		t.Fatalf("status=%d want 200, body=%v", status, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", status, body)
 	}
-	at, _ := body["access_token"].(string)
-	claims := decodeTXJWTClaims(t, at)
-	cnf, _ := claims["cnf"].(map[string]any)
-	if cnf != nil {
-		if _, ok := cnf["jkt"]; ok {
-			t.Errorf("issued token inherited subject_token's cnf.jkt; rebinding rule violated")
-		}
+	if got := body["error"]; got != "invalid_grant" {
+		t.Fatalf("error=%v want invalid_grant", got)
 	}
 }
 
-func TestScenario_TX_020_MTLSRebindingOnExchange(t *testing.T) {
+func TestScenario_TX_020_MTLSBoundSubjectRequiresMatchingCert(t *testing.T) {
 	t.Parallel()
-	// Mirror of TX-019 but for mTLS. Without an mTLS-bound request,
-	// the issued token has no cnf.x5t#S256 — the subject_token's
-	// binding is NOT inherited.
+	// Mirror of TX-019 for mTLS: an mTLS-bound subject_token cannot be
+	// exchanged unless the request presents the same certificate.
 	p := newTXProvider(t, txAllowAllPolicy{})
 	subjectClaims := p.defaultSubjectClaims("tx-020-jti")
 	subjectClaims.Confirmation = map[string]string{"x5t#S256": "subject-x5t-original"}
@@ -720,16 +707,11 @@ func TestScenario_TX_020_MTLSRebindingOnExchange(t *testing.T) {
 		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
 	}
 	status, body := p.postTokenExchange(t, form)
-	if status != http.StatusOK {
-		t.Fatalf("status=%d want 200, body=%v", status, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", status, body)
 	}
-	at, _ := body["access_token"].(string)
-	claims := decodeTXJWTClaims(t, at)
-	cnf, _ := claims["cnf"].(map[string]any)
-	if cnf != nil {
-		if _, ok := cnf["x5t#S256"]; ok {
-			t.Errorf("issued token inherited subject_token's cnf.x5t#S256; rebinding rule violated")
-		}
+	if got := body["error"]; got != "invalid_grant" {
+		t.Fatalf("error=%v want invalid_grant", got)
 	}
 }
 
@@ -869,10 +851,6 @@ func TestScenario_TX_025_IDTokenCnfMirrorsAccessTokenBinding(t *testing.T) {
 	p := newTXProvider(t, policy)
 	subjectClaims := p.defaultSubjectClaims("tx-025-jti")
 	subjectClaims.Scope = []string{"openid", "read"}
-	// Subject_token carries cnf so the rebinding posture is
-	// observable: a bearer exchange MUST NOT inherit it on either
-	// the access_token or the id_token.
-	subjectClaims.Confirmation = map[string]string{"jkt": "subject-jkt-original"}
 	subjectJWS := p.mintSubjectToken(t, subjectClaims)
 	form := url.Values{
 		"subject_token":      []string{subjectJWS},

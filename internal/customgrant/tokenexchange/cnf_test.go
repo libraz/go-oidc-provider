@@ -63,24 +63,27 @@ func TestBuildCnfClaim_MTLSOnly(t *testing.T) {
 	}
 }
 
-func TestBuildCnfClaim_DPoPWinsOverMTLS(t *testing.T) {
+func TestBuildCnfClaim_DualBindingPopulatesBoth(t *testing.T) {
 	t.Parallel()
-	// FAPI 2.0 collapses dual-binding requests to DPoP at the access-
-	// token layer; the id_token MUST follow the same precedence so the
-	// two carriers do not diverge.
+	// A request that presents both a DPoP proof and an mTLS client
+	// certificate produces an id_token cnf carrying both confirmation
+	// methods (RFC 7800 §3). The access-token side already stamps both
+	// so the two carriers stay in lock-step.
+	cert := fixtureLeafCert()
 	req := customgrant.Request{
-		DPoPJKT:  "win-jkt",
-		MTLSCert: fixtureLeafCert(),
+		DPoPJKT:  "dual-jkt",
+		MTLSCert: cert,
 	}
 	got := buildCnfClaim(req)
 	if got == nil {
-		t.Fatalf("buildCnfClaim = nil, want cnf.jkt (DPoP wins)")
+		t.Fatalf("buildCnfClaim = nil, want both cnf members")
 	}
-	if got["jkt"] != "win-jkt" {
-		t.Errorf("cnf.jkt=%q, want %q", got["jkt"], "win-jkt")
+	if got["jkt"] != "dual-jkt" {
+		t.Errorf("cnf.jkt=%q, want %q", got["jkt"], "dual-jkt")
 	}
-	if _, present := got["x5t#S256"]; present {
-		t.Errorf("cnf carries x5t#S256 even though DPoP was present: %v", got)
+	wantThumb := mtls.Thumbprint(cert)
+	if got["x5t#S256"] != wantThumb {
+		t.Errorf("cnf.x5t#S256=%q, want %q", got["x5t#S256"], wantThumb)
 	}
 }
 
@@ -216,6 +219,88 @@ func TestAssembleResponse_HandlerInjectedCnfStripped(t *testing.T) {
 	if cnf["jkt"] != "real-jkt" {
 		t.Errorf("id_token cnf.jkt=%q, want %q", cnf["jkt"], "real-jkt")
 	}
+}
+
+func TestRequireIDTokenAudienceRejectsOtherClientToken(t *testing.T) {
+	t.Parallel()
+
+	err := requireIDTokenAudience("caller-client", TokenView{
+		Type:     TokenTypeIDToken,
+		ClientID: "other-client",
+		Audience: []string{
+			"other-client",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected ID token audience check to reject other-client token")
+	}
+}
+
+func TestRequireIDTokenAudienceAcceptsCallerAudience(t *testing.T) {
+	t.Parallel()
+
+	err := requireIDTokenAudience("caller-client", TokenView{
+		Type:     TokenTypeIDToken,
+		ClientID: "caller-client",
+		Audience: []string{
+			"caller-client",
+		},
+	})
+	if err != nil {
+		t.Fatalf("requireIDTokenAudience: %v", err)
+	}
+}
+
+// TestRequireMatchingSenderConstraint_MultiMethodANDEvaluated pins the
+// AND posture across cnf methods: a subject_token carrying both jkt and
+// x5t#S256 MUST be rejected when the request satisfies only one of them.
+// Switch-on-first-present semantics would let a stolen multi-bound
+// token through against a partially matching request.
+func TestRequireMatchingSenderConstraint_MultiMethodANDEvaluated(t *testing.T) {
+	t.Parallel()
+
+	leaf := fixtureLeafCert()
+	correctJKT := "subject-jkt"
+	correctThumb := mtls.Thumbprint(leaf)
+	tok := TokenView{
+		Confirmation: &Confirmation{
+			JKT:     correctJKT,
+			X5tS256: correctThumb,
+		},
+	}
+
+	t.Run("jkt_matches_mtls_missing", func(t *testing.T) {
+		t.Parallel()
+		err := requireMatchingSenderConstraint(customgrant.Request{
+			DPoPJKT:  correctJKT,
+			MTLSCert: nil,
+		}, tok)
+		if err == nil {
+			t.Fatal("expected rejection when only the jkt half matches")
+		}
+	})
+
+	t.Run("mtls_matches_jkt_missing", func(t *testing.T) {
+		t.Parallel()
+		err := requireMatchingSenderConstraint(customgrant.Request{
+			DPoPJKT:  "",
+			MTLSCert: leaf,
+		}, tok)
+		if err == nil {
+			t.Fatal("expected rejection when only the mtls half matches")
+		}
+	})
+
+	t.Run("both_match", func(t *testing.T) {
+		t.Parallel()
+		err := requireMatchingSenderConstraint(customgrant.Request{
+			DPoPJKT:  correctJKT,
+			MTLSCert: leaf,
+		}, tok)
+		if err != nil {
+			t.Fatalf("requireMatchingSenderConstraint: %v", err)
+		}
+	})
 }
 
 // newAssembleHandler builds a Handler suitable for assembleResponse-
