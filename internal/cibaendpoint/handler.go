@@ -576,7 +576,7 @@ func consumeJARRequestObject(
 			"request is not supported by this OP")
 		return nil, false
 	}
-	obj, err := deps.JAR.Verify(ctx, raw, client.ID, client)
+	obj, err := deps.JAR.VerifyCIBA(ctx, raw, client.ID, client)
 	if err != nil {
 		deps.auditEmitter().Emit(ctx, audit.Event{
 			Name:     ciba.AuditAuthorizationRejected,

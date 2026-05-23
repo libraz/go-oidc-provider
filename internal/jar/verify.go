@@ -42,6 +42,29 @@ const (
 	maxJTILen = 256
 )
 
+// jtiUse is the typed scope tag for the request-object jti replay key.
+// Keeping the type unexported and the constants below as the only
+// constructors lets callers pick a scope through the typed [*Verifier]
+// methods ([Verifier.Verify] / [Verifier.VerifyCIBA]) rather than by
+// passing a raw string, so a typo cannot silently merge a new endpoint
+// into an existing JTI namespace.
+type jtiUse string
+
+const (
+	// jtiUseAuthorize scopes consumed request-object jti values minted
+	// for the authorization endpoint. PAR shares this scope with
+	// /authorize so a request object consumed at PAR cannot be replayed
+	// at /authorize within its lifetime.
+	jtiUseAuthorize jtiUse = "authz"
+
+	// jtiUseCIBA scopes consumed request-object jti values minted for
+	// the CIBA backchannel authentication endpoint. CIBA is a distinct
+	// flow from /authorize so the jti namespace is independent: a
+	// client may legitimately mint the same jti string on both
+	// surfaces over time.
+	jtiUseCIBA jtiUse = "ciba"
+)
+
 // JWKSResolver is the verifier's seam for fetching the client's
 // keyset. The default implementation pulls inline JWKs from
 // [op/store.Client.JWKs] and, when absent, fetches
@@ -303,6 +326,25 @@ func (v *Verifier) AllowedAlgs() []jose.Algorithm {
 // the wire-vs-payload "client_id" reconciliation happens in [Merge]
 // so the rule lives next to the other merge invariants.
 func (v *Verifier) Verify(ctx context.Context, raw, expectedClientID string, client *store.Client) (*Object, error) {
+	return v.verifyForUse(ctx, raw, expectedClientID, client, jtiUseAuthorize)
+}
+
+// VerifyCIBA verifies raw as a signed CIBA backchannel-authentication
+// request object. It is identical to [Verifier.Verify] except that any
+// consumed "jti" is recorded under the CIBA scope, so the /authorize
+// and CIBA endpoints do not share a replay namespace. See [jtiUse] for
+// the scoping rationale.
+func (v *Verifier) VerifyCIBA(ctx context.Context, raw, expectedClientID string, client *store.Client) (*Object, error) {
+	return v.verifyForUse(ctx, raw, expectedClientID, client, jtiUseCIBA)
+}
+
+// verifyForUse is the shared body behind [Verifier.Verify] and
+// [Verifier.VerifyCIBA]. The use parameter is unexported and typed so
+// the only call sites are the typed entry points above; adding a new
+// endpoint requires adding a new typed method and a new [jtiUse]
+// constant, which makes the scoping decision explicit at the call site
+// rather than hidden behind a string literal.
+func (v *Verifier) verifyForUse(ctx context.Context, raw, expectedClientID string, client *store.Client, use jtiUse) (*Object, error) {
 	if client == nil {
 		return nil, fmt.Errorf("%w: client is required", ErrJWKSConfigured)
 	}
@@ -345,7 +387,7 @@ func (v *Verifier) Verify(ctx context.Context, raw, expectedClientID string, cli
 	if err := v.validateClaims(parsed, expectedClientID); err != nil {
 		return nil, err
 	}
-	if err := v.consumeJTI(ctx, parsed, expectedClientID); err != nil {
+	if err := v.consumeJTI(ctx, parsed, expectedClientID, use); err != nil {
 		return nil, err
 	}
 	return parsed, nil
@@ -436,14 +478,14 @@ func mapJWEError(err error) error {
 // request object's "jti" claim. The function runs after the rest of
 // the claim validation succeeds so a malformed or stale request
 // object never advances the consumed-jti table. The mark key is
-// scoped to the client_id ("jar:" + clientID + ":" + jti) so two
-// clients minting the same jti by coincidence do not collide.
+// scoped to endpoint use and client_id so two endpoints or clients
+// minting the same jti by coincidence do not collide.
 //
 // When the verifier was constructed with a nil JTIs store, the
 // embedder explicitly opted into [VerifierConfig.AllowMissingJTI];
 // the function then admits every request object regardless of jti
 // presence. The opt-in is the only path that bypasses the gate.
-func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string) error {
+func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string, use jtiUse) error {
 	jti, _ := obj.Claims["jti"].(string)
 	if jti == "" {
 		if v.allowMissJTI {
@@ -469,7 +511,7 @@ func (v *Verifier) consumeJTI(ctx context.Context, obj *Object, clientID string)
 		// a malformed-object class.
 		return fmt.Errorf("%w: jti consume: missing exp", ErrParse)
 	}
-	key := "jar:" + clientID + ":" + jti
+	key := "jar:" + string(use) + ":" + clientID + ":" + jti
 	if err := v.jtis.Mark(ctx, key, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return ErrJTIReplayed
@@ -541,6 +583,9 @@ func pickKey(keys *josev4.JSONWebKeySet, kid string) (*josev4.JSONWebKey, error)
 // validateClaims runs the RFC 9101 §6.1 / FAPI 2.0 Message Signing
 // §5.6 checklist on the verified claim bag.
 func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
+	if err := assertType(obj); err != nil {
+		return err
+	}
 	if err := v.assertNoNestedRequest(obj); err != nil {
 		return err
 	}
@@ -559,6 +604,15 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 	}
 	if err := assertIat(obj, now, v.maxFutureSkew, v.maxAge, v.requireIAT); err != nil {
 		return err
+	}
+	return nil
+}
+
+const requestObjectType = "oauth-authz-req+jwt"
+
+func assertType(obj *Object) error {
+	if obj.Type != requestObjectType {
+		return ErrTypeInvalid
 	}
 	return nil
 }

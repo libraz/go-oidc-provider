@@ -151,8 +151,8 @@ func TestVerify_AllowsDistinctJTIs(t *testing.T) {
 
 // TestVerify_ScopesJTIPerClient asserts the namespace separation in
 // the consumed-jti key. Two different clients minting the same jti
-// value MUST NOT collide — the gate uses "jar:"+clientID+":"+jti so
-// the second client's request object passes despite sharing the
+// value MUST NOT collide — the gate includes the client_id in the
+// replay-store key, so the second client's request object passes despite sharing the
 // literal jti string with the first.
 func TestVerify_ScopesJTIPerClient(t *testing.T) {
 	t.Parallel()
@@ -191,6 +191,38 @@ func TestVerify_ScopesJTIPerClient(t *testing.T) {
 	other.ID = otherClientID
 	if _, err := v.Verify(context.Background(), raw2, otherClientID, other); err != nil {
 		t.Fatalf("second client must not collide on shared jti: %v", err)
+	}
+}
+
+func TestVerify_ScopesJTIPerEndpointUse(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jtis := inmem.New(inmem.WithClock(fakeClock{now: now})).ConsumedJTIs()
+	priv, keys := jtiKey(t, testKID)
+
+	c := happyClaims(now)
+	c["nbf"] = now.Unix()
+	c["jti"] = "shared-across-endpoints"
+	raw := signClaims(t, priv, testKID, c, josev4.ES256)
+
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:   testIssuer,
+		Resolver: &staticResolver{keys: keys},
+		Clock:    fakeClock{now: now},
+		JTIs:     jtis,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("authorize Verify: %v", err)
+	}
+	if _, err := v.VerifyCIBA(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("CIBA VerifyCIBA must not collide with authorize jti: %v", err)
+	}
+	if _, err := v.VerifyCIBA(context.Background(), raw, testClientID, newClient()); !errors.Is(err, jar.ErrJTIReplayed) {
+		t.Fatalf("err=%v want ErrJTIReplayed for second CIBA use", err)
 	}
 }
 
