@@ -231,7 +231,13 @@ func issueClientCredsResponse(
 	// to this issuance.
 	// resource carries the validated RFC 8707 §3 indicator (empty when
 	// the request omitted it); mintAccessToken puts it in aud.
-	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, "", scope, resource, now, 0, binding)
+	// client_credentials has no end-user, so the public sub == raw sub
+	// == client.ID. SubjectProjector is intentionally not invoked: the
+	// pairwise projection is an OIDC §8.1 concept defined for end-user
+	// subjects, and projecting client.ID would produce a value the
+	// resource server cannot correlate against any authenticated
+	// principal.
+	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, client.ID, "", scope, resource, now, 0, binding)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return

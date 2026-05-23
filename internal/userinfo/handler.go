@@ -55,9 +55,14 @@ type HandlerDeps struct {
 	UserStore store.UserStore
 
 	// SubjectProjector, when non-nil, converts the OP-internal raw
-	// subject from the access token into the public OIDC "sub" value
-	// for the token's client. UserStore lookup still uses the raw
-	// subject so pairwise subjects do not become database keys.
+	// subject into the per-client public OIDC "sub" value the userinfo
+	// response carries (OIDC Core §5.4: userinfo "sub" matches the
+	// corresponding id_token "sub"; §8.1: pairwise subjects are
+	// per-client opaque). The raw subject is recovered by pivoting
+	// through the access token's "gid" private claim to the owning
+	// grant — see [assembleClaims] / [resolveRawSubject]. UserStore
+	// lookup keys on the raw value so pairwise subjects do not become
+	// database keys.
 	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 
 	// Grants is the read-only grant lookup the handler consults to
@@ -652,13 +657,27 @@ func respondInvalidToken(w http.ResponseWriter, err error) {
 // granted scopes onto the claim universe, and returns the response
 // body. The bool reports success; on false the handler has already
 // written the response and the caller MUST return.
+//
+// When the access token's "sub" carries the per-client pairwise value
+// (RFC 9068 §3 / OIDC Core §8.1 — minted that way so RS-visible and
+// id_token "sub" agree), the raw OP-internal subject is recovered by
+// pivoting through the access token's "gid" private claim to the owning
+// grant. UserStore lookup and the OIDC Core §5.5 claims-request resolution
+// both key on the raw value; the response "sub" is then re-projected so
+// the client observes the pairwise value end-to-end. The opaque-format
+// path leaves "gid" empty and stamps the raw subject on the claims it
+// hands here, so the pivot is a no-op on that branch.
 func assembleClaims(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
 ) (map[string]any, bool) {
-	user, err := deps.UserStore.FindBySubject(ctx, claims.Subject)
+	rawSubject, ok := resolveRawSubject(ctx, w, deps, claims)
+	if !ok {
+		return nil, false
+	}
+	user, err := deps.UserStore.FindBySubject(ctx, rawSubject)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "subject unknown"))
@@ -669,7 +688,7 @@ func assembleClaims(
 		return nil, false
 	}
 	source := userClaims(user)
-	publicSubject, ok := projectResponseSubject(ctx, w, deps, claims.Subject, claims.ClientID)
+	publicSubject, ok := projectResponseSubject(ctx, w, deps, rawSubject, claims.ClientID)
 	if !ok {
 		return nil, false
 	}
@@ -678,13 +697,57 @@ func assembleClaims(
 		Scopes:            claims.Scope,
 		Source:            source,
 		CustomScopeClaims: deps.CustomScopeClaims,
-		Claims:            lookupClaimsRequest(ctx, deps, claims.Subject, claims.ClientID),
+		Claims:            lookupClaimsRequest(ctx, deps, rawSubject, claims.ClientID),
 	})
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return nil, false
 	}
 	return out, true
+}
+
+// resolveRawSubject returns the OP-internal stable subject identifier
+// for the presented access token. JWT tokens minted under a configured
+// SubjectProjector carry the per-client pairwise value in "sub" and the
+// stable identifier on the originating grant; the function recovers the
+// raw value by looking the grant up through the "gid" private claim
+// (RFC 7519 §4.3) the token endpoint stamps on every JWT it issues. The
+// opaque-format path (and legacy JWT tokens minted before pairwise was
+// configured) carries the raw subject in "sub" directly and the GrantID
+// is empty; the function returns the claim verbatim on that branch.
+//
+// A missing or unrecoverable grant collapses onto invalid_token rather
+// than silently falling back to the pairwise value: the grant being
+// gone means the consent the token descends from has been revoked, and
+// continuing to serve userinfo would defeat that.
+func resolveRawSubject(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps HandlerDeps,
+	claims *tokens.AccessTokenClaims,
+) (string, bool) {
+	// When no SubjectProjector is configured the JWT "sub" claim is
+	// already the OP-internal value (mintAccessToken stamps raw ==
+	// public on that branch), so the grant pivot would be a no-op DB
+	// hit. Short-circuit to keep the non-pairwise hot path free of the
+	// extra lookup.
+	if deps.SubjectProjector == nil {
+		return claims.Subject, true
+	}
+	if claims.GrantID == "" || deps.Grants == nil {
+		return claims.Subject, true
+	}
+	g, err := deps.Grants.Find(ctx, claims.GrantID)
+	if err != nil || g == nil {
+		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "grant unknown"))
+		w.WriteHeader(http.StatusUnauthorized)
+		return "", false
+	}
+	if g.Subject == "" {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return "", false
+	}
+	return g.Subject, true
 }
 
 func projectResponseSubject(

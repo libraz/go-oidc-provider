@@ -302,10 +302,16 @@ func issueAuthCodeResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
 	}
+	publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
 		exchanged.Subject,
+		publicSubject,
 		client.ID,
 		exchanged.GrantID,
 		exchanged.Scope,
@@ -320,11 +326,6 @@ func issueAuthCodeResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(exchanged.Scope) {
-		publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
 		idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
 		idToken, err = mintAuthCodeIDToken(deps, mintIDTokenInput{
 			Subject:     publicSubject,
@@ -419,6 +420,16 @@ func projectPublicSubject(ctx context.Context, deps Deps, raw string, client *st
 // regardless of format so refresh-token rotations and the
 // /token-success response stay format-agnostic.
 //
+// rawSubject is the OP-internal stable user identifier; publicSubject
+// is the per-client value that egress representations ("sub" claim on
+// JWT access tokens, introspection response on opaque tokens) MUST
+// carry. Callers compute publicSubject via [projectPublicSubject] so
+// every "sub" visible to the client / RS matches the id_token "sub"
+// (RFC 9068 §3). Stores retain the raw value so userinfo /
+// introspection / revocation lookups continue to key on the stable
+// internal identifier. For client_credentials and other non-end-user
+// grants the two values are identical.
+//
 // grantID is empty for grants without an authorize-side record
 // (client_credentials synthesises one upstream so the cascade still
 // works); the JWT registry stores the empty string verbatim and
@@ -427,7 +438,7 @@ func projectPublicSubject(ctx context.Context, deps Deps, raw string, client *st
 func mintAccessToken(
 	ctx context.Context,
 	deps Deps,
-	subject, clientID, grantID string,
+	rawSubject, publicSubject, clientID, grantID string,
 	scope []string,
 	resource string,
 	now time.Time,
@@ -440,11 +451,11 @@ func mintAccessToken(
 	}
 	switch format {
 	case store.AccessTokenFormatOpaque:
-		return mintOpaqueAccessToken(ctx, deps, subject, clientID, grantID, scope, resource, now, authTime, binding)
+		return mintOpaqueAccessToken(ctx, deps, rawSubject, clientID, grantID, scope, resource, now, authTime, binding)
 	case store.AccessTokenFormatJWT:
 		fallthrough
 	default:
-		return mintJWTAccessToken(ctx, deps, subject, clientID, grantID, scope, resource, now, authTime, binding)
+		return mintJWTAccessToken(ctx, deps, rawSubject, publicSubject, clientID, grantID, scope, resource, now, authTime, binding)
 	}
 }
 
@@ -479,7 +490,7 @@ func mintAccessToken(
 func mintJWTAccessToken(
 	ctx context.Context,
 	deps Deps,
-	subject, clientID, grantID string,
+	rawSubject, publicSubject, clientID, grantID string,
 	scope []string,
 	resource string,
 	now time.Time,
@@ -497,7 +508,7 @@ func mintJWTAccessToken(
 	}
 	claims := tokens.AccessTokenClaims{
 		Issuer:       deps.Issuer,
-		Subject:      subject,
+		Subject:      publicSubject,
 		Audience:     []string{audience},
 		ClientID:     clientID,
 		IssuedAt:     now.Unix(),
@@ -516,7 +527,7 @@ func mintJWTAccessToken(
 		if err := deps.AccessTokens.Register(ctx, store.AccessTokenRecord{
 			JTI:       jti,
 			GrantID:   grantID,
-			Subject:   subject,
+			Subject:   rawSubject,
 			ClientID:  clientID,
 			Scopes:    append([]string(nil), scope...),
 			IssuedAt:  now,

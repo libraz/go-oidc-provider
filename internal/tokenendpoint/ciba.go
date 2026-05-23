@@ -394,10 +394,16 @@ func issueCIBAResponse(
 		return
 	}
 	authTime := authTimeUnix(authorized.AuthTime)
+	publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
 		authorized.Subject,
+		publicSubject,
 		client.ID,
 		consumed.ID,
 		authorized.Scope,
@@ -412,11 +418,6 @@ func issueCIBAResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(authorized.Scope) {
-		publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
 		idToken, err = mintCIBAIDToken(deps, cibaIDTokenInput{
 			Subject:     publicSubject,
 			ClientID:    client.ID,

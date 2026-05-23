@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
@@ -862,6 +863,101 @@ func TestScenario_PW_40_UserInfoLooksUpRawSubjectAndReturnsPairwiseSub(t *testin
 	}
 	if got, _ := ui["email"].(string); got != "user-1@example.test" {
 		t.Errorf("userinfo email=%v want raw-subject user claim", ui["email"])
+	}
+}
+
+// TestScenario_PW_40_AccessTokenSubMatchesIDTokenSub pins RFC 9068 §3:
+// the "sub" claim of the JWT-formatted access token MUST match the
+// corresponding id_token "sub". Pairwise OPs project the per-client
+// value at every egress point (id_token, JWT access_token, userinfo,
+// introspection) so a resource server validating the access token
+// observes the same opaque identifier the client received in the id_token.
+func TestScenario_PW_40_AccessTokenSubMatchesIDTokenSub(t *testing.T) {
+	t.Parallel()
+	tk := newPairwiseProvider(t)
+	c := pairwiseClient(t, tk, "rp-pw-40-at-sub", "https://rp.example.com/cb")
+
+	tok := runPairwiseTokenFlow(t, tk, c, "https://rp.example.com/cb", "openid")
+	if tok.AccessToken == "" || tok.IDToken == "" {
+		t.Fatalf("/token response missing access_token or id_token: %v", tok.Raw)
+	}
+	idClaims := decodePWJWTClaims(t, tok.IDToken)
+	atClaims := decodePWJWTClaims(t, tok.AccessToken)
+	idSub, _ := idClaims["sub"].(string)
+	atSub, _ := atClaims["sub"].(string)
+	if idSub == "" {
+		t.Fatalf("id_token sub is empty: %v", idClaims)
+	}
+	if idSub == scenariokit.DefaultSubject {
+		t.Fatalf("id_token sub=%q must be the pairwise value, not the raw subject", idSub)
+	}
+	if atSub != idSub {
+		t.Errorf("access_token sub=%q must equal id_token sub=%q (RFC 9068 §3)", atSub, idSub)
+	}
+}
+
+// TestScenario_PW_40_IntrospectionReturnsProjectedSub pins the pairwise
+// projection across the introspection egress: a refresh-token record
+// persists the raw OP-internal subject, but the wire response carries
+// the per-client value resolved through SubjectProjector. Without the
+// projection the RS would observe a third subject identifier
+// (raw on introspection, pairwise on userinfo / id_token), breaking the
+// OIDC Core §8.1 single-pairwise-per-client guarantee.
+func TestScenario_PW_40_IntrospectionReturnsProjectedSub(t *testing.T) {
+	t.Parallel()
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithPairwiseSubject(pwPairwiseSalt),
+		op.WithFeature(feature.Introspect),
+	))
+	hash, err := op.HashClientSecret(pwClientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	c := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "rp-pw-40-introspect",
+		SecretHash:              hash,
+		RedirectURIs:            []string{"https://rp.example.com/cb"},
+		Scopes:                  []string{"openid", "profile", "email", "offline_access"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		SubjectType:             "pairwise",
+	})
+
+	tok := runPairwiseTokenFlow(t, tk, c, "https://rp.example.com/cb", "openid offline_access")
+	if tok.RefreshToken == "" {
+		t.Fatalf("/token response missing refresh_token (raw=%v)", tok.Raw)
+	}
+	idClaims := decodePWJWTClaims(t, tok.IDToken)
+	idSub, _ := idClaims["sub"].(string)
+	if idSub == "" || idSub == scenariokit.DefaultSubject {
+		t.Fatalf("id_token sub=%q, want non-empty pairwise value", idSub)
+	}
+
+	form := url.Values{"token": {tok.RefreshToken}, "token_type_hint": {"refresh_token"}}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		tk.Server.URL+"/oidc/introspect", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(c.ID, pwClientSecret)
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST /introspect: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/introspect status=%d body=%s", resp.StatusCode, body)
+	}
+	var intro map[string]any
+	if err := json.Unmarshal(body, &intro); err != nil {
+		t.Fatalf("decode /introspect body %s: %v", body, err)
+	}
+	if active, _ := intro["active"].(bool); !active {
+		t.Fatalf("introspection inactive for live refresh token: %v", intro)
+	}
+	if got, _ := intro["sub"].(string); got != idSub {
+		t.Errorf("introspection sub=%q must equal id_token sub=%q", got, idSub)
 	}
 }
 

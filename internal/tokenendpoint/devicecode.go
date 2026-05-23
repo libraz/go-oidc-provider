@@ -346,10 +346,16 @@ func issueDeviceCodeResponse(
 		return
 	}
 	authTime := authTimeUnix(authorized.AuthTime)
+	publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
 		authorized.Subject,
+		publicSubject,
 		client.ID,
 		consumed.ID,
 		authorized.Scope,
@@ -364,11 +370,6 @@ func issueDeviceCodeResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(authorized.Scope) {
-		publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
 		idToken, err = mintDeviceCodeIDToken(deps, deviceCodeIDTokenInput{
 			Subject:     publicSubject,
 			ClientID:    client.ID,

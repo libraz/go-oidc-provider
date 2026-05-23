@@ -143,10 +143,35 @@ type Deps struct {
 	UserStore store.UserStore
 
 	// SubjectProjector, when non-nil, converts the OP-internal raw
-	// subject into the public OIDC "sub" value for the requesting
-	// client. The token endpoint uses it only for id_token issuance;
-	// access-token and refresh-token records keep the raw subject so
-	// OP-served boundaries can still look up the UserStore.
+	// subject into the per-client public OIDC "sub" value. The
+	// projection is applied at every wire egress so RFC 9068 §3 holds
+	// (the JWT access token "sub" matches the id_token "sub") and
+	// OIDC Core §8.1 / §5.4 hold (userinfo and id_token surface the
+	// same pairwise value to the client):
+	//
+	//   - id_token "sub": projected on issuance.
+	//   - JWT access token "sub" (RFC 9068): projected at mintAccessToken;
+	//     the JTI revocation registry shadow row keeps the raw value so
+	//     OP-internal revocation lookups remain stable.
+	//   - Opaque access-token store row: keeps the raw subject; the
+	//     introspection handler re-projects on egress.
+	//   - Refresh-token store row: keeps the raw subject; the
+	//     introspection handler re-projects on egress.
+	//   - Grant and authorization-code records: keep the raw subject so
+	//     prompt=none / silent-renew lookups by (subject, client_id)
+	//     succeed against the session's user-scoped identifier.
+	//
+	// The userinfo handler recovers the raw subject by pivoting through
+	// the access token's "gid" private claim to the owning grant; that
+	// path is the only place the OP needs to invert the projection, and
+	// because the projection itself is not invertible (HMAC-style salted
+	// generators are the common case) the pivot is the load-bearing
+	// recovery mechanism rather than a convenience.
+	//
+	// client_credentials and custom-grant flows skip projection because
+	// the "sub" they carry is the client identifier (or a handler-chosen
+	// string), not an end-user subject the pairwise generator is
+	// configured for.
 	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 
 	// Keys is the active OP keyset. The first entry signs newly-issued

@@ -249,10 +249,16 @@ func issueRefreshResponse(
 	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
 		return
 	}
+	publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	accessToken, err := mintAccessToken(
 		ctx,
 		deps,
 		exchanged.Subject,
+		publicSubject,
 		client.ID,
 		exchanged.GrantID,
 		exchanged.Scope,
@@ -266,17 +272,8 @@ func issueRefreshResponse(
 		return
 	}
 	idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
-	idTokenSubject := exchanged.Subject
-	if oidcscope.ContainsOpenID(exchanged.Scope) {
-		publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
-		idTokenSubject = publicSubject
-	}
 	idToken, err := maybeMintRefreshIDToken(deps, refreshIDTokenInput{
-		Subject:  idTokenSubject,
+		Subject:  publicSubject,
 		ClientID: client.ID,
 		Scope:    exchanged.Scope,
 		Now:      now,
