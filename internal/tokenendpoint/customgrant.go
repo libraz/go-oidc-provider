@@ -145,6 +145,10 @@ func resolveCustomGrantAccessToken(
 	if err != nil {
 		return "", 0, err
 	}
+	grantID, err := newJTI()
+	if err != nil {
+		return "", 0, err
+	}
 	now := deps.now().UTC()
 	claims := tokens.AccessTokenClaims{
 		Issuer:       deps.Issuer,
@@ -154,6 +158,7 @@ func resolveCustomGrantAccessToken(
 		IssuedAt:     now.Unix(),
 		ExpiresAt:    tokens.ExpiresIn(now, ttl),
 		JTI:          jti,
+		GrantID:      grantID,
 		Scope:        append([]string(nil), resp.Scope...),
 		Confirmation: binding.confirmation(),
 		Extra:        resp.BoundAccessToken.ExtraClaims,

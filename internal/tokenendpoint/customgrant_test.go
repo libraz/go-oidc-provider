@@ -342,6 +342,9 @@ func TestCustomGrant_BoundAccessToken_PlainBearer(t *testing.T) {
 	if parsed.JTI == "" {
 		t.Error("jti missing on bound access token")
 	}
+	if parsed.GrantID == "" {
+		t.Error("gid missing on bound access token")
+	}
 	if len(parsed.Confirmation) != 0 {
 		t.Errorf("cnf must be absent on plain bearer bound token: %v", parsed.Confirmation)
 	}

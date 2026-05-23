@@ -152,6 +152,42 @@ func TestHandleCIBA_NilSubstore_RejectsUnsupportedGrantType(t *testing.T) {
 	}
 }
 
+func TestHandleCIBA_UnknownAuthReqID_AuditsLookupMiss(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	emitter := &recordingEmitter{}
+	f.deps.Audit = emitter
+
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "unknown-auth-req-id")
+	rec := f.post(t, form)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := cibaDecodeError(t, rec.Body.Bytes()); got != "expired_token" {
+		t.Fatalf("error = %q, want expired_token", got)
+	}
+
+	var found *audit.Event
+	for i := range emitter.events {
+		ev := emitter.events[i]
+		if ev.Name == ciba.AuditTokenRejected {
+			found = &ev
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected audit event %q; got %v", ciba.AuditTokenRejected, eventNames(emitter.events))
+	}
+	if got, _ := found.Extras["reason"].(string); got != "expired_token" {
+		t.Fatalf("reason = %q, want expired_token", got)
+	}
+	if got, _ := found.Extras["lookup"].(string); got != "not_found" {
+		t.Fatalf("lookup = %q, want not_found", got)
+	}
+}
+
 func TestHandleCIBA_PendingPoll_AuthorizationPending(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFixture(t)

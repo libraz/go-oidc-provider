@@ -221,7 +221,9 @@ func lookupCIBARequest(
 	rec, err := deps.CIBARequests.FindByAuthReqID(ctx, authReqID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			emitCIBAReject(ctx, deps, clientID, errExpiredToken)
+			emitCIBARejectWithExtras(ctx, deps, clientID, errExpiredToken, map[string]any{
+				"lookup": "not_found",
+			})
 			writeError(w, http.StatusBadRequest, errExpiredToken,
 				"auth_req_id expired or already consumed")
 			return nil, false
@@ -494,19 +496,24 @@ type cibaIDTokenInput struct {
 // when the substore stamped a non-zero value at Approve time;
 // the encoder omits the claim on zero.
 func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {
+	key := activeSigningKey(deps)
+	atHash, err := tokens.HashForAlg(in.AccessToken, key.Alg)
+	if err != nil {
+		return "", err
+	}
 	claims := tokens.IDTokenClaims{
 		Issuer:    deps.Issuer,
 		Subject:   in.Subject,
 		Audience:  []string{in.ClientID},
 		IssuedAt:  in.Now.Unix(),
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
-		AtHash:    tokens.Hash(in.AccessToken),
+		AtHash:    atHash,
 		AuthTime:  in.AuthTime,
 	}
 	if len(in.ACRValues) > 0 {
 		claims.ACR = in.ACRValues[0]
 	}
-	return tokens.SignIDToken(activeSigningKey(deps), claims)
+	return tokens.SignIDToken(key, claims)
 }
 
 // cibaIssuedExtras bundles the audit extras the issuance path
@@ -544,14 +551,20 @@ func emitCIBAIssued(ctx context.Context, deps Deps, in cibaIssuedExtras) {
 // OP returned ("authorization_pending", "slow_down",
 // "access_denied", "expired_token", or "invalid_grant").
 func emitCIBAReject(ctx context.Context, deps Deps, clientID, reason string) {
+	emitCIBARejectWithExtras(ctx, deps, clientID, reason, nil)
+}
+
+func emitCIBARejectWithExtras(ctx context.Context, deps Deps, clientID, reason string, extras map[string]any) {
+	if extras == nil {
+		extras = make(map[string]any, 1)
+	}
+	extras["reason"] = reason
 	deps.audit().Emit(ctx, audit.Event{
 		Name:     ciba.AuditTokenRejected,
 		Level:    audit.LevelInfo,
 		Message:  "auth_req_id poll rejected",
 		ClientID: clientID,
-		Extras: map[string]any{
-			"reason": reason,
-		},
+		Extras:   extras,
 	})
 }
 
