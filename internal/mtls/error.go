@@ -26,6 +26,12 @@ var (
 	// the embedder configured but a downstream proxy rewrote.
 	ErrCertMalformed = errors.New("mtls: client certificate malformed")
 
+	// ErrCertUntrusted signals that a presented cert did not verify
+	// against the verifier's configured RootCAs. Only emitted when
+	// [VerifierConfig.RootCAs] is non-nil; deployments that rely on
+	// TLS/proxy chain validation can leave RootCAs unset.
+	ErrCertUntrusted = errors.New("mtls: client certificate is not trusted")
+
 	// ErrSubjectMismatch signals that the client cert's subject DN
 	// did not equal the value registered against the client (RFC
 	// 8705 §2.1.2). Only emitted on the tls_client_auth path.

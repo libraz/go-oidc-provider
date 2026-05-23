@@ -2,6 +2,7 @@ package mtls
 
 import (
 	"crypto/x509"
+	"fmt"
 	"net/http"
 )
 
@@ -16,7 +17,8 @@ import (
 // layer touches it, and a nil receiver is never expected (callers
 // gate on the field's nilness before invoking any method).
 type Verifier struct {
-	proxy ProxyConfig
+	proxy   ProxyConfig
+	rootCAs *x509.CertPool
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier]. The struct
@@ -29,6 +31,12 @@ type VerifierConfig struct {
 	// request did not terminate TLS at the OP. The zero value
 	// disables the header path entirely.
 	Proxy ProxyConfig
+
+	// RootCAs, when non-nil, makes the verifier run x509 chain
+	// validation on the presented leaf certificate before returning it.
+	// Leave nil when TLS termination or a trusted proxy has already
+	// performed chain validation.
+	RootCAs *x509.CertPool
 }
 
 // NewVerifier returns a [*Verifier] from cfg. It never fails because
@@ -39,14 +47,26 @@ type VerifierConfig struct {
 //
 //nolint:unparam // error return reserved for future required fields.
 func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
-	return &Verifier{proxy: cfg.Proxy}, nil
+	return &Verifier{proxy: cfg.Proxy, rootCAs: cfg.RootCAs}, nil
 }
 
 // CertificateFromRequest is the request-scoped wrapper around the
 // package-level [CertificateFromRequest] function: it threads the
 // stored [ProxyConfig] so callers do not have to.
 func (v *Verifier) CertificateFromRequest(r *http.Request) (*x509.Certificate, error) {
-	return CertificateFromRequest(r, v.proxy)
+	cert, err := CertificateFromRequest(r, v.proxy)
+	if err != nil {
+		return nil, err
+	}
+	if v.rootCAs != nil {
+		if _, err := cert.Verify(x509.VerifyOptions{
+			Roots:     v.rootCAs,
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		}); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrCertUntrusted, err)
+		}
+	}
+	return cert, nil
 }
 
 // ThumbprintFromRequest returns the RFC 8705 §3.1 thumbprint of the

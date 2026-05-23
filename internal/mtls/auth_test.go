@@ -423,6 +423,23 @@ func TestVerifyTLSClientAuth_SubjectDN_DERFastPath(t *testing.T) {
 	}
 }
 
+// TestVerifyTLSClientAuth_SubjectDN_MultiValuedMatcherDoesNotFlatten pins
+// the conservative DN comparison for RFC 4514 multi-valued RDN spellings:
+// CN=alice+UID=evil must not be flattened into CN=alice.
+func TestVerifyTLSClientAuth_SubjectDN_MultiValuedMatcherDoesNotFlatten(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeafWith(t, func(c *x509.Certificate) {
+		c.Subject = pkix.Name{CommonName: "alice"}
+	})
+	err := mtls.VerifyTLSClientAuth(cert, mtls.ClientMatcher{
+		SubjectDN: "CN=alice+UID=evil",
+	})
+	if !errors.Is(err, mtls.ErrSubjectMismatch) {
+		t.Fatalf("err=%v want ErrSubjectMismatch", err)
+	}
+}
+
 // TestVerifyClientAuth_DispatchByMethod pins the B-MTLS §2 dispatch
 // contract: the [VerifyClientAuth] entry point routes onto the per-
 // method verifier the embedder named in the client's

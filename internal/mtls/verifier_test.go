@@ -2,12 +2,18 @@ package mtls_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 )
@@ -31,6 +37,46 @@ func TestVerifier_ThumbprintFromRequest_TLSPath(t *testing.T) {
 	}
 	if got != mtls.Thumbprint(cert) {
 		t.Errorf("thumbprint mismatch")
+	}
+}
+
+func TestVerifier_CertificateFromRequest_RootCAsRejectsUntrustedLeaf(t *testing.T) {
+	t.Parallel()
+
+	cert := generateLeaf(t)
+	roots := x509.NewCertPool()
+	v, err := mtls.NewVerifier(mtls.VerifierConfig{RootCAs: roots})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/userinfo", http.NoBody)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+
+	_, err = v.CertificateFromRequest(req)
+	if !errors.Is(err, mtls.ErrCertUntrusted) {
+		t.Fatalf("err=%v want ErrCertUntrusted", err)
+	}
+}
+
+func TestVerifier_CertificateFromRequest_RootCAsAcceptsTrustedLeaf(t *testing.T) {
+	t.Parallel()
+
+	ca, leaf := generateCATrustedLeaf(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	v, err := mtls.NewVerifier(mtls.VerifierConfig{RootCAs: roots})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/userinfo", http.NoBody)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}
+
+	got, err := v.CertificateFromRequest(req)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if got != leaf {
+		t.Fatal("CertificateFromRequest returned a different certificate pointer")
 	}
 }
 
@@ -122,4 +168,51 @@ func TestVerifier_VerifyBoundRequest_EmptyBoundFailsClosed(t *testing.T) {
 	if !errors.Is(err, mtls.ErrThumbprintMismatch) {
 		t.Errorf("err=%v want ErrThumbprintMismatch (empty bound thumbprint)", err)
 	}
+}
+
+func generateCATrustedLeaf(tb testing.TB) (*x509.Certificate, *x509.Certificate) {
+	tb.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		tb.Fatalf("Generate CA key: %v", err)
+	}
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		tb.Fatalf("Generate leaf key: %v", err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1001),
+		Subject:               pkix.Name{CommonName: "test ca"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.AddDate(2, 0, 0),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		tb.Fatalf("Create CA: %v", err)
+	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		tb.Fatalf("Parse CA: %v", err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1002),
+		Subject:      pkix.Name{CommonName: "rp.example"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.AddDate(1, 0, 0),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, ca, &leafKey.PublicKey, caKey)
+	if err != nil {
+		tb.Fatalf("Create leaf: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		tb.Fatalf("Parse leaf: %v", err)
+	}
+	return ca, leaf
 }
