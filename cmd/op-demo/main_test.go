@@ -46,6 +46,22 @@ var (
 	errDiscoveryTimeout = errors.New("waitDiscovery: timed out waiting for /.well-known/openid-configuration")
 )
 
+func TestDefaultListenAddrIsLoopback(t *testing.T) {
+	t.Parallel()
+
+	host, port, err := net.SplitHostPort(defaultListenAddr)
+	if err != nil {
+		t.Fatalf("defaultListenAddr = %q: %v", defaultListenAddr, err)
+	}
+	if port != "9090" {
+		t.Errorf("port = %q, want 9090", port)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		t.Fatalf("host = %q, want loopback address", host)
+	}
+}
+
 func baseTestConfig(addr string) runConfig {
 	return runConfig{
 		listen:       addr,

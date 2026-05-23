@@ -10,7 +10,7 @@
 // Quick start (HTTP):
 //
 //	go run ./cmd/op-demo \
-//	    -listen :9090 \
+//	    -listen 127.0.0.1:9090 \
 //	    -issuer https://localhost:9090 \
 //	    -client-id demo-client \
 //	    -redirect-uri https://localhost.emobix.co.uk:8443/test/a/op-demo/callback
@@ -71,6 +71,8 @@ import (
 // op-demo is a development binary, not a production OP, so a long
 // grace period would only mask hung handlers during conformance runs.
 const shutdownGrace = 5 * time.Second
+
+const defaultListenAddr = "127.0.0.1:9090"
 
 // runConfig groups the demo's startup knobs so run() does not grow a
 // long positional signature as flags accumulate.
@@ -133,7 +135,7 @@ func main() {
 
 func mainErr() error {
 	var (
-		listen      = flag.String("listen", ":9090", "TCP listen address (\"host:port\" or \":port\")")
+		listen      = flag.String("listen", defaultListenAddr, "TCP listen address (\"host:port\" or \":port\")")
 		issuer      = flag.String("issuer", "https://localhost:9090", "issuer URL — MUST be https://, no query, no fragment")
 		mount       = flag.String("mount", "/oidc", "URL prefix the OP handler is mounted under")
 		clientID    = flag.String("client-id", "demo-client", "client_id of the seed client")
