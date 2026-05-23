@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
     scopes TEXT NOT NULL DEFAULT '[]',
     resources TEXT NOT NULL DEFAULT '[]',
     token_endpoint_auth_method TEXT NOT NULL DEFAULT '',
+    token_endpoint_auth_signing_alg TEXT NOT NULL DEFAULT '',
     secret_hash TEXT NOT NULL DEFAULT '',
     public_client INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL DEFAULT '',

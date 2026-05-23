@@ -387,6 +387,7 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 		ResponseTypes:                     m.ResponseTypes,
 		Scope:                             m.Scope,
 		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
 		ApplicationType:                   m.ApplicationType,
 		SubjectType:                       m.SubjectType,
 		IDTokenSignedResponseAlg:          m.IDTokenSignedResponseAlg,

@@ -220,6 +220,10 @@ type ConfidentialClient struct {
 
 	// SubjectType mirrors [PublicClient.SubjectType].
 	SubjectType string
+
+	// TokenEndpointAuthSigningAlg restricts client_assertion signatures
+	// for this private_key_jwt client. Empty leaves the OP allow-list.
+	TokenEndpointAuthSigningAlg string
 }
 
 // seed projects c onto a [store.Client] with the confidential-client
@@ -332,6 +336,10 @@ type PrivateKeyJWTClient struct {
 
 	// SubjectType mirrors [PublicClient.SubjectType].
 	SubjectType string
+
+	// TokenEndpointAuthSigningAlg restricts client_assertion signatures
+	// for this private_key_jwt client. Empty leaves the OP allow-list.
+	TokenEndpointAuthSigningAlg string
 }
 
 // seed projects c onto a [store.Client] with the private_key_jwt
@@ -359,6 +367,7 @@ func (c PrivateKeyJWTClient) seed() (store.Client, error) {
 		GrantTypes:                       grants,
 		ResponseTypes:                    responses,
 		TokenEndpointAuthMethod:          AuthPrivateKeyJWT.String(),
+		TokenEndpointAuthSigningAlg:      c.TokenEndpointAuthSigningAlg,
 		JWKs:                             slices.Clone(c.JWKS),
 		Source:                           store.ClientSourceStatic,
 		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),

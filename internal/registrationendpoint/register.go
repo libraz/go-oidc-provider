@@ -27,6 +27,7 @@ type registrationResponse struct {
 	ResponseTypes                     []string `json:"response_types,omitempty"`
 	Scope                             string   `json:"scope,omitempty"`
 	TokenEndpointAuthMethod           string   `json:"token_endpoint_auth_method,omitempty"`
+	TokenEndpointAuthSigningAlg       string   `json:"token_endpoint_auth_signing_alg,omitempty"`
 	ApplicationType                   string   `json:"application_type,omitempty"`
 	SubjectType                       string   `json:"subject_type,omitempty"`
 	IDTokenAlg                        string   `json:"id_token_signed_response_alg,omitempty"`
@@ -164,6 +165,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		ResponseTypes:                     slices.Clone(m.ResponseTypes),
 		Scopes:                            splitScopes(m.Scope),
 		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
 		SecretHash:                        secretHash,
 		PublicClient:                      publicClient,
 		Source:                            store.ClientSourceDynamic,
@@ -255,6 +257,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		ResponseTypes:                     m.ResponseTypes,
 		Scope:                             m.Scope,
 		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
 		ApplicationType:                   m.ApplicationType,
 		SubjectType:                       m.SubjectType,
 		IDTokenAlg:                        m.IDTokenSignedResponseAlg,

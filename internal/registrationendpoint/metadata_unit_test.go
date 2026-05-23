@@ -46,6 +46,26 @@ func TestValidatePolicy_RejectsUnsupportedRequestObjectSigningAlg(t *testing.T) 
 	}
 }
 
+func TestValidatePolicy_RejectsUnsupportedTokenEndpointAuthSigningAlg(t *testing.T) {
+	t.Parallel()
+
+	_, err := validatePolicy(ClientMetadata{
+		RedirectURIs:                []string{"https://rp.example.com/cb"},
+		TokenEndpointAuthMethod:     "private_key_jwt",
+		TokenEndpointAuthSigningAlg: "none",
+	}, []string{"authorization_code", "refresh_token"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	var ve *validationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("err=%T %v, want validationError", err, err)
+	}
+	if ve.code != codeInvalidClientMetadata {
+		t.Errorf("code=%q want %q", ve.code, codeInvalidClientMetadata)
+	}
+}
+
 // TestValidatePolicy_AcceptsRequestObjectEncryption pins the v0.9.1
 // allow-list for [request_object_encryption_alg / _enc]: every entry
 // on the JOSE wrapper's allow-list flows through the DCR validator

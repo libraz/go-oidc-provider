@@ -29,6 +29,7 @@ type ClientMetadata struct {
 	ResponseTypes                     []string
 	Scope                             string
 	TokenEndpointAuthMethod           string
+	TokenEndpointAuthSigningAlg       string
 	ApplicationType                   string
 	SubjectType                       string
 	IDTokenSignedResponseAlg          string
@@ -72,6 +73,7 @@ type metadataWire struct {
 	ResponseTypes                     []string        `json:"response_types,omitempty"`
 	Scope                             string          `json:"scope,omitempty"`
 	TokenEndpointAuthMethod           string          `json:"token_endpoint_auth_method,omitempty"`
+	TokenEndpointAuthSigningAlg       string          `json:"token_endpoint_auth_signing_alg,omitempty"`
 	ApplicationType                   string          `json:"application_type,omitempty"`
 	SubjectType                       string          `json:"subject_type,omitempty"`
 	IDTokenSignedResponseAlg          string          `json:"id_token_signed_response_alg,omitempty"`
@@ -165,6 +167,7 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		ResponseTypes:                     cloneStrings(w.ResponseTypes),
 		Scope:                             w.Scope,
 		TokenEndpointAuthMethod:           w.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       w.TokenEndpointAuthSigningAlg,
 		ApplicationType:                   w.ApplicationType,
 		SubjectType:                       w.SubjectType,
 		IDTokenSignedResponseAlg:          w.IDTokenSignedResponseAlg,

@@ -219,6 +219,7 @@ func staticClientToMetadata(c store.Client) ClientMetadata {
 		ResponseTypes:                     c.ResponseTypes,
 		Scope:                             strings.Join(c.Scopes, " "),
 		TokenEndpointAuthMethod:           c.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       c.TokenEndpointAuthSigningAlg,
 		ApplicationType:                   c.ApplicationType,
 		SubjectType:                       c.SubjectType,
 		IDTokenSignedResponseAlg:          c.IDTokenSignedResponseAlg,

@@ -75,6 +75,10 @@ type JWKSResolver interface {
 	JWKS(ctx context.Context, clientID string) (*josev4.JSONWebKeySet, error)
 }
 
+type assertionSigningAlgResolver interface {
+	AssertionSigningAlg(ctx context.Context, clientID string) (string, error)
+}
+
 // PrivateKeyJWTVerifier is the library's reference [AssertionVerifier].
 // Embedders typically use this verifier wrapped around their own
 // JWKSResolver and the OP's [store.ConsumedJTIStore].
@@ -123,6 +127,9 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrAssertionMalformed, err)
 	}
+	if !assertionAlgAllowed(ctx, v.Resolver, clientID, jws) {
+		return ErrCredentialsInvalid
+	}
 	keys, err := v.Resolver.JWKS(ctx, clientID)
 	if err != nil || keys == nil || len(keys.Keys) == 0 {
 		return ErrCredentialsInvalid
@@ -146,6 +153,21 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 		return fmt.Errorf("authn: jti store: %w", err)
 	}
 	return nil
+}
+
+func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) bool {
+	algResolver, ok := resolver.(assertionSigningAlgResolver)
+	if !ok {
+		return true
+	}
+	pin, err := algResolver.AssertionSigningAlg(ctx, clientID)
+	if err != nil || pin == "" {
+		return err == nil
+	}
+	if len(jws.Signatures) == 0 {
+		return false
+	}
+	return jws.Signatures[0].Header.Algorithm == pin
 }
 
 // verifySignature tries every key in keys and returns the verified

@@ -44,6 +44,7 @@ func validatePolicy(
 			return validateGrantResponseTypeConsistency(canonical.GrantTypes, canonical.ResponseTypes)
 		},
 		func() error { return validateAuthMethod(canonical.TokenEndpointAuthMethod) },
+		func() error { return validateTokenEndpointAuthSigningAlg(canonical.TokenEndpointAuthSigningAlg) },
 		func() error { return validateSubjectType(canonical.SubjectType, pairwiseEnabled) },
 		func() error { return validateIDTokenAlg(canonical.IDTokenSignedResponseAlg) },
 		func() error { return validateRequestedScopes(canonical.Scope, iatScopes, scopes) },
@@ -232,6 +233,18 @@ func validateAuthMethod(m string) error {
 		return errInvalidClientMetadata("token_endpoint_auth_method client_secret_jwt is not supported")
 	default:
 		return errInvalidClientMetadata("token_endpoint_auth_method " + m + " is not supported")
+	}
+}
+
+func validateTokenEndpointAuthSigningAlg(alg string) error {
+	if alg == "" {
+		return nil
+	}
+	switch alg {
+	case "RS256", "PS256", "ES256", "EdDSA":
+		return nil
+	default:
+		return errInvalidClientMetadata("token_endpoint_auth_signing_alg " + alg + " is not supported")
 	}
 }
 

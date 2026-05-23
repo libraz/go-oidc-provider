@@ -121,6 +121,13 @@ type Client struct {
 	// "private_key_jwt", "tls_client_auth", "none").
 	TokenEndpointAuthMethod string
 
+	// TokenEndpointAuthSigningAlg restricts the JWS "alg" a
+	// private_key_jwt client may use for client_assertion signatures
+	// (OIDC Dynamic Client Registration 1.0 §2). Empty means "any OP
+	// supported assertion alg"; non-empty values are compared
+	// byte-for-byte against the protected header.
+	TokenEndpointAuthSigningAlg string
+
 	// SecretHash is the salted hash of the client_secret for clients that
 	// authenticate with a shared secret. Backends MUST NOT store the raw
 	// secret; the library never writes one back. The value is opaque to

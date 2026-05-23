@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"testing"
@@ -452,6 +453,54 @@ func TestPrivateKeyJWTVerifier_AudArrayWithExtraneous_StillAccepted(t *testing.T
 	}
 	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
 		t.Fatalf("aud array: %v", err)
+	}
+}
+
+func TestPrivateKeyJWTVerifier_RejectsAlgOutsideClientPin(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	jwks, err := json.Marshal(pubKeys)
+	if err != nil {
+		t.Fatalf("jsonMarshal JWKS: %v", err)
+	}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	st := inmem.New(inmem.WithClock(fixedClock{now: now}))
+	if err := st.RegisterClient(context.Background(), &store.Client{
+		ID:                          "client-1",
+		TokenEndpointAuthMethod:     string(clientauth.MethodPrivateKeyJWT),
+		TokenEndpointAuthSigningAlg: "PS256",
+		JWKs:                        jwks,
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	resolver, err := clientauth.NewStoreJWKSResolver(st.Clients())
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": tokenAud,
+		"jti": "j-alg-pin",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: resolver,
+		JTIStore: st.ConsumedJTIs(),
+		Audience: tokenAud,
+		Clock:    fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
+		t.Fatalf("err=%v want ErrCredentialsInvalid", err)
 	}
 }
 

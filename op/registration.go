@@ -159,6 +159,10 @@ type ClientMetadata struct {
 	// "private_key_jwt", "none").
 	TokenEndpointAuthMethod string
 
+	// TokenEndpointAuthSigningAlg restricts private_key_jwt
+	// client_assertion signatures to this JWS alg when non-empty.
+	TokenEndpointAuthSigningAlg string
+
 	// ApplicationType is "web" or "native"; the library forces
 	// "native" for loopback / custom-scheme redirect URIs.
 	ApplicationType string

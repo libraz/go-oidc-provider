@@ -71,6 +71,20 @@ func (r *StoreJWKSResolver) SetURLFetcher(f URLFetcher) {
 	r.urlFetcher = f
 }
 
+// AssertionSigningAlg returns the per-client private_key_jwt alg pin,
+// when one was registered. An empty string means the client did not pin
+// the assertion algorithm.
+func (r *StoreJWKSResolver) AssertionSigningAlg(ctx context.Context, clientID string) (string, error) {
+	client, err := r.clients.GetClient(ctx, clientID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", ErrJWKSNotConfigured
+		}
+		return "", fmt.Errorf("clientauth: client lookup: %w", err)
+	}
+	return client.TokenEndpointAuthSigningAlg, nil
+}
+
 // JWKS implements [JWKSResolver]. It looks the client up by id,
 // decodes the inline JWK Set on [store.Client.JWKs], and returns
 // it. Missing client / missing keys / malformed JSON all surface

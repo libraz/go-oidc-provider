@@ -136,13 +136,14 @@ func rotateAndUpdate(
 		return rotatedRegistration{}, false
 	}
 	updated := &store.Client{
-		ID:                      existing.ID,
-		ClientIDIssuedAt:        existing.ClientIDIssuedAt,
-		RedirectURIs:            slices.Clone(m.RedirectURIs),
-		GrantTypes:              slices.Clone(m.GrantTypes),
-		ResponseTypes:           slices.Clone(m.ResponseTypes),
-		Scopes:                  splitScopes(m.Scope),
-		TokenEndpointAuthMethod: m.TokenEndpointAuthMethod,
+		ID:                          existing.ID,
+		ClientIDIssuedAt:            existing.ClientIDIssuedAt,
+		RedirectURIs:                slices.Clone(m.RedirectURIs),
+		GrantTypes:                  slices.Clone(m.GrantTypes),
+		ResponseTypes:               slices.Clone(m.ResponseTypes),
+		Scopes:                      splitScopes(m.Scope),
+		TokenEndpointAuthMethod:     m.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg: m.TokenEndpointAuthSigningAlg,
 		// Preserve the existing secret hash unless the
 		// auth-method change requires a fresh secret. RFC 7592
 		// §2.2 leaves rotation policy to the OP; the conservative
@@ -371,6 +372,7 @@ func clientToResponse(c *store.Client, deps Deps, rotatedRAT, rawSecret string) 
 		ResponseTypes:                     slices.Clone(c.ResponseTypes),
 		Scope:                             strings.Join(c.Scopes, " "),
 		TokenEndpointAuthMethod:           c.TokenEndpointAuthMethod,
+		TokenEndpointAuthSigningAlg:       c.TokenEndpointAuthSigningAlg,
 		ApplicationType:                   c.ApplicationType,
 		SubjectType:                       c.SubjectType,
 		IDTokenAlg:                        c.IDTokenSignedResponseAlg,
