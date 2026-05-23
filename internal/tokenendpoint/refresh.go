@@ -55,6 +55,9 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
+	if !checkTokenScopeAllowlist(w, deps, client.ID, exchanged.Scope) {
+		return
+	}
 	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope) {
 		return
 	}
@@ -263,8 +266,17 @@ func issueRefreshResponse(
 		return
 	}
 	idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
+	idTokenSubject := exchanged.Subject
+	if oidcscope.ContainsOpenID(exchanged.Scope) {
+		publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
+		idTokenSubject = publicSubject
+	}
 	idToken, err := maybeMintRefreshIDToken(deps, refreshIDTokenInput{
-		Subject:  exchanged.Subject,
+		Subject:  idTokenSubject,
 		ClientID: client.ID,
 		Scope:    exchanged.Scope,
 		Now:      now,

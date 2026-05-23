@@ -42,7 +42,7 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !validateClientCredsResource(w, client, resource) {
 		return
 	}
-	authorized, ok := authorizeClientCreds(w, client, requested)
+	authorized, ok := authorizeClientCreds(w, deps, client, requested)
 	if !ok {
 		return
 	}
@@ -128,6 +128,7 @@ func validateClientCredsResource(w http.ResponseWriter, client *store.Client, re
 // ok=false when a response has already been written.
 func authorizeClientCreds(
 	w http.ResponseWriter,
+	deps Deps,
 	client *store.Client,
 	requested []string,
 ) (*clientcred.Authorized, bool) {
@@ -139,7 +140,26 @@ func authorizeClientCreds(
 		writeClientCredsAuthError(w, err)
 		return nil, false
 	}
+	if !checkTokenScopeAllowlist(w, deps, client.ID, authorized.Scope) {
+		return nil, false
+	}
 	return authorized, true
+}
+
+func checkTokenScopeAllowlist(
+	w http.ResponseWriter,
+	deps Deps,
+	clientID string,
+	granted []string,
+) bool {
+	for _, s := range granted {
+		if !deps.Scopes.Allows(s, clientID) {
+			writeError(w, http.StatusBadRequest, errInvalidScope,
+				"scope is restricted to a different client")
+			return false
+		}
+	}
+	return true
 }
 
 // writeClientCredsAuthError translates [clientcred.Err*] sentinels onto

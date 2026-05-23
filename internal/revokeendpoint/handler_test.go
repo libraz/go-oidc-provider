@@ -229,6 +229,43 @@ func TestHandler_NoCredentials(t *testing.T) {
 	}
 }
 
+func TestHandler_DuplicateTokenRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-dup-token")
+	form := url.Values{"token": {"one", "two"}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+}
+
+func TestHandler_DuplicateTokenTypeHintRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-dup-hint")
+	form := url.Values{
+		"token":           {"some-token"},
+		"token_type_hint": {"access_token", "refresh_token"},
+	}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+}
+
 // TestHandler_BadSecret returns 401 invalid_client +
 // WWW-Authenticate challenge when Basic auth presents a wrong
 // secret.

@@ -8,10 +8,25 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
+
+// revokeSingleValuedParams is the closed list of RFC 7009 §2.1 request
+// parameters and shared client-authentication credentials that must not
+// appear more than once.
+//
+//nolint:gochecknoglobals // closed allow-list, intentional package state.
+var revokeSingleValuedParams = []string{
+	"token",
+	"token_type_hint",
+	"client_id",
+	"client_secret",
+	"client_assertion_type",
+	"client_assertion",
+}
 
 // Defaults the handler applies when [Deps] omits the corresponding
 // field.
@@ -233,6 +248,11 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	if err := r.ParseForm(); err != nil {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
+		return
+	}
+	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, revokeSingleValuedParams); !ok {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"parameter "+name+" must not be repeated")
 		return
 	}
 	client, _, ok := authenticate(r.Context(), w, r, deps)

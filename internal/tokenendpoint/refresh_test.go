@@ -501,15 +501,51 @@ func TestRefresh_ScopeAllowedClients_Rejected(t *testing.T) {
 	if rec.ConsumedAt != nil {
 		t.Fatalf("refresh token must not be consumed on allowlist rejection (ConsumedAt=%v)", rec.ConsumedAt)
 	}
+}
 
-	// Without a scope override the request reuses the bound scope and
-	// should succeed (the allowlist check is skipped because the
-	// request did not ask for a fresh override). This double-checks
-	// that the rejection above did not corrupt the chain.
-	follow := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
-	defer follow.Body.Close()
-	if follow.StatusCode != http.StatusOK {
-		t.Fatalf("follow-up status=%d want 200; allowlist rejection must leave the token usable", follow.StatusCode)
+// TestRefresh_ScopeAllowedClients_RejectedWhenScopeOmitted verifies the
+// token endpoint enforces AllowedClients on the final refreshed scope,
+// even when the request omits the optional scope parameter and reuses
+// the refresh token's bound scope.
+func TestRefresh_ScopeAllowedClients_RejectedWhenScopeOmitted(t *testing.T) {
+	t.Parallel()
+
+	f := scopedFixture(t)
+	const secret = "shh-its-a-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := f.prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-conf",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid", "profile", "email", "billing:write"},
+	})
+
+	const tokenID = "rt-allowlist-omitted"
+	f.seedGrant(t, &store.Grant{
+		ID: "grant-allowlist-omitted", Subject: "user-1", ClientID: client.ID,
+		Scope: []string{"openid", "billing:write"},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  "user-1",
+		GrantID:  "grant-allowlist-omitted",
+		Scope:    []string{"openid", "billing:write"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "invalid_scope" {
+		t.Errorf("error=%v want invalid_scope", got)
 	}
 }
 

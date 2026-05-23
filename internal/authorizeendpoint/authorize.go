@@ -368,13 +368,8 @@ func applyFirstPartySkip(
 	hint authorizeHint,
 ) (authorizeHint, bool) {
 	ctx := r.Context()
-	grantSubject, err := projectGrantSubject(ctx, deps, active.Session.Subject, client.ID)
-	if err != nil {
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not derive subject")
-		return hint, false
-	}
 	g, err := upsertGrant(ctx, deps, grantUpsert{
-		Subject:  grantSubject,
+		Subject:  active.Session.Subject,
 		ClientID: client.ID,
 		Scope:    append([]string(nil), req.Scope...),
 		AuthTime: active.Session.AuthTime,
@@ -391,7 +386,7 @@ func applyFirstPartySkip(
 		Name:      opAuditConsentGrantedFirstParty,
 		Level:     audit.LevelInfo,
 		Message:   "first-party consent auto-granted",
-		ActorID:   grantSubject,
+		ActorID:   active.Session.Subject,
 		ClientID:  client.ID,
 		SessionID: active.Session.ID,
 		IP:        clientIPFromRequest(r, deps).String(),
@@ -730,7 +725,7 @@ func mintAndRedirect(
 	rec := &store.AuthorizationCode{
 		ID:                  codeID,
 		ClientID:            client.ID,
-		Subject:             active.Session.Subject,
+		Subject:             existing.Subject,
 		GrantID:             existing.ID,
 		RedirectURI:         req.RedirectURI,
 		Scope:               append([]string(nil), req.Scope...),

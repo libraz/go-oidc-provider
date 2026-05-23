@@ -14,6 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/ciba"
 	"github.com/libraz/go-oidc-provider/internal/cibaendpoint"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -109,6 +110,26 @@ func newDeps(s *inmem.Store, c fixedClock) cibaendpoint.Deps {
 	}
 }
 
+func newCIBATestStoreWithScopes(t *testing.T, c fixedClock, scopes []string) *inmem.Store {
+	t.Helper()
+	s := inmem.New(inmem.WithClock(c))
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(testClientSecret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	if err := s.RegisterClient(context.Background(), &store.Client{
+		ID:                      testClientID,
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"urn:openid:params:grant-type:ciba"},
+		Scopes:                  append([]string(nil), scopes...),
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+	return s
+}
+
 // newRequest builds a /bc-authorize POST. The caller threads
 // extra parameters via form (passing nil applies the canonical
 // minimal-success body). Client authentication rides on HTTP
@@ -135,6 +156,29 @@ func decodeError(t *testing.T, body []byte) string {
 		t.Fatalf("decode error envelope: %v: %s", err, body)
 	}
 	return env.Error
+}
+
+func TestServe_ScopeAllowedClientsRejected(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	store := newCIBATestStoreWithScopes(t, clock, []string{"openid", "billing:write"})
+	deps := newDeps(store, clock)
+	deps.Scopes = scoperegistry.New([]scoperegistry.Entry{
+		{Name: "billing:write", Public: true, AllowedClients: []string{"svc-billing"}},
+	})
+	form := url.Values{}
+	form.Set("scope", "openid billing:write")
+	form.Set("login_hint", "user@example")
+	rec := httptest.NewRecorder()
+
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidScope {
+		t.Fatalf("error = %q, want %q", got, wireInvalidScope)
+	}
 }
 
 // TestServe_NilSubstoreDoesNotPanic exercises the defence-in-depth

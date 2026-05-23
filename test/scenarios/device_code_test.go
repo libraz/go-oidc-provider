@@ -443,6 +443,21 @@ func TestScenario_DEV_007_DeviceAuthSuccessResponseShape(t *testing.T) {
 	}
 }
 
+// TestScenario_DEV_007B_DeviceAuthRejectsDuplicateScope pins the
+// RFC 6749 §3.2 single-valued parameter rule on /device_authorization:
+// a repeated scope field MUST be rejected instead of silently using the
+// first value and issuing a device_code for a narrower grant.
+func TestScenario_DEV_007B_DeviceAuthRejectsDuplicateScope(t *testing.T) {
+	t.Parallel()
+	p := newDevProvider(t, []string{"openid", "profile"})
+
+	status, body, _ := p.deviceAuthForm(t, url.Values{"scope": {"openid", "profile"}})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "invalid_request")
+}
+
 // TestScenario_DEV_008_DeviceCodePersistedWithStrippedParams is OOS —
 // the 'strip authorization-endpoint params' assertion is vendor-
 // specific. See catalog out_of_scope_reason.
@@ -1035,6 +1050,44 @@ func TestScenario_DEV_092_DeviceAuthRejectsOutOfSetScope(t *testing.T) {
 	p := newDevProvider(t, []string{"openid"})
 
 	status, body, _ := p.deviceAuthForm(t, url.Values{"scope": {"openid forbidden"}})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", status, body)
+	}
+	expectError(t, body, "invalid_scope")
+}
+
+// TestScenario_DEV_092B_DeviceAuthRejectsAllowedClientsScope pins the
+// global scope-registry gate at /device_authorization. The requested
+// scope is present in the client's registered Scopes set, but
+// op.Scope.AllowedClients reserves it for a different client_id.
+func TestScenario_DEV_092B_DeviceAuthRejectsAllowedClientsScope(t *testing.T) {
+	t.Parallel()
+	hash, err := op.HashClientSecret(devClientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	tk := testkit.NewProvider(t, testkit.WithOptions(
+		op.WithDeviceCodeGrant(),
+		op.WithScope(op.Scope{
+			Name:           "billing:write",
+			Public:         true,
+			AllowedClients: []string{"svc-billing"},
+		}),
+	))
+	client := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "dev-rp",
+		SecretHash:              hash,
+		Scopes:                  []string{"openid", "billing:write"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes: []string{
+			"authorization_code",
+			"refresh_token",
+			devURNDeviceCode,
+		},
+	})
+	p := &devProvider{tk: tk, client: client}
+
+	status, body, _ := p.deviceAuthForm(t, url.Values{"scope": {"openid billing:write"}})
 	if status != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400 body=%v", status, body)
 	}

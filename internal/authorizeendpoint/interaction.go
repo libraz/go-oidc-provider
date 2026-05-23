@@ -406,19 +406,9 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not establish session")
 		return
 	}
-	// Project the post-authentication subject through the configured
-	// op.SubjectGenerator before persisting the grant / code; the
-	// resulting value is what flows into id_token "sub" / access-token
-	// "sub" downstream. The session above keeps the raw subject because
-	// sessions are user-scoped, not client-scoped.
-	grantSubject, projErr := projectGrantSubject(r.Context(), deps, result.Subject, rec.ClientID)
-	if projErr != nil {
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not derive subject")
-		return
-	}
 	grantScope := chooseGrantScope(result.Scope, req.Scope)
 	grant, err := upsertGrant(r.Context(), deps, grantUpsert{
-		Subject:  grantSubject,
+		Subject:  result.Subject,
 		ClientID: rec.ClientID,
 		Scope:    grantScope,
 		AuthTime: result.AuthTime,
@@ -449,7 +439,7 @@ func terminateInteraction(
 	authCode := &store.AuthorizationCode{
 		ID:                  codeID,
 		ClientID:            rec.ClientID,
-		Subject:             grantSubject,
+		Subject:             result.Subject,
 		GrantID:             grant.ID,
 		RedirectURI:         req.RedirectURI,
 		Scope:               append([]string(nil), grantScope...),

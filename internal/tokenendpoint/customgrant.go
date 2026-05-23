@@ -84,6 +84,9 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 			"custom-grant handlers cannot issue refresh tokens in v0.9.1; lineage wiring lands in v0.9.2")
 		return
 	}
+	if !checkTokenScopeAllowlist(w, deps, client.ID, resp.Scope) {
+		return
+	}
 	accessToken, accessTokenTTL, err := resolveCustomGrantAccessToken(deps, client, dispatchIn, resp, binding)
 	if err != nil {
 		writeCustomGrantError(w, err)

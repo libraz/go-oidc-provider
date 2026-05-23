@@ -18,18 +18,23 @@ func fixedClock(now time.Time) func() time.Time {
 	return func() time.Time { return now }
 }
 
-func newSessionStore(tb testing.TB) store.SessionStore {
+type clockFunc func() time.Time
+
+func (f clockFunc) Now() time.Time { return f() }
+
+func newSessionStore(tb testing.TB, opts ...inmem.Option) store.SessionStore {
 	tb.Helper()
-	return inmem.New().Sessions()
+	return inmem.New(opts...).Sessions()
 }
 
 func newManager(tb testing.TB, now time.Time) *sessions.Manager {
 	tb.Helper()
 	codec := newSessionCodec(tb)
+	clock := fixedClock(now)
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: codec,
-		Store: newSessionStore(tb),
-		Clock: fixedClock(now),
+		Store: newSessionStore(tb, inmem.WithClock(clockFunc(clock))),
+		Clock: clock,
 	})
 	if err != nil {
 		tb.Fatalf("NewManager: %v", err)
@@ -131,11 +136,11 @@ func TestManager_Touch_ExtendsExpiry(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	codec := newSessionCodec(t)
-	st := newSessionStore(t)
+	cur := t0
+	st := newSessionStore(t, inmem.WithClock(clockFunc(func() time.Time { return cur })))
 
 	// Manager observes a moving clock so we can verify Touch advances
 	// ExpiresAt relative to the new "now".
-	cur := t0
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: codec,
 		Store: st,
@@ -221,7 +226,7 @@ func TestManager_Rotate_IssuesFreshIDPreservingChooserGroup(t *testing.T) {
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	codec := newSessionCodec(t)
-	st := newSessionStore(t)
+	st := newSessionStore(t, inmem.WithClock(clockFunc(fixedClock(now))))
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: codec,
 		Store: st,
@@ -285,12 +290,13 @@ func TestManager_Rotate_PreservesCreatedAt(t *testing.T) {
 
 	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	codec := newSessionCodec(t)
-	st := newSessionStore(t)
 	cur := t0
+	clock := func() time.Time { return cur }
+	st := newSessionStore(t, inmem.WithClock(clockFunc(clock)))
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: codec,
 		Store: st,
-		Clock: func() time.Time { return cur },
+		Clock: clock,
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
@@ -414,7 +420,7 @@ func TestManager_Resolve_RejectsChooserGroupMismatch(t *testing.T) {
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	codec := newSessionCodec(t)
-	st := newSessionStore(t)
+	st := newSessionStore(t, inmem.WithClock(clockFunc(fixedClock(now))))
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: codec,
 		Store: st,

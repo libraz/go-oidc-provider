@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/sessions"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // chooserManager builds a sessions.Manager with a clock that the test can
@@ -15,10 +16,11 @@ import (
 func chooserManager(tb testing.TB, t0 time.Time) (*sessions.Manager, func(time.Duration)) {
 	tb.Helper()
 	cur := t0
+	clock := func() time.Time { return cur }
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: newSessionCodec(tb),
-		Store: newSessionStore(tb),
-		Clock: func() time.Time { return cur },
+		Store: newSessionStore(tb, inmem.WithClock(clockFunc(clock))),
+		Clock: clock,
 	})
 	if err != nil {
 		tb.Fatalf("NewManager: %v", err)

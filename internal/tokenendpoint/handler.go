@@ -142,6 +142,13 @@ type Deps struct {
 	// standard claims plus the per-grant ACR/AMR/auth_time.
 	UserStore store.UserStore
 
+	// SubjectProjector, when non-nil, converts the OP-internal raw
+	// subject into the public OIDC "sub" value for the requesting
+	// client. The token endpoint uses it only for id_token issuance;
+	// access-token and refresh-token records keep the raw subject so
+	// OP-served boundaries can still look up the UserStore.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
+
 	// Keys is the active OP keyset. The first entry signs newly-issued
 	// JWTs; retiring entries are advertised in JWKS only.
 	Keys *keys.Set

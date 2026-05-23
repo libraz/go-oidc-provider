@@ -448,6 +448,36 @@ func TestRegister_OpenRegistration_ExplicitScopeOverridesDefault(t *testing.T) {
 	}
 }
 
+func TestRegister_RejectsAllowedClientsRestrictedScope(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t,
+		op.RegistrationOption{Open: true},
+		op.WithScope(op.Scope{
+			Name:           "billing:write",
+			Public:         true,
+			AllowedClients: []string{"svc-billing"},
+		}),
+	)
+
+	body := minimalMetadata()
+	body["scope"] = "openid billing:write"
+	resp := f.post(t, body, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	got := decodeBody(t, resp)
+	if got["error"] != "invalid_client_metadata" {
+		t.Errorf("error=%v want invalid_client_metadata", got["error"])
+	}
+	desc, _ := got["error_description"].(string)
+	if !strings.Contains(desc, "billing:write") {
+		t.Errorf("error_description=%q must name restricted scope", desc)
+	}
+}
+
 func slicesEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

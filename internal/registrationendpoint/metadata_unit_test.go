@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 )
 
 func TestValidatePolicy_RejectsJWKSAndJWKSURI(t *testing.T) {
@@ -647,5 +649,19 @@ func TestDefaultScopeIfEmpty_OpenRegistrationDefault(t *testing.T) {
 				t.Errorf("defaultScopeIfEmpty=%q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDefaultScopeIfEmpty_IATDefaultSkipsAllowedClientsRestrictedScopes(t *testing.T) {
+	t.Parallel()
+
+	registry := scoperegistry.New([]scoperegistry.Entry{
+		{Name: "openid", Public: true},
+		{Name: "profile", Public: true},
+		{Name: "billing:write", Public: true, AllowedClients: []string{"svc-billing"}},
+	})
+	got := defaultScopeIfEmpty("", nil, false, nil, registry)
+	if got != "openid profile" {
+		t.Fatalf("defaultScopeIfEmpty=%q want %q", got, "openid profile")
 	}
 }

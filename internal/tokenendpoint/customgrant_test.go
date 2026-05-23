@@ -198,6 +198,49 @@ func TestCustomGrant_ScopeInflationReturns400(t *testing.T) {
 	}
 }
 
+// TestCustomGrant_ScopeAllowedClientsRejected verifies custom grants
+// enforce the global op.Scope.AllowedClients gate after the handler
+// returns a scope set. The handler's scope is in the client's registered
+// set, but the OP-level scope registry restricts it to another client.
+func TestCustomGrant_ScopeAllowedClientsRejected(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:allowlist"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			AccessToken: "at",
+			Scope:       []string{"billing:write"},
+		},
+	}
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithScope(op.Scope{
+				Name:           "billing:write",
+				Public:         true,
+				AllowedClients: []string{"svc-billing"},
+			}),
+			op.WithCustomGrant(handler),
+		),
+	)
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token", clock: clock}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"billing:write"}, nil)
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	if got := decodeJSON(t, resp)["error"]; got != "invalid_scope" {
+		t.Errorf("error=%v want invalid_scope", got)
+	}
+}
+
 // TestCustomGrant_HandlerPanicReturns500 confirms that a panic in the
 // handler is converted to server_error without leaking the panic
 // message into the wire response.

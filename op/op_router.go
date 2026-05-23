@@ -74,6 +74,10 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	publicCORS := cors.NewPublic()
 	strictCORS := cors.NewStrict(originAllow, cfg.effectiveAuditEmitter())
 	encResolver := buildClientEncryptionResolver(cfg)
+	var subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
+	if cfg.subjectGeneratorSource != "" {
+		subjectProjector = buildSubjectProjector(cfg)
+	}
 	mux.Handle(cfg.endpoints.Discovery, publicCORS.Handler(discHandler))
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.JWKS),
@@ -90,6 +94,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Clients:            cfg.store.Clients(),
 			UserStore:          cfg.store.Users(),
 			Grants:             cfg.store.Grants(),
+			SubjectProjector:   subjectProjector,
 			Clock:              cfg.clock,
 			Leeway:             defaultUserInfoLeeway,
 			CustomScopeClaims:  customScopeClaims(cfg.scopes),
@@ -112,6 +117,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			RefreshTokens:                  cfg.store.RefreshTokens(),
 			Grants:                         cfg.store.Grants(),
 			UserStore:                      cfg.store.Users(),
+			SubjectProjector:               subjectProjector,
 			Keys:                           keySet,
 			Clock:                          cfg.clock,
 			Scopes:                         scopes,
@@ -139,8 +145,8 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			ClientEncJWKs:                  encResolver,
 		})),
 	)
-	mountDeviceAuthorizationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
-	mountBackchannelAuthenticationEndpoint(mux, cfg, dpopVerifier, mtlsVerifier, assertionVerifier, jarVerifier, strictCORS)
+	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifier, strictCORS)
+	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifier, jarVerifier, strictCORS)
 	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, originAllow, strictCORS, locales)
 	if err != nil {
 		return nil, err
@@ -479,6 +485,7 @@ func mountEndSessionEndpoint(
 func mountDeviceAuthorizationEndpoint(
 	mux *http.ServeMux,
 	cfg *config,
+	scopes *scoperegistry.Registry,
 	dpopVerifier *dpop.Verifier,
 	mtlsVerifier *mtls.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
@@ -494,6 +501,7 @@ func mountDeviceAuthorizationEndpoint(
 			VerificationURI:          cfg.effectiveDeviceVerificationURI(),
 			Clients:                  cfg.store.Clients(),
 			DeviceCodes:              deviceCodesFor(cfg),
+			Scopes:                   scopes,
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
@@ -572,6 +580,7 @@ func (a cibaHintResolverAdapter) Resolve(ctx context.Context, kind ciba.HintKind
 func mountBackchannelAuthenticationEndpoint(
 	mux *http.ServeMux,
 	cfg *config,
+	scopes *scoperegistry.Registry,
 	dpopVerifier *dpop.Verifier,
 	mtlsVerifier *mtls.Verifier,
 	assertionVerifier clientauth.AssertionVerifier,
@@ -591,6 +600,7 @@ func mountBackchannelAuthenticationEndpoint(
 			Issuer:                   cfg.issuer,
 			Clients:                  cfg.store.Clients(),
 			CIBARequests:             cibaRequestsFor(cfg),
+			Scopes:                   scopes,
 			Clock:                    cfg.clock,
 			AssertionVerifier:        assertionVerifier,
 			AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),

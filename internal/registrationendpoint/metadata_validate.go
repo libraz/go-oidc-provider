@@ -99,10 +99,11 @@ func validateDefaultMaxAge(v *int64) error {
 //     zero value) means "no default": the registered client gets
 //     [store.Client.Scopes] empty and must request scope explicitly
 //     on subsequent /authorize calls.
-//  3. scopes.PublicNames() — the registry's public catalog, applied
-//     only on the IAT-bound path when the IAT carried no AllowedScopes
-//     restriction. The IAT issuer is operator-supplied code so the
-//     broader default is acceptable.
+//  3. scopes.PublicNames() filtered to scopes without an AllowedClients
+//     restriction, applied only on the IAT-bound path when the IAT
+//     carried no AllowedScopes restriction. Dynamic registrations do
+//     not choose their client_id, so client-specific scopes cannot be
+//     safely defaulted onto the newly minted client.
 //  4. Empty string when no default applies.
 //
 // The minimum-privilege baseline for open registration is
@@ -126,12 +127,23 @@ func defaultScopeIfEmpty(scope string, iatScopes []string, openRegistration bool
 		return ""
 	}
 	if scopes != nil {
-		names := scopes.PublicNames()
+		names := registrationDefaultScopeNames(scopes)
 		if len(names) > 0 {
 			return strings.Join(names, " ")
 		}
 	}
 	return ""
+}
+
+func registrationDefaultScopeNames(scopes *scoperegistry.Registry) []string {
+	names := scopes.PublicNames()
+	out := names[:0]
+	for _, name := range names {
+		if scopes.Allows(name, "") {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // applyMetadataDefaults populates fields the client left blank with
@@ -250,10 +262,10 @@ func validateIDTokenAlg(alg string) error {
 }
 
 // validateRequestedScopes enforces (1) the IAT-bound AllowedScopes
-// allowlist when present and (2) the registry-level allowlist when a
-// non-nil [scoperegistry.Registry] is supplied. An empty Scope value is
-// permitted; the OP applies its global default (see §K.4) at the
-// authorize-time scope intersection rather than here.
+// allowlist when present, (2) registration in the OP scope catalog, and
+// (3) absence of an AllowedClients restriction on dynamic registrations.
+// An empty Scope value is permitted; defaultScopeIfEmpty decides whether
+// the registration path supplies a default before this validator runs.
 func validateRequestedScopes(scope string, iatAllowed []string, scopes *scoperegistry.Registry) error {
 	if scope == "" {
 		return nil
@@ -264,6 +276,9 @@ func validateRequestedScopes(scope string, iatAllowed []string, scopes *scopereg
 		}
 		if scopes != nil && !scopes.IsRegistered(s) {
 			return errInvalidClientMetadata("scope " + s + " is not registered")
+		}
+		if scopes != nil && !scopes.Allows(s, "") {
+			return errInvalidClientMetadata("scope " + s + " is restricted to specific clients")
 		}
 	}
 	return nil
@@ -555,11 +570,12 @@ func validatePairwiseMetadata(m ClientMetadata) error {
 		if err != nil {
 			return errInvalidRedirectURI("redirect_uri is not a valid URL")
 		}
+		redirectHost := strings.ToLower(u.Hostname())
 		if host == "" {
-			host = u.Hostname()
+			host = redirectHost
 			continue
 		}
-		if u.Hostname() != host {
+		if redirectHost != host {
 			return errInvalidClientMetadata("subject_type pairwise requires sector_identifier_uri when redirect_uris span multiple hosts")
 		}
 	}

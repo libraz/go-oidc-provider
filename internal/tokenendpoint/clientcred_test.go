@@ -154,6 +154,28 @@ func TestClientCredentials_ScopeOutsideRegistered(t *testing.T) {
 	}
 }
 
+// TestClientCredentials_ScopeAllowedClientsRejected verifies that the
+// /token endpoint enforces op.Scope.AllowedClients for client_credentials
+// grants, not just authorization_code and refresh_token. The client has
+// the scope in its registered set, but the global scope registry restricts
+// it to a different client_id.
+func TestClientCredentials_ScopeAllowedClientsRejected(t *testing.T) {
+	t.Parallel()
+
+	f := scopedFixture(t)
+	client, secret := clientCredsClient(t, f.prov, []string{"billing:write"})
+
+	resp := f.post(t, clientCredsForm("billing:write"), client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	if got := decodeJSON(t, resp); got["error"] != "invalid_scope" {
+		t.Errorf("error=%v want invalid_scope", got["error"])
+	}
+}
+
 // TestClientCredentials_OpenIDScopeRejected guards the documented
 // posture: there is no end-user identity to certify in this grant, so
 // the OIDC "openid" scope is meaningless and rejected outright with

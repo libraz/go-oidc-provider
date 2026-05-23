@@ -19,8 +19,10 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -55,6 +57,14 @@ const (
 	userCodeRetryBudget = 8
 )
 
+var deviceAuthSingleValuedParams = []string{
+	"client_id",
+	"client_secret",
+	"client_assertion",
+	"client_assertion_type",
+	"scope",
+}
+
 // Clock is the package-local view of the wall clock. It mirrors
 // the token / par endpoint posture: a structurally-typed interface
 // so a value satisfying [op.Clock] flows through without an
@@ -87,6 +97,11 @@ type Deps struct {
 	// handler writes a freshly minted record on every successful
 	// POST.
 	DeviceCodes store.DeviceCodeStore
+
+	// Scopes is the read-only scope registry. A nil value disables
+	// only the per-scope AllowedClients allowlist check; the client
+	// Scopes intersection still runs.
+	Scopes *scoperegistry.Registry
 
 	// Clock supplies the current wall-clock reading. A nil Clock
 	// falls back to [internal/timex.SystemClock].
@@ -273,6 +288,11 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
+	if name, ok := httpx.FirstDuplicateParameter(r.PostForm, deviceAuthSingleValuedParams); !ok {
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"parameter "+name+" must not be repeated")
+		return
+	}
 	dpopJKT, ok := verifyDPoPProof(r, w, deps)
 	if !ok {
 		return
@@ -288,7 +308,7 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !verifyClientGrantTypeAllowed(r.Context(), w, deps, client) {
 		return
 	}
-	scope, ok := parseScope(w, r.PostForm, client)
+	scope, ok := parseScope(w, r.PostForm, client, deps.Scopes)
 	if !ok {
 		return
 	}
@@ -422,10 +442,10 @@ func verifyClientGrantTypeAllowed(ctx context.Context, w http.ResponseWriter, de
 // it against the client's registered Scopes, and returns the
 // allow-listed subset. An empty request scope falls back to the
 // client's full registered set.
-func parseScope(w http.ResponseWriter, form url.Values, client *store.Client) ([]string, bool) {
+func parseScope(w http.ResponseWriter, form url.Values, client *store.Client, scopes *scoperegistry.Registry) ([]string, bool) {
 	raw := strings.TrimSpace(form.Get("scope"))
 	if raw == "" {
-		return slices.Clone(client.Scopes), true
+		return filterScopeAllowedClients(w, slices.Clone(client.Scopes), client.ID, scopes)
 	}
 	requested := strings.Fields(raw)
 	allowed := make(map[string]struct{}, len(client.Scopes))
@@ -439,7 +459,18 @@ func parseScope(w http.ResponseWriter, form url.Values, client *store.Client) ([
 			return nil, false
 		}
 	}
-	return slices.Clone(requested), true
+	return filterScopeAllowedClients(w, slices.Clone(requested), client.ID, scopes)
+}
+
+func filterScopeAllowedClients(w http.ResponseWriter, scope []string, clientID string, scopes *scoperegistry.Registry) ([]string, bool) {
+	for _, s := range scope {
+		if !scopes.Allows(s, clientID) {
+			writeError(w, http.StatusBadRequest, errInvalidScope,
+				"scope is restricted to a different client")
+			return nil, false
+		}
+	}
+	return scope, true
 }
 
 // parseResource extracts the RFC 8707 resource indicators from the

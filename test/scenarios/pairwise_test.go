@@ -16,6 +16,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -118,6 +120,266 @@ func runPairwiseFlow(t *testing.T, tk *testkit.Provider, c *store.Client, redire
 		t.Fatalf("id_token claims missing sub: %v", claims)
 	}
 	return sub
+}
+
+func runPairwiseTokenFlow(t *testing.T, tk *testkit.Provider, c *store.Client, redirectURI, scope string) scenariokit.TokenResponse {
+	t.Helper()
+	pkce := scenariokit.NewPKCEPair("")
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    c.ID,
+		RedirectURI: redirectURI,
+		Scope:       scope,
+		PKCE:        pkce,
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize callback missing code: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:         flow.Code,
+		RedirectURI:  redirectURI,
+		Verifier:     pkce.Verifier,
+		ClientID:     c.ID,
+		ClientSecret: pwClientSecret,
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	return tok
+}
+
+func pairwiseBrowserClient(t *testing.T, tk *testkit.Provider) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar: %v", err)
+	}
+	return tk.HTTPClient(jar)
+}
+
+func runPairwiseAuthorizeWithBrowser(
+	t *testing.T,
+	tk *testkit.Provider,
+	client *http.Client,
+	subject string,
+	params scenariokit.AuthorizeParams,
+) scenariokit.CodeFlowResult {
+	t.Helper()
+	authResp := getPairwiseAuthorizeResponse(t, tk, client, params)
+	defer func() { _ = authResp.Body.Close() }()
+	loc, err := authResp.Location()
+	if err != nil {
+		t.Fatalf("/authorize Location: %v", err)
+	}
+	if result, ok := pairwiseCaptureCallback(t, params.RedirectURI, loc); ok {
+		return result
+	}
+	interactionURL := tk.Server.URL + loc.Path
+	stepResp := mustPairwiseGET(t, client, interactionURL)
+	step := decodePWJSON(t, stepResp)
+	_ = stepResp.Body.Close()
+	stateRef, _ := step["state_ref"].(string)
+	csrf := findPWCookie(stepResp.Cookies(), "__Host-oidc_csrf")
+	if stateRef == "" || csrf == nil {
+		t.Fatalf("interaction prompt missing state_ref or csrf: %v", step)
+	}
+	postResp := postPairwiseInteraction(t, client, interactionURL, tk.Issuer, csrf.Value, stateRef,
+		map[string]string{testkit.SubjectFieldName: subject})
+	finalResp := completePairwiseConsentIfPrompted(t, client, interactionURL, tk.Issuer, csrf.Value, postResp)
+	defer func() { _ = finalResp.Body.Close() }()
+	if finalResp.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(finalResp.Body)
+		t.Fatalf("final interaction status=%d body=%s", finalResp.StatusCode, string(body))
+	}
+	loc, err = finalResp.Location()
+	if err != nil {
+		t.Fatalf("final Location: %v", err)
+	}
+	result, ok := pairwiseCaptureCallback(t, params.RedirectURI, loc)
+	if !ok {
+		t.Fatalf("callback %s does not match redirect_uri %s", loc.String(), params.RedirectURI)
+	}
+	return result
+}
+
+func getPairwiseAuthorizeCallback(
+	t *testing.T,
+	tk *testkit.Provider,
+	client *http.Client,
+	params scenariokit.AuthorizeParams,
+) scenariokit.CodeFlowResult {
+	t.Helper()
+	resp := getPairwiseAuthorizeResponse(t, tk, client, params)
+	defer func() { _ = resp.Body.Close() }()
+	loc, err := resp.Location()
+	if err != nil {
+		t.Fatalf("/authorize Location: %v", err)
+	}
+	result, ok := pairwiseCaptureCallback(t, params.RedirectURI, loc)
+	if !ok {
+		t.Fatalf("/authorize Location=%s did not target redirect_uri=%s", loc.String(), params.RedirectURI)
+	}
+	return result
+}
+
+func getPairwiseAuthorizeResponse(
+	t *testing.T,
+	tk *testkit.Provider,
+	client *http.Client,
+	params scenariokit.AuthorizeParams,
+) *http.Response {
+	t.Helper()
+	resp := mustPairwiseGET(t, client, tk.Server.URL+"/oidc/auth?"+params.Values().Encode())
+	if resp.StatusCode != http.StatusFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("/authorize status=%d body=%s", resp.StatusCode, string(body))
+	}
+	return resp
+}
+
+func mustPairwiseGET(t *testing.T, client *http.Client, rawURL string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, rawURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("build GET %s: %v", rawURL, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", rawURL, err)
+	}
+	return resp
+}
+
+func decodePWJSON(t *testing.T, resp *http.Response) map[string]any {
+	t.Helper()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read JSON body: %v", err)
+	}
+	out := map[string]any{}
+	if len(raw) == 0 {
+		return out
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode JSON body %s: %v", string(raw), err)
+	}
+	return out
+}
+
+func postPairwiseInteraction(
+	t *testing.T,
+	client *http.Client,
+	interactionURL, origin, csrf, stateRef string,
+	values map[string]string,
+) *http.Response {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"state_ref": stateRef, "values": values})
+	if err != nil {
+		t.Fatalf("marshal interaction submission: %v", err)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, interactionURL, bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("build POST %s: %v", interactionURL, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", origin)
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.AddCookie(&http.Cookie{Name: "__Host-oidc_csrf", Value: csrf})
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", interactionURL, err)
+	}
+	return resp
+}
+
+func completePairwiseConsentIfPrompted(
+	t *testing.T,
+	client *http.Client,
+	interactionURL, origin, csrf string,
+	prior *http.Response,
+) *http.Response {
+	t.Helper()
+	consent, env, err := testkit.IsConsentPrompt(prior)
+	if err != nil {
+		t.Fatalf("inspect consent prompt: %v", err)
+	}
+	if !consent {
+		return prior
+	}
+	stateRef, _ := env["state_ref"].(string)
+	if stateRef == "" {
+		t.Fatal("consent prompt missing state_ref")
+	}
+	if rotated := findPWCookie(prior.Cookies(), "__Host-oidc_csrf"); rotated != nil {
+		csrf = rotated.Value
+	}
+	return testkit.PostConsentApproval(t, client, interactionURL, origin, csrf, stateRef, pairwiseApprovedScopes(env))
+}
+
+func pairwiseApprovedScopes(env map[string]any) string {
+	data, _ := env["data"].(map[string]any)
+	scopesAny, _ := data["Scopes"].([]any)
+	out := make([]string, 0, len(scopesAny))
+	for _, s := range scopesAny {
+		entry, _ := s.(map[string]any)
+		name, _ := entry["Name"].(string)
+		if name != "" {
+			out = append(out, name)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+func pairwiseCaptureCallback(t *testing.T, redirectURI string, location *url.URL) (scenariokit.CodeFlowResult, bool) {
+	t.Helper()
+	want, err := url.Parse(redirectURI)
+	if err != nil {
+		t.Fatalf("parse redirect_uri %q: %v", redirectURI, err)
+	}
+	if location.Scheme != want.Scheme || location.Host != want.Host || location.Path != want.Path {
+		return scenariokit.CodeFlowResult{}, false
+	}
+	q := location.Query()
+	return scenariokit.CodeFlowResult{
+		Code:      q.Get("code"),
+		State:     q.Get("state"),
+		Iss:       q.Get("iss"),
+		Error:     q.Get("error"),
+		ErrorDesc: q.Get("error_description"),
+		Location:  location,
+	}, true
+}
+
+func findPWCookie(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+func pairwiseGetUserInfo(t *testing.T, tk *testkit.Provider, accessToken string) map[string]any {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+		tk.Server.URL+"/oidc/userinfo", http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("GET /userinfo: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/userinfo status=%d want 200 body=%s", resp.StatusCode, body)
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("decode /userinfo body %s: %v", string(body), err)
+	}
+	return out
 }
 
 // decodePWJWTClaims pulls the payload claims out of a JWS Compact
@@ -350,6 +612,30 @@ func TestScenario_PW_10_SingleHostRedirectURIsAdoptHostAsSector(t *testing.T) {
 	}
 }
 
+// TestScenario_PW_10B_SingleHostRedirectURIsCompareHostCaseInsensitively
+// confirms the single-host shortcut follows DNS hostname semantics.
+// Hosts are case-insensitive, so redirect_uris that differ only by host
+// casing must not force an otherwise unnecessary sector_identifier_uri.
+func TestScenario_PW_10B_SingleHostRedirectURIsCompareHostCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
+	tk := newPairwiseDCRProvider(t)
+	body := map[string]any{
+		"redirect_uris": []string{
+			"https://RP.example.com/cb1",
+			"https://rp.example.com/cb2",
+		},
+		"subject_type": "pairwise",
+	}
+	status, resp := postPairwiseRegistration(t, tk, body)
+	if status != http.StatusCreated {
+		t.Fatalf("status=%d want 201 body=%v", status, resp)
+	}
+	if got, _ := resp["subject_type"].(string); got != "pairwise" {
+		t.Errorf("subject_type=%q want pairwise (body=%v)", got, resp)
+	}
+}
+
 // TestScenario_PW_11_MultiHostRequiresSectorURI asserts a pairwise
 // client whose redirect_uris span more than one host and omits
 // sector_identifier_uri is rejected with invalid_client_metadata.
@@ -518,6 +804,64 @@ func TestScenario_PW_40_PairwiseSubIsDeterministic(t *testing.T) {
 	sub2 := runPairwiseFlow(t, tk, c, "https://rp.example.com/cb")
 	if sub1 != sub2 {
 		t.Errorf("pairwise sub drifted across two flows: %q vs %q", sub1, sub2)
+	}
+}
+
+func TestScenario_PW_40_PairwisePromptNoneReusesProjectedGrant(t *testing.T) {
+	t.Parallel()
+	tk := newPairwiseProvider(t)
+	c := pairwiseClient(t, tk, "rp-pw-40-prompt-none", "https://rp.example.com/cb")
+	client := pairwiseBrowserClient(t, tk)
+	pkce := scenariokit.NewPKCEPair("")
+	params := scenariokit.AuthorizeParams{
+		ClientID:    c.ID,
+		RedirectURI: "https://rp.example.com/cb",
+		Scope:       "openid",
+		PKCE:        pkce,
+	}
+	first := runPairwiseAuthorizeWithBrowser(t, tk, client, scenariokit.DefaultSubject, params)
+	if first.Code == "" || first.Error != "" {
+		t.Fatalf("first authorize result = %+v, want code", first)
+	}
+
+	params.Extra = url.Values{"prompt": {"none"}}
+	second := getPairwiseAuthorizeCallback(t, tk, client, params)
+	if second.Error != "" {
+		t.Fatalf("prompt=none returned error=%q desc=%q; want cached grant to mint code", second.Error, second.ErrorDesc)
+	}
+	if second.Code == "" {
+		t.Fatalf("prompt=none callback missing code: %+v", second)
+	}
+}
+
+func TestScenario_PW_40_UserInfoLooksUpRawSubjectAndReturnsPairwiseSub(t *testing.T) {
+	t.Parallel()
+	tk := newPairwiseProvider(t)
+	c := pairwiseClient(t, tk, "rp-pw-40-userinfo", "https://rp.example.com/cb")
+	tk.Store.PutUser(context.Background(), &store.User{
+		Subject: scenariokit.DefaultSubject,
+		Claims: map[string]any{
+			"email":          "user-1@example.test",
+			"email_verified": true,
+		},
+	})
+
+	tok := runPairwiseTokenFlow(t, tk, c, "https://rp.example.com/cb", "openid email")
+	if tok.AccessToken == "" || tok.IDToken == "" {
+		t.Fatalf("/token response missing access_token or id_token: %v", tok.Raw)
+	}
+	idClaims := decodePWJWTClaims(t, tok.IDToken)
+	idSub, _ := idClaims["sub"].(string)
+	if idSub == "" || idSub == scenariokit.DefaultSubject {
+		t.Fatalf("id_token sub=%q, want non-empty pairwise value distinct from raw subject", idSub)
+	}
+
+	ui := pairwiseGetUserInfo(t, tk, tok.AccessToken)
+	if got, _ := ui["sub"].(string); got != idSub {
+		t.Errorf("userinfo sub=%q want id_token sub=%q", got, idSub)
+	}
+	if got, _ := ui["email"].(string); got != "user-1@example.test" {
+		t.Errorf("userinfo email=%v want raw-subject user claim", ui["email"])
 	}
 }
 

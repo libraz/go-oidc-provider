@@ -24,6 +24,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
+	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -102,6 +103,11 @@ type Deps struct {
 	// CIBARequests is the substore for CIBA records. The handler
 	// writes a freshly minted record on every successful POST.
 	CIBARequests store.CIBARequestStore
+
+	// Scopes is the read-only scope registry. A nil value disables
+	// only the per-scope AllowedClients allowlist check; the client
+	// Scopes intersection still runs.
+	Scopes *scoperegistry.Registry
 
 	// Clock supplies the current wall-clock reading. A nil Clock
 	// falls back to [internal/timex.SystemClock].
@@ -794,6 +800,11 @@ func parseScope(
 		if _, ok := allowed[s]; !ok {
 			writeError(w, http.StatusBadRequest, errInvalidScope,
 				"requested scope is not permitted for this client")
+			return nil, false
+		}
+		if !deps.Scopes.Allows(s, client.ID) {
+			writeError(w, http.StatusBadRequest, errInvalidScope,
+				"scope is restricted to a different client")
 			return nil, false
 		}
 	}

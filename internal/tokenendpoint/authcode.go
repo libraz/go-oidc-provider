@@ -61,6 +61,9 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !ok {
 		return
 	}
+	if !checkTokenScopeAllowlist(w, deps, client.ID, exchanged.Scope) {
+		return
+	}
 	if !enforcePKCEDowngradeGuard(w, client, exchanged) {
 		return
 	}
@@ -317,9 +320,14 @@ func issueAuthCodeResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(exchanged.Scope) {
+		publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
 		idTokenExtra := projectIDTokenClaims(ctx, deps, exchanged.Subject, authCtx.Claims)
 		idToken, err = mintAuthCodeIDToken(deps, mintIDTokenInput{
-			Subject:     exchanged.Subject,
+			Subject:     publicSubject,
 			ClientID:    client.ID,
 			Nonce:       exchanged.Nonce,
 			AccessToken: accessToken,
@@ -385,6 +393,20 @@ type mintIDTokenInput struct {
 	// beyond the standard fields. Standard-claim collisions are
 	// rejected by [tokens.SignIDToken].
 	Extra map[string]any
+}
+
+func projectPublicSubject(ctx context.Context, deps Deps, raw string, client *store.Client) (string, error) {
+	if deps.SubjectProjector == nil {
+		return raw, nil
+	}
+	projected, err := deps.SubjectProjector(ctx, raw, client)
+	if err != nil {
+		return "", err
+	}
+	if projected == "" {
+		return "", errors.New("tokenendpoint: SubjectProjector returned empty subject")
+	}
+	return projected, nil
 }
 
 // mintAccessToken issues an access token in the wire format the

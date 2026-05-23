@@ -143,6 +143,54 @@ func TestAuthCode_NoOfflineAccess_DoesNotIssueRefreshToken(t *testing.T) {
 	}
 }
 
+func TestAuthCode_ScopeAllowedClientsRejectedAtTokenEndpoint(t *testing.T) {
+	t.Parallel()
+
+	f := scopedFixture(t)
+	const secret = "shh-its-a-secret"
+	hash, err := op.HashClientSecret(secret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	client := f.prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-conf",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid", "billing:write"},
+	})
+	verifier, challenge := pkcePair()
+	const codeID = "code-allowlist-token"
+	const grantID = "grant-allowlist-token"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "billing:write"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "billing:write"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-allowlist-token",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	if got := decodeJSON(t, resp)["error"]; got != "invalid_scope" {
+		t.Errorf("error=%v want invalid_scope", got)
+	}
+}
+
 func TestAuthCode_ResourceBindsAudienceAndRefreshToken(t *testing.T) {
 	t.Parallel()
 

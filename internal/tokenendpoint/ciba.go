@@ -68,7 +68,7 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !applyCIBAPollDecision(ctx, w, deps, rec, in.AuthReqID, client.ID) {
 		return
 	}
-	authorized, ok := authorizeCIBAPoll(w, client, rec, binding)
+	authorized, ok := authorizeCIBAPoll(w, deps, client, rec, binding)
 	if !ok {
 		emitCIBAReject(ctx, deps, client.ID, errInvalidGrant)
 		return
@@ -243,6 +243,7 @@ func lookupCIBARequest(
 // (nil, false) on rejection.
 func authorizeCIBAPoll(
 	w http.ResponseWriter,
+	deps Deps,
 	client *store.Client,
 	rec *store.CIBARequest,
 	binding tokenBinding,
@@ -255,6 +256,9 @@ func authorizeCIBAPoll(
 	})
 	if err != nil {
 		writeCIBAAuthError(w, err)
+		return nil, false
+	}
+	if !checkTokenScopeAllowlist(w, deps, client.ID, authorized.Scope) {
 		return nil, false
 	}
 	return authorized, true
@@ -408,8 +412,13 @@ func issueCIBAResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(authorized.Scope) {
+		publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
 		idToken, err = mintCIBAIDToken(deps, cibaIDTokenInput{
-			Subject:     authorized.Subject,
+			Subject:     publicSubject,
 			ClientID:    client.ID,
 			AccessToken: accessToken,
 			Now:         now,

@@ -54,6 +54,12 @@ type HandlerDeps struct {
 	// [store.ErrNotFound] when the subject does not exist.
 	UserStore store.UserStore
 
+	// SubjectProjector, when non-nil, converts the OP-internal raw
+	// subject from the access token into the public OIDC "sub" value
+	// for the token's client. UserStore lookup still uses the raw
+	// subject so pairwise subjects do not become database keys.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
+
 	// Grants is the read-only grant lookup the handler consults to
 	// honour any OIDC Core 1.0 §5.5 "claims" request that was
 	// persisted on the originating grant. A nil store disables the
@@ -663,8 +669,12 @@ func assembleClaims(
 		return nil, false
 	}
 	source := userClaims(user)
+	publicSubject, ok := projectResponseSubject(ctx, w, deps, claims.Subject, claims.ClientID)
+	if !ok {
+		return nil, false
+	}
 	out, err := Build(Input{
-		Subject:           claims.Subject,
+		Subject:           publicSubject,
 		Scopes:            claims.Scope,
 		Source:            source,
 		CustomScopeClaims: deps.CustomScopeClaims,
@@ -675,6 +685,29 @@ func assembleClaims(
 		return nil, false
 	}
 	return out, true
+}
+
+func projectResponseSubject(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps HandlerDeps,
+	rawSubject, clientID string,
+) (string, bool) {
+	if deps.SubjectProjector == nil {
+		return rawSubject, true
+	}
+	client, ok := resolveClient(ctx, deps, clientID)
+	if !ok {
+		w.Header().Set("WWW-Authenticate", buildBearerChallenge("invalid_token", "subject unknown"))
+		w.WriteHeader(http.StatusUnauthorized)
+		return "", false
+	}
+	projected, err := deps.SubjectProjector(ctx, rawSubject, client)
+	if err != nil || projected == "" {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return "", false
+	}
+	return projected, true
 }
 
 // lookupClaimsRequest resolves the OIDC Core 1.0 §5.5 "claims" payload

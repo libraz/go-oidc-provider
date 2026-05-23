@@ -77,7 +77,7 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !applyPollDecision(ctx, w, deps, rec, in.DeviceCode, client.ID) {
 		return
 	}
-	authorized, ok := authorizeDeviceCodePoll(w, client, rec, binding)
+	authorized, ok := authorizeDeviceCodePoll(w, deps, client, rec, binding)
 	if !ok {
 		emitDeviceCodeReject(ctx, deps, client.ID, errInvalidGrant)
 		return
@@ -215,6 +215,7 @@ func lookupDeviceCode(
 // code as a stale code per RFC 6749 §5.2.
 func authorizeDeviceCodePoll(
 	w http.ResponseWriter,
+	deps Deps,
 	client *store.Client,
 	rec *store.DeviceCode,
 	binding tokenBinding,
@@ -227,6 +228,9 @@ func authorizeDeviceCodePoll(
 	})
 	if err != nil {
 		writeDeviceCodeAuthError(w, err)
+		return nil, false
+	}
+	if !checkTokenScopeAllowlist(w, deps, client.ID, authorized.Scope) {
 		return nil, false
 	}
 	return authorized, true
@@ -360,8 +364,13 @@ func issueDeviceCodeResponse(
 	}
 	var idToken string
 	if oidcscope.ContainsOpenID(authorized.Scope) {
+		publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
 		idToken, err = mintDeviceCodeIDToken(deps, deviceCodeIDTokenInput{
-			Subject:     authorized.Subject,
+			Subject:     publicSubject,
 			ClientID:    client.ID,
 			AccessToken: accessToken,
 			Now:         now,
