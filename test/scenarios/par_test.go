@@ -289,7 +289,7 @@ func (f *parJARFixture) signES256(t *testing.T, claims map[string]any) string {
 				Use:       "sig",
 			},
 		},
-		(&josev4.SignerOptions{}).WithType("JWT"),
+		(&josev4.SignerOptions{}).WithType("oauth-authz-req+jwt"),
 	)
 	if err != nil {
 		t.Fatalf("NewSigner ES256: %v", err)
@@ -315,7 +315,7 @@ func (f *parJARFixture) signPS256(t *testing.T, priv *rsa.PrivateKey, kid string
 				Use:       "sig",
 			},
 		},
-		(&josev4.SignerOptions{}).WithType("JWT"),
+		(&josev4.SignerOptions{}).WithType("oauth-authz-req+jwt"),
 	)
 	if err != nil {
 		t.Fatalf("NewSigner PS256: %v", err)

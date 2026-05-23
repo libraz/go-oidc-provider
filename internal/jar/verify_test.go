@@ -114,6 +114,19 @@ func TestVerify_HappyPath(t *testing.T) {
 	}
 }
 
+func TestVerify_RejectsWrongTypeHeader(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, jwk, _ := signedRequestObjectWithType(t, happyClaims(now), testKID, "JWT")
+	keys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*jwk}}
+	v := newTestVerifier(t, now, keys)
+	_, err := v.Verify(context.Background(), raw, testClientID, newClient())
+	if !errors.Is(err, jar.ErrTypeInvalid) {
+		t.Fatalf("err=%v want ErrTypeInvalid", err)
+	}
+}
+
 func TestVerify_RejectsIssMismatch(t *testing.T) {
 	t.Parallel()
 

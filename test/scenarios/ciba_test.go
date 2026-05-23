@@ -332,7 +332,7 @@ func (f *cibaFAPIFixture) signES256(t *testing.T, claims map[string]any) string 
 			Algorithm: string(josev4.ES256),
 			Use:       "sig",
 		},
-	}, (&josev4.SignerOptions{}).WithType("JWT"))
+	}, (&josev4.SignerOptions{}).WithType("oauth-authz-req+jwt"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}

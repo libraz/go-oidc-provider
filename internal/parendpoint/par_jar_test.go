@@ -103,7 +103,7 @@ func (f *jarFixture) jarSign(t *testing.T, claims map[string]any) string {
 			Use:       "sig",
 		},
 	}
-	signer, err := josev4.NewSigner(sk, (&josev4.SignerOptions{}).WithType("JWT"))
+	signer, err := josev4.NewSigner(sk, (&josev4.SignerOptions{}).WithType("oauth-authz-req+jwt"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}

@@ -350,7 +350,7 @@ func (f *encJARFixture) signES256(t *testing.T, claims map[string]any) string {
 				Use:       "sig",
 			},
 		},
-		(&josev4.SignerOptions{}).WithType("JWT"),
+		(&josev4.SignerOptions{}).WithType("oauth-authz-req+jwt"),
 	)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)

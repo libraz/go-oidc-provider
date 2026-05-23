@@ -60,6 +60,12 @@ var (
 	// vector at the request_uri endpoint.
 	ErrNestedRequest = errors.New("jar: request object must not contain request or request_uri")
 
+	// ErrTypeInvalid signals that the JWS protected header "typ" is
+	// missing or is not the RFC 9101 request-object media type. The
+	// verifier enforces typ to prevent cross-JWT confusion with other
+	// client-signed JWTs that may reuse the same key material.
+	ErrTypeInvalid = errors.New("jar: request object typ invalid")
+
 	// ErrJWKSFetch signals that the client's keyset could not be
 	// retrieved from [op/store.Client.JWKsURI]. Wraps the underlying
 	// transport / parse error.

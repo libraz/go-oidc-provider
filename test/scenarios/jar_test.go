@@ -245,7 +245,7 @@ func (f *jarFixture) signPS256(t *testing.T, priv *rsa.PrivateKey, kid string, c
 // it keeps every per-alg helper at a single ES256/PS256/etc dispatch.
 func signWithJOSE(t *testing.T, key josev4.SigningKey, claims map[string]any) string {
 	t.Helper()
-	signer, err := josev4.NewSigner(key, (&josev4.SignerOptions{}).WithType("JWT"))
+	signer, err := josev4.NewSigner(key, (&josev4.SignerOptions{}).WithType("oauth-authz-req+jwt"))
 	if err != nil {
 		t.Fatalf("NewSigner(%s): %v", key.Algorithm, err)
 	}

@@ -35,6 +35,11 @@ type Object struct {
 	// resolved client keyset.
 	KeyID string
 
+	// Type is the "typ" protected header. RFC 9101 §10.8 uses
+	// "oauth-authz-req+jwt" to separate request objects from other
+	// client-signed JWTs that may share key material.
+	Type string
+
 	// Claims is the decoded payload as a generic map. JSON numbers are
 	// decoded into json.Number values so the claim consumer can pick
 	// the integer / float interpretation explicitly. RFC 9101 §6.1
@@ -77,9 +82,21 @@ func Parse(raw string) (*Object, error) {
 		Raw:       raw,
 		Algorithm: alg,
 		KeyID:     hdr.KeyID,
+		Type:      headerString(hdr.ExtraHeaders[josev4.HeaderType]),
 		Claims:    claims,
 		jws:       jws,
 	}, nil
+}
+
+func headerString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case josev4.ContentType:
+		return string(t)
+	default:
+		return ""
+	}
 }
 
 // decodeUnverifiedPayload extracts the JSON object body from the JWS

@@ -33,11 +33,32 @@ func signedRequestObject(t *testing.T, claims any, kid string) (string, *josev4.
 	return signed, pub, priv
 }
 
+func signedRequestObjectWithType(t *testing.T, claims any, kid, typ string) (string, *josev4.JSONWebKey, *ecdsa.PrivateKey) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	signed := signClaimsWithType(t, priv, kid, claims, josev4.ES256, typ)
+	pub := &josev4.JSONWebKey{
+		Key:       &priv.PublicKey,
+		KeyID:     kid,
+		Algorithm: string(josev4.ES256),
+		Use:       "sig",
+	}
+	return signed, pub, priv
+}
+
 // signClaims serialises claims as a compact JWS using priv with the
 // supplied alg / kid. It is the workhorse beneath
 // [signedRequestObject] and is exposed to tests that need to vary the
 // algorithm.
 func signClaims(t *testing.T, priv any, kid string, claims any, alg josev4.SignatureAlgorithm) string {
+	t.Helper()
+	return signClaimsWithType(t, priv, kid, claims, alg, "oauth-authz-req+jwt")
+}
+
+func signClaimsWithType(t *testing.T, priv any, kid string, claims any, alg josev4.SignatureAlgorithm, typ string) string {
 	t.Helper()
 	sk := josev4.SigningKey{
 		Algorithm: alg,
@@ -48,7 +69,7 @@ func signClaims(t *testing.T, priv any, kid string, claims any, alg josev4.Signa
 			Use:       "sig",
 		},
 	}
-	signer, err := josev4.NewSigner(sk, (&josev4.SignerOptions{}).WithType("JWT"))
+	signer, err := josev4.NewSigner(sk, (&josev4.SignerOptions{}).WithType(josev4.ContentType(typ)))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -90,6 +111,9 @@ func TestParse_HappyPath(t *testing.T) {
 	}
 	if obj.KeyID != "kid-1" {
 		t.Errorf("KeyID=%q want kid-1", obj.KeyID)
+	}
+	if obj.Type != "oauth-authz-req+jwt" {
+		t.Errorf("Type=%q want oauth-authz-req+jwt", obj.Type)
 	}
 	if obj.Claims["foo"] != "bar" {
 		t.Errorf("Claims[foo]=%v want bar", obj.Claims["foo"])
