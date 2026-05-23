@@ -3,6 +3,7 @@ package tokenendpoint
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -74,6 +75,65 @@ func TestRevokeJWTAccessTokensForGrant_StoreFault_EmitsAudit(t *testing.T) {
 	}
 }
 
+func TestRevokeChainForCode_UsesReplayGrantIDWhenFindCannotRecoverConsumedCode(t *testing.T) {
+	t.Parallel()
+
+	refreshes := &captureRefreshStore{}
+	deps := Deps{
+		Codes:              panicFindCodeStore{},
+		RefreshTokens:      refreshes,
+		RevocationStrategy: store.RevocationStrategyNone,
+	}
+
+	revokeChainForCode(context.Background(), deps, "code-1", "grant-1")
+
+	if got := refreshes.revokedGrantID(); got != "grant-1" {
+		t.Fatalf("revoked grant=%q want grant-1", got)
+	}
+}
+
 type fixedClock struct{ now time.Time }
 
 func (f fixedClock) Now() time.Time { return f.now }
+
+type panicFindCodeStore struct{}
+
+func (panicFindCodeStore) Save(context.Context, *store.AuthorizationCode) error { return nil }
+
+func (panicFindCodeStore) Find(context.Context, string) (*store.AuthorizationCode, error) {
+	panic("Find should not be needed when replay error carries GrantID")
+}
+
+func (panicFindCodeStore) Consume(context.Context, string) (*store.AuthorizationCode, error) {
+	return nil, store.ErrAlreadyConsumed
+}
+
+type captureRefreshStore struct {
+	mu      sync.Mutex
+	grantID string
+}
+
+func (s *captureRefreshStore) Save(context.Context, *store.RefreshToken) error { return nil }
+
+func (s *captureRefreshStore) Find(context.Context, string) (*store.RefreshToken, error) {
+	return nil, store.ErrNotFound
+}
+
+func (s *captureRefreshStore) Consume(context.Context, string) (*store.RefreshToken, error) {
+	return nil, store.ErrNotFound
+}
+
+func (s *captureRefreshStore) RevokeChain(context.Context, string) error { return nil }
+
+func (s *captureRefreshStore) RevokeByGrant(_ context.Context, grantID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.grantID = grantID
+	return nil
+}
+
+func (s *captureRefreshStore) revokedGrantID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.grantID
+}

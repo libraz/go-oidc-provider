@@ -194,7 +194,9 @@ func (a *txAuthCodes) Consume(ctx context.Context, id string) (*store.Authorizat
 		return nil, store.ErrNotFound
 	}
 	if rec.ConsumedAt != nil {
-		return nil, store.ErrAlreadyConsumed
+		out := cloneAuthCode(rec)
+		out.ID = id
+		return out, store.ErrAlreadyConsumed
 	}
 	updated := cloneAuthCode(rec)
 	now := a.tx.clock.Now()
@@ -708,9 +710,12 @@ func (p *txPARs) Save(ctx context.Context, par *store.PushedAuthRequest) error {
 	if _, exists := st.added[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	st.parent.mu.RLock()
+	st.parent.mu.Lock()
+	now := p.tx.clock.Now()
+	st.parent.deleteExpiredKeyLocked(key, now)
+	st.parent.maybeGCLocked(now)
 	_, parentExists := st.parent.m[key]
-	st.parent.mu.RUnlock()
+	st.parent.mu.Unlock()
 	if parentExists {
 		return store.ErrAlreadyExists
 	}

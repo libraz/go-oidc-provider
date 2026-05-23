@@ -166,7 +166,7 @@ func writeAuthCodeExchangeError(
 		// §A.12.4: a replayed code is treated as evidence that the
 		// chain is compromised. Revoke every refresh token descended
 		// from the same grant before responding.
-		revokeChainForCode(ctx, deps, code)
+		revokeChainForCode(ctx, deps, code, authcode.ReplayGrantID(err))
 		writeError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
 	case errors.Is(err, pkce.ErrChallengeMethodUnsupported),
 		errors.Is(err, pkce.ErrVerifierFormat),
@@ -204,15 +204,19 @@ func writeAuthCodeExchangeError(
 // refresh-token cascade is always required to satisfy RFC 6749
 // §4.1.2.
 //
-// The walk is best-effort: if the consumed authorization-code record
-// is no longer findable (e.g. the store garbage-collected it) the
-// function returns silently. The caller still emits invalid_grant.
-func revokeChainForCode(ctx context.Context, deps Deps, code string) {
-	// We cannot reach the grant id from the consumed code (Consume has
-	// already returned ErrAlreadyConsumed). Look the record up via
-	// Find; some stores still surface consumed rows there for audit.
-	rec, err := deps.Codes.Find(ctx, code)
-	if err != nil || rec == nil {
+// The walk is best-effort: replayGrantID is preferred because some stores hide
+// consumed rows from Find. For older stores that only expose consumed rows via
+// Find, the function falls back to looking the code up before returning.
+func revokeChainForCode(ctx context.Context, deps Deps, code, replayGrantID string) {
+	grantID := replayGrantID
+	if grantID == "" {
+		rec, err := deps.Codes.Find(ctx, code)
+		if err != nil || rec == nil {
+			return
+		}
+		grantID = rec.GrantID
+	}
+	if grantID == "" {
 		return
 	}
 	// Revoke access tokens first so the userinfo / introspection paths
@@ -223,7 +227,7 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	// under RevocationStrategyJTIRegistry the AT also passes through
 	// Register which is a fresh row, leaving the next refresh attempt
 	// blocked once the RT half of the cascade lands.
-	revokeJWTAccessTokensForGrant(ctx, deps, rec.GrantID)
+	revokeJWTAccessTokensForGrant(ctx, deps, grantID)
 	// Mirror the cascade onto the opaque-AT substore (ADR 0024
 	// §"Code-replay cascade"). The substore is nil for embedders who
 	// stay on the JWT-only default; calling RevokeByGrant on a nil
@@ -233,13 +237,13 @@ func revokeChainForCode(ctx context.Context, deps Deps, code string) {
 	// symmetric ordering so log lines / tx audit trails stay
 	// predictable.
 	if deps.OpaqueAccessTokens != nil {
-		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, rec.GrantID)
+		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
 	}
 	// RevokeByGrant walks the refresh-token store by GrantID and stamps
 	// every matching record. Implementations are expected to be silent
 	// when no record matches (a freshly-replayed code may not have
 	// produced a refresh token at all).
-	_ = deps.RefreshTokens.RevokeByGrant(ctx, rec.GrantID)
+	_ = deps.RefreshTokens.RevokeByGrant(ctx, grantID)
 }
 
 // revokeJWTAccessTokensForGrant runs the JWT-AT half of the
@@ -613,6 +617,15 @@ func opaqueAuthTime(authTime int64) time.Time {
 // OIDC Core §3.1.3.6 / §3.3.2.10 because the code-flow id_token is the
 // one that benefits the most from the binding.
 func mintAuthCodeIDToken(deps Deps, in mintIDTokenInput) (string, error) {
+	key := activeSigningKey(deps)
+	atHash, err := tokens.HashForAlg(in.AccessToken, key.Alg)
+	if err != nil {
+		return "", err
+	}
+	cHash, err := tokens.HashForAlg(in.Code, key.Alg)
+	if err != nil {
+		return "", err
+	}
 	claims := tokens.IDTokenClaims{
 		Issuer:    deps.Issuer,
 		Subject:   in.Subject,
@@ -621,13 +634,13 @@ func mintAuthCodeIDToken(deps Deps, in mintIDTokenInput) (string, error) {
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
 		AuthTime:  in.AuthTime,
 		Nonce:     in.Nonce,
-		AtHash:    tokens.Hash(in.AccessToken),
-		CHash:     tokens.Hash(in.Code),
+		AtHash:    atHash,
+		CHash:     cHash,
 		ACR:       in.ACR,
 		AMR:       append([]string(nil), in.AMR...),
 		Extra:     in.Extra,
 	}
-	return tokens.SignIDToken(activeSigningKey(deps), claims)
+	return tokens.SignIDToken(key, claims)
 }
 
 // maybeIssueRefreshToken issues and persists a refresh token when the

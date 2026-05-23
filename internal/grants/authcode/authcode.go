@@ -75,6 +75,28 @@ var (
 	ErrRedirectURIMismatch = errors.New("authcode: redirect_uri does not match")
 )
 
+// ReplayError wraps [ErrCodeReplayed] with the grant id recorded on the
+// consumed authorization code. Stores are allowed to hide consumed rows from
+// Find, so the token endpoint needs this metadata on the replay error itself
+// to run the RFC 6749 §4.1.2 descendant-token revocation cascade.
+type ReplayError struct {
+	GrantID string
+}
+
+func (e *ReplayError) Error() string { return ErrCodeReplayed.Error() }
+
+func (e *ReplayError) Unwrap() error { return ErrCodeReplayed }
+
+// ReplayGrantID extracts the grant id attached to a replay error, if the
+// backing store surfaced it during Consume.
+func ReplayGrantID(err error) string {
+	var replay *ReplayError
+	if errors.As(err, &replay) {
+		return replay.GrantID
+	}
+	return ""
+}
+
 // Issuer mints authorization codes and persists them via a
 // [store.AuthorizationCodeStore]. It is immutable after construction and
 // safe for concurrent use.
@@ -296,7 +318,8 @@ type Exchanged struct {
 // sentinels declared in this package.
 //
 // Replay detection: when the underlying store returns
-// [store.ErrAlreadyConsumed], Exchange returns [ErrCodeReplayed]. The token
+// [store.ErrAlreadyConsumed], Exchange returns [ErrCodeReplayed]. If the store
+// also returns the consumed record, the error carries its GrantID; the token
 // endpoint MUST revoke any refresh tokens that descend from this grant.
 func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
 	if in.Code == "" {
@@ -308,6 +331,9 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		case errors.Is(err, store.ErrNotFound):
 			return nil, ErrCodeMissing
 		case errors.Is(err, store.ErrAlreadyConsumed):
+			if rec != nil && rec.GrantID != "" {
+				return nil, &ReplayError{GrantID: rec.GrantID}
+			}
 			return nil, ErrCodeReplayed
 		default:
 			return nil, fmt.Errorf("authcode: consume: %w", err)

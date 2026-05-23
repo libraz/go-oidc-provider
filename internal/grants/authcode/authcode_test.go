@@ -271,6 +271,52 @@ func TestExchange_ReplayReturnsSentinel(t *testing.T) {
 	}
 }
 
+func TestExchange_ReplayCarriesGrantIDWhenStoreReturnsConsumedRecord(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	verifier := strings.Repeat("a", 64)
+	backing := newReplayMetadataCodeStore()
+	issuer, err := authcode.NewIssuer(authcode.IssuerConfig{
+		Store: backing,
+		Clock: func() time.Time { return t0 },
+	})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exchanger, err := authcode.NewExchanger(authcode.ExchangerConfig{
+		Store: backing,
+		Clock: func() time.Time { return t0 },
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+	code, err := issuer.Issue(ctx, goodInput(verifier))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	in := authcode.ExchangeInput{
+		Code:         code,
+		ClientID:     "client-1",
+		RedirectURI:  "https://rp.example.com/cb",
+		CodeVerifier: verifier,
+	}
+	if _, err := exchanger.Exchange(ctx, in); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+	_, err = exchanger.Exchange(ctx, in)
+	if !errors.Is(err, authcode.ErrCodeReplayed) {
+		t.Fatalf("second Exchange err=%v want ErrCodeReplayed", err)
+	}
+	if got := authcode.ReplayGrantID(err); got != "grant-1" {
+		t.Fatalf("ReplayGrantID=%q want grant-1", got)
+	}
+	if _, err := backing.Find(ctx, code); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find after replay err=%v want ErrNotFound", err)
+	}
+}
+
 // TestExchange_RejectsClientMismatch pins the (code, client_id) half
 // of RFC 6749 §4.1.3's tuple-binding contract: a code issued to one
 // client MUST NOT be exchangeable by another client, regardless of
@@ -462,4 +508,57 @@ func (s *alwaysAliveCodeStore) Consume(ctx context.Context, id string) (*store.A
 	now := time.Now().UTC()
 	rec.ConsumedAt = &now
 	return rec, nil
+}
+
+// replayMetadataCodeStore simulates backends that hide consumed rows from Find
+// while still returning the consumed record from the atomic Consume replay path.
+type replayMetadataCodeStore struct {
+	mu sync.Mutex
+	m  map[string]*store.AuthorizationCode
+}
+
+func newReplayMetadataCodeStore() *replayMetadataCodeStore {
+	return &replayMetadataCodeStore{m: make(map[string]*store.AuthorizationCode)}
+}
+
+func (s *replayMetadataCodeStore) Save(_ context.Context, code *store.AuthorizationCode) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.m[code.ID]; exists {
+		return store.ErrAlreadyExists
+	}
+	clone := *code
+	clone.Scope = append([]string(nil), code.Scope...)
+	s.m[code.ID] = &clone
+	return nil
+}
+
+func (s *replayMetadataCodeStore) Find(_ context.Context, id string) (*store.AuthorizationCode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[id]
+	if !ok || rec.ConsumedAt != nil {
+		return nil, store.ErrNotFound
+	}
+	clone := *rec
+	clone.Scope = append([]string(nil), rec.Scope...)
+	return &clone, nil
+}
+
+func (s *replayMetadataCodeStore) Consume(_ context.Context, id string) (*store.AuthorizationCode, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	clone := *rec
+	clone.Scope = append([]string(nil), rec.Scope...)
+	if rec.ConsumedAt != nil {
+		return &clone, store.ErrAlreadyConsumed
+	}
+	now := time.Now().UTC()
+	rec.ConsumedAt = &now
+	clone.ConsumedAt = &now
+	return &clone, nil
 }

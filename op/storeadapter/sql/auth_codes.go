@@ -111,7 +111,7 @@ func (s *authCodeStore) Consume(ctx context.Context, id string) (*store.Authoriz
 		return nil, store.ErrNotFound
 	}
 	if rec.ConsumedAt != nil {
-		return nil, store.ErrAlreadyConsumed
+		return rec, store.ErrAlreadyConsumed
 	}
 	now := s.parent.clock.Now()
 	idDigest := patterns.Digest(id)
@@ -125,6 +125,9 @@ func (s *authCodeStore) Consume(ctx context.Context, id string) (*store.Authoriz
 	}
 	if n == 0 {
 		// Lost the compare-and-swap to a concurrent Consume.
+		if replay, findErr := s.find(ctx, id); findErr == nil && replay.ConsumedAt != nil {
+			return replay, store.ErrAlreadyConsumed
+		}
 		return nil, store.ErrAlreadyConsumed
 	}
 	rec.ConsumedAt = &now

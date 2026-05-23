@@ -120,8 +120,10 @@ type AuthorizationCodeStore interface {
 	// and look up the resulting digest. It MUST return [ErrNotFound] if
 	// no such record exists, [ErrAlreadyConsumed] if the record's
 	// ConsumedAt was already set on entry, and a non-nil error if the
-	// underlying compare-and-set fails. After a successful Consume the
-	// returned record's ConsumedAt MUST be non-nil so that callers can
-	// audit the consumption time.
+	// underlying compare-and-set fails. When returning ErrAlreadyConsumed,
+	// implementations SHOULD also return the consumed record if it is still
+	// available so callers can recover GrantID for replay revocation. After
+	// a successful Consume the returned record's ConsumedAt MUST be non-nil
+	// so that callers can audit the consumption time.
 	Consume(ctx context.Context, id string) (*AuthorizationCode, error)
 }

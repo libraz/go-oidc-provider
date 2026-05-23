@@ -77,7 +77,9 @@ func (s *authCodeStore) Consume(_ context.Context, id string) (*store.Authorizat
 		return nil, store.ErrNotFound
 	}
 	if rec.ConsumedAt != nil {
-		return nil, store.ErrAlreadyConsumed
+		out := cloneAuthCode(rec)
+		out.ID = id
+		return out, store.ErrAlreadyConsumed
 	}
 	now := s.clock.Now()
 	rec.ConsumedAt = &now
