@@ -293,6 +293,12 @@ func TestHandler_GETLogoutNoHint(t *testing.T) {
 	}
 	if got := resp.Header.Get("Content-Security-Policy"); got == "" {
 		t.Error("Content-Security-Policy header missing")
+	} else {
+		for _, want := range []string{"form-action 'self'", "sandbox allow-forms allow-same-origin"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("Content-Security-Policy=%q missing %q", got, want)
+			}
+		}
 	}
 }
 
@@ -1101,6 +1107,26 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	}
 	if got := resp.Header.Get("Allow"); got == "" {
 		t.Error("Allow header missing")
+	}
+}
+
+func TestHandler_HEAD_AcceptedWhenGETIsSupported(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodHead, h.endSessionPath, http.NoBody)
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusMethodNotAllowed {
+		t.Fatal("HEAD returned 405")
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 interstitial equivalent", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Security-Policy"); !strings.Contains(got, "allow-forms") {
+		t.Errorf("Content-Security-Policy=%q missing allow-forms", got)
 	}
 }
 

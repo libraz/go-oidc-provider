@@ -70,7 +70,7 @@ func renderErrorBody(description string) string {
 // confirmation and error pages. Centralising the helper keeps the two
 // surfaces from drifting.
 func stampStaticHeaders(w http.ResponseWriter) {
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; sandbox allow-forms allow-same-origin")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")

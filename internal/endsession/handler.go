@@ -282,7 +282,7 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, req request) bool {
 	if req.idTokenHint != "" {
 		return true
 	}
-	if r.Method == http.MethodGet {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		renderLogoutConfirmation(w, r, req)
 		return false
 	}
@@ -310,8 +310,8 @@ func enforceCSRFGate(w http.ResponseWriter, r *http.Request, req request) bool {
 // (id_token_hint + post_logout_redirect_uri + state + client_id) and
 // well below the practical browser / proxy query-length limits.
 func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead+", "+http.MethodPost)
 		writeLogoutError(w, http.StatusMethodNotAllowed, descMethodNotAllowed)
 		return nil, false
 	}
