@@ -733,7 +733,7 @@ func TestScenario_TX_020_MTLSRebindingOnExchange(t *testing.T) {
 	}
 }
 
-func TestScenario_TX_021_RefreshTokenOnlyWhenPolicyOptsIn(t *testing.T) {
+func TestScenario_TX_021_RefreshTokenNeverIssuedByBuiltInExchange(t *testing.T) {
 	t.Parallel()
 	// Default policy: no refresh issuance.
 	p := newTXProvider(t, txAllowAllPolicy{})
@@ -749,7 +749,8 @@ func TestScenario_TX_021_RefreshTokenOnlyWhenPolicyOptsIn(t *testing.T) {
 	if got, ok := body["refresh_token"]; ok && got != "" {
 		t.Errorf("default refresh_token=%v want absent", got)
 	}
-	// Opt-in policy: refresh issuance.
+	// Opt-in policy: rejected until token-exchange refresh issuance is
+	// backed by the OP's RefreshTokenStore / replay-cascade machinery.
 	yes := true
 	policy := txDecisionPolicy{decision: &op.TokenExchangeDecision{IssueRefreshToken: &yes}}
 	p2 := newTXProvider(t, policy)
@@ -758,11 +759,12 @@ func TestScenario_TX_021_RefreshTokenOnlyWhenPolicyOptsIn(t *testing.T) {
 		"subject_token":      []string{subjectJWS2},
 		"subject_token_type": []string{"urn:ietf:params:oauth:token-type:access_token"},
 	})
-	if status != http.StatusOK {
-		t.Fatalf("opt-in status=%d want 200, body=%v", status, body)
+	if status != http.StatusBadRequest {
+		t.Fatalf("opt-in status=%d want 400, body=%v", status, body)
 	}
-	if got, _ := body["refresh_token"].(string); got == "" {
-		t.Errorf("opt-in refresh_token absent")
+	expectError(t, body, "invalid_request")
+	if got, ok := body["refresh_token"]; ok {
+		t.Errorf("rejected response must not include refresh_token, got %v", got)
 	}
 }
 

@@ -317,12 +317,11 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 			clientIDOf(req.Client), subjectView.Subject,
 			map[string]any{"audience": grantedAudience})
 	}
-	resp := h.assembleResponse(req, subjectView, grantedScope, grantedAudience, ttl, actChain, extraClaims, issueIDToken)
 	if issueRefresh {
-		if err := h.attachRefresh(ctx, &resp, req.Client, subjectView, actorView, grantedAudience); err != nil {
-			return customgrant.Response{}, err
-		}
+		return customgrant.Response{}, invalidRequest(
+			"token-exchange refresh_token issuance is not supported by the built-in handler")
 	}
+	resp := h.assembleResponse(req, subjectView, grantedScope, grantedAudience, ttl, actChain, extraClaims, issueIDToken)
 	h.emit(ctx, auditGranted, audit.LevelInfo,
 		"token-exchange granted",
 		clientIDOf(req.Client), subjectView.Subject,
