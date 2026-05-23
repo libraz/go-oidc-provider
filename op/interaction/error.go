@@ -99,13 +99,7 @@ func (JSONDriver) RenderError(w http.ResponseWriter, _ *http.Request, prompt Err
 // All variable byte sequences pass through [html.EscapeString].
 func (HTMLDriver) RenderError(w http.ResponseWriter, _ *http.Request, prompt ErrorPrompt) error {
 	body := buildErrorDocument(prompt)
-	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Cache-Control", "no-store, no-cache, must-revalidate")
-	h.Set("Pragma", "no-cache")
-	h.Set("X-Frame-Options", "DENY")
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "no-referrer")
+	stampHTMLHeaders(w)
 	if prompt.Status > 0 {
 		w.WriteHeader(prompt.Status)
 	} else {

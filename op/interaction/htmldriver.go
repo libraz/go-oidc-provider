@@ -68,15 +68,23 @@ var ErrMissingStateRef = errors.New("interaction: missing state_ref")
 // written, so callers MUST NOT have stamped headers themselves.
 func (HTMLDriver) Render(w http.ResponseWriter, _ *http.Request, prompt Prompt) error {
 	body := buildHTMLDocument(prompt)
-	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Cache-Control", "no-store, no-cache, must-revalidate")
-	h.Set("X-Frame-Options", "DENY")
+	stampHTMLHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.WriteString(w, body); err != nil {
 		return fmt.Errorf("interaction: render html prompt: %w", err)
 	}
 	return nil
+}
+
+func stampHTMLHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	h.Set("Pragma", "no-cache")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Referrer-Policy", "no-referrer")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 }
 
 // ParseSubmission reads at most [maxSubmissionBytes] from r.Body and

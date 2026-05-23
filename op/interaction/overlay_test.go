@@ -143,6 +143,15 @@ func TestTemplateOverlay_OverrideConsentRendersTemplate(t *testing.T) {
 	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
 		t.Errorf("X-Frame-Options = %q, want DENY", got)
 	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy = %q, want no-referrer", got)
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self'") {
+		t.Errorf("Content-Security-Policy = %q, want form-action self", csp)
+	}
 
 	body := rec.Body.String()
 	for _, want := range []string{

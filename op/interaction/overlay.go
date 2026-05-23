@@ -163,8 +163,5 @@ func writeOverlayResponse(w http.ResponseWriter, body *bytes.Buffer) error {
 // applies. The headers MUST be set before WriteHeader; the helper
 // keeps consent and chooser dispatch in sync.
 func stampOverlayHeaders(w http.ResponseWriter) {
-	h := w.Header()
-	h.Set("Content-Type", "text/html; charset=utf-8")
-	h.Set("Cache-Control", "no-store, no-cache, must-revalidate")
-	h.Set("X-Frame-Options", "DENY")
+	stampHTMLHeaders(w)
 }

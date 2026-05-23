@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -264,6 +265,32 @@ func TestHTMLDriver_RenderCSPCompliance(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHTMLDriver_RenderSecurityHeaders(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+	if err := (interaction.HTMLDriver{}).Render(rec, req, goldenCases()[0].prompt); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	headers := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "no-referrer",
+		"Pragma":                 "no-cache",
+	}
+	for name, want := range headers {
+		if got := rec.Header().Get(name); got != want {
+			t.Errorf("%s=%q want %q", name, got, want)
+		}
+	}
+	csp := rec.Header().Get("Content-Security-Policy")
+	for _, want := range []string{"default-src 'none'", "form-action 'self'", "frame-ancestors 'none'", "base-uri 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("Content-Security-Policy=%q missing %q", csp, want)
+		}
 	}
 }
 
