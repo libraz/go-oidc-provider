@@ -35,8 +35,11 @@ func TestWriteFormPost_HappyPath(t *testing.T) {
 	if !strings.Contains(csp, "default-src 'none'") {
 		t.Errorf("CSP missing default-src 'none': %q", csp)
 	}
-	if !strings.Contains(csp, "form-action https://rp.example.com/cb") {
+	if !strings.Contains(csp, "form-action https://rp.example.com") {
 		t.Errorf("CSP missing form-action: %q", csp)
+	}
+	if strings.Contains(csp, "/cb") {
+		t.Errorf("CSP form-action must be origin-only, got: %q", csp)
 	}
 	if !strings.Contains(csp, "script-src 'sha256-") {
 		t.Errorf("CSP missing script-src hash: %q", csp)
@@ -136,8 +139,11 @@ func TestWriteParamsFormPost_HappyPath(t *testing.T) {
 	if !strings.Contains(csp, "default-src 'none'") {
 		t.Errorf("CSP missing default-src 'none': %q", csp)
 	}
-	if !strings.Contains(csp, "form-action https://rp.example.com/cb") {
+	if !strings.Contains(csp, "form-action https://rp.example.com") {
 		t.Errorf("CSP missing form-action: %q", csp)
+	}
+	if strings.Contains(csp, "/cb") {
+		t.Errorf("CSP form-action must be origin-only, got: %q", csp)
 	}
 
 	body := w.Body.String()

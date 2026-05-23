@@ -161,14 +161,19 @@ func buildParamsFormPostBody(redirectURI string, params url.Values) string {
 }
 
 // formPostFormActionSource computes the CSP form-action source-list
-// value for redirectURI. The CSP spec accepts an absolute URL or an
-// origin; the helper returns the absolute URL as-is because the
-// authorize-time validator has already exact-matched it against the
-// client's registered list. A malformed URL falls back to "'self'"
-// which is the minimum-blast-radius default.
+// value for redirectURI. The CSP spec accepts origins, so the helper
+// reduces the exact redirect_uri to scheme://host[:port]. Keeping
+// path / query out of the directive avoids brittle intermediary
+// handling while preserving the cross-origin allow-list shape. A
+// malformed URL falls back to "'self'", the minimum-blast-radius
+// default.
 func formPostFormActionSource(redirectURI string) string {
 	if redirectURI == "" {
 		return "'self'"
 	}
-	return redirectURI
+	u, err := url.Parse(redirectURI)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "'self'"
+	}
+	return strings.ToLower(u.Scheme) + "://" + u.Host
 }
