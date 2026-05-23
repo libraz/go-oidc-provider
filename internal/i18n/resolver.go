@@ -205,6 +205,9 @@ func parseAcceptLanguage(raw string) []string {
 	}
 	var entries []entry
 	for _, part := range strings.Split(raw, ",") {
+		if len(entries) >= maxAcceptLanguageEntries {
+			break
+		}
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -215,7 +218,7 @@ func parseAcceptLanguage(raw string) []string {
 			tag = strings.TrimSpace(part[:semi])
 			q = parseQValue(part[semi+1:])
 		}
-		if tag == "" || q <= 0 {
+		if tag == "" || len(tag) > MaxTagLength || q <= 0 {
 			continue
 		}
 		entries = append(entries, entry{tag: tag, q: q})
@@ -233,6 +236,8 @@ func parseAcceptLanguage(raw string) []string {
 	}
 	return out
 }
+
+const maxAcceptLanguageEntries = 20
 
 // parseQValue extracts the float from a "q=N" / "q=0.7" trailer.
 // Anything the parser cannot interpret returns 1.0 — see the note

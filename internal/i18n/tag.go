@@ -17,13 +17,19 @@ type Tag string
 // when no other tag is registered.
 const English Tag = "en"
 
+// MaxTagLength bounds locale tags accepted from HTTP surfaces. Valid
+// BCP 47 tags used by the resolver are far shorter; the cap keeps
+// oversized Accept-Language / cookie values from driving avoidable CPU
+// and allocation work.
+const MaxTagLength = 48
+
 // ParseTag canonicalises raw into a [Tag]. Whitespace is trimmed,
 // case is folded to lower, and the BCP 47 separator is normalised
 // to '-'. Empty input returns the empty Tag, not [English]; the
 // caller decides whether an empty tag should fall back.
 func ParseTag(raw string) Tag {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if raw == "" || len(raw) > MaxTagLength {
 		return ""
 	}
 	out := make([]byte, 0, len(raw))

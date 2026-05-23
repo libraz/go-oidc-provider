@@ -3,6 +3,7 @@ package i18n_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -27,6 +28,14 @@ func TestParseTag(t *testing.T) {
 		if got := i18n.ParseTag(tc.in); got != tc.want {
 			t.Fatalf("ParseTag(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestParseTagRejectsOverlong(t *testing.T) {
+	t.Parallel()
+
+	if got := i18n.ParseTag(strings.Repeat("a", i18n.MaxTagLength+1)); got != "" {
+		t.Fatalf("ParseTag(overlong) = %q, want empty", got)
 	}
 }
 
@@ -315,6 +324,36 @@ func TestResolver_RejectsMalformedLocaleCookie(t *testing.T) {
 	})
 	if got != i18n.English {
 		t.Fatalf("Resolve=%q want en; malformed cookie must be ignored", got)
+	}
+}
+
+func TestResolver_AcceptLanguageCapsWork(t *testing.T) {
+	t.Parallel()
+
+	en, _ := i18n.NewBundle(i18n.English, nil)
+	ja, _ := i18n.NewBundle(i18n.Japanese, nil)
+	r, err := i18n.NewResolver(i18n.English, en, ja)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+	parts := make([]string, 0, 25)
+	for i := range 20 {
+		parts = append(parts, fmt.Sprintf("zz-%02d;q=1", i))
+	}
+	parts = append(parts, "ja;q=1")
+
+	got := r.Resolve(context.Background(), i18n.Request{
+		AcceptLanguage: strings.Join(parts, ","),
+	})
+	if got != i18n.English {
+		t.Fatalf("Resolve with matching tag past cap = %q, want default en", got)
+	}
+
+	got = r.Resolve(context.Background(), i18n.Request{
+		AcceptLanguage: strings.Repeat("a", i18n.MaxTagLength+1) + ";q=1,ja;q=0.9",
+	})
+	if got != i18n.Japanese {
+		t.Fatalf("Resolve should skip overlong tag and use ja, got %q", got)
 	}
 }
 
