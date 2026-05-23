@@ -74,19 +74,26 @@ func (req *Request) validateRedirectTarget(client *store.Client) error {
 	if req.RedirectURI == "" {
 		return ErrRedirectURIRequired
 	}
-	if client == nil || !redirectURIMatches(client.RedirectURIs, req.RedirectURI) {
+	if client == nil || !redirectURIMatches(client, req.RedirectURI) {
 		return ErrRedirectURIInvalid
 	}
 	return nil
 }
 
-func redirectURIMatches(registered []string, requested string) bool {
-	for _, candidate := range registered {
-		if candidate == requested || loopbackRedirectMatchesAnyPort(candidate, requested) {
+func redirectURIMatches(client *store.Client, requested string) bool {
+	for _, candidate := range client.RedirectURIs {
+		if candidate == requested || (clientAllowsLoopbackWildcard(client) && loopbackRedirectMatchesAnyPort(candidate, requested)) {
 			return true
 		}
 	}
 	return false
+}
+
+func clientAllowsLoopbackWildcard(client *store.Client) bool {
+	if client == nil {
+		return false
+	}
+	return client.PublicClient || strings.EqualFold(client.ApplicationType, "native")
 }
 
 func loopbackRedirectMatchesAnyPort(registered, requested string) bool {

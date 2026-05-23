@@ -183,20 +183,18 @@ func extractValues(r *http.Request) (url.Values, error) {
 }
 
 // singleValue returns the value of a single-valued parameter. Multiple
-// occurrences are tolerated only when every value is byte-equal; differing
-// values produce [ErrDuplicateParameter].
+// occurrences are rejected even when the bytes are identical: accepting a
+// repeated field creates parser asymmetry with the token endpoint and makes
+// request-object merge behaviour harder to reason about.
 func singleValue(v url.Values, key string) (string, error) {
 	values, ok := v[key]
 	if !ok || len(values) == 0 {
 		return "", nil
 	}
-	first := values[0]
-	for _, candidate := range values[1:] {
-		if candidate != first {
-			return "", ErrDuplicateParameter
-		}
+	if len(values) > 1 {
+		return "", ErrDuplicateParameter
 	}
-	return first, nil
+	return values[0], nil
 }
 
 // singleEntry returns the single occurrence of a multi-valued parameter

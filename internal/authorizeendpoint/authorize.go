@@ -335,7 +335,7 @@ func firstPartyShouldSkipConsent(
 	if !deps.isFirstPartyClient(client.ID) {
 		return false
 	}
-	if !firstPartyAutoGrantRequestTrusted(r) {
+	if !firstPartyAutoGrantRequestTrusted(r, req.RedirectURI) {
 		return false
 	}
 	if containsString(req.Prompt, interaction.PromptConsent) {
@@ -354,16 +354,42 @@ func firstPartyShouldSkipConsent(
 	}
 }
 
-func firstPartyAutoGrantRequestTrusted(r *http.Request) bool {
+func firstPartyAutoGrantRequestTrusted(r *http.Request, redirectURI string) bool {
 	if r == nil {
 		return false
 	}
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "same-site":
+	case "same-origin":
 		return true
+	case "same-site":
+		return firstPartySameSiteOriginMatchesRedirect(r, redirectURI)
 	default:
 		return false
 	}
+}
+
+func firstPartySameSiteOriginMatchesRedirect(r *http.Request, redirectURI string) bool {
+	redirectOrigin, ok := originFromRawURL(redirectURI)
+	if !ok {
+		return false
+	}
+	for _, raw := range []string{r.Header.Get("Origin"), r.Header.Get("Referer")} {
+		if raw == "" {
+			continue
+		}
+		if origin, ok := originFromRawURL(raw); ok && origin == redirectOrigin {
+			return true
+		}
+	}
+	return false
+}
+
+func originFromRawURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	return u.Scheme + "://" + u.Host, true
 }
 
 // applyFirstPartySkip persists (or extends) the grant the dispatcher

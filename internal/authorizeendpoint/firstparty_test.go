@@ -149,12 +149,12 @@ func TestAuthorize_FirstParty_SkipsConsentAndMintsCode(t *testing.T) {
 	testAuthorizeFirstPartySkipsConsentAndMintsCode(t, "same-origin")
 }
 
-// TestAuthorize_FirstParty_SameSiteSkipsConsentAndMintsCode covers the
-// common deployment shape where the OP and first-party RP live on sibling
-// hosts under the same registrable domain, e.g. id.example.jp and
-// ec.example.jp. Browsers classify that navigation as Sec-Fetch-Site:
-// same-site, not same-origin.
-func TestAuthorize_FirstParty_SameSiteSkipsConsentAndMintsCode(t *testing.T) {
+// TestAuthorize_FirstParty_SameSiteSkipsConsentWhenRedirectOriginMatches
+// covers the common deployment shape where the OP and first-party RP live on
+// sibling hosts under the same registrable domain, e.g. id.example.jp and
+// ec.example.jp. The same-site navigation is trusted only when the browser's
+// source origin matches the requested redirect_uri origin.
+func TestAuthorize_FirstParty_SameSiteSkipsConsentWhenRedirectOriginMatches(t *testing.T) {
 	t.Parallel()
 
 	testAuthorizeFirstPartySkipsConsentAndMintsCode(t, "same-site")
@@ -176,6 +176,9 @@ func testAuthorizeFirstPartySkipsConsentAndMintsCode(t *testing.T, secFetchSite 
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
 	r.Header.Set("Sec-Fetch-Site", secFetchSite)
+	if secFetchSite == "same-site" {
+		r.Header.Set("Referer", "https://rp.example.com/shop")
+	}
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
 	w := httptest.NewRecorder()
 	h.handler.ServeHTTP(w, r)
@@ -251,6 +254,41 @@ func testAuthorizeFirstPartySkipsConsentAndMintsCode(t *testing.T, secFetchSite 
 	}
 	if first.Extras["grant_id"] != rec.GrantID {
 		t.Errorf("audit grant_id=%v want %q", first.Extras["grant_id"], rec.GrantID)
+	}
+}
+
+func testAuthorizeFirstPartyFallsThroughToInteraction(t *testing.T, secFetchSite string) {
+	t.Helper()
+	h := newFirstPartyHarness(t)
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-fp",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", secFetchSite)
+	r.Header.Set("Sec-Fetch-Mode", "navigate")
+	r.Header.Set("Sec-Fetch-Dest", "document")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302", resp.StatusCode)
+	}
+	loc := mustParseLocation(t, resp)
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Fatalf("Location=%s want interaction redirect", loc.String())
+	}
+	for _, ev := range h.emitter.snapshot() {
+		if ev.Name == "consent.granted.first_party" {
+			t.Fatalf("first-party audit fired for %s request: %+v", secFetchSite, ev)
+		}
 	}
 }
 
@@ -400,6 +438,12 @@ func TestAuthorize_FirstParty_NotInSetGoesThroughInteraction(t *testing.T) {
 func TestAuthorize_FirstParty_CrossSiteFetchMetadataSuppressesSkip(t *testing.T) {
 	t.Parallel()
 
+	testAuthorizeFirstPartyFallsThroughToInteraction(t, "cross-site")
+}
+
+func TestAuthorize_FirstParty_SameSiteDifferentOriginSuppressesSkip(t *testing.T) {
+	t.Parallel()
+
 	h := newFirstPartyHarness(t)
 	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
 		Subject:  "user-fp",
@@ -410,9 +454,10 @@ func TestAuthorize_FirstParty_CrossSiteFetchMetadataSuppressesSkip(t *testing.T)
 	}
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
-	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	r.Header.Set("Sec-Fetch-Site", "same-site")
 	r.Header.Set("Sec-Fetch-Mode", "navigate")
 	r.Header.Set("Sec-Fetch-Dest", "document")
+	r.Header.Set("Referer", "https://marketing.example.com/promo")
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
 	w := httptest.NewRecorder()
 	h.handler.ServeHTTP(w, r)
@@ -424,11 +469,11 @@ func TestAuthorize_FirstParty_CrossSiteFetchMetadataSuppressesSkip(t *testing.T)
 	}
 	loc := mustParseLocation(t, resp)
 	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
-		t.Fatalf("Location=%s want interaction redirect (cross-site request must not auto-grant)", loc.String())
+		t.Fatalf("Location=%s want interaction redirect", loc.String())
 	}
 	for _, ev := range h.emitter.snapshot() {
 		if ev.Name == "consent.granted.first_party" {
-			t.Fatalf("first-party audit fired for cross-site request: %+v", ev)
+			t.Fatalf("first-party audit fired for same-site foreign origin: %+v", ev)
 		}
 	}
 }

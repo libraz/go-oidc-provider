@@ -410,22 +410,18 @@ func TestRequest_Validate_ResourceCanonicalisation(t *testing.T) {
 	}
 }
 
-// TestRequest_Validate_DuplicateResourceParameters confirms that the
-// authorize-side parser admits multiple "resource" entries on the wire
-// (RFC 8707 §2 explicitly allows the parameter to repeat). The
-// validator surface only sees the first value today; the duplicate-
-// parameter audit (S-14) keeps "resource" off the single-valued list
-// so this contract stays compatible with RFC 8707.
-func TestRequest_Validate_DuplicateResourceParameters(t *testing.T) {
+// TestRequest_Validate_DuplicateResourceParameters confirms the v1 single-
+// resource posture: because the request model persists one Resource string,
+// repeated wire entries are rejected instead of silently selecting one.
+func TestRequest_Validate_DuplicateResourceParametersRejected(t *testing.T) {
 	t.Parallel()
 
 	values := goodValues()
 	values["resource"] = []string{"https://api.example.com", "https://api.example.com"}
-	client := goodClient()
-	client.Resources = []string{"https://api.example.com"}
 
-	if _, err := authorize.ParseValues(values); err != nil {
-		t.Fatalf("ParseValues rejected duplicate resource entries: %v", err)
+	_, err := authorize.ParseValues(values)
+	if !errors.Is(err, authorize.ErrDuplicateParameter) {
+		t.Fatalf("err=%v want ErrDuplicateParameter", err)
 	}
 }
 
@@ -524,6 +520,8 @@ func TestRequest_Validate_LoopbackRedirectAllowsAnyPort(t *testing.T) {
 	t.Parallel()
 
 	client := goodClient()
+	client.PublicClient = true
+	client.ApplicationType = "native"
 	client.RedirectURIs = []string{
 		"http://127.0.0.1/cb",
 		"http://[::1]/cb",
@@ -560,6 +558,27 @@ func TestRequest_Validate_LoopbackRedirectAllowsAnyPort(t *testing.T) {
 				t.Fatalf("Validate(%q): %v", uri, err)
 			}
 		})
+	}
+}
+
+func TestRequest_Validate_LoopbackRedirectWildcardRequiresNativeOrPublicClient(t *testing.T) {
+	t.Parallel()
+
+	client := goodClient()
+	client.RedirectURIs = []string{"http://127.0.0.1/cb"}
+	values := goodValues()
+	values.Set("redirect_uri", "http://127.0.0.1:49152/cb")
+	req, err := authorize.ParseValues(values)
+	if err != nil {
+		t.Fatalf("ParseValues: %v", err)
+	}
+	err = req.Validate(client, nil, authorize.Policy{
+		PKCERequired:         true,
+		NonceRequired:        true,
+		StateOrNonceRequired: true,
+	})
+	if !errors.Is(err, authorize.ErrRedirectURIInvalid) {
+		t.Fatalf("Validate err=%v want ErrRedirectURIInvalid", err)
 	}
 }
 
@@ -774,22 +793,19 @@ func TestRequest_Validate_NoncePolicyConditional(t *testing.T) {
 	})
 }
 
-// TestParseValues_DuplicateParameter covers both branches of the duplicate
-// rule: identical repeats are accepted, conflicting repeats are rejected.
+// TestParseValues_DuplicateParameter covers both duplicate branches:
+// identical and conflicting repeats are rejected alike.
 func TestParseValues_DuplicateParameter(t *testing.T) {
 	t.Parallel()
 
-	t.Run("identical_accepted", func(t *testing.T) {
+	t.Run("identical_rejected", func(t *testing.T) {
 		t.Parallel()
 
 		v := goodValues()
 		v["state"] = []string{"state-abc", "state-abc"}
-		req, err := authorize.ParseValues(v)
-		if err != nil {
-			t.Fatalf("ParseValues: %v", err)
-		}
-		if err := req.Validate(goodClient(), nil, authorize.Policy{PKCERequired: true}); err != nil {
-			t.Fatalf("Validate: %v", err)
+		_, err := authorize.ParseValues(v)
+		if !errors.Is(err, authorize.ErrDuplicateParameter) {
+			t.Fatalf("err=%v want ErrDuplicateParameter", err)
 		}
 	})
 

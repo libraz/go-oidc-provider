@@ -139,11 +139,10 @@ var (
 	// invalid_request.
 	ErrNonceRequired = newErr("invalid_request", "nonce is required")
 
-	// ErrDuplicateParameter indicates a single-valued request parameter
-	// appeared more than once with conflicting values, or a multi-valued
-	// parameter appeared in more than one url.Values entry. Maps to
+	// ErrDuplicateParameter indicates a request parameter appeared more
+	// than once where the parser only accepts one occurrence. Maps to
 	// invalid_request.
-	ErrDuplicateParameter = newErr("invalid_request", "request parameter appeared more than once with different values")
+	ErrDuplicateParameter = newErr("invalid_request", "request parameter appeared more than once")
 
 	// ErrInvalidRequestURI indicates the request_uri value presented at
 	// /authorize is unknown, expired, already consumed, or otherwise
