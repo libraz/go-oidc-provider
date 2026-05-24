@@ -341,6 +341,29 @@ type config struct {
 	// fail at construction time.
 	firstPartyClients []string
 
+	// protectedResources carries the RFC 9728 resource-server metadata
+	// documents registered through [WithProtectedResources], in
+	// invocation order. Each entry's Resource is validated at the
+	// option site; duplicate-resource detection runs in
+	// [config.validate]. The router mounts one well-known handler per
+	// entry.
+	protectedResources []ProtectedResource
+
+	// authorizationDetailTypes carries the RFC 9396 authorization_details
+	// types registered through [WithAuthorizationDetailTypes], in
+	// registration order. A non-empty slice implies [feature.RAR]. The
+	// registered validators are consulted when parsing
+	// authorization_details at /authorize, /par, and /token.
+	authorizationDetailTypes []AuthorizationDetailType
+
+	// grantManagement* carry the OAuth 2.0 Grant Management draft
+	// configuration from [WithGrantManagement]. grantManagementEnabled
+	// gates the feature; Actions is the advertised / accepted set;
+	// ActionRequired maps to grant_management_action_required.
+	grantManagementEnabled        bool
+	grantManagementActions        []GrantManagementAction
+	grantManagementActionRequired bool
+
 	// claimsParameterSupportedSet records whether
 	// [WithClaimsParameterSupported] was invoked. When false the
 	// library defaults to true (the parser is always wired). When

@@ -283,8 +283,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// grants (upsert keyed on id)
 		grantSave: d.rebind(
 			"INSERT INTO " + n.grants +
-				" (id, subject, client_id, scope, claims, auth_time, acr, amr, created_at, updated_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + d.upsertAlias() +
+				" (id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("id",
 					"subject="+d.excludedRef("subject")+
 						", client_id="+d.excludedRef("client_id")+
@@ -293,16 +293,17 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 						", auth_time="+d.excludedRef("auth_time")+
 						", acr="+d.excludedRef("acr")+
 						", amr="+d.excludedRef("amr")+
+						", authorization_details="+d.excludedRef("authorization_details")+
 						", updated_at="+d.excludedRef("updated_at"))),
 		grantFind: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, created_at, updated_at" +
+			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants + " WHERE id = ?"),
 		grantFindBySubjectClient: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, created_at, updated_at" +
+			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants +
 				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1"),
 		grantListBySubject: d.rebind(
-			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, created_at, updated_at" +
+			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants + " WHERE subject = ?"),
 		grantDelete: d.rebind(
 			"DELETE FROM " + n.grants + " WHERE id = ?"),

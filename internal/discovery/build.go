@@ -99,6 +99,19 @@ type Input struct {
 	// copied verbatim onto the wire.
 	ACRValuesSupported []string
 
+	// AuthorizationDetailsTypesSupported carries the RFC 9396 §10
+	// authorization_details "type" identifiers the OP accepts. Nil
+	// leaves the field omitted; a non-nil slice is copied verbatim.
+	AuthorizationDetailsTypesSupported []string
+
+	// GrantManagementEnabled gates the OAuth 2.0 Grant Management draft
+	// discovery fields. GrantManagementActions is the advertised action
+	// set; GrantManagementActionRequired maps to
+	// grant_management_action_required.
+	GrantManagementEnabled        bool
+	GrantManagementActions        []string
+	GrantManagementActionRequired bool
+
 	// EncryptionAlgsSupported lists the JWE alg values the OP
 	// advertises across the *_encryption_alg_values_supported
 	// fields when [Features.Encryption] is true. The op layer
@@ -173,6 +186,7 @@ type EndpointPaths struct {
 	Register            string
 	DeviceAuthorization string
 	Backchannel         string
+	GrantManagement     string
 }
 
 // Features carries the enable bits for optional protocol extensions.
@@ -373,6 +387,7 @@ func Build(in Input) Document {
 	doc.ClaimsParameterSupported = in.ClaimsParameterSupported
 	applyClaimsSupported(in, &doc)
 	applyACRValuesSupported(in, &doc)
+	applyAuthorizationDetailsTypesSupported(in, &doc)
 	applyEncryptionFeature(in, &doc)
 	applyCIBAFeature(in, &doc)
 	applyStaticMetadata(in, &doc)
@@ -504,6 +519,11 @@ func applyFeatureEndpoints(in Input, doc *Document) {
 	}
 	if in.Features.DeviceCodeGrant {
 		doc.DeviceAuthorizationEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.DeviceAuthorization)
+	}
+	if in.GrantManagementEnabled {
+		doc.GrantManagementEndpoint = join(in.Issuer, in.MountPrefix, in.Endpoints.GrantManagement)
+		doc.GrantManagementActionsSupported = slices.Clone(in.GrantManagementActions)
+		doc.GrantManagementActionRequired = in.GrantManagementActionRequired
 	}
 }
 
@@ -677,6 +697,17 @@ func applyACRValuesSupported(in Input, doc *Document) {
 		return
 	}
 	doc.ACRValuesSupported = slices.Clone(in.ACRValuesSupported)
+}
+
+// applyAuthorizationDetailsTypesSupported publishes the RFC 9396 §10
+// authorization_details_types_supported array when the embedder
+// registered any types via op.WithAuthorizationDetailTypes. A non-nil
+// slice is cloned; nil / empty stays omitted.
+func applyAuthorizationDetailsTypesSupported(in Input, doc *Document) {
+	if len(in.AuthorizationDetailsTypesSupported) == 0 {
+		return
+	}
+	doc.AuthorizationDetailsTypesSupported = slices.Clone(in.AuthorizationDetailsTypesSupported)
 }
 
 // applyStaticMetadata copies the static RFC 8414 §2 metadata the

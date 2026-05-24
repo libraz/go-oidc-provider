@@ -3,7 +3,9 @@ package tokens_test
 import (
 	"crypto/ecdsa"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -122,6 +124,76 @@ func TestVerify_RoundTripMultipleAudiences(t *testing.T) {
 		t.Errorf("aud=%v want both audiences preserved in order", got.Audience)
 	}
 }
+
+// TestVerify_RoundTripAuthorizationDetails pins the RFC 9068 §2.2.3
+// authorization_details claim through the verify path: the verifier decodes
+// the array back onto AccessTokenClaims, and because decodeAccessTokenClaims
+// uses json.Decoder+UseNumber a bare-integer amount that exceeds the
+// float64 integer-exact range (2^53) survives as a json.Number carrying the
+// exact decimal string rather than being widened to a lossy float64.
+//
+// The token is minted with go-jose directly from a pre-marshaled JSON
+// payload so the "amount" reaches the wire as a bare JSON number (a JWT a
+// peer OP / token endpoint could legitimately have signed); go-jose's
+// typed Claims() helper would otherwise stringify a json.Number, which
+// would not exercise the float64-widening hazard.
+func TestVerify_RoundTripAuthorizationDetails(t *testing.T) {
+	t.Parallel()
+
+	set, entry := mustKeySet(t, "kid-1")
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const bigAmount = "100000000000000001" // > 2^53, not float64-exact.
+
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: josev4.JSONWebKey{
+			Key:   entry.Signer,
+			KeyID: entry.KeyID,
+			Use:   "sig",
+		}},
+		(&josev4.SignerOptions{}).WithType("at+jwt"),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	payload := []byte(`{` +
+		`"iss":"https://op.example.com","sub":"user-1","aud":"https://api.example.com",` +
+		`"client_id":"client-1","jti":"at-rar-verify",` +
+		`"iat":` + itoa(now.Unix()) + `,"exp":` + itoa(now.Add(time.Hour).Unix()) + `,` +
+		`"authorization_details":[{"type":"payment_initiation","amount":` + bigAmount + `}]}`)
+	// Sign at the JWS level (not the typed jwt builder) so the raw JSON
+	// payload reaches the wire verbatim with a bare-number amount.
+	sig, err := signer.Sign(payload)
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	jws, err := sig.CompactSerialize()
+	if err != nil {
+		t.Fatalf("CompactSerialize: %v", err)
+	}
+
+	v := &tokens.AccessTokenVerifier{Keys: set, Issuer: "https://op.example.com", Clock: fakeClock{now: now}}
+	got, _, err := v.Verify(jws)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(got.AuthorizationDetails) != 1 {
+		t.Fatalf("authorization_details length=%d want 1", len(got.AuthorizationDetails))
+	}
+	if got.AuthorizationDetails[0]["type"] != "payment_initiation" {
+		t.Errorf("type=%v want payment_initiation", got.AuthorizationDetails[0]["type"])
+	}
+	amount, ok := got.AuthorizationDetails[0]["amount"].(json.Number)
+	if !ok {
+		t.Fatalf("amount type=%T want json.Number (UseNumber preserves precision)", got.AuthorizationDetails[0]["amount"])
+	}
+	if amount.String() != bigAmount {
+		t.Errorf("amount=%q want %q", amount.String(), bigAmount)
+	}
+}
+
+// itoa is a tiny strconv.FormatInt wrapper kept local so the raw-JSON
+// payload above reads as a single string concatenation.
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
 func TestVerify_ExpiredReturnsExpiredSentinel(t *testing.T) {
 	t.Parallel()

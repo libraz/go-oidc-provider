@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -52,7 +53,7 @@ type firstPartyHarness struct {
 // newFirstPartyHarness builds an authorize handler whose Deps mark
 // "client-1" as first party AND wire a recording audit emitter so test
 // rows can assert on the emitted events.
-func newFirstPartyHarness(t *testing.T) *firstPartyHarness {
+func newFirstPartyHarness(t *testing.T, customise ...func(*authorizeendpoint.Deps)) *firstPartyHarness {
 	t.Helper()
 	clock := &fakeClock{now: fixedNow()}
 	st := inmem.New(inmem.WithClock(clock))
@@ -119,6 +120,11 @@ func newFirstPartyHarness(t *testing.T) *firstPartyHarness {
 		Clock:             clock,
 		FirstPartyClients: map[string]struct{}{"client-1": {}},
 		Audit:             emitter,
+	}
+	for _, c := range customise {
+		if c != nil {
+			c(&deps)
+		}
 	}
 
 	return &firstPartyHarness{
@@ -331,6 +337,113 @@ func TestAuthorize_FirstParty_PromptConsentSuppressesSkip(t *testing.T) {
 		if ev.Name == "consent.granted.first_party" {
 			t.Fatalf("first-party audit fired despite prompt=consent override: %+v", ev)
 		}
+	}
+}
+
+// TestAuthorize_FirstParty_AuthorizationDetailsSuppressesSkip pins that a
+// first-party, same-origin request carrying RFC 9396 authorization_details
+// does NOT silently auto-grant: rich, consent-bearing authorizations always
+// get an explicit consent ceremony. Without the len(req.AuthorizationDetails)
+// guard in firstPartyShouldSkipConsent the dispatcher would mint a code and
+// grant the payment authorization without the user ever seeing it.
+func TestAuthorize_FirstParty_AuthorizationDetailsSuppressesSkip(t *testing.T) {
+	t.Parallel()
+
+	h := newFirstPartyHarness(t, func(d *authorizeendpoint.Deps) {
+		d.AuthorizationDetailTypes = map[string]authorizationdetails.Validator{
+			"payment_initiation": func(context.Context, map[string]any, *store.Client) error { return nil },
+		}
+	})
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-fp",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	v := goodAuthorizeValues()
+	v.Set("authorization_details", `[{"type":"payment_initiation","amount":"100"}]`)
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302", resp.StatusCode)
+	}
+	loc := mustParseLocation(t, resp)
+	if loc.Query().Get("code") != "" {
+		t.Fatalf("Location=%s; RAR request must not silent-mint a code", loc.String())
+	}
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Fatalf("Location=%s want interaction redirect (RAR suppresses first-party skip)", loc.String())
+	}
+	for _, ev := range h.emitter.snapshot() {
+		if ev.Name == "consent.granted.first_party" {
+			t.Fatalf("first-party auto-grant fired for a RAR request: %+v", ev)
+		}
+	}
+}
+
+// TestAuthorize_NewAuthorizationDetailsForcesConsent pins that a returning
+// user whose existing grant already covers the requested scope, but who now
+// presents a NEW authorization_details element, is NOT silent-minted: the
+// dispatcher routes to an interaction so consent can capture the new rich
+// authorization. This exercises the authorizationDetailsCovered gate inside
+// buildHintState at the full-dispatch level (a non-first-party client, so
+// the first-party skip path is not involved).
+func TestAuthorize_NewAuthorizationDetailsForcesConsent(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, func(d *authorizeendpoint.Deps) {
+		d.AuthorizationDetailTypes = map[string]authorizationdetails.Validator{
+			"payment_initiation": func(context.Context, map[string]any, *store.Client) error { return nil },
+		}
+	})
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-rar",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	// Seed a grant that already covers the requested scope but carries no
+	// authorization_details, so only the new RAR element should force a prompt.
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "g-existing",
+		Subject:   "user-rar",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile"},
+		CreatedAt: h.clock.now.Add(-time.Hour),
+		UpdatedAt: h.clock.now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+
+	v := goodAuthorizeValues()
+	v.Set("authorization_details", `[{"type":"payment_initiation","amount":"100"}]`)
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302", resp.StatusCode)
+	}
+	loc := mustParseLocation(t, resp)
+	if loc.Query().Get("code") != "" {
+		t.Fatalf("Location=%s; a new authorization_details element must not silent-mint", loc.String())
+	}
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Fatalf("Location=%s want interaction redirect (new RAR is not covered by the grant)", loc.String())
 	}
 }
 

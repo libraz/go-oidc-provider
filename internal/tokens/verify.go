@@ -269,19 +269,20 @@ func (v *AccessTokenVerifier) now() time.Time {
 // space-delimited string form (RFC 6749 §3.3) which we split back into
 // the public slice shape.
 type accessTokenWire struct {
-	Issuer       string            `json:"iss"`
-	Subject      string            `json:"sub"`
-	Audience     json.RawMessage   `json:"aud"`
-	ClientID     string            `json:"client_id"`
-	IssuedAt     int64             `json:"iat"`
-	ExpiresAt    int64             `json:"exp"`
-	JTI          string            `json:"jti"`
-	Scope        string            `json:"scope"`
-	AuthTime     int64             `json:"auth_time"`
-	ACR          string            `json:"acr"`
-	AMR          []string          `json:"amr"`
-	Confirmation map[string]string `json:"cnf"`
-	Gid          string            `json:"gid,omitempty"`
+	Issuer               string            `json:"iss"`
+	Subject              string            `json:"sub"`
+	Audience             json.RawMessage   `json:"aud"`
+	ClientID             string            `json:"client_id"`
+	IssuedAt             int64             `json:"iat"`
+	ExpiresAt            int64             `json:"exp"`
+	JTI                  string            `json:"jti"`
+	Scope                string            `json:"scope"`
+	AuthTime             int64             `json:"auth_time"`
+	ACR                  string            `json:"acr"`
+	AMR                  []string          `json:"amr"`
+	Confirmation         map[string]string `json:"cnf"`
+	Gid                  string            `json:"gid,omitempty"`
+	AuthorizationDetails []map[string]any  `json:"authorization_details,omitempty"`
 }
 
 // decodeAccessTokenClaims parses payload into an [AccessTokenClaims].
@@ -292,7 +293,11 @@ type accessTokenWire struct {
 // package projects onto [AccessTokenClaims].
 func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 	var w accessTokenWire
-	if err := json.NewDecoder(bytes.NewReader(payload)).Decode(&w); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	// UseNumber preserves integer fidelity for the authorization_details
+	// claim (the only any-typed target); the other claims are typed.
+	dec.UseNumber()
+	if err := dec.Decode(&w); err != nil {
 		return nil, fmt.Errorf("decode payload: %w", err)
 	}
 
@@ -302,19 +307,20 @@ func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 	}
 
 	out := &AccessTokenClaims{
-		Issuer:       w.Issuer,
-		Subject:      w.Subject,
-		Audience:     aud,
-		ClientID:     w.ClientID,
-		IssuedAt:     w.IssuedAt,
-		ExpiresAt:    w.ExpiresAt,
-		JTI:          w.JTI,
-		Scope:        splitScope(w.Scope),
-		AuthTime:     w.AuthTime,
-		ACR:          w.ACR,
-		AMR:          w.AMR,
-		Confirmation: w.Confirmation,
-		GrantID:      w.Gid,
+		Issuer:               w.Issuer,
+		Subject:              w.Subject,
+		Audience:             aud,
+		ClientID:             w.ClientID,
+		IssuedAt:             w.IssuedAt,
+		ExpiresAt:            w.ExpiresAt,
+		JTI:                  w.JTI,
+		Scope:                splitScope(w.Scope),
+		AuthTime:             w.AuthTime,
+		ACR:                  w.ACR,
+		AMR:                  w.AMR,
+		Confirmation:         w.Confirmation,
+		GrantID:              w.Gid,
+		AuthorizationDetails: w.AuthorizationDetails,
 	}
 	return out, nil
 }

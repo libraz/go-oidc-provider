@@ -1,0 +1,63 @@
+# yaml-language-server: $schema=./schema.json
+feature: protected_resource_metadata
+prefix: PRM
+title: OAuth 2.0 Protected Resource Metadata (RFC 9728)
+specs:
+  - RFC 9728 §2 (resource metadata parameters)
+  - RFC 9728 §3 (obtaining metadata, well-known URI)
+  - RFC 9728 §3.1 (path-suffix construction for multiple resources)
+  - RFC 9728 §3.3 (authorization_servers)
+
+description: |
+  The OP hosts a read-only /.well-known/oauth-protected-resource document
+  for each resource server an embedder registers. The OP advertises
+  itself in authorization_servers and does not validate the resource's
+  bearer tokens. Documents are served openly (public CORS), like the
+  discovery document.
+
+rows:
+  - id: PRM-001
+    severity: P1
+    spec: RFC 9728 §3
+    behaviour: |
+      A registered resource server's metadata is served as a JSON
+      document at /.well-known/oauth-protected-resource whose `resource`
+      member equals the registered resource identifier and which carries
+      the resource's advertised scopes and bearer methods.
+    status: active
+
+  - id: PRM-002
+    severity: P1
+    spec: RFC 9728 §3.1
+    behaviour: |
+      When two resource servers are registered, each document is served
+      at the well-known path carrying the resource identifier's path
+      component, so the two metadata documents are retrieved
+      independently and each carries its own `resource` value.
+    status: active
+
+  - id: PRM-003
+    severity: P0
+    spec: RFC 9728 §3.3
+    behaviour: |
+      Every served document's `authorization_servers` member is a
+      single-element array naming the OP's own issuer identifier.
+    status: active
+
+  - id: PRM-004
+    severity: P2
+    spec: RFC 9728 §3
+    behaviour: |
+      The well-known document is fetchable cross-origin: a GET carrying
+      an Origin header receives Access-Control-Allow-Origin "*",
+      matching the open metadata posture of discovery and JWKS.
+    status: active
+
+  - id: PRM-005
+    severity: P1
+    spec: RFC 9728 §3.3
+    behaviour: |
+      A resource identifier that is not a valid resource indicator (a
+      relative URI, or one carrying a fragment) is rejected when the OP
+      is constructed, rather than serving a malformed document.
+    status: active

@@ -120,6 +120,34 @@ type Request struct {
 	// and userinfo endpoints can honour the requested claim
 	// projection without re-parsing the wire form.
 	Claims *ClaimsRequest
+
+	// AuthorizationDetailsRaw is the verbatim RFC 9396
+	// "authorization_details" parameter as it appeared on the wire
+	// (a JSON array string), or empty when absent. The parser performs
+	// no structural validation; the authorize endpoint decodes and
+	// validates it against the registered types (which the parser has
+	// no access to) and populates [Request.AuthorizationDetails]. The
+	// raw form is never persisted in the snapshot.
+	AuthorizationDetailsRaw string
+
+	// AuthorizationDetails is the decoded, validated RFC 9396
+	// authorization_details (a JSON array of objects, each with an
+	// accepted "type"). The authorize endpoint sets it after running the
+	// type validators; the grant emission path round-trips it through
+	// [RequestSnapshot] so the token endpoint and introspection can echo
+	// the granted details. Nil when the request carried none.
+	AuthorizationDetails []map[string]any
+
+	// GrantManagementAction is the OAuth 2.0 Grant Management draft
+	// "grant_management_action" parameter (create / replace / merge at
+	// the authorization endpoint), or empty when absent. The parser does
+	// not validate it against the configured action set; the endpoint
+	// does.
+	GrantManagementAction string
+
+	// GrantID is the Grant Management "grant_id" parameter the request
+	// targets (required for replace / merge). Empty when absent.
+	GrantID string
 }
 
 // Policy carries the runtime policy bits the [Request.Validate]

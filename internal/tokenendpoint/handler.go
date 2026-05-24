@@ -216,6 +216,11 @@ type Deps struct {
 	// `refresh_token` grant requirement.
 	StrictOfflineAccess bool
 
+	// GrantManagementEnabled makes the token response carry the issued
+	// grant_id (the Grant Management draft). Off by default so the
+	// non-GM response shape is unchanged.
+	GrantManagementEnabled bool
+
 	// SecretVerifier verifies confidential-client secrets. A nil value
 	// installs the library default ([clientauth.Argon2id]) so deployments
 	// that follow the reference posture need not wire one explicitly.
@@ -526,12 +531,14 @@ func ttlBucketFor(deps Deps, scope []string) string {
 // every successful grant. Optional fields (refresh_token, id_token) are
 // omitempty so the wire form matches the spec's "MUST/MAY" guidance.
 type successResponse struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	IDToken      string `json:"id_token,omitempty"`
-	Scope        string `json:"scope"`
+	AccessToken          string           `json:"access_token"`
+	TokenType            string           `json:"token_type"`
+	ExpiresIn            int64            `json:"expires_in"`
+	RefreshToken         string           `json:"refresh_token,omitempty"`
+	IDToken              string           `json:"id_token,omitempty"`
+	Scope                string           `json:"scope"`
+	AuthorizationDetails []map[string]any `json:"authorization_details,omitempty"`
+	GrantID              string           `json:"grant_id,omitempty"`
 }
 
 // writeSuccess marshals body and writes it with the cache-control and

@@ -46,6 +46,7 @@ func (c *config) validate() error {
 		c.validateEncryptionKeyset,
 		c.validateStaticClients,
 		c.validateStoreCapabilities,
+		c.validateProtectedResources,
 	} {
 		if err := fn(); err != nil {
 			return err

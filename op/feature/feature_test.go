@@ -22,6 +22,9 @@ func TestFlag_String(t *testing.T) {
 		{"mtls", feature.MTLS, "mtls"},
 		{"introspect", feature.Introspect, "introspect"},
 		{"revoke", feature.Revoke, "revoke"},
+		{"dynamic_registration", feature.DynamicRegistration, "dynamic_registration"},
+		{"rar", feature.RAR, "rar"},
+		{"grant_management", feature.GrantManagement, "grant_management"},
 		{"zero", feature.Flag(0), ""},
 		{"unknown", feature.Flag(99), ""},
 	}
@@ -42,6 +45,7 @@ func TestFlag_IsValid(t *testing.T) {
 	all := []feature.Flag{
 		feature.PKCE, feature.PAR, feature.JAR, feature.JARM,
 		feature.DPoP, feature.MTLS, feature.Introspect, feature.Revoke,
+		feature.DynamicRegistration, feature.RAR, feature.GrantManagement,
 	}
 	for _, f := range all {
 		if !f.IsValid() {

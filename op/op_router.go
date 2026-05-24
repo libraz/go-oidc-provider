@@ -16,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/internal/endsession"
+	"github.com/libraz/go-oidc-provider/internal/grantmgmtendpoint"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
 	"github.com/libraz/go-oidc-provider/internal/introspectendpoint"
 	"github.com/libraz/go-oidc-provider/internal/jar"
@@ -23,6 +24,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
+	"github.com/libraz/go-oidc-provider/internal/protectedresource"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -79,6 +81,9 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		subjectProjector = buildSubjectProjector(cfg)
 	}
 	mux.Handle(cfg.endpoints.Discovery, publicCORS.Handler(discHandler))
+	if err := mountProtectedResourceMetadata(mux, cfg, publicCORS); err != nil {
+		return nil, err
+	}
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.JWKS),
 		publicCORS.Handler(jwks.HandlerWithOptions(keySet, jwks.HandlerOptions{
@@ -130,6 +135,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			RefreshTokenOfflineTTL:         cfg.refreshTokenOfflineTTL,
 			RefreshTokenGraceTTL:           cfg.effectiveRefreshGrace(),
 			StrictOfflineAccess:            cfg.strictOfflineAccess,
+			GrantManagementEnabled:         cfg.grantManagementEnabled,
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
 			RequireSenderConstrainedTokens: cfg.requireSenderConstrainedTokens(),
 			AccessTokens:                   cfg.store.AccessTokens(),
@@ -156,6 +162,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	}
 	mountIntrospectionEndpoint(mux, cfg, scopes, keySet, encResolver, assertionVerifiers.Introspect, subjectProjector, strictCORS)
 	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifiers.Revoke, strictCORS)
+	mountGrantManagementEndpoint(mux, cfg, assertionVerifiers.Revoke, strictCORS)
 	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS)
 	bcc, err := buildBackchannelCoordinator(cfg, keySet)
 	if err != nil {
@@ -163,6 +170,66 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	}
 	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, strictCORS)
 	return mux, nil
+}
+
+// mountProtectedResourceMetadata registers one read-only RFC 9728
+// /.well-known/oauth-protected-resource handler per resource server
+// configured through [WithProtectedResources]. Without the option no
+// route is added. The well-known documents live at the OP root (not
+// behind [WithMountPrefix]) because RFC 9728 §3 fixes their location, so
+// the path is used verbatim rather than via [joinPath]. The OP issuer is
+// stamped into authorization_servers for every document.
+func mountProtectedResourceMetadata(mux *http.ServeMux, cfg *config, publicCORS *cors.Public) error {
+	for i := range cfg.protectedResources {
+		pr := cfg.protectedResources[i]
+		doc := protectedresource.Build(protectedresource.Input{
+			Resource:                          pr.Resource,
+			Issuer:                            cfg.issuer,
+			ScopesSupported:                   pr.ScopesSupported,
+			BearerMethodsSupported:            pr.BearerMethodsSupported,
+			ResourceSigningAlgValuesSupported: pr.ResourceSigningAlgValuesSupported,
+			JWKSURI:                           pr.JWKSURI,
+			ResourceDocumentation:             pr.ResourceDocumentation,
+		})
+		handler, err := protectedresource.Handler(doc)
+		if err != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "protected-resource metadata failed to marshal for " + pr.Resource,
+				Cause:       err,
+			}
+		}
+		mux.Handle(protectedresource.WellKnownPath(pr.Resource), publicCORS.Handler(handler))
+	}
+	return nil
+}
+
+// mountGrantManagementEndpoint registers the OAuth 2.0 Grant Management
+// draft endpoint (GET / DELETE {endpoint}/{grant_id}) when the feature is
+// enabled via [WithGrantManagement]. Without the option no route is added;
+// discovery gates the advertisement on the same condition.
+func mountGrantManagementEndpoint(mux *http.ServeMux, cfg *config, assertionVerifier clientauth.AssertionVerifier, strictCORS *cors.Strict) {
+	if !cfg.grantManagementEnabled {
+		return
+	}
+	handler := strictCORS.Handler(grantmgmtendpoint.Handler(grantmgmtendpoint.Deps{
+		Clients:                  cfg.store.Clients(),
+		Grants:                   cfg.store.Grants(),
+		RefreshTokens:            cfg.store.RefreshTokens(),
+		OpaqueAccessTokens:       cfg.store.OpaqueAccessTokens(),
+		AccessTokens:             cfg.store.AccessTokens(),
+		GrantRevocations:         cfg.store.GrantRevocations(),
+		RevocationStrategy:       cfg.atRevocation,
+		AccessTokenTTL:           cfg.accessTokenTTL,
+		SecretVerifier:           nil, // handler installs the Argon2id default.
+		AssertionVerifier:        assertionVerifier,
+		AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),
+		QueryEnabled:             cfg.grantManagementActionEnabled(GrantActionQuery),
+		RevokeEnabled:            cfg.grantManagementActionEnabled(GrantActionRevoke),
+		Clock:                    cfg.clock,
+	}))
+	base := joinPath(cfg.mountPrefix, cfg.endpoints.GrantManagement)
+	mux.Handle(base+"/{grant_id}", handler)
 }
 
 // mountRegistrationEndpoint registers the /register and
@@ -246,23 +313,27 @@ func mountPAREndpoint(
 	mux.Handle(
 		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
 		strictCORS.Handler(parendpoint.Handler(parendpoint.Deps{
-			Issuer:                     cfg.issuer,
-			Clients:                    cfg.store.Clients(),
-			PARs:                       cfg.store.PushedAuthRequests(),
-			Scopes:                     scopes,
-			Clock:                      cfg.clock,
-			JAR:                        jarVerifier,
-			DPoP:                       dpopVerifier,
-			DPoPNonces:                 cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
-			AssertionVerifier:          assertionVerifier,
-			AllowedClientAuthMethods:   cfg.allowedClientAuthMethods(),
-			RequirePKCE:                cfg.requirePKCE(),
-			RequireNonce:               cfg.requireNonce(),
-			RequireStateOrNonce:        cfg.requireStateOrNonce(),
-			RequireSignedRequestObject: cfg.requireSignedRequestObject(),
-			OpenIDScopeOptional:        cfg.openIDScopeOptional,
-			ClaimsParameterEnabled:     cfg.claimsParameterSupported(),
-			Audit:                      cfg.effectiveAuditEmitter(),
+			Issuer:                        cfg.issuer,
+			Clients:                       cfg.store.Clients(),
+			PARs:                          cfg.store.PushedAuthRequests(),
+			Scopes:                        scopes,
+			AuthorizationDetailTypes:      authorizationDetailRegistry(cfg),
+			Clock:                         cfg.clock,
+			JAR:                           jarVerifier,
+			DPoP:                          dpopVerifier,
+			DPoPNonces:                    cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
+			AssertionVerifier:             assertionVerifier,
+			AllowedClientAuthMethods:      cfg.allowedClientAuthMethods(),
+			RequirePKCE:                   cfg.requirePKCE(),
+			RequireNonce:                  cfg.requireNonce(),
+			RequireStateOrNonce:           cfg.requireStateOrNonce(),
+			RequireSignedRequestObject:    cfg.requireSignedRequestObject(),
+			OpenIDScopeOptional:           cfg.openIDScopeOptional,
+			ClaimsParameterEnabled:        cfg.claimsParameterSupported(),
+			Audit:                         cfg.effectiveAuditEmitter(),
+			GrantManagementEnabled:        cfg.grantManagementEnabled,
+			GrantManagementActions:        grantManagementActionSet(cfg),
+			GrantManagementActionRequired: cfg.grantManagementActionRequired,
 		})),
 	)
 	return nil
@@ -289,6 +360,7 @@ func mountIntrospectionEndpoint(
 			Issuer:                     cfg.issuer,
 			Clients:                    cfg.store.Clients(),
 			RefreshTokens:              cfg.store.RefreshTokens(),
+			Grants:                     cfg.store.Grants(),
 			Keys:                       keySet,
 			Scopes:                     scopes,
 			Clock:                      cfg.clock,
@@ -389,41 +461,45 @@ func mountAuthorizeHandlers(
 	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
 	spaLoginMount, spaStaticDir := spaWiringFor(cfg)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
-		Clients:                 cfg.store.Clients(),
-		Codes:                   cfg.store.AuthorizationCodes(),
-		Grants:                  cfg.store.Grants(),
-		Interactions:            cfg.store.Interactions(),
-		PARs:                    authorizePARStore(cfg),
-		JARM:                    jarmSigner,
-		JAR:                     jarVerifier,
-		Sessions:                sessMgr,
-		CookieCodec:             cookieCodec,
-		CSRF:                    csrfSigner,
-		Origins:                 allow,
-		Driver:                  cfg.interactionD,
-		Authn:                   orchestrator,
-		Scopes:                  scopes,
-		AuthorizePath:           authorizePath,
-		InteractionPath:         interactionPath,
-		SPALoginMount:           spaLoginMount,
-		SPAStaticDir:            spaStaticDir,
-		Clock:                   cfg.clock,
-		RequireJARMResponseMode: cfg.requireJARMResponseMode(),
-		RequirePKCE:             cfg.requirePKCE(),
-		RequireNonce:            cfg.requireNonce(),
-		RequireStateOrNonce:     cfg.requireStateOrNonce(),
-		RequirePAR:              cfg.requirePAR(),
-		Issuer:                  cfg.issuer,
-		AllowPrivateNetworkJAR:  cfg.allowPrivateNetworkJAR,
-		OpenIDScopeOptional:     cfg.openIDScopeOptional,
-		ClaimsParameterEnabled:  cfg.claimsParameterSupported(),
-		ACRResolver:             newACRResolver(cfg),
-		LocaleResolver:          locales,
-		SubjectProjector:        buildSubjectProjector(cfg),
-		ProxyTrust:              proxyTrust,
-		ClientEncJWKs:           encResolver,
-		FirstPartyClients:       firstPartyClientSet(cfg),
-		Audit:                   cfg.effectiveAuditEmitter(),
+		Clients:                       cfg.store.Clients(),
+		Codes:                         cfg.store.AuthorizationCodes(),
+		Grants:                        cfg.store.Grants(),
+		AuthorizationDetailTypes:      authorizationDetailRegistry(cfg),
+		GrantManagementEnabled:        cfg.grantManagementEnabled,
+		GrantManagementActions:        grantManagementActionSet(cfg),
+		GrantManagementActionRequired: cfg.grantManagementActionRequired,
+		Interactions:                  cfg.store.Interactions(),
+		PARs:                          authorizePARStore(cfg),
+		JARM:                          jarmSigner,
+		JAR:                           jarVerifier,
+		Sessions:                      sessMgr,
+		CookieCodec:                   cookieCodec,
+		CSRF:                          csrfSigner,
+		Origins:                       allow,
+		Driver:                        cfg.interactionD,
+		Authn:                         orchestrator,
+		Scopes:                        scopes,
+		AuthorizePath:                 authorizePath,
+		InteractionPath:               interactionPath,
+		SPALoginMount:                 spaLoginMount,
+		SPAStaticDir:                  spaStaticDir,
+		Clock:                         cfg.clock,
+		RequireJARMResponseMode:       cfg.requireJARMResponseMode(),
+		RequirePKCE:                   cfg.requirePKCE(),
+		RequireNonce:                  cfg.requireNonce(),
+		RequireStateOrNonce:           cfg.requireStateOrNonce(),
+		RequirePAR:                    cfg.requirePAR(),
+		Issuer:                        cfg.issuer,
+		AllowPrivateNetworkJAR:        cfg.allowPrivateNetworkJAR,
+		OpenIDScopeOptional:           cfg.openIDScopeOptional,
+		ClaimsParameterEnabled:        cfg.claimsParameterSupported(),
+		ACRResolver:                   newACRResolver(cfg),
+		LocaleResolver:                locales,
+		SubjectProjector:              buildSubjectProjector(cfg),
+		ProxyTrust:                    proxyTrust,
+		ClientEncJWKs:                 encResolver,
+		FirstPartyClients:             firstPartyClientSet(cfg),
+		Audit:                         cfg.effectiveAuditEmitter(),
 	})
 	mux.Handle(authorizePath, handler)
 	if spaLoginMount == "" {

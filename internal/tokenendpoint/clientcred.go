@@ -237,7 +237,7 @@ func issueClientCredsResponse(
 	// subjects, and projecting client.ID would produce a value the
 	// resource server cannot correlate against any authenticated
 	// principal.
-	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, client.ID, "", scope, resource, now, 0, binding)
+	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, client.ID, "", scope, resource, now, 0, binding, nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return

@@ -413,6 +413,7 @@ func issueCIBAResponse(
 		now,
 		authTime,
 		binding,
+		nil,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")

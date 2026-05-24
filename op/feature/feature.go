@@ -54,6 +54,23 @@ const (
 	// implicitly by [op.WithDynamicRegistration]; callers do not pass
 	// this flag to [op.WithFeature] directly.
 	DynamicRegistration
+
+	// RAR enables RFC 9396 Rich Authorization Requests. The
+	// authorization_details parameter is accepted at /authorize, /par,
+	// and /token, validated against the embedder-registered type set,
+	// persisted on the grant, and echoed on the token response and
+	// introspection. Activated implicitly by
+	// [op.WithAuthorizationDetailTypes]; callers do not pass this flag
+	// to [op.WithFeature] directly.
+	RAR
+
+	// GrantManagement enables the OAuth 2.0 Grant Management draft: the
+	// grant_management_action / grant_id authorization parameters, the
+	// grant management endpoint (query / revoke), and the matching
+	// discovery metadata. Activated implicitly by
+	// [op.WithGrantManagement]; callers do not pass this flag to
+	// [op.WithFeature] directly.
+	GrantManagement
 )
 
 // String returns the canonical lower-case identifier used in discovery
@@ -78,6 +95,10 @@ func (f Flag) String() string {
 		return "revoke"
 	case DynamicRegistration:
 		return "dynamic_registration"
+	case RAR:
+		return "rar"
+	case GrantManagement:
+		return "grant_management"
 	case flagUnspecified:
 		return ""
 	default:
@@ -88,7 +109,7 @@ func (f Flag) String() string {
 // IsValid reports whether f is one of the recognised exported constants.
 func (f Flag) IsValid() bool {
 	switch f {
-	case PKCE, PAR, JAR, JARM, DPoP, MTLS, Introspect, Revoke, DynamicRegistration:
+	case PKCE, PAR, JAR, JARM, DPoP, MTLS, Introspect, Revoke, DynamicRegistration, RAR, GrantManagement:
 		return true
 	case flagUnspecified:
 		return false

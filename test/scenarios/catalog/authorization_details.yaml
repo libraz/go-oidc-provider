@@ -1,0 +1,88 @@
+# yaml-language-server: $schema=./schema.json
+feature: authorization_details
+prefix: RAR
+title: Rich Authorization Requests (RFC 9396)
+specs:
+  - RFC 9396 §2 (authorization_details, type)
+  - RFC 9396 §2.1 (request structure)
+  - RFC 9396 §5 (invalid_authorization_details)
+  - RFC 9396 §6 (token response authorization_details)
+  - RFC 9396 §9 (token introspection)
+  - RFC 9396 §10 (authorization_details_types_supported)
+
+description: |
+  The OP accepts the authorization_details parameter at /authorize, /par,
+  and (via the grant) reflects it on token issuance and introspection. The
+  library validates the RFC 9396 §2.1 structure and the embedder-registered
+  per-type shape, enforces conservative size limits, persists the granted
+  details on the grant, and echoes them on the token response, on refresh,
+  and on introspection. Discovery advertises the accepted types.
+
+rows:
+  - id: RAR-001
+    severity: P1
+    spec: RFC 9396 §2.1
+    behaviour: |
+      An authorization request carrying an authorization_details array
+      whose elements name registered types and pass their validators is
+      accepted; the granted details are bound to the resulting
+      authorization and survive to token issuance.
+    status: active
+
+  - id: RAR-002
+    severity: P0
+    spec: RFC 9396 §5
+    behaviour: |
+      An authorization request whose authorization_details names a type
+      the OP does not accept is rejected with the error code
+      invalid_authorization_details rather than issuing a code.
+    status: active
+
+  - id: RAR-003
+    severity: P1
+    spec: RFC 9396 §3
+    behaviour: |
+      authorization_details pushed through a Pushed Authorization Request
+      are validated at push time and reproduced when the request_uri is
+      later presented at the authorization endpoint.
+    status: active
+
+  - id: RAR-004
+    severity: P1
+    spec: RFC 9396 §3
+    behaviour: |
+      authorization_details carried inside a signed request object (JAR)
+      are merged onto the request and validated like inline parameters.
+    status: pending
+
+  - id: RAR-010
+    severity: P1
+    spec: RFC 9396 §6
+    behaviour: |
+      The token response for a grant issued with authorization_details
+      echoes the granted authorization_details array.
+    status: active
+
+  - id: RAR-011
+    severity: P1
+    spec: RFC 9396 §6
+    behaviour: |
+      A token issued by refreshing a grant that carried
+      authorization_details echoes the same authorization_details.
+    status: active
+
+  - id: RAR-020
+    severity: P1
+    spec: RFC 9396 §9
+    behaviour: |
+      Introspection of an active token descending from a grant with
+      authorization_details returns the granted authorization_details.
+    status: active
+
+  - id: RAR-030
+    severity: P2
+    spec: RFC 9396 §10
+    behaviour: |
+      Discovery advertises authorization_details_types_supported listing
+      the accepted type identifiers when any are registered.
+    status: active

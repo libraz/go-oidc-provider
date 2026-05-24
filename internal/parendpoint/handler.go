@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
@@ -87,6 +88,13 @@ type Deps struct {
 	// per-scope AllowedClients allowlist check; the client.Scopes
 	// intersection still runs.
 	Scopes *scoperegistry.Registry
+
+	// AuthorizationDetailTypes is the RFC 9396 registry (accepted "type"
+	// → validator). When non-empty the handler validates a pushed
+	// authorization_details parameter and stores the validated elements
+	// on the snapshot; the /authorize consumption path then reuses them
+	// without re-parsing. Nil / empty ignores the parameter.
+	AuthorizationDetailTypes map[string]authorizationdetails.Validator
 
 	// Clock supplies the current wall-clock reading. A nil Clock falls
 	// back to [internal/timex.SystemClock].
@@ -205,6 +213,18 @@ type Deps struct {
 	// the wire response — collapsed onto RFC 6749 §5.2
 	// "invalid_client" — deliberately hides.
 	Audit audit.Emitter
+
+	// GrantManagementEnabled / GrantManagementActions /
+	// GrantManagementActionRequired mirror the authorize endpoint so the
+	// Grant Management draft's grant_management_action / grant_id
+	// parameters are validated at push time too (RFC 9126: the AS
+	// validates request parameters when the request_uri is issued), not
+	// only when the request_uri is later consumed at /authorize. The
+	// action set is the wire-string-keyed projection of the configured
+	// authorize-time actions.
+	GrantManagementEnabled        bool
+	GrantManagementActions        map[string]bool
+	GrantManagementActionRequired bool
 }
 
 // auditEmitter returns the configured audit sink, or a [audit.Discard]

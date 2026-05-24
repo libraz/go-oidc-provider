@@ -84,6 +84,19 @@ type RequestSnapshot struct {
 	// claims without re-parsing the wire form.
 	Claims *ClaimsRequest `json:"claims,omitempty"`
 
+	// AuthorizationDetails mirrors [Request.AuthorizationDetails]. The
+	// snapshot persists the validated RFC 9396 authorization_details
+	// across the interaction redirect so the grant emission path can
+	// store them and the token endpoint can echo them.
+	AuthorizationDetails []map[string]any `json:"authorization_details,omitempty"`
+
+	// GrantManagementAction / GrantID mirror the Grant Management draft
+	// request parameters across the interaction redirect so the grant
+	// emission path can apply create / replace / merge to the right
+	// target after authentication completes.
+	GrantManagementAction string `json:"grant_management_action,omitempty"`
+	GrantID               string `json:"grant_id,omitempty"`
+
 	// CreatedUnix is the unix-seconds timestamp at which the snapshot was
 	// taken. The HTTP layer uses it for diagnostic logging; the field is
 	// not consumed by [RequestSnapshot.ToRequest].
@@ -107,25 +120,28 @@ func SnapshotFrom(req *Request, now time.Time) RequestSnapshot {
 		maxAge = &v
 	}
 	return RequestSnapshot{
-		ClientID:            req.ClientID,
-		ResponseType:        req.ResponseType,
-		RedirectURI:         req.RedirectURI,
-		State:               req.State,
-		Nonce:               req.Nonce,
-		CodeChallenge:       req.CodeChallenge,
-		CodeChallengeMethod: req.CodeChallengeMethod,
-		Scope:               slices.Clone(req.Scope),
-		Resource:            req.Resource,
-		Prompt:              slices.Clone(req.Prompt),
-		ACRValues:           slices.Clone(req.ACRValues),
-		UILocales:           slices.Clone(req.UILocales),
-		MaxAge:              maxAge,
-		LoginHint:           req.LoginHint,
-		ResponseMode:        req.ResponseMode,
-		DPoPJKT:             req.DPoPJKT,
-		PARRequestURI:       req.PARRequestURI,
-		Claims:              CloneClaimsRequest(req.Claims),
-		CreatedUnix:         now.UTC().Unix(),
+		ClientID:              req.ClientID,
+		ResponseType:          req.ResponseType,
+		RedirectURI:           req.RedirectURI,
+		State:                 req.State,
+		Nonce:                 req.Nonce,
+		CodeChallenge:         req.CodeChallenge,
+		CodeChallengeMethod:   req.CodeChallengeMethod,
+		Scope:                 slices.Clone(req.Scope),
+		Resource:              req.Resource,
+		Prompt:                slices.Clone(req.Prompt),
+		ACRValues:             slices.Clone(req.ACRValues),
+		UILocales:             slices.Clone(req.UILocales),
+		MaxAge:                maxAge,
+		LoginHint:             req.LoginHint,
+		ResponseMode:          req.ResponseMode,
+		DPoPJKT:               req.DPoPJKT,
+		PARRequestURI:         req.PARRequestURI,
+		Claims:                CloneClaimsRequest(req.Claims),
+		AuthorizationDetails:  cloneAuthorizationDetails(req.AuthorizationDetails),
+		GrantManagementAction: req.GrantManagementAction,
+		GrantID:               req.GrantID,
+		CreatedUnix:           now.UTC().Unix(),
 	}
 }
 
@@ -139,25 +155,49 @@ func (s RequestSnapshot) ToRequest() *Request {
 		maxAge = &v
 	}
 	return &Request{
-		ClientID:            s.ClientID,
-		ResponseType:        s.ResponseType,
-		RedirectURI:         s.RedirectURI,
-		State:               s.State,
-		Nonce:               s.Nonce,
-		CodeChallenge:       s.CodeChallenge,
-		CodeChallengeMethod: s.CodeChallengeMethod,
-		Scope:               slices.Clone(s.Scope),
-		Resource:            s.Resource,
-		Prompt:              slices.Clone(s.Prompt),
-		ACRValues:           slices.Clone(s.ACRValues),
-		UILocales:           slices.Clone(s.UILocales),
-		MaxAge:              maxAge,
-		LoginHint:           s.LoginHint,
-		ResponseMode:        s.ResponseMode,
-		DPoPJKT:             s.DPoPJKT,
-		PARRequestURI:       s.PARRequestURI,
-		Claims:              CloneClaimsRequest(s.Claims),
+		ClientID:              s.ClientID,
+		ResponseType:          s.ResponseType,
+		RedirectURI:           s.RedirectURI,
+		State:                 s.State,
+		Nonce:                 s.Nonce,
+		CodeChallenge:         s.CodeChallenge,
+		CodeChallengeMethod:   s.CodeChallengeMethod,
+		Scope:                 slices.Clone(s.Scope),
+		Resource:              s.Resource,
+		Prompt:                slices.Clone(s.Prompt),
+		ACRValues:             slices.Clone(s.ACRValues),
+		UILocales:             slices.Clone(s.UILocales),
+		MaxAge:                maxAge,
+		LoginHint:             s.LoginHint,
+		ResponseMode:          s.ResponseMode,
+		DPoPJKT:               s.DPoPJKT,
+		PARRequestURI:         s.PARRequestURI,
+		Claims:                CloneClaimsRequest(s.Claims),
+		AuthorizationDetails:  cloneAuthorizationDetails(s.AuthorizationDetails),
+		GrantManagementAction: s.GrantManagementAction,
+		GrantID:               s.GrantID,
 	}
+}
+
+// cloneAuthorizationDetails deep-copies the authorization_details slice so
+// the snapshot and the restored request do not alias the same maps. A nil
+// or empty slice round-trips as nil so the json:omitempty tag drops it.
+func cloneAuthorizationDetails(in []map[string]any) []map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(in))
+	for i, el := range in {
+		if el == nil {
+			continue
+		}
+		cp := make(map[string]any, len(el))
+		for k, v := range el {
+			cp[k] = v
+		}
+		out[i] = cp
+	}
+	return out
 }
 
 // RequestState is the on-disk shape persisted in [op/store.Interaction.RawState].

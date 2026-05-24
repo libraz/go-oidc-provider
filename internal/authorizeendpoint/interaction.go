@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -408,15 +409,22 @@ func terminateInteraction(
 	}
 	grantScope := chooseGrantScope(result.Scope, req.Scope)
 	grant, err := upsertGrant(r.Context(), deps, grantUpsert{
-		Subject:  result.Subject,
-		ClientID: rec.ClientID,
-		Scope:    grantScope,
-		AuthTime: result.AuthTime,
-		ACR:      acr,
-		AMR:      amr,
-		Claims:   req.Claims,
-		Now:      deps.now(),
+		Subject:              result.Subject,
+		ClientID:             rec.ClientID,
+		Scope:                grantScope,
+		AuthTime:             result.AuthTime,
+		ACR:                  acr,
+		AMR:                  amr,
+		Claims:               req.Claims,
+		AuthorizationDetails: req.AuthorizationDetails,
+		GMAction:             req.GrantManagementAction,
+		GMGrantID:            req.GrantID,
+		Now:                  deps.now(),
 	})
+	if errors.Is(err, errGrantNotOwned) {
+		emitAuthorizeError(w, r, deps, req, errInvalidGrant, "grant_id is not valid for this client")
+		return
+	}
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not record grant")
 		return
@@ -596,8 +604,27 @@ type grantUpsert struct {
 	// Claims map untouched.
 	Claims *authorize.ClaimsRequest
 
+	// AuthorizationDetails is the validated RFC 9396 authorization_details
+	// the request carried. upsertGrant persists it verbatim so the token
+	// endpoint and introspection can echo it. Nil leaves the grant's
+	// existing details untouched on the refresh path.
+	AuthorizationDetails []map[string]any
+
+	// GMAction is the Grant Management draft action ("create" / "replace"
+	// / "merge") or empty for the ordinary (non-GM) upsert. GMGrantID is
+	// the targeted grant for replace / merge.
+	GMAction  string
+	GMGrantID string
+
 	Now time.Time
 }
+
+// errGrantNotOwned signals a Grant Management replace / merge referenced a
+// grant_id that does not resolve to a grant owned by the authenticated
+// (subject, client). The caller maps it to the OAuth invalid_grant wire
+// error. Keeping it distinct from a store fault prevents a cross-subject
+// or cross-client grant from being mutated.
+var errGrantNotOwned = errors.New("authorizeendpoint: grant_id not owned by subject/client")
 
 // upsertGrant ensures a grant exists for (subject, clientID) covering
 // at least the supplied scope. The auth context (AuthTime, ACR, AMR) is
@@ -611,6 +638,20 @@ func upsertGrant(
 	deps resolved,
 	in grantUpsert,
 ) (*store.Grant, error) {
+	switch in.GMAction {
+	case gmActionReplace, gmActionMerge:
+		return mutateManagedGrant(ctx, deps, in)
+	case gmActionCreate:
+		return createGrant(ctx, deps, in)
+	default:
+		return reuseOrCreateGrant(ctx, deps, in)
+	}
+}
+
+// reuseOrCreateGrant is the ordinary (non-Grant-Management) path: it
+// refreshes the existing (subject, client) grant when it already covers
+// the requested scope, otherwise it mints a fresh one.
+func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Grant, error) {
 	now := in.Now.UTC()
 	encodedClaims := authorize.EncodeClaimsToGrant(in.Claims)
 	existing, err := deps.Grants.FindBySubjectClient(ctx, in.Subject, in.ClientID)
@@ -622,31 +663,142 @@ func upsertGrant(
 		if encodedClaims != nil {
 			existing.Claims = encodedClaims
 		}
+		if in.AuthorizationDetails != nil {
+			existing.AuthorizationDetails = cloneGrantAuthorizationDetails(in.AuthorizationDetails)
+		}
 		if err := deps.Grants.Save(ctx, existing); err != nil {
 			return nil, fmt.Errorf("authorizeendpoint: refresh grant: %w", err)
 		}
 		return existing, nil
 	}
+	return createGrant(ctx, deps, in)
+}
+
+// createGrant mints a brand-new grant. Grant Management's create action
+// uses it directly (a fresh grant_id every time, never reusing an
+// existing record), and the ordinary path falls back to it when no
+// reusable grant exists.
+func createGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Grant, error) {
+	now := in.Now.UTC()
 	grantID, err := newRandomB64(uidByteLength)
 	if err != nil {
 		return nil, err
 	}
 	g := &store.Grant{
-		ID:        grantID,
-		Subject:   in.Subject,
-		ClientID:  in.ClientID,
-		Scope:     append([]string(nil), in.Scope...),
-		AuthTime:  in.AuthTime,
-		ACR:       in.ACR,
-		AMR:       append([]string(nil), in.AMR...),
-		Claims:    encodedClaims,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                   grantID,
+		Subject:              in.Subject,
+		ClientID:             in.ClientID,
+		Scope:                append([]string(nil), in.Scope...),
+		AuthTime:             in.AuthTime,
+		ACR:                  in.ACR,
+		AMR:                  append([]string(nil), in.AMR...),
+		Claims:               authorize.EncodeClaimsToGrant(in.Claims),
+		AuthorizationDetails: cloneGrantAuthorizationDetails(in.AuthorizationDetails),
+		CreatedAt:            now,
+		UpdatedAt:            now,
 	}
 	if err := deps.Grants.Save(ctx, g); err != nil {
 		return nil, fmt.Errorf("authorizeendpoint: persist grant: %w", err)
 	}
 	return g, nil
+}
+
+// mutateManagedGrant applies a Grant Management replace / merge to the
+// targeted grant_id. It enforces the ownership invariant — the grant MUST
+// resolve to one owned by the authenticated (subject, client) — before any
+// mutation, returning [errGrantNotOwned] otherwise so a hostile request
+// cannot read or rewrite another principal's grant.
+func mutateManagedGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Grant, error) {
+	g, err := deps.Grants.Find(ctx, in.GMGrantID)
+	if err != nil || g == nil {
+		return nil, errGrantNotOwned
+	}
+	if g.ClientID != in.ClientID || g.Subject != in.Subject {
+		return nil, errGrantNotOwned
+	}
+	switch in.GMAction {
+	case gmActionReplace:
+		g.Scope = append([]string(nil), in.Scope...)
+		g.AuthorizationDetails = cloneGrantAuthorizationDetails(in.AuthorizationDetails)
+	case gmActionMerge:
+		g.Scope = unionScopes(g.Scope, in.Scope)
+		g.AuthorizationDetails = appendAuthorizationDetails(g.AuthorizationDetails, in.AuthorizationDetails)
+	}
+	g.AuthTime = in.AuthTime
+	g.ACR = in.ACR
+	g.AMR = append(g.AMR[:0:0], in.AMR...)
+	if encodedClaims := authorize.EncodeClaimsToGrant(in.Claims); encodedClaims != nil {
+		g.Claims = encodedClaims
+	}
+	g.UpdatedAt = in.Now.UTC()
+	if err := deps.Grants.Save(ctx, g); err != nil {
+		return nil, fmt.Errorf("authorizeendpoint: replace/merge grant: %w", err)
+	}
+	return g, nil
+}
+
+// unionScopes returns base with every entry of add that is not already
+// present, preserving order (base first, then new entries).
+func unionScopes(base, add []string) []string {
+	seen := make(map[string]struct{}, len(base))
+	out := append([]string(nil), base...)
+	for _, s := range base {
+		seen[s] = struct{}{}
+	}
+	for _, s := range add {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// appendAuthorizationDetails merges the existing and new
+// authorization_details for a Grant Management merge. Elements are
+// deep-cloned so the persisted grant does not alias the request's maps, and
+// an added element that is deep-equal to one already present is skipped so a
+// repeated merge of the same authorization_details does not accumulate
+// unbounded duplicates on the grant.
+func appendAuthorizationDetails(base, add []map[string]any) []map[string]any {
+	out := cloneGrantAuthorizationDetails(base)
+	for _, el := range cloneGrantAuthorizationDetails(add) {
+		dup := false
+		for _, have := range out {
+			if reflect.DeepEqual(have, el) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, el)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// cloneGrantAuthorizationDetails deep-copies the authorization_details
+// slice so the persisted grant does not alias the request's maps. A nil or
+// empty slice yields nil.
+func cloneGrantAuthorizationDetails(in []map[string]any) []map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(in))
+	for i, el := range in {
+		if el == nil {
+			continue
+		}
+		cp := make(map[string]any, len(el))
+		for k, v := range el {
+			cp[k] = v
+		}
+		out[i] = cp
+	}
+	return out
 }
 
 // setCSRFCookie writes the __Host-oidc_csrf cookie carrying token.

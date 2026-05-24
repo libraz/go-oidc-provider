@@ -31,6 +31,14 @@ const (
 	errInvalidScope             = "invalid_scope"
 	errInvalidRequestObject     = "invalid_request_object"
 	errInvalidRequestURI        = "invalid_request_uri"
+	// errInvalidAuthorizationDetails is RFC 9396 §5's wire code for an
+	// authorization_details parameter the OP cannot honour (unknown type,
+	// malformed structure, validator rejection).
+	errInvalidAuthorizationDetails = "invalid_authorization_details"
+	// errInvalidGrant is the OAuth wire code the Grant Management draft
+	// returns when a grant_management_action references a grant_id the
+	// authenticated client does not own.
+	errInvalidGrant = "invalid_grant"
 )
 
 // errorResponse mirrors the token endpoint's failure envelope so embedders

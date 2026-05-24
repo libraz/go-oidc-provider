@@ -802,17 +802,22 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 			Register:            cfg.endpoints.Register,
 			DeviceAuthorization: cfg.endpoints.DeviceAuthorization,
 			Backchannel:         cfg.endpoints.Backchannel,
+			GrantManagement:     cfg.endpoints.GrantManagement,
 		},
-		Features:                  buildDiscoveryFeatures(cfg),
-		GrantsSupported:           grantStrings,
-		ScopesSupported:           scopes.PublicNames(),
-		ProfileAllowedAuthMethods: cfg.profileAllowedAuthMethodNames(),
-		ClaimsParameterSupported:  cfg.claimsParameterSupported(),
-		ClaimsSupported:           cfg.claimsSupported,
-		ACRValuesSupported:        cfg.acrValuesSupportedCopy(),
-		PairwiseEnabled:           cfg.pairwiseEnabled(),
-		EncryptionAlgsSupported:   cfg.effectiveEncryptionAlgs(),
-		EncryptionEncsSupported:   cfg.effectiveEncryptionEncs(),
+		Features:                           buildDiscoveryFeatures(cfg),
+		GrantsSupported:                    grantStrings,
+		ScopesSupported:                    scopes.PublicNames(),
+		ProfileAllowedAuthMethods:          cfg.profileAllowedAuthMethodNames(),
+		ClaimsParameterSupported:           cfg.claimsParameterSupported(),
+		ClaimsSupported:                    cfg.claimsSupported,
+		ACRValuesSupported:                 cfg.acrValuesSupportedCopy(),
+		AuthorizationDetailsTypesSupported: cfg.authorizationDetailTypeNames(),
+		GrantManagementEnabled:             cfg.grantManagementEnabled,
+		GrantManagementActions:             cfg.grantManagementActionStrings(),
+		GrantManagementActionRequired:      cfg.grantManagementActionRequired,
+		PairwiseEnabled:                    cfg.pairwiseEnabled(),
+		EncryptionAlgsSupported:            cfg.effectiveEncryptionAlgs(),
+		EncryptionEncsSupported:            cfg.effectiveEncryptionEncs(),
 		Metadata: discovery.Metadata{
 			ServiceDocumentation: cfg.discoveryMetadata.ServiceDocumentation,
 			OPPolicyURI:          cfg.discoveryMetadata.OPPolicyURI,
@@ -957,6 +962,14 @@ func buildFeatures(flags []feature.Flag) discovery.Features {
 			// PKCE is always enabled in v1.0; the flag exists so the
 			// caller can advertise it explicitly in discovery, which
 			// is already the default. Nothing to do here.
+		case feature.RAR:
+			// RAR advertises through authorization_details_types_supported
+			// (set from the registered types), not a boolean discovery
+			// flag, so there is nothing to toggle on [discovery.Features].
+		case feature.GrantManagement:
+			// Grant Management advertises through the dedicated
+			// grant_management_* Input fields, not a boolean
+			// [discovery.Features] flag, so there is nothing to toggle.
 		}
 	}
 	return out

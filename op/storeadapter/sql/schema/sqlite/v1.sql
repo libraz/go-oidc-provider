@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS oidc_grants (
     auth_time INTEGER NOT NULL DEFAULT 0,
     acr TEXT NOT NULL DEFAULT '',
     amr TEXT NOT NULL DEFAULT '[]',
+    authorization_details TEXT NOT NULL DEFAULT 'null',
     updated_at INTEGER NOT NULL,
     created_at INTEGER NOT NULL
 );

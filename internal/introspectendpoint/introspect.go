@@ -39,6 +39,11 @@ type response struct {
 	AuthTime  int64             `json:"auth_time,omitempty"`
 	ACR       string            `json:"acr,omitempty"`
 	AMR       []string          `json:"amr,omitempty"`
+
+	// AuthorizationDetails echoes the RFC 9396 authorization_details the
+	// token's grant was issued with (RFC 9396 §9). Populated for tokens
+	// that descend from a grant carrying details; nil otherwise.
+	AuthorizationDetails []map[string]any `json:"authorization_details,omitempty"`
 }
 
 // inactive is the canonical "active": false response. RFC 7662 §2.2
@@ -196,6 +201,9 @@ func projectAccessTokenClaims(c *tokens.AccessTokenClaims) response {
 	if len(c.Confirmation) > 0 {
 		out.Cnf = cloneStringMap(c.Confirmation)
 	}
+	if len(c.AuthorizationDetails) > 0 {
+		out.AuthorizationDetails = c.AuthorizationDetails
+	}
 	return out
 }
 
@@ -251,7 +259,9 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 	if !ok {
 		return response{}, false
 	}
-	return projectRefreshToken(rec, publicSubject), true
+	out := projectRefreshToken(rec, publicSubject)
+	out.AuthorizationDetails = grantAuthorizationDetails(ctx, deps, rec.GrantID)
+	return out, true
 }
 
 // resolveOpaqueAccessToken looks token up in the opaque-access-token
@@ -289,7 +299,24 @@ func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClien
 	if !ok {
 		return response{}, false
 	}
-	return projectOpaqueAccessToken(rec, publicSubject), true
+	out := projectOpaqueAccessToken(rec, publicSubject)
+	out.AuthorizationDetails = grantAuthorizationDetails(ctx, deps, rec.GrantID)
+	return out, true
+}
+
+// grantAuthorizationDetails reads the RFC 9396 authorization_details the
+// grant was issued with, for the introspection echo (RFC 9396 §9). A nil
+// store, an empty grantID, or any lookup failure yields nil so the field
+// is simply omitted — introspection never fails on the details echo.
+func grantAuthorizationDetails(ctx context.Context, deps Deps, grantID string) []map[string]any {
+	if deps.Grants == nil || grantID == "" {
+		return nil
+	}
+	g, err := deps.Grants.Find(ctx, grantID)
+	if err != nil || g == nil {
+		return nil
+	}
+	return g.AuthorizationDetails
 }
 
 // projectIntrospectionSubject converts the OP-internal raw subject on

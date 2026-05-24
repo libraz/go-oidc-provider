@@ -24,6 +24,7 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 		g.ID, g.Subject, g.ClientID,
 		encodeStrings(g.Scope), encodeMap(g.Claims),
 		timeToInt64(g.AuthTime), g.ACR, encodeStrings(g.AMR),
+		encodeObjectArray(g.AuthorizationDetails),
 		timeToInt64(g.CreatedAt), timeToInt64(g.UpdatedAt))
 	if err != nil {
 		return wrapErr("grants.Save", err)
@@ -133,18 +134,19 @@ func (r rowProxy) Scan(dest ...any) error { return r.rows.Scan(dest...) }
 
 func (s *grantStore) scan(sc scanner) (*store.Grant, error) {
 	var (
-		g         store.Grant
-		scopeRaw  []byte
-		claimsRaw []byte
-		amrRaw    []byte
-		authTime  int64
-		created   int64
-		updated   int64
+		g          store.Grant
+		scopeRaw   []byte
+		claimsRaw  []byte
+		amrRaw     []byte
+		detailsRaw []byte
+		authTime   int64
+		created    int64
+		updated    int64
 	)
 	if err := sc.Scan(
 		&g.ID, &g.Subject, &g.ClientID,
 		&scopeRaw, &claimsRaw, &authTime,
-		&g.ACR, &amrRaw,
+		&g.ACR, &amrRaw, &detailsRaw,
 		&created, &updated,
 	); err != nil {
 		return nil, err
@@ -161,9 +163,14 @@ func (s *grantStore) scan(sc scanner) (*store.Grant, error) {
 	if err != nil {
 		return nil, err
 	}
+	details, err := decodeObjectArray(detailsRaw)
+	if err != nil {
+		return nil, err
+	}
 	g.Scope = scope
 	g.Claims = claims
 	g.AMR = amr
+	g.AuthorizationDetails = details
 	g.AuthTime = int64ToTime(authTime)
 	g.CreatedAt = int64ToTime(created)
 	g.UpdatedAt = int64ToTime(updated)

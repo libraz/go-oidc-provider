@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
+	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -93,6 +95,12 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 			"response_mode is not supported by this OP")
 		return
 	}
+	if !validateAuthorizationDetails(w, r, deps, req, client) {
+		return
+	}
+	if !validateGrantManagement(w, r, deps, req) {
+		return
+	}
 	if jarmModeMissing(deps, req) {
 		// The active profile (FAPI 2.0 Message Signing §5.5) requires
 		// every authorize response to be JARM-wrapped, but this request
@@ -106,6 +114,85 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 		return
 	}
 	dispatchAuthorize(w, r, deps, req, client)
+}
+
+// validateAuthorizationDetails honours the RFC 9396 authorization_details
+// parameter when the OP has registered any types (feature.RAR). It decodes
+// and validates the raw parameter against the registry, stamps the
+// validated elements onto req for the grant emission path, and rejects an
+// unacceptable request via the redirect channel. When no types are
+// registered the parameter is treated as an unknown extension and ignored.
+// The return value reports whether processing should continue.
+func validateAuthorizationDetails(w http.ResponseWriter, r *http.Request, deps resolved, req *authorize.Request, client *store.Client) bool {
+	if len(deps.AuthorizationDetailTypes) == 0 || req.AuthorizationDetailsRaw == "" {
+		return true
+	}
+	details, err := authorizationdetails.Check(r.Context(), req.AuthorizationDetailsRaw, client, deps.AuthorizationDetailTypes)
+	if err != nil {
+		// Decision §9②: an over-size payload is a malformed request
+		// (invalid_request); every other failure is RFC 9396 §5's
+		// invalid_authorization_details.
+		code := errInvalidAuthorizationDetails
+		if errors.Is(err, authorizationdetails.ErrTooLarge) {
+			code = errInvalidRequest
+		}
+		emitAuthorizeError(w, r, deps, req, code, "authorization_details is not acceptable")
+		return false
+	}
+	req.AuthorizationDetails = details
+	return true
+}
+
+// Grant Management draft action wire strings honoured at /authorize.
+// query / revoke are endpoint-only operations and are rejected here.
+const (
+	gmActionCreate  = "create"
+	gmActionReplace = "replace"
+	gmActionMerge   = "merge"
+)
+
+// validateGrantManagement enforces the Grant Management draft request
+// rules before dispatch. When the feature is disabled the parameters are
+// ignored (cleared off req) as unknown extensions. When enabled it checks
+// the action is one the OP accepts and is an authorize-time action, and
+// that grant_id presence matches the action (forbidden for create,
+// required for replace / merge). Ownership of grant_id is enforced later,
+// at grant emission, where the authenticated subject is known. Returns
+// false when it wrote an error response.
+func validateGrantManagement(w http.ResponseWriter, r *http.Request, deps resolved, req *authorize.Request) bool {
+	if !deps.GrantManagementEnabled {
+		req.GrantManagementAction = ""
+		req.GrantID = ""
+		return true
+	}
+	action := req.GrantManagementAction
+	if action == "" {
+		if deps.GrantManagementActionRequired {
+			emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_management_action is required")
+			return false
+		}
+		return true
+	}
+	switch action {
+	case gmActionCreate, gmActionReplace, gmActionMerge:
+		// authorize-time action; continue.
+	default:
+		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_management_action is not valid at the authorization endpoint")
+		return false
+	}
+	if !deps.GrantManagementActions[action] {
+		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_management_action is not supported")
+		return false
+	}
+	if action == gmActionCreate && req.GrantID != "" {
+		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_id must not accompany grant_management_action=create")
+		return false
+	}
+	if (action == gmActionReplace || action == gmActionMerge) && req.GrantID == "" {
+		emitAuthorizeError(w, r, deps, req, errInvalidRequest, "grant_id is required for grant_management_action="+action)
+		return false
+	}
+	return true
 }
 
 func applyClientAuthorizeDefaults(req *authorize.Request, client *store.Client) {
@@ -344,6 +431,19 @@ func firstPartyShouldSkipConsent(
 	if oidcscope.ContainsOfflineAccess(req.Scope) {
 		return false
 	}
+	if req.GrantManagementAction != "" {
+		// A Grant Management mutation always gets an explicit consent
+		// ceremony; the first-party auto-grant never silently
+		// creates / replaces / merges a managed grant.
+		return false
+	}
+	if len(req.AuthorizationDetails) > 0 {
+		// RFC 9396 authorization_details are rich, consent-bearing
+		// authorizations (e.g. a payment_initiation amount/payee). The
+		// first-party auto-grant never silently grants them; the user
+		// always sees an explicit consent ceremony.
+		return false
+	}
 	switch hint.decision {
 	case decisionInteract:
 		return hint.prompt == interaction.PromptConsent
@@ -415,14 +515,15 @@ func applyFirstPartySkip(
 ) (authorizeHint, bool) {
 	ctx := r.Context()
 	g, err := upsertGrant(ctx, deps, grantUpsert{
-		Subject:  active.Session.Subject,
-		ClientID: client.ID,
-		Scope:    append([]string(nil), req.Scope...),
-		AuthTime: active.Session.AuthTime,
-		ACR:      active.Session.ACR,
-		AMR:      append([]string(nil), active.Session.AMR...),
-		Claims:   req.Claims,
-		Now:      deps.now(),
+		Subject:              active.Session.Subject,
+		ClientID:             client.ID,
+		Scope:                append([]string(nil), req.Scope...),
+		AuthTime:             active.Session.AuthTime,
+		ACR:                  active.Session.ACR,
+		AMR:                  append([]string(nil), active.Session.AMR...),
+		Claims:               req.Claims,
+		AuthorizationDetails: req.AuthorizationDetails,
+		Now:                  deps.now(),
 	})
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not record first-party grant")
@@ -496,12 +597,13 @@ func computeAuthorizeHint(
 // set is small enough to copy and the readability win is worth more than
 // the marginal allocation.
 type hintState struct {
-	hasSession  bool
-	forceLogin  bool
-	needConsent bool
-	promptNone  bool
-	selectAcct  bool
-	existing    *store.Grant
+	hasSession     bool
+	forceLogin     bool
+	acrUnsatisfied bool
+	needConsent    bool
+	promptNone     bool
+	selectAcct     bool
+	existing       *store.Grant
 }
 
 // buildHintState computes the orthogonal flag set used by the decision
@@ -527,6 +629,9 @@ func buildHintState(
 			out.forceLogin = true
 		}
 	}
+	if out.hasSession && len(req.ACRValues) > 0 {
+		out.acrUnsatisfied = !acrSatisfiedBySession(active.Session.ACR, req.ACRValues)
+	}
 	if out.hasSession {
 		if g, err := deps.Grants.FindBySubjectClient(ctx, active.Session.Subject, client.ID); err == nil {
 			out.existing = g
@@ -534,8 +639,69 @@ func buildHintState(
 	}
 	out.needConsent = containsString(req.Prompt, interaction.PromptConsent) ||
 		out.existing == nil ||
-		!scopeIsSubset(req.Scope, out.existing.Scope)
+		!scopeIsSubset(req.Scope, out.existing.Scope) ||
+		!authorizationDetailsCovered(req.AuthorizationDetails, out.existing)
+	// A Grant Management action mutates a specific grant (create a fresh
+	// one, or replace / merge the targeted grant_id). The mutation and
+	// its ownership check run in upsertGrant on the interaction path, so
+	// never silent-mint a GM request: force it through consent.
+	if req.GrantManagementAction != "" {
+		out.needConsent = true
+	}
 	return out
+}
+
+// authorizationDetailsCovered reports whether every requested RFC 9396
+// authorization_details element is already present on the grant. The
+// requested details are consent-bearing rich authorizations, so a request
+// that introduces a new element must run through consent (where the
+// interaction path persists it onto the grant) rather than silent-mint a
+// code against a grant whose details do not match — which would otherwise
+// either drop the requested detail or grant it without the user seeing it.
+func authorizationDetailsCovered(requested []map[string]any, grant *store.Grant) bool {
+	if len(requested) == 0 {
+		return true
+	}
+	if grant == nil {
+		return false
+	}
+	for _, want := range requested {
+		found := false
+		for _, have := range grant.AuthorizationDetails {
+			if reflect.DeepEqual(have, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// acrSatisfiedBySession reports whether the existing session's recorded
+// ACR is one of the acr_values the request asked for. RFC 9470 step-up:
+// when an RP requests one or more acr_values and the current session's
+// authentication context is not among them, the OP must re-authenticate
+// to reach a requested context rather than silently reuse the weaker
+// session.
+//
+// The predicate is exact string membership, deliberately not routed
+// through [op.ACRPolicy]: that seam resolves the id_token acr/amr at
+// issuance from the AAL a fresh ceremony reached, but an existing session
+// carries only its recorded ACR string (no AAL), and the lax default
+// policy treats any AAL >= 1 as satisfying any acr — which would make
+// step-up a no-op. Membership is the conservative reading: a session ACR
+// outside the requested set (an empty ACR included) is unsatisfied and
+// forces re-authentication. ACR hierarchies (a stronger session ACR
+// subsuming a weaker request) are intentionally not modelled; erring
+// toward an extra prompt is the safe direction.
+func acrSatisfiedBySession(sessionACR string, requested []string) bool {
+	if sessionACR == "" {
+		return false
+	}
+	return containsString(requested, sessionACR)
 }
 
 // decideHintPromptNone resolves the matrix when prompt=none is present.
@@ -548,6 +714,13 @@ func decideHintPromptNone(s hintState) authorizeHint {
 	switch {
 	case !s.hasSession, s.forceLogin:
 		return authorizeHint{decision: decisionLoginRequired}
+	case s.acrUnsatisfied:
+		// RFC 9470 step-up under prompt=none: the session exists but its
+		// authentication context is too weak for the requested acr_values,
+		// and prompt=none forbids an interaction. §9① resolves this to
+		// interaction_required (distinct from the login_required that a
+		// max_age expiry or absent session yields).
+		return authorizeHint{decision: decisionInteractionRequired}
 	case s.needConsent:
 		return authorizeHint{decision: decisionConsentRequired}
 	default:
@@ -569,7 +742,11 @@ func decideHintPromptNone(s hintState) authorizeHint {
 // scope.
 func decideHintInteractive(s hintState) authorizeHint {
 	switch {
-	case !s.hasSession, s.forceLogin:
+	case !s.hasSession, s.forceLogin, s.acrUnsatisfied:
+		// acrUnsatisfied joins the login branch: an RFC 9470 step-up runs
+		// the authn chain again to reach the requested acr_values (already
+		// carried on the interaction state), and terminateInteraction
+		// re-stamps the resolved acr / auth_time onto the session + grant.
 		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptLogin, grant: s.existing}
 	case s.selectAcct:
 		return authorizeHint{decision: decisionInteract, prompt: interaction.PromptSelectAccount, grant: s.existing}

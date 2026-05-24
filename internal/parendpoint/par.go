@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
@@ -100,7 +101,89 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 		writeAuthorizeError(w, err)
 		return
 	}
+	if !validateAuthorizationDetails(w, r, deps, req, client) {
+		return
+	}
+	if !validateGrantManagement(w, deps, req) {
+		return
+	}
 	persist(r.Context(), w, deps, req)
+}
+
+// validateGrantManagement enforces the Grant Management draft request rules
+// at push time, mirroring the authorize endpoint's check so a request_uri
+// is never issued for a request that /authorize would reject. When the
+// feature is disabled the parameters are cleared off req as unknown
+// extensions. Returns false when it wrote an error response.
+func validateGrantManagement(w http.ResponseWriter, deps Deps, req *authorize.Request) bool {
+	if !deps.GrantManagementEnabled {
+		req.GrantManagementAction = ""
+		req.GrantID = ""
+		return true
+	}
+	action := req.GrantManagementAction
+	if action == "" {
+		if deps.GrantManagementActionRequired {
+			writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_management_action is required")
+			return false
+		}
+		return true
+	}
+	switch action {
+	case gmActionCreate, gmActionReplace, gmActionMerge:
+		// authorize-time action; continue.
+	default:
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_management_action is not valid at the authorization endpoint")
+		return false
+	}
+	if !deps.GrantManagementActions[action] {
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_management_action is not supported")
+		return false
+	}
+	if action == gmActionCreate && req.GrantID != "" {
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_id must not accompany grant_management_action=create")
+		return false
+	}
+	if (action == gmActionReplace || action == gmActionMerge) && req.GrantID == "" {
+		writeError(w, http.StatusBadRequest, errInvalidRequest, "grant_id is required for grant_management_action="+action)
+		return false
+	}
+	return true
+}
+
+// gmAction* are the authorize-time Grant Management actions PAR validates.
+// They mirror the authorize endpoint's constants (duplicated rather than
+// shared because parendpoint does not import authorizeendpoint).
+const (
+	gmActionCreate  = "create"
+	gmActionReplace = "replace"
+	gmActionMerge   = "merge"
+)
+
+// validateAuthorizationDetails honours a pushed RFC 9396
+// authorization_details parameter when the OP has registered types. It
+// validates the raw value against the registry and stamps the decoded
+// elements onto req so [persist] snapshots them; the /authorize
+// consumption path then reuses the validated elements without re-parsing.
+// Returns false when it wrote an error response.
+func validateAuthorizationDetails(w http.ResponseWriter, r *http.Request, deps Deps, req *authorize.Request, client *store.Client) bool {
+	if len(deps.AuthorizationDetailTypes) == 0 || req.AuthorizationDetailsRaw == "" {
+		return true
+	}
+	details, err := authorizationdetails.Check(r.Context(), req.AuthorizationDetailsRaw, client, deps.AuthorizationDetailTypes)
+	if err != nil {
+		// Decision §9②: over-size is invalid_request; every other shape
+		// failure is RFC 9396 §5's invalid_authorization_details.
+		code := errInvalidAuthorizationDetails
+		status := http.StatusBadRequest
+		if errors.Is(err, authorizationdetails.ErrTooLarge) {
+			code = errInvalidRequest
+		}
+		writeError(w, status, code, "authorization_details is not acceptable")
+		return false
+	}
+	req.AuthorizationDetails = details
+	return true
 }
 
 // consumeJARRequestObject inspects the (post-strip) PAR form values for

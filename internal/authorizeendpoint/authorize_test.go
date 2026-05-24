@@ -86,7 +86,10 @@ func buildTestOrchestrator(t *testing.T) *authn.Orchestrator {
 }
 
 // newHarness builds a handler against fresh in-memory infrastructure.
-func newHarness(t *testing.T) *testHarness {
+// Optional customise hooks mutate the [authorizeendpoint.Deps] before the
+// handler is built so individual tests can enable opt-in surfaces (e.g. the
+// RFC 9396 authorization_details registry) without forking the harness.
+func newHarness(t *testing.T, customise ...func(*authorizeendpoint.Deps)) *testHarness {
 	t.Helper()
 	clock := &fakeClock{now: fixedNow()}
 	store := inmem.New(inmem.WithClock(clock))
@@ -140,6 +143,11 @@ func newHarness(t *testing.T) *testHarness {
 		AuthorizePath:   "/oidc/auth",
 		InteractionPath: "/oidc/interaction",
 		Clock:           clock,
+	}
+	for _, c := range customise {
+		if c != nil {
+			c(&deps)
+		}
 	}
 
 	return &testHarness{
@@ -431,6 +439,126 @@ func TestAuthorize_MaxAgeViolationForcesInteraction(t *testing.T) {
 	loc := mustParseLocation(t, resp)
 	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
 		t.Errorf("Location=%s want interaction redirect", loc.String())
+	}
+}
+
+func TestAuthorize_ACRUnsatisfiedForcesInteraction(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	// Session was authenticated at a weaker context than the RP now
+	// requests; RFC 9470 step-up must re-run the authn chain rather than
+	// silently mint against the weaker session.
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now,
+		ACR:      "urn:acr:low",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	v := goodAuthorizeValues()
+	v.Set("acr_values", "urn:acr:high")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	loc := mustParseLocation(t, resp)
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Errorf("Location=%s want interaction redirect", loc.String())
+	}
+}
+
+func TestAuthorize_ACRSatisfiedSession_MintsCode(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	// The session's recorded ACR is already one of the requested
+	// acr_values, so the dispatcher mints silently without a step-up.
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now,
+		ACR:      "urn:acr:high",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	v := goodAuthorizeValues()
+	v.Set("acr_values", "urn:acr:mid urn:acr:high")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	loc := mustParseLocation(t, resp)
+	if loc.Query().Get("code") == "" {
+		t.Fatalf("code missing from %s", loc.String())
+	}
+}
+
+func TestAuthorize_PromptNoneACRUnsatisfied_RedirectsInteractionRequired(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	// prompt=none forbids an interaction; a session too weak for the
+	// requested acr_values resolves to interaction_required (§9①),
+	// distinct from the login_required a max_age expiry would yield.
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now,
+		ACR:      "urn:acr:low",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	v := goodAuthorizeValues()
+	v.Set("prompt", "none")
+	v.Set("acr_values", "urn:acr:high")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	loc := mustParseLocation(t, resp)
+	if got := loc.Query().Get("error"); got != "interaction_required" {
+		t.Errorf("error=%q want interaction_required", got)
 	}
 }
 

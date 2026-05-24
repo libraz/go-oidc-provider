@@ -1,0 +1,71 @@
+# yaml-language-server: $schema=./schema.json
+feature: step_up
+prefix: SUP
+title: Step-up authentication challenge (RFC 9470)
+specs:
+  - RFC 9470 §3 (insufficient_user_authentication challenge)
+  - RFC 9470 §4 (acr_values / max_age re-authentication)
+  - OIDC Core 1.0 §3.1.2.1 (acr_values, max_age, prompt)
+
+description: |
+  Authorization-server side of step-up: when an existing session no
+  longer meets the freshness (`max_age`) or strength (`acr_values`) the
+  request demands, the OP re-authenticates rather than silently reusing
+  the session, and reflects the achieved acr / auth_time on the issued
+  tokens. The companion resource-server challenge string is built by the
+  public StepUpChallenge helper. The `auth_time` claim output itself is
+  covered by the auth_time (AT) catalog; SUP rows cover the
+  re-authentication forcing and acr reflection.
+
+rows:
+  - id: SUP-001
+    severity: P1
+    spec: RFC 9470 §4 / OIDC Core §3.1.2.1
+    behaviour: |
+      An authorization request that supplies `max_age=0` against an
+      established session always re-authenticates the user before issuing
+      a code, and the issued ID Token carries an `auth_time` reflecting
+      the fresh authentication rather than the prior session.
+    status: active
+    cross_refs:
+      - auth_time#AT-003
+
+  - id: SUP-002
+    severity: P1
+    spec: RFC 9470 §4 / OIDC Core §3.1.2.1
+    behaviour: |
+      When an established session's authentication is older than a
+      requested positive `max_age`, the authorization request forces
+      re-authentication instead of silently reusing the session.
+    status: active
+
+  - id: SUP-003
+    severity: P0
+    spec: RFC 9470 §3 / §4
+    behaviour: |
+      When the request's `acr_values` are not satisfied by the existing
+      session's authentication context, the OP re-authenticates; after a
+      successful step-up the issued ID Token's `acr` claim equals the
+      requested context.
+    status: active
+
+  - id: SUP-004
+    severity: P2
+    spec: RFC 9470 §3
+    behaviour: |
+      The resource-server challenge helper produces a
+      `WWW-Authenticate: Bearer` value that always carries
+      `error="insufficient_user_authentication"`, renders an optional
+      realm before the error, and appends the requested `acr_values`
+      (space-delimited) and `max_age` as quoted auth-params in canonical
+      order.
+    status: active
+
+  - id: SUP-005
+    severity: P1
+    spec: RFC 9470 §4 / OIDC Core §3.1.2.1
+    behaviour: |
+      When the existing session already satisfies the requested
+      `acr_values`, the authorization request is served without a new
+      interaction (silently) and the issued ID Token echoes that acr.
+    status: active

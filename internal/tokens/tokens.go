@@ -126,6 +126,13 @@ type AccessTokenClaims struct {
 	// emit unchanged wire bytes.
 	GrantID string `json:"-"`
 
+	// AuthorizationDetails is the RFC 9396 authorization_details claim
+	// (RFC 9068 §2.2.3): when the grant carries authorization_details, the
+	// JWT access token echoes them so a resource server can read the rich
+	// authorization directly off the token. Nil / empty omits the claim.
+	// Indirected through [mergeAccessTokenClaims] like Scope / GrantID.
+	AuthorizationDetails []map[string]any `json:"-"`
+
 	// Extra carries non-standard claims the caller wants stamped on
 	// the JWT alongside the standard set. The encoder flattens this
 	// map after the typed fields; collisions with standard claim
@@ -258,19 +265,20 @@ var idTokenStandardKeys = map[string]struct{}{
 //
 //nolint:gochecknoglobals // closed allow-list, intentional package state.
 var accessTokenStandardKeys = map[string]struct{}{
-	"iss":       {},
-	"sub":       {},
-	"aud":       {},
-	"client_id": {},
-	"iat":       {},
-	"exp":       {},
-	"jti":       {},
-	"scope":     {},
-	"auth_time": {},
-	"acr":       {},
-	"amr":       {},
-	"cnf":       {},
-	"gid":       {},
+	"iss":                   {},
+	"sub":                   {},
+	"aud":                   {},
+	"client_id":             {},
+	"iat":                   {},
+	"exp":                   {},
+	"jti":                   {},
+	"scope":                 {},
+	"auth_time":             {},
+	"acr":                   {},
+	"amr":                   {},
+	"cnf":                   {},
+	"gid":                   {},
+	"authorization_details": {},
 }
 
 // validateNoStandardCollisions returns an error when extra contains a
@@ -357,6 +365,9 @@ func mergeAccessTokenClaims(c AccessTokenClaims) map[string]any {
 	}
 	if c.GrantID != "" {
 		out["gid"] = c.GrantID
+	}
+	if len(c.AuthorizationDetails) > 0 {
+		out["authorization_details"] = c.AuthorizationDetails
 	}
 	for k, v := range c.Extra {
 		out[k] = v

@@ -1,0 +1,235 @@
+package grantmgmtendpoint_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/grantmgmtendpoint"
+	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
+)
+
+// fixedClock is the deterministic wall-clock the handler reads through
+// its Clock dependency. The 2026-04-26 anchor matches the sibling suites.
+type fixedClock struct{ now time.Time }
+
+func (c fixedClock) Now() time.Time { return c.now }
+
+const gmSecret = "grant-mgmt-secret" //nolint:gosec // G101: test fixture credential.
+
+// fixture bundles an inmem store, a confidential client, and an httptest
+// server mounting the handler at the {grant_id} pattern the endpoint
+// expects. Tests drive the server over the wire — no handler is invoked
+// directly.
+type fixture struct {
+	store    *inmem.Store
+	client   *store.Client
+	server   *httptest.Server
+	clock    fixedClock
+	endpoint string
+}
+
+// newFixture builds a fixture whose Deps are produced by deps so each test
+// can toggle QueryEnabled / RevokeEnabled or swap the grant store. The
+// supplied grants store backs the handler; pass nil to use the fixture's
+// own inmem grant store.
+func newFixture(tb testing.TB, configure func(*grantmgmtendpoint.Deps)) *fixture {
+	tb.Helper()
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	st := inmem.New(inmem.WithClock(clock))
+
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(gmSecret)
+	if err != nil {
+		tb.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := &store.Client{
+		ID:                      "client-gm",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid"},
+	}
+	if err := st.RegisterClient(context.Background(), client); err != nil {
+		tb.Fatalf("RegisterClient: %v", err)
+	}
+
+	deps := grantmgmtendpoint.Deps{
+		Clients:                  st.Clients(),
+		Grants:                   st.Grants(),
+		RefreshTokens:            st.RefreshTokens(),
+		AllowedClientAuthMethods: []clientauth.Method{clientauth.MethodSecretBasic},
+		Clock:                    clock,
+	}
+	if configure != nil {
+		configure(&deps)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/grant_management/{grant_id}", grantmgmtendpoint.Handler(deps))
+	server := httptest.NewServer(mux)
+	tb.Cleanup(server.Close)
+
+	return &fixture{
+		store:    st,
+		client:   client,
+		server:   server,
+		clock:    clock,
+		endpoint: server.URL + "/grant_management",
+	}
+}
+
+// seedGrant persists a grant owned by the fixture's confidential client so
+// the revoke / 500 tests have an owned target to operate on.
+func (f *fixture) seedGrant(tb testing.TB, id string) {
+	tb.Helper()
+	if err := f.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        id,
+		Subject:   "user-gm",
+		ClientID:  f.client.ID,
+		Scope:     []string{"openid"},
+		CreatedAt: f.clock.now,
+		UpdatedAt: f.clock.now,
+	}); err != nil {
+		tb.Fatalf("Grants.Save: %v", err)
+	}
+}
+
+// do issues a request with Basic auth as the fixture's confidential client.
+func (f *fixture) do(tb testing.TB, method, grantID string) *http.Response {
+	tb.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, f.endpoint+"/"+grantID, http.NoBody)
+	if err != nil {
+		tb.Fatalf("NewRequest: %v", err)
+	}
+	req.SetBasicAuth(f.client.ID, gmSecret)
+	resp, err := f.server.Client().Do(req)
+	if err != nil {
+		tb.Fatalf("Do: %v", err)
+	}
+	return resp
+}
+
+// decodeError parses an RFC 6749 §5.2 JSON error envelope.
+func decodeError(tb testing.TB, resp *http.Response) map[string]string {
+	tb.Helper()
+	var out map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		tb.Fatalf("decode error envelope: %v", err)
+	}
+	return out
+}
+
+// TestHandler_RevokeDisabled_Returns405 pins the action-set gate: with
+// RevokeEnabled:false a DELETE is rejected with 405 and the Allow header
+// omits DELETE so the endpoint never honours an action the OP did not
+// advertise in grant_management_actions_supported. The method-gating runs
+// before any grant lookup, so no owned grant is required.
+func TestHandler_RevokeDisabled_Returns405(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.QueryEnabled = true
+		d.RevokeEnabled = false
+	})
+	resp := f.do(t, http.MethodDelete, "any-grant")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d want 405", resp.StatusCode)
+	}
+	allow := resp.Header.Get("Allow")
+	if strings.Contains(allow, http.MethodDelete) {
+		t.Errorf("Allow=%q must not advertise DELETE when revoke is disabled", allow)
+	}
+	if !strings.Contains(allow, http.MethodGet) {
+		t.Errorf("Allow=%q should advertise GET (query enabled)", allow)
+	}
+}
+
+// TestHandler_QueryDisabled_Returns405 is the symmetric gate for the GET
+// (query) operation.
+func TestHandler_QueryDisabled_Returns405(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.QueryEnabled = false
+		d.RevokeEnabled = true
+	})
+	resp := f.do(t, http.MethodGet, "any-grant")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("status=%d want 405", resp.StatusCode)
+	}
+	if allow := resp.Header.Get("Allow"); strings.Contains(allow, http.MethodGet) {
+		t.Errorf("Allow=%q must not advertise GET when query is disabled", allow)
+	}
+}
+
+// TestHandler_RevokeEnabled_DeletesOwnedGrant pins the happy path: with
+// RevokeEnabled a DELETE on an owned grant succeeds (204) and the grant is
+// gone afterwards.
+func TestHandler_RevokeEnabled_DeletesOwnedGrant(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.RevokeEnabled = true
+	})
+	f.seedGrant(t, "grant-owned")
+
+	resp := f.do(t, http.MethodDelete, "grant-owned")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status=%d want 204", resp.StatusCode)
+	}
+	if _, err := f.store.Grants().Find(context.Background(), "grant-owned"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("grant still present after revoke: err=%v want ErrNotFound", err)
+	}
+}
+
+// deleteFailsGrantStore wraps a real GrantStore but forces Delete to fail,
+// so the test can exercise the serveRevoke server_error path without a mock
+// of the wider storage contract.
+type deleteFailsGrantStore struct {
+	store.GrantStore
+}
+
+func (s deleteFailsGrantStore) Delete(context.Context, string) error {
+	return errors.New("simulated backend delete failure")
+}
+
+// TestHandler_RevokeDeleteFailure_Returns500 pins that a failure to delete
+// the grant record surfaces as 500 server_error (not a false 204): the
+// grant is still live and queryable, so reporting success would be a lie.
+func TestHandler_RevokeDeleteFailure_Returns500(t *testing.T) {
+	t.Parallel()
+
+	var grants store.GrantStore
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.RevokeEnabled = true
+		grants = deleteFailsGrantStore{GrantStore: d.Grants}
+		d.Grants = grants
+	})
+	f.seedGrant(t, "grant-stuck")
+
+	resp := f.do(t, http.MethodDelete, "grant-stuck")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500", resp.StatusCode)
+	}
+	body := decodeError(t, resp)
+	if body["error"] != "server_error" {
+		t.Errorf("error=%v want server_error", body["error"])
+	}
+	// The grant must remain findable: the revoke did not complete.
+	if _, err := f.store.Grants().Find(context.Background(), "grant-stuck"); err != nil {
+		t.Errorf("grant should still be findable after a failed revoke: %v", err)
+	}
+}

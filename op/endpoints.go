@@ -73,6 +73,13 @@ type Endpoints struct {
 	// document advertises "backchannel_authentication_endpoint" with
 	// the same gating.
 	Backchannel string
+
+	// GrantManagement overrides the OAuth 2.0 Grant Management draft
+	// endpoint. Default: "/grant_management". Only mounted when the
+	// feature is enabled via [WithGrantManagement]; the discovery
+	// document advertises "grant_management_endpoint" with the same
+	// gating.
+	GrantManagement string
 }
 
 // defaultEndpoints returns the endpoint paths the [Provider] uses when the
@@ -94,54 +101,37 @@ func defaultEndpoints() Endpoints {
 		Register:            "/register",
 		DeviceAuthorization: "/device_authorization",
 		Backchannel:         "/bc-authorize",
+		GrantManagement:     "/grant_management",
 	}
 }
 
 // merge returns the endpoint set resulting from layering override on top of
 // e. Empty fields in override leave e's value untouched.
 func (e Endpoints) merge(override Endpoints) Endpoints {
-	out := e
-	if override.Discovery != "" {
-		out.Discovery = override.Discovery
+	return Endpoints{
+		Discovery:           pickEndpoint(override.Discovery, e.Discovery),
+		JWKS:                pickEndpoint(override.JWKS, e.JWKS),
+		Authorize:           pickEndpoint(override.Authorize, e.Authorize),
+		Token:               pickEndpoint(override.Token, e.Token),
+		UserInfo:            pickEndpoint(override.UserInfo, e.UserInfo),
+		EndSession:          pickEndpoint(override.EndSession, e.EndSession),
+		Introspect:          pickEndpoint(override.Introspect, e.Introspect),
+		Revoke:              pickEndpoint(override.Revoke, e.Revoke),
+		PAR:                 pickEndpoint(override.PAR, e.PAR),
+		Interaction:         pickEndpoint(override.Interaction, e.Interaction),
+		Session:             pickEndpoint(override.Session, e.Session),
+		Register:            pickEndpoint(override.Register, e.Register),
+		DeviceAuthorization: pickEndpoint(override.DeviceAuthorization, e.DeviceAuthorization),
+		Backchannel:         pickEndpoint(override.Backchannel, e.Backchannel),
+		GrantManagement:     pickEndpoint(override.GrantManagement, e.GrantManagement),
 	}
-	if override.JWKS != "" {
-		out.JWKS = override.JWKS
+}
+
+// pickEndpoint returns override when it is non-empty, else base. It keeps
+// [Endpoints.merge] a flat field map rather than a long if-ladder.
+func pickEndpoint(override, base string) string {
+	if override != "" {
+		return override
 	}
-	if override.Authorize != "" {
-		out.Authorize = override.Authorize
-	}
-	if override.Token != "" {
-		out.Token = override.Token
-	}
-	if override.UserInfo != "" {
-		out.UserInfo = override.UserInfo
-	}
-	if override.EndSession != "" {
-		out.EndSession = override.EndSession
-	}
-	if override.Introspect != "" {
-		out.Introspect = override.Introspect
-	}
-	if override.Revoke != "" {
-		out.Revoke = override.Revoke
-	}
-	if override.PAR != "" {
-		out.PAR = override.PAR
-	}
-	if override.Interaction != "" {
-		out.Interaction = override.Interaction
-	}
-	if override.Session != "" {
-		out.Session = override.Session
-	}
-	if override.Register != "" {
-		out.Register = override.Register
-	}
-	if override.DeviceAuthorization != "" {
-		out.DeviceAuthorization = override.DeviceAuthorization
-	}
-	if override.Backchannel != "" {
-		out.Backchannel = override.Backchannel
-	}
-	return out
+	return base
 }

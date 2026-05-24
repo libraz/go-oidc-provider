@@ -17,6 +17,9 @@ const (
 	errInvalidScope         = "invalid_scope"
 	errServerError          = "server_error"
 	errInvalidRequestObject = "invalid_request_object"
+	// errInvalidAuthorizationDetails is RFC 9396 §5's wire code for a
+	// pushed authorization_details the OP cannot honour.
+	errInvalidAuthorizationDetails = "invalid_authorization_details"
 )
 
 // writeError emits the RFC 6749 §5.2 envelope with the supplied status,

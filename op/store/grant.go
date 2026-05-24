@@ -59,6 +59,15 @@ type Grant struct {
 	// tokens; OIDC Core §12 requires the same set across refreshes.
 	AMR []string
 
+	// AuthorizationDetails captures the RFC 9396 authorization_details
+	// the user consented to, as the decoded JSON array of objects (each
+	// carrying a "type" the OP accepted). The library validates the
+	// structure and the per-type shape before persisting; backends store
+	// the slice verbatim. The token endpoint and introspection echo it,
+	// and a refresh reproduces it from the grant. Nil when the grant
+	// carried no authorization_details.
+	AuthorizationDetails []map[string]any
+
 	// CreatedAt is the wall-clock time at which the grant was first
 	// recorded. Supplied by the caller.
 	CreatedAt time.Time

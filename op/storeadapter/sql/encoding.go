@@ -1,6 +1,7 @@
 package oidcsql
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -62,6 +63,39 @@ func decodeMap(b []byte) (map[string]any, error) {
 		return nil, fmt.Errorf("oidcsql: unmarshal map[string]any: %w", err)
 	}
 	return m, nil
+}
+
+// encodeObjectArray serialises a []map[string]any column (the RFC 9396
+// authorization_details). A nil slice encodes as the JSON null literal so
+// the round-trip preserves "no authorization_details".
+func encodeObjectArray(a []map[string]any) []byte {
+	if a == nil {
+		return []byte("null")
+	}
+	b, err := json.Marshal(a)
+	if err != nil {
+		panic(fmt.Sprintf("oidcsql: marshal []map[string]any: %v", err)) //nolint:forbidigo // infallible: the elements decode from JSON, so they re-marshal.
+	}
+	return b
+}
+
+// decodeObjectArray deserialises a column written by encodeObjectArray.
+// The literal JSON null (or an empty column) decodes to a nil slice,
+// mirroring the inmem reference.
+func decodeObjectArray(b []byte) ([]map[string]any, error) {
+	if len(b) == 0 || string(b) == "null" {
+		return nil, nil
+	}
+	// UseNumber preserves integer fidelity so a round-trip through the
+	// column matches what authorizationdetails.Check decoded at the front
+	// door (e.g. a payment amount is not silently widened to float64).
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var a []map[string]any
+	if err := dec.Decode(&a); err != nil {
+		return nil, fmt.Errorf("oidcsql: unmarshal []map[string]any: %w", err)
+	}
+	return a, nil
 }
 
 // timeToInt64 converts a time.Time to the unix-nanosecond integer

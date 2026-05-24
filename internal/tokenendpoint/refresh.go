@@ -266,6 +266,7 @@ func issueRefreshResponse(
 		now,
 		authCtx.AuthTime,
 		binding,
+		authCtx.AuthorizationDetails,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -303,12 +304,14 @@ func issueRefreshResponse(
 		}
 	}
 	writeSuccess(w, successResponse{
-		AccessToken:  accessToken,
-		TokenType:    binding.tokenTypeFor(),
-		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
-		RefreshToken: rotated,
-		IDToken:      idToken,
-		Scope:        joinScope(exchanged.Scope),
+		AccessToken:          accessToken,
+		TokenType:            binding.tokenTypeFor(),
+		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
+		RefreshToken:         rotated,
+		IDToken:              idToken,
+		Scope:                joinScope(exchanged.Scope),
+		AuthorizationDetails: authCtx.AuthorizationDetails,
+		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
 }
 

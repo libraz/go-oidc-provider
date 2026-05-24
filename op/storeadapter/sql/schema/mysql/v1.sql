@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS oidc_grants (
     auth_time BIGINT NOT NULL DEFAULT 0,
     acr VARCHAR(64) NOT NULL DEFAULT '',
     amr JSON NOT NULL,
+    authorization_details JSON NOT NULL,
     updated_at BIGINT NOT NULL,
     created_at BIGINT NOT NULL,
     INDEX idx_oidc_grants_sub_client (subject, client_id, updated_at)

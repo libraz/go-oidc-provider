@@ -322,6 +322,57 @@ func TestSave_DefensiveCopy(t *testing.T) {
 	}
 }
 
+// TestGrant_DefensiveCopy_AuthorizationDetails pins that the grant store
+// deep-clones the RFC 9396 authorization_details slice (and its element
+// maps) so a caller that mutates a Find result cannot reach back into the
+// stored record. Without cloneObjectArray the returned slice aliases the
+// stored maps and the second Find observes the mutation.
+func TestGrant_DefensiveCopy_AuthorizationDetails(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+
+	g := &store.Grant{
+		ID:       "g-rar",
+		Subject:  "sub",
+		ClientID: "client",
+		Scope:    []string{"openid"},
+		AuthorizationDetails: []map[string]any{
+			{"type": "payment_initiation", "amount": "100"},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.Grants().Save(ctx, g); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := s.Grants().Find(ctx, "g-rar")
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	// Mutate both the slice (append a new element) and the inner map of
+	// the element the caller received.
+	got.AuthorizationDetails = append(got.AuthorizationDetails, map[string]any{"type": "injected"})
+	got.AuthorizationDetails[0]["amount"] = "999"
+	got.AuthorizationDetails[0]["injected"] = true
+
+	again, err := s.Grants().Find(ctx, "g-rar")
+	if err != nil {
+		t.Fatalf("Find again: %v", err)
+	}
+	if len(again.AuthorizationDetails) != 1 {
+		t.Fatalf("authorization_details length=%d want 1 (slice aliasing)", len(again.AuthorizationDetails))
+	}
+	if again.AuthorizationDetails[0]["amount"] != "100" {
+		t.Errorf("amount=%v want 100 (element map aliasing)", again.AuthorizationDetails[0]["amount"])
+	}
+	if _, leaked := again.AuthorizationDetails[0]["injected"]; leaked {
+		t.Error("element map mutation leaked into the stored grant")
+	}
+}
+
 func TestFind_DefensiveCopy(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference

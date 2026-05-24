@@ -323,6 +323,7 @@ func issueAuthCodeResponse(
 		now,
 		authCtx.AuthTime,
 		binding,
+		authCtx.AuthorizationDetails,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -369,13 +370,25 @@ func issueAuthCodeResponse(
 		return
 	}
 	writeSuccess(w, successResponse{
-		AccessToken:  accessToken,
-		TokenType:    binding.tokenTypeFor(),
-		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
-		RefreshToken: refreshToken,
-		IDToken:      idToken,
-		Scope:        joinScope(exchanged.Scope),
+		AccessToken:          accessToken,
+		TokenType:            binding.tokenTypeFor(),
+		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
+		RefreshToken:         refreshToken,
+		IDToken:              idToken,
+		Scope:                joinScope(exchanged.Scope),
+		AuthorizationDetails: authCtx.AuthorizationDetails,
+		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
+}
+
+// grantIDForResponse returns grantID for the token response only when the
+// Grant Management draft is enabled; otherwise it returns "" so the
+// grant_id member is omitted and the non-GM response shape is unchanged.
+func grantIDForResponse(deps Deps, grantID string) string {
+	if !deps.GrantManagementEnabled {
+		return ""
+	}
+	return grantID
 }
 
 // mintIDTokenInput collects the parameters [mintAuthCodeIDToken] needs.
@@ -448,6 +461,7 @@ func mintAccessToken(
 	now time.Time,
 	authTime int64,
 	binding tokenBinding,
+	authorizationDetails []map[string]any,
 ) (string, error) {
 	format := store.AccessTokenFormatJWT
 	if deps.AccessTokenFormatFor != nil {
@@ -455,11 +469,14 @@ func mintAccessToken(
 	}
 	switch format {
 	case store.AccessTokenFormatOpaque:
+		// The opaque path carries no claims; introspection / userinfo
+		// echo authorization_details by reading the grant via the shadow
+		// row's GrantID, so the details are not threaded onto the token.
 		return mintOpaqueAccessToken(ctx, deps, rawSubject, clientID, grantID, scope, resource, now, authTime, binding)
 	case store.AccessTokenFormatJWT:
 		fallthrough
 	default:
-		return mintJWTAccessToken(ctx, deps, rawSubject, publicSubject, clientID, grantID, scope, resource, now, authTime, binding)
+		return mintJWTAccessToken(ctx, deps, rawSubject, publicSubject, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails)
 	}
 }
 
@@ -500,6 +517,7 @@ func mintJWTAccessToken(
 	now time.Time,
 	authTime int64,
 	binding tokenBinding,
+	authorizationDetails []map[string]any,
 ) (string, error) {
 	jti, err := newJTI()
 	if err != nil {
@@ -511,17 +529,18 @@ func mintJWTAccessToken(
 		audience = resource
 	}
 	claims := tokens.AccessTokenClaims{
-		Issuer:       deps.Issuer,
-		Subject:      publicSubject,
-		Audience:     []string{audience},
-		ClientID:     clientID,
-		IssuedAt:     now.Unix(),
-		ExpiresAt:    expiresAt,
-		JTI:          jti,
-		Scope:        append([]string(nil), scope...),
-		AuthTime:     authTime,
-		Confirmation: binding.confirmation(),
-		GrantID:      grantID,
+		Issuer:               deps.Issuer,
+		Subject:              publicSubject,
+		Audience:             []string{audience},
+		ClientID:             clientID,
+		IssuedAt:             now.Unix(),
+		ExpiresAt:            expiresAt,
+		JTI:                  jti,
+		Scope:                append([]string(nil), scope...),
+		AuthTime:             authTime,
+		Confirmation:         binding.confirmation(),
+		GrantID:              grantID,
+		AuthorizationDetails: authorizationDetails,
 	}
 	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
 	if err != nil {
@@ -722,6 +741,12 @@ type authContext struct {
 	// The id_token issuer reads it (along with the user store) to
 	// project the requested id_token claims.
 	Claims *authorize.ClaimsRequest
+
+	// AuthorizationDetails is the RFC 9396 authorization_details the
+	// grant was issued with. The token endpoint echoes it on the
+	// response (RFC 9396 §6); a refresh reproduces it from the same
+	// grant. Nil when the grant carried none.
+	AuthorizationDetails []map[string]any
 }
 
 // lookupAuthContext resolves the auth_time / acr / amr claims from
@@ -750,6 +775,7 @@ func lookupAuthContext(ctx context.Context, deps Deps, grantID string) authConte
 		out.AMR = append([]string(nil), g.AMR...)
 	}
 	out.Claims = authorize.DecodeClaimsFromGrant(g.Claims)
+	out.AuthorizationDetails = g.AuthorizationDetails
 	return out
 }
 

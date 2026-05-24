@@ -97,6 +97,12 @@ type Deps struct {
 	// consult the refresh-token store.
 	RefreshTokens store.RefreshTokenStore
 
+	// Grants is the consent substore. The opaque-access-token and
+	// refresh-token branches read it by GrantID to echo the RFC 9396
+	// authorization_details the grant was issued with. A nil value
+	// simply omits authorization_details from the response.
+	Grants store.GrantStore
+
 	// Keys is the active OP keyset. Required so the JWT branch can
 	// verify access-token signatures; the active key plus all retiring
 	// keys MUST be present so tokens minted before a rotation continue

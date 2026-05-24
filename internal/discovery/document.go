@@ -79,6 +79,20 @@ type Document struct {
 	// DynamicRegistration feature is enabled.
 	RegistrationEndpoint string `json:"registration_endpoint,omitempty"`
 
+	// GrantManagementEndpoint is the absolute URL of the OAuth 2.0
+	// Grant Management draft endpoint. Only emitted when the feature is
+	// enabled via [op.WithGrantManagement].
+	GrantManagementEndpoint string `json:"grant_management_endpoint,omitempty"`
+
+	// GrantManagementActionsSupported lists the grant_management_action
+	// values the OP accepts. Only emitted when the feature is enabled.
+	GrantManagementActionsSupported []string `json:"grant_management_actions_supported,omitempty"`
+
+	// GrantManagementActionRequired advertises whether an authorization
+	// request MUST carry grant_management_action. Only emitted (as true)
+	// when the feature is enabled and the OP requires the action.
+	GrantManagementActionRequired bool `json:"grant_management_action_required,omitempty"`
+
 	// RegistrationEndpointAuthMethodsSupported lists the authentication
 	// methods accepted at the registration endpoint. v1.0 advertises
 	// "initial_access_token" only. Empty when the feature is disabled.
@@ -341,6 +355,12 @@ type Document struct {
 	// default. Embedders publish the closed list via
 	// op.WithACRValuesSupported(...).
 	ACRValuesSupported []string `json:"acr_values_supported,omitempty"`
+
+	// AuthorizationDetailsTypesSupported lists the RFC 9396 §10
+	// authorization_details "type" values the OP accepts. Populated
+	// only when [op.WithAuthorizationDetailTypes] registered any types
+	// (feature.RAR); empty otherwise so the field is omitted.
+	AuthorizationDetailsTypesSupported []string `json:"authorization_details_types_supported,omitempty"`
 
 	// ServiceDocumentation is the URL of a human-readable page that
 	// documents the OP for developers. RFC 8414 §2 lists the field as

@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=./schema.json
+feature: grant_management
+prefix: GM
+title: OAuth 2.0 Grant Management (draft)
+specs:
+  - OAuth 2.0 Grant Management draft §5 (grant_management_action / grant_id)
+  - OAuth 2.0 Grant Management draft §6 (replace / merge semantics)
+  - OAuth 2.0 Grant Management draft §7 (grant management endpoint)
+  - OAuth 2.0 Grant Management draft §3 (grant_management_action_required)
+
+description: |
+  The OP honours the grant_management_action / grant_id authorization
+  parameters (create / replace / merge), returns grant_id on the token
+  response, and exposes a confidential-client grant management endpoint for
+  query (GET) and revoke (DELETE). A grant_id is only ever usable by the
+  client that owns it. Tracks an IETF draft (ADR 0006); the surface is
+  experimental.
+
+rows:
+  - id: GM-001
+    severity: P1
+    spec: Grant Management draft §5
+    behaviour: |
+      An authorization request with grant_management_action=create issues
+      a fresh grant whose grant_id is returned on the token response.
+    status: active
+
+  - id: GM-002
+    severity: P0
+    spec: Grant Management draft §7
+    behaviour: |
+      A grant_id is scoped to the client that owns it: a different client
+      querying or revoking that grant_id is refused (reported as not
+      found) and the grant is left intact.
+    status: active
+
+  - id: GM-003
+    severity: P1
+    spec: Grant Management draft §6
+    behaviour: |
+      An authorization request with grant_management_action=replace and a
+      grant_id overwrites the referenced grant's scope; a later query
+      reflects only the replacing scope.
+    status: active
+
+  - id: GM-004
+    severity: P1
+    spec: Grant Management draft §6
+    behaviour: |
+      An authorization request with grant_management_action=merge and a
+      grant_id unions the new scope into the referenced grant; a later
+      query reflects the union.
+    status: active
+
+  - id: GM-005
+    severity: P1
+    spec: Grant Management draft §7
+    behaviour: |
+      GET on the grant management endpoint with a grant_id owned by the
+      authenticated client returns the grant's scope and any
+      authorization_details.
+    status: active
+
+  - id: GM-006
+    severity: P0
+    spec: Grant Management draft §7
+    behaviour: |
+      DELETE on the grant management endpoint revokes the grant: a
+      subsequent query reports it gone and tokens issued under the grant
+      (refresh tokens) no longer work.
+    status: active
+
+  - id: GM-007
+    severity: P1
+    spec: Grant Management draft §3
+    behaviour: |
+      When grant_management_action_required is configured, an
+      authorization request that omits grant_management_action is
+      rejected.
+    status: active

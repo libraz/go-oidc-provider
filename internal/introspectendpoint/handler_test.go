@@ -331,6 +331,47 @@ func TestHandler_JWTAccessToken_Active(t *testing.T) {
 	assertCacheControl(t, resp)
 }
 
+// TestHandler_JWTAccessToken_AuthorizationDetails echoes the RFC 9396
+// authorization_details claim onto the introspection response when the
+// presented JWT access token carries it (RFC 9396 §9).
+func TestHandler_JWTAccessToken_AuthorizationDetails(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-jwt-rar")
+	tok := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.ClientID = client.ID
+		c.Subject = "user-jwt-rar"
+		c.Scope = []string{"openid"}
+		c.Audience = []string{f.prov.Issuer}
+		c.AuthorizationDetails = []map[string]any{
+			{"type": "payment_initiation", "amount": "100"},
+		}
+	})
+	form := url.Values{"token": {tok}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, dump)
+	}
+	body := decodeJSON(t, resp)
+	if active, _ := body["active"].(bool); !active {
+		t.Fatalf("active=%v want true; body=%v", body["active"], body)
+	}
+	arr, ok := body["authorization_details"].([]any)
+	if !ok {
+		t.Fatalf("authorization_details not an array: %T", body["authorization_details"])
+	}
+	if len(arr) != 1 {
+		t.Fatalf("authorization_details length=%d want 1", len(arr))
+	}
+	el, _ := arr[0].(map[string]any)
+	if el["type"] != "payment_initiation" {
+		t.Errorf("authorization_details[0].type=%v want payment_initiation", el["type"])
+	}
+}
+
 // TestHandler_JWTAccessToken_Expired returns inactive when the
 // presented JWT is past its "exp" + leeway. The HTTP status remains
 // 200 — RFC 7662 §2.2 forbids leaking the failure cause through the

@@ -322,6 +322,73 @@ func TestSignAccessToken_GrantIDOmitemptyWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestSignAccessToken_AuthorizationDetailsClaim pins RFC 9068 §2.2.3: a
+// grant carrying RFC 9396 authorization_details echoes them on the JWT
+// access token as the "authorization_details" array claim so a resource
+// server can read the rich authorization off the token.
+func TestSignAccessToken_AuthorizationDetailsClaim(t *testing.T) {
+	t.Parallel()
+
+	key := newTestSigner(t)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jws, err := tokens.SignAccessToken(key, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-rar",
+		Scope:     []string{"openid"},
+		AuthorizationDetails: []map[string]any{
+			{"type": "payment_initiation", "amount": "100"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	payload := decodePayload(t, jws)
+	arr, ok := payload["authorization_details"].([]any)
+	if !ok {
+		t.Fatalf("authorization_details not an array: %T (RFC 9068 §2.2.3)", payload["authorization_details"])
+	}
+	if len(arr) != 1 {
+		t.Fatalf("authorization_details length=%d want 1", len(arr))
+	}
+	el, _ := arr[0].(map[string]any)
+	if el["type"] != "payment_initiation" {
+		t.Errorf("authorization_details[0].type=%v want payment_initiation", el["type"])
+	}
+}
+
+// TestSignAccessToken_AuthorizationDetailsOmittedWhenEmpty pins the
+// omitempty equivalent: a nil / empty AuthorizationDetails MUST NOT emit
+// the claim so non-RAR tokens stay byte-for-byte unchanged.
+func TestSignAccessToken_AuthorizationDetailsOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	key := newTestSigner(t)
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	jws, err := tokens.SignAccessToken(key, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example.com",
+		Subject:   "user-1",
+		Audience:  []string{"https://api.example.com"},
+		ClientID:  "client-1",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "at-no-rar",
+		Scope:     []string{"openid"},
+		// AuthorizationDetails intentionally left nil.
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+	payload := decodePayload(t, jws)
+	if v, ok := payload["authorization_details"]; ok {
+		t.Errorf("authorization_details present with nil input: %v", v)
+	}
+}
+
 func TestSignIDToken_NilSignerReturnsSentinel(t *testing.T) {
 	t.Parallel()
 	_, err := tokens.SignIDToken(tokens.SigningKey{KeyID: "k1"}, tokens.IDTokenClaims{})

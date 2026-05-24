@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS oidc_grants (
     auth_time BIGINT NOT NULL DEFAULT 0,
     acr TEXT NOT NULL DEFAULT '',
     amr JSONB NOT NULL DEFAULT '[]'::jsonb,
+    authorization_details JSONB NOT NULL DEFAULT 'null'::jsonb,
     updated_at BIGINT NOT NULL,
     created_at BIGINT NOT NULL
 );

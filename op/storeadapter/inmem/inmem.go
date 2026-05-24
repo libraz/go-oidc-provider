@@ -661,7 +661,24 @@ func cloneGrant(g *store.Grant) *store.Grant {
 	out.Scope = slices.Clone(g.Scope)
 	out.Claims = maps.Clone(g.Claims)
 	out.AMR = slices.Clone(g.AMR)
+	out.AuthorizationDetails = cloneObjectArray(g.AuthorizationDetails)
 	return &out
+}
+
+// cloneObjectArray deep-copies a []map[string]any (the RFC 9396
+// authorization_details) so a stored grant cannot be mutated through a
+// caller-held reference. The inner map values are not themselves cloned:
+// authorization_details elements decode from JSON into scalar / nested
+// values the store treats as immutable.
+func cloneObjectArray(in []map[string]any) []map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make([]map[string]any, len(in))
+	for i, m := range in {
+		out[i] = maps.Clone(m)
+	}
+	return out
 }
 
 // --- SessionStore ------------------------------------------------------------

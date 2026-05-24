@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
@@ -112,6 +113,27 @@ type Deps struct {
 	// to decide whether a re-consent prompt is required and writes a
 	// fresh grant when consent succeeds.
 	Grants store.GrantStore
+
+	// AuthorizationDetailTypes is the RFC 9396 registry: accepted
+	// "type" → validator. A non-empty map enables authorization_details
+	// validation at /authorize (feature.RAR). Nil / empty means the
+	// parameter is ignored as an unknown extension.
+	AuthorizationDetailTypes map[string]authorizationdetails.Validator
+
+	// GrantManagementEnabled gates the OAuth 2.0 Grant Management draft.
+	// When false the grant_management_action / grant_id parameters are
+	// ignored as unknown extensions.
+	GrantManagementEnabled bool
+
+	// GrantManagementActions is the accepted action set (the wire
+	// strings "create" / "replace" / "merge" matter at /authorize). A
+	// request naming an unsupported action is rejected.
+	GrantManagementActions map[string]bool
+
+	// GrantManagementActionRequired rejects an authorization request
+	// that omits grant_management_action when true (the draft's
+	// grant_management_action_required).
+	GrantManagementActionRequired bool
 
 	// Interactions is the substore for in-progress UI interactions. The
 	// handler writes a record on /authorize → /interaction redirects and
