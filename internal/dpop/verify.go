@@ -187,10 +187,21 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		emitter = audit.Discard()
 	}
 	return &Verifier{
-		clock:         clock,
-		jtis:          cfg.JTIs,
-		iatWindow:     window,
-		replayLeew:    window,
+		clock:     clock,
+		jtis:      cfg.JTIs,
+		iatWindow: window,
+		// replayLeew is anchored on the proof's iat, but the iat
+		// gate accepts the proof anywhere in [iat - iatWindow,
+		// iat + iatWindow]. Setting the JTI expiry to iat + 2*window
+		// guarantees the entry outlives the latest acceptable replay
+		// attempt no matter when the legitimate use first marked it
+		// (the worst case is mark at iat - iatWindow, replay at
+		// iat + iatWindow — a gap of 2*iatWindow). The previous
+		// iat + iatWindow value left a boundary where the entry
+		// expired exactly when the iat gate would still accept the
+		// proof, so a replay at now == iat + iatWindow passed both
+		// gates.
+		replayLeew:    2 * window,
 		nonces:        cfg.Nonces,
 		looseMethCase: cfg.AllowLooseMethodCase,
 		emitter:       emitter,

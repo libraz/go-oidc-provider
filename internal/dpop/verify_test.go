@@ -162,7 +162,11 @@ func TestVerify_JTIExpiryAnchoredToProofIAT(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	want := iat.Add(time.Minute)
+	// JTI must outlive the full iat acceptance window: a proof first
+	// marked at iat - IatWindow may legitimately face a replay attempt
+	// at iat + IatWindow, a 2*IatWindow gap. Anchoring expiry at iat +
+	// 2*IatWindow keeps the entry authoritative across the whole span.
+	want := iat.Add(2 * time.Minute)
 	if !jtis.expiresAt.Equal(want) {
 		t.Fatalf("jti expiresAt=%s want %s", jtis.expiresAt, want)
 	}
