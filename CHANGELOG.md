@@ -14,7 +14,12 @@ The main module and the storage-adapter sub-modules
 tag. Embedders pull each sub-module independently:
 
 ```
-# v0.9.1 (latest)
+# v0.9.2 (latest)
+go get github.com/libraz/go-oidc-provider@v0.9.2
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.2
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.2
+
+# v0.9.1
 go get github.com/libraz/go-oidc-provider@v0.9.1
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.1
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.1
@@ -24,6 +29,136 @@ go get github.com/libraz/go-oidc-provider@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
+
+## [v0.9.2] — 2026-05-24
+
+### Highlights
+
+- Refresh-token issuance for custom grants and RFC 8693 token-exchange
+  is now wired into the OP's own refresh-token lineage. A handler sets
+  `CustomGrantResponse.IssueRefreshToken` (or a `TokenExchangePolicy`
+  returns `IssueRefreshToken`); the OP — not the handler — mints and
+  persists the token through its `RefreshTokenStore`, sharing the access
+  token's grant identity so the credential rides the standard rotation,
+  single-use replay-cascade (RFC 9700 §2.2.2), and DPoP / mTLS
+  `cnf`-binding machinery.
+- Device-authorization revocation now cascades inside the library:
+  `devicecodekit.Revoke` revokes every access token issued from the
+  revoked `device_code` (its ID is the `GrantID` stamped on each token)
+  via `AccessTokenRegistry.RevokeByGrant` when the new
+  `devicecodekit.Deps.AccessTokens` registry is wired.
+- A broad security-hardening sweep across DPoP, JAR / JARM, JOSE, mTLS,
+  refresh rotation, client authentication, i18n input, metrics
+  cardinality, and the authorize / userinfo / introspection / end-session
+  endpoints (see Fixed).
+- Default-driver browser login is unblocked: the interaction HTML pages
+  no longer emit the two headers (`Referrer-Policy: no-referrer`,
+  CSP `form-action 'self'`) that made a real browser's credential POST
+  and post-consent redirect fail.
+
+### Added
+
+- `op.CustomGrantResponse.IssueRefreshToken bool` asks the OP to mint
+  and persist a refresh token bound to the issued access token's grant
+  identity. The OP owns the credential (RFC 6749 §6); issuance is gated
+  on the client being registered for the `refresh_token` grant, and a
+  request for refresh on an ineligible grant is honoured (200) with the
+  refresh token dropped and a `custom_grant.refresh_dropped` audit event.
+- `op.devicecodekit.Deps.AccessTokens` (optional
+  `store.AccessTokenRegistry`) enables the `Revoke` cascade described in
+  Highlights. The `device_code.revoked` audit event carries the
+  `revoked_access_tokens` count when the registry is wired; a nil
+  registry skips the cascade for JWT-stateless or out-of-band
+  deployments.
+- `op.WithDeviceCode(...)` records now lock after repeated poll abuse:
+  a device-code that is polled past the slow-down ladder is denied,
+  closing a polling-DoS vector.
+- `op.WithDiscoveryMetadata(...)` validates that embedder-supplied
+  endpoint URLs are well-formed absolute https URLs at `op.New` time
+  rather than emitting a malformed discovery document at runtime.
+- The example tree gains two automated verification harnesses under
+  `examples/internal/` (build-tagged, separate sub-modules):
+  `browserverify` (headless-Chrome end-to-end login across the
+  default-HTML-driver and SPA examples) and `apiverify` (stdlib-only
+  HTTP / boot smoke and grant-level checks for the API-only examples).
+
+### Changed
+
+- **Breaking**: `op.CustomGrantResponse.RefreshToken string` (a reserved
+  field that was always rejected) is removed in favour of
+  `IssueRefreshToken bool`. The string field let a handler supply a
+  refresh-token *value*, which contradicts the RFC 6749 §6 model in
+  which the authorization server issues the credential; the flag lets
+  the handler signal intent while the OP retains ownership of the value
+  and its lineage. No existing call site loses behaviour because the
+  string field never produced a usable refresh token.
+- `op.New` now enforces per-client scope and projects pairwise subjects
+  at token mint (not only at the authorize step), so a client cannot
+  widen its scope or observe a non-pairwise `sub` through the token
+  endpoint.
+- First-party auto-consent is additionally gated on the `Sec-Fetch-Site`
+  request header and an `offline_access`-aware check, narrowing the
+  silent-consent path to genuine first-party top-level navigations.
+- The JARM form-post response now scopes its CSP `form-action` to the
+  request's redirect-target origin instead of a broad value.
+- The JWKS document's default `Cache-Control` max-age is shortened to one
+  hour so key rotation propagates faster.
+- `op-demo` defaults its listen address to loopback, and advertises the
+  CIBA and refresh-token grants in its FAPI-CIBA profile.
+
+### Fixed
+
+- **DPoP**: the `jti` replay window is widened to twice the `iat`
+  acceptance window (closing a gap where a proof replayed near the window
+  edge could slip through), the `htu` comparison normalises a trailing
+  dot, and the `jti` store expiry is anchored to `iat`.
+- **JAR**: the request-object `jti` replay-cache expiry is floored and
+  its scope is made type-safe. A request object that declares a `typ`
+  header must name the `oauth-authz-req+jwt` media type (matched
+  case-insensitively per RFC 2045 §5.1); a request object that omits
+  `typ` is accepted, since RFC 9101 §10.8 makes the media type
+  RECOMMENDED rather than REQUIRED.
+- **JOSE**: kid-less JWE trial decryption is bounded by algorithm and key
+  count so a crafted token cannot force unbounded trial work.
+- **mTLS**: client certificates are verified against an optional
+  `RootCAs` set and multi-valued RDNs are preserved in subject matching.
+- **Refresh rotation**: the rotation chain is preserved on a grace-window
+  fault, and a refresh token presented with a parent from a different
+  client is rejected. `authorization_code` replay errors now surface the
+  `GrantID`.
+- **token-exchange**: a dual `cnf` (DPoP and mTLS) must AND-match, and
+  the issued `id_token` audience is pinned.
+- **Client authentication**: the Argon2id parameter floor follows the
+  OWASP minimum, the `client_assertion` signing algorithm is pinned per
+  client, and the `client_assertion` audience is scoped per endpoint —
+  each endpoint accepts its own URL plus the issuer, and PAR / the
+  backchannel endpoint additionally accept the token-endpoint URL (the
+  canonical client_assertion audience per RFC 7523 §3 / OIDC Core §9).
+- **userinfo / introspection / token**: `invalid_token` reasons are
+  genericised and a pairwise `gid` is required on userinfo; opaque-token
+  and JWT access-token subjects are projected through the configured
+  `SubjectProjector` on egress; userinfo and end-session accept `HEAD`.
+- **end-session**: the logout confirmation POST requires an `Origin` or
+  `Referer` header and the logout page CSP is tightened.
+- **CIBA**: a `client_notification_token` is rejected in poll-mode
+  requests.
+- **i18n**: `Accept-Language` entries and locale-tag length are capped,
+  and the locale cookie's shape and length are validated before use.
+- **Metrics**: events are forwarded before the internal counter update
+  and a panicking sink is recovered; event-name labels are allow-listed
+  to bound cardinality.
+- **Storage adapters**: the in-memory adapter amortises PAR / JTI garbage
+  collection and skips already-expired `Save`s; the Redis adapter floors
+  the `jti` TTL at 60 s on `Save`.
+- The interaction HTML pages relax `Referrer-Policy` to `same-origin` and
+  stop pinning CSP `form-action`, fixing browser login (the prior
+  `no-referrer` forced the credential POST's `Origin` to `null`, and
+  `form-action 'self'` blocked the post-consent cross-origin redirect).
+
+### Removed
+
+- `op.CustomGrantResponse.RefreshToken` (replaced by the
+  `IssueRefreshToken` flag; see Changed).
 
 ## [v0.9.1] — 2026-05-07
 
@@ -71,7 +206,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ### Added
 
-- `op.WithCustomGrant(...)` (ADR 0027) graduates from the
+- `op.WithCustomGrant(...)` graduates from the
   experimental marker introduced in v0.9.0 to a stable surface:
   `CustomGrantHandler` interface (`Name` / `ParamPolicy` / `Handle`)
   + `BoundAccessToken` helper that mints a cnf-bound `at+jwt` access
@@ -124,7 +259,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
     tracked alongside the SQL / Redis substore wiring deferred from
     v0.9.0.
 - `op.WithPairwiseSubject(salt)` and `op.WithSubjectGenerator(...)`
-  (ADR 0029) add OIDC Core §8 pairwise subject derivation
+  add OIDC Core §8 pairwise subject derivation
   and an extensible generator seam. `internal/sector` resolves
   `sector_identifier_uri` with HTTPS-only enforcement, RFC 1918 /
   loopback / link-local rejection, redirect-target re-validation,
@@ -215,14 +350,14 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
     `authorization_pending`.
   - `examples/33-token-exchange-delegation/` — frontend →
     service-a → service-b cross-client impersonation triggers the
-    OP-side `act` claim chain (ADR 0028); service-b's RS-side
+    OP-side `act` claim chain; service-b's RS-side
     verifier walks `act.sub` and accepts only delegated tokens.
   - `examples/34-pairwise-saas/` — `WithPairwiseSubject`
     salt with two tenants in distinct sectors observes `A != B`
     (different sector → different sub) and `A1 == A2` (same
     sector + same user → identical sub), satisfying both the
     privacy and determinism properties of OIDC Core §8.1.
-- JWE encryption (ADR 0030). The OP now decrypts JWE-shaped
+- JWE encryption. The OP now decrypts JWE-shaped
   request objects (JAR / PAR) and wraps outbound `id_token`,
   `userinfo` (JWT-shape), JARM authorization responses, and
   RFC 9701 JWT introspection responses in a JWE addressed to the
@@ -235,8 +370,8 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
     narrows the OP-advertised algorithm set below the v0.9.1 default
     allowlist (`RSA-OAEP-256` / `ECDH-ES{,+A128KW,+A256KW}` ×
     `A{128,256}GCM`). `RSA-OAEP-384` / `RSA-OAEP-512` are deferred
-    (go-jose v4.1.x exposes no constants for them; ADR 0030 amended
-    2026-05-04). `RSA1_5` is intentionally not shipped
+    (go-jose v4.1.x exposes no constants for them). `RSA1_5` is
+    intentionally not shipped
     (CVE-2017-11424 padding oracle); `dir` and symmetric-only `A*KW`
     are reserved for v2+.
   - Discovery now publishes `id_token_encryption_alg_values_supported`
@@ -397,7 +532,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   `mtls.ProxyConfig` into the verifier so the reverse-proxy header
   path works for every request.
 - JAR `AllowMissingJTI` stays at `true` for every profile, FAPI
-  profiles included (ADR 0032 amends ADR 0016). RFC 9101 §6.1 marks
+  profiles included. RFC 9101 §6.1 marks
   `jti` OPTIONAL on the wire and FAPI 2.0 Security Profile / FAPI 2.0
   Message Signing do not promote it to MUST; the §10.8 replay-defence
   floor is preserved through the JTIs store, which the verifier still
