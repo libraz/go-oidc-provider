@@ -546,28 +546,71 @@ func TestCustomGrant_BoundAccessToken_ConflictReturns500(t *testing.T) {
 	}
 }
 
-// TestCustomGrant_RefreshTokenRejectedInV091 confirms an embedder-
-// supplied [op.CustomGrantHandler] that returns a non-empty
-// [op.CustomGrantResponse.RefreshToken] is rejected with server_error.
-// v0.9.1 has no plumbing to persist a handler-supplied refresh token
-// through the OP's own [store.RefreshTokenStore] / lineage tracker,
-// so echoing the value verbatim would silently miss the registry on
-// the next refresh attempt. v0.9.2 will wire embedder-supplied refresh-
-// token persistence; until then the wire layer rejects the field at
-// dispatch time. The built-in token-exchange handler rides on the same
-// dispatcher but is explicitly exempt because its issuance / revocation
-// path is owned by the OP — its happy-path test
-// (test/scenarios/token_exchange_test.go) covers the exempt branch.
-func TestCustomGrant_RefreshTokenRejectedInV091(t *testing.T) {
+// TestCustomGrant_RefreshTokenIssuedWhenClientPermits confirms a
+// handler that sets [op.CustomGrantResponse.IssueRefreshToken] causes
+// the OP to mint and return an OP-owned refresh token when the client
+// is registered for the refresh_token grant. The OP — not the handler —
+// generates and persists the value through its own
+// [store.RefreshTokenStore], so the credential rides the standard
+// rotation / replay-cascade lineage (RFC 6749 §6).
+func TestCustomGrant_RefreshTokenIssuedWhenClientPermits(t *testing.T) {
 	t.Parallel()
 
-	const grantURN = "urn:example:grant-type:refresh-rejected"
+	const grantURN = "urn:example:grant-type:refresh-issued"
 	handler := &recordingGrant{
 		name: grantURN,
 		response: op.CustomGrantResponse{
-			AccessToken:  "test-access-token",
-			RefreshToken: "handler-supplied-refresh",
-			Scope:        []string{"read"},
+			AccessToken:       "test-access-token",
+			IssueRefreshToken: true,
+			Subject:           op.Subject("user-123"),
+			Scope:             []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	const secret = "shh-its-a-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-cg-refresh",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grantURN, "refresh_token"},
+		Scopes:                  []string{"read"},
+	})
+
+	form := url.Values{"grant_type": []string{grantURN}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if rt, _ := body["refresh_token"].(string); rt == "" {
+		t.Errorf("refresh_token missing; want an OP-minted value")
+	}
+}
+
+// TestCustomGrant_RefreshTokenDroppedWhenClientNotRegistered confirms the
+// OP gate drops the refresh token — without failing the response — when
+// the client is not registered for the refresh_token grant. The request
+// is honoured (200) with the refresh token silently omitted and a
+// custom_grant.refresh_dropped audit event (RFC 6749 §6).
+func TestCustomGrant_RefreshTokenDroppedWhenClientNotRegistered(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:refresh-dropped"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			AccessToken:       "test-access-token",
+			IssueRefreshToken: true,
+			Scope:             []string{"read"},
 		},
 	}
 	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
@@ -579,16 +622,12 @@ func TestCustomGrant_RefreshTokenRejectedInV091(t *testing.T) {
 	resp := f.post(t, form, client.ID, secret)
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("status=%d want 500", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
 	body := decodeJSON(t, resp)
-	if got := body["error"]; got != "server_error" {
-		t.Errorf("error=%v want server_error", got)
-	}
-	desc, _ := body["error_description"].(string)
-	if !strings.Contains(desc, "v0.9.2") {
-		t.Errorf("error_description=%q must cite v0.9.2 lineage wiring", desc)
+	if rt, _ := body["refresh_token"].(string); rt != "" {
+		t.Errorf("refresh_token=%q; want dropped (client not registered for refresh_token)", rt)
 	}
 }
 

@@ -225,16 +225,29 @@ type CustomGrantResponse struct {
 	// access-token TTL; a negative value is rejected at issuance.
 	AccessTokenTTL time.Duration
 
-	// RefreshToken is reserved for the v0.9.2 lineage-wiring contract
-	// and MUST be empty in v0.9.1. A non-empty value yields server_error
-	// at the wire layer because the OP would echo the value onto the
-	// response without persisting it through its own refresh-token store,
-	// so the next refresh attempt would silently miss the registry. The
-	// built-in token-exchange handler is the single in-tree exception
-	// because its issuance / revocation lineage already rides on the
-	// same path; v0.9.2 will wire embedder-supplied refresh-token
-	// persistence via the existing refresh-token store.
-	RefreshToken string
+	// IssueRefreshToken asks the OP to mint and persist a refresh
+	// token alongside the access token. The OP — not the handler —
+	// owns the credential: it generates the value, stores it on its
+	// own refresh-token store sharing the access token's grant
+	// identity, and binds it to the request's DPoP / mTLS proof, so
+	// the issued token rides the same rotation, single-use
+	// replay-cascade (RFC 9700 §2.2.2), and family-revocation
+	// machinery as an authorization_code-issued refresh token. The
+	// minted value is the one returned on the wire; a handler cannot
+	// supply a refresh-token value of its own because RFC 6749 §6
+	// makes the refresh token an authorization-server-issued
+	// credential.
+	//
+	// Issuance is gated by the OP: it is honoured only when the
+	// client is registered for the refresh_token grant and the grant
+	// is refresh-eligible (the device-code and client-credentials
+	// shapes are not, per RFC 8628 / RFC 6749 §4.4.3). A request for
+	// refresh on an ineligible grant is not an error — the refresh
+	// token is dropped and the consent/refresh-dropped audit event
+	// fires.
+	//
+	// Stable since v0.9.2.
+	IssueRefreshToken bool
 
 	// IDToken, when non-empty, is the embedder-signed JWT the OP
 	// returns verbatim. When empty and [Scope] contains "openid",
@@ -397,15 +410,15 @@ func (a customGrantAdapter) Handle(ctx context.Context, req customgrant.Request)
 		return customgrant.Response{}, err
 	}
 	out := customgrant.Response{
-		AccessToken:    resp.AccessToken,
-		AccessTokenTTL: resp.AccessTokenTTL,
-		RefreshToken:   resp.RefreshToken,
-		IDToken:        resp.IDToken,
-		Subject:        string(resp.Subject),
-		AuthTime:       resp.AuthTime,
-		Scope:          append([]string(nil), resp.Scope...),
-		Audience:       append([]string(nil), resp.Audience...),
-		ExtraClaims:    cloneClaims(resp.ExtraClaims),
+		AccessToken:       resp.AccessToken,
+		AccessTokenTTL:    resp.AccessTokenTTL,
+		IssueRefreshToken: resp.IssueRefreshToken,
+		IDToken:           resp.IDToken,
+		Subject:           string(resp.Subject),
+		AuthTime:          resp.AuthTime,
+		Scope:             append([]string(nil), resp.Scope...),
+		Audience:          append([]string(nil), resp.Audience...),
+		ExtraClaims:       cloneClaims(resp.ExtraClaims),
 	}
 	if resp.BoundAccessToken != nil {
 		out.BoundAccessToken = &customgrant.BoundAccessToken{

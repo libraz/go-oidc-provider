@@ -1,13 +1,15 @@
 package tokenendpoint
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
-	"github.com/libraz/go-oidc-provider/internal/customgrant/tokenexchange"
+	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -71,25 +73,26 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		writeCustomGrantError(w, err)
 		return
 	}
-	// v0.9.1 rejects handler-supplied RefreshToken on the embedder
-	// surface: the dispatcher would otherwise echo the value verbatim,
-	// but the OP would never persist it through its own
-	// [store.RefreshTokenStore] / lineage tracker. The next refresh
-	// request would then miss the registry and fail silently. The
-	// built-in token-exchange handler is the single in-tree exception
-	// because its issuance / revocation lineage rides on the same
-	// path; lineage wiring for embedder grants lands in v0.9.2.
-	if resp.RefreshToken != "" && grantType != tokenexchange.GrantType {
-		writeError(w, http.StatusInternalServerError, errServerError,
-			"custom-grant handlers cannot issue refresh tokens in v0.9.1; lineage wiring lands in v0.9.2")
-		return
-	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, resp.Scope) {
 		return
 	}
-	accessToken, accessTokenTTL, err := resolveCustomGrantAccessToken(deps, client, dispatchIn, resp, binding)
+	// The OP owns the grant identity: one GrantID is stamped on the
+	// access token and shared with any refresh token minted for this
+	// response, so the refresh credential rides the same per-grant
+	// revocation cascade and rotation chain as the access token.
+	grantID, err := newJTI()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	accessToken, accessTokenTTL, err := resolveCustomGrantAccessToken(deps, client, dispatchIn, resp, binding, grantID)
 	if err != nil {
 		writeCustomGrantError(w, err)
+		return
+	}
+	refreshToken, err := maybeIssueCustomGrantRefresh(ctx, deps, client, resp, grantID, binding)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	idToken, err := resolveCustomGrantIDToken(deps, client, resp)
@@ -101,10 +104,85 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		AccessToken:  accessToken,
 		TokenType:    binding.tokenTypeFor(),
 		ExpiresIn:    int64(accessTokenTTL.Seconds()),
-		RefreshToken: resp.RefreshToken,
+		RefreshToken: refreshToken,
 		IDToken:      idToken,
 		Scope:        joinScope(resp.Scope),
 	})
+}
+
+// maybeIssueCustomGrantRefresh mints and persists a refresh token for a
+// custom-grant response that asked for one. The OP owns the credential
+// (RFC 6749 §6): it generates the value, persists it on the refresh-token
+// store under the access token's grantID, and binds it to the request's
+// DPoP / mTLS proof so refresh-time enforcement requires a matching
+// proof. Issuance is gated on the client being registered for the
+// refresh_token grant; a request for refresh from a client that is not
+// so registered drops the token and audits custom_grant.refresh_dropped
+// rather than failing the response. Returns the empty string when no
+// refresh token is issued.
+func maybeIssueCustomGrantRefresh(
+	ctx context.Context,
+	deps Deps,
+	client *store.Client,
+	resp customgrant.Response,
+	grantID string,
+	binding tokenBinding,
+) (string, error) {
+	if !resp.IssueRefreshToken {
+		return "", nil
+	}
+	if !customGrantPermitsRefresh(client) {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     customgrant.AuditEventRefreshDropped,
+			Level:    audit.LevelInfo,
+			Message:  "custom-grant refresh token dropped: client not registered for refresh_token grant",
+			ActorID:  customGrantRefreshSubject(resp),
+			ClientID: client.ID,
+		})
+		return "", nil
+	}
+	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
+		Store: deps.RefreshTokens,
+		Clock: deps.clockFunc(),
+		TTL:   pickRefreshTokenTTL(deps, resp.Scope),
+	})
+	if err != nil {
+		return "", err
+	}
+	return issuer.Issue(ctx, refresh.IssueInput{
+		ClientID:           client.ID,
+		Subject:            customGrantRefreshSubject(resp),
+		GrantID:            grantID,
+		Scope:              append([]string(nil), resp.Scope...),
+		DPoPJKT:            refreshDPoPJKT(client, binding.DPoPJKT),
+		MTLSCertThumbprint: binding.MTLSThumbprint,
+	})
+}
+
+// customGrantPermitsRefresh reports whether the client is registered for
+// the refresh_token grant. Unlike [clientPermitsRefresh] it does not
+// require openid / offline_access, because delegation-style custom grants
+// (token-exchange) legitimately issue refresh tokens with no OIDC scope.
+func customGrantPermitsRefresh(c *store.Client) bool {
+	for _, g := range c.GrantTypes {
+		if g == "refresh_token" {
+			return true
+		}
+	}
+	return false
+}
+
+// customGrantRefreshSubject picks the subject persisted on the
+// refresh-token record: the response Subject, falling back to the bound
+// access token's subject. Empty is permitted for delegation grants.
+func customGrantRefreshSubject(resp customgrant.Response) string {
+	if resp.Subject != "" {
+		return resp.Subject
+	}
+	if resp.BoundAccessToken != nil {
+		return resp.BoundAccessToken.Subject
+	}
+	return ""
 }
 
 // resolveCustomGrantAccessToken returns the access token and its TTL
@@ -122,6 +200,7 @@ func resolveCustomGrantAccessToken(
 	in customgrant.DispatchInput,
 	resp customgrant.Response,
 	binding tokenBinding,
+	grantID string,
 ) (string, time.Duration, error) {
 	if resp.BoundAccessToken == nil {
 		return resp.AccessToken, resp.AccessTokenTTL, nil
@@ -142,10 +221,6 @@ func resolveCustomGrantAccessToken(
 		ttl = deps.AccessTokenTTL
 	}
 	jti, err := newJTI()
-	if err != nil {
-		return "", 0, err
-	}
-	grantID, err := newJTI()
 	if err != nil {
 		return "", 0, err
 	}

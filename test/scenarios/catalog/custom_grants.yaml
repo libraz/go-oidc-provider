@@ -108,16 +108,18 @@ rows:
 
   - id: CG-010
     severity: P1
-    spec: RFC 6749 §5.2 / project v0.9.1 contract
+    spec: RFC 6749 §6 / RFC 9700 §2.2.2
     behaviour: |
-      An embedder-registered custom grant whose handler returns a
-      non-empty CustomGrantResponse.RefreshToken MUST be rejected with
-      500 server_error and an error_description that cites v0.9.2 as
-      the release that wires embedder-supplied refresh-token
-      persistence. The OP would otherwise echo the value verbatim
-      onto the wire without persisting it through its own refresh-
-      token store, so the next refresh attempt would silently miss
-      the registry. The built-in token-exchange handler is exempt
-      from this gate because its issuance / revocation lineage rides
-      on the same path.
+      A custom grant whose handler sets
+      CustomGrantResponse.IssueRefreshToken MUST cause the OP — not the
+      handler — to mint and persist a refresh token through its own
+      refresh-token store, sharing the access token's grant identity so
+      the credential rides the standard rotation / replay-cascade
+      lineage (the refresh token is an authorization-server-issued
+      credential per RFC 6749 §6). The issued refresh token MUST be
+      exchangeable at the token endpoint. Issuance is gated on the
+      client being registered for the refresh_token grant; when it is
+      not, the request still succeeds (200) with the refresh token
+      silently dropped. The built-in token-exchange handler rides the
+      same path.
     status: active

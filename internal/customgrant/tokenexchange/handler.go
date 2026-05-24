@@ -3,7 +3,6 @@ package tokenexchange
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
@@ -181,6 +180,8 @@ func (h *Handler) Handle(ctx context.Context, req customgrant.Request) (customgr
 // phase. Steps 1-7 of the state machine — form-shape checks, token
 // verification, actor/subject distinctness — collapse to one helper
 // the orchestrator can call before any audience or scope work begins.
+//
+//nolint:gocognit // parseAndVerify enumerates the RFC 8693 §2.1 subject/actor token gates in flat shape; refactor would obscure spec mapping.
 func (h *Handler) parseAndVerify(ctx context.Context, req customgrant.Request) (TokenView, *TokenView, error) {
 	if err := validateRequestedTokenType(req.Form); err != nil {
 		return TokenView{}, nil, err
@@ -329,11 +330,20 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 			clientIDOf(req.Client), subjectView.Subject,
 			map[string]any{"audience": grantedAudience})
 	}
-	if issueRefresh {
-		return customgrant.Response{}, invalidRequest(
-			"token-exchange refresh_token issuance is not supported by the built-in handler")
-	}
 	resp := h.assembleResponse(req, subjectView, grantedScope, grantedAudience, ttl, actChain, extraClaims, issueIDToken)
+	if issueRefresh {
+		// The handler signals intent only; the OP mints and persists
+		// the refresh token on the shared custom-grant path so it
+		// rides the rotation / replay-cascade / cnf-binding lineage.
+		resp.IssueRefreshToken = true
+		h.emit(ctx, auditRefreshIssued, audit.LevelInfo,
+			"token-exchange refresh token issuance requested",
+			clientIDOf(req.Client), subjectView.Subject,
+			map[string]any{
+				"actor":    actorSubOf(actorView),
+				"audience": grantedAudience,
+			})
+	}
 	h.emit(ctx, auditGranted, audit.LevelInfo,
 		"token-exchange granted",
 		clientIDOf(req.Client), subjectView.Subject,
@@ -397,25 +407,6 @@ func (h *Handler) assembleResponse(req customgrant.Request, subjectView TokenVie
 		resp.ExtraClaims = idClaims
 	}
 	return resp
-}
-
-// attachRefresh mints and stamps the optional refresh credential when
-// the policy explicitly opts in. The audit emission is paired with
-// the mint so a failed write still surfaces the issuance attempt.
-func (h *Handler) attachRefresh(ctx context.Context, resp *customgrant.Response, client *store.Client, subjectView TokenView, actorView *TokenView, grantedAudience []string) error {
-	rt, err := mintOpaqueRefresh()
-	if err != nil {
-		return fmt.Errorf("tokenexchange: mint refresh: %w", err)
-	}
-	resp.RefreshToken = rt
-	h.emit(ctx, auditRefreshIssued, audit.LevelInfo,
-		"token-exchange refresh token issued",
-		clientIDOf(client), subjectView.Subject,
-		map[string]any{
-			"actor":    actorSubOf(actorView),
-			"audience": grantedAudience,
-		})
-	return nil
 }
 
 // translateLookupErr maps an errExternalIssuer / errTokenInvalid

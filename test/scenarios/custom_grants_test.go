@@ -376,43 +376,65 @@ func TestScenario_CG_009_HandlerReceivesClientEntityOnly(t *testing.T) {
 	t.Skip("out-of-scope: CG-009 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_CG_010_HandlerRefreshTokenRejectedInV091 confirms that
-// an embedder-registered custom grant whose handler returns a non-empty
-// CustomGrantResponse.RefreshToken is rejected with 500 server_error,
-// citing v0.9.2 as the release that wires embedder-supplied refresh-
-// token persistence. v0.9.1 has no plumbing to persist a handler-
-// supplied refresh token through the OP's own refresh-token store /
-// lineage tracker, so echoing the value verbatim would silently miss
-// the registry on the next refresh attempt. The built-in token-exchange
-// handler is exempt from this gate (its issuance / revocation lineage
-// rides on the same path); see token_exchange_test.go for that
-// happy-path coverage.
+// TestScenario_CG_010_HandlerRefreshTokenWiredToLineage confirms that a
+// custom grant whose handler sets CustomGrantResponse.IssueRefreshToken
+// causes the OP to mint and persist an OP-owned refresh token (the
+// handler signals intent only). The issued token is exchangeable at the
+// token endpoint, proving it was persisted through the OP's own
+// refresh-token store and rides the standard rotation lineage rather
+// than being echoed verbatim. Issuance is gated on the client being
+// registered for the refresh_token grant.
 //
-// Spec: project v0.9.1 contract (RFC 6749 §5.2 server_error envelope).
-func TestScenario_CG_010_HandlerRefreshTokenRejectedInV091(t *testing.T) {
+// Spec: RFC 6749 §6 / RFC 9700 §2.2.2.
+func TestScenario_CG_010_HandlerRefreshTokenWiredToLineage(t *testing.T) {
 	t.Parallel()
 	const grantURN = "urn:example:grant-type:cg-010"
+	const subject = "user-cg-010"
 	handler := &recordingCustomGrant{
 		name: grantURN,
-		response: op.CustomGrantResponse{ //nolint:gosec // G101 false positive: AccessToken/RefreshToken are fixed-string test fixtures, not credentials.
-			AccessToken:  "issued-cg-010",
-			RefreshToken: "handler-supplied-refresh-token",
-			Scope:        []string{"openid"},
+		response: op.CustomGrantResponse{ //nolint:gosec // G101 false positive: AccessToken is a fixed-string test fixture, not a credential.
+			AccessToken:       "issued-cg-010",
+			IssueRefreshToken: true,
+			Subject:           op.Subject(subject),
+			Scope:             []string{"openid"},
 		},
 	}
-	tk, rp := newCGProvider(t, handler, []string{"openid"}, nil)
+	hash, err := op.HashClientSecret(cgClientSecret)
+	if err != nil {
+		t.Fatalf("HashClientSecret: %v", err)
+	}
+	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "cg-rp-refresh",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grantURN, "refresh_token"},
+		Scopes:                  []string{"openid"},
+	})
+
 	status, body := postCustomGrant(t, tk, url.Values{
 		"grant_type": []string{grantURN},
 	}, rp.ID, cgClientSecret)
-	if status != http.StatusInternalServerError {
-		t.Fatalf("status=%d want 500, body=%v", status, body)
+	if status != http.StatusOK {
+		t.Fatalf("custom grant status=%d want 200, body=%v", status, body)
 	}
-	if got := body["error"]; got != "server_error" {
-		t.Errorf("error=%v want server_error", got)
+	rt, _ := body["refresh_token"].(string)
+	if rt == "" {
+		t.Fatalf("refresh_token missing; want an OP-minted value, body=%v", body)
 	}
-	desc, _ := body["error_description"].(string)
-	if !strings.Contains(desc, "v0.9.2") {
-		t.Errorf("error_description=%q must cite v0.9.2 lineage wiring", desc)
+
+	// Exchanging the OP-minted refresh token proves it was persisted
+	// through the refresh-token store (a verbatim echo would miss the
+	// registry and fail here).
+	rstatus, rbody := postCustomGrant(t, tk, url.Values{
+		"grant_type":    []string{"refresh_token"},
+		"refresh_token": []string{rt},
+	}, rp.ID, cgClientSecret)
+	if rstatus != http.StatusOK {
+		t.Fatalf("refresh exchange status=%d want 200, body=%v", rstatus, rbody)
+	}
+	if at, _ := rbody["access_token"].(string); at == "" {
+		t.Errorf("refresh exchange returned no access_token, body=%v", rbody)
 	}
 }
 

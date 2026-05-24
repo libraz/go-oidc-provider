@@ -21,6 +21,11 @@ import (
 const (
 	AuditEventRequested = "custom_grant.requested"
 	AuditEventFailed    = "custom_grant.failed"
+	// AuditEventRefreshDropped fires when a response asked the OP to
+	// mint a refresh token but the client is not registered for the
+	// refresh_token grant. The rest of the response is still issued;
+	// the refresh token is silently omitted (RFC 6749 §6 gate).
+	AuditEventRefreshDropped = "custom_grant.refresh_dropped"
 )
 
 // Sentinel errors. Each value names a single dispatch failure mode

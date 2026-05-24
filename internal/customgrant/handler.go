@@ -123,9 +123,12 @@ type Response struct {
 	// global access-token TTL before issuance.
 	AccessTokenTTL time.Duration
 
-	// RefreshToken is the optional refresh credential. Empty omits
-	// the field from the wire response.
-	RefreshToken string
+	// IssueRefreshToken asks the wire layer to mint and persist a
+	// refresh token bound to the issued access token's grant identity.
+	// The OP owns the credential; handlers signal intent only. Mirror
+	// of op.CustomGrantResponse.IssueRefreshToken — see that field for
+	// the authoritative documentation and the issuance gate.
+	IssueRefreshToken bool
 
 	// IDToken, when non-empty, is treated as embedder-signed and
 	// returned verbatim. When empty and Scope contains "openid", the
