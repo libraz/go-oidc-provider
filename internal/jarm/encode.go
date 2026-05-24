@@ -189,12 +189,12 @@ func (s *Signer) Sign(p Payload) (string, error) {
 		"nbf": iat,
 	}
 	if p.State != "" {
+		// "state" is carried as a signed claim; the JWS signature already
+		// binds it, so no separate s_hash is emitted. JARM / FAPI 2.0
+		// Message Signing §5.6 do not define s_hash in the authorization
+		// response, and emitting it trips conformance "unexpected
+		// parameter" checks.
 		claims["state"] = p.State
-		sHash, herr := tokens.HashForAlg(p.State, string(s.alg))
-		if herr != nil {
-			return "", fmt.Errorf("%w: s_hash: %w", ErrEncode, herr)
-		}
-		claims["s_hash"] = sHash
 	}
 	if p.Code != "" {
 		claims["code"] = p.Code
