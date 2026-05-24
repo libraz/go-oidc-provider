@@ -83,8 +83,21 @@ func stampHTMLHeaders(w http.ResponseWriter) {
 	h.Set("Pragma", "no-cache")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+	// same-origin (not no-referrer): a no-referrer page makes the
+	// browser serialize the form-POST Origin header as "null" (Fetch
+	// "Append a request Origin header" §3), which the interaction CSRF
+	// Origin gate then rejects with 403. same-origin keeps the Origin on
+	// the same-origin submission while still suppressing cross-origin
+	// Referer leakage; the page URL carries only the opaque interaction
+	// uid and loads no subresources.
+	h.Set("Referrer-Policy", "same-origin")
+	// form-action is intentionally not pinned: a successful consent POST
+	// redirects (302) to the relying party's cross-origin redirect_uri,
+	// and browsers enforce form-action against redirect targets, so
+	// form-action 'self' would block flow completion. default-src 'none'
+	// plus the double-submit CSRF token and Origin allowlist remain the
+	// defense.
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
 }
 
 // ParseSubmission reads at most [maxSubmissionBytes] from r.Body and

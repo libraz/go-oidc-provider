@@ -278,8 +278,11 @@ func TestHTMLDriver_RenderSecurityHeaders(t *testing.T) {
 	}
 	headers := map[string]string{
 		"X-Content-Type-Options": "nosniff",
-		"Referrer-Policy":        "no-referrer",
-		"Pragma":                 "no-cache",
+		// same-origin (not no-referrer): no-referrer would make the
+		// browser send Origin: null on the form POST, which the
+		// interaction CSRF Origin gate rejects. See htmldriver.go.
+		"Referrer-Policy": "same-origin",
+		"Pragma":          "no-cache",
 	}
 	for name, want := range headers {
 		if got := rec.Header().Get(name); got != want {
@@ -287,10 +290,15 @@ func TestHTMLDriver_RenderSecurityHeaders(t *testing.T) {
 		}
 	}
 	csp := rec.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "form-action 'self'", "frame-ancestors 'none'", "base-uri 'none'"} {
+	for _, want := range []string{"default-src 'none'", "frame-ancestors 'none'", "base-uri 'none'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("Content-Security-Policy=%q missing %q", csp, want)
 		}
+	}
+	// form-action must NOT be pinned: it would block the post-consent
+	// 302 to the relying party's cross-origin redirect_uri.
+	if strings.Contains(csp, "form-action") {
+		t.Errorf("Content-Security-Policy=%q must not pin form-action", csp)
 	}
 }
 
