@@ -397,3 +397,103 @@ func TestRevoke_NilDepsReturnsInvalidArgument(t *testing.T) {
 		t.Errorf("empty deviceCode: err = %v, want ErrInvalidArgument", err)
 	}
 }
+
+// TestRevoke_CascadesAccessTokenRevocation confirms that revoking a
+// device authorization revokes every access token issued from that
+// device_code — the tokens carry the device_code's ID as their GrantID,
+// so RevokeByGrant retires them — while leaving tokens from unrelated
+// grants untouched. The audit event reports the count.
+func TestRevoke_CascadesAccessTokenRevocation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	reg := s.AccessTokens()
+	makePendingRecord(t, ds, "dev-casc-1", "ABCDEFGH")
+
+	now := time.Now()
+	for _, jti := range []string{"at-casc-a", "at-casc-b"} {
+		if err := reg.Register(ctx, store.AccessTokenRecord{
+			JTI:       jti,
+			GrantID:   "dev-casc-1",
+			ClientID:  "client-1",
+			IssuedAt:  now,
+			ExpiresAt: now.Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("Register %s: %v", jti, err)
+		}
+	}
+	if err := reg.Register(ctx, store.AccessTokenRecord{
+		JTI:       "at-other",
+		GrantID:   "other-grant",
+		ClientID:  "client-1",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Register at-other: %v", err)
+	}
+
+	emitter := &captureEmitter{}
+	deps := &devicecodekit.Deps{DeviceCodes: ds, AccessTokens: reg, Audit: emitter}
+	if err := devicecodekit.Revoke(ctx, deps, "dev-casc-1", devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+
+	for _, jti := range []string{"at-casc-a", "at-casc-b"} {
+		rec, err := reg.Find(ctx, jti)
+		if err != nil {
+			t.Fatalf("Find %s: %v", jti, err)
+		}
+		if rec == nil || !rec.Revoked {
+			t.Errorf("access token %s not revoked: %+v", jti, rec)
+		}
+	}
+	other, err := reg.Find(ctx, "at-other")
+	if err != nil {
+		t.Fatalf("Find at-other: %v", err)
+	}
+	if other == nil || other.Revoked {
+		t.Errorf("unrelated access token must not be revoked: %+v", other)
+	}
+
+	var gotCount any
+	for _, ev := range emitter.events {
+		if ev.Name == "device_code.revoked" {
+			gotCount = ev.Extras["revoked_access_tokens"]
+		}
+	}
+	if gotCount != 2 {
+		t.Errorf("revoked_access_tokens = %v, want 2", gotCount)
+	}
+}
+
+// TestRevoke_NilRegistrySkipsCascade confirms that when no
+// AccessTokenRegistry is wired the revoke still denies the authorization
+// and emits the audit event, without a revoked_access_tokens count.
+func TestRevoke_NilRegistrySkipsCascade(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	makePendingRecord(t, ds, "dev-casc-nil", "ABCDEFGH")
+
+	emitter := &captureEmitter{}
+	deps := &devicecodekit.Deps{DeviceCodes: ds, Audit: emitter}
+	if err := devicecodekit.Revoke(ctx, deps, "dev-casc-nil", devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	rec, err := ds.FindByDeviceCode(ctx, "dev-casc-nil")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode: %v", err)
+	}
+	if rec.Status != store.DeviceCodeStatusDenied {
+		t.Errorf("Status = %v, want Denied", rec.Status)
+	}
+	for _, ev := range emitter.events {
+		if ev.Name == "device_code.revoked" {
+			if _, ok := ev.Extras["revoked_access_tokens"]; ok {
+				t.Errorf("nil registry must not report revoked_access_tokens: %v", ev.Extras)
+			}
+		}
+	}
+}

@@ -238,18 +238,17 @@ const (
 	// signal so SOC tooling and embedder cascade-revoke subscribers
 	// can react in one place. Extras carry: client_id, reason (e.g.
 	// "user_denied", "user_code_lockout", or an embedder-supplied
-	// value).
+	// value), and revoked_access_tokens (the cascade count) when the
+	// helper was wired with an [store.AccessTokenRegistry].
 	//
-	// v0.9.1 ships the audit signal only. The library-side cascade —
-	// walking [store.AccessTokenRegistry] for tokens whose grant_id
-	// matches the revoked device_code — is a v0.9.2 design task that
-	// requires an issued-tokens-by-device_code mapping the substore
-	// does not yet expose. Until then, embedders subscribe to this
-	// event and call [store.AccessTokenRegistry.RevokeByGrant] (or
-	// the equivalent on their custom registry) themselves; the
-	// device_code.ID equals the GrantID stamped on every issued
-	// access token derived from that device authorization, so the
-	// existing RevokeByGrant primitive is sufficient.
+	// When the registry is wired the helper cascade-revokes every
+	// access token whose GrantID matches the revoked device_code (the
+	// device_code.ID is stamped verbatim as the GrantID on every issued
+	// access token), so the existing RevokeByGrant primitive retires
+	// the whole grant. A nil registry skips the cascade so embedders
+	// running JWT-stateless deployments — or driving the cascade
+	// out-of-band — can subscribe to this event and call
+	// [store.AccessTokenRegistry.RevokeByGrant] themselves.
 	AuditDeviceCodeRevoked = AuditEvent("device_code.revoked")
 )
 

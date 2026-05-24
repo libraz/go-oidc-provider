@@ -1559,16 +1559,11 @@ func TestScenario_DEV_100_UserCodeBruteForceLockout(t *testing.T) {
 
 // TestScenario_DEV_101_RevokeEmitsAuditAndTransitions pins the public
 // revoke helper (op/devicecodekit.Revoke). The helper transitions a
-// Pending record to Denied with the supplied reason, the next /token
-// poll returns access_denied, and a second revoke call surfaces
-// ErrAlreadyDecided so the embedder's idempotency posture is
-// preserved.
-//
-// v0.9.1 ships the audit signal only; the library-side cascade walk
-// lands in v0.9.2. Embedders subscribing to AuditDeviceCodeRevoked
-// read the device_code_id extra and call AccessTokenRegistry.RevokeByGrant
-// with the value (the GrantID stamped on issued access tokens equals
-// the device_code's ID at consume time).
+// Pending record to Denied with the supplied reason, cascade-revokes
+// every access token issued from that device_code (its ID is the
+// GrantID on each token), the next /token poll returns access_denied,
+// and a second revoke call surfaces ErrAlreadyDecided so the embedder's
+// idempotency posture is preserved.
 //
 // Spec: RFC 8628 §3.5, OAuth 2.0 user-trust posture.
 func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
@@ -1576,10 +1571,31 @@ func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
 	p := newDevProvider(t, []string{"openid"})
 
 	deviceCode := p.issueDeviceCode(t, "openid")
-	deps := &devicecodekit.Deps{DeviceCodes: p.tk.Store.DeviceCodes()}
+	reg := p.tk.Store.AccessTokens()
+	deps := &devicecodekit.Deps{DeviceCodes: p.tk.Store.DeviceCodes(), AccessTokens: reg}
+
+	// An access token whose GrantID is the device_code's ID stands in
+	// for one issued from this device authorization; the cascade must
+	// retire it when the authorization is revoked.
+	now := time.Now()
+	if err := reg.Register(context.Background(), store.AccessTokenRecord{
+		JTI:       "dev-101-at",
+		GrantID:   deviceCode,
+		ClientID:  "client-1",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Register access token: %v", err)
+	}
 
 	if err := devicecodekit.Revoke(context.Background(), deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 		t.Fatalf("Revoke: %v", err)
+	}
+
+	if at, err := reg.Find(context.Background(), "dev-101-at"); err != nil {
+		t.Fatalf("Find access token after revoke: %v", err)
+	} else if at == nil || !at.Revoked {
+		t.Errorf("device_code access token not cascade-revoked: %+v", at)
 	}
 	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
 	if err != nil {

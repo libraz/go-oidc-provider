@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
@@ -127,6 +128,20 @@ type Deps struct {
 	// invoke when the embedder has not wired audit observability
 	// yet.
 	Audit audit.Emitter
+
+	// AccessTokens is the access-token registry the [Revoke] helper
+	// cascades into: when a device authorization is revoked, every
+	// access token issued from that device_code is revoked alongside
+	// the record via [store.AccessTokenRegistry.RevokeByGrant]. The
+	// device_code's ID is stamped verbatim as the GrantID on every
+	// access token derived from that authorization, so the existing
+	// per-grant cascade is sufficient. Optional: a nil registry
+	// (JWT-stateless deployments with no shadow store, or embedders
+	// that drive the cascade out-of-band) skips the cascade, and
+	// [Revoke] still denies the authorization and emits the audit
+	// event. When set, [op.AuditDeviceCodeRevoked] carries the
+	// "revoked_access_tokens" count.
+	AccessTokens store.AccessTokenRegistry
 }
 
 // auditEmitter returns the configured audit sink, or a discard
@@ -270,24 +285,20 @@ func recordStrike(ctx context.Context, deps *Deps, deviceCodeID, clientID string
 }
 
 // Revoke transitions a Pending device-authorization record to Denied
-// with the supplied reason and emits an [op.AuditDeviceCodeRevoked]
-// audit event so embedders subscribing to the audit stream can run
-// their own cascade-revoke walk against [store.AccessTokenRegistry]
-// (or any opaque-AT shadow store).
+// with the supplied reason, cascade-revokes every access token issued
+// from that device_code, and emits an [op.AuditDeviceCodeRevoked] audit
+// event.
 //
-// Why this is a thin wrapper over [store.DeviceCodeStore.Deny]:
-// the user-trust posture every device-flow OP should hold is "when
-// the user revokes a device authorization, every access token issued
-// from that device_code is revoked alongside the row". The library-
-// side cascade — walking the registry by GrantID where GrantID
-// equals the consumed device_code's ID — is a v0.9.2 design task
-// that requires an issued-tokens-by-device_code mapping the
-// substore does not yet expose. v0.9.1 ships the audit signal so
-// embedders can implement the cascade themselves: subscribe to
-// [op.AuditDeviceCodeRevoked], read the "device_code_id" extra,
-// and call [store.AccessTokenRegistry.RevokeByGrant] (the
-// device_code's ID is stamped verbatim onto the GrantID column at
-// issuance, so the existing per-grant cascade is sufficient).
+// The cascade enacts the user-trust posture every device-flow OP should
+// hold: "when the user revokes a device authorization, every access
+// token issued from that device_code is revoked alongside the row." The
+// device_code's ID is stamped verbatim as the GrantID on every access
+// token derived from that authorization, so the cascade is a single
+// [store.AccessTokenRegistry.RevokeByGrant] call. It runs only when
+// [Deps.AccessTokens] is set; a nil registry (JWT-stateless or
+// out-of-band deployments) skips the cascade while still denying the
+// authorization and emitting the audit event. The audit event carries
+// the "revoked_access_tokens" count when the cascade ran.
 //
 // Errors:
 //   - [ErrInvalidArgument] when deps or deps.DeviceCodes is nil, or
@@ -297,6 +308,10 @@ func recordStrike(ctx context.Context, deps *Deps, deviceCodeID, clientID string
 //   - [ErrAlreadyDecided] when the record is no longer in Pending
 //     (already Approved, Denied, or Consumed).
 //   - Any substore transport error surfaces verbatim.
+//   - A wrapped error when the access-token cascade fails after the
+//     record was denied; the denial and audit event still stand, so a
+//     caller seeing this error knows the authorization is revoked but
+//     the token cascade did not complete.
 //
 // The reason argument is stamped onto the record's DenyReason field
 // and the audit event's "reason" extra. Embedders SHOULD use one of
@@ -339,16 +354,32 @@ func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error 
 			return err
 		}
 	}
+	// Cascade-revoke every access token issued from this device_code.
+	// The device_code's ID is the GrantID stamped on each issued token,
+	// so RevokeByGrant retires them all. The denial already stopped new
+	// tokens; this revokes the ones already minted. A nil registry
+	// skips the cascade (JWT-stateless or out-of-band deployments).
+	revoked, cascadeErr := 0, error(nil)
+	if deps.AccessTokens != nil {
+		revoked, cascadeErr = deps.AccessTokens.RevokeByGrant(ctx, deviceCodeID)
+	}
+	extras := map[string]any{
+		"device_code_id": deviceCodeID,
+		"reason":         reason,
+	}
+	if deps.AccessTokens != nil {
+		extras["revoked_access_tokens"] = revoked
+	}
 	deps.auditEmitter().Emit(ctx, audit.Event{
 		Name:     devicecode.AuditRevoked,
 		Level:    audit.LevelInfo,
 		Message:  "device_code revoked",
 		ClientID: rec.ClientID,
-		Extras: map[string]any{
-			"device_code_id": deviceCodeID,
-			"reason":         reason,
-		},
+		Extras:   extras,
 	})
+	if cascadeErr != nil {
+		return fmt.Errorf("devicecodekit: cascade revoke access tokens: %w", cascadeErr)
+	}
 	return nil
 }
 

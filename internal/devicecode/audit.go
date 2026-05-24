@@ -76,14 +76,10 @@ const (
 	// and embedder cascade-revoke subscribers can react to a denied
 	// device authorization in one place. Extras carry: client_id,
 	// reason (the embedder-supplied or library-default value, e.g.
-	// "user_denied", "user_code_lockout", "user_revoked_device").
-	//
-	// v0.9.1 ships the audit signal only; embedders walk their own
-	// [store.AccessTokenRegistry] (and any opaque-AT shadow store)
-	// for tokens whose grant_id matches the revoked device_code so
-	// the per-grant cascade fires immediately. The library-side
-	// cascade — walking the registry on the embedder's behalf — is a
-	// v0.9.2 design task tracked alongside the substore extension
-	// that surfaces "issued access tokens for device_code D".
+	// "user_denied", "user_code_lockout", "user_revoked_device"), and,
+	// when the revoke helper was given an [store.AccessTokenRegistry],
+	// the revoked_access_tokens count. The helper cascade-revokes every
+	// access token whose grant_id matches the device_code so the
+	// per-grant cascade fires inside the library.
 	AuditRevoked = "device_code.revoked"
 )
