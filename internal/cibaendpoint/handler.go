@@ -305,6 +305,8 @@ func resolveDeps(d Deps) Deps {
 // request shape, authenticates the client, classifies the hint,
 // resolves it to a subject, parses the requested parameters,
 // mints the auth_req_id, and persists the resulting record.
+//
+//nolint:cyclop // serve enumerates the /bc-authorize gates (form, DPoP, client auth, hint resolve, mint) in flat shape; refactor would obscure request ordering.
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !parseAndValidateForm(w, r) {
 		return

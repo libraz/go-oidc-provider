@@ -411,6 +411,7 @@ func TestWithDiscoveryMetadata_RejectsUnsafeURLs(t *testing.T) {
 		},
 		{
 			name: "mtls alias public http",
+			//nolint:gosec // G101 false positive: test fixture endpoint URL, not a credential.
 			meta: op.DiscoveryMetadata{MTLSEndpointAliases: map[string]string{
 				"token_endpoint": "http://internal-host/token",
 			}},
@@ -445,6 +446,7 @@ func TestWithDiscoveryMetadata_AllowsLoopbackHTTPForDevelopment(t *testing.T) {
 			ServiceDocumentation: "http://localhost:8080/docs",
 			OPPolicyURI:          "http://127.0.0.1:8080/policy",
 			OPTermsOfServiceURI:  "https://idp.example.com/tos",
+			//nolint:gosec // G101 false positive: test fixture endpoint URL, not a credential.
 			MTLSEndpointAliases: map[string]string{
 				"token_endpoint": "http://[::1]:8080/token",
 			},

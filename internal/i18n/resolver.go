@@ -125,6 +125,8 @@ type Request struct {
 // Resolve walks the priority chain and returns the first matching
 // tag. The chain always terminates at the default tag, so the
 // return value is guaranteed to be a registered locale.
+//
+//nolint:gocognit // Resolve walks the fixed locale priority chain (prefs, ui_locales, cookie, Accept-Language, default) in flat shape.
 func (r *Resolver) Resolve(ctx context.Context, in Request) Tag {
 	if r.prefs != nil && in.Subject != "" {
 		if tag, err := r.prefs.PreferredLocale(ctx, in.Subject); err == nil {
@@ -195,6 +197,8 @@ func validLocaleCookie(raw string) bool {
 // suffixes, sorting only by descending q so the resolver sees the
 // caller's most-preferred entry first. Malformed q values fall back
 // to 1.0 — the package errs toward more matches over fewer.
+//
+//nolint:gocognit // parseAcceptLanguage is a flat RFC 7231 q-value parser; the branch count tracks the grammar.
 func parseAcceptLanguage(raw string) []string {
 	if raw = strings.TrimSpace(raw); raw == "" {
 		return nil

@@ -119,8 +119,8 @@ func TestCardinality_LabelAllowlist(t *testing.T) {
 		if fam.GetName() != "oidc_token_exchange_events_total" {
 			continue
 		}
-		if got, max := len(fam.GetMetric()), 3; got > max {
-			t.Fatalf("token_exchange metrics = %d, want <= %d after attacker-controlled names", got, max)
+		if got, limit := len(fam.GetMetric()), 3; got > limit {
+			t.Fatalf("token_exchange metrics = %d, want <= %d after attacker-controlled names", got, limit)
 		}
 	}
 }

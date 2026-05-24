@@ -321,6 +321,8 @@ type Exchanged struct {
 // [store.ErrAlreadyConsumed], Exchange returns [ErrCodeReplayed]. If the store
 // also returns the consumed record, the error carries its GrantID; the token
 // endpoint MUST revoke any refresh tokens that descend from this grant.
+//
+//nolint:gocognit // Exchange enumerates the code-replay / binding / expiry gates in flat shape; refactor would obscure spec mapping.
 func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged, error) {
 	if in.Code == "" {
 		return nil, ErrCodeMissing

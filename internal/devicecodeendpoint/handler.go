@@ -57,6 +57,7 @@ const (
 	userCodeRetryBudget = 8
 )
 
+//nolint:gochecknoglobals // immutable RFC 8628 single-valued parameter allowlist.
 var deviceAuthSingleValuedParams = []string{
 	"client_id",
 	"client_secret",

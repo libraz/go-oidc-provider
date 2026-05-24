@@ -114,6 +114,8 @@ type PrivateKeyJWTVerifier struct {
 }
 
 // Verify implements [AssertionVerifier].
+//
+//nolint:cyclop // Verify enumerates the RFC 7523 client-assertion gates in flat shape; refactor would obscure spec mapping.
 func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion string) error {
 	if v.Resolver == nil || v.JTIStore == nil || v.Clock == nil || v.Audience == "" {
 		return errors.New("authn: PrivateKeyJWTVerifier missing required fields")

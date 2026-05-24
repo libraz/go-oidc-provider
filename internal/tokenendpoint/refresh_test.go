@@ -524,6 +524,7 @@ func TestRefresh_ScopeAllowedClients_RejectedWhenScopeOmitted(t *testing.T) {
 		Scopes:                  []string{"openid", "profile", "email", "billing:write"},
 	})
 
+	//nolint:gosec // G101 false positive: test fixture identifier, not a credential.
 	const tokenID = "rt-allowlist-omitted"
 	f.seedGrant(t, &store.Grant{
 		ID: "grant-allowlist-omitted", Subject: "user-1", ClientID: client.ID,

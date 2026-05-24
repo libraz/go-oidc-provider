@@ -49,6 +49,7 @@ func TestValidatePolicy_RejectsUnsupportedRequestObjectSigningAlg(t *testing.T) 
 func TestValidatePolicy_RejectsUnsupportedTokenEndpointAuthSigningAlg(t *testing.T) {
 	t.Parallel()
 
+	//nolint:gosec // G101 false positive: test fixture client metadata, not a credential.
 	_, err := validatePolicy(ClientMetadata{
 		RedirectURIs:                []string{"https://rp.example.com/cb"},
 		TokenEndpointAuthMethod:     "private_key_jwt",

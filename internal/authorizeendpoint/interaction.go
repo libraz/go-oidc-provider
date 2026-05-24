@@ -576,36 +576,6 @@ func chooseGrantScope(approved, requested []string) []string {
 	return append([]string(nil), requested...)
 }
 
-// projectGrantSubject runs the configured op.SubjectGenerator over
-// the post-authentication subject so the grant / code records carry
-// the value that flows into id_token "sub" / access-token "sub". A
-// nil [resolved.SubjectProjector] (the v0.x default UUIDv7 strategy
-// or a unit-test wiring that omits the projector) leaves the raw
-// subject intact, preserving the legacy passthrough wire shape.
-//
-// The function loads the client through [resolved.Clients] so the
-// pairwise generator can derive the sector from
-// [store.Client.SectorIdentifierURI] / [store.Client.RedirectURIs].
-// A failed client lookup or projection surfaces as a server_error
-// emitted by the caller; the function itself never logs.
-func projectGrantSubject(ctx context.Context, deps resolved, raw, clientID string) (string, error) {
-	if deps.SubjectProjector == nil {
-		return raw, nil
-	}
-	client, err := deps.Clients.GetClient(ctx, clientID)
-	if err != nil {
-		return "", fmt.Errorf("authorizeendpoint: load client for subject projection: %w", err)
-	}
-	projected, err := deps.SubjectProjector(ctx, raw, client)
-	if err != nil {
-		return "", fmt.Errorf("authorizeendpoint: project subject: %w", err)
-	}
-	if projected == "" {
-		return "", errors.New("authorizeendpoint: SubjectProjector returned empty subject")
-	}
-	return projected, nil
-}
-
 // grantUpsert collects the inputs upsertGrant needs. The struct exists
 // so the helper stays under the linter's parameter limit and so future
 // fields (e.g., per-claim consent payload) can be added without

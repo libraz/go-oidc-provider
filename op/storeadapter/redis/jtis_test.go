@@ -1,4 +1,4 @@
-package oidcredis
+package oidcredis //nolint:testpackage // tests exercise unexported jtiTTL and minJTITTL helpers.
 
 import (
 	"testing"

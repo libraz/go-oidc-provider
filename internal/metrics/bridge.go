@@ -85,6 +85,7 @@ func (b *Bridge) update(ev audit.Event) {
 const unknownEventLabel = "unknown"
 
 var (
+	//nolint:gochecknoglobals // immutable event-label allowlist; bounds metric label cardinality.
 	dcrEventLabels = map[string]struct{}{
 		"client.registered":                         {},
 		"client.metadata_read":                      {},
@@ -101,11 +102,13 @@ var (
 		"cascade.access_token_revoke_failed":        {},
 		"cascade.opaque_access_token_revoke_failed": {},
 	}
+	//nolint:gochecknoglobals // immutable event-label allowlist; bounds metric label cardinality.
 	deviceAuthorizationEventLabels = map[string]struct{}{
 		"issued":           {},
 		"rejected":         {},
 		"unbound_rejected": {},
 	}
+	//nolint:gochecknoglobals // immutable event-label allowlist; bounds metric label cardinality.
 	deviceCodeEventLabels = map[string]struct{}{
 		"token.issued":                       {},
 		"token.rejected":                     {},
@@ -115,6 +118,7 @@ var (
 		"verification.user_code_brute_force": {},
 		"revoked":                            {},
 	}
+	//nolint:gochecknoglobals // immutable event-label allowlist; bounds metric label cardinality.
 	cibaEventLabels = map[string]struct{}{
 		"authorization.issued":           {},
 		"authorization.rejected":         {},
@@ -127,6 +131,7 @@ var (
 		"token.rejected":                 {},
 		"token.slow_down":                {},
 	}
+	//nolint:gochecknoglobals // immutable event-label allowlist; bounds metric label cardinality.
 	tokenExchangeEventLabels = map[string]struct{}{
 		"requested":                    {},
 		"granted":                      {},
@@ -145,6 +150,7 @@ var (
 		"self_exchange":                {},
 		"subject_token_registry_error": {},
 	}
+	//nolint:gochecknoglobals // immutable event-label allowlist; bounds metric label cardinality.
 	backChannelLogoutLabels = map[string]struct{}{
 		"delivered": {},
 		"failed":    {},
