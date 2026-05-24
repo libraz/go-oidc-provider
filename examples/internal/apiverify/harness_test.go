@@ -152,6 +152,95 @@ func runDiscovery(t *testing.T, dir, baseURL string) {
 	}
 }
 
+// runDiscoveryAssert boots the example and asserts its discovery document
+// contains every want substring and none of the notWant substrings — used
+// where the discovery document itself is the feature (the public scope
+// allowlist, the registered ui_locales).
+func runDiscoveryAssert(t *testing.T, dir, baseURL string, want, notWant []string) {
+	t.Helper()
+	p := buildAndStart(t, dir)
+	defer p.kill()
+
+	body := pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+	for _, w := range want {
+		if !strings.Contains(body, w) {
+			t.Fatalf("discovery document missing %q:\n%s", w, body)
+		}
+	}
+	for _, nw := range notWant {
+		if strings.Contains(body, nw) {
+			t.Fatalf("discovery document unexpectedly contains %q:\n%s", nw, body)
+		}
+	}
+}
+
+// runCORSPreflight boots the example and drives a CORS preflight against the
+// token endpoint from each origin: allowlisted origins must be echoed back
+// in Access-Control-Allow-Origin, a non-allowlisted origin must not be.
+func runCORSPreflight(t *testing.T, dir, baseURL string, allowed []string, denied string) {
+	t.Helper()
+	p := buildAndStart(t, dir)
+	defer p.kill()
+
+	pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+
+	for _, origin := range allowed {
+		if got := preflightACAO(t, baseURL, origin); got != origin {
+			t.Fatalf("allowlisted origin %q: Access-Control-Allow-Origin = %q, want it echoed", origin, got)
+		}
+	}
+	if got := preflightACAO(t, baseURL, denied); got == denied {
+		t.Fatalf("non-allowlisted origin %q was echoed in Access-Control-Allow-Origin", denied)
+	}
+}
+
+// preflightACAO sends an OPTIONS preflight for a POST /oidc/token from
+// origin and returns the Access-Control-Allow-Origin response header.
+func preflightACAO(t *testing.T, baseURL, origin string) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodOptions, baseURL+"/oidc/token", nil)
+	if err != nil {
+		t.Fatalf("build preflight: %v", err)
+	}
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("preflight from %q: %v", origin, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.Header.Get("Access-Control-Allow-Origin")
+}
+
+// runMetrics boots the example, drives one failing token request to bump an
+// OIDC counter (the library emits oidc_* metrics only once a business event
+// fires), then asserts the embedder's /metrics surface exposes them.
+func runMetrics(t *testing.T, dir, baseURL string) {
+	t.Helper()
+	p := buildAndStart(t, dir)
+	defer p.kill()
+
+	pollHTTP(t, p, baseURL+"/.well-known/openid-configuration", 20*time.Second)
+
+	// An unknown client at the token endpoint fails client authentication,
+	// which the metrics bridge counts — enough to surface an oidc_ series.
+	form := url.Values{"grant_type": {"client_credentials"}, "scope": {"api:read"}}
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("build token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("no-such-client", "wrong-secret")
+	if resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req); err == nil {
+		_ = resp.Body.Close()
+	}
+
+	body := pollHTTP(t, p, baseURL+"/metrics", 10*time.Second)
+	if !strings.Contains(body, "oidc_") {
+		t.Fatalf("/metrics exposes no oidc_ series after a token failure:\n%s", body)
+	}
+}
+
 // runSelfVerify boots an example that runs an in-process grant round-trip
 // and prints a "✓ self-verify" marker on success, and waits for it. The
 // example may keep serving afterward (custom-grant, token-exchange) or exit
