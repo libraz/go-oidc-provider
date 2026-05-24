@@ -100,7 +100,6 @@ type Verifier struct {
 	allowMissJTI  bool
 	jtis          store.ConsumedJTIStore
 	maxLifetime   time.Duration
-	singleAud     bool
 }
 
 // VerifierConfig is the parameter bundle for [NewVerifier].
@@ -202,12 +201,6 @@ type VerifierConfig struct {
 	// Zero leaves the cap disabled (back-compat).
 	MaxLifetime time.Duration
 
-	// RequireSingleAudience rejects JWT array-form "aud" claims and
-	// requires a byte-exact string equal to Issuer. FAPI-family profiles
-	// enable this to avoid cross-AS confusion; non-FAPI deployments retain
-	// RFC 7519's string-or-array compatibility posture.
-	RequireSingleAudience bool
-
 	// EncryptionResolver, when non-nil, enables JWE-shaped request
 	// objects (compact form with five base64url segments). The
 	// verifier decrypts the JWE through [internal/jose.Decrypt],
@@ -286,7 +279,6 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error) {
 		allowMissJTI:  cfg.AllowMissingJTI,
 		jtis:          cfg.JTIs,
 		maxLifetime:   cfg.MaxLifetime,
-		singleAud:     cfg.RequireSingleAudience,
 	}, nil
 }
 
@@ -592,7 +584,7 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 	if err := assertIssuer(obj, expectedClientID); err != nil {
 		return err
 	}
-	if err := assertAudience(obj, v.issuer, v.singleAud); err != nil {
+	if err := assertAudience(obj, v.issuer); err != nil {
 		return err
 	}
 	now := v.clock.Now()
@@ -610,11 +602,22 @@ func (v *Verifier) validateClaims(obj *Object, expectedClientID string) error {
 
 const requestObjectType = "oauth-authz-req+jwt"
 
+// assertType enforces RFC 9101 §10.8 explicit typing only when the
+// request object actually declares a "typ". The "oauth-authz-req+jwt"
+// media type is RECOMMENDED, not REQUIRED, so a request object that
+// omits typ entirely — as RFC 9101 permits and many RPs emit — is
+// accepted. When typ IS present it must name a request object
+// (optionally with the "application/" media-type prefix); any other
+// declared type is rejected so a JWT minted for a different purpose
+// cannot be replayed here. The comparison is case-insensitive because
+// media types are case-insensitive (RFC 2045 §5.1).
 func assertType(obj *Object) error {
-	if obj.Type != requestObjectType {
+	switch strings.ToLower(obj.Type) {
+	case "", requestObjectType, "application/" + requestObjectType:
+		return nil
+	default:
 		return ErrTypeInvalid
 	}
-	return nil
 }
 
 // assertNoNestedRequest enforces RFC 9101 §6.1: the request object
@@ -643,9 +646,13 @@ func assertIssuer(obj *Object, expectedClientID string) error {
 	return nil
 }
 
-// assertAudience enforces "aud" containing the OP issuer. Unless single is
-// set, the claim may be a single string or an array per RFC 7519 §4.1.3.
-func assertAudience(obj *Object, issuer string, single bool) error {
+// assertAudience enforces RFC 9101 §6.1: the request object "aud" must
+// identify the OP issuer. The claim may be a single string or an array
+// per RFC 7519 §4.1.3, and an array is accepted as long as the issuer is
+// among its values — RFC 9101 / FAPI 2.0 Message Signing require the
+// issuer to be present, not that it be the sole audience, so additional
+// audiences are ignored rather than rejected.
+func assertAudience(obj *Object, issuer string) error {
 	switch v := obj.Claims["aud"].(type) {
 	case nil:
 		return fmt.Errorf("%w: missing", ErrAudMismatch)
@@ -655,9 +662,6 @@ func assertAudience(obj *Object, issuer string, single bool) error {
 		}
 		return nil
 	case []any:
-		if single {
-			return fmt.Errorf("%w: aud array not allowed", ErrAudMismatch)
-		}
 		for _, raw := range v {
 			if s, ok := raw.(string); ok && s == issuer {
 				return nil

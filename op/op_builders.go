@@ -348,16 +348,14 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 	// it. The flag below tracks that requirement and applies only when
 	// no other profile loosened the constraint.
 	var (
-		requireNbf            bool
-		requireIAT            bool
-		requireSingleAudience bool
-		maxLifetime           time.Duration
-		allowMissingJTI       = true
+		requireNbf      bool
+		requireIAT      bool
+		maxLifetime     time.Duration
+		allowMissingJTI = true
 	)
 	for _, p := range cfg.profiles {
 		if p == profile.FAPI2Baseline || p == profile.FAPI2MessageSigning || p == profile.FAPICIBA {
 			requireNbf = true
-			requireSingleAudience = true
 			maxLifetime = 60 * time.Minute
 		}
 		if p == profile.FAPICIBA {
@@ -373,16 +371,15 @@ func buildJARVerifier(cfg *config, encSet *keys.EncryptionSet) (*jar.Verifier, e
 		resolverOpts = append(resolverOpts, jar.WithBaseTransport(cfg.jwksHTTPTransport))
 	}
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:                cfg.issuer,
-		Resolver:              jar.NewDefaultResolver(cfg.clock, resolverOpts...),
-		Clock:                 cfg.clock,
-		RequireNbf:            requireNbf,
-		RequireIAT:            requireIAT,
-		JTIs:                  cfg.store.ConsumedJTIs(),
-		EncryptionResolver:    jarEncryptionResolver(encSet),
-		AllowMissingJTI:       allowMissingJTI,
-		MaxLifetime:           maxLifetime,
-		RequireSingleAudience: requireSingleAudience,
+		Issuer:             cfg.issuer,
+		Resolver:           jar.NewDefaultResolver(cfg.clock, resolverOpts...),
+		Clock:              cfg.clock,
+		RequireNbf:         requireNbf,
+		RequireIAT:         requireIAT,
+		JTIs:               cfg.store.ConsumedJTIs(),
+		EncryptionResolver: jarEncryptionResolver(encSet),
+		AllowMissingJTI:    allowMissingJTI,
+		MaxLifetime:        maxLifetime,
 	})
 	if err != nil {
 		return nil, &Error{
@@ -449,9 +446,16 @@ type assertionVerifiers struct {
 // introspection, device authorization, or token.
 //
 // The AS issuer remains accepted as an alias on every endpoint for FAPI
-// 2.0 / RFC 7523bis compatibility. CIBA additionally accepts the token
-// endpoint URL because CIBA Core 1.0 §7.1 explicitly permits issuer,
-// token endpoint URL, and backchannel authentication endpoint URL.
+// 2.0 / RFC 7523bis compatibility. PAR additionally accepts the token
+// endpoint URL: RFC 9126 §2 authenticates the PAR request as a token-
+// endpoint client, so the token endpoint URL — the canonical
+// client_assertion audience per RFC 7523 §3 / OIDC Core §9 — is a valid
+// aud there. The directional protection is preserved: the token endpoint
+// still does not accept the PAR-specific URL, and the shared consumed-JTI
+// store blocks replay of a single assertion across endpoints. CIBA
+// likewise accepts the token endpoint URL because CIBA Core 1.0 §7.1
+// explicitly permits issuer, token endpoint URL, and backchannel
+// authentication endpoint URL.
 func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
 	resolver, err := clientauth.NewStoreJWKSResolver(cfg.store.Clients())
 	if err != nil {
@@ -474,7 +478,7 @@ func buildAssertionVerifiers(cfg *config) (assertionVerifiers, error) {
 	backchannelAud := absoluteEndpointURL(cfg, cfg.endpoints.Backchannel)
 	return assertionVerifiers{
 		Token:       buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
-		PAR:         buildAssertionVerifier(cfg, resolver, parAud, []string{cfg.issuer}),
+		PAR:         buildAssertionVerifier(cfg, resolver, parAud, []string{cfg.issuer, tokenAud}),
 		Introspect:  buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
 		Revoke:      buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),
 		Device:      buildAssertionVerifier(cfg, resolver, tokenAud, []string{cfg.issuer}),

@@ -38,8 +38,10 @@ func TestBuildProxyTrust_NilWhenNoCIDRs(t *testing.T) {
 // TestBuildAssertionVerifiers_EndpointScopedAudience pins that a
 // private_key_jwt assertion minted for PAR is not also accepted at token /
 // revoke / introspection / device endpoints. Issuer remains an accepted
-// alias for FAPI 2.0, but endpoint URLs are scoped to the endpoint that
-// receives the assertion.
+// alias for FAPI 2.0, and PAR additionally accepts the token endpoint URL
+// (RFC 9126 §2 authenticates PAR as a token-endpoint client), but the
+// token endpoint does not reciprocally accept the PAR URL — the scoping
+// stays directional.
 func TestBuildAssertionVerifiers_EndpointScopedAudience(t *testing.T) {
 	t.Parallel()
 
@@ -61,7 +63,7 @@ func TestBuildAssertionVerifiers_EndpointScopedAudience(t *testing.T) {
 	backchannelAud := absoluteEndpointURL(cfg, cfg.endpoints.Backchannel)
 
 	assertVerifierAudiences(t, "token", verifiers.Token, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
-	assertVerifierAudiences(t, "par", verifiers.PAR, parAud, []string{cfg.issuer}, []string{tokenAud, backchannelAud})
+	assertVerifierAudiences(t, "par", verifiers.PAR, parAud, []string{cfg.issuer, tokenAud}, []string{backchannelAud})
 	assertVerifierAudiences(t, "introspect", verifiers.Introspect, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
 	assertVerifierAudiences(t, "revoke", verifiers.Revoke, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})
 	assertVerifierAudiences(t, "device", verifiers.Device, tokenAud, []string{cfg.issuer}, []string{parAud, backchannelAud})

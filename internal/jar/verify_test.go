@@ -127,6 +127,41 @@ func TestVerify_RejectsWrongTypeHeader(t *testing.T) {
 	}
 }
 
+// TestVerify_AcceptsAbsentTypeHeader pins RFC 9101 §10.8: the
+// "oauth-authz-req+jwt" media type is RECOMMENDED, not REQUIRED, so a
+// request object that omits typ entirely must still verify. RPs and
+// the conformance suite routinely sign request objects with no typ.
+func TestVerify_AcceptsAbsentTypeHeader(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, jwk, _ := signedRequestObjectWithType(t, happyClaims(now), testKID, "")
+	keys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*jwk}}
+	v := newTestVerifier(t, now, keys)
+	obj, err := v.Verify(context.Background(), raw, testClientID, newClient())
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if obj.Type != "" {
+		t.Errorf("Type=%q want empty", obj.Type)
+	}
+}
+
+// TestVerify_AcceptsMixedCaseTypeHeader pins case-insensitive media-type
+// matching (RFC 2045 §5.1): the request-object media type may arrive in
+// any case, so a scrambled-case "oauth-authz-req+jwt" must still verify.
+func TestVerify_AcceptsMixedCaseTypeHeader(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, jwk, _ := signedRequestObjectWithType(t, happyClaims(now), testKID, "OautH-auThZ-REQ+jWt")
+	keys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*jwk}}
+	v := newTestVerifier(t, now, keys)
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
 func TestVerify_RejectsIssMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -168,27 +203,31 @@ func TestVerify_AcceptsAudArrayWithIssuer(t *testing.T) {
 	}
 }
 
-func TestVerify_StrictAudienceRejectsAudArray(t *testing.T) {
+// TestVerify_AcceptsMultiValuedAudWithIssuer pins RFC 9101 §6.1: the
+// request object "aud" only has to *contain* the issuer. A multi-valued
+// array carrying the issuer alongside other (even bogus) audiences is
+// accepted under the FAPI profile — the OP ignores audiences that are
+// not itself rather than rejecting the request.
+func TestVerify_AcceptsMultiValuedAudWithIssuer(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	c := happyClaims(now)
 	c["nbf"] = now.Unix()
-	c["aud"] = []string{testIssuer}
+	c["aud"] = []string{testIssuer, "https://other.example", "invalid"}
 	raw, keys := makeRequestObject(t, c)
 	v, err := jar.NewVerifier(jar.VerifierConfig{
-		Issuer:                testIssuer,
-		Resolver:              &staticResolver{keys: keys},
-		Clock:                 fakeClock{now: now},
-		RequireNbf:            true,
-		RequireSingleAudience: true,
-		AllowMissingJTI:       true,
+		Issuer:          testIssuer,
+		Resolver:        &staticResolver{keys: keys},
+		Clock:           fakeClock{now: now},
+		RequireNbf:      true,
+		AllowMissingJTI: true,
 	})
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
-	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); !errors.Is(err, jar.ErrAudMismatch) {
-		t.Fatalf("err=%v want ErrAudMismatch", err)
+	if _, err := v.Verify(context.Background(), raw, testClientID, newClient()); err != nil {
+		t.Fatalf("Verify: %v", err)
 	}
 }
 

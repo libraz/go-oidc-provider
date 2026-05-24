@@ -69,7 +69,14 @@ func signClaimsWithType(t *testing.T, priv any, kid string, claims any, alg jose
 			Use:       "sig",
 		},
 	}
-	signer, err := josev4.NewSigner(sk, (&josev4.SignerOptions{}).WithType(josev4.ContentType(typ)))
+	opts := &josev4.SignerOptions{}
+	// An empty typ means "emit no typ header at all" so tests can model
+	// the request objects RFC 9101 permits (and the conformance suite
+	// sends) without a media type.
+	if typ != "" {
+		opts = opts.WithType(josev4.ContentType(typ))
+	}
+	signer, err := josev4.NewSigner(sk, opts)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
