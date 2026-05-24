@@ -42,6 +42,18 @@ advisories:
     threat: T-01
     status: covered
     notes: Keycloak redirect_uri pre-JARM bypass.
+  - id: CVE-2026-3872
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-3872
+    threat: T-01
+    status: covered
+    notes: Keycloak wildcard redirect URI path traversal via ..;/.
+  - id: CVE-2026-7504
+    severity: P0
+    source: https://access.redhat.com/security/cve/CVE-2026-7504
+    threat: T-01
+    status: covered
+    notes: Keycloak wildcard redirect URI parser confusion via multi-@ userinfo.
 
   # --- T-02 State / nonce / PKCE required ---------------------------
   - id: CVE-2024-10318
@@ -50,6 +62,12 @@ advisories:
     threat: T-02
     status: covered
     notes: NGINX OIDC reference module; nonce never validated.
+  - id: CVE-2026-7571
+    severity: P0
+    source: https://access.redhat.com/security/cve/CVE-2026-7571
+    threat: T-02
+    status: covered
+    notes: Keycloak implicit-flow disable bypass and access-token disclosure.
 
   # --- T-03 Mix-up / code-injection ---------------------------------
   - id: CVE-2024-23647
@@ -74,6 +92,15 @@ advisories:
       interception. The (code, client_id, redirect_uri, code_verifier)
       tuple match in internal/grants/authcode prevents the bypass;
       TestExchange_RejectsClientMismatch pins the client_id half.
+  - id: CVE-2026-4282
+    severity: P0
+    source: https://access.redhat.com/security/cve/CVE-2026-4282
+    threat: T-03
+    status: tracking
+    notes: |
+      Keycloak authorization-code forgery via SingleUseObjectProvider
+      isolation flaw. Needs a store-namespace / code-consumption review
+      before flipping to covered.
 
   # --- T-04 Audience confusion --------------------------------------
   - id: CVE-2025-27370
@@ -94,6 +121,12 @@ advisories:
     threat: T-04
     status: covered
     notes: MinIO OIDC alg-confusion + aud confusion.
+  - id: CVE-2026-37979
+    severity: P0
+    source: https://access.redhat.com/security/cve/CVE-2026-37979
+    threat: T-04
+    status: covered
+    notes: Keycloak OIDC token introspection audience bypass.
 
   # --- T-05 Algorithm downgrade -------------------------------------
   - id: CVE-2015-2951
@@ -164,6 +197,12 @@ advisories:
     threat: T-06
     status: covered
     notes: Auth0 jsonwebtoken-koa trusted jwk header.
+  - id: CVE-2026-34240
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-34240
+    threat: T-06
+    status: covered
+    notes: Dart jose header-provided jwk accepted for verification.
   - id: CVE-2024-29371
     severity: P0
     source: https://nvd.nist.gov/vuln/detail/CVE-2024-29371
@@ -190,6 +229,12 @@ advisories:
     notes: |
       go-jose JWE decryption panic. Class-covered by FuzzJOSEParse:
       ParseSigned is JWS-only and panic-immune.
+  - id: GHSA-vm9r-h74p-hg97
+    severity: P0
+    source: https://github.com/appsup-dart/jose/security/advisories/GHSA-vm9r-h74p-hg97
+    threat: T-06
+    status: covered
+    notes: GHSA pair for CVE-2026-34240.
   - id: GHSA-c6gw-w398-hv78
     severity: P2
     source: https://github.com/go-jose/go-jose/security/advisories/GHSA-c6gw-w398-hv78
@@ -253,6 +298,20 @@ advisories:
       fosite private_key_jwt jti replay (2020).
       TestPrivateKeyJWTVerifier_JTIReplay_Rejected pins the per-jti
       single-use contract that blocks the replay.
+  - id: CVE-2026-1035
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-1035
+    threat: T-07
+    status: covered
+    notes: Keycloak refresh token reuse bypass via TOCTOU race.
+
+  # --- T-08 Outbound fetch / SSRF ----------------------------------
+  - id: CVE-2026-1180
+    severity: P0
+    source: https://access.redhat.com/security/cve/CVE-2026-1180
+    threat: T-08
+    status: covered
+    notes: Keycloak OIDC DCR jwks_uri SSRF during private_key_jwt key resolution.
 
   # --- T-09 Token / sensitive-info leak paths ----------------------
   - id: GHSA-7mqr-2v3q-v2wm

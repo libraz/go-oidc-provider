@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +86,16 @@ func (stubStore) CIBARequests() store.CIBARequestStore { return nil }
 type noClientsStore struct{ stubStore }
 
 func (noClientsStore) Clients() store.ClientStore { return nil }
+
+// noSessionsStore wraps [stubStore] and returns nil from Sessions() so
+// the SessionStore-presence check can be exercised. The default grant
+// set mounts the browser authorize endpoint, which is the exact
+// predicate (grantsRequireAuthorizeEndpoint) the runtime uses to decide
+// whether it consumes the SessionStore — so a nil here MUST surface at
+// op.New rather than at the first /authorize request.
+type noSessionsStore struct{ stubStore }
+
+func (noSessionsStore) Sessions() store.SessionStore { return nil }
 
 type stubAccessTokenRegistry struct{}
 
@@ -311,6 +322,31 @@ func TestNew_RejectsMissingClientStore(t *testing.T) {
 	}
 	if !op.IsServerError(err) {
 		t.Errorf("missing ClientStore must surface as server configuration error: %v", err)
+	}
+}
+
+// TestNew_RejectsMissingSessionStore pins that a store returning nil
+// from Sessions() under a grant set that mounts the browser authorize
+// endpoint surfaces a configuration error at op.New, not a nil-deref
+// when the session manager is built. The default grant set satisfies
+// the gate, so the bare wrapper is enough to trigger it.
+func TestNew_RejectsMissingSessionStore(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(noSessionsStore{}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	)
+	if err == nil {
+		t.Fatal("expected configuration error for missing SessionStore")
+	}
+	if !strings.Contains(err.Error(), "SessionStore") {
+		t.Errorf("err = %v, want it to mention SessionStore", err)
+	}
+	if !op.IsServerError(err) {
+		t.Errorf("missing SessionStore must surface as server configuration error: %v", err)
 	}
 }
 

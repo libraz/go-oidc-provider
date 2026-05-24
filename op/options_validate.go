@@ -831,6 +831,12 @@ func (c *config) validateStoreCapabilities() error {
 			because: "an interactive grant that issues consent records is enabled",
 		},
 		{
+			need:    grantsRequireAuthorizeEndpoint(c.grants),
+			got:     c.store.Sessions(),
+			desc:    "SessionStore",
+			because: "a grant that mounts the browser authorize endpoint is enabled",
+		},
+		{
 			need:    slices.Contains(c.grants, grant.DeviceCode),
 			got:     c.store.DeviceCodes(),
 			desc:    "DeviceCodeStore",

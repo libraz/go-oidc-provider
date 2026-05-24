@@ -120,6 +120,29 @@ type queries struct {
 	// op metadata
 	metadataGet string
 	metadataSet string
+
+	// device codes (RFC 8628)
+	deviceCodeSave            string
+	deviceCodeFind            string
+	deviceCodeFindByUserCode  string
+	deviceCodeApprove         string
+	deviceCodeDeny            string
+	deviceCodeRecordPoll      string
+	deviceCodeConsume         string
+	deviceCodeStrikeIncrement string
+	deviceCodeStrikeRead      string
+	deviceCodeViolationIncr   string
+	deviceCodeViolationRead   string
+
+	// CIBA requests (OpenID Connect CIBA Core 1.0)
+	cibaSave          string
+	cibaFind          string
+	cibaApprove       string
+	cibaDeny          string
+	cibaRecordPoll    string
+	cibaConsume       string
+	cibaViolationIncr string
+	cibaViolationRead string
 }
 
 // buildQueries assembles every SQL template the adapter needs for the
@@ -142,6 +165,15 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	clientCols := joinColumns(clientColumns)
 	clientPlaceholders := placeholders(len(clientColumns))
 	clientUpdateSets := updateSetList(clientColumns, "id")
+
+	const deviceCodeCols = "id, client_id, user_code, subject, scope, resource, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, user_code_strikes, poll_violations, last_polled_at, expires_at, issued_at"
+	// notExpiredGuard tails every device-code and CIBA state-transition
+	// query so an expired-but-not-yet-collected row behaves identically
+	// to a missing one (ErrNotFound), matching the strict-less-than
+	// expiry semantic the inmem reference and contract harness pin. A
+	// zero expires_at opts out of expiry.
+	const notExpiredGuard = " AND (expires_at = 0 OR expires_at >= ?)"
+	const cibaCols = "id, client_id, subject, scope, resource, acr_values, binding_message, user_code, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, poll_violations, last_polled_at, expires_at, issued_at"
 
 	q := queries{
 		// clients
@@ -391,6 +423,64 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		metadataSet: d.rebind(
 			"INSERT INTO " + n.metadata + " (meta_key, meta_value) VALUES (?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("meta_key", "meta_value="+d.excludedRef("meta_value"))),
+
+		// device codes (RFC 8628). The id column holds the SHA-256
+		// digest of the wire device_code; the substore hashes before
+		// every bind so the raw bearer secret never reaches the DB.
+		deviceCodeSave: d.rebind(
+			"INSERT INTO " + n.deviceCodes + " (" + deviceCodeCols + ")" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+		deviceCodeFind: d.rebind(
+			"SELECT " + deviceCodeCols + " FROM " + n.deviceCodes + " WHERE id = ?"),
+		deviceCodeFindByUserCode: d.rebind(
+			"SELECT " + deviceCodeCols + " FROM " + n.deviceCodes + " WHERE user_code = ?"),
+		deviceCodeApprove: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET status = ?, subject = ?, auth_time = ?" +
+				" WHERE id = ? AND status = ?" + notExpiredGuard),
+		deviceCodeDeny: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
+				" WHERE id = ? AND status = ?" + notExpiredGuard),
+		deviceCodeRecordPoll: d.rebind(
+			"UPDATE " + n.deviceCodes +
+				" SET last_polled_at = ?, poll_interval = CASE WHEN ? > poll_interval THEN ? ELSE poll_interval END" +
+				" WHERE id = ?" + notExpiredGuard),
+		deviceCodeConsume: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET status = ? WHERE id = ? AND status = ?" + notExpiredGuard),
+		deviceCodeStrikeIncrement: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET user_code_strikes = user_code_strikes + 1" +
+				" WHERE id = ? AND user_code_strikes < 255" + notExpiredGuard),
+		deviceCodeStrikeRead: d.rebind(
+			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard),
+		deviceCodeViolationIncr: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET poll_violations = poll_violations + 1" +
+				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard),
+		deviceCodeViolationRead: d.rebind(
+			"SELECT poll_violations FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard),
+
+		// CIBA requests (OpenID Connect CIBA Core 1.0). The id column
+		// holds the SHA-256 digest of the wire auth_req_id; the substore
+		// hashes before every bind so the raw bearer secret never
+		// reaches the DB.
+		cibaSave: d.rebind(
+			"INSERT INTO " + n.cibaRequests + " (" + cibaCols + ")" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+		cibaFind: d.rebind(
+			"SELECT " + cibaCols + " FROM " + n.cibaRequests + " WHERE id = ?"),
+		cibaApprove: d.rebind(
+			"UPDATE " + n.cibaRequests + " SET status = ?, subject = ?, auth_time = ?" +
+				" WHERE id = ? AND status = ?" + notExpiredGuard),
+		cibaDeny: d.rebind(
+			"UPDATE " + n.cibaRequests + " SET status = ?, deny_reason = ?" +
+				" WHERE id = ? AND status = ?" + notExpiredGuard),
+		cibaRecordPoll: d.rebind(
+			"UPDATE " + n.cibaRequests + " SET last_polled_at = ? WHERE id = ?" + notExpiredGuard),
+		cibaConsume: d.rebind(
+			"UPDATE " + n.cibaRequests + " SET status = ? WHERE id = ? AND status = ?" + notExpiredGuard),
+		cibaViolationIncr: d.rebind(
+			"UPDATE " + n.cibaRequests + " SET poll_violations = poll_violations + 1" +
+				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard),
+		cibaViolationRead: d.rebind(
+			"SELECT poll_violations FROM " + n.cibaRequests + " WHERE id = ?" + notExpiredGuard),
 	}
 
 	// Layer 6: scan every produced query for SQL-injection

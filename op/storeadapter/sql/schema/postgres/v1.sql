@@ -245,3 +245,61 @@ CREATE TABLE IF NOT EXISTS oidc_op_metadata (
     meta_key TEXT PRIMARY KEY,
     meta_value TEXT NOT NULL
 );
+
+-- oidc_device_codes.id stores the SHA-256 hex digest (64 ASCII chars)
+-- of the RFC 8628 device_code bearer secret the device polls with at
+-- the token endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / state transitions via the
+-- shared op/storeadapter/patterns.Digest helper. user_code is the
+-- human-read-aloud value gated by the package's brute-force lockout,
+-- so it is stored canonicalised (uppercase, separators stripped) and
+-- carries a UNIQUE constraint so a fresh user_code never collides with
+-- a live record.
+CREATE TABLE IF NOT EXISTS oidc_device_codes (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user_code TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    scope JSONB NOT NULL DEFAULT '[]'::jsonb,
+    resource JSONB NOT NULL DEFAULT '[]'::jsonb,
+    dpop_jkt TEXT NOT NULL DEFAULT '',
+    mtls_cert_thumbprint TEXT NOT NULL DEFAULT '',
+    poll_interval BIGINT NOT NULL DEFAULT 0,
+    status SMALLINT NOT NULL DEFAULT 0,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    deny_reason TEXT NOT NULL DEFAULT '',
+    user_code_strikes SMALLINT NOT NULL DEFAULT 0,
+    poll_violations SMALLINT NOT NULL DEFAULT 0,
+    last_polled_at BIGINT,
+    expires_at BIGINT NOT NULL,
+    issued_at BIGINT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS oidc_device_codes_user_code ON oidc_device_codes(user_code);
+CREATE INDEX IF NOT EXISTS idx_oidc_device_codes_expires ON oidc_device_codes(expires_at);
+
+-- oidc_ciba_requests.id stores the SHA-256 hex digest (64 ASCII chars)
+-- of the OIDC CIBA auth_req_id bearer secret the client polls with at
+-- the token endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / state transitions via the
+-- shared op/storeadapter/patterns.Digest helper.
+CREATE TABLE IF NOT EXISTS oidc_ciba_requests (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    subject TEXT NOT NULL DEFAULT '',
+    scope JSONB NOT NULL DEFAULT '[]'::jsonb,
+    resource JSONB NOT NULL DEFAULT '[]'::jsonb,
+    acr_values JSONB NOT NULL DEFAULT '[]'::jsonb,
+    binding_message TEXT NOT NULL DEFAULT '',
+    user_code TEXT NOT NULL DEFAULT '',
+    dpop_jkt TEXT NOT NULL DEFAULT '',
+    mtls_cert_thumbprint TEXT NOT NULL DEFAULT '',
+    poll_interval BIGINT NOT NULL DEFAULT 0,
+    status SMALLINT NOT NULL DEFAULT 0,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    deny_reason TEXT NOT NULL DEFAULT '',
+    poll_violations SMALLINT NOT NULL DEFAULT 0,
+    last_polled_at BIGINT,
+    expires_at BIGINT NOT NULL,
+    issued_at BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oidc_ciba_requests_expires ON oidc_ciba_requests(expires_at);

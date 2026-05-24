@@ -122,8 +122,9 @@ func (s *Store) PutUserWithPassword(ctx context.Context, u *store.User, username
 
 // UserPasswords returns the SQL implementation of
 // [store.UserPasswordStore]. The returned value is the same underlying
-// state as [Store.Users]; the split mirrors the inmem reference adapter
-// so the LoginFlow compiler accepts it directly.
+// handle as [Store.Users] (a *userStore satisfies both interfaces); the
+// split mirrors the inmem reference adapter so the LoginFlow compiler
+// accepts it directly.
 func (s *Store) UserPasswords() store.UserPasswordStore {
-	return newUserStore(s, nil)
+	return s.usersImpl
 }

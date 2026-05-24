@@ -73,6 +73,8 @@ func Run(t *testing.T, f Factory) {
 		{"RegistrationAccessTokenStore", ratCases},
 		{"OpaqueAccessTokenStore", opaqueAccessTokenCases},
 		{"GrantRevocationStore", grantRevocationCases},
+		{"DeviceCodeStore", deviceCodeCases},
+		{"CIBARequestStore", cibaRequestCases},
 		{"Transactional", transactionalCases},
 	}
 

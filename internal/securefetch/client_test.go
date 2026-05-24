@@ -264,6 +264,11 @@ func TestClient_Get_DefaultsToDefaultMaxBody(t *testing.T) {
 // rejects loopback, RFC 1918, link-local, IPv6 ULA, and cloud-metadata
 // hosts. A future revision that loosens any policy fails this test
 // loudly rather than silently widening the surface.
+//
+// Tracks: CVE-2026-1180 (Keycloak; OIDC Dynamic Client Registration
+// `jwks_uri` SSRF when resolving private_key_jwt keys). In this
+// codebase, registered client `jwks_uri` resolution is routed through
+// the same JAR JWKS fetcher / securefetch envelope.
 func TestPolicy_SSRFContract(t *testing.T) {
 	t.Parallel()
 

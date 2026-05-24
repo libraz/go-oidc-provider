@@ -26,7 +26,9 @@ import (
 // verification), CVE-2018-1000531 (inversoft prime-jwt; alg header
 // downgrade and jwk-trusting verification), CVE-2017-11424
 // (python-jose-style libraries that resolved jku from the header),
-// CVE-2019-7644 (Auth0 jsonwebtoken-koa; trusted jwk header), and the
+// CVE-2019-7644 (Auth0 jsonwebtoken-koa; trusted jwk header),
+// CVE-2026-34240 / GHSA-vm9r-h74p-hg97 (Dart jose; header-provided
+// jwk treated as a verification candidate), and the
 // general RFC 8725 §3 guidance that arose from these incidents.
 //
 // Defence in this codebase: [jose.ParseSigned] returns a parsed JWS

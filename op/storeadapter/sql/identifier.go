@@ -68,6 +68,8 @@ type nameMap struct {
 	iats               string
 	rats               string
 	metadata           string
+	deviceCodes        string
+	cibaRequests       string
 }
 
 // defaultNames returns the canonical table names. Embedders that
@@ -93,6 +95,8 @@ func defaultNames() nameMap {
 		iats:               "oidc_initial_access_tokens",
 		rats:               "oidc_registration_access_tokens",
 		metadata:           "oidc_op_metadata",
+		deviceCodes:        "oidc_device_codes",
+		cibaRequests:       "oidc_ciba_requests",
 	}
 }
 
@@ -139,6 +143,10 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.rats = physical
 		case "op_metadata":
 			n.metadata = physical
+		case "device_codes":
+			n.deviceCodes = physical
+		case "ciba_requests":
+			n.cibaRequests = physical
 		default:
 			return fmt.Errorf("oidcsql: unknown WithNaming key %q (valid keys: %s)",
 				logical, strings.Join(knownNamingKeys, ", "))
@@ -169,6 +177,8 @@ func (n nameMap) all() []string {
 		n.iats,
 		n.rats,
 		n.metadata,
+		n.deviceCodes,
+		n.cibaRequests,
 	}
 }
 
@@ -204,6 +214,8 @@ var knownNamingKeys = []string{
 	"initial_access_tokens",
 	"registration_access_tokens",
 	"op_metadata",
+	"device_codes",
+	"ciba_requests",
 }
 
 // rewriteSchema swaps every default table name in the embedded DDL
@@ -232,6 +244,8 @@ func rewriteSchema(raw []byte, n nameMap) string {
 		{defaults.users, n.users},
 		{defaults.iats, n.iats},
 		{defaults.rats, n.rats},
+		{defaults.deviceCodes, n.deviceCodes},
+		{defaults.cibaRequests, n.cibaRequests},
 	}
 	for _, p := range pairs {
 		if p.from == p.to {

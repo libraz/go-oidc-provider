@@ -246,11 +246,14 @@ func TestValidate_SentinelTable(t *testing.T) {
 // Tracks: CVE-2024-10318 (NGINX OIDC reference module, late 2024) —
 // ID-token nonce was not validated, allowing session-fixation /
 // ID-token-replay against any RP that accepted an attacker-supplied
-// fresh-looking token. The structural defence here is one layer
-// further out: an OP that never issues an ID token outside the
+// fresh-looking token. CVE-2026-7571 (Keycloak) is the sibling class:
+// client-state manipulation bypassed the disabled implicit-flow
+// control and exposed access tokens on front-channel / log surfaces.
+// The structural defence here is one layer further out: an OP that
+// never issues an ID or access token outside the
 // /token endpoint (i.e. only response_type=code) eliminates the
-// front-channel nonce-binding surface entirely. This test pins that
-// surface to "closed".
+// front-channel nonce-binding and token-disclosure surface entirely.
+// This test pins that surface to "closed".
 //
 // Also tracks: OIDC Core 1.0 §15.5.2 / OAuth 2.0 Security BCP
 // (RFC 9700) §2.1.2 which DEPRECATE the implicit and hybrid flows
@@ -442,6 +445,10 @@ func TestRequest_Validate_DuplicateResourceParametersRejected(t *testing.T) {
 //   - ory/fosite GHSA-rfq3-w54c-f9q5 (loopback redirect rule allowed
 //     host/query override; the fix narrows runtime variation to the
 //     port only — exact-string match here is even stricter).
+//   - CVE-2026-3872 (Keycloak; wildcard redirect URI path traversal
+//     via `..;/` in the OIDC auth endpoint).
+//   - CVE-2026-7504 (Keycloak; wildcard redirect URI parser confusion
+//     through multiple `@` bytes in the userinfo / authority segment).
 //   - RFC 6749 §3.1.2.3 / RFC 9700 §4.1 which mandate "complete client
 //     redirection URI matching" for non-loopback URIs.
 func TestRequest_Validate_RedirectURIAttackVariants(t *testing.T) {
@@ -467,12 +474,14 @@ func TestRequest_Validate_RedirectURIAttackVariants(t *testing.T) {
 		{"path_double_slash", "https://rp.example.com//cb"},
 		{"path_dot_segment", "https://rp.example.com/./cb"},
 		{"path_parent_dot_segment", "https://rp.example.com/x/../cb"},
+		{"path_semicolon_parent_dot_segment", "https://rp.example.com/cb/..;/admin"},
 		{"path_pct_encoded", "https://rp.example.com/c%62"}, // %62 = 'b'
 		{"path_trailing_pct_space", "https://rp.example.com/cb%20"},
 		{"explicit_default_port", "https://rp.example.com:443/cb"},
 		{"alternate_port", "https://rp.example.com:8443/cb"},
 		{"userinfo_smuggling", "https://attacker.example@rp.example.com/cb"},
 		{"userinfo_with_pass", "https://u:p@rp.example.com/cb"},
+		{"userinfo_multi_at", "https://rp.example.com@@attacker.example/cb"},
 		{"empty_string", ""},
 		{"javascript_scheme", "javascript:alert(1)"},
 		{"data_scheme", "data:text/html,evil"},

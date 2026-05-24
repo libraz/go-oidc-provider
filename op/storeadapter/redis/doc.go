@@ -23,9 +23,12 @@
 // [github.com/libraz/go-oidc-provider/op/storeadapter/composite] —
 // example 09-redis-volatile demonstrates the wiring end-to-end. Direct
 // use of the [Store] without composite is not supported: every
-// out-of-scope substore accessor returns a stub that panics on first call
-// so configuration errors surface loudly rather than silently corrupting
-// state.
+// out-of-scope substore accessor returns nil. For feature-gated substores
+// (AccessTokens, GrantRevocations, DeviceCodes, CIBARequests, IATs, RATs)
+// op.New rejects that nil at construction time when the matching feature
+// is enabled, so misconfiguration surfaces loudly rather than silently
+// corrupting state; the composite layer routes those accessors to the
+// durable backend before they ever reach the OP.
 //
 // # Security defaults
 //

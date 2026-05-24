@@ -243,3 +243,61 @@ CREATE TABLE IF NOT EXISTS oidc_op_metadata (
     meta_key VARCHAR(64) PRIMARY KEY,
     meta_value LONGTEXT NOT NULL
 );
+
+-- oidc_device_codes.id stores the SHA-256 hex digest (64 ASCII chars)
+-- of the RFC 8628 device_code bearer secret the device polls with at
+-- the token endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / state transitions via the
+-- shared op/storeadapter/patterns.Digest helper. user_code is the
+-- human-read-aloud value gated by the package's brute-force lockout,
+-- so it is stored canonicalised (uppercase, separators stripped) and
+-- carries a UNIQUE constraint so a fresh user_code never collides with
+-- a live record.
+CREATE TABLE IF NOT EXISTS oidc_device_codes (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    user_code VARCHAR(64) NOT NULL,
+    subject VARCHAR(255) NOT NULL DEFAULT '',
+    scope JSON NOT NULL,
+    resource JSON NOT NULL,
+    dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
+    mtls_cert_thumbprint VARCHAR(64) NOT NULL DEFAULT '',
+    poll_interval BIGINT NOT NULL DEFAULT 0,
+    status SMALLINT NOT NULL DEFAULT 0,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    deny_reason VARCHAR(64) NOT NULL DEFAULT '',
+    user_code_strikes SMALLINT NOT NULL DEFAULT 0,
+    poll_violations SMALLINT NOT NULL DEFAULT 0,
+    last_polled_at BIGINT NULL,
+    expires_at BIGINT NOT NULL,
+    issued_at BIGINT NOT NULL,
+    UNIQUE KEY oidc_device_codes_user_code (user_code),
+    INDEX idx_oidc_device_codes_expires (expires_at)
+);
+
+-- oidc_ciba_requests.id stores the SHA-256 hex digest (64 ASCII chars)
+-- of the OIDC CIBA auth_req_id bearer secret the client polls with at
+-- the token endpoint; the raw value is never persisted. The adapter
+-- computes the digest on Save / Find / state transitions via the
+-- shared op/storeadapter/patterns.Digest helper.
+CREATE TABLE IF NOT EXISTS oidc_ciba_requests (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    client_id VARCHAR(255) NOT NULL,
+    subject VARCHAR(255) NOT NULL DEFAULT '',
+    scope JSON NOT NULL,
+    resource JSON NOT NULL,
+    acr_values JSON NOT NULL,
+    binding_message VARCHAR(255) NOT NULL DEFAULT '',
+    user_code VARCHAR(64) NOT NULL DEFAULT '',
+    dpop_jkt VARCHAR(64) NOT NULL DEFAULT '',
+    mtls_cert_thumbprint VARCHAR(64) NOT NULL DEFAULT '',
+    poll_interval BIGINT NOT NULL DEFAULT 0,
+    status SMALLINT NOT NULL DEFAULT 0,
+    auth_time BIGINT NOT NULL DEFAULT 0,
+    deny_reason VARCHAR(64) NOT NULL DEFAULT '',
+    poll_violations SMALLINT NOT NULL DEFAULT 0,
+    last_polled_at BIGINT NULL,
+    expires_at BIGINT NOT NULL,
+    issued_at BIGINT NOT NULL,
+    INDEX idx_oidc_ciba_requests_expires (expires_at)
+);

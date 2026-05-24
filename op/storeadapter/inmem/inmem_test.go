@@ -151,6 +151,58 @@ func TestConsumePAR_Race(t *testing.T) {
 	}
 }
 
+// TestConsumeRefresh_Race pins the refresh-token rotation hardening:
+// concurrent presentations of the same refresh token must have exactly
+// one successful consumer, with every other racer observing replay.
+//
+// Tracks: CVE-2026-1035 (Keycloak; refresh token reuse bypass via a
+// TOCTOU race in rotation enforcement).
+func TestConsumeRefresh_Race(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+	const n = 64
+	const tokenID = "race-refresh"
+	if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID:        tokenID,
+		ClientID:  "c",
+		Subject:   "s",
+		GrantID:   "g",
+		Scope:     []string{"openid", "offline_access"},
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	var wins, replays atomic.Int32
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.RefreshTokens().Consume(ctx, tokenID)
+			switch {
+			case err == nil:
+				wins.Add(1)
+			case errors.Is(err, store.ErrAlreadyConsumed):
+				replays.Add(1)
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if wins.Load() != 1 {
+		t.Fatalf("expected exactly one Consume to win, got %d", wins.Load())
+	}
+	if replays.Load() != n-1 {
+		t.Fatalf("expected %d replays, got %d", n-1, replays.Load())
+	}
+}
+
 func TestBeginTx_SerialisesConcurrentTransactions(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference

@@ -96,6 +96,9 @@ type Store struct {
 	usersImpl              *userStore
 	iatsImpl               *iatStore
 	ratsImpl               *ratStore
+	deviceCodesImpl        *deviceCodeStore
+	cibaRequestsImpl       *cibaRequestStore
+	metadataImpl           *metadataStore
 }
 
 // New constructs a Store backed by the supplied *sql.DB. The caller is
@@ -157,6 +160,9 @@ func (s *Store) attachSubstores() {
 	s.usersImpl = newUserStore(s, nil)
 	s.iatsImpl = newIATStore(s, nil)
 	s.ratsImpl = newRATStore(s, nil)
+	s.deviceCodesImpl = newDeviceCodeStore(s)
+	s.cibaRequestsImpl = newCIBARequestStore(s)
+	s.metadataImpl = newMetadataStore(s, nil)
 }
 
 // Schema returns the dialect-specific DDL the adapter expects, with
@@ -323,24 +329,20 @@ func (s *Store) GrantRevocations() store.GrantRevocationStore { return s.grantRe
 // table. The substore is the persistence path for coarse construction-
 // time decisions (subject_mode in v0.9.1; future keys land on the same
 // surface without further interface change).
-func (s *Store) Metadata() store.MetadataStore { return newMetadataStore(s, nil) }
+func (s *Store) Metadata() store.MetadataStore { return s.metadataImpl }
 
-// DeviceCodes implements [store.Store] but the SQL adapter does not
-// yet ship a [store.DeviceCodeStore] implementation; the device_code
-// grant ladders in via the in-memory adapter or a composite that
-// routes [composite.DeviceCodes] elsewhere. Returning nil here lets
-// op.New surface the gap with a clear "device_code substore missing"
-// error at construction time when [op.WithDeviceCodeGrant] is
-// supplied.
-func (s *Store) DeviceCodes() store.DeviceCodeStore { return nil }
+// DeviceCodes returns the [store.DeviceCodeStore] handle backing the
+// RFC 8628 device-authorization grant. The substore sits outside the
+// transactional cluster: its approve→consume compare-and-swap is the
+// single-use guarantee, so it is never enlisted in a Tx.
+func (s *Store) DeviceCodes() store.DeviceCodeStore { return s.deviceCodesImpl }
 
-// CIBARequests implements [store.Store] but the SQL adapter does not
-// yet ship a [store.CIBARequestStore] implementation; CIBA support
-// ladders in via the in-memory adapter or a composite that routes
-// [composite.CIBARequests] elsewhere. Returning nil here lets op.New
-// surface the gap with a clear "CIBA substore missing" error at
-// construction time when [op.WithCIBA] is supplied.
-func (s *Store) CIBARequests() store.CIBARequestStore { return nil }
+// CIBARequests returns the [store.CIBARequestStore] handle backing the
+// OpenID Connect CIBA backchannel-authentication grant. The substore
+// sits outside the transactional cluster: its approve→consume
+// compare-and-swap is the single-use guarantee, so it is never
+// enlisted in a Tx.
+func (s *Store) CIBARequests() store.CIBARequestStore { return s.cibaRequestsImpl }
 
 // --- store.ClientRegistry ----------------------------------------------------
 
