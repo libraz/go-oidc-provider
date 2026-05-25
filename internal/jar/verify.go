@@ -354,20 +354,9 @@ func (v *Verifier) verifyForUse(ctx context.Context, raw, expectedClientID strin
 	if pin := client.RequestObjectSigningAlg; pin != "" && pin != parsed.Algorithm.String() {
 		return nil, fmt.Errorf("%w: client requires %q", ErrAlgNotAllowed, pin)
 	}
-	keys, err := v.resolver.Resolve(ctx, client)
+	payload, err := v.verifySignature(ctx, parsed, client)
 	if err != nil {
 		return nil, err
-	}
-	if keys == nil || len(keys.Keys) == 0 {
-		return nil, ErrNoMatchingJWK
-	}
-	jwk, err := pickKey(keys, parsed.KeyID)
-	if err != nil {
-		return nil, err
-	}
-	payload, err := parsed.jws.Verify(jwk.Key)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrSigInvalid, err)
 	}
 	// Re-decode against the verified payload bytes so the verifier
 	// never trusts [Object.Claims] from before the signature check.
@@ -383,6 +372,39 @@ func (v *Verifier) verifyForUse(ctx context.Context, raw, expectedClientID strin
 		return nil, err
 	}
 	return parsed, nil
+}
+
+// verifySignature resolves the client's keyset, selects the key named by
+// the parsed header, holds it to the OP's key-shape floor, and verifies
+// the JWS signature, returning the verified payload bytes. It runs after
+// the alg-allowlist and client alg-pin checks in [Verifier.verifyForUse]
+// so the error precedence (alg rejection before key resolution) is
+// preserved.
+func (v *Verifier) verifySignature(ctx context.Context, parsed *Object, client *store.Client) ([]byte, error) {
+	keys, err := v.resolver.Resolve(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	if keys == nil || len(keys.Keys) == 0 {
+		return nil, ErrNoMatchingJWK
+	}
+	jwk, err := pickKey(keys, parsed.KeyID)
+	if err != nil {
+		return nil, err
+	}
+	// Defence-in-depth: hold the client-supplied verification key to the
+	// same RFC 7518 §3.3 / RFC 8725 §3.2 floor the OP applies to its own
+	// keys (RSA >= 2048 bits, curve pinned to the declared alg). A
+	// sub-floor or curve-mismatched client key is rejected as an invalid
+	// signature rather than being handed to go-jose with a laxer check.
+	if err := jose.AssertAlgKeyShape(parsed.Algorithm.String(), jwk.Key); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSigInvalid, err)
+	}
+	payload, err := parsed.jws.Verify(jwk.Key)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSigInvalid, err)
+	}
+	return payload, nil
 }
 
 // maybeDecrypt detects a JWE-shaped raw (5-segment compact form per

@@ -174,8 +174,24 @@ func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID st
 
 // verifySignature tries every key in keys and returns the verified
 // payload on the first success. It returns an error if no key validates.
+//
+// Each candidate key is first gated through [jose.AssertAlgKeyShape]:
+// the OP's own signing keys are held to the RFC 7518 §3.3 / RFC 8725
+// §3.2 floor (RSA >= 2048 bits, curve pinned to the declared alg), and
+// a client registering a weaker or mismatched key MUST NOT receive a
+// laxer check than the OP applies to itself. A key whose shape does not
+// match the declared alg is skipped rather than handed to go-jose, so a
+// sub-floor key can never satisfy the assertion. Compliant keys are
+// unaffected: the gate is a superset of what go-jose already enforces.
 func verifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) ([]byte, error) {
+	alg := ""
+	if len(jws.Signatures) > 0 {
+		alg = jws.Signatures[0].Header.Algorithm
+	}
 	for i := range keys.Keys {
+		if jose.AssertAlgKeyShape(alg, keys.Keys[i].Key) != nil {
+			continue
+		}
 		payload, err := jws.Verify(keys.Keys[i])
 		if err == nil {
 			return payload, nil
