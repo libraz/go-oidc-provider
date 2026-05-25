@@ -91,6 +91,44 @@ func TestApplyOverrides_ValidKeysOnly(t *testing.T) {
 	}
 }
 
+// TestRewriteSchema_RenamesEveryTable guards against a rename pair being
+// added to applyOverrides / knownNamingKeys but forgotten in
+// rewriteSchema. When that happens the query builder targets the renamed
+// table while Migrate creates the table under its default name, so the
+// store boots broken at the first query (this regressed op_metadata
+// once). The test overrides every known key to a distinct sentinel and
+// asserts that no default name survives the rewrite for any dialect.
+func TestRewriteSchema_RenamesEveryTable(t *testing.T) {
+	t.Parallel()
+
+	overrides := make(map[string]string, len(knownNamingKeys))
+	for _, key := range knownNamingKeys {
+		overrides[key] = "rn_" + key
+	}
+
+	n := defaultNames()
+	if err := n.applyOverrides(overrides); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+
+	for _, d := range []struct {
+		name    string
+		dialect Dialect
+	}{
+		{"sqlite", SQLite()},
+		{"mysql", MySQL()},
+		{"postgres", Postgres()},
+	} {
+		rewritten := rewriteSchema(d.dialect.schema, n)
+		for _, def := range defaultNames().all() {
+			if strings.Contains(rewritten, def) {
+				t.Errorf("%s: default table name %q survived rewriteSchema; "+
+					"its rename pair is missing from rewriteSchema", d.name, def)
+			}
+		}
+	}
+}
+
 func TestApplyOverrides_UnknownKeyRejected(t *testing.T) {
 	t.Parallel()
 	n := defaultNames()

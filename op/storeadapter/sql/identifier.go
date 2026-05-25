@@ -244,6 +244,7 @@ func rewriteSchema(raw []byte, n nameMap) string {
 		{defaults.users, n.users},
 		{defaults.iats, n.iats},
 		{defaults.rats, n.rats},
+		{defaults.metadata, n.metadata},
 		{defaults.deviceCodes, n.deviceCodes},
 		{defaults.cibaRequests, n.cibaRequests},
 	}
