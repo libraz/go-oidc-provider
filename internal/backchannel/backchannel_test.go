@@ -297,6 +297,63 @@ func TestCoordinator_FansOutToRegisteredClients(t *testing.T) {
 	}
 }
 
+func TestCoordinator_ProjectsSubjectPerTargetClient(t *testing.T) {
+	t.Parallel()
+	priv, sk := mustKey(t)
+	st := inmem.New()
+	delivered := make(chan string, 1)
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:  "https://op.example.com",
+		Signing: sk,
+		Clients: st.Clients(),
+		Grants:  st.Grants(),
+		SubjectProjector: func(_ context.Context, raw string, client *store.Client) (string, error) {
+			if raw != "internal-user" {
+				t.Fatalf("raw subject=%q want internal-user", raw)
+			}
+			if client == nil || client.ID != "pairwise-rp" {
+				t.Fatalf("projector client=%v want pairwise-rp", client)
+			}
+			return "pairwise-sub-for-rp", nil
+		},
+		Deliverer: backchannel.DelivererFunc(func(_ context.Context, _ backchannel.Target, token string) error {
+			delivered <- token
+			return nil
+		}),
+		Clock: fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	now := time.Now()
+	saveClient(t, st, &store.Client{
+		ID: "pairwise-rp", BackchannelLogoutURI: "https://rp.example/logout", SubjectType: "pairwise",
+	})
+	saveGrant(t, st, &store.Grant{
+		ID: "g-pairwise", Subject: "internal-user", ClientID: "pairwise-rp", CreatedAt: now, UpdatedAt: now,
+	})
+
+	n, err := coord.Notify(context.Background(), backchannel.Notice{Subject: "internal-user", SessionID: "sid-1"})
+	if err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("Notify dispatched %d, want 1", n)
+	}
+	token := <-delivered
+	parsed, err := jwt.ParseSigned(token, allowedAlgs())
+	if err != nil {
+		t.Fatalf("parse logout token: %v", err)
+	}
+	claims := map[string]any{}
+	if err := parsed.Claims(&priv.PublicKey, &claims); err != nil {
+		t.Fatalf("verify logout token: %v", err)
+	}
+	if got := claims["sub"]; got != "pairwise-sub-for-rp" {
+		t.Fatalf("logout token sub=%v want pairwise-sub-for-rp", got)
+	}
+}
+
 func TestCoordinator_SkipsSessionRequiredWhenSidEmpty(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

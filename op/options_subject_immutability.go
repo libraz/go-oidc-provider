@@ -3,7 +3,6 @@ package op
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -77,7 +76,7 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 		if persisted == current {
 			return c.writeOpInitMarker(ctx, meta)
 		}
-		return fmt.Errorf("%w: persisted=%q, configured=%q", ErrSubjectModeMismatch, persisted, current)
+		return subjectModeMismatch("persisted=" + persisted + ", configured=" + current)
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return &Error{
@@ -99,8 +98,7 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 		return initErr
 	}
 	if priorInit && current != store.SubjectModePublic {
-		return fmt.Errorf("%w: subject-mode marker absent but op-init sentinel present (store has been used previously), configured=%q",
-			ErrSubjectModeMismatch, current)
+		return subjectModeMismatch("subject-mode marker absent but op-init sentinel present (store has been used previously), configured=" + current)
 	}
 	hasGrants, hasErr := c.store.Grants().HasAny(ctx)
 	if hasErr != nil {
@@ -111,8 +109,7 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 		}
 	}
 	if hasGrants && current != store.SubjectModePublic {
-		return fmt.Errorf("%w: persisted marker absent on a populated store (legacy upgrade infers %q), configured=%q",
-			ErrSubjectModeMismatch, store.SubjectModePublic, current)
+		return subjectModeMismatch("persisted marker absent on a populated store (legacy upgrade infers " + store.SubjectModePublic + "), configured=" + current)
 	}
 	if err := meta.Set(ctx, store.SubjectModeKey, current); err != nil {
 		return &Error{
@@ -122,6 +119,18 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 		}
 	}
 	return c.writeOpInitMarker(ctx, meta)
+}
+
+func subjectModeMismatch(detail string) *Error {
+	desc := ErrSubjectModeMismatch.Description
+	if detail != "" {
+		desc += ": " + detail
+	}
+	return &Error{
+		Code:        codeConfiguration,
+		Description: desc,
+		Cause:       ErrSubjectModeMismatch,
+	}
 }
 
 // metadataHasOpInit reports whether the store has previously been

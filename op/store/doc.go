@@ -15,21 +15,26 @@
 // client registration) live on opt-in extension interfaces such as
 // [ClientRegistry] rather than being bolted onto the core read-only contract.
 //
-// # Transactional vs single-operation clusters
+// # Atomic single-operation contracts and optional transactions
 //
-// A subset of substores must be coordinated atomically because exchanging an
-// authorization code, rotating a refresh token, or consuming a pushed
-// authorization request crosses several record kinds and a partial commit
-// would open a replay window. Backends that wish to serve those kinds
-// implement the optional [Transactional] extension; the [Tx] type then
-// vends substore handles that share a single underlying transaction.
+// The OP core does not open cross-substore transactions. Safety-critical
+// single-use behaviour is expressed on the individual substore methods:
+// authorization codes, refresh tokens, PAR records, device codes, and CIBA
+// requests all expose compare-and-set style Consume methods, and revocation
+// substores expose idempotent cascade operations. A backend must make each
+// documented operation atomic within its own storage engine.
 //
-// The transactional cluster is fixed and consists of [AuthorizationCodeStore],
-// [RefreshTokenStore], [GrantStore], [SessionStore], and
-// [PushedAuthRequestStore]. The remaining substores -- [ConsumedJTIStore]
-// and [InteractionStore] -- are intentionally outside the cluster: they are
-// idempotent or recoverable and operating them inside a transaction would
-// pessimise hot paths without improving safety.
+// The composite adapter additionally requires a closed atomic-routing cluster
+// ([AuthorizationCodeStore], [RefreshTokenStore], [GrantStore],
+// [PushedAuthRequestStore], [AccessTokenRegistry], [OpaqueAccessTokenStore],
+// and [GrantRevocationStore]) to resolve to one backend. That keeps replay
+// detection, refresh rotation, token registration, and revocation cascades in
+// one consistency domain even though the OP core calls the substores directly.
+//
+// Backends and embedders that want explicit transactions may implement the
+// optional [Transactional] extension. [Tx] then vends handles bound to one
+// underlying transaction for manual use and contract tests, but implementing
+// Transactional is not required merely to serve the OP runtime.
 //
 // # Godoc is normative
 //

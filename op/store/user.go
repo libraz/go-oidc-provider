@@ -43,7 +43,7 @@ type User struct {
 //   - the token endpoint, to embed claims in id_token bodies;
 //   - administrative endpoints (e.g. session list), to render names.
 //
-// UserStore is intentionally outside the transactional cluster: the
+// UserStore is intentionally outside the atomic-routing cluster: the
 // OP never writes to it during a grant exchange, so coupling it to the
 // authorization-code transaction would pessimise hot paths without
 // improving safety.

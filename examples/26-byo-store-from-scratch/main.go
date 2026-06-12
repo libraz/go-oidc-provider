@@ -22,7 +22,7 @@
 //
 //   - Clients (GetClient only — no dynamic registration)
 //   - AuthorizationCodes, RefreshTokens, Grants, PushedAuthRequests
-//     (the transactional cluster; substores bind to either *sql.DB or
+//     (the atomic-routing cluster; substores bind to either *sql.DB or
 //     *sql.Tx through a small querier interface, exactly like the
 //     bundled adapter)
 //   - Sessions, Interactions, ConsumedJTIs

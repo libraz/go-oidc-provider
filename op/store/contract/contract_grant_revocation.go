@@ -25,7 +25,7 @@ import (
 //     /revocation-ed is revoked even when its grant has no tombstone;
 //   - GC: rows whose ExpiresAt is strictly before the cutoff are dropped.
 //
-// Backends that participate in the transactional cluster (every backend
+// Backends that participate in the atomic-routing cluster (every backend
 // the library ships under the grant-tombstone strategy) MUST satisfy
 // every case here.
 

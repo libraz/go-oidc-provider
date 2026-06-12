@@ -1,12 +1,13 @@
 package registrationendpoint
 
 import (
+	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
 	"strings"
 
-	"github.com/libraz/go-oidc-provider/internal/jose"
+	internaljose "github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 )
 
@@ -466,6 +467,39 @@ func validateJWKSConfiguration(m ClientMetadata) error {
 	if len(m.JWKs) > 0 && m.JWKsURI != "" {
 		return errInvalidClientMetadata("jwks and jwks_uri are mutually exclusive")
 	}
+	if m.TokenEndpointAuthMethod != "private_key_jwt" {
+		return nil
+	}
+	hasInline := len(m.JWKs) > 0
+	hasURI := m.JWKsURI != ""
+	if hasInline == hasURI {
+		return errInvalidClientMetadata("private_key_jwt requires exactly one of jwks or jwks_uri")
+	}
+	if hasInline {
+		return validateInlineJWKS(m.JWKs)
+	}
+	return nil
+}
+
+func validateInlineJWKS(raw json.RawMessage) error {
+	keys, err := internaljose.ParseJWKSet(raw)
+	if err != nil {
+		return errInvalidClientMetadata("jwks is malformed")
+	}
+	if len(keys) == 0 {
+		return errInvalidClientMetadata("jwks must contain at least one key")
+	}
+	for _, key := range keys {
+		if key.Algorithm != "" {
+			if err := internaljose.AssertAlgKeyShape(key.Algorithm, key.Key); err != nil {
+				return errInvalidClientMetadata("jwks contains an unsupported key")
+			}
+			continue
+		}
+		if _, _, _, ok := internaljose.KeyShape(key.Key); !ok {
+			return errInvalidClientMetadata("jwks contains an unsupported key")
+		}
+	}
 	return nil
 }
 
@@ -561,12 +595,12 @@ func validateJWEAlgEncPair(algField, encField, alg, enc string) error {
 			" must be set together (RFC 7591 / OIDC Core §6.1)")
 	}
 	if alg != "" {
-		if _, ok := jose.ParseJWEAlg(alg); !ok {
+		if _, ok := internaljose.ParseJWEAlg(alg); !ok {
 			return errInvalidClientMetadata(algField + " " + alg + " is not supported")
 		}
 	}
 	if enc != "" {
-		if _, ok := jose.ParseJWEEnc(enc); !ok {
+		if _, ok := internaljose.ParseJWEEnc(enc); !ok {
 			return errInvalidClientMetadata(encField + " " + enc + " is not supported")
 		}
 	}

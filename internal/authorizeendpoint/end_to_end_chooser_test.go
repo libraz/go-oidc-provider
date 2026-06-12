@@ -248,15 +248,13 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	}
 }
 
-// TestEndToEnd_FreshLoginAddsToExistingChooserGroup asserts that a
-// prompt=login submission against an /authorize that carries an active
-// session cookie ADDS the freshly-authenticated subject to the
-// existing chooser group rather than discarding the prior session.
-// This is the seeding path examples/13-multi-account relies on: a
-// browser logs in as user-A, then a subsequent prompt=login flow as
-// user-B leaves both accounts in the same chooser group so a follow-up
-// prompt=select_account renders both rows.
-func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
+// TestEndToEnd_FreshLoginDifferentSubjectStartsNewChooserGroup pins the
+// session-grafting defence: a prompt=login submission against an
+// /authorize request that carries an active cookie for a different
+// subject MUST NOT join the existing chooser group. Cookie planting
+// would otherwise let an attacker graft a victim's fresh login into the
+// attacker's chooser group and switch to it later.
+func TestEndToEnd_FreshLoginDifferentSubjectStartsNewChooserGroup(t *testing.T) {
 	t.Parallel()
 	clock := fakeClock{now: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)}
 	cookieKey := []byte(chooserCookieKey)
@@ -293,8 +291,8 @@ func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
 
 	// Drive /authorize?prompt=login with user-A's session cookie
 	// attached. The orchestrator runs the testkit SubjectAuthenticator
-	// for "user-B"; ensureSession sees the active cookie, sees the
-	// subject mismatch, and routes to AddAccount.
+	// for "user-B"; ensureSession sees the subject mismatch and MUST
+	// issue a fresh chooser group instead of calling AddAccount.
 	values := e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0])
 	values.Set("prompt", "login")
 	values.Set("nonce", "n-multi")
@@ -366,8 +364,9 @@ func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
 	// The orchestrator pauses at consent because user-B has no cached
 	// grant for this client. Submit the consent prompt inline (rather
 	// than via completeConsentIfPrompted) so the request carries
-	// user-A's session cookie — ensureSession reads it at terminate
-	// time to drive the AddAccount path.
+	// user-A's session cookie — this reproduces the cookie-planting
+	// shape where a different-subject fresh login completes while an
+	// unrelated active session cookie is present.
 	finalResp := postConsentWithSessionCookie(t, client, ctx, interactionURL, tk.Issuer, csrfCookie, interactionCookie, sessA.Cookie, postResp)
 	defer finalResp.Body.Close()
 	if finalResp.StatusCode != http.StatusFound {
@@ -375,8 +374,8 @@ func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
 		t.Fatalf("final status=%d body=%s", finalResp.StatusCode, string(dump))
 	}
 
-	// The new session cookie MUST stay in the original chooser group
-	// (AddAccount path), not allocate a fresh one (Issue path).
+	// The new session cookie MUST allocate a fresh chooser group
+	// (Issue path), not join the original group (AddAccount path).
 	sessionCookie := findCookie(finalResp.Cookies(), cookie.SessionProfile.Name)
 	if sessionCookie == nil {
 		t.Fatal("session cookie not refreshed")
@@ -385,15 +384,21 @@ func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode session cookie: %v", err)
 	}
-	if payload.ChooserGroupID != sessA.ChooserGroupID {
-		t.Errorf("ChooserGroupID after fresh login = %q, want %q (AddAccount, not Issue)",
-			payload.ChooserGroupID, sessA.ChooserGroupID)
+	if payload.ChooserGroupID == sessA.ChooserGroupID {
+		t.Fatalf("ChooserGroupID after fresh login reused planted group %q; want fresh group", payload.ChooserGroupID)
 	}
 	if payload.CurrentSessionID == sessA.SessionID {
 		t.Error("CurrentSessionID == sessA.SessionID, want a freshly-issued SessionID for user-B")
 	}
+	active, err := mgr.Resolve(ctx, sessionCookie.Value)
+	if err != nil {
+		t.Fatalf("Resolve new session: %v", err)
+	}
+	if active.Session.Subject != "user-B" {
+		t.Fatalf("new session subject=%q want user-B", active.Session.Subject)
+	}
 
-	// Both accounts MUST now be live in the chooser group.
+	// The planted chooser group MUST remain user-A only.
 	rows, err := mgr.Accounts(ctx, sessA.ChooserGroupID)
 	if err != nil {
 		t.Fatalf("Accounts: %v", err)
@@ -402,8 +407,8 @@ func TestEndToEnd_FreshLoginAddsToExistingChooserGroup(t *testing.T) {
 	for _, r := range rows {
 		subjects[r.Subject] = true
 	}
-	if !subjects["user-A"] || !subjects["user-B"] {
-		t.Errorf("chooser group subjects = %v, want both user-A and user-B", subjects)
+	if !subjects["user-A"] || subjects["user-B"] {
+		t.Errorf("planted chooser group subjects = %v, want only user-A", subjects)
 	}
 }
 

@@ -219,7 +219,7 @@ func issueRefreshResponse(
 	binding tokenBinding,
 ) {
 	now := deps.now().UTC()
-	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
+	authCtx := refreshAuthContext(ctx, deps, exchanged)
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
@@ -249,10 +249,14 @@ func issueRefreshResponse(
 	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
 		return
 	}
-	publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+	publicSubject := exchanged.Subject
+	if !exchanged.SubjectPublic {
+		var err error
+		publicSubject, err = projectPublicSubject(ctx, deps, exchanged.Subject, client)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
 	}
 	accessToken, err := mintAccessToken(
 		ctx,
@@ -267,6 +271,7 @@ func issueRefreshResponse(
 		authCtx.AuthTime,
 		binding,
 		authCtx.AuthorizationDetails,
+		exchanged.AccessTokenExtra,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -313,6 +318,24 @@ func issueRefreshResponse(
 		AuthorizationDetails: authCtx.AuthorizationDetails,
 		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
+}
+
+func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) authContext {
+	fallback := lookupAuthContext(ctx, deps, exchanged.GrantID)
+	out := fallback
+	if !exchanged.AuthTime.IsZero() {
+		out.AuthTime = exchanged.AuthTime.Unix()
+	}
+	if exchanged.ACR != "" {
+		out.ACR = exchanged.ACR
+	}
+	if len(exchanged.AMR) > 0 {
+		out.AMR = append([]string(nil), exchanged.AMR...)
+	}
+	if len(exchanged.AuthorizationDetails) > 0 {
+		out.AuthorizationDetails = cloneAuthorizationDetails(exchanged.AuthorizationDetails)
+	}
+	return out
 }
 
 // refreshIDTokenInput collects the parameters
@@ -407,15 +430,22 @@ func rotateRefreshToken(
 		rotatedJKT = refreshDPoPJKT(client, binding.DPoPJKT)
 	}
 	token, err := issuer.Issue(ctx, refresh.IssueInput{
-		ClientID:           client.ID,
-		Subject:            exchanged.Subject,
-		GrantID:            exchanged.GrantID,
-		Scope:              append([]string(nil), exchanged.Scope...),
-		Resource:           exchanged.Resource,
-		ParentID:           &parent,
-		DPoPJKT:            rotatedJKT,
-		MTLSCertThumbprint: binding.MTLSThumbprint,
-		Nonce:              exchanged.Nonce,
+		ClientID:             client.ID,
+		Subject:              exchanged.Subject,
+		GrantID:              exchanged.GrantID,
+		Scope:                append([]string(nil), exchanged.Scope...),
+		Resource:             exchanged.Resource,
+		ParentID:             &parent,
+		DPoPJKT:              rotatedJKT,
+		MTLSCertThumbprint:   binding.MTLSThumbprint,
+		Nonce:                exchanged.Nonce,
+		Origin:               exchanged.Origin,
+		SubjectPublic:        exchanged.SubjectPublic,
+		AuthTime:             exchanged.AuthTime,
+		ACR:                  exchanged.ACR,
+		AMR:                  append([]string(nil), exchanged.AMR...),
+		AuthorizationDetails: cloneAuthorizationDetails(exchanged.AuthorizationDetails),
+		AccessTokenExtra:     cloneClaimsMap(exchanged.AccessTokenExtra),
 	})
 	if err != nil {
 		return "", err

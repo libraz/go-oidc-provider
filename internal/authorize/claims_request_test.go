@@ -3,6 +3,7 @@ package authorize_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/authorize"
@@ -24,6 +25,16 @@ func TestParseClaimsRequest_Whitespace(t *testing.T) {
 	got, err := authorize.ParseClaimsRequest("   \n\t ")
 	if err != nil || got != nil {
 		t.Fatalf("got=%+v err=%v want (nil,nil)", got, err)
+	}
+}
+
+func TestParseClaimsRequest_RejectsOversizedInput(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"userinfo":{"name":{"value":"` + strings.Repeat("x", 16*1024) + `"}}}`
+	_, err := authorize.ParseClaimsRequest(raw)
+	if !errors.Is(err, authorize.ErrClaimsRequestInvalid) {
+		t.Fatalf("err=%v want ErrClaimsRequestInvalid", err)
 	}
 }
 

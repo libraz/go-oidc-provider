@@ -202,9 +202,9 @@ func TestVerify_JTIExpiresAfterIatWindowCloses(t *testing.T) {
 	// absent at this point; the test only insists Has() does not lie
 	// about a still-live entry.
 	clock.advance(2*time.Minute + time.Nanosecond)
-	if got, err := jtis.Has(context.Background(), "jti-1"); err != nil {
+	if got, err := jtis.Has(context.Background(), "dpop:jti-1"); err != nil {
 		t.Fatalf("Has: %v", err)
 	} else if got {
-		t.Fatalf("Has(jti-1) past 2*IatWindow = true; want store to treat the entry as collectable")
+		t.Fatalf("Has(dpop:jti-1) past 2*IatWindow = true; want store to treat the entry as collectable")
 	}
 }

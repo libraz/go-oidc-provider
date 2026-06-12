@@ -1,15 +1,14 @@
 //go:build example
 
 // tx.go — store.Transactional support. BeginTx opens one *sql.Tx and
-// returns a store.Tx whose substore accessors are all bound to it, so
-// the authorization-code exchange (consume code + persist refresh token
-// + update grant + register access token) commits atomically.
+// returns a store.Tx whose substore accessors are all bound to it. The OP
+// runtime does not require this extension, but it is useful for embedders
+// that perform their own maintenance or migration writes.
 //
 // store.Tx exposes only AuthorizationCodes / Grants / RefreshTokens /
-// PushedAuthRequests / Commit / Rollback. The library reaches the
-// tx-bound AccessTokens registry through a runtime type assertion on the
-// concrete *scratchTx, so AccessTokens() is exported here too even
-// though store.Tx does not declare it.
+// PushedAuthRequests / Commit / Rollback. AccessTokens() is exported here as
+// an optional convenience for callers that hold the concrete *scratchTx; it is
+// not part of the public store.Tx contract.
 
 package main
 
@@ -54,10 +53,8 @@ func (t *scratchTx) PushedAuthRequests() store.PushedAuthRequestStore {
 	return &parStore{q: t.tx, now: t.parent.now}
 }
 
-// AccessTokens returns the tx-bound registry. store.Tx does not declare
-// this method; the library reaches it through a runtime type assertion
-// so the registry write coordinates with the grant write inside one
-// atomic transaction.
+// AccessTokens returns the tx-bound registry. store.Tx does not declare this
+// method; it is available only to callers that hold the concrete *scratchTx.
 func (t *scratchTx) AccessTokens() store.AccessTokenRegistry {
 	return &accessTokenStore{q: t.tx}
 }

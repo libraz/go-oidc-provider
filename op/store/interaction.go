@@ -12,7 +12,7 @@ import (
 // it is opaque content owned by the [github.com/libraz/go-oidc-provider/op/interaction.Driver]
 // implementation.
 //
-// Interactions are explicitly NOT part of the transactional cluster. They
+// Interactions are explicitly NOT part of the atomic-routing cluster. They
 // are recoverable single-operation state -- losing a row means the user is
 // asked to log in again, not that a security boundary is breached -- and
 // holding them in a backend separate from the persistent store lets
@@ -54,7 +54,7 @@ type Interaction struct {
 }
 
 // InteractionStore is the substore for in-progress UI interactions. It is
-// explicitly NOT part of the transactional cluster: backends that route
+// explicitly NOT part of the atomic-routing cluster: backends that route
 // interactions to a different physical store (for example, persistent
 // records in MySQL but interactions in Redis) are correct by design.
 type InteractionStore interface {

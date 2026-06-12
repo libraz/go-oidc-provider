@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
@@ -110,7 +111,7 @@ func newHarness(t *testing.T, customise ...func(*authorizeendpoint.Deps)) *testH
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: sessCodec,
 		Store: store.Sessions(),
-		Clock: clock.Now,
+		Clock: func() time.Time { return clock.now },
 	})
 	if err != nil {
 		t.Fatalf("sessions.NewManager: %v", err)
@@ -379,6 +380,112 @@ func TestAuthorize_HappyPathWithExistingSessionAndGrant_MintsCode(t *testing.T) 
 	}
 }
 
+func TestAuthorize_HappyPathWithExistingSessionAndGrant_EmitsCodeIssued(t *testing.T) {
+	t.Parallel()
+
+	emitter := &recordingEmitter{}
+	h := newHarness(t, func(d *authorizeendpoint.Deps) {
+		d.Audit = emitter
+	})
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile", "email"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+
+	ev := findRecordedAuditEvent(emitter.snapshot(), "code.issued")
+	if ev == nil {
+		t.Fatalf("code.issued not emitted; got=%v", emitter.snapshot())
+	}
+	if ev.ActorID != "user-1" {
+		t.Errorf("ActorID=%q want user-1", ev.ActorID)
+	}
+	if ev.ClientID != "client-1" {
+		t.Errorf("ClientID=%q want client-1", ev.ClientID)
+	}
+	if ev.SessionID != out.SessionID {
+		t.Errorf("SessionID=%q want %q", ev.SessionID, out.SessionID)
+	}
+	if got := ev.Extras["grant_id"]; got != "grant-1" {
+		t.Errorf("extras.grant_id=%v want grant-1", got)
+	}
+}
+
+func TestAuthorize_ExistingSessionTouchesIdleExpiry(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now.Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile", "email"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+	h.clock.now = h.clock.now.Add(time.Hour)
+
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+goodAuthorizeValues().Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+	got, err := h.store.Sessions().Find(context.Background(), out.SessionID)
+	if err != nil {
+		t.Fatalf("Find session: %v", err)
+	}
+	want := h.clock.now.Add(sessions.IdleTTLDefault)
+	if !got.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt=%v want %v", got.ExpiresAt, want)
+	}
+}
+
+func findRecordedAuditEvent(events []audit.Event, name string) *audit.Event {
+	for i := range events {
+		if events[i].Name == name {
+			return &events[i]
+		}
+	}
+	return nil
+}
+
 func TestAuthorize_PromptLoginForcesInteraction_EvenWithSession(t *testing.T) {
 	t.Parallel()
 
@@ -630,7 +737,7 @@ func newScopeHarness(t *testing.T) *testHarness {
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: sessCodec,
 		Store: st.Sessions(),
-		Clock: clock.Now,
+		Clock: func() time.Time { return clock.now },
 	})
 	if err != nil {
 		t.Fatalf("sessions.NewManager: %v", err)
@@ -825,7 +932,7 @@ func newHarnessWithProxyTrust(t *testing.T) *testHarness {
 	mgr, err := sessions.NewManager(sessions.Config{
 		Codec: sessCodec,
 		Store: st.Sessions(),
-		Clock: clock.Now,
+		Clock: func() time.Time { return clock.now },
 	})
 	if err != nil {
 		t.Fatalf("sessions.NewManager: %v", err)

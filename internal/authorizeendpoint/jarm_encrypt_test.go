@@ -122,6 +122,25 @@ func newJARMTestFixture(t *testing.T, withEncMetadata, withEncKey bool) *jarmTes
 	}
 }
 
+func weakRSAEncJWKs(t *testing.T, kid string) json.RawMessage {
+	t.Helper()
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentional weak key for floor-rejection test
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	jwk := josev4.JSONWebKey{
+		Key:       &rsaKey.PublicKey,
+		KeyID:     kid,
+		Use:       "enc",
+		Algorithm: "RSA-OAEP-256",
+	}
+	body, err := json.Marshal(josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{jwk}})
+	if err != nil {
+		t.Fatalf("marshal jwks: %v", err)
+	}
+	return body
+}
+
 // resolved returns the [resolved] view the splice helpers consume.
 // All four production fields used on the JARM emit path are populated;
 // the rest are left at zero value because the splice does not touch
@@ -289,6 +308,36 @@ func TestJARMEncrypt_MetadataButNoEncKey_SuccessFallsBackToServerError(t *testin
 	}
 	if got := q.Get("state"); got != "state-abc" {
 		t.Errorf("state=%q want state-abc", got)
+	}
+}
+
+func TestJARMEncrypt_MetadataButWeakEncKey_SuccessFallsBackToServerError(t *testing.T) {
+	t.Parallel()
+
+	f := newJARMTestFixture(t, true, false)
+	f.store.clients[f.clientID].JWKs = weakRSAEncJWKs(t, "rp-weak")
+	req := f.authorizeRequest("query.jwt")
+	w := dispatchSuccess(f, req, "code-weak")
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	loc, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	q := loc.Query()
+	if got := q.Get("error"); got != "server_error" {
+		t.Errorf("error=%q want server_error", got)
+	}
+	if got := q.Get("error_description"); got != "jarm_response_encryption_failed" {
+		t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
+	}
+	if got := q.Get("code"); got != "" {
+		t.Errorf("code leaked on weak-key path: %q (Location=%s)", got, loc.String())
+	}
+	if got := q.Get("response"); got != "" {
+		t.Errorf("response param leaked on weak-key path: %q", got)
 	}
 }
 

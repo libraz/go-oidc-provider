@@ -37,4 +37,11 @@ var (
 	// alg. The caller cannot encrypt to this client until the RP
 	// publishes a compatible key.
 	ErrNoMatchingKey = errors.New("clientencjwks: no matching encryption key in JWKS")
+
+	// ErrWeakRecipientKey signals that the JWKS contains an encryption
+	// key candidate for the requested alg, but the key shape is outside
+	// the OP's cryptographic floor (for example RSA below 2048 bits or
+	// an unsupported EC curve). The caller must fail closed rather than
+	// encrypt to the weak key.
+	ErrWeakRecipientKey = errors.New("clientencjwks: weak recipient encryption key")
 )

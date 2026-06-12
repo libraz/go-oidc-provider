@@ -97,7 +97,7 @@ func stampHTMLHeaders(w http.ResponseWriter) {
 	// form-action 'self' would block flow completion. default-src 'none'
 	// plus the double-submit CSRF token and Origin allowlist remain the
 	// defense.
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'none'; frame-ancestors 'none'; base-uri 'none'")
 }
 
 // ParseSubmission reads at most [maxSubmissionBytes] from r.Body and
@@ -124,7 +124,7 @@ func (HTMLDriver) ParseSubmission(r *http.Request) (FormSubmission, error) {
 			continue
 		}
 		if len(vs) > 0 {
-			values[k] = vs[0]
+			values[k] = strings.Join(vs, " ")
 		}
 	}
 	return FormSubmission{StateRef: stateRef, Values: values}, nil
@@ -237,6 +237,7 @@ func writeAttemptsRemaining(b *strings.Builder, attempts int) {
 // marker for scopes the catalogue declared mandatory, matching the
 // orchestrator's server-side enforcement.
 func writeConsentScopeList(b *strings.Builder, data ConsentScopePromptData) {
+	writeConsentClient(b, data.Client)
 	b.WriteString(`<ul>`)
 	for _, s := range data.Scopes {
 		b.WriteString(`<li>`)
@@ -251,6 +252,19 @@ func writeConsentScopeList(b *strings.Builder, data ConsentScopePromptData) {
 		b.WriteString(`</li>`)
 	}
 	b.WriteString(`</ul>`)
+}
+
+func writeConsentClient(b *strings.Builder, client ClientView) {
+	name := client.Name
+	if name == "" {
+		name = client.ClientID
+	}
+	if name == "" {
+		return
+	}
+	b.WriteString(`<p>Client: `)
+	b.WriteString(html.EscapeString(name))
+	b.WriteString(`</p>`)
 }
 
 // writeConsentApprovedField emits the single hidden field the

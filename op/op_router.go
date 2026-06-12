@@ -25,6 +25,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 	"github.com/libraz/go-oidc-provider/internal/parendpoint"
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
+	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/internal/revokeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
@@ -42,7 +43,7 @@ import (
 // handlers, plus the optional endpoints (PAR, introspect, revoke,
 // /register, /end_session) gated on the configured features and
 // grants.
-func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver) (*http.ServeMux, error) {
+func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scopes *scoperegistry.Registry, locales *i18n.Resolver, proxyTrust *proxy.Trust) (*http.ServeMux, error) {
 	mux := http.NewServeMux()
 	doc := discovery.Build(buildDiscoveryInput(cfg, scopes, locales))
 	discHandler, err := discovery.Handler(doc)
@@ -153,7 +154,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	)
 	mountDeviceAuthorizationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Device, strictCORS)
 	mountBackchannelAuthenticationEndpoint(mux, cfg, scopes, dpopVerifier, mtlsVerifier, assertionVerifiers.Backchannel, jarVerifier, strictCORS)
-	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, originAllow, strictCORS, locales)
+	sessMgr, err := mountAuthorizeHandlers(mux, cfg, scopes, keySet, encResolver, jarVerifier, originAllow, strictCORS, locales, proxyTrust)
 	if err != nil {
 		return nil, err
 	}
@@ -429,6 +430,7 @@ func mountAuthorizeHandlers(
 	allow *csrf.Allowlist,
 	strictCORS *cors.Strict,
 	locales *i18n.Resolver,
+	proxyTrust *proxy.Trust,
 ) (*sessions.Manager, error) {
 	if !grantsRequireAuthorizeEndpoint(cfg.grants) {
 		return nil, nil //nolint:nilnil // documented "no manager needed" sentinel.
@@ -438,10 +440,6 @@ func mountAuthorizeHandlers(
 		return nil, err
 	}
 	cookieCodec, sessMgr, err := buildSessionMachinery(cfg)
-	if err != nil {
-		return nil, err
-	}
-	proxyTrust, err := buildProxyTrust(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -541,6 +539,7 @@ func mountEndSessionEndpoint(
 			AccessTokenTTL:     cfg.accessTokenTTL,
 			GrantRevocations:   cfg.store.GrantRevocations(),
 			RevocationStrategy: cfg.atRevocation,
+			Audit:              cfg.effectiveAuditEmitter(),
 		})),
 	)
 }

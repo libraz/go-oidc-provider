@@ -3,7 +3,7 @@
 // codes.go — store.AuthorizationCodeStore (vault_grant_codes) and
 // store.RefreshTokenStore (vault_renewal_slips).
 //
-// Both substores belong to the transactional cluster. They are
+// Both substores belong to the atomic-routing cluster. They are
 // constructed against a querier so the same code runs on the database
 // or inside a transaction. Both honour the hash-on-store contract: the
 // bearer secret (code / refresh-token id) is hashed before it reaches
@@ -153,14 +153,18 @@ const (
 	refreshInsert = `
 INSERT INTO vault_renewal_slips
   (token_secret_digest, relying_party, principal, ledger_id, requested_scope,
-   resource_hint, parent_secret_digest, dpop_thumb, mtls_thumb, nonce_echo,
-   is_void, expires_epoch, consumed_epoch, issued_epoch)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+   resource_hint, principal_is_wire, origin_kind, auth_epoch, acr_value,
+   amr_values, authorization_detail, access_token_extra, parent_secret_digest,
+   dpop_thumb, mtls_thumb, nonce_echo, is_void, expires_epoch, consumed_epoch,
+   issued_epoch)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	refreshSelect = `
 SELECT token_secret_digest, relying_party, principal, ledger_id, requested_scope,
-       resource_hint, parent_secret_digest, dpop_thumb, mtls_thumb, nonce_echo,
-       is_void, expires_epoch, consumed_epoch, issued_epoch
+       resource_hint, principal_is_wire, origin_kind, auth_epoch, acr_value,
+       amr_values, authorization_detail, access_token_extra, parent_secret_digest,
+       dpop_thumb, mtls_thumb, nonce_echo, is_void, expires_epoch, consumed_epoch,
+       issued_epoch
 FROM vault_renewal_slips WHERE token_secret_digest = ?`
 
 	refreshConsume = `
@@ -181,7 +185,10 @@ UPDATE vault_renewal_slips SET consumed_epoch = ?, is_void = 1 WHERE ledger_id =
 func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 	_, err := s.q.ExecContext(ctx, refreshInsert,
 		digest(t.ID), t.ClientID, t.Subject, t.GrantID,
-		encodeStrings(t.Scope), t.Resource, digestNullable(t.ParentID),
+		encodeStrings(t.Scope), t.Resource, boolToInt(t.SubjectPublic),
+		string(t.Origin), epochOf(t.AuthTime), t.ACR, encodeStrings(t.AMR),
+		encodeObjectArray(t.AuthorizationDetails), encodeMap(t.AccessTokenExtra),
+		digestNullable(t.ParentID),
 		t.DPoPJKT, t.MTLSCertThumbprint, t.Nonce, boolToInt(t.Revoked),
 		epochOf(t.ExpiresAt), epochPtr(t.ConsumedAt), epochOf(t.CreatedAt))
 	if err != nil {
@@ -206,16 +213,23 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 		t        store.RefreshToken
 		stored   string
 		scope    string
+		amr      string
+		details  string
+		extra    string
 		parent   *string
 		consumed *int64
 		expires  int64
 		created  int64
 		void     int64
+		subPub   int64
+		authE    int64
+		origin   string
 	)
 	err := s.q.QueryRowContext(ctx, refreshSelect, d).Scan(
 		&stored, &t.ClientID, &t.Subject, &t.GrantID, &scope,
-		&t.Resource, &parent, &t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce,
-		&void, &expires, &consumed, &created)
+		&t.Resource, &subPub, &origin, &authE, &t.ACR, &amr, &details, &extra,
+		&parent, &t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &void,
+		&expires, &consumed, &created)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -226,7 +240,13 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 		return nil, store.ErrNotFound
 	}
 	t.ID = id
+	t.SubjectPublic = subPub == 1
 	t.Scope = decodeStrings(scope)
+	t.Origin = store.RefreshTokenOrigin(origin)
+	t.AuthTime = timeOf(authE)
+	t.AMR = decodeStrings(amr)
+	t.AuthorizationDetails = decodeObjectArray(details)
+	t.AccessTokenExtra = decodeMap(extra)
 	t.ParentID = parent
 	t.ConsumedAt = timePtr(consumed)
 	t.ExpiresAt = timeOf(expires)

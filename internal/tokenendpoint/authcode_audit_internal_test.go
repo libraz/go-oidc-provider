@@ -3,11 +3,13 @@ package tokenendpoint
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/grants/authcode"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -89,6 +91,37 @@ func TestRevokeChainForCode_UsesReplayGrantIDWhenFindCannotRecoverConsumedCode(t
 
 	if got := refreshes.revokedGrantID(); got != "grant-1" {
 		t.Fatalf("revoked grant=%q want grant-1", got)
+	}
+}
+
+func TestWriteAuthCodeExchangeError_CodeReplay_EmitsAudit(t *testing.T) {
+	t.Parallel()
+
+	capture := &captureEmitter{}
+	deps := Deps{
+		Audit:              capture,
+		Codes:              panicFindCodeStore{},
+		RefreshTokens:      &captureRefreshStore{},
+		RevocationStrategy: store.RevocationStrategyNone,
+	}
+	w := httptest.NewRecorder()
+
+	writeAuthCodeExchangeError(context.Background(), w, deps, "code-1", &authcode.ReplayError{
+		GrantID: "grant-replayed",
+	})
+
+	if len(capture.events) != 1 {
+		t.Fatalf("events=%d want 1", len(capture.events))
+	}
+	ev := capture.events[0]
+	if ev.Name != auditCodeReplayDetected {
+		t.Fatalf("event=%q want %q", ev.Name, auditCodeReplayDetected)
+	}
+	if ev.Level != audit.LevelWarn {
+		t.Fatalf("level=%v want %v", ev.Level, audit.LevelWarn)
+	}
+	if got := ev.Extras["grant_id"]; got != "grant-replayed" {
+		t.Fatalf("extras.grant_id=%v want grant-replayed", got)
 	}
 }
 

@@ -239,7 +239,7 @@ func scheduleApprove(a *autoApprovingCIBA, authReqID, subject string) {
 // cmd/, and a zero AuthTime omits the auth_time claim — which suits a
 // demo that never asserts the value.
 func (a *autoApprovingCIBA) runApprove(authReqID, subject string) {
-	err := a.inner.Approve(a.ctx, authReqID, subject, time.Time{})
+	err := a.inner.Approve(a.ctx, authReqID, subject, "", time.Time{})
 	switch {
 	case err == nil:
 		a.log.Info("ciba auto-approved",
@@ -257,16 +257,16 @@ func (a *autoApprovingCIBA) FindByAuthReqID(ctx context.Context, id string) (*st
 	return a.inner.FindByAuthReqID(ctx, id)
 }
 
-func (a *autoApprovingCIBA) Approve(ctx context.Context, id, subject string, authTime time.Time) error {
-	return a.inner.Approve(ctx, id, subject, authTime)
+func (a *autoApprovingCIBA) Approve(ctx context.Context, id, subject, acr string, authTime time.Time) error {
+	return a.inner.Approve(ctx, id, subject, acr, authTime)
 }
 
 func (a *autoApprovingCIBA) Deny(ctx context.Context, id, reason string) error {
 	return a.inner.Deny(ctx, id, reason)
 }
 
-func (a *autoApprovingCIBA) RecordPoll(ctx context.Context, id string, when time.Time) error {
-	return a.inner.RecordPoll(ctx, id, when)
+func (a *autoApprovingCIBA) RecordPoll(ctx context.Context, id string, when time.Time, nextInterval time.Duration) error {
+	return a.inner.RecordPoll(ctx, id, when, nextInterval)
 }
 
 func (a *autoApprovingCIBA) IncrementPollViolation(ctx context.Context, id string) (uint8, error) {

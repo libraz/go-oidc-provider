@@ -133,7 +133,8 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if rec == nil {
 		return interaction.Step{}, store.ErrNotFound
 	}
-	if !rec.ConfirmedAt.IsZero() && !rec.LockedUntil.IsZero() && rec.LockedUntil.After(in.AuthTime) {
+	now := a.verifier.clock().Now()
+	if !rec.ConfirmedAt.IsZero() && !rec.LockedUntil.IsZero() && rec.LockedUntil.After(now) {
 		return interaction.Step{}, ErrLocked
 	}
 	return interaction.Step{Prompt: a.prompt(rec)}, nil

@@ -152,6 +152,14 @@ type slogEmitter struct {
 // is always the first key — log shippers that pre-route by leading
 // attribute see "audit" up front.
 func (e *slogEmitter) Emit(ctx context.Context, ev Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Default().Warn("audit emitter: downstream logger panicked",
+				slog.String("event", ev.Name),
+				slog.Any("panic", r),
+			)
+		}
+	}()
 	e.logger.LogAttrs(ctx, ev.Level.slogLevel(), ev.Message, attrsFor(ev)...)
 }
 
@@ -190,6 +198,9 @@ func attrsFor(ev Event) []slog.Attr {
 func extraAttr(k string, v any) slog.Attr {
 	if redact.IsSensitive(k) {
 		return slog.String(k, redact.Sentinel)
+	}
+	if s, ok := v.(string); ok {
+		return slog.String(k, redact.Mask(s))
 	}
 	return slog.Any(k, v)
 }

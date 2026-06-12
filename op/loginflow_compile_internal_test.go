@@ -2,9 +2,14 @@ package op
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
+	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -16,6 +21,12 @@ func stubTOTPKey(seed string) []byte {
 	out := make([]byte, mfaEncryptionKeyLen)
 	copy(out, seed)
 	return out
+}
+
+type testEmailDeliveryFunc func(context.Context, string, string) error
+
+func (f testEmailDeliveryFunc) Send(ctx context.Context, address, code string) error {
+	return f(ctx, address, code)
 }
 
 // TestSelectTOTPKeys_PerStepWins pins the more-specific-wins contract:
@@ -135,5 +146,62 @@ func TestTotpFallbackKeys_SplitsCurrentAndPrev(t *testing.T) {
 	}
 	if len(prev) != 2 || !bytes.Equal(prev[0], b) || !bytes.Equal(prev[1], c) {
 		t.Fatalf("prev = %x, want %x", prev, [][]byte{b, c})
+	}
+}
+
+func TestProjectBuiltinStep_AttachesLockoutCounter(t *testing.T) {
+	t.Parallel()
+
+	const subject = "subject-lockout"
+	st := inmem.New()
+	counter, err := lockout.New(st.AuthnLockouts(), nil)
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	for i := range 30 {
+		if _, err := counter.RecordFailure(context.Background(), subject); err != nil {
+			t.Fatalf("RecordFailure %d: %v", i+1, err)
+		}
+	}
+	cfg := &config{authnLockoutStore: st.AuthnLockouts()}
+	totpKey := stubTOTPKey("totp-lockout-key")
+
+	cases := []struct {
+		name    string
+		step    Step
+		wantErr error
+	}{
+		{
+			name:    "totp",
+			step:    StepTOTP{Store: st.TOTPs(), EncryptionKey: totpKey},
+			wantErr: totp.ErrLocked,
+		},
+		{
+			name: "emailotp",
+			step: StepEmailOTP{
+				Store:  st.EmailOTPs(),
+				Sender: testEmailDeliveryFunc(func(context.Context, string, string) error { return nil }),
+				Users:  st.Users(),
+			},
+			wantErr: emailotp.ErrLocked,
+		},
+		{
+			name:    "recovery",
+			step:    StepRecoveryCode{Store: st.RecoveryCodes()},
+			wantErr: recovery.ErrLocked,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			lfStep, err := projectBuiltinStep("rule", tc.step, cfg)
+			if err != nil {
+				t.Fatalf("projectBuiltinStep: %v", err)
+			}
+			_, err = lfStep.Authenticator.Begin(context.Background(), authn.BeginInput{Subject: subject})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Begin err=%v want %v", err, tc.wantErr)
+			}
+		})
 	}
 }

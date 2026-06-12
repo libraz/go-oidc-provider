@@ -45,10 +45,10 @@ type PushedAuthRequest struct {
 }
 
 // PushedAuthRequestStore is the substore for PAR records. It belongs to the
-// transactional cluster: at the authorization endpoint the library consumes
-// the URI and issues the associated authorization code in a single
-// transaction so that a partial failure cannot leave a still-redeemable URI
-// next to an issued code.
+// atomic-routing cluster so PAR consumption and the associated authorization
+// artefacts share one backend consistency domain in composite deployments.
+// Implementations MUST make Consume itself atomic; the OP runtime does not
+// require a cross-substore [Transactional] transaction.
 type PushedAuthRequestStore interface {
 	// Save persists a freshly created PAR record. The implementation
 	// MUST hash [PushedAuthRequest.URI] (SHA-256, ideally HMAC'd with a

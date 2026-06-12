@@ -132,12 +132,12 @@ type Authorized struct {
 	// ciba.token.issued audit extras.
 	SenderConstraint string
 
-	// ACRValues is the slice of Authentication Context Class
-	// References the CIBA record committed to at /bc-authorize.
-	// The caller threads them onto the issued id_token's acr / amr
-	// claims when present; an empty slice signals "no acr claim
-	// requested".
-	ACRValues []string
+	// ACR is the Authentication Context Class Reference the
+	// authentication device actually satisfied when approving the
+	// record. The caller threads it onto the issued id_token's acr
+	// claim when present; it MUST NOT infer a value from requested
+	// ACRValues.
+	ACR string
 }
 
 // Authorize applies the CIBA-specific authorization gates:
@@ -183,7 +183,7 @@ func Authorize(in AuthorizeInput) (*Authorized, error) {
 		Subject:          in.Record.Subject,
 		AuthTime:         in.Record.AuthTime,
 		SenderConstraint: binding,
-		ACRValues:        slices.Clone(in.Record.ACRValues),
+		ACR:              in.Record.ACR,
 	}, nil
 }
 

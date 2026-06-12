@@ -7,11 +7,18 @@ package scenarios_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -270,6 +277,51 @@ func TestScenario_RAR_003_PushedThenReproducedAtAuthorize(t *testing.T) {
 	assertSingleRARType(t, tok.Raw["authorization_details"])
 }
 
+// TestScenario_RAR_004_RequestObjectDetailsMergedAndValidated carries the
+// authorization_details value as a JSON array inside a signed request
+// object. The JAR merge layer must re-encode that decoded JSON shape into
+// the regular authorization_details parameter so the authorize parser
+// validates it and the token response echoes the granted details.
+func TestScenario_RAR_004_RequestObjectDetailsMergedAndValidated(t *testing.T) {
+	t.Parallel()
+
+	tk, priv, kid := rarJARProvider(t)
+	claims := rarJARClaims(tk.Issuer)
+	claims["authorization_details"] = []map[string]any{{
+		"type":    rarType,
+		"actions": []string{"initiate"},
+	}}
+	signed := signWithJOSE(t, josev4.SigningKey{
+		Algorithm: josev4.ES256,
+		Key: josev4.JSONWebKey{
+			Key:       priv,
+			KeyID:     kid,
+			Algorithm: string(josev4.ES256),
+			Use:       "sig",
+		},
+	}, claims)
+
+	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+		ClientID:    "rp-rar-jar",
+		RedirectURI: rarCallback,
+		PKCE:        scenariokit.PKCEPair{Verifier: jarPKCEVerifier, Challenge: jarPKCEChallenge, Method: "S256"},
+		Extra:       url.Values{"request": {signed}},
+	})
+	if flow.Code == "" {
+		t.Fatalf("authorize via request object failed: %+v", flow)
+	}
+	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
+		Code:        flow.Code,
+		RedirectURI: rarCallback,
+		Verifier:    jarPKCEVerifier,
+		Extra:       url.Values{"client_id": {"rp-rar-jar"}},
+	})
+	if tok.StatusCode != http.StatusOK {
+		t.Fatalf("/token status=%d body=%v", tok.StatusCode, tok.Raw)
+	}
+	assertSingleRARType(t, tok.Raw["authorization_details"])
+}
+
 // rarRefresh runs a refresh_token grant with the confidential client's
 // Basic credentials and returns the parsed token response.
 func rarRefresh(t *testing.T, tk *testkit.Provider, refreshToken string) map[string]any {
@@ -311,5 +363,73 @@ func assertSingleRARType(t *testing.T, v any) {
 	}
 	if el["type"] != rarType {
 		t.Errorf("authorization_details[0].type=%v want %q", el["type"], rarType)
+	}
+}
+
+func rarJARProvider(t *testing.T) (*testkit.Provider, *ecdsa.PrivateKey, string) {
+	t.Helper()
+	clock := jarFixedClock{t: jarAnchor}
+	tk := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithFeature(feature.JAR),
+			op.WithAuthorizationDetailTypes(op.AuthorizationDetailType{
+				Type: rarType,
+				Validate: func(_ context.Context, el map[string]any, _ *store.Client) error {
+					if _, ok := el["actions"].([]any); !ok {
+						return errors.New("payment_initiation requires an actions array")
+					}
+					return nil
+				},
+			}),
+		),
+	)
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	const kid = "rp-rar-jar-kid"
+	jwksRaw, err := json.Marshal(josev4.JSONWebKeySet{
+		Keys: []josev4.JSONWebKey{{
+			Key:       &priv.PublicKey,
+			KeyID:     kid,
+			Algorithm: string(josev4.ES256),
+			Use:       "sig",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal JWKS: %v", err)
+	}
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:           "rp-rar-jar",
+		PublicClient: true,
+		RedirectURIs: []string{rarCallback},
+		Scopes:       []string{"openid", "profile"},
+	})
+	updated := *rp
+	updated.JWKs = jwksRaw
+	if err := tk.Store.UpdateClient(context.Background(), &updated); err != nil {
+		t.Fatalf("UpdateClient(JWKs): %v", err)
+	}
+	return tk, priv, kid
+}
+
+func rarJARClaims(issuer string) map[string]any {
+	now := jarAnchor
+	return map[string]any{
+		"iss":                   "rp-rar-jar",
+		"aud":                   issuer,
+		"exp":                   now.Add(2 * time.Minute).Unix(),
+		"iat":                   now.Unix(),
+		"nbf":                   now.Unix(),
+		"jti":                   freshJARScenarioJTI(),
+		"client_id":             "rp-rar-jar",
+		"response_type":         "code",
+		"redirect_uri":          rarCallback,
+		"scope":                 "openid profile",
+		"state":                 "rar-jar-state",
+		"nonce":                 "rar-jar-nonce",
+		"code_challenge":        jarPKCEChallenge,
+		"code_challenge_method": "S256",
 	}
 }

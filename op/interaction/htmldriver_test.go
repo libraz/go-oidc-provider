@@ -118,11 +118,14 @@ func goldenCases() []struct {
 			name: "consent-scope",
 			prompt: interaction.Prompt{
 				Type: "consent.scope",
-				Data: interaction.ConsentScopePromptData{Scopes: []interaction.ConsentScope{
-					{Name: "openid", Description: "Sign you in", Required: true},
-					{Name: "profile", Description: "Basic profile information"},
-					{Name: "email", Description: "Email address"},
-				}},
+				Data: interaction.ConsentScopePromptData{
+					Client: interaction.ClientView{ClientID: "rp-1", Name: "Example RP"},
+					Scopes: []interaction.ConsentScope{
+						{Name: "openid", Description: "Sign you in", Required: true},
+						{Name: "profile", Description: "Basic profile information"},
+						{Name: "email", Description: "Email address"},
+					},
+				},
 				StateRef:  "ref-consent",
 				CSRFToken: "csrf-4",
 			},
@@ -239,6 +242,34 @@ func TestHTMLDriver_RenderDeterministic(t *testing.T) {
 	}
 }
 
+func TestHTMLDriver_ConsentClientNameEscaped(t *testing.T) {
+	t.Parallel()
+
+	prompt := interaction.Prompt{
+		Type: "consent.scope",
+		Data: interaction.ConsentScopePromptData{
+			Client: interaction.ClientView{
+				ClientID: "rp-fallback",
+				Name:     `<script>alert("rp")</script>`,
+			},
+			Scopes: []interaction.ConsentScope{{Name: "openid"}},
+		},
+		StateRef: "ref-consent",
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/interaction/u-1", nil)
+	if err := (interaction.HTMLDriver{}).Render(rec, req, prompt); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `<script>`) || strings.Contains(body, `alert("rp")`) {
+		t.Fatalf("client name was not escaped:\n%s", body)
+	}
+	if !strings.Contains(body, `&lt;script&gt;alert(&#34;rp&#34;)&lt;/script&gt;`) {
+		t.Fatalf("escaped client name missing:\n%s", body)
+	}
+}
+
 // TestHTMLDriver_RenderCSPCompliance is the regression test for the
 // §3.4 CSP guarantees. The body must not carry any of the patterns
 // that would force the embedder to relax script-src / style-src.
@@ -338,6 +369,21 @@ func TestHTMLDriver_ParseSubmissionAcceptsCharsetParam(t *testing.T) {
 	}
 	if sub.StateRef != "ref-1" {
 		t.Errorf("StateRef = %q, want ref-1", sub.StateRef)
+	}
+}
+
+func TestHTMLDriver_ParseSubmissionJoinsRepeatedFields(t *testing.T) {
+	t.Parallel()
+
+	body := strings.NewReader("state_ref=ref-1&approved_scopes=openid&approved_scopes=profile&approved_scopes=email")
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/interaction/u-1", body)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	sub, err := (interaction.HTMLDriver{}).ParseSubmission(r)
+	if err != nil {
+		t.Fatalf("ParseSubmission: %v", err)
+	}
+	if got := sub.Values[interaction.ConsentApprovedScopesField]; got != "openid profile email" {
+		t.Fatalf("approved_scopes=%q want %q", got, "openid profile email")
 	}
 }
 

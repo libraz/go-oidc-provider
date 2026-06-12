@@ -12,7 +12,7 @@ import (
 
 // cibaRequestStore is the SQL implementation of
 // [store.CIBARequestStore] (OpenID Connect CIBA Core 1.0). Like the
-// device-code substore it sits outside the transactional cluster: the
+// device-code substore it sits outside the atomic-routing cluster: the
 // approve→consume compare-and-swap embedded in Consume is the
 // single-use guarantee, so the handle never carries a *sql.Tx.
 type cibaRequestStore struct {
@@ -40,7 +40,7 @@ func (s *cibaRequestStore) Save(ctx context.Context, req *store.CIBARequest) err
 	idDigest := patterns.Digest(req.ID)
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.cibaSave,
 		idDigest, req.ClientID, req.Subject,
-		encodeStrings(req.Scope), encodeStrings(req.Resource), encodeStrings(req.ACRValues),
+		encodeStrings(req.Scope), encodeStrings(req.Resource), encodeStrings(req.ACRValues), req.ACR,
 		req.BindingMessage, req.UserCode, req.DPoPJKT, req.MTLSCertS256,
 		int64(req.Interval), int64(req.Status), timeToInt64(req.AuthTime), req.DenyReason,
 		int64(req.PollViolations), timePtrToInt64Ptr(req.LastPolledAt),
@@ -70,10 +70,10 @@ func (s *cibaRequestStore) FindByAuthReqID(ctx context.Context, authReqID string
 	return rec, nil
 }
 
-func (s *cibaRequestStore) Approve(ctx context.Context, authReqID, subject string, authTime time.Time) error {
+func (s *cibaRequestStore) Approve(ctx context.Context, authReqID, subject, acr string, authTime time.Time) error {
 	idDigest := patterns.Digest(authReqID)
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.cibaApprove,
-		int64(store.CIBARequestStatusApproved), subject, timeToInt64(authTime),
+		int64(store.CIBARequestStatusApproved), subject, acr, timeToInt64(authTime),
 		idDigest, int64(store.CIBARequestStatusPending), s.now())
 	if err != nil {
 		return wrapErr("ciba.Approve", err)
@@ -92,10 +92,10 @@ func (s *cibaRequestStore) Deny(ctx context.Context, authReqID, reason string) e
 	return s.afterTransition(ctx, idDigest, res)
 }
 
-func (s *cibaRequestStore) RecordPoll(ctx context.Context, authReqID string, when time.Time) error {
+func (s *cibaRequestStore) RecordPoll(ctx context.Context, authReqID string, when time.Time, nextInterval time.Duration) error {
 	idDigest := patterns.Digest(authReqID)
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.cibaRecordPoll,
-		timeToInt64(when), idDigest, s.now())
+		timeToInt64(when), int64(nextInterval), int64(nextInterval), idDigest, s.now())
 	if err != nil {
 		return wrapErr("ciba.RecordPoll", err)
 	}
@@ -205,7 +205,7 @@ func (s *cibaRequestStore) scanOne(ctx context.Context, query string, args ...an
 		issued     int64
 	)
 	err := s.runner().QueryRowContext(ctx, query, args...).Scan(
-		&stored, &c.ClientID, &c.Subject, &scope, &resource, &acrValues,
+		&stored, &c.ClientID, &c.Subject, &scope, &resource, &acrValues, &c.ACR,
 		&c.BindingMessage, &c.UserCode, &c.DPoPJKT, &c.MTLSCertS256,
 		&interval, &status, &authTime, &c.DenyReason, &violations,
 		&lastPolled, &expires, &issued)

@@ -2,9 +2,14 @@
 package registrationendpoint
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"strings"
 	"testing"
+
+	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -225,13 +230,22 @@ func TestValidateStaticClient_RejectsPairwiseWithoutOption(t *testing.T) {
 func TestValidateStaticClient_AcceptsCIBAClientWithoutRedirectURIs(t *testing.T) {
 	t.Parallel()
 
-	//nolint:gosec // G101: test fixture; "private_key_jwt" is an OIDC auth-method label, not a credential.
-	c := store.Client{
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	c := store.Client{ //nolint:gosec // G101: static CIBA is an OIDC fixture label, not a credential.
 		ID:                      "demo-ciba",
 		GrantTypes:              []string{"urn:openid:params:grant-type:ciba", "refresh_token"},
 		ResponseTypes:           []string{"code"},
 		TokenEndpointAuthMethod: "private_key_jwt",
 		Source:                  store.ClientSourceStatic,
+		JWKs: jwksRaw(t, josev4.JSONWebKey{
+			Key:       &key.PublicKey,
+			KeyID:     "static-ciba",
+			Algorithm: "ES256",
+			Use:       "sig",
+		}),
 	}
 	if err := ValidateStaticClient(c, StaticClientValidationOptions{
 		AllowedGrantTypes:    []string{"authorization_code", "refresh_token", "urn:openid:params:grant-type:ciba"},

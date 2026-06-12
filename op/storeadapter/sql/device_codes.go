@@ -12,7 +12,7 @@ import (
 
 // deviceCodeStore is the SQL implementation of
 // [store.DeviceCodeStore]. The substore is intentionally outside the
-// transactional cluster (see the interface godoc): the approve→consume
+// atomic-routing cluster (see the interface godoc): the approve→consume
 // compare-and-swap embedded in Consume provides the single-use
 // guarantee on its own, so the handle never carries a *sql.Tx.
 type deviceCodeStore struct {
@@ -103,6 +103,16 @@ func (s *deviceCodeStore) Approve(ctx context.Context, deviceCode, subject strin
 	return s.afterTransition(ctx, idDigest, res)
 }
 
+func (s *deviceCodeStore) ApproveByUserCode(ctx context.Context, userCode, subject string, authTime time.Time) error {
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeApproveByUser,
+		int64(store.DeviceCodeStatusApproved), subject, timeToInt64(authTime),
+		userCode, int64(store.DeviceCodeStatusPending), s.now())
+	if err != nil {
+		return wrapErr("deviceCodes.ApproveByUserCode", err)
+	}
+	return s.afterTransitionByUserCode(ctx, userCode, res)
+}
+
 func (s *deviceCodeStore) Deny(ctx context.Context, deviceCode, reason string) error {
 	idDigest := patterns.Digest(deviceCode)
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeDeny,
@@ -112,6 +122,16 @@ func (s *deviceCodeStore) Deny(ctx context.Context, deviceCode, reason string) e
 		return wrapErr("deviceCodes.Deny", err)
 	}
 	return s.afterTransition(ctx, idDigest, res)
+}
+
+func (s *deviceCodeStore) DenyByUserCode(ctx context.Context, userCode, reason string) error {
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeDenyByUser,
+		int64(store.DeviceCodeStatusDenied), reason,
+		userCode, int64(store.DeviceCodeStatusPending), s.now())
+	if err != nil {
+		return wrapErr("deviceCodes.DenyByUserCode", err)
+	}
+	return s.afterTransitionByUserCode(ctx, userCode, res)
 }
 
 func (s *deviceCodeStore) RecordPoll(ctx context.Context, deviceCode string, when time.Time, nextInterval time.Duration) error {
@@ -135,6 +155,11 @@ func (s *deviceCodeStore) RecordPoll(ctx context.Context, deviceCode string, whe
 func (s *deviceCodeStore) IncrementUserCodeStrike(ctx context.Context, deviceCode string) (uint8, error) {
 	return s.increment(ctx, deviceCode,
 		s.parent.queries.deviceCodeStrikeIncrement, s.parent.queries.deviceCodeStrikeRead)
+}
+
+func (s *deviceCodeStore) IncrementUserCodeStrikeByUserCode(ctx context.Context, userCode string) (uint8, error) {
+	return s.incrementByUserCode(ctx, userCode,
+		s.parent.queries.deviceCodeStrikeIncrUser, s.parent.queries.deviceCodeStrikeReadUser)
 }
 
 func (s *deviceCodeStore) IncrementPollViolation(ctx context.Context, deviceCode string) (uint8, error) {
@@ -203,6 +228,24 @@ func (s *deviceCodeStore) afterTransition(ctx context.Context, idDigest string, 
 	return store.ErrConflict
 }
 
+func (s *deviceCodeStore) afterTransitionByUserCode(ctx context.Context, userCode string, res databasesql.Result) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return wrapErr("deviceCodes.transitionByUserCode.RowsAffected", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	rec, _, findErr := s.scanOne(ctx, s.parent.queries.deviceCodeFindByUserCode, userCode)
+	if findErr != nil {
+		return findErr
+	}
+	if isExpired(rec.ExpiresAt, s.parent.clock) {
+		return store.ErrNotFound
+	}
+	return store.ErrConflict
+}
+
 // increment runs the +1 update (saturating at 255 via the query's
 // WHERE guard) and reads the resulting value back. Missing or expired
 // records surface as ErrNotFound; a saturated counter reports 255.
@@ -219,6 +262,22 @@ func (s *deviceCodeStore) increment(ctx context.Context, deviceCode, updateQ, re
 	}
 	if err != nil {
 		return 0, wrapErr("deviceCodes.increment.read", err)
+	}
+	return uint8(v), nil //nolint:gosec // counter is capped at 255 by the update guard.
+}
+
+func (s *deviceCodeStore) incrementByUserCode(ctx context.Context, userCode, updateQ, readQ string) (uint8, error) {
+	now := s.now()
+	if _, err := s.runner().ExecContext(ctx, updateQ, userCode, now); err != nil {
+		return 0, wrapErr("deviceCodes.incrementByUserCode", err)
+	}
+	var v int64
+	err := s.runner().QueryRowContext(ctx, readQ, userCode, now).Scan(&v)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return 0, store.ErrNotFound
+	}
+	if err != nil {
+		return 0, wrapErr("deviceCodes.incrementByUserCode.read", err)
 	}
 	return uint8(v), nil //nolint:gosec // counter is capped at 255 by the update guard.
 }

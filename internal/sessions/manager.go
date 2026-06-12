@@ -231,7 +231,14 @@ func (m *Manager) Resolve(ctx context.Context, cookieValue string) (*Active, err
 		// chooser group — treat as tampered.
 		return nil, ErrCookieInvalid
 	}
+	if sessionExpired(sess.ExpiresAt, m.clock().UTC()) {
+		return nil, ErrCurrentSessionExpired
+	}
 	return &Active{Payload: payload, Session: sess}, nil
+}
+
+func sessionExpired(expiresAt, now time.Time) bool {
+	return !expiresAt.IsZero() && expiresAt.UTC().Before(now.UTC())
 }
 
 // Touch refreshes the active session's idle timer to now + idleTTL. It is

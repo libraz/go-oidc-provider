@@ -13,7 +13,7 @@ import (
 
 // TestContract_HotColdSplit drives the full contract suite against a
 // composite store that mirrors a realistic hot/cold deployment: a persistent
-// backend serves the transactional cluster plus Clients, while an ephemeral
+// backend serves the atomic-routing cluster plus Clients, while an ephemeral
 // backend serves Interactions and ConsumedJTIs. The contract behaviours must
 // hold identically to a single-backend store.
 //

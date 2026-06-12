@@ -25,14 +25,22 @@ func newAuthCode(now time.Time, id string) *store.AuthorizationCode {
 
 func newRefresh(now time.Time, id string, parent *string) *store.RefreshToken {
 	return &store.RefreshToken{
-		ID:        id,
-		ClientID:  "client",
-		Subject:   "sub",
-		GrantID:   "grant",
-		Scope:     []string{"openid"},
-		ParentID:  parent,
-		ExpiresAt: now.Add(24 * time.Hour),
-		CreatedAt: now,
+		ID:                   id,
+		ClientID:             "client",
+		Subject:              "sub",
+		SubjectPublic:        true,
+		GrantID:              "grant",
+		Scope:                []string{"openid"},
+		Resource:             "https://api.example.com",
+		Origin:               store.RefreshOriginCustomGrant,
+		AuthTime:             now.Add(-time.Minute),
+		ACR:                  "urn:acr:pwd",
+		AMR:                  []string{"pwd", "otp"},
+		AuthorizationDetails: []map[string]any{{"type": "payment", "amount": "100"}},
+		AccessTokenExtra:     map[string]any{"act": map[string]any{"sub": "actor"}},
+		ParentID:             parent,
+		ExpiresAt:            now.Add(24 * time.Hour),
+		CreatedAt:            now,
 	}
 }
 

@@ -31,6 +31,7 @@ func TestDiscovery_Golden_AllFeaturesEnabled(t *testing.T) {
 			PAR: true, JAR: true, JARM: true, DPoP: true, MTLS: true,
 			Introspect: true, Revoke: true,
 		},
+		RequirePAR:      true,
 		GrantsSupported: []string{"authorization_code", "refresh_token"},
 		AuthMethodsSupported: []string{
 			"client_secret_basic",

@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -106,6 +107,25 @@ func TestIntegration_Discovery_WithFeaturesAdvertisesEndpoints(t *testing.T) {
 	}
 	if got, _ := doc["introspection_endpoint"].(string); got != validIssuer+"/oidc/introspect" {
 		t.Errorf("introspection_endpoint=%v", doc["introspection_endpoint"])
+	}
+}
+
+func TestIntegration_Discovery_FAPIProfileAdvertisesRequirePAR(t *testing.T) {
+	t.Parallel()
+
+	_, base := startProvider(t, op.WithProfile(profile.FAPI2Baseline))
+	resp := httpGet(t, base+"/.well-known/openid-configuration")
+	defer resp.Body.Close()
+
+	var doc map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, _ := doc["pushed_authorization_request_endpoint"].(string); got != validIssuer+"/oidc/par" {
+		t.Errorf("par_endpoint=%v want %s/oidc/par", doc["pushed_authorization_request_endpoint"], validIssuer)
+	}
+	if got, _ := doc["require_pushed_authorization_requests"].(bool); !got {
+		t.Fatalf("require_pushed_authorization_requests=%v want true; doc=%v", doc["require_pushed_authorization_requests"], doc)
 	}
 }
 

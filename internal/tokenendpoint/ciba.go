@@ -103,7 +103,7 @@ func parseCIBARequest(w http.ResponseWriter, r *http.Request) (cibaInputs, bool)
 // Core §11 and short-circuits the wire response on every non-emit
 // branch. The helper also stamps the LastPolledAt observation
 // (for the next slow_down ladder step), persists the doubled
-// interval on slow_down via [IncrementPollViolation], and triggers
+// interval on slow_down via [store.CIBARequestStore.RecordPoll], and triggers
 // the poll-abuse lockout when the strike counter saturates. It
 // returns true when the decision is "emit" — the only branch that
 // lets the caller proceed to authorization gates and credential
@@ -127,17 +127,20 @@ func applyCIBAPollDecision(
 		PollViolations:    rec.PollViolations,
 		MaxPollViolations: deps.CIBAMaxPollViolations,
 	})
-	// Stamp the poll timestamp before any further branching so the
-	// next poll's slow_down ladder sees the current observation. A
-	// store fault here is non-fatal: the worst case is the next
-	// poll gets the same decision because LastPolledAt is stale,
-	// which is the correct fail-open behaviour for a transient
-	// substore outage. We surface the fault as a warn-level audit
-	// event so SOC tooling can spot a transient outage that quietly
-	// defeats the slow_down ladder; the poll decision itself still
-	// proceeds because RecordPoll is best-effort observability
-	// rather than a single-use gate.
-	if err := deps.CIBARequests.RecordPoll(ctx, authReqID, now); err != nil {
+	// Stamp the poll timestamp and any slow_down interval escalation before
+	// branching so the next poll's ladder sees the current observation. A
+	// store fault here is non-fatal: the worst case is the next poll gets
+	// the same decision because LastPolledAt or Interval is stale, which is
+	// the correct fail-open behaviour for a transient substore outage. We
+	// surface the fault as a warn-level audit event so SOC tooling can spot
+	// a transient outage that quietly defeats the slow_down ladder; the
+	// poll decision itself still proceeds because RecordPoll is best-effort
+	// observability rather than a single-use gate.
+	nextInterval := rec.Interval
+	if decision.Decision == ciba.PollDecisionSlowDown {
+		nextInterval = decision.NextInterval
+	}
+	if err := deps.CIBARequests.RecordPoll(ctx, authReqID, now, nextInterval); err != nil {
 		deps.audit().Emit(ctx, audit.Event{
 			Name:     ciba.AuditPollObservationFailed,
 			Level:    audit.LevelWarn,
@@ -360,14 +363,11 @@ func consumeCIBARequest(
 // handler reads index 0 (or empty when none was registered),
 // matching the access-token aud claim's single-entry encoding.
 //
-// acr / amr threading: the bc-authorize record carries the
-// requested ACR values verbatim. The handler stamps acr from the
-// first entry on the issued id_token. amr is left unset until the
-// substore retains a real authentication-method signal — copying
-// acr_values into amr (the previous v0.9.x posture) was a wire-
-// shape mismatch: OIDC Core 1.0 §2 defines acr as the
-// authentication context class and amr as the authentication
-// methods used, and the two have no defined synonymy.
+// acr / amr threading: the bc-authorize record carries requested
+// ACR values for the authentication device, but token issuance stamps
+// only the ACR that the device actually satisfied at Approve time.
+// amr is left unset until the substore retains a real authentication-
+// method signal.
 func issueCIBAResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -427,7 +427,7 @@ func issueCIBAResponse(
 			AccessToken: accessToken,
 			Now:         now,
 			AuthTime:    authTime,
-			ACRValues:   authorized.ACRValues,
+			ACR:         authorized.ACR,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -449,6 +449,12 @@ func issueCIBAResponse(
 		resource,
 		"",
 		binding,
+		store.RefreshOriginCIBA,
+		false,
+		authContext{
+			AuthTime: authTime,
+			ACR:      authorized.ACR,
+		},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -484,7 +490,7 @@ type cibaIDTokenInput struct {
 	AccessToken string
 	Now         time.Time
 	AuthTime    int64
-	ACRValues   []string
+	ACR         string
 }
 
 // mintCIBAIDToken signs the id_token issued in response to a
@@ -511,9 +517,7 @@ func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {
 		AtHash:    atHash,
 		AuthTime:  in.AuthTime,
 	}
-	if len(in.ACRValues) > 0 {
-		claims.ACR = in.ACRValues[0]
-	}
+	claims.ACR = in.ACR
 	return tokens.SignIDToken(key, claims)
 }
 

@@ -15,6 +15,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endsession"
@@ -50,6 +51,24 @@ type harness struct {
 	endSessionPath string
 	clientID       string
 	postLogoutURI  string
+	audit          *endSessionAuditRecorder
+}
+
+type endSessionAuditRecorder struct {
+	events []audit.Event
+}
+
+func (r *endSessionAuditRecorder) Emit(_ context.Context, ev audit.Event) {
+	r.events = append(r.events, ev)
+}
+
+func (r *endSessionAuditRecorder) find(name string) *audit.Event {
+	for i := range r.events {
+		if r.events[i].Name == name {
+			return &r.events[i]
+		}
+	}
+	return nil
 }
 
 // newHarness builds a handler against fresh in-memory infrastructure
@@ -119,6 +138,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("RegisterClient: %v", err)
 	}
 
+	auditRecorder := &endSessionAuditRecorder{}
 	deps := endsession.Deps{
 		Issuer:       "https://op.example.com",
 		Clients:      st.Clients(),
@@ -127,6 +147,7 @@ func newHarness(t *testing.T) *harness {
 		Clock:        clock,
 		Grants:       st.Grants(),
 		AccessTokens: st.AccessTokens(),
+		Audit:        auditRecorder,
 	}
 	mux := http.NewServeMux()
 	const endSessionPath = "/oidc/end_session"
@@ -141,6 +162,7 @@ func newHarness(t *testing.T) *harness {
 		endSessionPath: endSessionPath,
 		clientID:       clientID,
 		postLogoutURI:  postLogout,
+		audit:          auditRecorder,
 	}
 }
 
@@ -369,6 +391,16 @@ func TestHandler_POSTLogoutNoHintCSRF(t *testing.T) {
 	}
 	if _, err := h.store.Sessions().Find(context.Background(), sessionID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("session record still present: err=%v", err)
+	}
+	ev := h.audit.find("session.destroyed")
+	if ev == nil {
+		t.Fatalf("session.destroyed not emitted; got=%v", h.audit.events)
+	}
+	if ev.ActorID != "user-1" {
+		t.Errorf("session.destroyed ActorID=%q want user-1", ev.ActorID)
+	}
+	if ev.SessionID != sessionID {
+		t.Errorf("session.destroyed SessionID=%q want %q", ev.SessionID, sessionID)
 	}
 }
 

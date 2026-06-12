@@ -79,8 +79,8 @@ type Grant struct {
 }
 
 // GrantStore is the substore for persisted consent. It belongs to the
-// transactional cluster because grant updates accompany authorization-code
-// exchanges and refresh-token rotations.
+// atomic-routing cluster because grant updates accompany authorization-code
+// exchanges, refresh-token rotations, and revocation cascades.
 type GrantStore interface {
 	// Save persists a new grant or replaces an existing one. Save MUST
 	// return [ErrAlreadyExists] if used in insert mode and the ID is

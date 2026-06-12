@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // TestEnforceSenderConstraint_DisabledNoOp confirms the helper is a
@@ -77,7 +79,7 @@ func TestEnforceSenderConstraint_UnboundFails(t *testing.T) {
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control=%q want no-store", got)
 	}
-	var body errorResponse
+	var body httpx.ErrorBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode body: %v (%s)", err, rec.Body.String())
 	}

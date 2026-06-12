@@ -141,6 +141,17 @@ func maybeIssueCustomGrantRefresh(
 		})
 		return "", nil
 	}
+	subject := customGrantRefreshSubject(resp)
+	if subject == "" {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     customgrant.AuditEventRefreshDropped,
+			Level:    audit.LevelInfo,
+			Message:  "custom-grant refresh token dropped: response subject is empty",
+			ActorID:  "",
+			ClientID: client.ID,
+		})
+		return "", nil
+	}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
 		Clock: deps.clockFunc(),
@@ -151,12 +162,31 @@ func maybeIssueCustomGrantRefresh(
 	}
 	return issuer.Issue(ctx, refresh.IssueInput{
 		ClientID:           client.ID,
-		Subject:            customGrantRefreshSubject(resp),
+		Subject:            subject,
+		SubjectPublic:      true,
 		GrantID:            grantID,
 		Scope:              append([]string(nil), resp.Scope...),
+		Resource:           singleAudienceResource(resp.Audience),
+		Origin:             store.RefreshOriginCustomGrant,
+		AuthTime:           resp.AuthTime,
+		AccessTokenExtra:   customGrantAccessTokenExtra(resp),
 		DPoPJKT:            refreshDPoPJKT(client, binding.DPoPJKT),
 		MTLSCertThumbprint: binding.MTLSThumbprint,
 	})
+}
+
+func singleAudienceResource(audience []string) string {
+	if len(audience) == 1 {
+		return audience[0]
+	}
+	return ""
+}
+
+func customGrantAccessTokenExtra(resp customgrant.Response) map[string]any {
+	if resp.BoundAccessToken != nil {
+		return cloneClaimsMap(resp.BoundAccessToken.ExtraClaims)
+	}
+	return nil
 }
 
 // customGrantPermitsRefresh reports whether the client is registered for

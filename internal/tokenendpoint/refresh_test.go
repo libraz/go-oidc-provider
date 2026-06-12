@@ -118,6 +118,47 @@ func TestRefresh_RequireAuthTime_EmitsAuthTime(t *testing.T) {
 	}
 }
 
+func TestRefresh_UsesRefreshRecordAuthContextWithoutGrant(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	client.RequireAuthTime = true
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+	const tokenID = "rt-record-auth-context" //nolint:gosec // refresh-token id fixture, not a live credential.
+	authTime := f.clock.now.Add(-7 * time.Minute)
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:                   tokenID,
+		ClientID:             client.ID,
+		Subject:              "user-1",
+		GrantID:              "missing-grant-record-context",
+		Scope:                []string{"openid", "offline_access"},
+		AuthTime:             authTime,
+		ACR:                  "urn:acr:pwd",
+		AMR:                  []string{"pwd", "otp"},
+		AuthorizationDetails: []map[string]any{{"type": "payment"}},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	idClaims := decodeIDTokenClaims(t, body["id_token"].(string))
+	if got := idClaims["auth_time"]; got != float64(authTime.Unix()) {
+		t.Fatalf("auth_time=%v want %d", got, authTime.Unix())
+	}
+	if got := idClaims["acr"]; got != "urn:acr:pwd" {
+		t.Fatalf("acr=%v want urn:acr:pwd", got)
+	}
+	if _, ok := body["authorization_details"]; !ok {
+		t.Fatalf("authorization_details missing from refresh response: %v", body)
+	}
+}
+
 func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	t.Parallel()
 

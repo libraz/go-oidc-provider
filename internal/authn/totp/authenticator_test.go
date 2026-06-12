@@ -160,6 +160,31 @@ func TestAuthenticator_BeginRejectsWhileLocked(t *testing.T) {
 	}
 }
 
+func TestAuthenticator_BeginUsesClockForLockExpiry(t *testing.T) {
+	t.Parallel()
+
+	f := newAdapterFixture(t)
+	rec, err := f.store.Get(context.Background(), f.subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	rec.LockedUntil = f.clock.t.Add(-time.Minute)
+	if err := f.store.Put(context.Background(), rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	step, err := f.adapter.Begin(context.Background(), op.BeginInput{
+		Subject:  f.subject,
+		AuthTime: f.clock.t.Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	if step.Prompt == nil {
+		t.Fatalf("Begin returned no prompt: %+v", step)
+	}
+}
+
 func TestAuthenticator_BeginPropagatesNotFound(t *testing.T) {
 	t.Parallel()
 

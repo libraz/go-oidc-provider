@@ -87,6 +87,63 @@ func TestVerifyUserCode_NormalisesSubmission(t *testing.T) {
 	}
 }
 
+func TestUserCodeKeyedApprovalPathDoesNotNeedDeviceCode(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	makePendingRecord(t, ds, "dev-user-code-only", "ABCDEFGH")
+	deps := &devicecodekit.Deps{DeviceCodes: ds}
+
+	matched, err := devicecodekit.VerifyUserCodeByUserCode(ctx, deps, "abcd-efgh", "ABCDEFGH")
+	if err != nil {
+		t.Fatalf("VerifyUserCodeByUserCode: %v", err)
+	}
+	if !matched {
+		t.Fatal("matched=false want true")
+	}
+	authTime := time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
+	if err := devicecodekit.ApproveUserCode(ctx, deps, "ABCDEFGH", "subject-1", authTime); err != nil {
+		t.Fatalf("ApproveUserCode: %v", err)
+	}
+	rec, err := ds.Consume(ctx, "dev-user-code-only")
+	if err != nil {
+		t.Fatalf("Consume after user_code approval: %v", err)
+	}
+	if rec.Subject != "subject-1" || !rec.AuthTime.Equal(authTime) {
+		t.Fatalf("approved record = %+v, want subject/authTime from ApproveUserCode", rec)
+	}
+}
+
+func TestVerifyUserCodeByUserCode_MismatchUsesStrikeGate(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	makePendingRecord(t, ds, "dev-user-code-strike", "ABCDEFGH")
+	deps := &devicecodekit.Deps{DeviceCodes: ds}
+
+	for i := 1; i <= int(devicecodekit.MaxUserCodeStrikes); i++ {
+		matched, err := devicecodekit.VerifyUserCodeByUserCode(ctx, deps, "ABCDEFGH", "ZZZZ9999")
+		if err != nil {
+			t.Fatalf("VerifyUserCodeByUserCode strike %d: %v", i, err)
+		}
+		if matched {
+			t.Fatalf("strike %d matched=true, want false", i)
+		}
+	}
+	rec, err := ds.FindByDeviceCode(ctx, "dev-user-code-strike")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode: %v", err)
+	}
+	if rec.Status != store.DeviceCodeStatusDenied {
+		t.Fatalf("Status=%v want Denied", rec.Status)
+	}
+	if rec.DenyReason != devicecodekit.DenyReasonUserCodeLockout {
+		t.Fatalf("DenyReason=%q want %q", rec.DenyReason, devicecodekit.DenyReasonUserCodeLockout)
+	}
+}
+
 // TestVerifyUserCode_FourMismatchesStayPending pins the brute-force
 // gate's pre-lockout window: four wrong submissions advance the
 // strike counter but the record stays Pending. The embedder may
@@ -337,6 +394,17 @@ func TestRevoke_PendingRecordTransitionsDenied(t *testing.T) {
 	}
 	if !emitter.containsName("device_code.revoked") {
 		t.Errorf("audit stream missing device_code.revoked: %v", emitter.names())
+	}
+	for _, ev := range emitter.events {
+		if ev.Name != "device_code.revoked" {
+			continue
+		}
+		if _, ok := ev.Extras["device_code_id"]; ok {
+			t.Fatalf("audit extras leaked raw device_code_id: %v", ev.Extras)
+		}
+		if got := ev.Extras["device_code_hash"]; got == "" {
+			t.Fatalf("audit extras missing device_code_hash: %v", ev.Extras)
+		}
 	}
 }
 

@@ -5,9 +5,8 @@
 // helper the substores share.
 //
 // Every accessor returns a substore bound to the aggregate's *sql.DB.
-// The transactional-cluster accessors on store.Tx (see tx.go) return
-// substores bound to a single *sql.Tx instead, so an authorization-code
-// exchange commits atomically.
+// The optional store.Tx accessors (see tx.go) return substores bound to a
+// single *sql.Tx for embedders that need manual cross-substore transactions.
 
 package main
 

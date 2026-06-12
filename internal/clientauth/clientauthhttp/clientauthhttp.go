@@ -14,22 +14,12 @@ package clientauthhttp
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
-	"github.com/libraz/go-oidc-provider/internal/httpx"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
-)
-
-// RFC 6749 §5.2 wire codes the helper emits. The set is closed; ad-hoc
-// codes are forbidden so the discoverable error surface stays
-// auditable across endpoints.
-const (
-	codeInvalidRequest = "invalid_request"
-	codeInvalidClient  = "invalid_client"
-	codeServerError    = "server_error"
 )
 
 // EventClientAuthnFailure is the canonical audit-event name emitted on
@@ -117,62 +107,20 @@ const (
 // the wire response stays at the canonical RFC 6749 §5.2
 // "invalid_client" envelope.
 func (a *Authenticator) Authenticate(ctx context.Context, w http.ResponseWriter, r *http.Request) (*store.Client, *clientauth.Credentials, bool) {
-	creds, err := clientauth.Parse(r)
-	usedBasic := r.Header.Get("Authorization") != ""
-	if err != nil {
-		a.emitClientAuthnFailure(ctx, "", "", reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if creds.Method == clientauth.MethodPrivateKeyJWT && a.AssertionVerifier == nil {
-		a.emitClientAuthnFailure(ctx, creds.ClientID, string(creds.Method), "private_key_jwt_disabled")
-		writeInvalidClient(w, usedBasic, "private_key_jwt is not enabled")
-		return nil, nil, false
-	}
-	client, err := a.lookupClient(ctx, creds.ClientID)
-	if err != nil {
-		a.emitClientAuthnFailure(ctx, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	if _, err := clientauth.VerifyClient(ctx, creds, client, clientauth.VerifyOpts{
+	return endpointsupport.AuthenticateClient(ctx, w, r, endpointsupport.AuthenticateOpts{
+		Clients:           a.Clients,
 		SecretVerifier:    a.SecretVerifier,
 		AssertionVerifier: a.AssertionVerifier,
 		AllowedMethods:    a.AllowedMethods,
-	}); err != nil {
-		a.emitClientAuthnFailure(ctx, creds.ClientID, string(creds.Method), reasonForAuthnError(err))
-		writeAuthnError(w, err, usedBasic)
-		return nil, nil, false
-	}
-	return client, creds, true
-}
-
-// emitClientAuthnFailure raises [audit.Event] for a pre-issuance
-// client authentication failure. The wire response stays on the
-// canonical RFC 6749 §5.2 "invalid_client" envelope, so the audit
-// stream is the only place the failing client_id and a triage-level
-// reason code surface.
-func (a *Authenticator) emitClientAuthnFailure(ctx context.Context, clientID, method, reason string) {
-	extras := map[string]any{"reason": reason}
-	if method != "" {
-		extras["method"] = method
-	}
-	a.emitter().Emit(ctx, audit.Event{
-		Name:     a.eventName(),
-		Level:    audit.LevelWarn,
-		Message:  a.message(),
-		ClientID: clientID,
-		Extras:   extras,
+	}, func(creds *clientauth.Credentials, err error) {
+		clientID := ""
+		method := ""
+		if creds != nil {
+			clientID = creds.ClientID
+			method = string(creds.Method)
+		}
+		endpointsupport.EmitAuthnFailure(ctx, a.Audit, a.eventName(), a.message(), clientID, err, method)
 	})
-}
-
-// emitter returns the configured audit sink, falling back to
-// [audit.Discard] so call sites can invoke Emit unconditionally.
-func (a *Authenticator) emitter() audit.Emitter {
-	if a.Audit == nil {
-		return audit.Discard()
-	}
-	return a.Audit
 }
 
 // eventName returns the canonical event name, defaulting when the
@@ -191,85 +139,4 @@ func (a *Authenticator) message() string {
 		return defaultAuditMessage
 	}
 	return a.AuditMessage
-}
-
-// lookupClient resolves the registered client for id, mapping
-// [store.ErrNotFound] to [clientauth.ErrCredentialsInvalid] so the
-// caller cannot tell "unknown client" apart from "wrong secret"
-// through the error surface.
-func (a *Authenticator) lookupClient(ctx context.Context, id string) (*store.Client, error) {
-	if id == "" {
-		return nil, clientauth.ErrCredentialsInvalid
-	}
-	c, err := a.Clients.GetClient(ctx, id)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, clientauth.ErrCredentialsInvalid
-		}
-		return nil, err
-	}
-	return c, nil
-}
-
-// reasonForAuthnError maps a [clientauth] sentinel onto the short
-// reason code emitted on the audit event. The codes match the
-// clientauth error names so a reader can grep from an audit line
-// back to the failing branch in the verifier.
-func reasonForAuthnError(err error) string {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		return "no_credentials"
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials):
-		return "ambiguous_credentials"
-	case errors.Is(err, clientauth.ErrUnsupportedMethod):
-		return "unsupported_method"
-	case errors.Is(err, clientauth.ErrClientMismatch):
-		return "client_mismatch"
-	case errors.Is(err, clientauth.ErrCredentialsInvalid):
-		return "invalid_client_credentials"
-	case errors.Is(err, clientauth.ErrAssertionMalformed):
-		return "assertion_malformed"
-	case errors.Is(err, clientauth.ErrAssertionReplayed):
-		return "assertion_replayed"
-	default:
-		return "server_error"
-	}
-}
-
-// writeAuthnError maps an authentication error onto the wire
-// response. The mapping is the canonical RFC 6749 §5.2 table
-// augmented by this library's sentinel discrimination.
-func writeAuthnError(w http.ResponseWriter, err error, usedBasic bool) {
-	switch {
-	case errors.Is(err, clientauth.ErrNoCredentials):
-		// No credentials at all: the request reached the endpoint
-		// without any way to authenticate a confidential client and
-		// without claiming a public-client identity. Surface 401 with
-		// a challenge so RP libraries retry intelligently.
-		writeInvalidClient(w, usedBasic, "client authentication required")
-	case errors.Is(err, clientauth.ErrAmbiguousCredentials),
-		errors.Is(err, clientauth.ErrUnsupportedMethod):
-		_ = httpx.WriteError(w, http.StatusBadRequest, codeInvalidRequest,
-			"client authentication parameters are malformed")
-	case errors.Is(err, clientauth.ErrClientMismatch),
-		errors.Is(err, clientauth.ErrCredentialsInvalid),
-		errors.Is(err, clientauth.ErrAssertionMalformed),
-		errors.Is(err, clientauth.ErrAssertionReplayed):
-		writeInvalidClient(w, usedBasic, "client authentication failed")
-	default:
-		_ = httpx.WriteError(w, http.StatusInternalServerError, codeServerError, "")
-	}
-}
-
-// writeInvalidClient is the dedicated 401 path for the
-// "invalid_client" code: per RFC 6749 §5.2, a request that
-// authenticated via HTTP Basic MUST receive a WWW-Authenticate
-// challenge so RP libraries that follow the Basic-auth state machine
-// retry intelligently. The realm value is fixed to "oidc" to match
-// the rest of the library's posture.
-func writeInvalidClient(w http.ResponseWriter, basic bool, description string) {
-	if basic {
-		w.Header().Set("WWW-Authenticate", `Basic realm="oidc"`)
-	}
-	_ = httpx.WriteError(w, http.StatusUnauthorized, codeInvalidClient, description)
 }

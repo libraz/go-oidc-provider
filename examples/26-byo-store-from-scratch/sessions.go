@@ -1,7 +1,7 @@
 //go:build example
 
 // sessions.go — store.SessionStore against vault_browser_seats. Outside
-// the transactional cluster: session writes are not coordinated with
+// the atomic-routing cluster: session writes are not coordinated with
 // token-endpoint commits. Save upserts; Find / ListByChooserGroup honour
 // ExpiresAt regardless of any sweep.
 

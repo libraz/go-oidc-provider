@@ -627,6 +627,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
 		Clients:                  cfg.store.Clients(),
 		Grants:                   cfg.store.Grants(),
+		SubjectProjector:         backchannelSubjectProjector(cfg),
 		Deliverer:                deliverer,
 		Emitter:                  cfg.effectiveAuditEmitter(),
 		Clock:                    cfg.clock,
@@ -640,6 +641,13 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		}
 	}
 	return coord, nil
+}
+
+func backchannelSubjectProjector(cfg *config) func(ctx context.Context, raw string, client *store.Client) (string, error) {
+	if cfg.subjectGeneratorSource == "" {
+		return nil
+	}
+	return buildSubjectProjector(cfg)
 }
 
 // backchannelPostureFor projects the public
@@ -812,6 +820,7 @@ func buildDiscoveryInput(cfg *config, scopes *scoperegistry.Registry, locales *i
 		ClaimsSupported:                    cfg.claimsSupported,
 		ACRValuesSupported:                 cfg.acrValuesSupportedCopy(),
 		AuthorizationDetailsTypesSupported: cfg.authorizationDetailTypeNames(),
+		RequirePAR:                         cfg.requirePAR(),
 		GrantManagementEnabled:             cfg.grantManagementEnabled,
 		GrantManagementActions:             cfg.grantManagementActionStrings(),
 		GrantManagementActionRequired:      cfg.grantManagementActionRequired,

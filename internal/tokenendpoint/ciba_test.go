@@ -208,6 +208,35 @@ func TestHandleCIBA_PendingPoll_AuthorizationPending(t *testing.T) {
 	}
 }
 
+func TestHandleCIBA_SlowDownPersistsNextInterval(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:           "auth-req-slow-down",
+		Scope:        []string{"openid"},
+		Status:       store.CIBARequestStatusPending,
+		Interval:     ciba.DefaultInterval,
+		LastPolledAt: ptrTime(f.clock.now.Add(-1 * time.Millisecond)),
+	})
+	form := url.Values{}
+	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
+	form.Set("auth_req_id", "auth-req-slow-down")
+	rec := f.post(t, form)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := cibaDecodeError(t, rec.Body.Bytes()); got != "slow_down" {
+		t.Fatalf("error = %q, want slow_down", got)
+	}
+	got, err := f.store.CIBARequests().FindByAuthReqID(context.Background(), "auth-req-slow-down")
+	if err != nil {
+		t.Fatalf("FindByAuthReqID: %v", err)
+	}
+	if got.Interval != 2*ciba.DefaultInterval {
+		t.Fatalf("Interval=%v want %v", got.Interval, 2*ciba.DefaultInterval)
+	}
+}
+
 func TestHandleCIBA_DeniedRecord_AccessDenied(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFixture(t)
@@ -240,7 +269,7 @@ func TestHandleCIBA_ConsumedRecord_InvalidGrant(t *testing.T) {
 		Status: store.CIBARequestStatusPending,
 	})
 	// Approve then consume to land in the Consumed state.
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-consumed", "user-1", time.Time{}); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-consumed", "user-1", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	if _, err := f.store.CIBARequests().Consume(context.Background(), "auth-req-consumed"); err != nil {
@@ -269,7 +298,7 @@ func TestHandleCIBA_ApprovedRecord_HappyPath(t *testing.T) {
 		Scope:  []string{"openid", "profile"},
 		Status: store.CIBARequestStatusPending,
 	})
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-ok", "user-42", time.Time{}); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-ok", "user-42", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	form := url.Values{}
@@ -319,7 +348,7 @@ func TestHandleCIBA_PollAbuseLockout(t *testing.T) {
 	for range int(ciba.MaxPollViolations) {
 		// Re-seed LastPolledAt to a value inside the slow_down floor
 		// so each poll counts as a violation.
-		_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-abuse", f.clock.now.Add(-1*time.Millisecond))
+		_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-abuse", f.clock.now.Add(-1*time.Millisecond), ciba.DefaultInterval)
 		rec := f.post(t, form)
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -329,7 +358,7 @@ func TestHandleCIBA_PollAbuseLockout(t *testing.T) {
 		}
 	}
 	// The next poll should observe the locked record.
-	_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-abuse", f.clock.now.Add(-1*time.Millisecond))
+	_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-abuse", f.clock.now.Add(-1*time.Millisecond), ciba.DefaultInterval)
 	rec := f.post(t, form)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -364,14 +393,14 @@ func TestHandleCIBA_PollAbuseLockoutThresholdOverride(t *testing.T) {
 	form.Set("grant_type", "urn:openid:params:grant-type:ciba")
 	form.Set("auth_req_id", "auth-req-override")
 	for range int(overrideCap) {
-		_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-override", f.clock.now.Add(-1*time.Millisecond))
+		_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-override", f.clock.now.Add(-1*time.Millisecond), ciba.DefaultInterval)
 		rec := f.post(t, form)
 		if got := cibaDecodeError(t, rec.Body.Bytes()); got != "slow_down" {
 			t.Fatalf("error = %q, want slow_down (override cap=%d)", got, overrideCap)
 		}
 	}
 	// One more poll past the override threshold should now lock out.
-	_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-override", f.clock.now.Add(-1*time.Millisecond))
+	_ = f.store.CIBARequests().RecordPoll(context.Background(), "auth-req-override", f.clock.now.Add(-1*time.Millisecond), ciba.DefaultInterval)
 	rec := f.post(t, form)
 	if got := cibaDecodeError(t, rec.Body.Bytes()); got != "access_denied" {
 		t.Fatalf("error = %q, want access_denied after override cap exceeded", got)
@@ -405,15 +434,15 @@ func (s recordPollFailingStore) FindByAuthReqID(ctx context.Context, id string) 
 	return s.inner.FindByAuthReqID(ctx, id)
 }
 
-func (s recordPollFailingStore) Approve(ctx context.Context, id, subject string, authTime time.Time) error {
-	return s.inner.Approve(ctx, id, subject, authTime)
+func (s recordPollFailingStore) Approve(ctx context.Context, id, subject, acr string, authTime time.Time) error {
+	return s.inner.Approve(ctx, id, subject, acr, authTime)
 }
 
 func (s recordPollFailingStore) Deny(ctx context.Context, id, reason string) error {
 	return s.inner.Deny(ctx, id, reason)
 }
 
-func (s recordPollFailingStore) RecordPoll(_ context.Context, _ string, _ time.Time) error {
+func (s recordPollFailingStore) RecordPoll(_ context.Context, _ string, _ time.Time, _ time.Duration) error {
 	return errInjectedRecordPoll
 }
 
@@ -514,7 +543,7 @@ func TestHandleCIBA_IDTokenStampsAuthTime(t *testing.T) {
 		Scope:  []string{"openid"},
 		Status: store.CIBARequestStatusPending,
 	})
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-at", "user-7", authTime); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-at", "user-7", "", authTime); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	form := url.Values{}
@@ -559,7 +588,7 @@ func TestHandleCIBA_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 		Scope:  []string{"openid"},
 		Status: store.CIBARequestStatusPending,
 	})
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-need-at", "user-x", time.Time{}); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-need-at", "user-x", "", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	form := url.Values{}
@@ -571,15 +600,12 @@ func TestHandleCIBA_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	}
 }
 
-// TestHandleCIBA_IDTokenStampsACRWithoutAMR pins the acr/amr
-// contract on the CIBA-issued id_token: when the persisted record
-// carries one or more requested ACR values, the issued id_token
-// stamps acr from the first entry and MUST NOT synthesise amr
-// from the same slice. acr names the authentication context class
-// (OIDC Core 1.0 §2) and amr names the authentication methods
-// used; the two are not synonyms, and the substore does not yet
-// retain a real authentication-method signal so amr stays absent.
-func TestHandleCIBA_IDTokenStampsACRWithoutAMR(t *testing.T) {
+// TestHandleCIBA_IDTokenStampsApprovedACRWithoutAMR pins the acr/amr
+// contract on the CIBA-issued id_token: requested ACR values are not
+// self-certifying. The issued id_token stamps only the ACR value the
+// authentication device supplied to Approve, and MUST NOT synthesize
+// amr from requested acr_values.
+func TestHandleCIBA_IDTokenStampsApprovedACRWithoutAMR(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFixture(t)
 	f.seedCIBARequest(t, &store.CIBARequest{
@@ -588,7 +614,7 @@ func TestHandleCIBA_IDTokenStampsACRWithoutAMR(t *testing.T) {
 		Status:    store.CIBARequestStatusPending,
 		ACRValues: []string{"urn:mace:incommon:iap:bronze", "urn:mace:incommon:iap:silver"},
 	})
-	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-acr", "user-42", time.Time{}); err != nil {
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-acr", "user-42", "urn:mace:incommon:iap:silver", time.Time{}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	form := url.Values{}
@@ -608,8 +634,8 @@ func TestHandleCIBA_IDTokenStampsACRWithoutAMR(t *testing.T) {
 		t.Fatalf("id_token missing: %s", rec.Body.String())
 	}
 	claims := decodeIDTokenClaims(t, body.IDToken)
-	if got, _ := claims["acr"].(string); got != "urn:mace:incommon:iap:bronze" {
-		t.Errorf("acr = %q, want urn:mace:incommon:iap:bronze", got)
+	if got, _ := claims["acr"].(string); got != "urn:mace:incommon:iap:silver" {
+		t.Errorf("acr = %q, want urn:mace:incommon:iap:silver", got)
 	}
 	if _, present := claims["amr"]; present {
 		t.Errorf("amr MUST be absent (substore does not retain authentication methods); got %v", claims["amr"])

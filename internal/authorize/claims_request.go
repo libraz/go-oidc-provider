@@ -6,6 +6,8 @@ import (
 	"slices"
 )
 
+const maxClaimsRequestBytes = 16 * 1024
+
 // ClaimsRequest is the parsed view of the OIDC Core 1.0 §5.5 "claims"
 // request parameter. The wire form is a JSON object with optional
 // "userinfo" and "id_token" top-level members; this struct exposes those
@@ -131,6 +133,9 @@ func ParseClaimsRequest(raw string) (*ClaimsRequest, error) {
 	trimmed := bytes.TrimSpace([]byte(raw))
 	if len(trimmed) == 0 {
 		return nil, nil //nolint:nilnil // documented contract: absent parameter
+	}
+	if len(trimmed) > maxClaimsRequestBytes {
+		return nil, ErrClaimsRequestInvalid
 	}
 	var top map[string]json.RawMessage
 	dec := json.NewDecoder(bytes.NewReader(trimmed))

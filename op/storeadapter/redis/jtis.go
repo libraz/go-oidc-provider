@@ -18,8 +18,6 @@ type jtiStore struct {
 	parent *Store
 }
 
-const minJTITTL = 60 * time.Second
-
 func newJTIStore(parent *Store) *jtiStore { return &jtiStore{parent: parent} }
 
 // jtiKey hashes the supplied jti so the key length is bounded. JTI
@@ -56,14 +54,7 @@ func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) er
 }
 
 func jtiTTL(now, expiresAt time.Time) time.Duration {
-	ttl := expiresAt.Sub(now)
-	if ttl <= 0 {
-		return ttl
-	}
-	if ttl < minJTITTL {
-		return minJTITTL
-	}
-	return ttl
+	return expiresAt.Sub(now)
 }
 
 // Has reports whether jti has previously been marked. Redis evicts

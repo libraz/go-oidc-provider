@@ -112,8 +112,31 @@ func (s *deviceCodeStore) Approve(_ context.Context, deviceCode, subject string,
 	})
 }
 
+func (s *deviceCodeStore) ApproveByUserCode(_ context.Context, userCode, subject string, authTime time.Time) error {
+	return s.transitionByUserCode(userCode, func(rec *store.DeviceCode) error {
+		if rec.Status != store.DeviceCodeStatusPending {
+			return store.ErrConflict
+		}
+		rec.Status = store.DeviceCodeStatusApproved
+		rec.Subject = subject
+		rec.AuthTime = authTime
+		return nil
+	})
+}
+
 func (s *deviceCodeStore) Deny(_ context.Context, deviceCode, reason string) error {
 	return s.transition(deviceCode, func(rec *store.DeviceCode) error {
+		if rec.Status != store.DeviceCodeStatusPending {
+			return store.ErrConflict
+		}
+		rec.Status = store.DeviceCodeStatusDenied
+		rec.DenyReason = reason
+		return nil
+	})
+}
+
+func (s *deviceCodeStore) DenyByUserCode(_ context.Context, userCode, reason string) error {
+	return s.transitionByUserCode(userCode, func(rec *store.DeviceCode) error {
 		if rec.Status != store.DeviceCodeStatusPending {
 			return store.ErrConflict
 		}
@@ -146,6 +169,23 @@ func (s *deviceCodeStore) IncrementUserCodeStrike(_ context.Context, deviceCode 
 		if rec.UserCodeStrikes == 255 {
 			// Saturate rather than overflow; the brute-force gate
 			// will already have triggered Deny well before this.
+			strikes = rec.UserCodeStrikes
+			return nil
+		}
+		rec.UserCodeStrikes++
+		strikes = rec.UserCodeStrikes
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return strikes, nil
+}
+
+func (s *deviceCodeStore) IncrementUserCodeStrikeByUserCode(_ context.Context, userCode string) (uint8, error) {
+	var strikes uint8
+	err := s.transitionByUserCode(userCode, func(rec *store.DeviceCode) error {
+		if rec.UserCodeStrikes == 255 {
 			strikes = rec.UserCodeStrikes
 			return nil
 		}
@@ -208,6 +248,23 @@ func (s *deviceCodeStore) transition(deviceCode string, mutate func(*store.Devic
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := hashKey(deviceCode)
+	rec, ok := s.m[key]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if isExpired(rec.ExpiresAt, s.clock) {
+		return store.ErrNotFound
+	}
+	return mutate(rec)
+}
+
+func (s *deviceCodeStore) transitionByUserCode(userCode string, mutate func(*store.DeviceCode) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.userCodeIndex[userCode]
+	if !ok {
+		return store.ErrNotFound
+	}
 	rec, ok := s.m[key]
 	if !ok {
 		return store.ErrNotFound

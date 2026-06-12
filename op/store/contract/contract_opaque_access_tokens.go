@@ -22,7 +22,7 @@ import (
 //     and reports the count;
 //   - GC: rows whose ExpiresAt is strictly before the cutoff are dropped.
 //
-// Backends that participate in the transactional cluster (every backend the
+// Backends that participate in the atomic-routing cluster (every backend the
 // library ships) MUST satisfy every case here.
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.

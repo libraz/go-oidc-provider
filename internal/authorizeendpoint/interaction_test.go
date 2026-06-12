@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authorizeendpoint"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -159,6 +160,54 @@ func TestInteractionPost_HappyPath_RedirectsWithCode(t *testing.T) {
 	}
 	if !strings.Contains(loc, "code=") {
 		t.Errorf("Location=%q must carry code", loc)
+	}
+}
+
+func TestInteractionPost_HappyPath_EmitsSessionAndConsentAudit(t *testing.T) {
+	t.Parallel()
+
+	emitter := &recordingEmitter{}
+	h := newHarness(t, func(d *authorizeendpoint.Deps) {
+		d.Audit = emitter
+	})
+	start := startInteractionFlow(t, h)
+
+	getResp := doInteractionGet(t, h, start)
+	defer getResp.Body.Close()
+	stateRef, csrfCookie := readPromptStateRef(t, getResp)
+
+	body := interaction.FormSubmission{
+		StateRef: stateRef,
+		Values:   map[string]string{testkit.SubjectFieldName: "user-1"},
+	}
+	rr := postSubmission(t, h, start, csrfCookie, body)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	events := emitter.snapshot()
+	sessionEv := findRecordedAuditEvent(events, "session.created")
+	if sessionEv == nil {
+		t.Fatalf("session.created not emitted; got=%v", events)
+	}
+	if sessionEv.ActorID != "user-1" {
+		t.Errorf("session.created ActorID=%q want user-1", sessionEv.ActorID)
+	}
+	if sessionEv.SessionID == "" {
+		t.Error("session.created SessionID is empty")
+	}
+	consentEv := findRecordedAuditEvent(events, "consent.granted")
+	if consentEv == nil {
+		t.Fatalf("consent.granted not emitted; got=%v", events)
+	}
+	if consentEv.ActorID != "user-1" {
+		t.Errorf("consent.granted ActorID=%q want user-1", consentEv.ActorID)
+	}
+	if consentEv.ClientID != "client-1" {
+		t.Errorf("consent.granted ClientID=%q want client-1", consentEv.ClientID)
+	}
+	if got := consentEv.Extras["grant_id"]; got == "" {
+		t.Errorf("consent.granted extras.grant_id=%v want populated", got)
 	}
 }
 

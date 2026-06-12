@@ -91,10 +91,11 @@ type AuthorizationCode struct {
 }
 
 // AuthorizationCodeStore is the substore for authorization_code records.
-// It is part of the transactional cluster: backends that serve it implement
-// [Transactional] so that the token endpoint can consume the code, persist
-// the resulting refresh token, and update the grant in a single atomic
-// operation (RFC 6749 §10.5).
+// It is part of the atomic-routing cluster: composite deployments keep it on
+// the same backend as refresh tokens, grants, access-token registries, PAR,
+// and grant revocations so replay detection and cascades share one
+// consistency domain. Implementations MUST make Consume itself atomic; the OP
+// runtime does not require a cross-substore [Transactional] transaction.
 type AuthorizationCodeStore interface {
 	// Save persists a freshly issued authorization code. The
 	// implementation MUST hash [AuthorizationCode.ID] (SHA-256, ideally

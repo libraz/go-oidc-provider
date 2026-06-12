@@ -24,6 +24,25 @@ func TestSlog_NilLoggerCollapsesToDiscard(t *testing.T) {
 	em.Emit(context.Background(), audit.Event{Name: "ignored"})
 }
 
+func TestSlog_DownstreamPanicIsRecovered(t *testing.T) {
+	t.Parallel()
+
+	em := audit.Slog(slog.New(panickingHandler{}))
+	em.Emit(context.Background(), audit.Event{Name: "code.issued"})
+}
+
+type panickingHandler struct{}
+
+func (panickingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (panickingHandler) Handle(context.Context, slog.Record) error {
+	panic("audit sink exploded")
+}
+
+func (panickingHandler) WithAttrs([]slog.Attr) slog.Handler { return panickingHandler{} }
+
+func (panickingHandler) WithGroup(string) slog.Handler { return panickingHandler{} }
+
 func TestSlog_EmitsCanonicalFields(t *testing.T) {
 	t.Parallel()
 
@@ -147,6 +166,33 @@ func TestSlog_RedactsExtrasWithoutWrapper(t *testing.T) {
 		if got := extras[key]; got != "[REDACTED]" {
 			t.Errorf("extras[%q]=%v want [REDACTED]", key, got)
 		}
+	}
+}
+
+func TestSlog_MasksFreeformStringExtras(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	em := audit.Slog(logger)
+
+	em.Emit(context.Background(), audit.Event{
+		Name: "token.refresh_replay_detected",
+		Extras: map[string]any{
+			"error": "refresh failed: refresh_token=rt-secret&client_id=client-1",
+		},
+	})
+
+	var rec map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &rec); err != nil {
+		t.Fatalf("decode: %v\n%s", err, buf.String())
+	}
+	extras, ok := rec["extras"].(map[string]any)
+	if !ok {
+		t.Fatalf("extras group missing: %T", rec["extras"])
+	}
+	if got, want := extras["error"], "refresh failed: refresh_token=[REDACTED]&client_id=client-1"; got != want {
+		t.Fatalf("extras[error]=%v want %q", got, want)
 	}
 }
 

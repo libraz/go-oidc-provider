@@ -134,6 +134,12 @@ type CIBARequest struct {
 	// must satisfy at least one before Approve.
 	ACRValues []string
 
+	// ACR is the Authentication Context Class Reference the
+	// authentication device actually satisfied when approving the
+	// request. Empty means the approval did not assert a concrete ACR;
+	// token issuance MUST NOT infer one from ACRValues.
+	ACR string
+
 	// BindingMessage is the human-readable string the client supplied
 	// for display on the authentication device (CIBA Core §7.1). The
 	// library length-caps the value at 50 characters and HTML-escapes
@@ -209,7 +215,7 @@ type CIBARequest struct {
 
 // CIBARequestStore is the substore for OpenID Connect CIBA Core 1.0
 // backchannel-authentication records. It is intentionally outside the
-// transactional cluster: the approve→consume CAS embedded in
+// atomic-routing cluster: the approve→consume CAS embedded in
 // [CIBARequestStore.Consume] provides the single-use guarantee on its
 // own, and pairing the consume with the access-token / refresh-token
 // writes inside one transaction would force every embedder to either
@@ -238,12 +244,14 @@ type CIBARequestStore interface {
 	FindByAuthReqID(ctx context.Context, authReqID string) (*CIBARequest, error)
 
 	// Approve atomically transitions a Pending record to Approved
-	// and stamps the supplied subject and authTime. The library
+	// and stamps the supplied subject, satisfied ACR, and authTime. The library
 	// invokes Approve from the embedder's authentication device
 	// callback; the subject parameter overrides any previously
 	// stored value so an embedder that defers user resolution to
 	// the auth device can stamp the verified identity at the same
-	// point. authTime captures the wall-clock at which the end
+	// point. acr is the authentication context class reference the
+	// device actually satisfied; it may be empty when the deployment
+	// has no comparable ACR vocabulary. authTime captures the wall-clock at which the end
 	// user completed the authentication-device interaction; the
 	// token endpoint reads it back when the issued id_token
 	// requires the auth_time claim. A zero authTime is permitted
@@ -251,7 +259,7 @@ type CIBARequestStore interface {
 	// Returns [ErrNotFound] when the record does not exist or is
 	// already expired, and [ErrConflict] when the record's current
 	// status is not Pending.
-	Approve(ctx context.Context, authReqID, subject string, authTime time.Time) error
+	Approve(ctx context.Context, authReqID, subject, acr string, authTime time.Time) error
 
 	// Deny atomically transitions a Pending record to Denied and
 	// stores the supplied reason. The library uses Deny for explicit
@@ -262,12 +270,17 @@ type CIBARequestStore interface {
 	// [ErrConflict] with the same semantics as Approve.
 	Deny(ctx context.Context, authReqID, reason string) error
 
-	// RecordPoll updates [CIBARequest.LastPolledAt] to when. The
-	// library calls RecordPoll before checking the slow_down
-	// condition so the next poll's interval comparison sees the
-	// current timestamp. Returns [ErrNotFound] when the record does
-	// not exist; the library treats that as expired_token.
-	RecordPoll(ctx context.Context, authReqID string, when time.Time) error
+	// RecordPoll updates [CIBARequest.LastPolledAt] to when and
+	// [CIBARequest.Interval] to nextInterval when nextInterval is greater
+	// than the current value. The library calls RecordPoll after deciding
+	// the current poll result but before writing the response, so the next
+	// poll observes both the current timestamp and the escalated
+	// slow_down interval. A nextInterval value less than or equal to the
+	// current interval preserves the existing interval. Implementations
+	// MUST persist both fields atomically.
+	// Returns [ErrNotFound] when the record does not exist; the library
+	// treats that as expired_token.
+	RecordPoll(ctx context.Context, authReqID string, when time.Time, nextInterval time.Duration) error
 
 	// IncrementPollViolation increments [CIBARequest.PollViolations]
 	// by one and returns the new value. The library calls

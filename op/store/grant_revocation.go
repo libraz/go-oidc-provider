@@ -77,11 +77,10 @@ type RevokedJTI struct {
 
 // GrantRevocationStore is the substore for the grant-tombstone JWT
 // access-token revocation strategy (ADR 0025). It belongs to the
-// transactional cluster: a [GrantRevocationStore.RevokeGrant] /
-// [GrantRevocationStore.RevokeJTI] call accompanies the underlying grant
-// or refresh-token write, and the operations MUST commit atomically so a
-// partial failure cannot leave a still-redeemable tombstone next to a
-// freshly-rotated grant.
+// atomic-routing cluster so tombstones, denylist rows, grants, and refresh
+// tokens share one backend consistency domain in composite deployments.
+// RevokeGrant and RevokeJTI MUST be idempotent single-operation writes; the OP
+// runtime does not require a cross-substore [Transactional] transaction.
 //
 // Backends MAY satisfy this interface with two physical tables (one per
 // row shape) or a unified table with a discriminator column; either

@@ -131,6 +131,34 @@ func TestManager_Resolve_DetectsExpiredSession(t *testing.T) {
 	}
 }
 
+func TestManager_Resolve_RejectsIdleExpiredSession(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cur := t0
+	codec := newSessionCodec(t)
+	storeClock := t0
+	st := newSessionStore(t, inmem.WithClock(clockFunc(func() time.Time { return storeClock })))
+	mgr, err := sessions.NewManager(sessions.Config{
+		Codec:   codec,
+		Store:   st,
+		Clock:   func() time.Time { return cur },
+		IdleTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	out, err := mgr.Issue(context.Background(), sessions.Login{Subject: "user", AuthTime: t0})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	cur = t0.Add(time.Hour + time.Nanosecond)
+	if _, err := mgr.Resolve(context.Background(), out.Cookie); !errors.Is(err, sessions.ErrCurrentSessionExpired) {
+		t.Errorf("err=%v want ErrCurrentSessionExpired", err)
+	}
+}
+
 func TestManager_Touch_ExtendsExpiry(t *testing.T) {
 	t.Parallel()
 

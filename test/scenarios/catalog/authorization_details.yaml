@@ -53,7 +53,7 @@ rows:
     behaviour: |
       authorization_details carried inside a signed request object (JAR)
       are merged onto the request and validated like inline parameters.
-    status: pending
+    status: active
 
   - id: RAR-010
     severity: P1

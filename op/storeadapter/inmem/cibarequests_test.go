@@ -79,10 +79,10 @@ func TestCIBARequests_ApproveDenyConsume(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	authTime := time.Now().UTC().Truncate(time.Second)
-	if err := cs.Approve(ctx, "ap-id", "user-42", authTime); err != nil {
+	if err := cs.Approve(ctx, "ap-id", "user-42", "urn:mace:incommon:iap:bronze", authTime); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
-	if err := cs.Approve(ctx, "ap-id", "user-42", authTime); !errors.Is(err, store.ErrConflict) {
+	if err := cs.Approve(ctx, "ap-id", "user-42", "urn:mace:incommon:iap:bronze", authTime); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("double Approve: want ErrConflict, got %v", err)
 	}
 	consumed, err := cs.Consume(ctx, "ap-id")
@@ -91,6 +91,9 @@ func TestCIBARequests_ApproveDenyConsume(t *testing.T) {
 	}
 	if consumed.Subject != "user-42" {
 		t.Errorf("Consume.Subject = %q, want user-42", consumed.Subject)
+	}
+	if consumed.ACR != "urn:mace:incommon:iap:bronze" {
+		t.Errorf("Consume.ACR = %q, want urn:mace:incommon:iap:bronze", consumed.ACR)
 	}
 	if !consumed.AuthTime.Equal(authTime) {
 		t.Errorf("Consume.AuthTime = %v, want %v", consumed.AuthTime, authTime)
@@ -174,7 +177,7 @@ func TestCIBARequests_RecordPoll(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	when := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
-	if err := cs.RecordPoll(ctx, "poll-id", when); err != nil {
+	if err := cs.RecordPoll(ctx, "poll-id", when, 10*time.Second); err != nil {
 		t.Fatalf("RecordPoll: %v", err)
 	}
 	got, err := cs.FindByAuthReqID(ctx, "poll-id")
@@ -186,6 +189,19 @@ func TestCIBARequests_RecordPoll(t *testing.T) {
 	}
 	if !got.LastPolledAt.Equal(when) {
 		t.Errorf("LastPolledAt = %v, want %v", *got.LastPolledAt, when)
+	}
+	if got.Interval != 10*time.Second {
+		t.Errorf("Interval = %v, want 10s", got.Interval)
+	}
+	if err := cs.RecordPoll(ctx, "poll-id", when.Add(time.Second), time.Second); err != nil {
+		t.Fatalf("RecordPoll lower interval: %v", err)
+	}
+	got, err = cs.FindByAuthReqID(ctx, "poll-id")
+	if err != nil {
+		t.Fatalf("FindByAuthReqID after lower interval: %v", err)
+	}
+	if got.Interval != 10*time.Second {
+		t.Errorf("Interval after lower update = %v, want 10s", got.Interval)
 	}
 }
 
@@ -260,7 +276,7 @@ func TestCIBARequests_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := cs.Approve(ctx, concurrentAuthReqID(i), "user-"+concurrentAuthReqID(i), time.Time{})
+			err := cs.Approve(ctx, concurrentAuthReqID(i), "user-"+concurrentAuthReqID(i), "", time.Time{})
 			switch {
 			case err == nil:
 			case errors.Is(err, store.ErrConflict):

@@ -188,12 +188,12 @@ type DeviceCode struct {
 }
 
 // DeviceCodeStore is the substore for RFC 8628 device-authorization
-// records. It is intentionally outside the transactional cluster: the
+// records. It is intentionally outside the atomic-routing cluster: the
 // approve→consume CAS embedded in [DeviceCodeStore.Consume] provides the
 // single-use guarantee on its own, and pairing the consume with the
 // access-token / refresh-token writes inside one transaction would force
 // every embedder to either hand the device-code substore the same backend
-// as the rest of the transactional cluster or reimplement the CAS in
+// as the rest of the atomic-routing cluster or reimplement the CAS in
 // their composite layer. The remaining failure mode — Consume succeeds
 // and a follow-on token write fails — is observable on the wire as a
 // missing token response, after which the device retries the entire
@@ -244,6 +244,13 @@ type DeviceCodeStore interface {
 	// "already decided" message).
 	Approve(ctx context.Context, deviceCode, subject string, authTime time.Time) error
 
+	// ApproveByUserCode is the user_code-keyed variant of Approve.
+	// It exists for verification pages that only know the human
+	// user_code and must never receive the polling bearer device_code.
+	// The userCode argument is the canonical normalised value. Returns
+	// [ErrNotFound] / [ErrConflict] with the same semantics as Approve.
+	ApproveByUserCode(ctx context.Context, userCode, subject string, authTime time.Time) error
+
 	// Deny atomically transitions a Pending record to Denied and
 	// stores the supplied reason. The library uses Deny both for
 	// explicit user-denied transitions ("user_denied") and for
@@ -251,6 +258,11 @@ type DeviceCodeStore interface {
 	// reason is opaque to the substore. Returns [ErrNotFound] /
 	// [ErrConflict] with the same semantics as Approve.
 	Deny(ctx context.Context, deviceCode, reason string) error
+
+	// DenyByUserCode is the user_code-keyed variant of Deny. It is used
+	// by verification pages that decide or revoke an authorization
+	// without exposing the polling bearer device_code to the browser.
+	DenyByUserCode(ctx context.Context, userCode, reason string) error
 
 	// RecordPoll atomically updates [DeviceCode.LastPolledAt] to
 	// when AND [DeviceCode.Interval] to nextInterval. The library
@@ -279,6 +291,13 @@ type DeviceCodeStore interface {
 	// "user_code_lockout". Returns [ErrNotFound] when the record
 	// does not exist.
 	IncrementUserCodeStrike(ctx context.Context, deviceCode string) (uint8, error)
+
+	// IncrementUserCodeStrikeByUserCode is the user_code-keyed variant
+	// of IncrementUserCodeStrike. Verification pages use it when they
+	// identify the pending record by a prefilled user_code / opaque
+	// browser flow and need the brute-force gate without exposing the
+	// device_code.
+	IncrementUserCodeStrikeByUserCode(ctx context.Context, userCode string) (uint8, error)
 
 	// IncrementPollViolation increments [DeviceCode.PollViolations]
 	// by one and returns the new value. The token endpoint calls this

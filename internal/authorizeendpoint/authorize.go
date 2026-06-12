@@ -33,6 +33,12 @@ import (
 // op/audit_test.go.
 const opAuditConsentGrantedFirstParty = "consent.granted.first_party"
 
+const (
+	opAuditCodeIssued     = "code.issued"
+	opAuditConsentGranted = "consent.granted"
+	opAuditSessionCreated = "session.created"
+)
+
 // maxAuthorizeFormBytes caps POST /authorize request body size. Authorize
 // requests are tiny in practice; this ceiling is well above any legitimate
 // payload (the largest field, request_object, comfortably fits in a few
@@ -569,7 +575,14 @@ func resolveSession(r *http.Request, deps resolved) (*sessions.Active, error) {
 	if c == nil || c.Value == "" {
 		return nil, nil //nolint:nilnil // documented "no session" sentinel
 	}
-	return deps.Sessions.Resolve(r.Context(), c.Value)
+	active, err := deps.Sessions.Resolve(r.Context(), c.Value)
+	if err != nil {
+		return nil, err
+	}
+	if err := deps.Sessions.Touch(r.Context(), active.Session.ID); err != nil {
+		return nil, err
+	}
+	return active, nil
 }
 
 // computeAuthorizeHint runs the decision matrix described in
@@ -965,6 +978,19 @@ func mintAndRedirect(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist authorization code")
 		return
 	}
+	deps.auditEmitter().Emit(r.Context(), audit.Event{
+		Name:      opAuditCodeIssued,
+		Level:     audit.LevelInfo,
+		Message:   "authorization code issued",
+		ActorID:   active.Session.Subject,
+		ClientID:  client.ID,
+		SessionID: active.Session.ID,
+		Extras: map[string]any{
+			"code_id":  codeID,
+			"grant_id": existing.ID,
+			"scope":    append([]string(nil), req.Scope...),
+		},
+	})
 	emitAuthorizeSuccess(w, r, deps, req, codeID)
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -176,6 +177,18 @@ type Deps struct {
 	// Wave 2 plumbs this field; the handler logic that consumes it
 	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
+
+	// Audit is the structured audit-event sink. A nil Emitter falls
+	// back to [audit.Discard] so the handler can emit session.destroyed
+	// unconditionally on successful OP session termination.
+	Audit audit.Emitter
+}
+
+func (d Deps) audit() audit.Emitter {
+	if d.Audit == nil {
+		return audit.Discard()
+	}
+	return d.Audit
 }
 
 // Handler returns the HTTP handler the OP mounts at its /end_session
@@ -463,6 +476,13 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 		// is consistent with the manager's ErrNotFound contract and
 		// matches how /authorize treats expired sessions.
 		_ = deps.Sessions.Logout(r.Context(), sid)
+		deps.audit().Emit(r.Context(), audit.Event{
+			Name:      "session.destroyed",
+			Level:     audit.LevelInfo,
+			Message:   "session destroyed",
+			ActorID:   subject,
+			SessionID: sid,
+		})
 	}
 	if subject != "" {
 		revokeAccessTokens(r.Context(), deps, subject)

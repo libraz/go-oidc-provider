@@ -238,12 +238,12 @@ func canonicalHost(host, scheme string) string {
 	return host
 }
 
-// canonicalPath strips a single trailing '/' from path. The empty path is
+// canonicalPath strips trailing '/' characters from path. The empty path is
 // preserved as the empty string; "/" collapses to the empty string so an
 // authority-only URL ("https://example.com") and the same with the lone
 // slash ("https://example.com/") both canonicalise to the empty path.
-// Multi-segment paths keep their leading slash and lose only the final
-// trailing slash ("/api/" → "/api").
+// Multi-segment paths keep their leading slash and lose trailing slashes
+// ("/api//" -> "/api").
 func canonicalPath(path string) string {
 	if path == "" || path == "/" {
 		return ""

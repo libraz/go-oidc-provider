@@ -29,6 +29,15 @@ func mustRSAKey(t *testing.T) *rsa.PrivateKey {
 	return k
 }
 
+func mustWeakRSAKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentional weak key for floor-rejection test
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	return k
+}
+
 // inlineJWKs marshals the supplied keys into a JWKS JSON document
 // suitable for [store.Client.JWKs]. Helper centralises the
 // json.RawMessage round-trip so individual tests stay focused on the
@@ -56,8 +65,12 @@ func rsaPublicJWK(priv *rsa.PrivateKey, kid, use, alg string) josev4.JSONWebKey 
 // jwksHandler returns an http.Handler that serves body verbatim with
 // the supplied status / content-type.
 func jwksHandler(status int, body []byte) http.Handler {
+	return jwksHandlerWithContentType(status, body, "application/jwk-set+json")
+}
+
+func jwksHandlerWithContentType(status int, body []byte, contentType string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/jwk-set+json")
+		w.Header().Set("Content-Type", contentType)
 		w.WriteHeader(status)
 		_, _ = w.Write(body)
 	})
@@ -133,6 +146,20 @@ func TestResolveRecipient_OnlySigKey_ErrNoMatchingKey(t *testing.T) {
 	_, err := r.ResolveRecipient(context.Background(), client, "RSA-OAEP-256", "A256GCM")
 	if !errors.Is(err, clientencjwks.ErrNoMatchingKey) {
 		t.Fatalf("err=%v want ErrNoMatchingKey", err)
+	}
+}
+
+func TestResolveRecipient_InlineJWKs_WeakRSARejected(t *testing.T) {
+	t.Parallel()
+
+	priv := mustWeakRSAKey(t)
+	jwk := rsaPublicJWK(priv, "weak-rsa", "enc", "RSA-OAEP-256")
+	client := &store.Client{ID: "rp", JWKs: inlineJWKs(t, jwk)}
+
+	r := clientencjwks.New(clientencjwks.Config{})
+	_, err := r.ResolveRecipient(context.Background(), client, "RSA-OAEP-256", "A256GCM")
+	if !errors.Is(err, clientencjwks.ErrWeakRecipientKey) {
+		t.Fatalf("err=%v want ErrWeakRecipientKey", err)
 	}
 }
 
@@ -216,6 +243,30 @@ func TestResolveRecipient_JWKsURI_500(t *testing.T) {
 	_, err := r.ResolveRecipient(context.Background(), client, "RSA-OAEP-256", "A256GCM")
 	if !errors.Is(err, clientencjwks.ErrJWKSFetch) {
 		t.Fatalf("err=%v want ErrJWKSFetch", err)
+	}
+}
+
+func TestResolveRecipient_JWKsURI_RejectsBadContentType(t *testing.T) {
+	t.Parallel()
+
+	priv := mustRSAKey(t)
+	body, err := json.Marshal(josev4.JSONWebKeySet{
+		Keys: []josev4.JSONWebKey{rsaPublicJWK(priv, "k2", "enc", "RSA-OAEP-256")},
+	})
+	if err != nil {
+		t.Fatalf("marshal jwks: %v", err)
+	}
+	srv := httptest.NewServer(jwksHandlerWithContentType(http.StatusOK, body, "text/html"))
+	defer srv.Close()
+
+	client := &store.Client{ID: "rp", JWKsURI: srv.URL}
+	r := clientencjwks.New(clientencjwks.Config{AllowPrivateNetwork: true})
+	_, err = r.ResolveRecipient(context.Background(), client, "RSA-OAEP-256", "A256GCM")
+	if !errors.Is(err, clientencjwks.ErrJWKSFetch) {
+		t.Fatalf("err=%v want ErrJWKSFetch", err)
+	}
+	if !strings.Contains(err.Error(), "content-type") {
+		t.Fatalf("err=%v want content-type detail", err)
 	}
 }
 

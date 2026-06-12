@@ -210,6 +210,63 @@ func TestAudit_TokenIssued_NoOfflineAccessNoRefreshEvent(t *testing.T) {
 	}
 }
 
+func TestAudit_CodeConsumed_OnAuthCodeExchange(t *testing.T) {
+	t.Parallel()
+
+	f, capture := auditFixture(t)
+	client, secret := auditRefreshClient(t, f)
+	verifier, challenge := pkcePair()
+	const codeID = "code-consumed-audit"
+	const grantID = "grant-consumed-audit"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+
+	rec := capture.findEvent(t, "code.consumed")
+	if rec == nil {
+		t.Fatalf("code.consumed not emitted; capture=%s", capture.buf.String())
+	}
+	if rec["actor_id"] != subject {
+		t.Errorf("actor_id=%v want %s", rec["actor_id"], subject)
+	}
+	if rec["client_id"] != client.ID {
+		t.Errorf("client_id=%v want %s", rec["client_id"], client.ID)
+	}
+	extras, _ := rec["extras"].(map[string]any)
+	if extras == nil {
+		t.Fatalf("extras missing on code.consumed: %v", rec)
+	}
+	if got := extras["code_id"]; got != codeID {
+		t.Errorf("extras.code_id=%v want %s", got, codeID)
+	}
+	if got := extras["grant_id"]; got != grantID {
+		t.Errorf("extras.grant_id=%v want %s", got, grantID)
+	}
+	if _, ok := extras["consumed_at"]; !ok {
+		t.Errorf("extras.consumed_at missing: %v", extras)
+	}
+}
+
 // TestAudit_TokenIssued_OfflineAccessFlag pins the offline_access=
 // true branch: when the granted scope contains "offline_access" AND
 // op.WithRefreshTokenOfflineTTL is configured, the audit event

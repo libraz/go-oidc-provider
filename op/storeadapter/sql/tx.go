@@ -64,31 +64,26 @@ func (t *sqlTx) RefreshTokens() store.RefreshTokenStore { return t.refreshes }
 func (t *sqlTx) PushedAuthRequests() store.PushedAuthRequestStore { return t.pars }
 
 // AccessTokens returns the tx-bound access-token registry. Although
-// [store.Tx] does not expose this method directly, the library
-// reaches it through a runtime type assertion so the tx's view of
-// the registry coordinates with grant writes.
+// [store.Tx] does not expose this method directly, callers that hold a
+// concrete *sqlTx may use it for manual cross-substore transactions.
 //
 // This method is exported on the concrete *sqlTx type for embedders
 // who hold a typed handle and need to reach the registry inside a
-// transaction (the wiring layer in op/ already does this through the
-// AccessTokenRegistry interface).
+// transaction.
 func (t *sqlTx) AccessTokens() store.AccessTokenRegistry { return t.accessTokens }
 
 // OpaqueAccessTokens returns the tx-bound opaque-AT substore (ADR 0024).
 // As with [sqlTx.AccessTokens], [store.Tx] does not expose this method
-// directly; the library reaches it through a runtime type assertion so
-// opaque-AT save / revoke commits coordinate with grant writes inside
-// the same atomic transaction.
+// directly; callers that hold a concrete *sqlTx may use it for manual
+// cross-substore transactions.
 func (t *sqlTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return t.opaqueAccessTokens
 }
 
 // GrantRevocations returns the tx-bound grant-revocation substore
 // (ADR 0025). As with [sqlTx.AccessTokens] and [sqlTx.OpaqueAccessTokens],
-// [store.Tx] does not expose this method directly; the library reaches
-// it through a runtime type assertion so a tombstone insert / JTI
-// denylist insert commits atomically with the underlying grant or
-// refresh-token write that triggered the cascade.
+// [store.Tx] does not expose this method directly; callers that hold a
+// concrete *sqlTx may use it for manual cross-substore transactions.
 func (t *sqlTx) GrantRevocations() store.GrantRevocationStore {
 	return t.grantRevocations
 }

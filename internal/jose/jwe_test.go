@@ -370,6 +370,24 @@ func TestEncrypt_RejectsNonAllowedAlgEnc(t *testing.T) {
 	}
 }
 
+func TestEncrypt_RejectsSubMinimumRSARecipient(t *testing.T) {
+	t.Parallel()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentional weak key for floor-rejection test
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	_, err = jose.Encrypt([]byte("x"), jose.EncryptionRecipient{
+		Alg: jose.JWEAlgRSAOAEP256, Enc: jose.JWEEncA256GCM, KeyID: "weak", Key: &rsaKey.PublicKey,
+	})
+	if !errors.Is(err, jose.ErrJWEUnsupportedKey) {
+		t.Fatalf("Encrypt with weak RSA: want ErrJWEUnsupportedKey, got %v", err)
+	}
+	if !errors.Is(err, jose.ErrUnsupportedKeyShape) {
+		t.Fatalf("Encrypt with weak RSA: want ErrUnsupportedKeyShape wrap, got %v", err)
+	}
+}
+
 // TestEncryptNestedJWT_RoundTrip covers the canonical
 // encrypted-and-signed JWT shape: the OP signs a payload as a JWS,
 // wraps it as a JWE addressed to the RP, and the RP decrypts to

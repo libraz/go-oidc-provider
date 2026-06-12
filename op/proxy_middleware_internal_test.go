@@ -118,3 +118,33 @@ func TestWrapWithTrustedProxy_EmptyTrustIsNoOp(t *testing.T) {
 		t.Errorf("empty trust altered r.Host: got %q, want %q", sawHost, "op.local")
 	}
 }
+
+func TestWrapWithTrustedProxy_RejectsDisallowedForwardedHost(t *testing.T) {
+	t.Parallel()
+
+	trust, err := proxy.NewTrustWithHosts([]string{"127.0.0.1/32"}, []string{"op.example.com"})
+	if err != nil {
+		t.Fatalf("proxy.NewTrustWithHosts: %v", err)
+	}
+
+	var sawScheme, sawHost string
+	h := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		sawScheme = r.URL.Scheme
+		sawHost = r.Host
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://internal:8080/.well-known/openid-configuration", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "evil.example.com")
+
+	rw := httptest.NewRecorder()
+	wrapWithTrustedProxy(h, trust).ServeHTTP(rw, req)
+
+	if sawScheme != "https" {
+		t.Errorf("downstream r.URL.Scheme = %q, want %q", sawScheme, "https")
+	}
+	if sawHost != "internal:8080" {
+		t.Errorf("disallowed X-Forwarded-Host altered r.Host: got %q, want inbound %q", sawHost, "internal:8080")
+	}
+}

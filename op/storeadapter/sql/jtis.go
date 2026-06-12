@@ -29,6 +29,10 @@ func (s *jtiStore) runner() runner { return pickRunner(s.parent, s.tx) }
 // length to a fixed 64-char hex value.
 func (s *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) error {
 	digest := patterns.Digest(jti)
+	now := s.parent.clock.Now()
+	if _, err := s.runner().ExecContext(ctx, s.parent.queries.jtiDeleteExpired, digest, timeToInt64(now)); err != nil {
+		return wrapErr("jtis.Mark.deleteExpired", err)
+	}
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.jtiMark, digest, timeToInt64(expiresAt))
 	if err != nil {
 		if isDuplicate(err) {

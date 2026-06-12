@@ -287,6 +287,7 @@ var jtiCases = []subtest{
 	{"MarkHas", jtiMarkHas},
 	{"HasMissing", jtiHasMissing},
 	{"Replay", jtiReplay},
+	{"ExpiredMarkerCanBeReplaced", jtiExpiredMarkerCanBeReplaced},
 }
 
 func jtiMarkHas(t *testing.T, f Factory) {
@@ -326,6 +327,24 @@ func jtiReplay(t *testing.T, f Factory) {
 	err := b.Store.ConsumedJTIs().Mark(ctx, "jti-replay", expiresAt)
 	if !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("replay Mark: want ErrAlreadyConsumed, got %v", err)
+	}
+}
+
+func jtiExpiredMarkerCanBeReplaced(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-expired", b.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("expired Mark: %v", err)
+	}
+	got, err := b.Store.ConsumedJTIs().Has(ctx, "jti-expired")
+	if err != nil {
+		t.Fatalf("Has expired: %v", err)
+	}
+	if got {
+		t.Fatal("Has returned true for expired jti marker")
+	}
+	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-expired", b.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("fresh Mark after expired marker: %v", err)
 	}
 }
 

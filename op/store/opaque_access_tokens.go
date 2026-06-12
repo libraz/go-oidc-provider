@@ -102,10 +102,11 @@ type OpaqueAccessToken struct {
 }
 
 // OpaqueAccessTokenStore is the substore for opaque access tokens
-// (ADR 0024). It belongs to the transactional cluster: a Save call
-// accompanies a grant write or refresh-token rotation, and the two
-// operations MUST commit atomically so a partially-issued wire token
-// cannot leave a credential the OP does not remember.
+// (ADR 0024). It belongs to the atomic-routing cluster so opaque-token
+// persistence, grants, refresh tokens, and revocation cascades share one
+// backend consistency domain in composite deployments. Save itself MUST be
+// atomic for a single opaque-token ID; the OP runtime does not require a
+// cross-substore [Transactional] transaction.
 //
 // Backends MAY satisfy this interface with a positive list (revocation
 // removes the row) or a marked-revoked list (revocation flips a

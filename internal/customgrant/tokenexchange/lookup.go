@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -75,16 +76,18 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 		}
 		return lookupResult{reason: classifyVerifyErr(err)}, fmt.Errorf("%w: %w", errTokenInvalid, err)
 	}
-	// Defence-in-depth: when the registry is wired, reject revoked
-	// JTIs even if the JWT itself is intact.
-	if h.accessTokens != nil && claims.JTI != "" {
-		rec, regErr := h.accessTokens.Find(ctx, claims.JTI)
-		if regErr != nil {
-			return lookupResult{reason: "registry_error"}, fmt.Errorf("%w: registry: %w", errTokenInvalid, regErr)
-		}
-		if rec != nil && rec.Revoked {
-			return lookupResult{reason: "revoked"}, errTokenInvalid
-		}
+	// Defence-in-depth: reject revoked JWT ATs even if the JWS itself
+	// verifies. This follows the same strategy dispatcher as userinfo
+	// and introspection, so grant tombstones close the token-exchange
+	// bypass as well as per-JTI registry rows.
+	if revoked, ok := endpointsupport.JWTAccessTokenRevoked(ctx, endpointsupport.JWTRevocationOpts{
+		AccessTokens:       h.accessTokens,
+		GrantRevocations:   h.grantRevocations,
+		RevocationStrategy: h.revocationStrategy,
+	}, claims); !ok {
+		return lookupResult{reason: "registry_error"}, fmt.Errorf("%w: registry lookup failed", errTokenInvalid)
+	} else if revoked {
+		return lookupResult{reason: "revoked"}, errTokenInvalid
 	}
 	act := extractAct(raw)
 	return lookupResult{

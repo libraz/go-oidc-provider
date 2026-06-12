@@ -5,7 +5,7 @@
 // Drives the full device-code round-trip against an httptest-hosted
 // OP and asserts the wire shape (200 + non-empty device_code +
 // non-empty user_code from /device_authorization, 200 + non-empty
-// access_token from /token after Approve). Any regression in the
+// access_token from /token after user_code approval). Any regression in the
 // public API surface fails the example with exit code 1 before the
 // public listener binds.
 
@@ -18,6 +18,8 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"time"
+
+	"github.com/libraz/go-oidc-provider/op/devicecodekit"
 )
 
 // selfVerify drives an in-process round-trip against an httptest
@@ -26,9 +28,8 @@ import (
 //  1. Builds a fresh OP via [buildProvider].
 //  2. POSTs /device_authorization with client_id=cli-tool.
 //  3. Asserts 200 + non-empty device_code + non-empty user_code.
-//  4. Calls DeviceCodeStore.Approve directly (the substore method
-//     a verification page would invoke after the user clicks
-//     "Allow").
+//  4. Verifies and approves using only user_code, mirroring a browser
+//     verification page that must not receive device_code.
 //  5. POSTs /token with grant_type=device_code.
 //  6. Asserts 200 + non-empty access_token.
 //
@@ -55,8 +56,16 @@ func selfVerify(logger *slog.Logger) error {
 	}
 	logger.Debug("self-verify authorized", slog.String("user_code", authz.UserCode))
 
-	if err := st.DeviceCodes().Approve(ctx, authz.DeviceCode, demoSubject, time.Now().UTC()); err != nil { //nolint:forbidigo // demo only: production embedders stamp authTime from their authentication device's clock seam.
-		return fmt.Errorf("approve: %w", err)
+	deps := &devicecodekit.Deps{DeviceCodes: st.DeviceCodes()}
+	matched, err := devicecodekit.VerifyUserCodeByUserCode(ctx, deps, authz.UserCode, authz.UserCode)
+	if err != nil {
+		return fmt.Errorf("verify user_code: %w", err)
+	}
+	if !matched {
+		return errors.New("verify user_code did not match")
+	}
+	if err := devicecodekit.ApproveUserCode(ctx, deps, authz.UserCode, demoSubject, time.Now().UTC()); err != nil { //nolint:forbidigo // demo only: production embedders stamp authTime from their authentication device's clock seam.
+		return fmt.Errorf("approve user_code: %w", err)
 	}
 
 	tok, err := postTokenOnce(ctx, srv.URL+tokenPath, authz.DeviceCode)

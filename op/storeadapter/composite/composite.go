@@ -11,18 +11,18 @@
 // such as Redis. The library takes a single [store.Store] value, so the
 // composite adapter weaves several backends behind one [Store] facade.
 //
-// # The transactional cluster invariant
+// # Atomic-routing cluster invariant
 //
 // Authorization-code exchange, refresh-token rotation, and PAR consumption
-// each touch several substores in the same handler path. If any of those
-// substores commit independently, a partial failure leaves a still-redeemable
-// record next to a freshly issued one and opens a replay window. To make the
-// hazard impossible to misconfigure, the composite adapter validates at
-// construction time that every Kind in the [TxClusterKinds] set resolves to
-// the SAME backend (the "tx anchor") and that the anchor implements
-// [store.Transactional]. Configurations that violate either rule cause [New]
-// to return one of the sentinel errors declared in this package; the embedder
-// finds out at startup, not at production traffic time.
+// each touch several substores in the same handler path. The OP core relies
+// on the compare-and-set / single-operation guarantees documented on those
+// substores rather than opening [store.Transactional] transactions itself.
+// The composite adapter still validates at construction time that every Kind
+// in the [TxClusterKinds] set resolves to the SAME backend so those CAS
+// operations share one consistency domain. If that backend also implements
+// [store.Transactional], [Store.BeginTx] delegates to it for embedders and
+// tests that want explicit transactions; otherwise [New] still succeeds and
+// [Store.BeginTx] reports [ErrTxAnchorNotTx].
 //
 // # Routing
 //
@@ -57,7 +57,8 @@ import (
 
 // Kind enumerates every substore the [store.Store] aggregate exposes. The
 // composite adapter routes each Kind to a single backend; the [TxClusterKinds]
-// subset additionally requires that all members share one anchor.
+// subset additionally requires that all members share one consistency-domain
+// anchor.
 type Kind int
 
 // Kind values. The integer values are not part of the API: callers use the
@@ -66,19 +67,19 @@ type Kind int
 // participates in atomic commits.
 const (
 	// Clients routes [store.ClientStore] (and optionally
-	// [store.ClientRegistry]) calls. Outside the transactional cluster.
+	// [store.ClientRegistry]) calls. Outside the atomic-routing cluster.
 	Clients Kind = iota + 1
 
 	// AuthorizationCodes routes [store.AuthorizationCodeStore] calls.
-	// Member of the transactional cluster.
+	// Member of the atomic-routing cluster.
 	AuthorizationCodes
 
 	// RefreshTokens routes [store.RefreshTokenStore] calls. Member of the
-	// transactional cluster.
+	// atomic-routing cluster.
 	RefreshTokens
 
-	// Grants routes [store.GrantStore] calls. Member of the transactional
-	// cluster.
+	// Grants routes [store.GrantStore] calls. Member of the
+	// atomic-routing cluster.
 	Grants
 
 	// Sessions routes [store.SessionStore] calls. Outside the transactional
@@ -89,15 +90,15 @@ const (
 	Sessions
 
 	// PushedAuthRequests routes [store.PushedAuthRequestStore] calls.
-	// Member of the transactional cluster.
+	// Member of the atomic-routing cluster.
 	PushedAuthRequests
 
 	// Interactions routes [store.InteractionStore] calls. Outside the
-	// transactional cluster.
+	// atomic-routing cluster.
 	Interactions
 
 	// ConsumedJTIs routes [store.ConsumedJTIStore] calls. Outside the
-	// transactional cluster.
+	// atomic-routing cluster.
 	ConsumedJTIs
 
 	// Users routes [store.UserStore] calls. Outside the transactional
@@ -106,48 +107,46 @@ const (
 
 	// InitialAccessTokens routes [store.InitialAccessTokenStore] calls.
 	// Used by the RFC 7591 dynamic-client-registration endpoint. Outside
-	// the transactional cluster.
+	// the atomic-routing cluster.
 	InitialAccessTokens
 
 	// RegistrationAccessTokens routes [store.RegistrationAccessTokenStore]
 	// calls. Used by the RFC 7592 management endpoints. Outside the
-	// transactional cluster.
+	// atomic-routing cluster.
 	RegistrationAccessTokens
 
 	// AccessTokens routes [store.AccessTokenRegistry] calls. Used by
 	// the userinfo, introspection, revocation endpoints, and by the
-	// code-replay cascade. Part of the transactional cluster: the
-	// register-on-issue path commits alongside the matching grant
-	// write.
+	// code-replay cascade. Member of the atomic-routing cluster so
+	// token registration, grant writes, and revocation cascades share
+	// one backend consistency domain.
 	AccessTokens
 
 	// OpaqueAccessTokens routes [store.OpaqueAccessTokenStore] calls
 	// (ADR 0024). Used by the userinfo, introspection, revocation
 	// endpoints, and by the code-replay cascade when opt-in opaque
-	// access tokens are enabled. Part of the transactional cluster:
-	// the save-on-issue path commits alongside the matching grant
-	// write.
+	// access tokens are enabled. Member of the atomic-routing cluster
+	// for the same reason as [AccessTokens].
 	OpaqueAccessTokens
 
 	// GrantRevocations routes [store.GrantRevocationStore] calls
 	// (ADR 0025). Used by the userinfo, introspection, and revocation
 	// endpoints to enforce JWT access-token revocation under the
 	// grant-tombstone strategy, and written by the code-replay /
-	// logout cascades. Part of the transactional cluster: a tombstone
-	// or denylist write commits alongside the matching grant /
-	// refresh-token write so a partially-committed cascade cannot
-	// leave a still-redeemable grant next to its tombstone.
+	// logout cascades. Member of the atomic-routing cluster so
+	// tombstone / denylist writes share the same backend consistency
+	// domain as the grants and refresh tokens they protect.
 	GrantRevocations
 
 	// Metadata routes [store.MetadataStore] calls. Outside the
-	// transactional cluster: the substore is consulted only by the
+	// atomic-routing cluster: the substore is consulted only by the
 	// op.New construction-time pairwise immutability gate.
 	Metadata
 
 	// DeviceCodes routes [store.DeviceCodeStore] calls. Used by the
 	// /device_authorization endpoint, the verification page, and the
 	// device_code grant at the token endpoint. Outside the
-	// transactional cluster: the approve→consume CAS in
+	// atomic-routing cluster: the approve→consume CAS in
 	// [store.DeviceCodeStore.Consume] supplies the single-use
 	// guarantee without coordinating with the access-token /
 	// refresh-token writes.
@@ -156,7 +155,7 @@ const (
 	// CIBARequests routes [store.CIBARequestStore] calls. Used by the
 	// /bc-authorize endpoint, the embedder's authentication device
 	// callback, and the CIBA grant at the token endpoint. Outside the
-	// transactional cluster: the approve→consume CAS in
+	// atomic-routing cluster: the approve→consume CAS in
 	// [store.CIBARequestStore.Consume] supplies the single-use
 	// guarantee without coordinating with the access-token /
 	// refresh-token writes.
@@ -223,9 +222,10 @@ var allKinds = []Kind{
 }
 
 // TxClusterKinds is the closed set of [Kind] values that must share a single
-// backend. The library coordinates updates that span these substores under
-// one [store.Transactional] handle, so routing two of them to different
-// backends would split the atomic commit and open a replay window.
+// backend. The OP core relies on per-substore CAS operations rather than
+// opening transactions, but routing two of these kinds to different backends
+// would still split the consistency domain for replay detection, refresh
+// rotation, and revocation cascades.
 //
 // [Sessions] is intentionally absent: the OP does not coordinate Session
 // writes with token-endpoint commits, and embedders are expected to route
@@ -250,13 +250,13 @@ var (
 	// resolved to different backends. The wrapped error message names the
 	// kinds and the backend types so operators can identify the
 	// misconfiguration from logs alone.
-	ErrTxClusterSplit = errors.New("composite: transactional-cluster Kinds split across backends")
+	ErrTxClusterSplit = errors.New("composite: atomic-routing cluster Kinds split across backends")
 
-	// ErrTxAnchorNotTx signals that the backend chosen as the
-	// transactional-cluster anchor does not implement
-	// [store.Transactional]. Backends in the cluster must support atomic
-	// commits; a Store value that lacks BeginTx cannot host them.
-	ErrTxAnchorNotTx = errors.New("composite: transactional-cluster anchor does not implement store.Transactional")
+	// ErrTxAnchorNotTx signals that [Store.BeginTx] was called but the
+	// backend chosen as the atomic-routing anchor does not implement
+	// [store.Transactional]. New no longer rejects this at construction
+	// time because OP handlers do not require live transactions.
+	ErrTxAnchorNotTx = errors.New("composite: atomic-routing cluster anchor does not implement store.Transactional")
 
 	// ErrKindNotRouted signals that a [Kind] has no backend and no
 	// [WithDefault] fallback was supplied. Every Kind must be reachable
@@ -309,20 +309,22 @@ type config struct {
 }
 
 // Store is the composite [store.Store]. The zero value is unusable; callers
-// MUST construct one through [New]. Store also implements
-// [store.Transactional] by delegating to the transactional anchor; the
-// optional [store.ClientRegistry] capability is reachable through
-// [Store.ClientRegistry].
+// MUST construct one through [New]. Store also exposes BeginTx by delegating
+// to the atomic-routing anchor when that backend implements
+// [store.Transactional]; the optional [store.ClientRegistry] capability is
+// reachable through [Store.ClientRegistry].
 type Store struct {
 	// routes maps every [Kind] to the backend it resolves to. The map is
 	// fully populated by [New] -- accessor methods rely on every Kind
 	// being present and panic-free lookup.
 	routes map[Kind]store.Store
 
-	// anchor is the backend that owns the entire transactional cluster.
-	// It is guaranteed to implement [store.Transactional] (otherwise
-	// [New] would have returned an error).
-	anchor store.Transactional
+	// anchor is the backend that owns the entire atomic-routing cluster.
+	anchor store.Store
+
+	// txAnchor is the transactional view of anchor when available. nil
+	// means Store.BeginTx returns ErrTxAnchorNotTx.
+	txAnchor store.Transactional
 
 	// registry is the [store.ClientRegistry] view of the Clients backend
 	// when that backend supports the extension. nil otherwise.
@@ -335,15 +337,12 @@ type Store struct {
 //  1. Every [Kind] is routed (either via [With] or [WithDefault]); otherwise
 //     [ErrKindNotRouted] is returned with the offending Kind named.
 //  2. Every member of [TxClusterKinds] resolves to the same backend (the
-//     "tx anchor"); otherwise [ErrTxClusterSplit] is returned with the
+//     "routing anchor"); otherwise [ErrTxClusterSplit] is returned with the
 //     conflicting Kinds and backend types named.
-//  3. The tx anchor implements [store.Transactional]; otherwise
-//     [ErrTxAnchorNotTx] is returned with the anchor's concrete type named.
 //
 // The order is deliberate: missing routing is the most common configuration
 // bug, so callers see that error first; cluster splits are the next-most
-// common; anchor capability is checked last because it requires that the
-// other two checks already pass.
+// common.
 func New(opts ...Option) (*Store, error) {
 	cfg := &config{}
 	for _, opt := range opts {
@@ -361,9 +360,11 @@ func New(opts ...Option) (*Store, error) {
 		return nil, err
 	}
 	registry, _ := routes[Clients].(store.ClientRegistry)
+	txAnchor, _ := anchor.(store.Transactional)
 	return &Store{
 		routes:   routes,
 		anchor:   anchor,
+		txAnchor: txAnchor,
 		registry: registry,
 	}, nil
 }
@@ -395,10 +396,9 @@ func resolveKind(cfg *config, k Kind) (store.Store, error) {
 }
 
 // resolveAnchor verifies that every [TxClusterKinds] member maps to the same
-// backend and that the backend implements [store.Transactional]. The first
-// kind in the cluster is the canonical anchor; subsequent kinds that resolve
-// to a different backend produce [ErrTxClusterSplit].
-func resolveAnchor(routes map[Kind]store.Store) (store.Transactional, error) {
+// backend. The first kind in the cluster is the canonical anchor; subsequent
+// kinds that resolve to a different backend produce [ErrTxClusterSplit].
+func resolveAnchor(routes map[Kind]store.Store) (store.Store, error) {
 	anchorKind := TxClusterKinds[0]
 	anchor := routes[anchorKind]
 	for _, k := range TxClusterKinds[1:] {
@@ -409,14 +409,7 @@ func resolveAnchor(routes map[Kind]store.Store) (store.Transactional, error) {
 			)
 		}
 	}
-	tx, ok := anchor.(store.Transactional)
-	if !ok {
-		return nil, fmt.Errorf(
-			"%w: anchor backend %T does not satisfy store.Transactional",
-			ErrTxAnchorNotTx, anchor,
-		)
-	}
-	return tx, nil
+	return anchor, nil
 }
 
 // Clients implements [store.Store]. The returned [store.ClientStore] is the
@@ -484,22 +477,20 @@ func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore {
 }
 
 // AccessTokens implements [store.Store] by routing the call through the
-// transactional-cluster anchor. Splitting the AT registry away from the
-// other transactional substores would re-introduce a code-replay
-// cascade that revokes refresh tokens in one backend and access
-// tokens in another, so the composite
-// rejects such configurations at construction time via
-// [TxClusterKinds].
+// atomic-routing anchor. Splitting the AT registry away from the
+// other cluster members would re-introduce a code-replay cascade that
+// revokes refresh tokens in one backend and access tokens in another,
+// so the composite rejects such configurations at construction time
+// via [TxClusterKinds].
 func (s *Store) AccessTokens() store.AccessTokenRegistry {
 	return s.routes[AccessTokens].AccessTokens()
 }
 
 // OpaqueAccessTokens implements [store.Store] (ADR 0024) by routing the
-// call through the transactional-cluster anchor. The substore belongs
-// to the same atomic-commit cluster as [AccessTokens] for the same
-// reason: rotating an opaque AT inside a refresh-rotation tx must
-// commit alongside the new AT and grant updates so a stolen-but-still-
-// valid token cannot outlive its issuing chain. The routed backend MAY
+// call through the atomic-routing anchor. The substore belongs to the
+// same consistency cluster as [AccessTokens] for the same reason:
+// opaque-token writes and revocation reads must share a backend with
+// the grant and refresh-token records they protect. The routed backend MAY
 // return nil from its own [store.Store.OpaqueAccessTokens] accessor
 // when opaque format is not enabled; the library checks the resulting
 // nil at op.New time and rejects opaque-format options that have no
@@ -509,11 +500,10 @@ func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 }
 
 // GrantRevocations implements [store.Store] (ADR 0025) by routing the
-// call through the transactional-cluster anchor. The substore belongs
-// to the same atomic-commit cluster as [Grants] and [RefreshTokens]:
-// cascade revocations write a tombstone alongside the underlying
-// refresh-token chain revocation so a partial failure cannot leave a
-// still-redeemable grant next to its tombstone. The routed backend MAY
+// call through the atomic-routing anchor. The substore belongs to the
+// same consistency cluster as [Grants] and [RefreshTokens] so cascade
+// revocations and subsequent grant / token checks see the same backend
+// state. The routed backend MAY
 // return nil from its own [store.Store.GrantRevocations] accessor when
 // the grant-tombstone strategy is not enabled; the library checks the
 // resulting nil at op.New time and rejects the strategy when its
@@ -551,18 +541,22 @@ func (s *Store) CIBARequests() store.CIBARequestStore {
 	return s.routes[CIBARequests].CIBARequests()
 }
 
-// BeginTx implements [store.Transactional] by delegating to the
-// transactional anchor. The returned [store.Tx] vends substores from the
-// anchor's transaction; ConsumedJTIs and Interactions are deliberately not
-// exposed on [store.Tx] (see the godoc on [store.Tx]) and continue to flow
-// through the per-Kind routing for both transactional and non-transactional
-// callers.
+// BeginTx delegates to the atomic-routing anchor when that backend implements
+// [store.Transactional]. The OP core does not call this method; it is provided
+// for embedders and contract tests that want explicit transactions over the
+// routed backend.
 //
 // If the anchor's BeginTx fails, the error is propagated verbatim; the
 // composite adapter does not wrap it because callers commonly need to match
 // transport-level sentinels (for example [context.Canceled]).
 func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
-	inner, err := s.anchor.BeginTx(ctx)
+	if s.txAnchor == nil {
+		return nil, fmt.Errorf(
+			"%w: anchor backend %T does not satisfy store.Transactional",
+			ErrTxAnchorNotTx, s.anchor,
+		)
+	}
+	inner, err := s.txAnchor.BeginTx(ctx)
 	if err != nil {
 		return nil, err
 	}

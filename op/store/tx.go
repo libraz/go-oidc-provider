@@ -3,21 +3,17 @@ package store
 import "context"
 
 // Transactional is the opt-in extension a backend implements when it can
-// host the transactional cluster of substores. The library invokes
-// [Transactional.BeginTx] whenever it needs to coordinate updates that span
-// more than one substore -- principally authorization-code exchange,
-// refresh-token rotation, and pushed-authorization-request consumption --
-// and uses the returned [Tx] to obtain substore handles bound to that
-// transaction.
+// expose explicit transaction handles for the atomic-routing cluster of
+// substores. The OP runtime does not require this extension; it relies on the
+// atomicity documented on each substore operation. Embedders and contract
+// tests may still call [Transactional.BeginTx] directly when they need to
+// coordinate manual writes across several substores.
 //
-// Backends that are not transactional simply do not implement this
-// interface. The composite adapter checks at construction time that every
-// transactional-cluster Kind ([AuthorizationCodes], [RefreshTokens],
-// [Grants], [PushedAuthRequests], [AccessTokens]) is routed to a backend
-// that implements Transactional, and rejects configurations that violate
-// the invariant (see [op/storeadapter/composite] for the construction-time
-// check). This makes the "single backend per transactional cluster" rule
-// structural rather than a runtime warning.
+// Backends that are not transactional simply do not implement this interface.
+// The composite adapter still checks at construction time that every
+// atomic-routing-cluster Kind is routed to one backend, but it does not require
+// that backend to implement Transactional. Calling BeginTx through such a
+// composite returns the adapter's ErrTxAnchorNotTx sentinel.
 //
 // Note that [SessionStore] is intentionally outside the cluster: the OP
 // does not coordinate Session writes with token-endpoint transactions.

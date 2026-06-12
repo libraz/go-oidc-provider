@@ -238,6 +238,17 @@ type CustomGrantResponse struct {
 	// makes the refresh token an authorization-server-issued
 	// credential.
 	//
+	// Refresh issuance also persists the custom-grant context needed
+	// for later rotation: Subject (or BoundAccessToken.Subject) is
+	// treated as an already-public wire subject and is not pairwise-
+	// projected again, AuthTime is replayed onto refresh-derived
+	// id_tokens, a single Audience entry is preserved as the RFC 8707
+	// resource binding, and BoundAccessToken.ExtraClaims are copied to
+	// the next JWT access token. If both Subject and
+	// BoundAccessToken.Subject are empty, the OP drops the refresh token
+	// and emits the refresh-dropped audit event rather than failing the
+	// token response.
+	//
 	// Issuance is gated by the OP: it is honoured only when the
 	// client is registered for the refresh_token grant and the grant
 	// is refresh-eligible (the device-code and client-credentials

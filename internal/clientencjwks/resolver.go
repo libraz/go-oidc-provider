@@ -94,15 +94,10 @@ func New(cfg Config) *Resolver {
 		maxBody = defaultMaxBodyBytes
 	}
 
-	// The fetcher uses the shared hardened envelope. We do not pin a
-	// content-type allow-list here because the historical posture
-	// accepted any content type the upstream returned (the JSON parse
-	// at [parseJWKS] catches a wrong shape); preserving that posture
-	// avoids a behaviour change for embedders whose RPs serve JWKS
-	// from caching layers that emit application/octet-stream.
 	client := securefetch.NewClient(securefetch.Policy{
 		AllowPrivateNetwork: cfg.AllowPrivateNetwork,
 		MaxBodyBytes:        maxBody,
+		AcceptContentTypes:  []string{"application/json", "application/jwk-set+json"},
 		Timeout:             httpTimeout,
 		BaseTransport:       cfg.BaseTransport,
 	})
@@ -153,7 +148,10 @@ func (r *Resolver) ResolveRecipient(
 	if err != nil {
 		return jose.EncryptionRecipient{}, err
 	}
-	key, ok := pickEncryptionKey(keys, jweAlg)
+	key, ok, weakErr := pickEncryptionKey(keys, jweAlg)
+	if weakErr != nil {
+		return jose.EncryptionRecipient{}, weakErr
+	}
 	if !ok {
 		return jose.EncryptionRecipient{}, ErrNoMatchingKey
 	}
@@ -228,11 +226,12 @@ func validateAlgEnc(alg, enc string) (jose.JWEAlg, jose.JWEEnc, error) {
 // The caller is responsible for validating the (alg, enc) pair
 // against the OP allow-list before calling this helper; the helper
 // does not re-check.
-func pickEncryptionKey(keys *josev4.JSONWebKeySet, alg jose.JWEAlg) (josev4.JSONWebKey, bool) {
+func pickEncryptionKey(keys *josev4.JSONWebKeySet, alg jose.JWEAlg) (josev4.JSONWebKey, bool, error) {
 	if keys == nil {
-		return josev4.JSONWebKey{}, false
+		return josev4.JSONWebKey{}, false, nil
 	}
 	target := alg.String()
+	var weakErr error
 	for i := range keys.Keys {
 		k := keys.Keys[i]
 		if k.Use != "" && k.Use != "enc" {
@@ -241,7 +240,11 @@ func pickEncryptionKey(keys *josev4.JSONWebKeySet, alg jose.JWEAlg) (josev4.JSON
 		if k.Algorithm != "" && k.Algorithm != target {
 			continue
 		}
-		return k, true
+		if err := jose.AssertJWEAlgKeyShape(alg, k.Key); err != nil {
+			weakErr = fmt.Errorf("%w: kid %q: %w", ErrWeakRecipientKey, k.KeyID, err)
+			continue
+		}
+		return k, true, nil
 	}
-	return josev4.JSONWebKey{}, false
+	return josev4.JSONWebKey{}, false, weakErr
 }

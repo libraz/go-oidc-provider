@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
@@ -71,7 +72,7 @@ func AuthenticateClient(
 	onFailure func(creds *clientauth.Credentials, err error),
 ) (*store.Client, *clientauth.Credentials, bool) {
 	creds, err := clientauth.Parse(r)
-	usedBasic := r.Header.Get("Authorization") != ""
+	usedBasic := usedBasicAuth(r)
 	if err != nil {
 		if onFailure != nil {
 			onFailure(nil, err)
@@ -110,6 +111,14 @@ func AuthenticateClient(
 		return nil, nil, false
 	}
 	return client, creds, true
+}
+
+func usedBasicAuth(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	scheme, _, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	return ok && strings.EqualFold(scheme, "Basic")
 }
 
 // errPrivateKeyJWTDisabled is the sentinel surfaced via the audit hook
@@ -192,17 +201,20 @@ func EmitAuthnFailure(
 	emitter audit.Emitter,
 	eventName, message, clientID string,
 	err error,
+	method ...string,
 ) {
 	if emitter == nil {
 		emitter = audit.Discard()
+	}
+	extras := map[string]any{"reason": ReasonForAuthnError(err)}
+	if len(method) > 0 && method[0] != "" {
+		extras["method"] = method[0]
 	}
 	emitter.Emit(ctx, audit.Event{
 		Name:     eventName,
 		Level:    audit.LevelWarn,
 		Message:  message,
 		ClientID: clientID,
-		Extras: map[string]any{
-			"reason": ReasonForAuthnError(err),
-		},
+		Extras:   extras,
 	})
 }

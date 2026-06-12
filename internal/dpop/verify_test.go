@@ -162,6 +162,9 @@ func TestVerify_JTIExpiryAnchoredToProofIAT(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
+	if jtis.jti != "dpop:jti-1" {
+		t.Fatalf("jti key=%q want dpop:jti-1", jtis.jti)
+	}
 	// JTI must outlive the full iat acceptance window: a proof first
 	// marked at iat - IatWindow may legitimately face a replay attempt
 	// at iat + IatWindow, a 2*IatWindow gap. Anchoring expiry at iat +

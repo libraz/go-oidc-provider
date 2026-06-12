@@ -91,6 +91,12 @@ func WithClaimsSupported(claims ...string) Option {
 // Stable since v0.x.
 func WithACRValuesSupported(values ...string) Option {
 	return optionFunc(func(c *config) error {
+		if c.acrValuesSupported != nil {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithACRValuesSupported was supplied more than once",
+			}
+		}
 		for i, v := range values {
 			if v == "" {
 				return &Error{

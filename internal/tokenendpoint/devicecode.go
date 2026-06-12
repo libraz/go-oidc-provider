@@ -405,6 +405,9 @@ func issueDeviceCodeResponse(
 		resource,
 		"",
 		binding,
+		store.RefreshOriginDeviceCode,
+		false,
+		authContext{AuthTime: authTime},
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")

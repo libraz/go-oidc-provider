@@ -1,7 +1,7 @@
 //go:build example
 
 // par.go — store.PushedAuthRequestStore against vault_pushed_handles.
-// Part of the transactional cluster. The request_uri is a bearer
+// Part of the atomic-routing cluster. The request_uri is a bearer
 // secret, so it is hashed before storage and looked up by digest.
 
 package main

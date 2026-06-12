@@ -47,10 +47,10 @@ const (
 	// against a URL. The negative cache exists to defeat amplification
 	// DoS: an attacker who repeatedly drives /authorize with a JAR
 	// that names an unreachable jwks_uri would otherwise issue one
-	// outbound request per inbound request. 30 seconds is long enough
-	// to absorb a flood without delaying recovery from a transient RP
-	// outage by more than half a minute.
-	defaultJWKSNegativeTTL = 30 * time.Second
+	// outbound request per inbound request. 5 seconds is long enough
+	// to collapse bursts without delaying recovery from a transient RP
+	// outage by more than a few seconds.
+	defaultJWKSNegativeTTL = 5 * time.Second
 )
 
 // jwksCache is a tiny thread-safe TTL cache keyed by the JWKs URL. It

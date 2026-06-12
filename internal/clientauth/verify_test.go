@@ -15,6 +15,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
+	"github.com/libraz/go-oidc-provider/internal/dpop"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -241,6 +242,28 @@ func (r staticResolver) JWKS(_ context.Context, _ string) (*josev4.JSONWebKeySet
 type fixedClock struct{ now time.Time }
 
 func (c fixedClock) Now() time.Time { return c.now }
+
+type fixedDPoPClock struct{ now time.Time }
+
+func (c fixedDPoPClock) Now() time.Time { return c.now }
+
+type recordingJTIStore struct {
+	jti       string
+	expiresAt time.Time
+}
+
+func (s *recordingJTIStore) Mark(_ context.Context, jti string, expiresAt time.Time) error {
+	if s.jti == jti {
+		return store.ErrAlreadyConsumed
+	}
+	s.jti = jti
+	s.expiresAt = expiresAt
+	return nil
+}
+
+func (s *recordingJTIStore) Has(_ context.Context, jti string) (bool, error) {
+	return s.jti == jti, nil
+}
 
 func TestPrivateKeyJWTVerifier_HappyPath(t *testing.T) {
 	t.Parallel()
@@ -555,6 +578,133 @@ func TestPrivateKeyJWTVerifier_JTIReplay_Rejected(t *testing.T) {
 	}
 }
 
+func TestPrivateKeyJWTVerifier_JTIKeyScopedByClient(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": tokenAud,
+		"jti": "shared-jti",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	jtis := &recordingJTIStore{}
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: staticResolver{keys: pubKeys},
+		JTIStore: jtis,
+		Audience: tokenAud,
+		Clock:    fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if jtis.jti != "clientassertion:client-1:shared-jti" {
+		t.Fatalf("jti key=%q want clientassertion:client-1:shared-jti", jtis.jti)
+	}
+	if want := now.Add(time.Minute); !jtis.expiresAt.Equal(want) {
+		t.Fatalf("expiresAt=%s want %s", jtis.expiresAt, want)
+	}
+}
+
+func TestPrivateKeyJWTVerifier_OverlongExpRejected(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": tokenAud,
+		"jti": "long-exp",
+		"iat": now.Unix(),
+		"exp": now.Add(5*time.Minute + time.Second).Unix(),
+	})
+	jtis := &recordingJTIStore{}
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: staticResolver{keys: pubKeys},
+		JTIStore: jtis,
+		Audience: tokenAud,
+		Clock:    fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionMalformed) {
+		t.Fatalf("err=%v want ErrAssertionMalformed", err)
+	}
+	if jtis.jti != "" {
+		t.Fatalf("overlong assertion marked jti key %q", jtis.jti)
+	}
+}
+
+func TestPrivateKeyJWTVerifier_JTIDoesNotCollideWithDPoP(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	jtis := inmem.New(inmem.WithClock(fixedClock{now: now})).ConsumedJTIs()
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": tokenAud,
+		"jti": "shared-jti",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: staticResolver{keys: pubKeys},
+		JTIStore: jtis,
+		Audience: tokenAud,
+		Clock:    fixedClock{now: now}.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
+		t.Fatalf("assertion Verify: %v", err)
+	}
+
+	dpopVerifier, err := dpop.NewVerifier(dpop.VerifierConfig{
+		JTIs:  jtis,
+		Clock: fixedDPoPClock{now: now},
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	proof := signDPoPProof(t, priv, map[string]any{
+		"jti": "shared-jti",
+		"htm": "POST",
+		"htu": tokenAud,
+		"iat": now.Unix(),
+	})
+	if _, err := dpopVerifier.Verify(context.Background(), dpop.VerifyInput{
+		ProofHeader: proof,
+		Method:      "POST",
+		URL:         mustParseURL(t, tokenAud),
+		TLS:         true,
+	}); err != nil {
+		t.Fatalf("DPoP Verify with same raw jti: %v", err)
+	}
+}
+
 // TestVerifyClient_PrivateKeyJWT_UnknownClient_DummyVerifyShim pins the
 // timing-oracle defence for private_key_jwt: when [VerifyClient] is
 // asked to authenticate against a nil registered client (e.g. unknown
@@ -644,4 +794,32 @@ func signAssertion(tb testing.TB, priv *ecdsa.PrivateKey, keyID string, claims m
 		tb.Fatalf("Serialize: %v", err)
 	}
 	return out
+}
+
+func signDPoPProof(tb testing.TB, priv *ecdsa.PrivateKey, claims map[string]any) string {
+	tb.Helper()
+	jwk := josev4.JSONWebKey{Key: &priv.PublicKey}
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: josev4.ES256, Key: priv},
+		(&josev4.SignerOptions{}).
+			WithType("dpop+jwt").
+			WithHeader("jwk", jwk),
+	)
+	if err != nil {
+		tb.Fatalf("NewSigner: %v", err)
+	}
+	out, err := jwt.Signed(signer).Claims(claims).Serialize()
+	if err != nil {
+		tb.Fatalf("Serialize: %v", err)
+	}
+	return out
+}
+
+func mustParseURL(tb testing.TB, raw string) *url.URL {
+	tb.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		tb.Fatalf("url.Parse(%q): %v", raw, err)
+	}
+	return u
 }

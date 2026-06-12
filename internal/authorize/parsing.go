@@ -1,26 +1,20 @@
 package authorize
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 )
 
 // parRequestURIPrefix is the URN scheme + namespace RFC 9126 §2.2
 // reserves for pushed-authorization-request identifiers. The library
-// admits exactly this shape on the wire — a request_uri whose value
-// does not begin with this prefix is structurally rejected so the
-// non-PAR JAR-by-URI surface (RFC 9101 §5.2.2) cannot be exercised.
-//
-// The choice is documented in 002-product-design.md: FAPI 2.0 mandates
-// PAR, the OP-side request_uri fetcher needed for JAR-by-URI would
-// require RFC 9101 §10.2 hardening (https-only / size cap / TTL /
-// content-type / SSRF deny-list) that the library has not implemented,
-// and discovery advertises the URN prefix in
-// request_uri_parameter_supported. Rejecting at the parser collapses
-// the attack surface to the PAR path, which already exists with its
-// own dedicated controls in [internal/parendpoint] and the
-// [op/store.PushedAuthRequestStore].
+// admits exactly this shape directly on the authorization endpoint.
+// Generic JAR-by-URI is supported through the preregistration and
+// network-security-gated request-object pipeline; unregistered
+// request_uri values still fail this structural parser gate.
 const parRequestURIPrefix = "urn:ietf:params:oauth:request_uri:"
 
 // ParseRequest extracts the canonical [Request] from r. For GET it reads
@@ -63,13 +57,12 @@ func ParseValues(v url.Values) (*Request, error) {
 	}
 	if rawURI := singles["request_uri"]; rawURI != "" {
 		// RFC 9126 §2.2 reserves the urn:ietf:params:oauth:request_uri:
-		// namespace for PAR identifiers; the library does not implement
-		// the RFC 9101 §5.2.2 fetcher needed to safely follow a generic
-		// https URL (see [parRequestURIPrefix]). The prefix check is
+		// namespace for PAR identifiers. Registered JAR-by-URI is resolved
+		// before this parser constructs Request; raw authorization-endpoint
+		// request_uri values must therefore be PAR URNs. The prefix check is
 		// case-insensitive (RFC 8141 §1.2 makes the URN scheme case-
-		// insensitive) on the prefix portion only — the body, which the
-		// PAR store keys on, stays case-sensitive at the persistence
-		// layer.
+		// insensitive) on the prefix portion only; the body, which the PAR
+		// store keys on, stays case-sensitive at the persistence layer.
 		if !hasPARRequestURIPrefix(rawURI) {
 			return nil, ErrInvalidRequestURI
 		}
@@ -78,7 +71,7 @@ func ParseValues(v url.Values) (*Request, error) {
 		ClientID:                singles["client_id"],
 		ResponseType:            singles["response_type"],
 		RedirectURI:             singles["redirect_uri"],
-		Scope:                   dedupePreserve(strings.Fields(multis["scope"])),
+		Scope:                   dedupePreserve(oidcscope.Parse(multis["scope"])),
 		Resource:                singles["resource"],
 		State:                   singles["state"],
 		Nonce:                   singles["nonce"],
@@ -132,6 +125,9 @@ func parseSingleValues(v url.Values) (map[string]string, error) {
 	for _, name := range singleParseFields {
 		val, err := singleValue(v, name)
 		if err != nil {
+			if name == "resource" && errors.Is(err, ErrDuplicateParameter) {
+				return nil, ErrResourceInvalid
+			}
 			return nil, err
 		}
 		out[name] = val

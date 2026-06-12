@@ -3,7 +3,7 @@
 // tokens.go — store.AccessTokenRegistry against vault_wire_tokens. The
 // registry is the JWT access-token shadow: Register writes a row at
 // issuance, Revoke* flip is_void, GC drops expired rows. Part of the
-// transactional cluster (Register commits alongside the grant write).
+// atomic-routing cluster.
 
 package main
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -42,6 +43,14 @@ var ErrSubjectRequired = errors.New("recovery: subject is required")
 // at the trust boundary.
 var ErrCodeMissing = errors.New("recovery: code field is missing")
 
+// ErrLocked is returned when the shared cross-factor brute-force gate
+// is locked for the subject.
+var ErrLocked = errors.New("recovery: factor is locked")
+
+// ErrResetRequired is returned when the shared cross-factor counter
+// crosses the long threshold and the user must reset/recover factors.
+var ErrResetRequired = errors.New("recovery: factor reset required")
+
 // Authenticator is the [op.Authenticator] adapter for the single-use
 // recovery-code factor. It binds a [Verifier] (the primitive that
 // hashes / matches / consumes codes) to a [store.RecoveryStore] (the
@@ -51,6 +60,7 @@ var ErrCodeMissing = errors.New("recovery: code field is missing")
 type Authenticator struct {
 	verifier *Verifier
 	store    store.RecoveryStore
+	lockout  *lockout.Counter
 }
 
 // ErrVerifierRequired / ErrStoreRequired are returned by
@@ -74,6 +84,14 @@ func NewAuthenticator(verifier *Verifier, recoveryStore store.RecoveryStore) (*A
 		return nil, ErrStoreRequired
 	}
 	return &Authenticator{verifier: verifier, store: recoveryStore}, nil
+}
+
+// WithLockout returns a copy of a with the supplied cross-factor
+// brute-force counter. A nil counter leaves the authenticator unchanged.
+func (a *Authenticator) WithLockout(c *lockout.Counter) *Authenticator {
+	cp := *a
+	cp.lockout = c
+	return &cp
 }
 
 // Type implements [authn.Authenticator]. Always returns
@@ -102,6 +120,14 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
+	if a.lockout != nil {
+		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
+			if errors.Is(err, lockout.ErrLocked) {
+				return interaction.Step{}, ErrLocked
+			}
+			return interaction.Step{}, fmt.Errorf("recovery: lockout guard: %w", err)
+		}
+	}
 	batch, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
 		return interaction.Step{}, fmt.Errorf("recovery: load batch: %w", err)
@@ -124,13 +150,21 @@ func (a *Authenticator) Begin(ctx context.Context, in authn.BeginInput) (interac
 //     was consumed).
 //   - On [OutcomeAllConsumed] / [OutcomeNoCodes]: the matching error
 //     is returned so the orchestrator stops the chain.
-func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) {
+func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (interaction.Step, error) { //nolint:gocognit,cyclop // Recovery-code verification branches mirror the factor state machine.
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
 	code, ok := in.Submission.Values[CodeFieldName]
 	if !ok || code == "" {
 		return interaction.Step{}, ErrCodeMissing
+	}
+	if a.lockout != nil {
+		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
+			if errors.Is(err, lockout.ErrLocked) {
+				return interaction.Step{}, ErrLocked
+			}
+			return interaction.Step{}, fmt.Errorf("recovery: lockout guard: %w", err)
+		}
 	}
 	batch, err := a.store.Get(ctx, in.Subject)
 	if err != nil {
@@ -149,8 +183,25 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 
 	switch {
 	case verr == nil:
+		if a.lockout != nil {
+			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
+				return interaction.Step{}, fmt.Errorf("recovery: lockout reset: %w", rerr)
+			}
+		}
 		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
 	case errors.Is(verr, ErrCodeInvalid):
+		if a.lockout != nil {
+			out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
+			if lerr != nil {
+				return interaction.Step{}, fmt.Errorf("recovery: lockout record failure: %w", lerr)
+			}
+			if out.ResetRequired {
+				return interaction.Step{}, ErrResetRequired
+			}
+			if !out.LockedUntil.IsZero() {
+				return interaction.Step{}, ErrLocked
+			}
+		}
 		return interaction.Step{Prompt: a.prompt(batch)}, nil
 	default:
 		// ErrAllConsumed / ErrNoCodes / hash-format failures flow

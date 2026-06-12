@@ -121,13 +121,9 @@ func New(opts ...Option) (*Provider, error) {
 		return nil, err
 	}
 	cfg.emitPartialWiringWarnings()
-	trust, err := proxy.NewTrust(cfg.trustedProxies)
+	trust, err := buildProxyTrust(cfg)
 	if err != nil {
-		return nil, &Error{
-			Code:        codeConfiguration,
-			Description: "WithTrustedProxies rejected by parser",
-			Cause:       err,
-		}
+		return nil, err
 	}
 	if err := seedStaticClients(cfg); err != nil {
 		return nil, err
@@ -159,7 +155,7 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	mux, err := buildRouter(cfg, keySet, encSet, scopes, locales)
+	mux, err := buildRouter(cfg, keySet, encSet, scopes, locales, trust)
 	if err != nil {
 		return nil, err
 	}
@@ -876,18 +872,21 @@ func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep,
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
+		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindTOTP), Authenticator: auth}, nil
 	case StepEmailOTP:
 		auth, err := buildStepEmailOTP(v)
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
+		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindEmailOTP), Authenticator: auth}, nil
 	case StepRecoveryCode:
 		auth, err := buildStepRecoveryCode(v)
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
+		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindRecoveryCode), Authenticator: auth}, nil
 	case StepCaptcha:
 		auth, err := buildStepCaptcha(v)

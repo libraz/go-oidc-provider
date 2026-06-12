@@ -66,6 +66,15 @@ func mustRSAKey2048(t *testing.T) *rsa.PrivateKey {
 	return k
 }
 
+func mustWeakRSAKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentional weak key for floor-rejection test
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	return k
+}
+
 // TestAuthCode_IDTokenEncryption_Disabled pins the legacy path: a
 // client without id_token_encrypted_response_alg / _enc receives a
 // plain three-segment JWS id_token regardless of resolver wiring.
@@ -238,6 +247,51 @@ func TestAuthCode_IDTokenEncryption_NoMatchingKey_FailsClosed(t *testing.T) {
 	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "server_error" {
+		t.Errorf("error=%v want server_error", body["error"])
+	}
+}
+
+func TestAuthCode_IDTokenEncryption_WeakKey_FailsClosed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	rpKey := mustWeakRSAKey(t)
+	client.JWKs = rsaPrivJWK(t, rpKey, "rp-weak")
+	client.IDTokenEncryptedResponseAlg = "RSA-OAEP-256"
+	client.IDTokenEncryptedResponseEnc = "A256GCM"
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+
+	verifier, challenge := pkcePair()
+	const codeID = "code-enc-weak"
+	const grantID = "grant-enc-weak"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: "user-1", ClientID: client.ID,
+		Scope: []string{"openid", "email"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             "user-1",
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "email"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-enc-weak",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status=%d want 500", resp.StatusCode)
 	}

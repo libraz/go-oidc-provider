@@ -35,7 +35,7 @@ const consentOverlayTemplate = `<!doctype html><html><body>
 <form method="{{.SubmitMethod}}" action="{{.SubmitAction}}">
 <input type="hidden" name="state_ref" value="{{.StateRef}}">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-{{range .Scopes}}<label><input type="checkbox" name="{{$.ApprovedScopesField}}" value="{{.Name}}"{{if .Required}} checked disabled{{end}}> {{.Description}}</label>{{end}}
+{{range .Scopes}}{{if .Required}}<input type="hidden" name="{{$.ApprovedScopesField}}" value="{{.Name}}">{{end}}<label><input type="checkbox" name="{{$.ApprovedScopesField}}" value="{{.Name}}"{{if .Required}} checked disabled{{end}}> {{.Description}}</label>{{end}}
 <button type="submit">Approve</button>
 </form>
 </body></html>`

@@ -84,15 +84,16 @@ func (p SessionDurabilityPosture) String() string {
 // own goroutine; the coordinator blocks until all deliveries complete
 // or the parent context expires.
 type Coordinator struct {
-	issuer    string
-	signing   SigningKey
-	clients   store.ClientStore
-	grants    store.GrantStore
-	deliverer Deliverer
-	emitter   audit.Emitter
-	clock     timex.Clock
-	tokenTTL  time.Duration
-	posture   SessionDurabilityPosture
+	issuer           string
+	signing          SigningKey
+	clients          store.ClientStore
+	grants           store.GrantStore
+	subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
+	deliverer        Deliverer
+	emitter          audit.Emitter
+	clock            timex.Clock
+	tokenTTL         time.Duration
+	posture          SessionDurabilityPosture
 }
 
 // Config carries the construction-time dependencies for [NewCoordinator].
@@ -113,6 +114,12 @@ type Config struct {
 	// Grants is the store the coordinator queries to enumerate the
 	// audience clients for a terminating subject. Required.
 	Grants store.GrantStore
+
+	// SubjectProjector converts the OP-internal subject into the
+	// per-client subject value used in the Logout Token's sub claim.
+	// Nil preserves the raw subject. Pairwise deployments wire the same
+	// projector used by ID token / userinfo / introspection issuance.
+	SubjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 
 	// Deliverer ships the signed token to one RP. A nil value
 	// substitutes [NewHTTPDeliverer] with [DefaultTimeout]; tests
@@ -176,15 +183,16 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		ttl = DefaultTokenTTL
 	}
 	return &Coordinator{
-		issuer:    cfg.Issuer,
-		signing:   cfg.Signing,
-		clients:   cfg.Clients,
-		grants:    cfg.Grants,
-		deliverer: deliverer,
-		emitter:   emitter,
-		clock:     clock,
-		tokenTTL:  ttl,
-		posture:   cfg.SessionDurabilityPosture,
+		issuer:           cfg.Issuer,
+		signing:          cfg.Signing,
+		clients:          cfg.Clients,
+		grants:           cfg.Grants,
+		subjectProjector: cfg.SubjectProjector,
+		deliverer:        deliverer,
+		emitter:          emitter,
+		clock:            clock,
+		tokenTTL:         ttl,
+		posture:          cfg.SessionDurabilityPosture,
 	}, nil
 }
 
@@ -231,7 +239,10 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	targets := c.resolveTargets(ctx, grants, notice.SessionID)
+	targets, err := c.resolveTargets(ctx, grants, notice.Subject, notice.SessionID)
+	if err != nil {
+		return 0, err
+	}
 	if len(targets) == 0 {
 		c.emitNoSessionsForSubject(ctx, notice)
 		return 0, nil
@@ -262,7 +273,7 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 //   - BackchannelLogoutURI is non-empty;
 //   - if BackchannelLogoutSessionRequired is true the notice carries
 //     a SessionID — otherwise the spec contract cannot be honoured.
-func (c *Coordinator) resolveTargets(ctx context.Context, grants []*store.Grant, sid string) []Target {
+func (c *Coordinator) resolveTargets(ctx context.Context, grants []*store.Grant, rawSubject, sid string) ([]Target, error) { //nolint:gocognit // Target resolution is intentionally linear to keep skip reasons local.
 	out := make([]Target, 0, len(grants))
 	seen := make(map[string]struct{}, len(grants))
 	for _, g := range grants {
@@ -282,13 +293,25 @@ func (c *Coordinator) resolveTargets(ctx context.Context, grants []*store.Grant,
 		if client.BackchannelLogoutSessionRequired && sid == "" {
 			continue
 		}
+		subject := rawSubject
+		if c.subjectProjector != nil {
+			projected, err := c.subjectProjector(ctx, rawSubject, client)
+			if err != nil {
+				return nil, err
+			}
+			if projected == "" {
+				return nil, errors.New("backchannel: SubjectProjector returned empty subject")
+			}
+			subject = projected
+		}
 		seen[g.ClientID] = struct{}{}
 		out = append(out, Target{
 			ClientID: client.ID,
+			Subject:  subject,
 			URL:      client.BackchannelLogoutURI,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // dispatchOne mints, signs, and ships a Logout Token for one
@@ -306,7 +329,7 @@ func (c *Coordinator) dispatchOne(
 		Audience:  target.ClientID,
 		IssuedAt:  iat,
 		ExpiresAt: exp,
-		Subject:   notice.Subject,
+		Subject:   target.Subject,
 		SessionID: notice.SessionID,
 	}
 	token, err := SignLogoutToken(c.signing, claims)

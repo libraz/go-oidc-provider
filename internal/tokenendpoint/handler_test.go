@@ -178,6 +178,12 @@ func assertCacheControl(tb testing.TB, resp *http.Response) {
 	if got := resp.Header.Get("Pragma"); got != "no-cache" {
 		tb.Errorf("Pragma=%q want no-cache", got)
 	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		tb.Errorf("X-Content-Type-Options=%q want nosniff", got)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json; charset=utf-8" {
+		tb.Errorf("Content-Type=%q want application/json; charset=utf-8", got)
+	}
 }
 
 // TestHandler_GETRejected confirms the endpoint refuses non-POST

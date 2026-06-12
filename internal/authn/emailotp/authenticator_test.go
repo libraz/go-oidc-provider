@@ -182,6 +182,50 @@ func TestContinueSendMatchedEmailDeliversAndPersists(t *testing.T) {
 	}
 }
 
+func TestContinueSendCarriesVerifyLockoutCounters(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	a, _, recStore := newFixture(t, now)
+	firstFailure := now.Add(-time.Hour)
+	lockedUntil := now.Add(time.Hour)
+	if err := recStore.Put(context.Background(), &store.EmailOTPRecord{
+		Subject:           "sub-1",
+		CodeSalt:          []byte("old-salt"),
+		CodeHash:          []byte("old-hash"),
+		ExpiresAt:         now.Add(time.Minute),
+		FailedCount:       emailotp.LockThresholdShort,
+		FirstFailureAt:    firstFailure,
+		LockedUntil:       lockedUntil,
+		LastSendAttemptAt: now.Add(-time.Minute),
+		SendWindowStart:   now.Add(-time.Hour),
+		SendCount:         1,
+	}); err != nil {
+		t.Fatalf("Put prior record: %v", err)
+	}
+
+	if _, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject: "sub-1",
+		Submission: interaction.FormSubmission{
+			Values: map[string]string{emailotp.EmailFieldName: "Alice@Example.com"},
+		},
+	}); err != nil {
+		t.Fatalf("Continue resend: %v", err)
+	}
+	rec, err := recStore.Get(context.Background(), "sub-1")
+	if err != nil {
+		t.Fatalf("Get resent record: %v", err)
+	}
+	if rec.FailedCount != emailotp.LockThresholdShort {
+		t.Fatalf("FailedCount=%d want %d", rec.FailedCount, emailotp.LockThresholdShort)
+	}
+	if !rec.FirstFailureAt.Equal(firstFailure) {
+		t.Fatalf("FirstFailureAt=%v want %v", rec.FirstFailureAt, firstFailure)
+	}
+	if !rec.LockedUntil.Equal(lockedUntil) {
+		t.Fatalf("LockedUntil=%v want %v", rec.LockedUntil, lockedUntil)
+	}
+}
+
 func TestContinueSendMismatchedEmailSkipsMailer(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)

@@ -44,6 +44,7 @@ func newDeviceCode(now time.Time, id, userCode string) *store.DeviceCode {
 var deviceCodeCases = []subtest{
 	{"SaveFind", deviceCodeSaveFind},
 	{"FindByUserCodeHidesDeviceCode", deviceCodeFindByUserCode},
+	{"UserCodeApprovalPath", deviceCodeUserCodeApprovalPath},
 	{"ApproveConsumeOnce", deviceCodeApproveConsumeOnce},
 	{"ApproveConflictAfterDeny", deviceCodeApproveConflictAfterDeny},
 	{"ConsumeConflictWhenDenied", deviceCodeConsumeConflictWhenDenied},
@@ -53,6 +54,31 @@ var deviceCodeCases = []subtest{
 	{"Expired", deviceCodeExpired},
 	{"DuplicateUserCode", deviceCodeDuplicateUserCode},
 	{"TransitionMissing", deviceCodeTransitionMissing},
+}
+
+func deviceCodeUserCodeApprovalPath(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	if err := dc.Save(ctx, newDeviceCode(b.Now(), "dc-uc-approve", "AAAA-0099")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if strikes, err := dc.IncrementUserCodeStrikeByUserCode(ctx, "AAAA-0099"); err != nil || strikes != 1 {
+		t.Fatalf("IncrementUserCodeStrikeByUserCode = %d, %v; want 1, nil", strikes, err)
+	}
+	if err := dc.ApproveByUserCode(ctx, "AAAA-0099", "sub-user-code", b.Now()); err != nil {
+		t.Fatalf("ApproveByUserCode: %v", err)
+	}
+	got, err := dc.FindByDeviceCode(ctx, "dc-uc-approve")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode after ApproveByUserCode: %v", err)
+	}
+	if got.Status != store.DeviceCodeStatusApproved || got.Subject != "sub-user-code" || got.UserCodeStrikes != 1 {
+		t.Fatalf("unexpected record after user_code approval: %+v", got)
+	}
+	if err := dc.DenyByUserCode(ctx, "AAAA-0099", "late-deny"); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("DenyByUserCode after approve: want ErrConflict, got %v", err)
+	}
 }
 
 func deviceCodeSaveFind(t *testing.T, f Factory) {

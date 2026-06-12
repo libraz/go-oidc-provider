@@ -326,7 +326,7 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 	// the "malformed proof never advances the table" property the
 	// previous ordering relied on.
 	expiresAt := time.Unix(parsed.claims.IssuedAt, 0).Add(v.replayLeew)
-	if err := v.jtis.Mark(ctx, parsed.claims.JTI, expiresAt); err != nil {
+	if err := v.jtis.Mark(ctx, "dpop:"+parsed.claims.JTI, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return nil, ErrProofReplayed
 		}

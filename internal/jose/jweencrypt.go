@@ -60,6 +60,9 @@ func Encrypt(plaintext []byte, recipient EncryptionRecipient) (string, error) {
 	if recipient.Key == nil {
 		return "", fmt.Errorf("%w: nil recipient key", ErrJWEUnsupportedKey)
 	}
+	if err := AssertJWEAlgKeyShape(recipient.Alg, recipient.Key); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrJWEUnsupportedKey, err)
+	}
 
 	rcpt := josev4.Recipient{
 		Algorithm: josev4.KeyAlgorithm(recipient.Alg),
@@ -112,6 +115,9 @@ func EncryptNestedJWT(jws string, recipient EncryptionRecipient) (string, error)
 	}
 	if recipient.Key == nil {
 		return "", fmt.Errorf("%w: nil recipient key", ErrJWEUnsupportedKey)
+	}
+	if err := AssertJWEAlgKeyShape(recipient.Alg, recipient.Key); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrJWEUnsupportedKey, err)
 	}
 
 	rcpt := josev4.Recipient{

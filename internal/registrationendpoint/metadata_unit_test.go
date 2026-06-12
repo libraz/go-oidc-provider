@@ -2,9 +2,16 @@
 package registrationendpoint
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 )
@@ -31,6 +38,100 @@ func TestValidatePolicy_RejectsHTTPClientURI(t *testing.T) {
 	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
 	if err == nil {
 		t.Fatal("expected validation error, got nil")
+	}
+}
+
+func TestValidatePolicy_PrivateKeyJWTRequiresJWKS(t *testing.T) {
+	t.Parallel()
+
+	//nolint:gosec // G101 false positive: private_key_jwt is an auth-method label.
+	_, err := validatePolicy(ClientMetadata{
+		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
+		TokenEndpointAuthMethod: "private_key_jwt",
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	if err == nil {
+		t.Fatal("expected validation error, got nil")
+	}
+	assertInvalidClientMetadata(t, err)
+}
+
+func TestValidatePolicy_PrivateKeyJWTRejectsBadInlineJWKS(t *testing.T) {
+	t.Parallel()
+
+	weakRSA, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // deliberately weak M-13 fixture.
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	cases := []struct {
+		name string
+		jwks []byte
+	}{
+		{name: "malformed", jwks: []byte(`{"keys":[`)},
+		{name: "empty", jwks: []byte(`{"keys":[]}`)},
+		{name: "weak_rsa", jwks: jwksRaw(t, josev4.JSONWebKey{
+			Key:       &weakRSA.PublicKey,
+			KeyID:     "weak",
+			Algorithm: "RS256",
+			Use:       "sig",
+		})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			//nolint:gosec // G101 false positive: private_key_jwt is an auth-method label.
+			_, err := validatePolicy(ClientMetadata{
+				RedirectURIs:            []string{"https://rp.test.invalid/cb"},
+				TokenEndpointAuthMethod: "private_key_jwt",
+				JWKs:                    tc.jwks,
+			}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+			if err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			assertInvalidClientMetadata(t, err)
+		})
+	}
+}
+
+func TestValidatePolicy_PrivateKeyJWTAcceptsValidInlineJWKS(t *testing.T) {
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	//nolint:gosec // G101 false positive: private_key_jwt is an auth-method label.
+	_, err = validatePolicy(ClientMetadata{
+		RedirectURIs:            []string{"https://rp.test.invalid/cb"},
+		TokenEndpointAuthMethod: "private_key_jwt",
+		JWKs: jwksRaw(t, josev4.JSONWebKey{
+			Key:       &key.PublicKey,
+			KeyID:     "p256",
+			Algorithm: "ES256",
+			Use:       "sig",
+		}),
+	}, []string{"authorization_code"}, []string{"code"}, nil, false, nil, nil, false, false, false)
+	if err != nil {
+		t.Fatalf("validatePolicy: %v", err)
+	}
+}
+
+func jwksRaw(tb testing.TB, keys ...josev4.JSONWebKey) []byte {
+	tb.Helper()
+	raw, err := json.Marshal(josev4.JSONWebKeySet{Keys: keys})
+	if err != nil {
+		tb.Fatalf("json.Marshal JWKS: %v", err)
+	}
+	return raw
+}
+
+func assertInvalidClientMetadata(tb testing.TB, err error) {
+	tb.Helper()
+	var ve *validationError
+	if !errors.As(err, &ve) {
+		tb.Fatalf("err=%T %v, want validationError", err, err)
+	}
+	if ve.code != codeInvalidClientMetadata {
+		tb.Fatalf("code=%q want %q", ve.code, codeInvalidClientMetadata)
 	}
 }
 

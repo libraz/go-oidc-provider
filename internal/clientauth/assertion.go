@@ -79,6 +79,8 @@ type assertionSigningAlgResolver interface {
 	AssertionSigningAlg(ctx context.Context, clientID string) (string, error)
 }
 
+const maxAssertionLifetime = 5 * time.Minute
+
 // PrivateKeyJWTVerifier is the library's reference [AssertionVerifier].
 // Embedders typically use this verifier wrapped around their own
 // JWKSResolver and the OP's [store.ConsumedJTIStore].
@@ -145,10 +147,12 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 		return fmt.Errorf("%w: %w", ErrAssertionMalformed, err)
 	}
 	accepted := append([]string{v.Audience}, v.AuxAudiences...)
-	if err := validateAssertionClaims(claims, clientID, accepted, v.Clock(), leeway); err != nil {
+	now := v.Clock()
+	if err := validateAssertionClaims(claims, clientID, accepted, now, leeway); err != nil {
 		return err
 	}
-	if err := v.JTIStore.Mark(ctx, claims.JTI, time.Unix(claims.ExpiresAt, 0).UTC()); err != nil {
+	expiresAt := assertionJTIExpiry(claims, now)
+	if err := v.JTIStore.Mark(ctx, assertionJTIKey(clientID, claims.JTI), expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return ErrAssertionReplayed
 		}
@@ -248,6 +252,9 @@ func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAu
 	if !now.Add(-leeway).Before(exp) {
 		return ErrAssertionMalformed
 	}
+	if exp.After(now.Add(maxAssertionLifetime)) {
+		return ErrAssertionMalformed
+	}
 	if claims.IssuedAt != 0 {
 		iat := time.Unix(claims.IssuedAt, 0).UTC()
 		if iat.After(now.Add(leeway)) {
@@ -261,6 +268,19 @@ func validateAssertionClaims(claims AssertionClaims, clientID string, acceptedAu
 		}
 	}
 	return nil
+}
+
+func assertionJTIKey(clientID, jti string) string {
+	return "clientassertion:" + clientID + ":" + jti
+}
+
+func assertionJTIExpiry(claims AssertionClaims, now time.Time) time.Time {
+	expiresAt := time.Unix(claims.ExpiresAt, 0).UTC()
+	maxRetain := now.Add(maxAssertionLifetime)
+	if expiresAt.After(maxRetain) {
+		return maxRetain
+	}
+	return expiresAt
 }
 
 // audienceMatchesAny reports whether any of expected appears in aud.

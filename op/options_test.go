@@ -3,6 +3,7 @@ package op_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -694,6 +695,28 @@ func TestWithACRValuesSupported_RejectsEmptyValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty value") {
 		t.Errorf("err = %v, want empty-value diagnostic", err)
+	}
+}
+
+func TestWithACRValuesSupported_RejectsDuplicateOption(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithACRValuesSupported("urn:example:high"),
+		op.WithACRValuesSupported("urn:example:low"),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for duplicate WithACRValuesSupported, got nil")
+	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("err = %v, want *op.Error", err)
+	}
+	if typed.Code != "configuration_error" {
+		t.Fatalf("op.Error.Code=%q want configuration_error", typed.Code)
+	}
+	if !strings.Contains(err.Error(), "supplied more than once") {
+		t.Errorf("err = %v, want duplicate-option diagnostic", err)
 	}
 }
 

@@ -140,6 +140,19 @@ func exchangeAuthCode(
 		writeAuthCodeExchangeError(ctx, w, deps, in.Code, err)
 		return nil, false
 	}
+	deps.audit().Emit(ctx, audit.Event{
+		Name:     auditCodeConsumed,
+		Level:    audit.LevelInfo,
+		Message:  "authorization code consumed",
+		ActorID:  exchanged.Subject,
+		ClientID: in.ClientID,
+		Extras: map[string]any{
+			"code_id":     in.Code,
+			"grant_id":    exchanged.GrantID,
+			"scope":       append([]string(nil), exchanged.Scope...),
+			"consumed_at": exchanged.ConsumedAt,
+		},
+	})
 	return exchanged, true
 }
 
@@ -166,6 +179,7 @@ func writeAuthCodeExchangeError(
 		// §A.12.4: a replayed code is treated as evidence that the
 		// chain is compromised. Revoke every refresh token descended
 		// from the same grant before responding.
+		emitCodeReplayDetected(ctx, deps, authcode.ReplayGrantID(err))
 		revokeChainForCode(ctx, deps, code, authcode.ReplayGrantID(err))
 		writeError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
 	case errors.Is(err, pkce.ErrChallengeMethodUnsupported),
@@ -175,6 +189,17 @@ func writeAuthCodeExchangeError(
 	default:
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 	}
+}
+
+func emitCodeReplayDetected(ctx context.Context, deps Deps, grantID string) {
+	deps.audit().Emit(ctx, audit.Event{
+		Name:    auditCodeReplayDetected,
+		Level:   audit.LevelWarn,
+		Message: "authorization-code replay detected",
+		Extras: map[string]any{
+			"grant_id": grantID,
+		},
+	})
 }
 
 // revokeChainForCode revokes every refresh token whose GrantID matches
@@ -364,6 +389,9 @@ func issueAuthCodeResponse(
 		exchanged.Resource,
 		exchanged.Nonce,
 		binding,
+		store.RefreshOriginAuthCode,
+		false,
+		authCtx,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -462,6 +490,7 @@ func mintAccessToken(
 	authTime int64,
 	binding tokenBinding,
 	authorizationDetails []map[string]any,
+	extraClaims ...map[string]any,
 ) (string, error) {
 	format := store.AccessTokenFormatJWT
 	if deps.AccessTokenFormatFor != nil {
@@ -476,7 +505,11 @@ func mintAccessToken(
 	case store.AccessTokenFormatJWT:
 		fallthrough
 	default:
-		return mintJWTAccessToken(ctx, deps, rawSubject, publicSubject, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails)
+		var extra map[string]any
+		if len(extraClaims) > 0 {
+			extra = extraClaims[0]
+		}
+		return mintJWTAccessToken(ctx, deps, rawSubject, publicSubject, clientID, grantID, scope, resource, now, authTime, binding, authorizationDetails, extra)
 	}
 }
 
@@ -518,6 +551,7 @@ func mintJWTAccessToken(
 	authTime int64,
 	binding tokenBinding,
 	authorizationDetails []map[string]any,
+	extraClaims map[string]any,
 ) (string, error) {
 	jti, err := newJTI()
 	if err != nil {
@@ -541,6 +575,7 @@ func mintJWTAccessToken(
 		Confirmation:         binding.confirmation(),
 		GrantID:              grantID,
 		AuthorizationDetails: authorizationDetails,
+		Extra:                cloneClaimsMap(extraClaims),
 	}
 	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
 	if err != nil {
@@ -631,6 +666,42 @@ func opaqueAuthTime(authTime int64) time.Time {
 	return time.Unix(authTime, 0).UTC()
 }
 
+func timeFromUnix(v int64) time.Time {
+	if v == 0 {
+		return time.Time{}
+	}
+	return time.Unix(v, 0).UTC()
+}
+
+func cloneAuthorizationDetails(in []map[string]any) []map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(in))
+	for i, obj := range in {
+		if obj == nil {
+			continue
+		}
+		cp := make(map[string]any, len(obj))
+		for k, v := range obj {
+			cp[k] = v
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+func cloneClaimsMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 // mintAuthCodeIDToken signs the OIDC id_token issued in response to an
 // authorization_code exchange. at_hash and c_hash are populated per
 // OIDC Core §3.1.3.6 / §3.3.2.10 because the code-flow id_token is the
@@ -677,6 +748,9 @@ func maybeIssueRefreshToken(
 	scope []string,
 	resource, nonce string,
 	binding tokenBinding,
+	origin store.RefreshTokenOrigin,
+	subjectPublic bool,
+	authCtx authContext,
 ) (string, error) {
 	if !clientPermitsRefresh(client, scope) {
 		return "", nil
@@ -690,14 +764,20 @@ func maybeIssueRefreshToken(
 		return "", err
 	}
 	token, err := issuer.Issue(ctx, refresh.IssueInput{
-		ClientID:           client.ID,
-		Subject:            subject,
-		GrantID:            grantID,
-		Scope:              append([]string(nil), scope...),
-		Resource:           resource,
-		Nonce:              nonce,
-		DPoPJKT:            refreshDPoPJKT(client, binding.DPoPJKT),
-		MTLSCertThumbprint: binding.MTLSThumbprint,
+		ClientID:             client.ID,
+		Subject:              subject,
+		GrantID:              grantID,
+		Scope:                append([]string(nil), scope...),
+		Resource:             resource,
+		Origin:               origin,
+		SubjectPublic:        subjectPublic,
+		AuthTime:             timeFromUnix(authCtx.AuthTime),
+		ACR:                  authCtx.ACR,
+		AMR:                  append([]string(nil), authCtx.AMR...),
+		AuthorizationDetails: cloneAuthorizationDetails(authCtx.AuthorizationDetails),
+		Nonce:                nonce,
+		DPoPJKT:              refreshDPoPJKT(client, binding.DPoPJKT),
+		MTLSCertThumbprint:   binding.MTLSThumbprint,
 	})
 	if err != nil {
 		return "", err

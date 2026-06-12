@@ -164,6 +164,32 @@ func AssertAlgKeyShape(alg string, pub crypto.PublicKey) error {
 	}
 }
 
+// AssertJWEAlgKeyShape returns nil iff pub is an allowed recipient public
+// key shape for the JWE key-management alg. The check applies the same
+// RSA floor and EC curve allow-list as [KeyShape] before the encrypter is
+// constructed, so outbound JWE cannot be minted to sub-floor RP keys.
+func AssertJWEAlgKeyShape(alg JWEAlg, pub crypto.PublicKey) error {
+	if _, _, _, ok := KeyShape(pub); !ok {
+		return fmt.Errorf("%w: key type %T is not in the OP allow-list", ErrUnsupportedKeyShape, pub)
+	}
+	switch alg {
+	case JWEAlgRSAOAEP256:
+		if _, ok := pub.(*rsa.PublicKey); !ok {
+			return fmt.Errorf("%w: alg %q requires *rsa.PublicKey, got %s", ErrUnsupportedKeyShape, alg, describe(pub))
+		}
+		return nil
+	case JWEAlgECDHES, JWEAlgECDHESA128KW, JWEAlgECDHESA256KW:
+		if _, ok := pub.(*ecdsa.PublicKey); !ok {
+			return fmt.Errorf("%w: alg %q requires *ecdsa.PublicKey, got %s", ErrUnsupportedKeyShape, alg, describe(pub))
+		}
+		return nil
+	case "":
+		return fmt.Errorf("%w: empty alg", ErrUnsupportedKeyShape)
+	default:
+		return fmt.Errorf("%w: alg %q has no shape policy", ErrUnsupportedKeyShape, alg)
+	}
+}
+
 // describe returns a short, log-safe label for pub. Used only inside
 // error wrappings so operators can see "*ecdsa.PublicKey/P-384" instead
 // of a raw Go type when an alg/key mismatch is logged.

@@ -400,6 +400,7 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 		CodeHash:  hashCode(salt, in.Subject, code),
 		ExpiresAt: expiresAt,
 	}
+	carryVerifyCounters(rec, prior)
 	advanceSendWindow(rec, prior, now)
 	if constantTimeEqualEmails(email, bound) {
 		if err := a.mailer.Send(ctx, Message{
@@ -421,6 +422,15 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 		Prompt:  a.verifyPrompt(bound, expiresAt),
 		Scratch: scratchVerify,
 	}, nil
+}
+
+func carryVerifyCounters(rec, prior *store.EmailOTPRecord) {
+	if rec == nil || prior == nil {
+		return
+	}
+	rec.FailedCount = prior.FailedCount
+	rec.FirstFailureAt = prior.FirstFailureAt
+	rec.LockedUntil = prior.LockedUntil
 }
 
 // loadPriorRecord returns the persisted record for subject (if any),

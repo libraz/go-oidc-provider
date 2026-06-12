@@ -57,6 +57,48 @@ func (faultyRegistry) GC(_ context.Context, _ time.Time) (int, error) {
 	panic("faultyRegistry.GC should not be reached on the lookup path")
 }
 
+type notFoundRegistry struct{}
+
+func (notFoundRegistry) Register(_ context.Context, _ store.AccessTokenRecord) error {
+	panic("notFoundRegistry.Register should not be reached on the lookup path")
+}
+
+func (notFoundRegistry) Find(_ context.Context, _ string) (*store.AccessTokenRecord, error) {
+	return nil, store.ErrNotFound
+}
+
+func (notFoundRegistry) RevokeByJTI(_ context.Context, _ string) error {
+	panic("notFoundRegistry.RevokeByJTI should not be reached on the lookup path")
+}
+
+func (notFoundRegistry) RevokeByGrant(_ context.Context, _ string) (int, error) {
+	panic("notFoundRegistry.RevokeByGrant should not be reached on the lookup path")
+}
+
+func (notFoundRegistry) GC(_ context.Context, _ time.Time) (int, error) {
+	panic("notFoundRegistry.GC should not be reached on the lookup path")
+}
+
+type revokedGrantStore struct {
+	grantID string
+}
+
+func (s revokedGrantStore) RevokeGrant(context.Context, store.GrantTombstone) error {
+	panic("revokedGrantStore.RevokeGrant should not be reached on the lookup path")
+}
+
+func (s revokedGrantStore) RevokeJTI(context.Context, store.RevokedJTI) error {
+	panic("revokedGrantStore.RevokeJTI should not be reached on the lookup path")
+}
+
+func (s revokedGrantStore) IsRevoked(_ context.Context, grantID, _ string, _ time.Time) (bool, error) {
+	return grantID == s.grantID, nil
+}
+
+func (s revokedGrantStore) GC(context.Context, time.Time) (int, error) {
+	panic("revokedGrantStore.GC should not be reached on the lookup path")
+}
+
 // recordingEmitter captures every emitted audit.Event in order so the
 // test can scan for the M10 audit name. The struct is intentionally not
 // goroutine-safe — a single test goroutine drives one Handle call.
@@ -184,6 +226,96 @@ func TestHandle_RegistryFault_EmitsRegistryErrorAudit(t *testing.T) {
 	}
 	if found.ClientID != "caller" {
 		t.Errorf("client_id=%q, want %q", found.ClientID, "caller")
+	}
+}
+
+func TestLookupJWT_GrantTombstoneRevoked_ReturnsInvalid(t *testing.T) {
+	t.Parallel()
+
+	entry, err := keys.GenerateES256("tx-revoked-kid")
+	if err != nil {
+		t.Fatalf("GenerateES256: %v", err)
+	}
+	keySet, err := keys.NewSet([]keys.Entry{entry})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	h := &Handler{
+		issuer:             "https://op.example",
+		keys:               keySet,
+		grantRevocations:   revokedGrantStore{grantID: "grant-revoked"},
+		revocationStrategy: store.RevocationStrategyGrantTombstone,
+		clock:              fixedClock{now: now},
+	}
+	signer := tokens.FromInternalEntry(entry)
+	subjectJWS, err := tokens.SignAccessToken(signer, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example",
+		Subject:   "user-revoked",
+		Audience:  []string{"https://api.example"},
+		ClientID:  "subject-client",
+		GrantID:   "grant-revoked",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "tx-revoked-jti",
+		Scope:     []string{"read"},
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+
+	result, err := h.lookupJWT(context.Background(), subjectJWS, TokenTypeAccessToken)
+	if !errors.Is(err, errTokenInvalid) {
+		t.Fatalf("lookupJWT err=%v want errTokenInvalid", err)
+	}
+	if result.reason != "revoked" {
+		t.Fatalf("reason=%q want revoked", result.reason)
+	}
+}
+
+func TestLookupJWT_JTIRegistryNotFoundIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	entry, err := keys.GenerateES256("tx-notfound-kid")
+	if err != nil {
+		t.Fatalf("GenerateES256: %v", err)
+	}
+	keySet, err := keys.NewSet([]keys.Entry{entry})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	h := &Handler{
+		issuer:             "https://op.example",
+		keys:               keySet,
+		accessTokens:       notFoundRegistry{},
+		revocationStrategy: store.RevocationStrategyJTIRegistry,
+		clock:              fixedClock{now: now},
+	}
+	signer := tokens.FromInternalEntry(entry)
+	subjectJWS, err := tokens.SignAccessToken(signer, tokens.AccessTokenClaims{
+		Issuer:    "https://op.example",
+		Subject:   "user-ok",
+		Audience:  []string{"https://api.example"},
+		ClientID:  "subject-client",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Hour).Unix(),
+		JTI:       "tx-notfound-jti",
+		Scope:     []string{"read"},
+	})
+	if err != nil {
+		t.Fatalf("SignAccessToken: %v", err)
+	}
+
+	result, err := h.lookupJWT(context.Background(), subjectJWS, TokenTypeAccessToken)
+	if err != nil {
+		t.Fatalf("lookupJWT err=%v want nil", err)
+	}
+	if result.reason != "" {
+		t.Fatalf("reason=%q want empty", result.reason)
+	}
+	if result.view.Subject != "user-ok" {
+		t.Fatalf("subject=%q want user-ok", result.view.Subject)
 	}
 }
 

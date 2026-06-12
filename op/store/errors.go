@@ -30,9 +30,9 @@ var ErrAlreadyConsumed = errors.New("store: record already consumed")
 // have no concept of versioned updates need never return ErrConflict.
 var ErrConflict = errors.New("store: concurrent modification")
 
-// ErrTxRequired is returned when an operation that requires a transaction is
-// invoked on a substore handle that was obtained outside one. It is used by
-// backends that refuse to run transactional-cluster mutations on the
-// non-transactional handle path; backends without that distinction need
-// never return it.
+// ErrTxRequired is returned by transactional backends when a transaction
+// handle has already been closed, or when an embedder calls a backend-specific
+// operation that the backend intentionally exposes only through a transaction.
+// The OP runtime does not require ordinary Store substore calls to return this
+// error.
 var ErrTxRequired = errors.New("store: operation requires a transaction")

@@ -321,6 +321,96 @@ func TestHandler_JWTAccessToken_StoreFault_EmitsAudit(t *testing.T) {
 	}
 }
 
+func TestHandler_RefreshToken_Success_EmitsRevokedAudit(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("ecdsa key: %v", err)
+	}
+	keyset, err := keys.NewSet([]keys.Entry{{KeyID: "audit-success-1", Signer: priv}})
+	if err != nil {
+		t.Fatalf("keys.NewSet: %v", err)
+	}
+	innerStore := inmem.New(inmem.WithClock(clock))
+
+	const clientID = "client-revoke-success"
+	const secret = "revoke-success-secret"
+	hash, err := (&clientauth.Argon2id{}).Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	if err := innerStore.RegisterClient(context.Background(), &store.Client{
+		ID:                      clientID,
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"refresh_token"},
+	}); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	const refreshID = "refresh-success-1"
+	const grantID = "grant-success-1"
+	const subject = "user-1"
+	if err := innerStore.RefreshTokens().Save(context.Background(), &store.RefreshToken{
+		ID:        refreshID,
+		ClientID:  clientID,
+		Subject:   subject,
+		GrantID:   grantID,
+		CreatedAt: clock.now,
+		ExpiresAt: clock.now.Add(24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("RefreshTokens.Save: %v", err)
+	}
+
+	capture := newRevokeAuditCapture()
+	deps := revokeendpoint.Deps{
+		Issuer:        "https://op.example",
+		Clients:       innerStore.Clients(),
+		RefreshTokens: innerStore.RefreshTokens(),
+		Keys:          keyset,
+		Clock:         clock,
+		Audit:         capture.emitter(),
+	}
+	form := url.Values{
+		"token":           {refreshID},
+		"token_type_hint": {"refresh_token"},
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "https://op.example/revoke", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, secret)
+	rec := httptest.NewRecorder()
+
+	revokeendpoint.Handler(deps).ServeHTTP(rec, req)
+	resp := rec.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode=%d want 200", resp.StatusCode)
+	}
+
+	auditRec := capture.findEvent("token.revoked")
+	if auditRec == nil {
+		t.Fatalf("expected audit event token.revoked, captured=%s", capture.dump())
+	}
+	if got, _ := auditRec["actor_id"].(string); got != subject {
+		t.Errorf("audit actor_id=%q want %q", got, subject)
+	}
+	if got, _ := auditRec["client_id"].(string); got != clientID {
+		t.Errorf("audit client_id=%q want %q", got, clientID)
+	}
+	extras, ok := auditRec["extras"].(map[string]any)
+	if !ok {
+		t.Fatalf("audit record missing extras: %v", auditRec)
+	}
+	if got, _ := extras["surface"].(string); got != "refresh_chain" {
+		t.Errorf("extras.surface=%q want refresh_chain", got)
+	}
+	if got, _ := extras["grant_id"].(string); got != grantID {
+		t.Errorf("extras.grant_id=%q want %q", got, grantID)
+	}
+}
+
 // revokeAuditCapture wraps a slog logger that emits audit events as
 // JSON records into a bytes.Buffer. Mirrors the auditCapture pattern
 // in internal/tokenendpoint/audit_test.go but is local to the revoke

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -429,6 +430,17 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not record grant")
 		return
 	}
+	deps.auditEmitter().Emit(r.Context(), audit.Event{
+		Name:     opAuditConsentGranted,
+		Level:    audit.LevelInfo,
+		Message:  "consent grant recorded",
+		ActorID:  result.Subject,
+		ClientID: rec.ClientID,
+		Extras: map[string]any{
+			"grant_id": grant.ID,
+			"scope":    append([]string(nil), grant.Scope...),
+		},
+	})
 	codeID, err := newRandomB64(codeByteLength)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
@@ -493,9 +505,7 @@ type ensureSessionArgs struct {
 
 // ensureSession reuses the cookie-bound session when it represents
 // the same subject, switches within the existing chooser group when
-// the chooser picked a different account, adds a new account to the
-// existing chooser group when a fresh login lands on top of an active
-// session for a different subject, or issues a fresh session
+// the chooser picked a different account, or issues a fresh session
 // otherwise. The resulting cookie is set on the response writer.
 //
 // Session-fixation defence: when the cookie-bound subject equals the
@@ -515,6 +525,7 @@ func ensureSession(w http.ResponseWriter, r *http.Request, deps resolved, in ens
 		if err != nil {
 			return fmt.Errorf("authorizeendpoint: rotate session: %w", err)
 		}
+		emitSessionCreated(r.Context(), deps, in.Subject, out.SessionID, out.ChooserGroupID, "rotate")
 		return setSessionCookie(w, out.Cookie)
 	}
 	out, err := pickSessionOutcome(r.Context(), deps, in, active)
@@ -524,12 +535,14 @@ func ensureSession(w http.ResponseWriter, r *http.Request, deps resolved, in ens
 	return setSessionCookie(w, out.Cookie)
 }
 
-// pickSessionOutcome selects between the three Manager paths the
-// terminate-step needs (Switch / AddAccount / Issue). Splitting the
-// decision out of [ensureSession] keeps the caller under the gocognit
-// ceiling without losing the ordering invariant: chooser-picked switch
-// wins, then add-account-on-fresh-login, then plain Issue.
-func pickSessionOutcome(ctx context.Context, deps resolved, in ensureSessionArgs, active *sessions.Active) (sessions.Outcome, error) {
+// pickSessionOutcome selects between the Manager paths the terminate
+// step needs. A chooser-picked switch wins; every other different-
+// subject login starts a fresh chooser group. In particular, a
+// non-chooser fresh login MUST NOT call AddAccount just because the
+// browser presented an existing session cookie: callers of
+// sessions.Manager.AddAccount must prove the user explicitly selected
+// "add another account" in the chooser UI.
+func pickSessionOutcome(ctx context.Context, deps resolved, in ensureSessionArgs, _ *sessions.Active) (sessions.Outcome, error) {
 	if in.ChooserGroupID != "" && in.ChooserSelectedSessionID != "" {
 		out, err := deps.Sessions.Switch(ctx, in.ChooserGroupID, in.ChooserSelectedSessionID)
 		if err != nil {
@@ -543,18 +556,26 @@ func pickSessionOutcome(ctx context.Context, deps resolved, in ensureSessionArgs
 		AMR:      slices.Clone(in.AMR),
 		ACR:      in.ACR,
 	}
-	if active != nil && active.Session != nil && active.Session.ChooserGroupID != "" {
-		out, err := deps.Sessions.AddAccount(ctx, active.Session.ChooserGroupID, login)
-		if err != nil {
-			return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: add account: %w", err)
-		}
-		return out, nil
-	}
 	out, err := deps.Sessions.Issue(ctx, login)
 	if err != nil {
 		return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: issue session: %w", err)
 	}
+	emitSessionCreated(ctx, deps, in.Subject, out.SessionID, out.ChooserGroupID, "issue")
 	return out, nil
+}
+
+func emitSessionCreated(ctx context.Context, deps resolved, subject, sessionID, chooserGroupID, reason string) {
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:      opAuditSessionCreated,
+		Level:     audit.LevelInfo,
+		Message:   "session created",
+		ActorID:   subject,
+		SessionID: sessionID,
+		Extras: map[string]any{
+			"chooser_group_id": chooserGroupID,
+			"reason":           reason,
+		},
+	})
 }
 
 // setSessionCookie builds and writes the __Host-oidc_session cookie

@@ -1,7 +1,7 @@
 //go:build example
 
 // grants.go — store.GrantStore against vault_consent_ledger. Part of
-// the transactional cluster. Save upserts so the contract's "backends
+// the atomic-routing cluster. Save upserts so the contract's "backends
 // that perform upsert MAY treat Save as idempotent" path is taken.
 
 package main

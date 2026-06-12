@@ -517,6 +517,51 @@ func TestExchange_GraceWindow_ReturnsInGrace(t *testing.T) {
 	}
 }
 
+func TestExchange_GraceWindow_PreservesRefreshContext(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	f := newFixture(t, t0)
+	ctx := context.Background()
+	in := goodIssue()
+	in.Resource = "https://api.example.com"
+	in.Origin = store.RefreshOriginCustomGrant
+	in.SubjectPublic = true
+	in.AuthTime = t0.Add(-5 * time.Minute)
+	in.ACR = "urn:acr:pwd"
+	in.AMR = []string{"pwd", "otp"}
+	in.AuthorizationDetails = []map[string]any{{"type": "payment"}}
+	in.AccessTokenExtra = map[string]any{"act": map[string]any{"sub": "actor"}}
+
+	root, err := f.issuer.Issue(ctx, in)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("Exchange#1: %v", err)
+	}
+	*f.cur = f.cur.Add(refresh.GraceTTLDefault / 2)
+	again, err := f.exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
+	if err != nil {
+		t.Fatalf("grace Exchange: %v", err)
+	}
+	if !again.InGrace {
+		t.Fatal("grace Exchange InGrace=false want true")
+	}
+	if again.Resource != in.Resource || again.Origin != in.Origin || !again.SubjectPublic {
+		t.Fatalf("context mismatch: resource=%q origin=%q subjectPublic=%v", again.Resource, again.Origin, again.SubjectPublic)
+	}
+	if !again.AuthTime.Equal(in.AuthTime) || again.ACR != in.ACR {
+		t.Fatalf("auth context mismatch: auth_time=%v acr=%q", again.AuthTime, again.ACR)
+	}
+	if len(again.AuthorizationDetails) != 1 || again.AuthorizationDetails[0]["type"] != "payment" {
+		t.Fatalf("authorization_details=%v", again.AuthorizationDetails)
+	}
+	if len(again.AccessTokenExtra) == 0 {
+		t.Fatal("access token extra not preserved")
+	}
+}
+
 // TestExchange_GraceWindow_ExpiredFallsBackToReplay confirms that
 // re-presenting a consumed token after the grace TTL has elapsed
 // surfaces the strict replay error and revokes the chain.
@@ -1025,6 +1070,59 @@ func TestExchange_ChainRevokeFailure_EmitsAuditEvent(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected refresh.chain_revoke_failed warn event, got %+v", events)
+	}
+}
+
+func TestExchange_Replay_EmitsReplayDetectedAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	cur := t0
+	clk := func() time.Time { return cur }
+	st := inmem.New(inmem.WithClock(movingClock{cur: &cur})).RefreshTokens()
+	em := &recordingEmitter{}
+
+	iss, err := refresh.NewIssuer(refresh.IssuerConfig{Store: st, Clock: clk, TTL: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store: st,
+		Clock: clk,
+		Audit: em,
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	ctx := context.Background()
+	root, err := iss.Issue(ctx, goodIssue())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); err != nil {
+		t.Fatalf("first Exchange: %v", err)
+	}
+
+	cur = cur.Add(refresh.GraceTTLDefault + time.Second)
+	if _, err := exc.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+
+	var found bool
+	for _, ev := range em.snapshot() {
+		if ev.Name != "refresh.replay_detected" {
+			continue
+		}
+		found = true
+		if ev.Level != audit.LevelWarn {
+			t.Fatalf("level=%v want %v", ev.Level, audit.LevelWarn)
+		}
+		if got := ev.Extras["refresh_token_id"]; got != root {
+			t.Fatalf("extras.refresh_token_id=%v want %q", got, root)
+		}
+	}
+	if !found {
+		t.Fatalf("expected refresh.replay_detected audit event; got %v", em.snapshot())
 	}
 }
 

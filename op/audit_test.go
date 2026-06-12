@@ -27,18 +27,36 @@ func TestAuditEvent_BCLMirror(t *testing.T) {
 	}
 }
 
-// TestAuditEvent_TokenMirror keeps the public op.AuditTokenIssued /
-// op.AuditTokenRefreshed constants aligned with the raw strings the
-// token endpoint emits. The internal handler cannot import op/, so
-// the values are duplicated as strings (auditTokenIssued /
-// auditTokenRefreshed in internal/tokenendpoint/handler.go) and this
-// test pins them together.
+// TestAuditEvent_TokenMirror keeps the public token/code audit
+// constants aligned with the raw strings the token and revoke
+// endpoints emit. The internal handlers cannot import op/, so the
+// values are duplicated as strings and this test pins them together.
 func TestAuditEvent_TokenMirror(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]op.AuditEvent{
-		"token.issued":    op.AuditTokenIssued,
-		"token.refreshed": op.AuditTokenRefreshed,
+		"code.issued":          op.AuditCodeIssued,
+		"code.consumed":        op.AuditCodeConsumed,
+		"code.replay_detected": op.AuditCodeReplayDetected,
+		"token.issued":         op.AuditTokenIssued,
+		"token.refreshed":      op.AuditTokenRefreshed,
+		"token.revoked":        op.AuditTokenRevoked,
+		"token.revoke_failed":  op.AuditTokenRevokeFailed,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
+func TestAuditEvent_ConsentSessionMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"consent.granted":   op.AuditConsentGranted,
+		"session.created":   op.AuditSessionCreated,
+		"session.destroyed": op.AuditSessionDestroyed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

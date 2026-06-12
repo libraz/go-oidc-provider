@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -37,6 +36,8 @@ const (
 	auditTokenIssued        = "token.issued"
 	auditTokenRefreshed     = "token.refreshed"
 	auditTokenRevokeFailed  = "token.revoke_failed"
+	auditCodeConsumed       = "code.consumed"
+	auditCodeReplayDetected = "code.replay_detected"
 	auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
 )
 
@@ -204,7 +205,7 @@ type Deps struct {
 	// RefreshTokenGraceTTL bounds the RFC 9700 §2.2.2 grace window
 	// during which a just-rotated refresh token is still accepted.
 	// Zero or negative falls back to [refresh.GraceTTLDefault]
-	// (currently 30s). The token endpoint forwards this verbatim to
+	// (currently 60s). The token endpoint forwards this verbatim to
 	// [refresh.ExchangerConfig.GraceTTL].
 	RefreshTokenGraceTTL time.Duration
 
@@ -425,8 +426,7 @@ func Handler(deps Deps) http.Handler {
 func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
-		stampNoStore(w)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, errInvalidRequest, "method not allowed")
 		return
 	}
 	if !isFormContent(r.Header.Get("Content-Type")) {
@@ -544,14 +544,12 @@ type successResponse struct {
 // writeSuccess marshals body and writes it with the cache-control and
 // content-type headers the token endpoint owes every response.
 func writeSuccess(w http.ResponseWriter, body successResponse) {
-	stampNoStore(w)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Pragma", "no-cache")
 	// gosec G117 flags the AccessToken field name as "secret-shaped";
 	// the field name is required by RFC 6749 §5.1 and the token is the
 	// purpose of this response. There is no leak: the value is delivered
 	// over TLS to the authenticated client only.
-	_ = json.NewEncoder(w).Encode(body) //nolint:gosec // RFC 6749 §5.1 mandates the field name.
+	_ = httpx.WriteJSON(w, http.StatusOK, body)
 }
 
 // authenticate resolves the client credentials carried by the request,

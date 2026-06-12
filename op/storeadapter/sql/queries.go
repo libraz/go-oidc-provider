@@ -94,9 +94,10 @@ type queries struct {
 	interactionDelete string
 
 	// consumed JTIs
-	jtiMark string
-	jtiHas  string
-	jtiGC   string
+	jtiDeleteExpired string
+	jtiMark          string
+	jtiHas           string
+	jtiGC            string
 
 	// users
 	userFindBySubject    string
@@ -126,11 +127,15 @@ type queries struct {
 	deviceCodeFind            string
 	deviceCodeFindByUserCode  string
 	deviceCodeApprove         string
+	deviceCodeApproveByUser   string
 	deviceCodeDeny            string
+	deviceCodeDenyByUser      string
 	deviceCodeRecordPoll      string
 	deviceCodeConsume         string
 	deviceCodeStrikeIncrement string
+	deviceCodeStrikeIncrUser  string
 	deviceCodeStrikeRead      string
+	deviceCodeStrikeReadUser  string
 	deviceCodeViolationIncr   string
 	deviceCodeViolationRead   string
 
@@ -173,7 +178,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 	// expiry semantic the inmem reference and contract harness pin. A
 	// zero expires_at opts out of expiry.
 	const notExpiredGuard = " AND (expires_at = 0 OR expires_at >= ?)"
-	const cibaCols = "id, client_id, subject, scope, resource, acr_values, binding_message, user_code, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, poll_violations, last_polled_at, expires_at, issued_at"
+	const cibaCols = "id, client_id, subject, scope, resource, acr_values, acr, binding_message, user_code, dpop_jkt, mtls_cert_thumbprint, poll_interval, status, auth_time, deny_reason, poll_violations, last_polled_at, expires_at, issued_at"
 
 	q := queries{
 		// clients
@@ -200,10 +205,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// refresh tokens
 		refreshSave: d.rebind(
 			"INSERT INTO " + n.refreshes +
-				" (id, client_id, grant_id, parent_id, subject, scope, resource, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" (id, client_id, grant_id, parent_id, subject, subject_public, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, dpop_jkt, mtls_cert_thumbprint, nonce, revoked, expires_at, consumed_at, created_at)" +
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		refreshFind: d.rebind(
-			"SELECT id, client_id, subject, grant_id, scope, resource, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
+			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id = ?"),
 		refreshConsume: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),
@@ -362,6 +367,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"DELETE FROM " + n.interactions + " WHERE id = ?"),
 
 		// consumed JTIs
+		jtiDeleteExpired: d.rebind(
+			"DELETE FROM " + n.jtis + " WHERE jti = ? AND expires_at > 0 AND expires_at <= ?"),
 		jtiMark: d.rebind(
 			"INSERT INTO " + n.jtis + " (jti, expires_at) VALUES (?, ?)"),
 		jtiHas: d.rebind(
@@ -438,9 +445,15 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		deviceCodeApprove: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, subject = ?, auth_time = ?" +
 				" WHERE id = ? AND status = ?" + notExpiredGuard),
+		deviceCodeApproveByUser: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET status = ?, subject = ?, auth_time = ?" +
+				" WHERE user_code = ? AND status = ?" + notExpiredGuard),
 		deviceCodeDeny: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
 				" WHERE id = ? AND status = ?" + notExpiredGuard),
+		deviceCodeDenyByUser: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
+				" WHERE user_code = ? AND status = ?" + notExpiredGuard),
 		deviceCodeRecordPoll: d.rebind(
 			"UPDATE " + n.deviceCodes +
 				" SET last_polled_at = ?, poll_interval = CASE WHEN ? > poll_interval THEN ? ELSE poll_interval END" +
@@ -450,8 +463,13 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		deviceCodeStrikeIncrement: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET user_code_strikes = user_code_strikes + 1" +
 				" WHERE id = ? AND user_code_strikes < 255" + notExpiredGuard),
+		deviceCodeStrikeIncrUser: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET user_code_strikes = user_code_strikes + 1" +
+				" WHERE user_code = ? AND user_code_strikes < 255" + notExpiredGuard),
 		deviceCodeStrikeRead: d.rebind(
 			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard),
+		deviceCodeStrikeReadUser: d.rebind(
+			"SELECT user_code_strikes FROM " + n.deviceCodes + " WHERE user_code = ?" + notExpiredGuard),
 		deviceCodeViolationIncr: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET poll_violations = poll_violations + 1" +
 				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard),
@@ -464,17 +482,19 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		// reaches the DB.
 		cibaSave: d.rebind(
 			"INSERT INTO " + n.cibaRequests + " (" + cibaCols + ")" +
-				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		cibaFind: d.rebind(
 			"SELECT " + cibaCols + " FROM " + n.cibaRequests + " WHERE id = ?"),
 		cibaApprove: d.rebind(
-			"UPDATE " + n.cibaRequests + " SET status = ?, subject = ?, auth_time = ?" +
+			"UPDATE " + n.cibaRequests + " SET status = ?, subject = ?, acr = ?, auth_time = ?" +
 				" WHERE id = ? AND status = ?" + notExpiredGuard),
 		cibaDeny: d.rebind(
 			"UPDATE " + n.cibaRequests + " SET status = ?, deny_reason = ?" +
 				" WHERE id = ? AND status = ?" + notExpiredGuard),
 		cibaRecordPoll: d.rebind(
-			"UPDATE " + n.cibaRequests + " SET last_polled_at = ? WHERE id = ?" + notExpiredGuard),
+			"UPDATE " + n.cibaRequests +
+				" SET last_polled_at = ?, poll_interval = CASE WHEN ? > poll_interval THEN ? ELSE poll_interval END" +
+				" WHERE id = ?" + notExpiredGuard),
 		cibaConsume: d.rebind(
 			"UPDATE " + n.cibaRequests + " SET status = ? WHERE id = ? AND status = ?" + notExpiredGuard),
 		cibaViolationIncr: d.rebind(

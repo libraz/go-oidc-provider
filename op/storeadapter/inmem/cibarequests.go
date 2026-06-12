@@ -68,13 +68,14 @@ func (s *cibaRequestStore) FindByAuthReqID(_ context.Context, authReqID string) 
 	return out, nil
 }
 
-func (s *cibaRequestStore) Approve(_ context.Context, authReqID, subject string, authTime time.Time) error {
+func (s *cibaRequestStore) Approve(_ context.Context, authReqID, subject, acr string, authTime time.Time) error {
 	return s.transition(authReqID, func(rec *store.CIBARequest) error {
 		if rec.Status != store.CIBARequestStatusPending {
 			return store.ErrConflict
 		}
 		rec.Status = store.CIBARequestStatusApproved
 		rec.Subject = subject
+		rec.ACR = acr
 		rec.AuthTime = authTime
 		return nil
 	})
@@ -91,10 +92,13 @@ func (s *cibaRequestStore) Deny(_ context.Context, authReqID, reason string) err
 	})
 }
 
-func (s *cibaRequestStore) RecordPoll(_ context.Context, authReqID string, when time.Time) error {
+func (s *cibaRequestStore) RecordPoll(_ context.Context, authReqID string, when time.Time, nextInterval time.Duration) error {
 	return s.transition(authReqID, func(rec *store.CIBARequest) error {
 		t := when
 		rec.LastPolledAt = &t
+		if nextInterval > rec.Interval {
+			rec.Interval = nextInterval
+		}
 		return nil
 	})
 }

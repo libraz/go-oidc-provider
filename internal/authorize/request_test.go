@@ -423,8 +423,8 @@ func TestRequest_Validate_DuplicateResourceParametersRejected(t *testing.T) {
 	values["resource"] = []string{"https://api.example.com", "https://api.example.com"}
 
 	_, err := authorize.ParseValues(values)
-	if !errors.Is(err, authorize.ErrDuplicateParameter) {
-		t.Fatalf("err=%v want ErrDuplicateParameter", err)
+	if !errors.Is(err, authorize.ErrResourceInvalid) {
+		t.Fatalf("err=%v want ErrResourceInvalid", err)
 	}
 }
 
@@ -853,6 +853,26 @@ func TestParseValues_ScopeDeduplicationOrder(t *testing.T) {
 		t.Fatalf("ParseValues: %v", err)
 	}
 	want := []string{"openid", "email", "profile"}
+	if len(req.Scope) != len(want) {
+		t.Fatalf("scope=%v want %v", req.Scope, want)
+	}
+	for i, s := range want {
+		if req.Scope[i] != s {
+			t.Errorf("scope[%d]=%q want %q", i, req.Scope[i], s)
+		}
+	}
+}
+
+func TestParseValues_ScopeUsesASCIISpaceGrammar(t *testing.T) {
+	t.Parallel()
+
+	v := goodValues()
+	v.Set("scope", "openid\tprofile email")
+	req, err := authorize.ParseValues(v)
+	if err != nil {
+		t.Fatalf("ParseValues: %v", err)
+	}
+	want := []string{"openid\tprofile", "email"}
 	if len(req.Scope) != len(want) {
 		t.Fatalf("scope=%v want %v", req.Scope, want)
 	}

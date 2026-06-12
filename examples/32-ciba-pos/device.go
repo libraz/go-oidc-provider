@@ -25,7 +25,7 @@ import (
 )
 
 func simulateDeviceApproval(ctx context.Context, logger *slog.Logger, st *inmem.Store, authReqID string) error {
-	if err := st.CIBARequests().Approve(ctx, authReqID, demoSubject, time.Now().UTC()); err != nil { //nolint:forbidigo // demo only: production embedders stamp authTime from their authentication device's clock seam.
+	if err := st.CIBARequests().Approve(ctx, authReqID, demoSubject, "", time.Now().UTC()); err != nil { //nolint:forbidigo // demo only: production embedders stamp authTime from their authentication device's clock seam.
 		return err
 	}
 	logger.Info("device approved auth_req_id",

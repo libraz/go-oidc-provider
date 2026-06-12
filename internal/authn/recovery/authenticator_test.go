@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -112,6 +113,41 @@ func TestAuthenticator_BeginPropagatesNotFound(t *testing.T) {
 	})
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAuthenticator_CrossFactorLockoutSurfacesAsErrLocked(t *testing.T) {
+	t.Parallel()
+
+	f := newAdapterFixture(t)
+	st := inmem.New()
+	counter, err := lockout.New(st.AuthnLockouts(), nil)
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	for i := range 30 {
+		if _, err := counter.RecordFailure(context.Background(), f.subject); err != nil {
+			t.Fatalf("RecordFailure %d: %v", i+1, err)
+		}
+	}
+	auth := f.adapter.WithLockout(counter)
+
+	_, err = auth.Begin(context.Background(), op.BeginInput{
+		Subject:  f.subject,
+		AuthTime: f.authTime,
+	})
+	if !errors.Is(err, recovery.ErrLocked) {
+		t.Fatalf("Begin err=%v want ErrLocked", err)
+	}
+	_, err = auth.Continue(context.Background(), op.ContinueInput{
+		Subject:  f.subject,
+		AuthTime: f.authTime,
+		Submission: interaction.FormSubmission{Values: map[string]string{
+			recovery.CodeFieldName: "00000-00000",
+		}},
+	})
+	if !errors.Is(err, recovery.ErrLocked) {
+		t.Fatalf("Continue err=%v want ErrLocked", err)
 	}
 }
 

@@ -182,6 +182,26 @@ func TestBuild_EmitsEndpointsWhenFeaturesEnabled(t *testing.T) {
 	}
 }
 
+func TestBuild_EmitsRequirePARWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	doc := discovery.Build(discovery.Input{
+		Issuer:      "https://idp.example.com",
+		MountPrefix: "/oidc",
+		Endpoints: discovery.EndpointPaths{
+			JWKS:      "/jwks",
+			Authorize: "/auth",
+			Token:     "/token",
+			PAR:       "/par",
+		},
+		Features:   discovery.Features{PAR: true},
+		RequirePAR: true,
+	})
+	if !doc.RequirePushedAuthorizationRequests {
+		t.Fatal("require_pushed_authorization_requests must be true when RequirePAR is configured")
+	}
+}
+
 func TestBuild_StaticPolicyValues(t *testing.T) {
 	t.Parallel()
 
@@ -213,11 +233,8 @@ func TestBuild_ProfileFiltersTokenAuthMethods(t *testing.T) {
 		},
 		Features: discovery.Features{MTLS: true, Introspect: true, Revoke: true},
 		// FAPI 2.0 §3.1.3 narrowing: secret_basic and secret_post must
-		// not appear even though MTLS is enabled (which would otherwise
-		// add tls_client_auth on top of the default secret list).
-		ProfileAllowedAuthMethods: []string{
-			"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth",
-		},
+		// not appear even though MTLS is enabled.
+		ProfileAllowedAuthMethods: []string{"private_key_jwt"},
 	})
 	for _, banned := range []string{"client_secret_basic", "client_secret_post", "none"} {
 		for _, got := range doc.TokenEndpointAuthMethodsSupported {
@@ -226,18 +243,8 @@ func TestBuild_ProfileFiltersTokenAuthMethods(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"tls_client_auth", "self_signed_tls_client_auth"} {
-		found := false
-		for _, got := range doc.TokenEndpointAuthMethodsSupported {
-			if got == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("token_endpoint_auth_methods_supported missing %q (got %v)",
-				want, doc.TokenEndpointAuthMethodsSupported)
-		}
+	if got := doc.TokenEndpointAuthMethodsSupported; len(got) != 1 || got[0] != "private_key_jwt" {
+		t.Errorf("token_endpoint_auth_methods_supported=%v want [private_key_jwt]", got)
 	}
 	// Introspection / revocation lists mirror the filtered token list,
 	// so the same bans must apply there too.

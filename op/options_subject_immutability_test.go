@@ -76,6 +76,13 @@ func TestSubjectModeGate_RejectsPublicToPairwiseWithMarker(t *testing.T) {
 	if !errors.Is(err, op.ErrSubjectModeMismatch) {
 		t.Fatalf("op.New err=%v, want ErrSubjectModeMismatch", err)
 	}
+	var typed *op.Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("op.New err=%v, want *op.Error", err)
+	}
+	if typed.Code != "configuration_error" {
+		t.Fatalf("op.Error.Code=%q want configuration_error", typed.Code)
+	}
 }
 
 // TestSubjectModeGate_RejectsPairwiseToPublicWithMarker confirms the

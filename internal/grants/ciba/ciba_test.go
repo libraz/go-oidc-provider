@@ -27,6 +27,7 @@ func makeRecord(status store.CIBARequestStatus) *store.CIBARequest {
 		Scope:     []string{"openid", "profile"},
 		Resource:  []string{"https://api.example.com"},
 		ACRValues: []string{"urn:mace:incommon:iap:silver"},
+		ACR:       "urn:mace:incommon:iap:bronze",
 		Subject:   "user-42",
 		Status:    status,
 	}
@@ -50,8 +51,8 @@ func TestAuthorize_Approved(t *testing.T) {
 	if len(got.Scope) != 2 {
 		t.Errorf("Scope = %v, want [openid profile]", got.Scope)
 	}
-	if len(got.ACRValues) != 1 || got.ACRValues[0] != "urn:mace:incommon:iap:silver" {
-		t.Errorf("ACRValues = %v, want [urn:mace:incommon:iap:silver]", got.ACRValues)
+	if got.ACR != "urn:mace:incommon:iap:bronze" {
+		t.Errorf("ACR = %q, want urn:mace:incommon:iap:bronze", got.ACR)
 	}
 }
 

@@ -47,6 +47,11 @@ type Target struct {
 	// failure so operators can correlate without parsing the token.
 	ClientID string
 
+	// Subject is the per-client subject value stamped into the Logout
+	// Token's sub claim. In pairwise deployments this is the projected
+	// subject for ClientID; otherwise it is the OP-internal subject.
+	Subject string
+
 	// URL is the absolute endpoint registered via
 	// [op/store.Client.BackchannelLogoutURI]. The DCR / RM /
 	// static-client validators reject any non-https / userinfo-bearing

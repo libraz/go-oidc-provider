@@ -112,9 +112,11 @@ type PublicClient struct {
 	ApplicationType string
 
 	// SubjectType requests a particular OIDC subject_type ("public"
-	// or "pairwise"). v1.0 ships with "public" only — supplying any
-	// other value is recorded but currently has no runtime effect; a
-	// future pairwise rollout will honour it.
+	// or "pairwise"). When the provider is constructed with
+	// [WithPairwiseSubject], clients whose SubjectType is "pairwise"
+	// receive pairwise subjects; "public" or empty preserve public
+	// subjects. Without [WithPairwiseSubject], "pairwise" is rejected
+	// by static-client validation.
 	SubjectType string
 }
 
@@ -218,11 +220,13 @@ type ConfidentialClient struct {
 	// ApplicationType mirrors [PublicClient.ApplicationType].
 	ApplicationType string
 
-	// SubjectType mirrors [PublicClient.SubjectType].
+	// SubjectType requests the OIDC subject_type for this client; see
+	// [PublicClient.SubjectType].
 	SubjectType string
 
-	// TokenEndpointAuthSigningAlg restricts client_assertion signatures
-	// for this private_key_jwt client. Empty leaves the OP allow-list.
+	// TokenEndpointAuthSigningAlg is meaningful only for private_key_jwt
+	// clients; ConfidentialClient records it so callers can share seed
+	// construction code across confidential and private-key clients.
 	TokenEndpointAuthSigningAlg string
 }
 
@@ -334,7 +338,8 @@ type PrivateKeyJWTClient struct {
 	// ApplicationType mirrors [PublicClient.ApplicationType].
 	ApplicationType string
 
-	// SubjectType mirrors [PublicClient.SubjectType].
+	// SubjectType requests the OIDC subject_type for this client; see
+	// [PublicClient.SubjectType].
 	SubjectType string
 
 	// TokenEndpointAuthSigningAlg restricts client_assertion signatures

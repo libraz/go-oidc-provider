@@ -83,9 +83,13 @@ func TestNew_TxAnchorNotTransactional(t *testing.T) {
 		t.Fatal("test fixture incorrectly implements Transactional")
 	}
 
-	_, err := composite.New(composite.WithDefault(nonTx))
+	s, err := composite.New(composite.WithDefault(nonTx))
+	if err != nil {
+		t.Fatalf("New with non-transactional anchor: %v", err)
+	}
+	_, err = s.BeginTx(context.Background())
 	if !errors.Is(err, composite.ErrTxAnchorNotTx) {
-		t.Fatalf("non-tx anchor: want ErrTxAnchorNotTx, got %v", err)
+		t.Fatalf("BeginTx with non-tx anchor: want ErrTxAnchorNotTx, got %v", err)
 	}
 }
 
@@ -113,7 +117,7 @@ func TestNew_DefaultPlusOverride_OK(t *testing.T) {
 	persistent := newInmem(t)
 	ephemeral := newInmem(t)
 
-	// All Tx-cluster Kinds resolve to persistent (via the default) and
+	// All atomic-routing cluster Kinds resolve to persistent (via the default) and
 	// the non-transactional Kinds resolve to ephemeral.
 	s, err := composite.New(
 		composite.WithDefault(persistent),
@@ -142,7 +146,7 @@ func TestNew_ClientsOverrideToReadOnlyBackend_OK(t *testing.T) {
 	// Default routes everything (including the Tx cluster) to persistent.
 	// Clients is overridden to a backend that does NOT implement
 	// Transactional. That is acceptable because Clients is outside the
-	// transactional cluster: validation must succeed.
+	// atomic-routing cluster: validation must succeed.
 	s, err := composite.New(
 		composite.WithDefault(persistent),
 		composite.With(composite.Clients, clientsOnly),

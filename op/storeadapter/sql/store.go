@@ -333,13 +333,13 @@ func (s *Store) Metadata() store.MetadataStore { return s.metadataImpl }
 
 // DeviceCodes returns the [store.DeviceCodeStore] handle backing the
 // RFC 8628 device-authorization grant. The substore sits outside the
-// transactional cluster: its approve→consume compare-and-swap is the
+// atomic-routing cluster: its approve→consume compare-and-swap is the
 // single-use guarantee, so it is never enlisted in a Tx.
 func (s *Store) DeviceCodes() store.DeviceCodeStore { return s.deviceCodesImpl }
 
 // CIBARequests returns the [store.CIBARequestStore] handle backing the
 // OpenID Connect CIBA backchannel-authentication grant. The substore
-// sits outside the transactional cluster: its approve→consume
+// sits outside the atomic-routing cluster: its approve→consume
 // compare-and-swap is the single-use guarantee, so it is never
 // enlisted in a Tx.
 func (s *Store) CIBARequests() store.CIBARequestStore { return s.cibaRequestsImpl }

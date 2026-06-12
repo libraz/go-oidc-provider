@@ -73,6 +73,15 @@ func mustRSAKey(t *testing.T) *rsa.PrivateKey {
 	return k
 }
 
+func mustWeakRSAKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentional weak key for floor-rejection test
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	return k
+}
+
 // privKeyResolver implements [jose.EncryptionKeyResolver] over a
 // single (kid, *rsa.PrivateKey) pair. The test uses it to decrypt the
 // JWE the handler emits.
@@ -263,6 +272,38 @@ func TestHandler_Encrypted_NoMatchingKey_ServerError(t *testing.T) {
 	priv := mustRSAKey(t)
 	mutated := *client
 	mutated.JWKs = rsaSigOnlyJWKs(t, priv, "rp-sig-only")
+	mutated.IntrospectionEncryptedResponseAlg = "RSA-OAEP-256"
+	mutated.IntrospectionEncryptedResponseEnc = "A256GCM"
+	if err := f.prov.Store.UpdateClient(context.Background(), &mutated); err != nil {
+		t.Fatalf("UpdateClient: %v", err)
+	}
+
+	tok := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.ClientID = client.ID
+		c.Audience = []string{f.prov.Issuer}
+	})
+	form := url.Values{"token": {tok}}
+	resp := f.postWithAccept(t, form, client.ID, secret, jwtAccept)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		dump, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 500; body=%s", resp.StatusCode, dump)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "server_error" {
+		t.Errorf("error=%v want server_error", body["error"])
+	}
+}
+
+func TestHandler_Encrypted_WeakKey_ServerError(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-enc-weak")
+
+	priv := mustWeakRSAKey(t)
+	mutated := *client
+	mutated.JWKs = rsaEncJWKs(t, priv, "rp-weak")
 	mutated.IntrospectionEncryptedResponseAlg = "RSA-OAEP-256"
 	mutated.IntrospectionEncryptedResponseEnc = "A256GCM"
 	if err := f.prov.Store.UpdateClient(context.Background(), &mutated); err != nil {

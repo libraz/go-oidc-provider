@@ -49,6 +49,10 @@ var Sensitive = []string{
 	"request_uri",
 	"assertion",
 	"client_assertion",
+	"device_code",
+	"device_code_id",
+	"auth_req_id",
+	"user_code",
 }
 
 // sensitiveSubstrings is the closed list of needles that mark a key as

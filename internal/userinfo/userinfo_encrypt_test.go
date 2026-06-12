@@ -51,6 +51,25 @@ func newRPEncryptionKeypair(tb testing.TB) rpEncryptionKeypair {
 	return rpEncryptionKeypair{priv: k, jwks: body}
 }
 
+func newWeakRPEncryptionKeypair(tb testing.TB) rpEncryptionKeypair {
+	tb.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentional weak key for floor-rejection test
+	if err != nil {
+		tb.Fatalf("rsa.GenerateKey: %v", err)
+	}
+	jwk := josev4.JSONWebKey{
+		Key:       &k.PublicKey,
+		KeyID:     "rp-weak-enc",
+		Use:       "enc",
+		Algorithm: "RSA-OAEP-256",
+	}
+	body, err := json.Marshal(josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{jwk}})
+	if err != nil {
+		tb.Fatalf("marshal jwks: %v", err)
+	}
+	return rpEncryptionKeypair{priv: k, jwks: body}
+}
+
 // putClient seeds the in-memory client store with the supplied
 // record. The userinfo handler resolves the AT-bound client through
 // [HandlerDeps.Clients]; tests use this helper to wire encryption
@@ -289,5 +308,29 @@ func TestHandler_JWTShape_EncryptionRequested_NoMatchingKey(t *testing.T) {
 	}
 	if strings.Count(string(raw), ".") >= 2 {
 		t.Errorf("500 body must not contain a JWS/JWE shape: %s", raw)
+	}
+}
+
+func TestHandler_JWTShape_EncryptionRequested_WeakKey(t *testing.T) {
+	t.Parallel()
+
+	f := newUserInfoFixture(t)
+	kp := newWeakRPEncryptionKeypair(t)
+	f.putUser(t, "user-1", map[string]any{"email": "alice@example.com"})
+	f.putClient(t, &store.Client{
+		ID:                           "client-jwe-weak",
+		UserInfoEncryptedResponseAlg: "RSA-OAEP-256",
+		UserInfoEncryptedResponseEnc: "A256GCM",
+		JWKs:                         kp.jwks,
+	})
+	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.ClientID = "client-jwe-weak"
+	})
+
+	resp := f.doRequest(t, f.newJWTAcceptGet(t, token))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		dump, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 500; body=%s", resp.StatusCode, dump)
 	}
 }

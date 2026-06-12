@@ -596,6 +596,83 @@ func TestCustomGrant_RefreshTokenIssuedWhenClientPermits(t *testing.T) {
 	}
 }
 
+func TestCustomGrant_RefreshRotationPreservesBoundContext(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:refresh-bound-context"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			BoundAccessToken: &op.BoundAccessToken{
+				Subject:  op.Subject("public-subject-from-token-exchange"),
+				Audience: []string{"https://api.example.com"},
+				ExtraClaims: map[string]any{
+					"act": map[string]any{"sub": "actor-1"},
+				},
+			},
+			IssueRefreshToken: true,
+			Subject:           op.Subject("public-subject-from-token-exchange"),
+			Scope:             []string{"read"},
+			Audience:          []string{"https://api.example.com"},
+		},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	const secret = "shh-its-a-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-cg-refresh-bound-context",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grantURN, "refresh_token"},
+		Scopes:                  []string{"read"},
+		Resources:               []string{"https://api.example.com"},
+	})
+
+	resp := f.post(t, url.Values{"grant_type": []string{grantURN}}, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	rt, _ := body["refresh_token"].(string)
+	if rt == "" {
+		t.Fatal("refresh_token missing")
+	}
+	rec, err := prov.Store.RefreshTokens().Find(context.Background(), rt)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find: %v", err)
+	}
+	if !rec.SubjectPublic || rec.Subject != "public-subject-from-token-exchange" {
+		t.Fatalf("stored subject context = %q public=%v", rec.Subject, rec.SubjectPublic)
+	}
+	if rec.Resource != "https://api.example.com" || rec.Origin != store.RefreshOriginCustomGrant {
+		t.Fatalf("stored resource/origin = %q/%q", rec.Resource, rec.Origin)
+	}
+
+	refreshResp := f.post(t, refreshForm(rt, ""), client.ID, secret)
+	defer refreshResp.Body.Close()
+	if refreshResp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh status=%d want 200 body=%v", refreshResp.StatusCode, decodeJSON(t, refreshResp))
+	}
+	refreshed := decodeJSON(t, refreshResp)
+	claims := decodeJWTPayload(t, refreshed["access_token"].(string))
+	if got := claims["sub"]; got != "public-subject-from-token-exchange" {
+		t.Fatalf("refreshed access token sub=%v; want original public subject", got)
+	}
+	if got := claims["aud"]; got != "https://api.example.com" {
+		t.Fatalf("refreshed access token aud=%v", claims["aud"])
+	}
+	if _, ok := claims["act"].(map[string]any); !ok {
+		t.Fatalf("refreshed access token missing act claim: %v", claims)
+	}
+}
+
 // TestCustomGrant_RefreshTokenDroppedWhenClientNotRegistered confirms the
 // OP gate drops the refresh token — without failing the response — when
 // the client is not registered for the refresh_token grant. The request
@@ -628,6 +705,46 @@ func TestCustomGrant_RefreshTokenDroppedWhenClientNotRegistered(t *testing.T) {
 	body := decodeJSON(t, resp)
 	if rt, _ := body["refresh_token"].(string); rt != "" {
 		t.Errorf("refresh_token=%q; want dropped (client not registered for refresh_token)", rt)
+	}
+}
+
+func TestCustomGrant_RefreshTokenDroppedWhenSubjectEmpty(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:refresh-empty-subject"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			AccessToken:       "test-access-token",
+			IssueRefreshToken: true,
+			Scope:             []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	const secret = "shh-its-a-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-cg-refresh-empty-subject",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grantURN, "refresh_token"},
+		Scopes:                  []string{"read"},
+	})
+
+	resp := f.post(t, url.Values{"grant_type": []string{grantURN}}, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if rt, _ := body["refresh_token"].(string); rt != "" {
+		t.Fatalf("refresh_token=%q; want dropped for empty subject", rt)
 	}
 }
 

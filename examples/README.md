@@ -52,6 +52,8 @@ it boots with `go run -tags example ./examples/08-composite-hot-cold`.
 | issue tokens to backend services (no end user) | [`05-client-credentials`](05-client-credentials/main.go) |
 | serve plain OAuth 2.0 alongside OIDC | [`04-oauth2-only`](04-oauth2-only/main.go) |
 | persist on a real database (SQLite / MySQL) | [`06-sql-store`](06-sql-store/main.go), [`07-mysql-store`](07-mysql-store/main.go) |
+| customise SQL table names | [`25-byo-table-names`](25-byo-table-names/main.go) |
+| implement a store from scratch | [`26-byo-store-from-scratch`](26-byo-store-from-scratch/main.go) |
 | split hot volatile state from durable state | [`08-composite-hot-cold`](08-composite-hot-cold/main.go), [`09-redis-volatile`](09-redis-volatile/main.go) |
 | swap the default HTML driver for JSON | [`16-custom-interaction`](16-custom-interaction/main.go) |
 | drive login / consent / logout from a SPA | [`10-react-login`](10-react-login/main.go) |

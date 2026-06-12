@@ -58,6 +58,16 @@ type Config struct {
 	// JWS verifies cleanly.
 	AccessTokens store.AccessTokenRegistry
 
+	// GrantRevocations is the grant-tombstone store consulted when
+	// RevocationStrategy is RevocationStrategyGrantTombstone. When nil,
+	// the lookup path falls back to the JTI registry for the legacy
+	// migration window.
+	GrantRevocations store.GrantRevocationStore
+
+	// RevocationStrategy selects how JWT access-token revocation is
+	// checked for subject_token / actor_token lookup.
+	RevocationStrategy store.AccessTokenRevocationStrategy
+
 	// OpaqueAccessTokens is the opaque AT substore. When non-nil the
 	// lookup path falls back onto it for subject_token values that do
 	// not parse as a JWS.
@@ -83,6 +93,8 @@ type Handler struct {
 	issuer             string
 	keys               *keys.Set
 	accessTokens       store.AccessTokenRegistry
+	grantRevocations   store.GrantRevocationStore
+	revocationStrategy store.AccessTokenRevocationStrategy
 	opaqueAccessTokens store.OpaqueAccessTokenStore
 	audit              audit.Emitter
 	clock              interface{ Now() time.Time }
@@ -107,6 +119,8 @@ func New(cfg Config) (*Handler, error) {
 		issuer:             cfg.Issuer,
 		keys:               cfg.Keys,
 		accessTokens:       cfg.AccessTokens,
+		grantRevocations:   cfg.GrantRevocations,
+		revocationStrategy: cfg.RevocationStrategy,
 		opaqueAccessTokens: cfg.OpaqueAccessTokens,
 		audit:              cfg.Audit,
 		clock:              cfg.Clock,

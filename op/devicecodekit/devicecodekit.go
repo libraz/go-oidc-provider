@@ -23,9 +23,12 @@ package devicecodekit
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
@@ -229,6 +232,97 @@ func VerifyUserCode(ctx context.Context, deps *Deps, deviceCodeID, submittedUser
 	return false, recordStrike(ctx, deps, deviceCodeID, rec.ClientID)
 }
 
+// VerifyUserCodeByUserCode is the user_code-keyed variant of
+// [VerifyUserCode]. It lets a verification page identify the pending
+// record by a normalised user_code (for example one carried in a
+// session-bound browser flow or QR-code URL) without ever receiving the
+// polling bearer device_code.
+func VerifyUserCodeByUserCode(ctx context.Context, deps *Deps, recordUserCode, submittedUserCode string) (matched bool, err error) {
+	if deps == nil || deps.DeviceCodes == nil {
+		return false, ErrInvalidArgument
+	}
+	if recordUserCode == "" || submittedUserCode == "" {
+		return false, ErrInvalidArgument
+	}
+	recordCanonical, err := devicecode.NormaliseUserCode(recordUserCode)
+	if err != nil {
+		return false, ErrInvalidArgument
+	}
+	submittedCanonical, err := devicecode.NormaliseUserCode(submittedUserCode)
+	if err != nil {
+		submittedCanonical = ""
+	}
+	rec, lookupErr := deps.DeviceCodes.FindByUserCode(ctx, recordCanonical)
+	if lookupErr != nil {
+		if errors.Is(lookupErr, store.ErrNotFound) {
+			return false, ErrUnknownDeviceCode
+		}
+		return false, lookupErr
+	}
+	if rec.Status != store.DeviceCodeStatusPending {
+		return false, ErrAlreadyDecided
+	}
+	if submittedCanonical != "" && constantTimeStringEqual(submittedCanonical, rec.UserCode) {
+		return true, nil
+	}
+	return false, recordStrikeByUserCode(ctx, deps, recordCanonical, rec.ClientID)
+}
+
+// ApproveUserCode transitions a Pending device authorization to
+// Approved using only the human user_code as the record key. The helper
+// is the verification-page companion to [VerifyUserCodeByUserCode]:
+// embedders can build the whole browser approval path without exposing
+// device_code to that browser.
+func ApproveUserCode(ctx context.Context, deps *Deps, userCode, subject string, authTime time.Time) error {
+	if deps == nil || deps.DeviceCodes == nil {
+		return ErrInvalidArgument
+	}
+	if userCode == "" || subject == "" {
+		return ErrInvalidArgument
+	}
+	canonical, err := devicecode.NormaliseUserCode(userCode)
+	if err != nil {
+		return ErrInvalidArgument
+	}
+	if err := deps.DeviceCodes.ApproveByUserCode(ctx, canonical, subject, authTime); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return ErrUnknownDeviceCode
+		case errors.Is(err, store.ErrConflict):
+			return ErrAlreadyDecided
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+// DenyUserCode transitions a Pending device authorization to Denied
+// using only the human user_code as the record key.
+func DenyUserCode(ctx context.Context, deps *Deps, userCode, reason string) error {
+	if deps == nil || deps.DeviceCodes == nil {
+		return ErrInvalidArgument
+	}
+	if userCode == "" {
+		return ErrInvalidArgument
+	}
+	canonical, err := devicecode.NormaliseUserCode(userCode)
+	if err != nil {
+		return ErrInvalidArgument
+	}
+	if err := deps.DeviceCodes.DenyByUserCode(ctx, canonical, reason); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return ErrUnknownDeviceCode
+		case errors.Is(err, store.ErrConflict):
+			return ErrAlreadyDecided
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
 // recordStrike increments the per-record strike counter and, when
 // the post-increment value crosses [MaxUserCodeStrikes], transitions
 // the record to Denied with reason [DenyReasonUserCodeLockout]. The
@@ -268,6 +362,44 @@ func recordStrike(ctx context.Context, deps *Deps, deviceCodeID, clientID string
 			return denyErr
 		}
 		// Sentinel-class race absorbed; audit already emitted, lockout observable.
+		return nil
+	}
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     devicecode.AuditVerificationDenied,
+		Level:    audit.LevelWarn,
+		Message:  "device_code denied: user_code brute-force lockout",
+		ClientID: clientID,
+		Extras: map[string]any{
+			"reason":      DenyReasonUserCodeLockout,
+			"strikes":     int(strikes),
+			"max_strikes": int(MaxUserCodeStrikes),
+		},
+	})
+	return nil
+}
+
+func recordStrikeByUserCode(ctx context.Context, deps *Deps, userCode, clientID string) error {
+	strikes, err := deps.DeviceCodes.IncrementUserCodeStrikeByUserCode(ctx, userCode)
+	if err != nil {
+		return err
+	}
+	deps.auditEmitter().Emit(ctx, audit.Event{
+		Name:     devicecode.AuditUserCodeBruteForce,
+		Level:    audit.LevelWarn,
+		Message:  "user_code mismatch on verification page",
+		ClientID: clientID,
+		Extras: map[string]any{
+			"strikes":     int(strikes),
+			"max_strikes": int(MaxUserCodeStrikes),
+		},
+	})
+	if strikes < MaxUserCodeStrikes {
+		return nil
+	}
+	if denyErr := deps.DeviceCodes.DenyByUserCode(ctx, userCode, DenyReasonUserCodeLockout); denyErr != nil {
+		if !errors.Is(denyErr, store.ErrConflict) && !errors.Is(denyErr, store.ErrNotFound) {
+			return denyErr
+		}
 		return nil
 	}
 	deps.auditEmitter().Emit(ctx, audit.Event{
@@ -364,8 +496,8 @@ func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error 
 		revoked, cascadeErr = deps.AccessTokens.RevokeByGrant(ctx, deviceCodeID)
 	}
 	extras := map[string]any{
-		"device_code_id": deviceCodeID,
-		"reason":         reason,
+		"device_code_hash": fingerprintDeviceCode(deviceCodeID),
+		"reason":           reason,
 	}
 	if deps.AccessTokens != nil {
 		extras["revoked_access_tokens"] = revoked
@@ -381,6 +513,11 @@ func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error 
 		return fmt.Errorf("devicecodekit: cascade revoke access tokens: %w", cascadeErr)
 	}
 	return nil
+}
+
+func fingerprintDeviceCode(deviceCodeID string) string {
+	sum := sha256.Sum256([]byte(deviceCodeID))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // constantTimeStringEqual reports whether a and b are byte-identical

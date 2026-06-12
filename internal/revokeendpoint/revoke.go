@@ -11,6 +11,11 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
+const (
+	auditTokenRevoked      = "token.revoked"
+	auditTokenRevokeFailed = "token.revoke_failed"
+)
+
 // revokeToken dispatches to the JWT-acknowledgement or refresh-token
 // branch based on the token's structural shape and the supplied hint.
 // The function never surfaces an error: every failure path collapses
@@ -130,6 +135,14 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 		RevocationStrategy: deps.RevocationStrategy,
 	}, claims.JTI, claims.GrantID, time.Unix(claims.ExpiresAt, 0).Add(5*time.Minute).UTC()); err != nil {
 		emitRevokeFailed(ctx, deps, authenticatedClientID, "jwt_access_token", err)
+	} else {
+		emitRevoked(ctx, deps, revokedEvent{
+			ClientID: authenticatedClientID,
+			Subject:  claims.Subject,
+			Surface:  "jwt_access_token",
+			GrantID:  claims.GrantID,
+			JTI:      claims.JTI,
+		})
 	}
 	return true
 }
@@ -190,6 +203,12 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain", err)
 		return false
 	}
+	emitRevoked(ctx, deps, revokedEvent{
+		ClientID: authenticatedClientID,
+		Subject:  rec.Subject,
+		Surface:  "refresh_chain",
+		GrantID:  rec.GrantID,
+	})
 	return true
 }
 
@@ -223,7 +242,41 @@ func revokeOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClient
 		emitRevokeFailed(ctx, deps, authenticatedClientID, "opaque_access_token", err)
 		return false
 	}
+	emitRevoked(ctx, deps, revokedEvent{
+		ClientID: authenticatedClientID,
+		Subject:  rec.Subject,
+		Surface:  "opaque_access_token",
+		GrantID:  rec.GrantID,
+	})
 	return true
+}
+
+type revokedEvent struct {
+	ClientID string
+	Subject  string
+	Surface  string
+	GrantID  string
+	JTI      string
+}
+
+func emitRevoked(ctx context.Context, deps Deps, ev revokedEvent) {
+	extras := map[string]any{
+		"surface": ev.Surface,
+	}
+	if ev.GrantID != "" {
+		extras["grant_id"] = ev.GrantID
+	}
+	if ev.JTI != "" {
+		extras["jti"] = ev.JTI
+	}
+	deps.audit().Emit(ctx, audit.Event{
+		Name:     auditTokenRevoked,
+		Level:    audit.LevelInfo,
+		Message:  "token revoked",
+		ActorID:  ev.Subject,
+		ClientID: ev.ClientID,
+		Extras:   extras,
+	})
 }
 
 // emitRevokeFailed raises [audit.Event] for a non-NotFound storage
@@ -242,7 +295,7 @@ func emitRevokeFailed(ctx context.Context, deps Deps, clientID, surface string, 
 		return
 	}
 	deps.audit().Emit(ctx, audit.Event{
-		Name:     "token.revoke_failed",
+		Name:     auditTokenRevokeFailed,
 		Level:    audit.LevelError,
 		Message:  "revoke endpoint encountered a storage fault while flipping a record",
 		ClientID: clientID,

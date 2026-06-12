@@ -27,6 +27,8 @@ func buildExtensionDispatcher(cfg *config, keySet *keys.Set) *customgrant.Dispat
 			Issuer:             cfg.issuer,
 			Keys:               keySet,
 			AccessTokens:       cfg.store.AccessTokens(),
+			GrantRevocations:   cfg.store.GrantRevocations(),
+			RevocationStrategy: cfg.atRevocation,
 			OpaqueAccessTokens: cfg.store.OpaqueAccessTokens(),
 			Audit:              cfg.effectiveAuditEmitter(),
 			Clock:              clock,

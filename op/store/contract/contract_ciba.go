@@ -84,21 +84,21 @@ func cibaApproveConsumeOnce(t *testing.T, f Factory) {
 	if err := cr.Save(ctx, newCIBARequest(b.Now(), "ar-ac")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := cr.Approve(ctx, "ar-ac", "sub-1", b.Now()); err != nil {
+	if err := cr.Approve(ctx, "ar-ac", "sub-1", "urn:mace:incommon:iap:bronze", b.Now()); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 	got, err := cr.FindByAuthReqID(ctx, "ar-ac")
 	if err != nil {
 		t.Fatalf("FindByAuthReqID after approve: %v", err)
 	}
-	if got.Status != store.CIBARequestStatusApproved || got.Subject != "sub-1" {
+	if got.Status != store.CIBARequestStatusApproved || got.Subject != "sub-1" || got.ACR != "urn:mace:incommon:iap:bronze" {
 		t.Fatalf("approve did not stamp record: %+v", got)
 	}
 	first, err := cr.Consume(ctx, "ar-ac")
 	if err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
-	if first.Status != store.CIBARequestStatusConsumed || first.ID != "ar-ac" {
+	if first.Status != store.CIBARequestStatusConsumed || first.ID != "ar-ac" || first.ACR != "urn:mace:incommon:iap:bronze" {
 		t.Fatalf("Consume returned unexpected record: %+v", first)
 	}
 	if _, err := cr.Consume(ctx, "ar-ac"); !errors.Is(err, store.ErrAlreadyConsumed) {
@@ -116,7 +116,7 @@ func cibaApproveConflictAfterDeny(t *testing.T, f Factory) {
 	if err := cr.Deny(ctx, "ar-cf", "user_denied"); err != nil {
 		t.Fatalf("Deny: %v", err)
 	}
-	if err := cr.Approve(ctx, "ar-cf", "sub-1", b.Now()); !errors.Is(err, store.ErrConflict) {
+	if err := cr.Approve(ctx, "ar-cf", "sub-1", "", b.Now()); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("Approve after Deny: want ErrConflict, got %v", err)
 	}
 }
@@ -143,7 +143,7 @@ func cibaRecordPollStamps(t *testing.T, f Factory) {
 	if err := cr.Save(ctx, newCIBARequest(b.Now(), "ar-poll")); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	if err := cr.RecordPoll(ctx, "ar-poll", b.Now()); err != nil {
+	if err := cr.RecordPoll(ctx, "ar-poll", b.Now(), 10*time.Second); err != nil {
 		t.Fatalf("RecordPoll: %v", err)
 	}
 	got, err := cr.FindByAuthReqID(ctx, "ar-poll")
@@ -153,7 +153,20 @@ func cibaRecordPollStamps(t *testing.T, f Factory) {
 	if got.LastPolledAt == nil {
 		t.Fatal("RecordPoll did not stamp LastPolledAt")
 	}
-	if err := cr.RecordPoll(ctx, "absent", b.Now()); !errors.Is(err, store.ErrNotFound) {
+	if got.Interval != 10*time.Second {
+		t.Fatalf("RecordPoll Interval=%v want 10s", got.Interval)
+	}
+	if err := cr.RecordPoll(ctx, "ar-poll", b.Now().Add(time.Second), time.Second); err != nil {
+		t.Fatalf("RecordPoll lower interval: %v", err)
+	}
+	got, err = cr.FindByAuthReqID(ctx, "ar-poll")
+	if err != nil {
+		t.Fatalf("FindByAuthReqID after lower interval: %v", err)
+	}
+	if got.Interval != 10*time.Second {
+		t.Fatalf("RecordPoll lower interval changed Interval=%v want 10s", got.Interval)
+	}
+	if err := cr.RecordPoll(ctx, "absent", b.Now(), 10*time.Second); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("RecordPoll missing: want ErrNotFound, got %v", err)
 	}
 }
@@ -191,13 +204,13 @@ func cibaExpired(t *testing.T, f Factory) {
 	if _, err := cr.FindByAuthReqID(ctx, "ar-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("FindByAuthReqID expired: want ErrNotFound, got %v", err)
 	}
-	if err := cr.Approve(ctx, "ar-exp", "sub-1", b.Now()); !errors.Is(err, store.ErrNotFound) {
+	if err := cr.Approve(ctx, "ar-exp", "sub-1", "", b.Now()); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Approve expired: want ErrNotFound, got %v", err)
 	}
 	if _, err := cr.Consume(ctx, "ar-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Consume expired: want ErrNotFound, got %v", err)
 	}
-	if err := cr.RecordPoll(ctx, "ar-exp", b.Now()); !errors.Is(err, store.ErrNotFound) {
+	if err := cr.RecordPoll(ctx, "ar-exp", b.Now(), 10*time.Second); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("RecordPoll expired: want ErrNotFound, got %v", err)
 	}
 	if _, err := cr.IncrementPollViolation(ctx, "ar-exp"); !errors.Is(err, store.ErrNotFound) {
@@ -209,7 +222,7 @@ func cibaTransitionMissing(t *testing.T, f Factory) {
 	b := f(t)
 	cr := requireCIBA(t, b.Store)
 	ctx := context.Background()
-	if err := cr.Approve(ctx, "absent", "sub-1", b.Now()); !errors.Is(err, store.ErrNotFound) {
+	if err := cr.Approve(ctx, "absent", "sub-1", "", b.Now()); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Approve missing: want ErrNotFound, got %v", err)
 	}
 	if err := cr.Deny(ctx, "absent", "user_denied"); !errors.Is(err, store.ErrNotFound) {

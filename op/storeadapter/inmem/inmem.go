@@ -402,7 +402,9 @@ func (s *refreshStore) Consume(_ context.Context, id string) (*store.RefreshToke
 		return nil, store.ErrNotFound
 	}
 	if rec.ConsumedAt != nil {
-		return nil, store.ErrAlreadyConsumed
+		out := cloneRefresh(rec)
+		out.ID = id
+		return out, store.ErrAlreadyConsumed
 	}
 	now := s.clock.Now()
 	rec.ConsumedAt = &now
@@ -532,6 +534,9 @@ func cloneRefresh(t *store.RefreshToken) *store.RefreshToken {
 	out := *t
 	out.Scope = slices.Clone(t.Scope)
 	out.Resource = t.Resource
+	out.AMR = slices.Clone(t.AMR)
+	out.AuthorizationDetails = cloneObjectArray(t.AuthorizationDetails)
+	out.AccessTokenExtra = cloneMap(t.AccessTokenExtra)
 	if t.ParentID != nil {
 		p := *t.ParentID
 		out.ParentID = &p
@@ -677,6 +682,17 @@ func cloneObjectArray(in []map[string]any) []map[string]any {
 	out := make([]map[string]any, len(in))
 	for i, m := range in {
 		out[i] = maps.Clone(m)
+	}
+	return out
+}
+
+func cloneMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
 	}
 	return out
 }

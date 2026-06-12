@@ -104,6 +104,11 @@ type Input struct {
 	// leaves the field omitted; a non-nil slice is copied verbatim.
 	AuthorizationDetailsTypesSupported []string
 
+	// RequirePAR reports whether every authorization request must arrive
+	// through the pushed authorization request endpoint. FAPI 2.0
+	// Baseline requires this; vanilla OIDC leaves it false.
+	RequirePAR bool
+
 	// GrantManagementEnabled gates the OAuth 2.0 Grant Management draft
 	// discovery fields. GrantManagementActions is the advertised action
 	// set; GrantManagementActionRequired maps to
@@ -374,6 +379,7 @@ func Build(in Input) Document {
 	applyDynamicRegistration(in, &doc)
 	applyJARMFeature(in, &doc)
 	applyEndpointAuthMirrors(in, &doc)
+	doc.RequirePushedAuthorizationRequests = in.RequirePAR
 	// RFC 9207: every authorization response (success and error)
 	// carries an "iss" parameter set to the OP's issuer. The library
 	// emits it unconditionally — it is defense-in-depth against
@@ -588,14 +594,6 @@ func applyMTLSFeature(in Input, doc *Document) {
 	// path and the §3 binding path; clients use it to decide whether
 	// to present a certificate at /token in the first place.
 	doc.TLSClientCertificateBoundAccessTokens = true
-	// Append the §2 auth methods so a client can discover whether
-	// tls_client_auth / self_signed_tls_client_auth are accepted at
-	// /token without trial-and-error.
-	doc.TokenEndpointAuthMethodsSupported = appendUnique(
-		doc.TokenEndpointAuthMethodsSupported,
-		"tls_client_auth",
-		"self_signed_tls_client_auth",
-	)
 	// RFC 8705 §5: an OP that serves separate hostnames for its
 	// mTLS-required endpoints publishes the alternative URLs here.
 	// The field is published only when the embedder supplied at least
@@ -800,43 +798,18 @@ func join(issuer, mountPrefix, endpoint string) string {
 	return issuer + mountPrefix + endpoint
 }
 
-// defaultAuthMethods returns the auth-method advertisement, falling back to
-// the v1.0 baseline when the caller does not supply an override. The
+// defaultAuthMethods returns the auth-method advertisement, falling back
+// to the v1.0 baseline when the caller does not supply an override. The
 // baseline lists the symmetric secret methods plus private_key_jwt
 // (OIDC Core §9 / RFC 7523 §3) — the OP wiring layer always installs
 // the [internal/clientauth.PrivateKeyJWTVerifier] so a client whose
 // metadata names "private_key_jwt" can authenticate out of the box.
-// tls_client_auth / self_signed_tls_client_auth are appended only
-// when the [feature.MTLS] flag is on; they live behind a feature
-// gate because they require a [internal/mtls] verifier and a
-// terminating-mTLS deployment shape.
 func defaultAuthMethods(in []string) []string {
 	if len(in) == 0 {
 		return []string{"client_secret_basic", "client_secret_post", "private_key_jwt"}
 	}
 	out := make([]string, len(in))
 	copy(out, in)
-	return out
-}
-
-// appendUnique returns base with each entry from extra appended exactly
-// once, preserving the original order. The helper exists so the mTLS
-// branch above can extend the auth-method list without duplicating
-// values an embedder may have already named in
-// [Input.AuthMethodsSupported].
-func appendUnique(base []string, extra ...string) []string {
-	seen := make(map[string]struct{}, len(base)+len(extra))
-	for _, v := range base {
-		seen[v] = struct{}{}
-	}
-	out := append([]string(nil), base...)
-	for _, v := range extra {
-		if _, ok := seen[v]; ok {
-			continue
-		}
-		seen[v] = struct{}{}
-		out = append(out, v)
-	}
 	return out
 }
 

@@ -26,6 +26,14 @@ type RefreshToken struct {
 	// Subject is the OP-internal stable identifier of the end-user.
 	Subject string
 
+	// SubjectPublic is true when Subject is already the public wire
+	// subject for this client and MUST NOT be passed through the OP's
+	// subject projector again during refresh rotation. Built-in
+	// authorization, device, and CIBA flows store the internal subject
+	// and leave this false; custom-grant / token-exchange refresh chains
+	// set it because their subject comes from an already-issued token.
+	SubjectPublic bool
+
 	// GrantID points at the [Grant] record that captures the user's
 	// consent for this token's scopes.
 	GrantID string
@@ -39,6 +47,34 @@ type RefreshToken struct {
 	// parameter and rotated access tokens should continue using the OP's
 	// default audience path.
 	Resource string
+
+	// Origin records which grant family created the refresh chain. The
+	// value is informational for storage adapters and audit tooling; the
+	// token endpoint uses the concrete context fields below for runtime
+	// decisions so unknown / legacy origins remain refreshable.
+	Origin RefreshTokenOrigin
+
+	// AuthTime is the authentication instant that should be reproduced on
+	// refresh-derived id_tokens and opaque-token metadata. Zero means the
+	// originating flow had no end-user authentication timestamp or the
+	// row predates this field.
+	AuthTime time.Time
+
+	// ACR and AMR are the authentication context values that should be
+	// reproduced on refresh-derived id_tokens. Empty values are omitted.
+	ACR string
+	AMR []string
+
+	// AuthorizationDetails captures the RFC 9396 authorization_details
+	// bound to this refresh chain. The token endpoint echoes it on refresh
+	// responses and copies it onto JWT access tokens.
+	AuthorizationDetails []map[string]any
+
+	// AccessTokenExtra carries non-standard JWT access-token claims that
+	// must survive refresh rotation. It is primarily used by custom grants
+	// such as token exchange to preserve delegation metadata ("act").
+	// Built-in authorization, device, and CIBA flows leave it nil.
+	AccessTokenExtra map[string]any
 
 	// ParentID is the ID of the refresh token that this token replaces, or
 	// nil if the token is the root of a rotation chain. Backends use the
@@ -107,17 +143,36 @@ type RefreshToken struct {
 	Revoked bool
 }
 
+// RefreshTokenOrigin names the grant family that created a refresh-token
+// chain. Empty means "legacy / unknown" and is accepted for records persisted
+// before the field existed.
+type RefreshTokenOrigin string
+
+const (
+	// RefreshOriginAuthCode identifies refresh chains created by the
+	// authorization-code grant.
+	RefreshOriginAuthCode RefreshTokenOrigin = "authcode"
+	// RefreshOriginCustomGrant identifies refresh chains created by custom
+	// grants, including token exchange.
+	RefreshOriginCustomGrant RefreshTokenOrigin = "custom_grant"
+	// RefreshOriginDeviceCode identifies refresh chains created by the
+	// device authorization grant.
+	RefreshOriginDeviceCode RefreshTokenOrigin = "device_code"
+	// RefreshOriginCIBA identifies refresh chains created by CIBA.
+	RefreshOriginCIBA RefreshTokenOrigin = "ciba"
+)
+
 // RefreshTokenStore is the substore for refresh_token records. It belongs to
-// the transactional cluster: rotation is "consume the old token + persist the
-// new token + update the grant" and the three operations must commit
-// atomically to avoid leaving an unconsumed token behind on partial failure.
+// the atomic-routing cluster so rotation, access-token registration, grant
+// updates, and revocation cascades share one backend consistency domain in
+// composite deployments.
 //
 // Implementations are responsible for two cross-cutting invariants:
 //
-//   - Rotation: every Save with a non-nil ParentID MUST occur in the same
-//     transaction as the Consume of that ParentID. The library guarantees
-//     this on the call site, but backends MUST NOT silently allow the
-//     pattern to be split across transactions.
+//   - Rotation: Consume MUST be a single-record compare-and-set, and Save
+//     with a non-nil ParentID MUST preserve the parent/root links supplied by
+//     the caller so replay cascades can later revoke the whole chain. The OP
+//     runtime does not require a cross-substore [Transactional] transaction.
 //   - Replay detection: if a Consume call observes a ConsumedAt that is
 //     already non-nil, the backend MUST return [ErrAlreadyConsumed]. The
 //     library will then call [RefreshTokenStore.RevokeChain] with the
@@ -142,8 +197,11 @@ type RefreshTokenStore interface {
 	// id and look up the resulting digest. It MUST return [ErrNotFound]
 	// when the record is absent, [ErrAlreadyConsumed] when the record's
 	// ConsumedAt was already set on entry, and a non-nil error if the
-	// compare-and-set fails. The returned record's ConsumedAt MUST be
-	// non-nil on success.
+	// compare-and-set fails. When returning ErrAlreadyConsumed,
+	// implementations MUST also return the consumed record if it is still
+	// available so callers can recover the chain root for replay
+	// revocation. The returned record's ConsumedAt MUST be non-nil on
+	// success.
 	Consume(ctx context.Context, id string) (*RefreshToken, error)
 
 	// RevokeChain revokes every refresh token in the rotation chain whose

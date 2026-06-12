@@ -246,8 +246,6 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (a
 // same instant the rest of the library uses for token TTLs and audit
 // timestamps. A nil [config.clock] passes nil through and the helper
 // falls back to [timex.SystemClock].
-//
-//nolint:unused // helper consumed when the LoginFlow compile path wires WithAuthnLockoutStore (follow-up); retained so the lockout integration is in tree.
 func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticator { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if c == nil || c.authnLockoutStore == nil {
 		return auth
@@ -261,6 +259,8 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 		return t.WithLockout(counter)
 	case *emailotp.Authenticator:
 		return t.WithLockout(counter)
+	case *recovery.Authenticator:
+		return t.WithLockout(counter)
 	default:
 		return auth
 	}
@@ -271,13 +271,10 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 // structurally identical (single Now() time.Time method); the shim
 // exists solely because Go does not implicitly convert between named
 // interface types.
-//
-//nolint:unused // consumed by attachLockoutCounter; both retained for the WithAuthnLockoutStore wiring.
 type clockShim struct {
 	inner Clock
 }
 
-//nolint:unused // consumed by attachLockoutCounter via the clockShim type.
 func (s clockShim) Now() time.Time {
 	if s.inner == nil {
 		return time.Time{}
@@ -289,8 +286,6 @@ func (s clockShim) Now() time.Time {
 // when c is non-nil, or nil otherwise. The lockout helper falls back
 // to [timex.SystemClock] on a nil clock so production code paths that
 // did not configure [WithClock] still see a valid wall-clock reading.
-//
-//nolint:unused // consumed by attachLockoutCounter.
 func clockShimOrNil(c Clock) timex.Clock { //nolint:ireturn,nolintlint // timex.Clock is the helper's contract; nil is the documented "use SystemClock" signal.
 	if c == nil {
 		return nil

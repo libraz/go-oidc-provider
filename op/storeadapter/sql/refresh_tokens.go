@@ -31,7 +31,9 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 	parentDigest := digestNullableID(t.ParentID)
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.refreshSave,
 		idDigest, t.ClientID, t.GrantID, parentDigest, t.Subject,
-		encodeStrings(t.Scope), t.Resource,
+		boolToInt64(t.SubjectPublic), encodeStrings(t.Scope), t.Resource,
+		string(t.Origin), timeToInt64(t.AuthTime), t.ACR, encodeStrings(t.AMR),
+		encodeObjectArray(t.AuthorizationDetails), encodeMap(t.AccessTokenExtra),
 		t.DPoPJKT, t.MTLSCertThumbprint, t.Nonce, boolToInt64(t.Revoked),
 		timeToInt64(t.ExpiresAt), timePtrToInt64Ptr(t.ConsumedAt), timeToInt64(t.CreatedAt))
 	if err != nil {
@@ -70,15 +72,22 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 		t        store.RefreshToken
 		stored   string
 		scope    []byte
+		amr      []byte
+		details  []byte
+		extra    []byte
 		parent   *string
 		consumed *int64
 		expires  int64
 		created  int64
 		revoked  int64
+		subPub   int64
+		authTime int64
+		origin   string
 	)
 	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshFind, idDigest).Scan(
-		&stored, &t.ClientID, &t.Subject, &t.GrantID,
-		&scope, &t.Resource, &parent, &consumed, &expires, &created,
+		&stored, &t.ClientID, &t.Subject, &subPub, &t.GrantID,
+		&scope, &t.Resource, &origin, &authTime, &t.ACR, &amr, &details, &extra,
+		&parent, &consumed, &expires, &created,
 		&t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &revoked)
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
@@ -93,13 +102,31 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 	if err != nil {
 		return nil, err
 	}
+	amrDec, err := decodeStrings(amr)
+	if err != nil {
+		return nil, err
+	}
+	detailsDec, err := decodeObjectArray(details)
+	if err != nil {
+		return nil, err
+	}
+	extraDec, err := decodeMap(extra)
+	if err != nil {
+		return nil, err
+	}
 	t.ID = id
+	t.SubjectPublic = int64ToBool(subPub)
 	t.Scope = dec
 	t.ParentID = parent
 	t.ConsumedAt = int64PtrToTimePtr(consumed)
 	t.ExpiresAt = int64ToTime(expires)
 	t.CreatedAt = int64ToTime(created)
 	t.Revoked = int64ToBool(revoked)
+	t.Origin = store.RefreshTokenOrigin(origin)
+	t.AuthTime = int64ToTime(authTime)
+	t.AMR = amrDec
+	t.AuthorizationDetails = detailsDec
+	t.AccessTokenExtra = extraDec
 	return &t, nil
 }
 
@@ -117,7 +144,7 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		return nil, err
 	}
 	if t.ConsumedAt != nil {
-		return nil, store.ErrAlreadyConsumed
+		return t, store.ErrAlreadyConsumed
 	}
 	now := s.parent.clock.Now()
 	idDigest := patterns.Digest(id)
@@ -130,6 +157,9 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		return nil, wrapErr("refreshes.Consume.RowsAffected", err)
 	}
 	if n == 0 {
+		if replay, findErr := s.find(ctx, id); findErr == nil && replay.ConsumedAt != nil {
+			return replay, store.ErrAlreadyConsumed
+		}
 		return nil, store.ErrAlreadyConsumed
 	}
 	t.ConsumedAt = &now

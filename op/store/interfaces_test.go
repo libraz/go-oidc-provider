@@ -370,13 +370,25 @@ func (fakeDeviceCodeStore) Approve(context.Context, string, string, time.Time) e
 	return store.ErrNotFound
 }
 
+func (fakeDeviceCodeStore) ApproveByUserCode(context.Context, string, string, time.Time) error {
+	return store.ErrNotFound
+}
+
 func (fakeDeviceCodeStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
+
+func (fakeDeviceCodeStore) DenyByUserCode(context.Context, string, string) error {
+	return store.ErrNotFound
+}
 
 func (fakeDeviceCodeStore) RecordPoll(context.Context, string, time.Time, time.Duration) error {
 	return store.ErrNotFound
 }
 
 func (fakeDeviceCodeStore) IncrementUserCodeStrike(context.Context, string) (uint8, error) {
+	return 0, store.ErrNotFound
+}
+
+func (fakeDeviceCodeStore) IncrementUserCodeStrikeByUserCode(context.Context, string) (uint8, error) {
 	return 0, store.ErrNotFound
 }
 
@@ -398,13 +410,13 @@ func (fakeCIBARequestStore) FindByAuthReqID(context.Context, string) (*store.CIB
 	return nil, store.ErrNotFound
 }
 
-func (fakeCIBARequestStore) Approve(context.Context, string, string, time.Time) error {
+func (fakeCIBARequestStore) Approve(context.Context, string, string, string, time.Time) error {
 	return store.ErrNotFound
 }
 
 func (fakeCIBARequestStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
 
-func (fakeCIBARequestStore) RecordPoll(context.Context, string, time.Time) error {
+func (fakeCIBARequestStore) RecordPoll(context.Context, string, time.Time, time.Duration) error {
 	return store.ErrNotFound
 }
 

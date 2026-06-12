@@ -60,11 +60,11 @@ type AccessTokenRecord struct {
 }
 
 // AccessTokenRegistry is the substore for the JWT access-token shadow
-// rows. The substore belongs to the transactional cluster: a token
-// issuance ([AccessTokenRegistry.Register]) accompanies
-// a grant write or refresh-token rotation, and the two operations must
-// commit atomically so a partially-issued token cannot reach the wire
-// without a matching registry row.
+// rows. The substore belongs to the atomic-routing cluster so issued-token
+// registration, grants, refresh tokens, and revocation cascades share one
+// backend consistency domain in composite deployments. Register itself MUST
+// be atomic for a single JTI; the OP runtime does not require a cross-substore
+// [Transactional] transaction.
 //
 // Backends MAY satisfy this interface with a positive list (revocation
 // removes the row) or a marked-revoked list (revocation flips a

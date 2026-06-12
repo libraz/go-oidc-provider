@@ -43,6 +43,7 @@ import (
 // internal/grants/refresh cannot import op/, so the strings are
 // duplicated and the op/audit_test.go pin keeps the values aligned.
 const (
+	auditRefreshReplayDetected    = "refresh.replay_detected"
 	auditRefreshChainRevokeFailed = "refresh.chain_revoke_failed"
 	auditRefreshGrantRevokeFailed = "refresh.grant_revoke_failed"
 )
@@ -156,6 +157,14 @@ type IssueInput struct {
 	Scope    []string
 	Resource string
 	ParentID *string
+	Origin   store.RefreshTokenOrigin
+
+	SubjectPublic        bool
+	AuthTime             time.Time
+	ACR                  string
+	AMR                  []string
+	AuthorizationDetails []map[string]any
+	AccessTokenExtra     map[string]any
 
 	// DPoPJKT is the RFC 7638 thumbprint of the DPoP key the
 	// associated access token is bound to (RFC 9449 §6.1). Non-empty
@@ -196,18 +205,25 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 	}
 	now := i.clock().UTC()
 	rec := &store.RefreshToken{
-		ID:                 id,
-		ClientID:           in.ClientID,
-		Subject:            in.Subject,
-		GrantID:            in.GrantID,
-		Scope:              slices.Clone(in.Scope),
-		Resource:           in.Resource,
-		ParentID:           cloneStringPtr(in.ParentID),
-		ExpiresAt:          now.Add(i.ttl),
-		CreatedAt:          now,
-		DPoPJKT:            in.DPoPJKT,
-		MTLSCertThumbprint: in.MTLSCertThumbprint,
-		Nonce:              in.Nonce,
+		ID:                   id,
+		ClientID:             in.ClientID,
+		Subject:              in.Subject,
+		SubjectPublic:        in.SubjectPublic,
+		GrantID:              in.GrantID,
+		Scope:                slices.Clone(in.Scope),
+		Resource:             in.Resource,
+		Origin:               in.Origin,
+		AuthTime:             in.AuthTime,
+		ACR:                  in.ACR,
+		AMR:                  slices.Clone(in.AMR),
+		AuthorizationDetails: cloneObjectArray(in.AuthorizationDetails),
+		AccessTokenExtra:     cloneClaims(in.AccessTokenExtra),
+		ParentID:             cloneStringPtr(in.ParentID),
+		ExpiresAt:            now.Add(i.ttl),
+		CreatedAt:            now,
+		DPoPJKT:              in.DPoPJKT,
+		MTLSCertThumbprint:   in.MTLSCertThumbprint,
+		Nonce:                in.Nonce,
 	}
 	if err := i.store.Save(ctx, rec); err != nil {
 		return "", fmt.Errorf("refresh: save: %w", err)
@@ -350,6 +366,11 @@ type Exchanged struct {
 	// Subject is the OP-internal stable identifier of the end-user.
 	Subject string
 
+	// SubjectPublic is copied from the consumed record. When true, the
+	// token endpoint uses Subject as the already-public wire subject and
+	// skips subject projection.
+	SubjectPublic bool
+
 	// GrantID points at the [store.Grant] that captured the user's
 	// consent for the chain.
 	GrantID string
@@ -361,6 +382,13 @@ type Exchanged struct {
 	// Resource is the RFC 8707 resource indicator the chain is bound to.
 	// Empty means the originating grant omitted the parameter.
 	Resource string
+
+	Origin               store.RefreshTokenOrigin
+	AuthTime             time.Time
+	ACR                  string
+	AMR                  []string
+	AuthorizationDetails []map[string]any
+	AccessTokenExtra     map[string]any
 
 	// ConsumedAt is the wall-clock time at which the store committed
 	// the consumption. It is populated by the store, not the exchanger's
@@ -447,17 +475,24 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		return nil, err
 	}
 	return &Exchanged{
-		ConsumedID:         rec.ID,
-		ClientID:           rec.ClientID,
-		Subject:            rec.Subject,
-		GrantID:            rec.GrantID,
-		Scope:              resolvedScope,
-		Resource:           rec.Resource,
-		ConsumedAt:         *rec.ConsumedAt,
-		IssuedAt:           rec.CreatedAt,
-		DPoPJKT:            rec.DPoPJKT,
-		MTLSCertThumbprint: rec.MTLSCertThumbprint,
-		Nonce:              rec.Nonce,
+		ConsumedID:           rec.ID,
+		ClientID:             rec.ClientID,
+		Subject:              rec.Subject,
+		SubjectPublic:        rec.SubjectPublic,
+		GrantID:              rec.GrantID,
+		Scope:                resolvedScope,
+		Resource:             rec.Resource,
+		Origin:               rec.Origin,
+		AuthTime:             rec.AuthTime,
+		ACR:                  rec.ACR,
+		AMR:                  slices.Clone(rec.AMR),
+		AuthorizationDetails: cloneObjectArray(rec.AuthorizationDetails),
+		AccessTokenExtra:     cloneClaims(rec.AccessTokenExtra),
+		ConsumedAt:           *rec.ConsumedAt,
+		IssuedAt:             rec.CreatedAt,
+		DPoPJKT:              rec.DPoPJKT,
+		MTLSCertThumbprint:   rec.MTLSCertThumbprint,
+		Nonce:                rec.Nonce,
 	}, nil
 }
 
@@ -472,6 +507,7 @@ func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err
 	case errors.Is(err, store.ErrNotFound):
 		return ErrTokenMissing
 	case errors.Is(err, store.ErrAlreadyConsumed):
+		e.emitReplayDetected(ctx, presentedID)
 		e.revokeChainBestEffort(ctx, presentedID)
 		return ErrTokenReplayed
 	default:
@@ -543,10 +579,22 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 		// §2.2.2 calls out. Revoke explicitly here so the cascade
 		// is anchored to the validation point even if the caller's
 		// post-grace error mapping is later refactored.
+		e.emitReplayDetected(ctx, in.Token)
 		e.revokeChainBestEffort(ctx, in.Token)
 		return nil, false, nil
 	}
 	return exchanged, true, nil
+}
+
+func (e *Exchanger) emitReplayDetected(ctx context.Context, presentedID string) {
+	e.audit.Emit(ctx, audit.Event{
+		Name:    auditRefreshReplayDetected,
+		Level:   audit.LevelWarn,
+		Message: "refresh-token replay detected",
+		Extras: map[string]any{
+			"refresh_token_id": presentedID,
+		},
+	})
 }
 
 // graceExchange resolves a presented token whose ConsumedAt is at most
@@ -578,17 +626,25 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 		return nil, err
 	}
 	return &Exchanged{
-		ConsumedID:         rec.ID,
-		ClientID:           rec.ClientID,
-		Subject:            rec.Subject,
-		GrantID:            rec.GrantID,
-		Scope:              resolvedScope,
-		ConsumedAt:         *rec.ConsumedAt,
-		IssuedAt:           rec.CreatedAt,
-		DPoPJKT:            rec.DPoPJKT,
-		MTLSCertThumbprint: rec.MTLSCertThumbprint,
-		Nonce:              rec.Nonce,
-		InGrace:            true,
+		ConsumedID:           rec.ID,
+		ClientID:             rec.ClientID,
+		Subject:              rec.Subject,
+		SubjectPublic:        rec.SubjectPublic,
+		GrantID:              rec.GrantID,
+		Scope:                resolvedScope,
+		Resource:             rec.Resource,
+		Origin:               rec.Origin,
+		AuthTime:             rec.AuthTime,
+		ACR:                  rec.ACR,
+		AMR:                  slices.Clone(rec.AMR),
+		AuthorizationDetails: cloneObjectArray(rec.AuthorizationDetails),
+		AccessTokenExtra:     cloneClaims(rec.AccessTokenExtra),
+		ConsumedAt:           *rec.ConsumedAt,
+		IssuedAt:             rec.CreatedAt,
+		DPoPJKT:              rec.DPoPJKT,
+		MTLSCertThumbprint:   rec.MTLSCertThumbprint,
+		Nonce:                rec.Nonce,
+		InGrace:              true,
 	}, nil
 }
 
@@ -738,4 +794,33 @@ func cloneStringPtr(p *string) *string {
 	}
 	v := *p
 	return &v
+}
+
+func cloneObjectArray(in []map[string]any) []map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, len(in))
+	for i, obj := range in {
+		if obj == nil {
+			continue
+		}
+		cp := make(map[string]any, len(obj))
+		for k, v := range obj {
+			cp[k] = v
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+func cloneClaims(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

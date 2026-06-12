@@ -63,7 +63,7 @@ type Session struct {
 }
 
 // SessionStore is the substore for OP sessions. It is a volatile substore
-// outside the transactional cluster: session writes (Save / Touch / Delete)
+// outside the atomic-routing cluster: session writes (Save / Touch / Delete)
 // are NOT coordinated with token-endpoint commits, and the OP tolerates
 // session loss as a normal "user re-logs-in" event rather than a
 // security incident.

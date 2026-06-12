@@ -2,8 +2,14 @@ package op_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -43,7 +49,7 @@ func TestWithStaticClients_AcceptsMixedSeeds(t *testing.T) {
 			},
 			op.PrivateKeyJWTClient{
 				ID:           "demo-fapi",
-				JWKS:         []byte(`{"keys":[]}`),
+				JWKS:         validStaticJWKS(t),
 				RedirectURIs: []string{"https://app.example.com/cb"},
 				Scopes:       []string{"openid"},
 			},
@@ -51,6 +57,24 @@ func TestWithStaticClients_AcceptsMixedSeeds(t *testing.T) {
 	)...); err != nil {
 		t.Fatalf("WithStaticClients rejected mixed seed list: %v", err)
 	}
+}
+
+func validStaticJWKS(tb testing.TB) []byte {
+	tb.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		tb.Fatalf("ecdsa.GenerateKey: %v", err)
+	}
+	raw, err := json.Marshal(josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key:       &key.PublicKey,
+		KeyID:     "static-p256",
+		Algorithm: "ES256",
+		Use:       "sig",
+	}}})
+	if err != nil {
+		tb.Fatalf("json.Marshal JWKS: %v", err)
+	}
+	return raw
 }
 
 func TestWithStaticClients_RejectsEmpty(t *testing.T) {

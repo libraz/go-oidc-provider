@@ -14,6 +14,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -384,16 +385,47 @@ func refreshSaveFindConsume(t *testing.T, f Factory) {
 	if got.ID != "rt-1" {
 		t.Fatalf("unexpected token: %+v", got)
 	}
+	assertRefreshContext(t, got, rt)
 	consumed, err := b.Store.RefreshTokens().Consume(ctx, "rt-1")
 	if err != nil {
 		t.Fatalf("Consume: %v", err)
 	}
+	assertRefreshContext(t, consumed, rt)
 	if consumed.ConsumedAt == nil {
 		t.Fatal("Consume returned ConsumedAt=nil")
 	}
-	_, err = b.Store.RefreshTokens().Consume(ctx, "rt-1")
+	replayed, err := b.Store.RefreshTokens().Consume(ctx, "rt-1")
 	if !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("second Consume: want ErrAlreadyConsumed, got %v", err)
+	}
+	if replayed == nil {
+		t.Fatal("second Consume returned nil record with ErrAlreadyConsumed")
+	}
+	assertRefreshContext(t, replayed, rt)
+	if replayed.ConsumedAt == nil {
+		t.Fatal("second Consume returned ConsumedAt=nil")
+	}
+}
+
+func assertRefreshContext(t *testing.T, got, want *store.RefreshToken) {
+	t.Helper()
+	if got.SubjectPublic != want.SubjectPublic {
+		t.Fatalf("SubjectPublic=%v want %v", got.SubjectPublic, want.SubjectPublic)
+	}
+	if got.Resource != want.Resource || got.Origin != want.Origin || got.ACR != want.ACR {
+		t.Fatalf("refresh context mismatch: got resource=%q origin=%q acr=%q", got.Resource, got.Origin, got.ACR)
+	}
+	if !got.AuthTime.Equal(want.AuthTime) {
+		t.Fatalf("AuthTime=%v want %v", got.AuthTime, want.AuthTime)
+	}
+	if !reflect.DeepEqual(got.AMR, want.AMR) {
+		t.Fatalf("AMR=%v want %v", got.AMR, want.AMR)
+	}
+	if !reflect.DeepEqual(got.AuthorizationDetails, want.AuthorizationDetails) {
+		t.Fatalf("AuthorizationDetails=%v want %v", got.AuthorizationDetails, want.AuthorizationDetails)
+	}
+	if !reflect.DeepEqual(got.AccessTokenExtra, want.AccessTokenExtra) {
+		t.Fatalf("AccessTokenExtra=%v want %v", got.AccessTokenExtra, want.AccessTokenExtra)
 	}
 }
 
