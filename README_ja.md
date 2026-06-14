@@ -42,7 +42,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
 ## クイックスタート
 
 `op.New` の最小必須オプションは 4 つ — `Issuer`, `Store`, `Keyset`,
-32 バイトの `CookieKey`。安全でない構成のままでは起動せずエラーを返すため、
+32 バイトの `CookieKeys`。安全でない構成のままでは起動せずエラーを返すため、
 不完全な設定は構築時に必ず失敗する。
 
 ```go

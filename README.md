@@ -39,8 +39,8 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
 
 ## Quickstart
 
-`op.New` requires four options at minimum — `Issuer`, `Store`, `Keyset`, and a
-32-byte `CookieKey`. The constructor returns an error rather than booting in an
+`op.New` requires four options at minimum — `Issuer`, `Store`, `Keyset`, and
+32-byte `CookieKeys`. The constructor returns an error rather than booting in an
 unsafe configuration, so partial setups fail fast.
 
 ```go
