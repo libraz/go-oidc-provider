@@ -128,6 +128,20 @@ advisories:
     status: covered
     notes: Keycloak OIDC token introspection audience bypass.
 
+  - id: CVE-2026-32235
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-32235
+    threat: T-01
+    status: tracking
+    notes: |
+      Backstage auth-backend redirect-URI allowlist bypass under
+      Dynamic Client Registration: a crafted redirect_uri passes the
+      configured allowlist pattern yet resolves to an attacker host,
+      delivering the code to the attacker. Touches both redirect-URI
+      matching and the DCR surface. New test needed — pin that the
+      registered-URI match is exact / normalised and cannot be defeated
+      by a pattern that over-matches the host authority.
+
   # --- T-05 Algorithm downgrade -------------------------------------
   - id: CVE-2015-2951
     severity: P0
@@ -276,6 +290,24 @@ advisories:
       jwx padding oracle possibility (CBC-mode JWE). Class-covered:
       JWS-only allowlist excludes every CBC-mode JWE alg.
 
+  - id: CVE-2026-28498
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-28498
+    threat: T-06
+    status: covered
+    notes: |
+      Authlib (alias GHSA-m344-f55w-2m6j) at_hash / c_hash verification
+      fail-opened: the internal hash check returned true when the alg
+      header was unknown / unsupported instead of rejecting. Our JOSE
+      allow-list {RS256, PS256, ES256, EdDSA} is closed at two layers
+      (the parser's permitted-algorithm list and ParseAlgorithm), so an
+      out-of-list alg is a hard reject, never a silent pass.
+      TestParseSigned_RejectsUnsupportedRegisteredAlg_NoFailOpen pins it
+      with cryptographically valid ES384 / RS384 / PS384 tokens (real
+      signatures over a sibling algorithm — the only reason to reject is
+      the algorithm policy). TestAlgorithm_IsAllowed pins the helper-
+      level default-false that the fail-open inverts.
+
   # --- T-07 Replay --------------------------------------------------
   - id: CVE-2020-15222
     severity: P0
@@ -326,6 +358,19 @@ advisories:
       fault so SOC tooling can detect the silent-failure class.
       TestHandler_RefreshToken_StoreFault_EmitsAudit pins the contract.
 
+  - id: CVE-2026-8922
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-8922
+    threat: T-09
+    status: tracking
+    notes: |
+      Keycloak introspection ignored the realm-level notBefore when a
+      client-level notBefore was set, so a token inside the revoked
+      window still introspected as active. Structural property: the
+      introspection active=true decision must honour every configured
+      not-before / revocation input, not just the narrowest one. New
+      test needed against the introspection endpoint.
+
   # --- T-11 Open redirect on error ---------------------------------
   - id: CVE-2023-6927
     severity: P0
@@ -364,6 +409,38 @@ advisories:
       attacker cannot extend lifetime by triggering rotation.
       TestManager_Rotate_IssuesFreshIDPreservingChooserGroup +
       TestManager_Rotate_PreservesCreatedAt pin both halves.
+
+  - id: CVE-2026-7507
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-7507
+    threat: T-12
+    status: covered
+    notes: |
+      Keycloak OIDC-login session fixation leading to account takeover:
+      the session was not rebound across the privilege transition, so a
+      pre-seeded session ID survived login. Where GHSA-xhpr-465j-7p9q is
+      pinned at the Manager.Rotate primitive, this is pinned at the wire
+      boundary: TestInteractionPost_RotatesSessionIDAfterFreshAuthn
+      drives a full authorize → interaction → terminate flow with a
+      planted session cookie and asserts the terminal response issues a
+      fresh session ID and deletes the old record whenever a fresh authn
+      factor ran. ensureSession rotates on same-subject re-auth; a
+      consent-only / chooser-only chain intentionally does not.
+
+  # --- T-13 Confused deputy ----------------------------------------
+  - id: CVE-2026-1486
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-1486
+    threat: T-13
+    status: tracking
+    notes: |
+      Keycloak jwt-authorization-grant issued tokens without checking
+      that the backing identity provider was enabled — a token-issuance
+      authorisation gate skipped. Maps onto our custom-grant dispatch:
+      the structural property is "verify the grant's preconditions
+      before emitting any token". New test needed; confirm the custom-
+      grant path cannot mint tokens when the backing authority is
+      disabled.
 
   # --- T-15 TOTP / RFC 6238 ----------------------------------------
   - id: GHSA-9r3w-4j8q-pw98
@@ -417,3 +494,24 @@ advisories:
       dex SAML XML self-rolled parser bug. SAML is not implemented in
       go-oidc-provider (CLAUDE.md "ライブラリ性の核": OP only). Listed
       here so future contributors know it was reviewed and excluded.
+  - id: CVE-2026-4874
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-4874
+    threat: T-14
+    status: out-of-scope
+    out_of_scope_reason: |
+      Keycloak SSRF via token-endpoint URL manipulation. Outbound
+      request egress control is the embedder's network boundary, not OP
+      logic (CLAUDE.md "library posture": HTTP / transport concerns are
+      embedder-owned). Reviewed and excluded.
+  - id: CVE-2026-1518
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-1518
+    threat: T-22
+    status: out-of-scope
+    out_of_scope_reason: |
+      Keycloak CIBA backchannel-notification SSRF: a privileged client
+      configured an internal URL as its notification endpoint. The SSRF
+      egress control is embedder-owned; the OP does not make outbound
+      calls to client-supplied URLs in this library's CIBA surface.
+      Reviewed and excluded.

@@ -415,13 +415,20 @@ var _ = func() interaction.Driver { return testkit.AutoConsentDriver{} }
 // Used to silence the unused context import after the rewrite.
 var _ = context.Background
 
-// TestInteractionPost_RotatesSessionIDAfterFreshAuthn pins the H-C1
+// TestInteractionPost_RotatesSessionIDAfterFreshAuthn pins the
 // session-fixation defence: when a user with an existing session
 // completes the login interaction (re-authentication for the same
 // subject), the cookie-bound session ID rotates to a fresh value and
 // the previous record is deleted from the store. Without rotation the
 // pre-fixation cookie value (planted by an attacker who could read or
 // observe it before the user logged in) would remain valid.
+//
+// Tracks: CVE-2026-7507 (Keycloak OIDC-login session fixation → account
+// takeover) — the authenticated session was not rebound across the
+// privilege transition, so a pre-seeded session ID survived login. The
+// structural property pinned here is that a fresh authn factor at the
+// authorize / interaction boundary rotates the session ID (fresh
+// cookie, old record deleted), not only at a later verification step.
 func TestInteractionPost_RotatesSessionIDAfterFreshAuthn(t *testing.T) {
 	t.Parallel()
 
