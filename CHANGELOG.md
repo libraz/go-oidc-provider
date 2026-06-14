@@ -77,6 +77,13 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 - `op/storeadapter/sql` device-code and CIBA substores, with new
   `oidc_device_codes` / `oidc_ciba_requests` tables across the three dialects,
   table-name overrides, and contract-harness coverage.
+- `AuthnLockoutStamper` optional store extension (`StampLock`) — stamps
+  `LockedUntil` atomically without a whole-row `Put`, closing the cross-factor
+  lockout lost-update race. Stores that omit it fall back to `Get`+`Put`; the
+  inmem reference implements it.
+- `RefreshChainResolver` optional store extension — resolves hashed
+  refresh-token pointers for the internal replay-cascade chain walk while the
+  public `Find` / `Consume` lookups stay hash-only and constant-time.
 - `jose.AssertJWEAlgKeyShape` and `jose.ParseJWKSet`, holding outbound JWE to
   the OP RSA floor and EC curve allow-list before encryption.
 - `examples/25-byo-table-names` (remap every SQL adapter table to
@@ -115,6 +122,23 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   seed that uses `none` or `client_secret_*` instead of accepting it. *Migration:*
   a FAPI deployment must seed only `private_key_jwt` / mTLS clients; move any
   public or `client_secret_*` clients out of the FAPI-profiled provider.
+- **BREAKING — refresh-token `id` / `parent_id` are hashed at rest.** Public
+  `RefreshTokenStore.Find` / `Consume` are now hash-only constant-time lookups;
+  the internal chain walk resolves stored handles through the new optional
+  `RefreshChainResolver`, and SQL schema validation rejects legacy (unhashed)
+  refresh table shapes. *Migration:* SQL-backed stores must adopt the hashed
+  refresh schema; custom stores must persist hashed ids and implement
+  `RefreshChainResolver` for replay-cascade revocation.
+- **BREAKING — one-time auth factors are single-use via atomic compare-and-set.**
+  `emailotp` Consume, `totp` Accept, and `recovery` Consume now return
+  `ErrAlreadyConsumed` on replay so a code cannot be accepted twice under
+  concurrency. *Migration:* custom factor stores must make these CAS operations
+  (the inmem reference shows the shape).
+- **BREAKING — terminal factor failures now render HTTP 400, not 500.** Expired
+  or consumed one-time codes, lockout, required reset, and too-many-resends are
+  wrapped in the new `authn.ErrFactorAbort` sentinel, which the authorize
+  endpoint maps to `400`. *Migration:* embedders keying off the prior `500` for
+  these cases must handle `400`.
 - `op.New` now rejects a nil `SessionStore` at construction when the grant set
   mounts the browser authorize endpoint, using the same predicate the runtime
   enforces (`validateStoreCapabilities`).
@@ -128,9 +152,23 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
   missing from the schema rewrite, so the query builder targeted the renamed
   table while `Migrate` created `op_metadata` under its default name — booting
   an override-configured store broken at the first query.
+- Save-time garbage collection for the SQL and inmem device-code / CIBA
+  substores, with zero-expiry preservation guards.
+- Grant `ListBySubject` no longer collapses distinct rows that share a
+  `(subject, client_id)` pair.
 
 ### Security
 
+- One-time auth factors (email-OTP, TOTP, recovery codes) can no longer be
+  accepted twice under concurrency: single-use is enforced by an atomic store
+  compare-and-set returning `ErrAlreadyConsumed` on replay (race tests added).
+- Closed a cross-factor account-lockout lost-update race via the atomic
+  `StampLock` path, so concurrent failed factors cannot overwrite each other's
+  `LockedUntil`.
+- Refresh-token `id` / `parent_id` are hashed at rest and looked up in constant
+  time, hardening against store-disclosure and timing side channels.
+- Hardened the account-chooser add-account path with PAR-aware URL stamping and
+  a forgery-resistant marker check.
 - Bump `github.com/go-jose/go-jose/v4` to v4.1.4, fixing a JWE-decryption
   panic (GO-2026-4945) reachable wherever the OP decrypts JWE input.
 
