@@ -26,12 +26,12 @@ jobs:
       - uses: actions/checkout@v4
 
       # Lint, govulncheck and the gofumpt/goimports binaries live in
-      # tools/go.mod pins the minimum toolchain. Use the fixed 1.26.3
+      # tools/go.mod pins the minimum toolchain. Use the fixed 1.26.4
       # patch level so govulncheck does not flag stdlib CVEs already
       # fixed upstream.
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.3"
+          go-version: "1.26.4"
           cache-dependency-path: |
             go.sum
             tools/go.sum
@@ -91,7 +91,7 @@ jobs:
       # module directives so x509 / template / http2 fixes are present.
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.3"
+          go-version: "1.26.4"
           cache-dependency-path: |
             go.sum
             op/storeadapter/sql/go.sum
@@ -151,7 +151,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.3"
+          go-version: "1.26.4"
           cache-dependency-path: |
             go.sum
             op/storeadapter/sql/go.sum
@@ -168,7 +168,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.3"
+          go-version: "1.26.4"
           cache-dependency-path: |
             go.sum
             tools/go.sum
