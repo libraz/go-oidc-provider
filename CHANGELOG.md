@@ -14,7 +14,12 @@ The main module and the storage-adapter sub-modules
 tag. Embedders pull each sub-module independently:
 
 ```
-# v0.9.2 (latest)
+# v0.9.3 (latest)
+go get github.com/libraz/go-oidc-provider@v0.9.3
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.3
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
+
+# v0.9.2
 go get github.com/libraz/go-oidc-provider@v0.9.2
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.2
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.2
@@ -29,6 +34,105 @@ go get github.com/libraz/go-oidc-provider@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
+
+## [v0.9.3] — 2026-06-14
+
+### Highlights
+
+- RFC 9396 Rich Authorization Requests, OAuth 2.0 Grant Management, and
+  RFC 9728 protected-resource metadata land together: `authorization_details`
+  is validated, persisted on the grant, and echoed on JWT access tokens and
+  introspection; grants can be queried and revoked; and each registered
+  resource advertises its protecting authorization servers.
+- The SQL adapter now implements the device-code and CIBA substores, so
+  `WithDeviceCodeGrant` / `WithCIBA` run on mysql / postgres / sqlite —
+  previously these grants only worked on the inmem reference store.
+- Refresh-token rotation now preserves the original authentication context
+  (`auth_time`, `acr`, `amr`, `authorization_details`, and more), so
+  refresh-derived id_tokens and JWT access tokens reproduce it faithfully.
+- Client-supplied verification keys (`client_assertion` and JAR request
+  objects) are now held to the OP key-shape floor — a breaking tightening
+  for clients still signing with sub-floor keys (see Changed).
+
+### Added
+
+- **RFC 9396 Rich Authorization Requests.** `authorization_details` is
+  accepted and validated against the `op.WithAuthorizationDetailTypes`
+  registry at `/authorize`, `/par`, and `/token`, persisted on the grant,
+  and echoed on JWT access tokens (RFC 9068 §2.2.3) and introspection
+  (RFC 9396 §5, §10). Gated by the `RAR` feature flag; oversize requests are
+  rejected as `invalid_request`, other malformed shapes as
+  `invalid_authorization_details`.
+- **OAuth 2.0 Grant Management** via `op.WithGrantManagement`: the
+  `grant_management_action` / `grant_id` authorization parameters, the query
+  and revoke endpoint, PAR push-time validation, and discovery advertisement.
+- **RFC 9728 protected-resource metadata** via `op.WithProtectedResources`,
+  served at the OP root well-known location per registered resource with the
+  issuer stamped into `authorization_servers`.
+- `op.StepUpChallenge` — builds the value of an RFC 9470 §3
+  `WWW-Authenticate: Bearer` challenge (`error="insufficient_user_authentication"`
+  plus `realm` / `acr_values` / `max_age`) for an embedder's resource server
+  to return. The OP itself never emits the header; it honours the advertised
+  `acr_values` / `max_age` when the client re-authorizes.
+- `op/storeadapter/sql` device-code and CIBA substores, with new
+  `oidc_device_codes` / `oidc_ciba_requests` tables across the three dialects,
+  table-name overrides, and contract-harness coverage.
+- `jose.AssertJWEAlgKeyShape` and `jose.ParseJWKSet`, holding outbound JWE to
+  the OP RSA floor and EC curve allow-list before encryption.
+- `examples/25-byo-table-names` (remap every SQL adapter table to
+  embedder-owned names) and `examples/26-byo-store-from-scratch` (implement
+  the `Store` interface end to end without the bundled SQL adapter), both
+  wired into the apiverify / browserverify harnesses.
+
+### Changed
+
+- **BREAKING — client verification keys held to the OP key-shape floor.**
+  `client_assertion` keys (`internal/clientauth`) and JAR request-object keys
+  (`internal/jar`) are now gated through `jose.AssertAlgKeyShape`
+  (RFC 7518 §3.3 / RFC 8725 §3.2): RSA must be ≥ 2048 bits and the EC curve
+  must match the declared `alg`. A sub-floor or curve-mismatched key is
+  rejected as `ErrSigInvalid` rather than passed to go-jose under a laxer
+  check. *Migration:* clients signing `client_assertion` or request objects
+  with sub-2048-bit RSA or a mismatched EC curve must rotate to compliant keys.
+- **BREAKING — `RefreshTokenStore.Consume` is now an atomic compare-and-set.**
+  It must return the consumed record on `ErrAlreadyConsumed` so a replay
+  cascade can revoke the whole chain (RFC 6749 §10.4); a
+  `refresh.replay_detected` audit event is emitted before the best-effort
+  revoke. *Migration:* custom `RefreshTokenStore` implementations must make
+  `Consume` a CAS that yields the prior record on replay.
+- **BREAKING — `store.RefreshToken` carries the authentication context.**
+  New fields (`auth_time`, `acr`, `amr`, `authorization_details`,
+  `subject_public`, `origin`, `access_token_extra`) and `RefreshTokenOrigin`
+  thread through the inmem / sql / composite adapters with new
+  `oidc_refresh_tokens` columns. *Migration:* SQL-backed stores must apply the
+  new column migrations; custom stores must persist the new fields. Rows
+  written before the `origin` field stay refreshable (empty origin).
+- **BREAKING — static client seeds are validated against the active profile's
+  allowed `token_endpoint_auth_method` set at construction.** Under a FAPI
+  profile (`FAPI2Baseline` / `FAPI2MessageSigning` / `FAPICIBA`), whose
+  conformant methods are `private_key_jwt` / `tls_client_auth` /
+  `self_signed_tls_client_auth`, `op.New` now rejects a `WithStaticClients`
+  seed that uses `none` or `client_secret_*` instead of accepting it. *Migration:*
+  a FAPI deployment must seed only `private_key_jwt` / mTLS clients; move any
+  public or `client_secret_*` clients out of the FAPI-profiled provider.
+- `op.New` now rejects a nil `SessionStore` at construction when the grant set
+  mounts the browser authorize endpoint, using the same predicate the runtime
+  enforces (`validateStoreCapabilities`).
+- Pre-issuance client authentication is consolidated into `endpointsupport`,
+  matching the HTTP Basic scheme case-insensitively per RFC 7617.
+
+### Fixed
+
+- SQL table-name overrides now rename the metadata table in `rewriteSchema`.
+  The rename pair was present in `applyOverrides` and `knownNamingKeys` but
+  missing from the schema rewrite, so the query builder targeted the renamed
+  table while `Migrate` created `op_metadata` under its default name — booting
+  an override-configured store broken at the first query.
+
+### Security
+
+- Bump `github.com/go-jose/go-jose/v4` to v4.1.4, fixing a JWE-decryption
+  panic (GO-2026-4945) reachable wherever the OP decrypts JWE input.
 
 ## [v0.9.2] — 2026-05-24
 
