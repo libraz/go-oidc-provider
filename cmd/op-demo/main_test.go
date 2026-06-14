@@ -137,6 +137,28 @@ func TestBuildClientSeeds_ConfidentialTrio(t *testing.T) {
 	}
 }
 
+// TestCommonClientSeeds_FAPIProfilesSeedNothing pins that the shared
+// public + client_secret_* seeds are omitted under a FAPI profile. FAPI
+// permits only private_key_jwt / mTLS, so op.New rejects a none-auth or
+// client_secret_* static seed at construction under an active FAPI
+// profile; emitting one here would make the FAPI op-demo fail to boot.
+func TestCommonClientSeeds_FAPIProfilesSeedNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, profile := range []string{"fapi2-baseline", "fapi2-message-signing", "fapi-ciba"} {
+		cfg := runConfig{
+			profile:       profile,
+			clientID:      "demo-client",
+			redirectURIs:  []string{"https://app.example/cb"},
+			confClientID:  "demo-confidential",
+			confClientSec: "demo-confidential-secret-32-bytes-min",
+		}
+		if got := commonClientSeeds(cfg, nil); got != nil {
+			t.Errorf("commonClientSeeds(profile=%q) returned %d seed(s), want nil", profile, len(got))
+		}
+	}
+}
+
 func TestDerivePostLogoutURIs(t *testing.T) {
 	t.Parallel()
 

@@ -559,8 +559,16 @@ func buildClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
 }
 
 // commonClientSeeds returns the public demo client and (when
-// configured) the confidential client trio that every profile shares.
+// configured) the confidential client trio that the non-FAPI profiles
+// share. FAPI profiles get nothing here: their only conformant auth
+// methods are private_key_jwt and mTLS, so a public (none) or
+// client_secret_* static seed is rejected by op.New at construction
+// under an active FAPI profile. The FAPI plans drive the dedicated
+// confidential clients from fapi2ClientSeeds instead.
 func commonClientSeeds(cfg runConfig, postLogoutURIs []string) []op.ClientSeed {
+	if isFAPIProfile(cfg.profile) {
+		return nil
+	}
 	seeds := []op.ClientSeed{
 		// Public demo client used by manual flows (curl smoke
 		// tests, the OP-managed login UI). The library has no
