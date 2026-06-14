@@ -788,6 +788,8 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.3...HEAD
+[v0.9.3]: https://github.com/libraz/go-oidc-provider/compare/v0.9.2...v0.9.3
+[v0.9.2]: https://github.com/libraz/go-oidc-provider/compare/v0.9.1...v0.9.2
 [v0.9.1]: https://github.com/libraz/go-oidc-provider/compare/v0.9.0...v0.9.1
 [v0.9.0]: https://github.com/libraz/go-oidc-provider/releases/tag/v0.9.0

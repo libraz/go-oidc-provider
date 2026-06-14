@@ -27,7 +27,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリ。
 ## インストール
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.0
+go get github.com/libraz/go-oidc-provider/op@v0.9.3
 ```
 
 Go 1.25+。DB / Redis ドライバを引き込むストアアダプタはサブモジュール
@@ -35,8 +35,8 @@ Go 1.25+。DB / Redis ドライバを引き込むストアアダプタはサブ�
 依存は入らない。
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.3
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
 ```
 
 ## クイックスタート
@@ -50,7 +50,7 @@ handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
     op.WithStore(inmem.New()),
     op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
-    op.WithCookieKey(cookieKey), // 32 バイト, AES-256-GCM
+    op.WithCookieKeys(cookieKey), // 32 バイト, AES-256-GCM
 )
 if err != nil {
     log.Fatal(err)

@@ -12,9 +12,10 @@ import (
 
 // WithInteractionDriver registers the [interaction.Driver] that bridges
 // the OP state machine to the user-facing UI. If unset, the [Provider]
-// uses [interaction.JSONDriver], which speaks JSON over HTTP: every
-// prompt is written as a JSON envelope and every submission is decoded
-// from a JSON body. SSR or framework-specific Drivers replace it.
+// boots into [interaction.HTMLDriver], a working server-rendered HTML
+// login surface — unless [WithSPAUI] is configured, in which case the
+// default falls away and the embedder's SPA owns rendering over the JSON
+// state endpoints. SSR or framework-specific Drivers replace it.
 // Stable since v0.1.
 func WithInteractionDriver(d interaction.Driver) Option {
 	return optionFunc(func(c *config) error {

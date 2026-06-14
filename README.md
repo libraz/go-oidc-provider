@@ -26,15 +26,15 @@ Message Signing.
 ## Install
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.0
+go get github.com/libraz/go-oidc-provider/op@v0.9.3
 ```
 
 Go 1.25+. Storage adapters are published as sub-modules so their
 dependencies stay out of your `go.sum` until you opt in:
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.3
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
 ```
 
 ## Quickstart
@@ -48,7 +48,7 @@ handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
     op.WithStore(inmem.New()),
     op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
-    op.WithCookieKey(cookieKey), // 32 bytes, AES-256-GCM
+    op.WithCookieKeys(cookieKey), // 32 bytes, AES-256-GCM
 )
 if err != nil {
     log.Fatal(err)
