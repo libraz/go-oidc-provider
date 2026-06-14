@@ -248,6 +248,208 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	}
 }
 
+// TestEndToEnd_ChooserAddAccountURL_AddsAccountToExistingGroup drives the
+// public multi-account path rather than seeding the second account directly:
+// a chooser prompt renders AddAccountURL, the browser follows it with the
+// original session cookie, a fresh login authenticates user-B, and the
+// terminal session is added to user-A's chooser group.
+func TestEndToEnd_ChooserAddAccountURL_AddsAccountToExistingGroup(t *testing.T) {
+	t.Parallel()
+	clock := fakeClock{now: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)}
+	cookieKey := []byte(chooserCookieKey)
+	tk := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithCookieKeys(cookieKey)),
+	)
+	const secret = "rp-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "rp-add-account",
+		SecretHash:              hash,
+		RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	mgr, sessCodec := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
+	ctx := context.Background()
+	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.now})
+	if err != nil {
+		t.Fatalf("Issue user-A: %v", err)
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := tk.HTTPClient(jar)
+
+	values := e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0])
+	values.Set("prompt", "select_account")
+	authReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		tk.Server.URL+"/oidc/auth?"+values.Encode(), http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest /authorize chooser: %v", err)
+	}
+	authReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	authResp, err := client.Do(authReq)
+	if err != nil {
+		t.Fatalf("GET /authorize chooser: %v", err)
+	}
+	defer authResp.Body.Close()
+	location, err := authResp.Location()
+	if err != nil {
+		t.Fatalf("chooser Location: %v", err)
+	}
+	chooserInteractionURL := tk.Server.URL + location.Path
+	chooserInteractionCookie := findCookie(authResp.Cookies(), cookie.InteractionProfile.Name)
+	if chooserInteractionCookie == nil {
+		t.Fatal("__Host-oidc_interaction cookie missing on chooser authorize")
+	}
+
+	stepReq, err := http.NewRequestWithContext(ctx, http.MethodGet, chooserInteractionURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest chooser interaction: %v", err)
+	}
+	stepReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	stepReq.AddCookie(chooserInteractionCookie)
+	stepResp, err := client.Do(stepReq)
+	if err != nil {
+		t.Fatalf("GET chooser interaction: %v", err)
+	}
+	defer stepResp.Body.Close()
+	if stepResp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(stepResp.Body)
+		t.Fatalf("chooser GET status=%d body=%s", stepResp.StatusCode, string(dump))
+	}
+	step := decodeMap(t, stepResp)
+	addAccountURL := chooserAddAccountURLFromPrompt(t, step)
+	if addAccountURL == "" {
+		t.Fatalf("AddAccountURL missing from chooser prompt: %v", step)
+	}
+	addURL, err := url.Parse(addAccountURL)
+	if err != nil {
+		t.Fatalf("parse AddAccountURL %q: %v", addAccountURL, err)
+	}
+	if got := addURL.Query().Get("prompt"); got != "login" {
+		t.Fatalf("AddAccountURL prompt=%q want login: %s", got, addAccountURL)
+	}
+
+	addReq, err := http.NewRequestWithContext(ctx, http.MethodGet, tk.Server.URL+addAccountURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest AddAccountURL: %v", err)
+	}
+	addReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	addResp, err := client.Do(addReq)
+	if err != nil {
+		t.Fatalf("GET AddAccountURL: %v", err)
+	}
+	defer addResp.Body.Close()
+	if addResp.StatusCode != http.StatusFound {
+		t.Fatalf("AddAccountURL status=%d, want 302", addResp.StatusCode)
+	}
+	addLocation, err := addResp.Location()
+	if err != nil {
+		t.Fatalf("AddAccountURL Location: %v", err)
+	}
+	addInteractionURL := tk.Server.URL + addLocation.Path
+	addInteractionCookie := findCookie(addResp.Cookies(), cookie.InteractionProfile.Name)
+	if addInteractionCookie == nil {
+		t.Fatal("__Host-oidc_interaction cookie missing on add-account authorize")
+	}
+
+	authnReq, err := http.NewRequestWithContext(ctx, http.MethodGet, addInteractionURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest add-account interaction: %v", err)
+	}
+	authnReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	authnReq.AddCookie(addInteractionCookie)
+	authnResp, err := client.Do(authnReq)
+	if err != nil {
+		t.Fatalf("GET add-account interaction: %v", err)
+	}
+	defer authnResp.Body.Close()
+	if authnResp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(authnResp.Body)
+		t.Fatalf("add-account interaction status=%d body=%s", authnResp.StatusCode, string(dump))
+	}
+	authnStep := decodeMap(t, authnResp)
+	if got, _ := authnStep["type"].(string); got == "interaction.chooser" {
+		t.Fatalf("add-account flow rendered chooser again; want authenticator prompt")
+	}
+	stateRef, _ := authnStep["state_ref"].(string)
+	csrfCookie := findCookie(authnResp.Cookies(), cookie.CSRFProfile.Name)
+	if csrfCookie == nil {
+		t.Fatal("csrf cookie missing on add-account auth prompt")
+	}
+	body := map[string]any{
+		"state_ref": stateRef,
+		"values":    map[string]string{"subject": "user-B"},
+	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal auth body: %v", err)
+	}
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, addInteractionURL, bytes.NewReader(rawBody))
+	if err != nil {
+		t.Fatalf("NewRequest add-account POST: %v", err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("Origin", tk.Issuer)
+	postReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	postReq.AddCookie(csrfCookie)
+	postReq.AddCookie(addInteractionCookie)
+	postReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	postResp, err := client.Do(postReq)
+	if err != nil {
+		t.Fatalf("POST add-account auth: %v", err)
+	}
+	defer postResp.Body.Close()
+
+	finalResp := postConsentWithSessionCookie(t, client, ctx, addInteractionURL, tk.Issuer, csrfCookie, addInteractionCookie, sessA.Cookie, postResp)
+	defer finalResp.Body.Close()
+	if finalResp.StatusCode != http.StatusFound {
+		dump, _ := io.ReadAll(finalResp.Body)
+		t.Fatalf("final status=%d body=%s", finalResp.StatusCode, string(dump))
+	}
+	sessionCookie := findCookie(finalResp.Cookies(), cookie.SessionProfile.Name)
+	if sessionCookie == nil {
+		t.Fatal("session cookie not refreshed after add-account")
+	}
+	payload, err := sessCodec.Decode(sessionCookie.Value)
+	if err != nil {
+		t.Fatalf("decode session cookie: %v", err)
+	}
+	if payload.ChooserGroupID != sessA.ChooserGroupID {
+		t.Fatalf("ChooserGroupID=%q want original group %q", payload.ChooserGroupID, sessA.ChooserGroupID)
+	}
+	if payload.CurrentSessionID == sessA.SessionID {
+		t.Fatal("CurrentSessionID still points at user-A; want newly added user-B session")
+	}
+	active, err := mgr.Resolve(ctx, sessionCookie.Value)
+	if err != nil {
+		t.Fatalf("Resolve add-account session: %v", err)
+	}
+	if active.Session.Subject != "user-B" {
+		t.Fatalf("active subject=%q want user-B", active.Session.Subject)
+	}
+	rows, err := mgr.Accounts(ctx, sessA.ChooserGroupID)
+	if err != nil {
+		t.Fatalf("Accounts: %v", err)
+	}
+	subjects := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		subjects[r.Subject] = true
+	}
+	if !subjects["user-A"] || !subjects["user-B"] || len(subjects) != 2 {
+		t.Fatalf("chooser group subjects=%v, want user-A and user-B", subjects)
+	}
+}
+
 // TestEndToEnd_FreshLoginDifferentSubjectStartsNewChooserGroup pins the
 // session-grafting defence: a prompt=login submission against an
 // /authorize request that carries an active cookie for a different
@@ -585,5 +787,15 @@ func chooserAccountsFromPrompt(tb testing.TB, env map[string]any) []map[string]a
 			out = append(out, entry)
 		}
 	}
+	return out
+}
+
+func chooserAddAccountURLFromPrompt(tb testing.TB, env map[string]any) string {
+	tb.Helper()
+	data, _ := env["data"].(map[string]any)
+	if data == nil {
+		tb.Fatalf("prompt envelope missing data: %v", env)
+	}
+	out, _ := data["AddAccountURL"].(string)
 	return out
 }

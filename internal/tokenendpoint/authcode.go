@@ -46,6 +46,10 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 		return
 	}
 	in.ClientID = client.ID
+	authorizationDetails, ok := parseTokenAuthorizationDetails(w, r, deps, client)
+	if !ok {
+		return
+	}
 	mtlsOut, ok := verifyTokenMTLS(w, r, deps, dpopOut.JKT)
 	if !ok {
 		return
@@ -70,7 +74,7 @@ func handleAuthorizationCode(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !enforceDPoPJKTBinding(w, exchanged, binding) {
 		return
 	}
-	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, binding)
+	issueAuthCodeResponse(ctx, w, deps, client, in.Code, exchanged, binding, authorizationDetails)
 }
 
 // authCodeInputs is the de-structured view of the form parameters the
@@ -324,11 +328,16 @@ func issueAuthCodeResponse(
 	code string,
 	exchanged *authcode.Exchanged,
 	binding tokenBinding,
+	requestedAuthorizationDetails []map[string]any,
 ) {
 	now := deps.now().UTC()
 	authCtx := lookupAuthContext(ctx, deps, exchanged.GrantID)
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		return
+	}
+	authorizationDetails, ok := reduceAuthorizationDetails(w, requestedAuthorizationDetails, authCtx.AuthorizationDetails)
+	if !ok {
 		return
 	}
 	publicSubject, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
@@ -348,7 +357,7 @@ func issueAuthCodeResponse(
 		now,
 		authCtx.AuthTime,
 		binding,
-		authCtx.AuthorizationDetails,
+		authorizationDetails,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
@@ -367,6 +376,7 @@ func issueAuthCodeResponse(
 			AuthTime:    authCtx.AuthTime,
 			ACR:         authCtx.ACR,
 			AMR:         authCtx.AMR,
+			Claims:      authCtx.Claims,
 			Extra:       idTokenExtra,
 		})
 		if err != nil {
@@ -391,10 +401,16 @@ func issueAuthCodeResponse(
 		binding,
 		store.RefreshOriginAuthCode,
 		false,
-		authCtx,
+		authCtx.withAuthorizationDetails(authorizationDetails),
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	if !enforceAuthCodeGrantTombstoneMintRefusal(ctx, w, deps, exchanged.GrantID, exchanged.IssuedAt) {
+		if refreshToken != "" {
+			_ = deps.RefreshTokens.RevokeByGrant(ctx, exchanged.GrantID)
+		}
 		return
 	}
 	writeSuccess(w, successResponse{
@@ -404,9 +420,44 @@ func issueAuthCodeResponse(
 		RefreshToken:         refreshToken,
 		IDToken:              idToken,
 		Scope:                joinScope(exchanged.Scope),
-		AuthorizationDetails: authCtx.AuthorizationDetails,
+		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
 		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
+}
+
+// enforceAuthCodeGrantTombstoneMintRefusal refuses to mint tokens when the
+// grant backing the redeemed authorization code carries an active tombstone.
+// issuedAt MUST be the code's issuance instant (its CreatedAt), not the
+// redemption clock: the store contract treats a grant as revoked for a token
+// iff iat <= RevokedAt, and an authorization code is always issued before its
+// grant could be tombstoned. Passing the redemption "now" would make the probe
+// pass only when redemption coincided with the revocation instant, silently
+// minting an access token and a refresh token on a revoked grant for any
+// elapsed time after revocation. This mirrors the refresh path, which probes
+// with the consumed token's IssuedAt for the same reason.
+func enforceAuthCodeGrantTombstoneMintRefusal(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	grantID string,
+	issuedAt time.Time,
+) bool {
+	if deps.RevocationStrategy != store.RevocationStrategyGrantTombstone {
+		return true
+	}
+	if deps.GrantRevocations == nil || grantID == "" {
+		return true
+	}
+	revoked, err := deps.GrantRevocations.IsRevoked(ctx, grantID, "", issuedAt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return false
+	}
+	if revoked {
+		writeError(w, http.StatusBadRequest, errInvalidGrant, "authorization code rejected")
+		return false
+	}
+	return true
 }
 
 // grantIDForResponse returns grantID for the token response only when the
@@ -432,6 +483,7 @@ type mintIDTokenInput struct {
 	AuthTime    int64
 	ACR         string
 	AMR         []string
+	Claims      *authorize.ClaimsRequest
 
 	// Extra is the projected non-standard claim set assembled from the
 	// grant's persisted OIDC Core 1.0 §5.5 "claims" payload (id_token
@@ -726,11 +778,25 @@ func mintAuthCodeIDToken(deps Deps, in mintIDTokenInput) (string, error) {
 		Nonce:     in.Nonce,
 		AtHash:    atHash,
 		CHash:     cHash,
-		ACR:       in.ACR,
+		ACR:       idTokenACRForClaims(in.ACR, in.Claims),
 		AMR:       append([]string(nil), in.AMR...),
 		Extra:     in.Extra,
 	}
 	return tokens.SignIDToken(key, claims)
+}
+
+func idTokenACRForClaims(acr string, req *authorize.ClaimsRequest) string {
+	spec, ok := req.IDTokenSpec("acr")
+	if !ok || !spec.Essential {
+		return acr
+	}
+	if len(spec.Values) == 0 && spec.Value == nil {
+		return acr
+	}
+	if spec.Allows(acr) {
+		return acr
+	}
+	return ""
 }
 
 // maybeIssueRefreshToken issues and persists a refresh token when the
@@ -827,6 +893,11 @@ type authContext struct {
 	// response (RFC 9396 §6); a refresh reproduces it from the same
 	// grant. Nil when the grant carried none.
 	AuthorizationDetails []map[string]any
+}
+
+func (c authContext) withAuthorizationDetails(details []map[string]any) authContext {
+	c.AuthorizationDetails = details
+	return c
 }
 
 // lookupAuthContext resolves the auth_time / acr / amr claims from

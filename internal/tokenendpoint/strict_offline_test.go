@@ -56,12 +56,10 @@ func strictConfidentialClient(tb testing.TB, f *fixture) (*store.Client, string)
 // TestStrictOfflineAccess_RefreshExchangeRejectsNonOfflineToken pins
 // the §"Error handling" row in ADR 0017: under WithStrictOfflineAccess,
 // a refresh request whose originating grant did NOT carry
-// "offline_access" fails with invalid_grant on first use, even though
-// the bound scope still contains "openid". The exchanger consumes the
-// token before the gate fires, so the rejection is single-shot and
-// the chain breaks at this point. The error description names the
-// policy so an operator can correlate the rejection with the option
-// flip.
+// "offline_access" fails with invalid_grant before the token is
+// consumed, even though the bound scope still contains "openid". The
+// error description names the policy so an operator can correlate the
+// rejection with the option flip.
 func TestStrictOfflineAccess_RefreshExchangeRejectsNonOfflineToken(t *testing.T) {
 	t.Parallel()
 
@@ -92,6 +90,13 @@ func TestStrictOfflineAccess_RefreshExchangeRejectsNonOfflineToken(t *testing.T)
 	if desc, _ := body["error_description"].(string); desc == "" ||
 		!containsString(desc, "offline_access") {
 		t.Errorf("error_description=%q must mention offline_access", desc)
+	}
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find after rejection: %v", err)
+	}
+	if rec.ConsumedAt != nil {
+		t.Fatalf("refresh token must not be consumed on strict-offline rejection (ConsumedAt=%v)", rec.ConsumedAt)
 	}
 }
 
@@ -128,6 +133,33 @@ func TestStrictOfflineAccess_RefreshExchangeAcceptsOfflineToken(t *testing.T) {
 	}
 	if rotated, _ := body["refresh_token"].(string); rotated == "" {
 		t.Errorf("refresh_token must be rotated for offline-access chain")
+	}
+}
+
+func TestStrictOfflineAccess_CustomGrantRefreshSkipsOfflineScopeGate(t *testing.T) {
+	t.Parallel()
+
+	f := strictFixture(t)
+	client, secret := strictConfidentialClient(t, f)
+	const tokenID = "rt-custom-grant-no-offline" //nolint:gosec // opaque test fixture id, not a credential.
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:            tokenID,
+		ClientID:      client.ID,
+		Subject:       "user-1",
+		GrantID:       "grant-custom-no-offline",
+		Scope:         []string{"read"},
+		Origin:        store.RefreshOriginCustomGrant,
+		SubjectPublic: true,
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if rotated, _ := body["refresh_token"].(string); rotated == "" {
+		t.Fatalf("refresh_token must rotate for custom-grant chain under strict offline")
 	}
 }
 

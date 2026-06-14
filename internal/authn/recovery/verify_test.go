@@ -292,6 +292,20 @@ func (f *fakeRecoveryStore) Put(_ context.Context, b *store.RecoveryBatch) error
 	return nil
 }
 
+func (f *fakeRecoveryStore) Consume(_ context.Context, b *store.RecoveryBatch, index int) error {
+	if f.current == nil || b == nil || f.current.Subject != b.Subject {
+		return store.ErrNotFound
+	}
+	if index < 0 || index >= len(f.current.Codes) || index >= len(b.Codes) {
+		return store.ErrNotFound
+	}
+	if !f.current.Codes[index].ConsumedAt.IsZero() {
+		return store.ErrAlreadyConsumed
+	}
+	f.current.Codes[index].ConsumedAt = b.Codes[index].ConsumedAt
+	return nil
+}
+
 func (f *fakeRecoveryStore) Delete(_ context.Context, _ string) error {
 	f.current = nil
 	return nil

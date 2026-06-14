@@ -35,6 +35,7 @@ const jwtTyp = "token-introspection+jwt"
 //     Signing §5: profile forces JWT regardless of client metadata or
 //     Accept).
 //   - The client has preregistered an introspection_signed_response_alg.
+//   - The client has preregistered introspection_encrypted_response_alg.
 //   - The Accept header prefers the JWT media type.
 //
 // The profile-force check sits ahead of the per-client metadata check
@@ -49,6 +50,9 @@ func shouldEmitJWT(deps Deps, client *store.Client, accept string) bool {
 		return true
 	}
 	if client.IntrospectionSignedResponseAlg != "" {
+		return true
+	}
+	if client.IntrospectionEncryptedResponseAlg != "" {
 		return true
 	}
 	return preferJWT(accept)

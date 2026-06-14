@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/refreshchain"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -540,10 +541,8 @@ func (e *Exchanger) mapConsumeError(ctx context.Context, presentedID string, err
 // scope widening) is treated as evidence of a stolen consumed token:
 // per RFC 9700 §2.2.2 such replays MUST revoke the chain. tryGrace
 // invokes [Exchanger.revokeChainBestEffort] directly on that branch
-// (returning handled=false so the caller's [Exchanger.mapConsumeError]
-// surfaces [ErrTokenReplayed]); emitting the revoke here keeps the
-// cascade anchored to the validation point even if the caller's
-// post-grace error mapping is later refactored.
+// and returns handled=true with [ErrTokenReplayed] so the caller does
+// not run [Exchanger.mapConsumeError] and double-count the replay.
 func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged, bool, error) {
 	if e.graceTTL <= 0 {
 		return nil, false, nil
@@ -577,11 +576,11 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 		// revoked: a consumed token presented by a different client,
 		// or with a widened scope, is the same threat shape RFC 9700
 		// §2.2.2 calls out. Revoke explicitly here so the cascade
-		// is anchored to the validation point even if the caller's
-		// post-grace error mapping is later refactored.
+		// is anchored to the validation point without double-emitting
+		// through mapConsumeError.
 		e.emitReplayDetected(ctx, in.Token)
 		e.revokeChainBestEffort(ctx, in.Token)
-		return nil, false, nil
+		return nil, true, ErrTokenReplayed
 	}
 	return exchanged, true, nil
 }
@@ -681,6 +680,14 @@ func (e *Exchanger) withinGraceWindow(rec *store.RefreshToken) bool {
 func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID string) {
 	rootID, ok := e.findChainRoot(ctx, presentedID)
 	if !ok {
+		e.audit.Emit(ctx, audit.Event{
+			Name:    auditRefreshChainRevokeFailed,
+			Level:   audit.LevelWarn,
+			Message: "refresh chain root lookup failed after replay detection",
+			Extras: map[string]any{
+				"reason": "chain_root_lookup_failed",
+			},
+		})
 		return
 	}
 	if err := e.store.RevokeChain(ctx, rootID); err != nil {
@@ -699,7 +706,10 @@ func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID strin
 	if e.grantRevocations == nil {
 		return
 	}
-	rootRec, ferr := e.store.Find(ctx, rootID)
+	// rootID is the chain handle returned by findChainRoot, not a bearer
+	// credential, so resolve it through the chain-walk helper rather than the
+	// hash-only public Find (which a hash-on-store backend would miss).
+	rootRec, ferr := refreshchain.FindByHandle(ctx, e.store, rootID)
 	if ferr != nil || rootRec == nil || rootRec.GrantID == "" {
 		// Nothing more to do: the chain root is unfindable or carries
 		// no GrantID. JWT-AT revocation is grant-keyed, so without a
@@ -732,24 +742,7 @@ func (e *Exchanger) revokeChainBestEffort(ctx context.Context, presentedID strin
 // ok=false if the walk fails / loops. The walk terminates at the first
 // record whose ParentID is nil; chainWalkLimit caps the iteration count.
 func (e *Exchanger) findChainRoot(ctx context.Context, startID string) (string, bool) {
-	current := startID
-	var clientID string
-	for range chainWalkLimit {
-		rec, err := e.store.Find(ctx, current)
-		if err != nil || rec == nil {
-			return "", false
-		}
-		if clientID == "" {
-			clientID = rec.ClientID
-		} else if rec.ClientID != clientID {
-			return "", false
-		}
-		if rec.ParentID == nil {
-			return current, true
-		}
-		current = *rec.ParentID
-	}
-	return "", false
+	return refreshchain.FindRoot(ctx, e.store, startID, chainWalkLimit)
 }
 
 // resolveScope returns the scope to bind to the rotated token. When the

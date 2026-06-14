@@ -155,14 +155,15 @@ INSERT INTO vault_renewal_slips
   (token_secret_digest, relying_party, principal, ledger_id, requested_scope,
    resource_hint, principal_is_wire, origin_kind, auth_epoch, acr_value,
    amr_values, authorization_detail, access_token_extra, parent_secret_digest,
+   parent_secret_raw,
    dpop_thumb, mtls_thumb, nonce_echo, is_void, expires_epoch, consumed_epoch,
    issued_epoch)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	refreshSelect = `
 SELECT token_secret_digest, relying_party, principal, ledger_id, requested_scope,
        resource_hint, principal_is_wire, origin_kind, auth_epoch, acr_value,
-       amr_values, authorization_detail, access_token_extra, parent_secret_digest,
+       amr_values, authorization_detail, access_token_extra, parent_secret_raw,
        dpop_thumb, mtls_thumb, nonce_echo, is_void, expires_epoch, consumed_epoch,
        issued_epoch
 FROM vault_renewal_slips WHERE token_secret_digest = ?`
@@ -188,7 +189,7 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 		encodeStrings(t.Scope), t.Resource, boolToInt(t.SubjectPublic),
 		string(t.Origin), epochOf(t.AuthTime), t.ACR, encodeStrings(t.AMR),
 		encodeObjectArray(t.AuthorizationDetails), encodeMap(t.AccessTokenExtra),
-		digestNullable(t.ParentID),
+		digestNullable(t.ParentID), t.ParentID,
 		t.DPoPJKT, t.MTLSCertThumbprint, t.Nonce, boolToInt(t.Revoked),
 		epochOf(t.ExpiresAt), epochPtr(t.ConsumedAt), epochOf(t.CreatedAt))
 	if err != nil {
@@ -205,8 +206,9 @@ func (s *refreshStore) Find(ctx context.Context, id string) (*store.RefreshToken
 }
 
 // find resolves a row by digest. The returned record's ID is restored
-// to the caller's raw value; ParentID stays a digest because the chain
-// walk in RevokeChain consumes parent pointers as digests.
+// to the caller's raw value, and ParentID is the raw parent token ID so
+// callers can pass Find(child).ParentID back to Find/RevokeChain without
+// learning this store's hash-on-store representation.
 func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken, error) {
 	d := digest(id)
 	var (
@@ -261,7 +263,9 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		return nil, err
 	}
 	if t.ConsumedAt != nil {
-		return nil, store.ErrAlreadyConsumed
+		// Replay: return the consumed record so the caller can recover
+		// the chain root for refresh-token replay revocation.
+		return t, store.ErrAlreadyConsumed
 	}
 	now := s.now()
 	res, err := s.q.ExecContext(ctx, refreshConsume, now.Unix(), digest(id))
@@ -273,6 +277,10 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		return nil, fmt.Errorf("refreshes.Consume.RowsAffected: %w", err)
 	}
 	if n == 0 {
+		// Lost the compare-and-swap to a concurrent Consume.
+		if replay, ferr := s.find(ctx, id); ferr == nil && replay.ConsumedAt != nil {
+			return replay, store.ErrAlreadyConsumed
+		}
 		return nil, store.ErrAlreadyConsumed
 	}
 	t.ConsumedAt = &now

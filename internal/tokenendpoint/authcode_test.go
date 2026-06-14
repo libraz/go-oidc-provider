@@ -104,6 +104,65 @@ func TestAuthCode_HappyPath(t *testing.T) {
 	}
 }
 
+func TestAuthCode_AuthorizationDetailsCanBeReducedAtTokenEndpoint(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-rar-reduce"
+	const grantID = "grant-rar-reduce-code"
+	const subject = "user-rar-reduce-code"
+	redirect := client.RedirectURIs[0]
+	granted := []map[string]any{
+		{"type": "payment", "amount": "100"},
+		{"type": "payment", "amount": "200"},
+	}
+	f.seedGrant(t, &store.Grant{
+		ID:                   grantID,
+		Subject:              subject,
+		ClientID:             client.ID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: granted,
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "offline_access"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	form := authCodeForm(codeID, redirect, verifier)
+	form.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	details, ok := body["authorization_details"].([]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("authorization_details=%T %[1]v want one reduced element", body["authorization_details"])
+	}
+	claims := decodeJWTPayload(t, body["access_token"].(string))
+	atDetails, ok := claims["authorization_details"].([]any)
+	if !ok || len(atDetails) != 1 {
+		t.Fatalf("access token authorization_details=%T %[1]v want one reduced element", claims["authorization_details"])
+	}
+	rotated, _ := body["refresh_token"].(string)
+	got, err := f.prov.Store.RefreshTokens().Find(context.Background(), rotated)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(rotated): %v", err)
+	}
+	if len(got.AuthorizationDetails) != 1 || got.AuthorizationDetails[0]["amount"] != "100" {
+		t.Fatalf("refresh authorization_details=%v want amount=100 only", got.AuthorizationDetails)
+	}
+}
+
 func TestAuthCode_NoOfflineAccess_DoesNotIssueRefreshToken(t *testing.T) {
 	t.Parallel()
 
@@ -1291,6 +1350,123 @@ func TestAuthCode_Replay_GrantTombstone_WritesTombstone(t *testing.T) {
 	}
 	if stillRevoked {
 		t.Errorf("IsRevoked must return false for iat strictly after RevokedAt")
+	}
+}
+
+func TestAuthCode_GrantTombstoneRefusesSuccessResponse(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-tombstone-preexisting"
+	const grantID = "grant-tombstone-preexisting"
+	const subject = "user-tombstone-preexisting"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "offline_access"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "offline_access"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+	if err := f.prov.Store.GrantRevocations().RevokeGrant(context.Background(), store.GrantTombstone{
+		GrantID:   grantID,
+		RevokedAt: f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+		Reason:    "test",
+	}); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_grant" {
+		t.Fatalf("error=%v want invalid_grant", body["error"])
+	}
+	if _, ok := body["access_token"]; ok {
+		t.Fatalf("tombstoned grant response must not expose access_token: %v", body)
+	}
+	if _, ok := body["refresh_token"]; ok {
+		t.Fatalf("tombstoned grant response must not expose refresh_token: %v", body)
+	}
+}
+
+// TestAuthCode_GrantTombstoneRefusesAfterElapsedTime pins that the
+// grant-tombstone mint refusal keys off the authorization code's
+// issuance time, not the redemption wall-clock. A grant tombstoned at
+// some instant T0 must refuse redemption of an outstanding code issued
+// before T0 even when the redemption happens later (T0 + Δ): the code
+// predates the revocation, so it is revoked. Keying the IsRevoked probe
+// on "now" instead would skip the refusal for every Δ>0 and mint both an
+// access token and a refresh token on a revoked grant — the exact gap
+// the same-instant TestAuthCode_GrantTombstoneRefusesSuccessResponse
+// fixture cannot observe.
+func TestAuthCode_GrantTombstoneRefusesAfterElapsedTime(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-tombstone-elapsed"
+	const grantID = "grant-tombstone-elapsed"
+	const subject = "user-tombstone-elapsed"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "offline_access"},
+	})
+	// The code was issued an hour before redemption.
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "offline_access"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		CreatedAt:           f.clock.now.Add(-time.Hour),
+		ExpiresAt:           f.clock.now.Add(time.Minute),
+	})
+	// The grant was tombstoned one minute before redemption — strictly
+	// after the code was issued, strictly before "now".
+	if err := f.prov.Store.GrantRevocations().RevokeGrant(context.Background(), store.GrantTombstone{
+		GrantID:   grantID,
+		RevokedAt: f.clock.now.Add(-time.Minute),
+		ExpiresAt: f.clock.now.Add(time.Hour),
+		Reason:    "test",
+	}); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 (revoked grant must refuse) body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_grant" {
+		t.Fatalf("error=%v want invalid_grant", body["error"])
+	}
+	if _, ok := body["access_token"]; ok {
+		t.Fatalf("revoked grant response must not expose access_token: %v", body)
+	}
+	if _, ok := body["refresh_token"]; ok {
+		t.Fatalf("revoked grant response must not expose refresh_token: %v", body)
 	}
 }
 

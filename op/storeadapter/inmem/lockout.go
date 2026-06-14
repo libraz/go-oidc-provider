@@ -78,6 +78,24 @@ func (s *authnLockoutStore) Increment(_ context.Context, subject string, now tim
 	return rec.FailedCount, nil
 }
 
+// StampLock implements [store.AuthnLockoutStamper]. The mutex makes the
+// LockedUntil write atomic with respect to a concurrent Increment, so the
+// lockout stamp cannot overwrite (and thereby lose) an increment that lands
+// between the helper's threshold check and this call (M-AUTHN-4).
+func (s *authnLockoutStore) StampLock(_ context.Context, subject string, lockedUntil time.Time) error {
+	if subject == "" {
+		return errors.New("inmem: authn lockout stamp requires non-empty subject")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.m[subject]
+	if !ok {
+		return store.ErrNotFound
+	}
+	rec.LockedUntil = lockedUntil
+	return nil
+}
+
 func cloneAuthnLockoutRecord(r *store.AuthnLockoutRecord) *store.AuthnLockoutRecord {
 	if r == nil {
 		return nil

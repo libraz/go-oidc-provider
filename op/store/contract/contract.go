@@ -367,6 +367,7 @@ func authCodeDuplicateSave(t *testing.T, f Factory) {
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var refreshCases = []subtest{
 	{"SaveFindConsume", refreshSaveFindConsume},
+	{"ParentIDRoundTrip", refreshParentIDRoundTrip},
 	{"RevokeChain", refreshRevokeChain},
 	{"RevokeChainMissing", refreshRevokeChainMissing},
 }
@@ -427,6 +428,60 @@ func assertRefreshContext(t *testing.T, got, want *store.RefreshToken) {
 	if !reflect.DeepEqual(got.AccessTokenExtra, want.AccessTokenExtra) {
 		t.Fatalf("AccessTokenExtra=%v want %v", got.AccessTokenExtra, want.AccessTokenExtra)
 	}
+}
+
+func refreshParentIDRoundTrip(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	root := newRefresh(b.Now(), "root", nil)
+	child := newRefresh(b.Now(), "child", strPtr("root"))
+	for _, rt := range []*store.RefreshToken{root, child} {
+		if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
+			t.Fatalf("Save %s: %v", rt.ID, err)
+		}
+	}
+	gotChild, err := b.Store.RefreshTokens().Find(ctx, "child")
+	if err != nil {
+		t.Fatalf("Find child: %v", err)
+	}
+	if gotChild.ParentID == nil {
+		t.Fatal("Find child returned nil ParentID")
+	}
+	// A returned ParentID is a chain handle, not a bearer credential:
+	// hash-on-store backends resolve it through RefreshChainResolver, while
+	// backends that return a raw parent pointer round-trip it through Find.
+	gotRoot, err := findChainParent(ctx, b.Store.RefreshTokens(), *gotChild.ParentID)
+	if err != nil {
+		t.Fatalf("resolve(Find(child).ParentID): %v", err)
+	}
+	if gotRoot.GrantID != root.GrantID || gotRoot.ClientID != root.ClientID {
+		t.Fatalf("parent round-trip returned wrong record: %+v want root %+v", gotRoot, root)
+	}
+	// A backend that hashes IDs on store (implements RefreshChainResolver and
+	// therefore returns a one-way digest as ParentID) MUST NOT let that digest
+	// be redeemed through the bearer-credential Find: a leaked digest must be
+	// inert. Backends that return a raw parent pointer have no such handle to
+	// reject, so the check is gated on the optional interface.
+	if _, ok := b.Store.RefreshTokens().(store.RefreshChainResolver); ok {
+		if _, err := b.Store.RefreshTokens().Find(ctx, *gotChild.ParentID); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("Find(ParentID digest): want ErrNotFound, got %v — stored handle is redeemable as a credential", err)
+		}
+	}
+	if err := b.Store.RefreshTokens().RevokeChain(ctx, *gotChild.ParentID); err != nil {
+		t.Fatalf("RevokeChain(Find(child).ParentID): %v", err)
+	}
+	assertRevoked(t, b.Store, "child")
+}
+
+// findChainParent resolves a chain handle (a value returned as
+// [store.RefreshToken.ParentID]) the way the OP's revocation walk does:
+// through [store.RefreshChainResolver] when the backend hashes parent pointers,
+// otherwise through the generic Find for backends that return raw pointers.
+func findChainParent(ctx context.Context, tokens store.RefreshTokenStore, handle string) (*store.RefreshToken, error) {
+	if r, ok := tokens.(store.RefreshChainResolver); ok {
+		return r.FindByStoredHandle(ctx, handle)
+	}
+	return tokens.Find(ctx, handle)
 }
 
 func refreshRevokeChain(t *testing.T, f Factory) {

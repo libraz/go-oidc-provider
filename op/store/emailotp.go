@@ -117,6 +117,15 @@ type EmailOTPStore interface {
 	// post-success counter reset.
 	Put(ctx context.Context, r *EmailOTPRecord) error
 
+	// Consume atomically marks the pending challenge represented by r
+	// as consumed. It MUST succeed for at most one caller observing the
+	// same unconsumed challenge and MUST return [ErrAlreadyConsumed]
+	// when another caller has already consumed it. Backends SHOULD
+	// verify that the stored challenge still matches r.CodeSalt /
+	// r.CodeHash before stamping ConsumedAt so a stale success cannot
+	// consume a newer code issued for the same subject.
+	Consume(ctx context.Context, r *EmailOTPRecord) error
+
 	// Delete removes the pending challenge for subject. It MUST return
 	// [ErrNotFound] if no such challenge exists so callers can
 	// distinguish a no-op delete from a successful one. The library

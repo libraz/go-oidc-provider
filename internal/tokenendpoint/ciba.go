@@ -68,9 +68,9 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !applyCIBAPollDecision(ctx, w, deps, rec, in.AuthReqID, client.ID) {
 		return
 	}
-	authorized, ok := authorizeCIBAPoll(w, deps, client, rec, binding)
+	authorized, reason, ok := authorizeCIBAPoll(w, deps, client, rec, binding)
 	if !ok {
-		emitCIBAReject(ctx, deps, client.ID, errInvalidGrant)
+		emitCIBAReject(ctx, deps, client.ID, reason)
 		return
 	}
 	consumed, ok := consumeCIBARequest(ctx, w, deps, in.AuthReqID)
@@ -252,7 +252,7 @@ func authorizeCIBAPoll(
 	client *store.Client,
 	rec *store.CIBARequest,
 	binding tokenBinding,
-) (*cgrant.Authorized, bool) {
+) (*cgrant.Authorized, string, bool) {
 	authorized, err := cgrant.Authorize(cgrant.AuthorizeInput{
 		Client:                client,
 		Record:                rec,
@@ -261,12 +261,33 @@ func authorizeCIBAPoll(
 	})
 	if err != nil {
 		writeCIBAAuthError(w, err)
-		return nil, false
+		return nil, cibaAuthErrorCode(err), false
 	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, authorized.Scope) {
-		return nil, false
+		return nil, errInvalidScope, false
 	}
-	return authorized, true
+	return authorized, "", true
+}
+
+func cibaAuthErrorCode(err error) string {
+	switch {
+	case errors.Is(err, cgrant.ErrGrantNotPermitted):
+		return errUnauthorizedClient
+	case errors.Is(err, cgrant.ErrScopeForbidden):
+		return errInvalidScope
+	case errors.Is(err, cgrant.ErrPendingApproval):
+		return errAuthorizationPending
+	case errors.Is(err, cgrant.ErrDenied):
+		return errAccessDenied
+	case errors.Is(err, cgrant.ErrExpired):
+		return errExpiredToken
+	case errors.Is(err, cgrant.ErrCnfBindingMismatch),
+		errors.Is(err, cgrant.ErrCnfBindingMissing),
+		errors.Is(err, cgrant.ErrAlreadyRedeemed):
+		return errInvalidGrant
+	default:
+		return errServerError
+	}
 }
 
 // writeCIBAAuthError translates the [cgrant.Err*] sentinels onto

@@ -549,6 +549,42 @@ func TestAuthorize_MaxAgeViolationForcesInteraction(t *testing.T) {
 	}
 }
 
+func TestAuthorize_MaxAgeZeroForcesInteraction(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now,
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	v := goodAuthorizeValues()
+	v.Set("max_age", "0")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	loc := mustParseLocation(t, resp)
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Errorf("Location=%s want interaction redirect", loc.String())
+	}
+}
+
 func TestAuthorize_ACRUnsatisfiedForcesInteraction(t *testing.T) {
 	t.Parallel()
 
@@ -576,6 +612,45 @@ func TestAuthorize_ACRUnsatisfiedForcesInteraction(t *testing.T) {
 	}
 	v := goodAuthorizeValues()
 	v.Set("acr_values", "urn:acr:high")
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		h.authorizePath+"?"+v.Encode(), http.NoBody)
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	loc := mustParseLocation(t, resp)
+	if !strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Errorf("Location=%s want interaction redirect", loc.String())
+	}
+}
+
+func TestAuthorize_ClaimsEssentialACRUnsatisfiedForcesInteraction(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, func(d *authorizeendpoint.Deps) {
+		d.ClaimsParameterEnabled = true
+	})
+	out, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now,
+		ACR:      "urn:acr:low",
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if err := h.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-1",
+		Subject:   "user-1",
+		ClientID:  "client-1",
+		Scope:     []string{"openid", "profile"},
+		CreatedAt: h.clock.now,
+		UpdatedAt: h.clock.now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	v := goodAuthorizeValues()
+	v.Set("claims", `{"id_token":{"acr":{"essential":true,"values":["urn:acr:high"]}}}`)
 	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
 		h.authorizePath+"?"+v.Encode(), http.NoBody)
 	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: out.Cookie})

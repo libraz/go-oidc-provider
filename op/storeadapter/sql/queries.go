@@ -138,6 +138,7 @@ type queries struct {
 	deviceCodeStrikeReadUser  string
 	deviceCodeViolationIncr   string
 	deviceCodeViolationRead   string
+	deviceCodeGC              string
 
 	// CIBA requests (OpenID Connect CIBA Core 1.0)
 	cibaSave          string
@@ -148,6 +149,7 @@ type queries struct {
 	cibaConsume       string
 	cibaViolationIncr string
 	cibaViolationRead string
+	cibaGC            string
 }
 
 // buildQueries assembles every SQL template the adapter needs for the
@@ -209,7 +211,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		refreshFind: d.rebind(
 			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
-				" FROM " + n.refreshes + " WHERE id = ?"),
+				" FROM " + n.refreshes + " WHERE id IN (?, ?)"),
 		refreshConsume: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),
 		refreshRevokeChainUpdate: d.rebind(
@@ -236,7 +238,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		accessTokenRevokeByGrant: d.rebind(
 			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
 		accessTokenGC: d.rebind(
-			"DELETE FROM " + n.accessTokens + " WHERE expires_at < ?"),
+			"DELETE FROM " + n.accessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// opaque access tokens (ADR 0024). The PK is the SHA-256 digest
 		// of the raw bearer ID; callers hash before binding so the raw
@@ -253,7 +255,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		opaqueAccessTokenRevokeByGrant: d.rebind(
 			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
 		opaqueAccessTokenGC: d.rebind(
-			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at < ?"),
+			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// grant revocation (ADR 0025). Two physical tables share one
 		// substore: oidc_grant_revocations holds per-grant tombstones,
@@ -374,7 +376,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		jtiHas: d.rebind(
 			"SELECT expires_at FROM " + n.jtis + " WHERE jti = ?"),
 		jtiGC: d.rebind(
-			"DELETE FROM " + n.jtis + " WHERE expires_at < ?"),
+			"DELETE FROM " + n.jtis + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// users
 		userFindBySubject: d.rebind(
@@ -475,6 +477,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard),
 		deviceCodeViolationRead: d.rebind(
 			"SELECT poll_violations FROM " + n.deviceCodes + " WHERE id = ?" + notExpiredGuard),
+		deviceCodeGC: d.rebind(
+			"DELETE FROM " + n.deviceCodes + " WHERE expires_at > 0 AND expires_at < ?"),
 
 		// CIBA requests (OpenID Connect CIBA Core 1.0). The id column
 		// holds the SHA-256 digest of the wire auth_req_id; the substore
@@ -502,6 +506,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" WHERE id = ? AND poll_violations < 255" + notExpiredGuard),
 		cibaViolationRead: d.rebind(
 			"SELECT poll_violations FROM " + n.cibaRequests + " WHERE id = ?" + notExpiredGuard),
+		cibaGC: d.rebind(
+			"DELETE FROM " + n.cibaRequests + " WHERE expires_at > 0 AND expires_at < ?"),
 	}
 
 	// Layer 6: scan every produced query for SQL-injection

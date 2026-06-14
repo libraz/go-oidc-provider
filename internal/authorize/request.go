@@ -144,6 +144,17 @@ type Request struct {
 	// GrantID is the Grant Management "grant_id" parameter the request
 	// targets (required for replace / merge). Empty when absent.
 	GrantID string
+
+	// InternalAddAccount is an OP-private marker added only to the
+	// chooser prompt's AddAccountURL. It is not part of OAuth/OIDC; the
+	// authorize endpoint accepts it only when the active session cookie
+	// still belongs to [InternalChooserGroupID].
+	InternalAddAccount bool
+
+	// InternalChooserGroupID carries the chooser group the AddAccountURL
+	// was minted for. The value is ignored unless [InternalAddAccount]
+	// is true and the current session resolves to the same group.
+	InternalChooserGroupID string
 }
 
 // Policy carries the runtime policy bits the [Request.Validate]

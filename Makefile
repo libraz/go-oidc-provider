@@ -2,7 +2,7 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := verify
 
-.PHONY: tools fmt lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
+.PHONY: tools format lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
         scenario-coverage-yaml-only scenario-stats scenario-advisories scenario-advisories-strict \
         example-01 example-03 example-17 example-41 example-51 \
@@ -14,7 +14,7 @@ SHELL := /usr/bin/env bash
 tools:
 	@scripts/install-tools.sh
 
-fmt:
+format:
 	@scripts/fmt.sh
 
 lint:

@@ -128,11 +128,13 @@ func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, err
 	return decode(rec), nil
 }
 
-// Touch extends the session's idle timer atomically. The contract
-// requires the operation to be atomic with respect to the existing
-// record, so the adapter performs a Find-then-SET sequence under a
-// MULTI/EXEC pipeline. The chooser-group set is not touched —
-// Touch only changes the TTL and UpdatedAt fields on the parent
+// Touch extends the session's idle timer without recreating a deleted
+// record. Redis has no compare-and-update JSON primitive in the plain
+// command set, so the adapter fetches and rewrites the encoded value, then
+// commits with SET XX. If a concurrent Delete removes the key between the
+// fetch and the write, SET XX reports false and Touch returns ErrNotFound
+// instead of resurrecting the session. The chooser-group set is not
+// touched — Touch only changes the TTL and UpdatedAt fields on the parent
 // record.
 func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedAt time.Time) error {
 	rec, err := s.fetch(ctx, id)
@@ -159,8 +161,12 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 		// real Delete to keep the chooser-group index honest.
 		return s.Delete(ctx, id)
 	}
-	if err := s.parent.client.Set(ctx, s.sessionKey(id), payload, ttl).Err(); err != nil {
+	ok, err := s.parent.client.SetXX(ctx, s.sessionKey(id), payload, ttl).Result()
+	if err != nil {
 		return fmt.Errorf("oidcredis: SET session (Touch): %w", err)
+	}
+	if !ok {
+		return store.ErrNotFound
 	}
 	return nil
 }

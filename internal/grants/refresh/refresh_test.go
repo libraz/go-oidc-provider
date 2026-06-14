@@ -1016,6 +1016,31 @@ func (s *graceFindFaultStore) RevokeChain(context.Context, string) error {
 
 func (s *graceFindFaultStore) RevokeByGrant(context.Context, string) error { return nil }
 
+type rootLookupFaultStore struct {
+	rec     *store.RefreshToken
+	revoked bool
+}
+
+func (s *rootLookupFaultStore) Save(context.Context, *store.RefreshToken) error { return nil }
+
+func (s *rootLookupFaultStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
+	if id == s.rec.ID {
+		return s.rec, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+func (s *rootLookupFaultStore) Consume(context.Context, string) (*store.RefreshToken, error) {
+	return s.rec, store.ErrAlreadyConsumed
+}
+
+func (s *rootLookupFaultStore) RevokeChain(context.Context, string) error {
+	s.revoked = true
+	return nil
+}
+
+func (s *rootLookupFaultStore) RevokeByGrant(context.Context, string) error { return nil }
+
 // TestExchange_ChainRevokeFailure_EmitsAuditEvent pins H-A2: when the
 // post-replay chain revoke encounters a transport fault the
 // exchanger MUST emit a warn-level audit event so SOC tooling can
@@ -1071,6 +1096,48 @@ func TestExchange_ChainRevokeFailure_EmitsAuditEvent(t *testing.T) {
 	if !found {
 		t.Errorf("expected refresh.chain_revoke_failed warn event, got %+v", events)
 	}
+}
+
+func TestExchange_ChainRootLookupFailure_EmitsAuditEvent(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	parent := "missing-parent"
+	consumedAt := t0.Add(-2 * refresh.GraceTTLDefault)
+	st := &rootLookupFaultStore{rec: &store.RefreshToken{
+		ID:         "rt-replayed",
+		ClientID:   "client-1",
+		Subject:    "user-1",
+		GrantID:    "grant-1",
+		ParentID:   &parent,
+		Scope:      []string{"openid"},
+		ConsumedAt: &consumedAt,
+		ExpiresAt:  t0.Add(time.Hour),
+		CreatedAt:  t0.Add(-time.Hour),
+	}}
+	em := &recordingEmitter{}
+	exc, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store: st,
+		Clock: func() time.Time { return t0 },
+		Audit: em,
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+
+	if _, err := exc.Exchange(context.Background(), refresh.ExchangeInput{Token: "rt-replayed", ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay err=%v want ErrTokenReplayed", err)
+	}
+	if st.revoked {
+		t.Fatal("RevokeChain called even though root lookup failed")
+	}
+	events := em.snapshot()
+	for _, ev := range events {
+		if ev.Name == "refresh.chain_revoke_failed" && ev.Level == audit.LevelWarn && ev.Extras["reason"] == "chain_root_lookup_failed" {
+			return
+		}
+	}
+	t.Fatalf("expected chain_root_lookup_failed audit event, got %+v", events)
 }
 
 func TestExchange_Replay_EmitsReplayDetectedAuditEvent(t *testing.T) {

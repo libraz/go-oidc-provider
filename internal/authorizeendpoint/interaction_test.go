@@ -211,6 +211,41 @@ func TestInteractionPost_HappyPath_EmitsSessionAndConsentAudit(t *testing.T) {
 	}
 }
 
+func TestInteractionPost_TerminalReplayDoesNotIssueSecondCode(t *testing.T) {
+	t.Parallel()
+
+	emitter := &recordingEmitter{}
+	h := newHarness(t, func(d *authorizeendpoint.Deps) {
+		d.Audit = emitter
+	})
+	start := startInteractionFlow(t, h)
+
+	getResp := doInteractionGet(t, h, start)
+	defer getResp.Body.Close()
+	stateRef, csrfCookie := readPromptStateRef(t, getResp)
+
+	body := interaction.FormSubmission{
+		StateRef: stateRef,
+		Values:   map[string]string{testkit.SubjectFieldName: "user-1"},
+	}
+	first := postSubmission(t, h, start, csrfCookie, body)
+	if first.Code != http.StatusFound {
+		t.Fatalf("first status=%d body=%s", first.Code, first.Body.String())
+	}
+	beforeReplayEvents := len(emitter.snapshot())
+
+	second := postSubmission(t, h, start, csrfCookie, body)
+	if second.Code == http.StatusFound {
+		t.Fatalf("replayed terminal POST returned redirect/code: Location=%q", second.Header().Get("Location"))
+	}
+	if second.Code != http.StatusNotFound && second.Code != http.StatusGone {
+		t.Fatalf("replay status=%d want 404/410 body=%s", second.Code, second.Body.String())
+	}
+	if after := len(emitter.snapshot()); after != beforeReplayEvents {
+		t.Fatalf("replayed terminal POST emitted %d new audit events", after-beforeReplayEvents)
+	}
+}
+
 // TestInteractionPost_AcceptsCSRFTokenViaFormBody covers the SSR
 // fallback path in verifyCSRFToken: a request that posts a
 // url-encoded body with the csrf_token field (and no X-CSRF-Token

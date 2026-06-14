@@ -47,6 +47,24 @@ func (s *totpStore) Put(_ context.Context, r *store.TOTPRecord) error {
 	return nil
 }
 
+// Accept implements [store.TOTPStore].
+func (s *totpStore) Accept(_ context.Context, r *store.TOTPRecord) error {
+	if r == nil {
+		return errors.New("inmem: nil totp record")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.m[r.Subject]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if r.LastAcceptedStep == 0 || current.LastAcceptedStep >= r.LastAcceptedStep {
+		return store.ErrAlreadyConsumed
+	}
+	s.m[r.Subject] = cloneTOTPRecord(r)
+	return nil
+}
+
 // Delete implements [store.TOTPStore].
 func (s *totpStore) Delete(_ context.Context, subject string) error {
 	s.mu.Lock()

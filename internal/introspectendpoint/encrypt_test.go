@@ -99,12 +99,11 @@ func (r privKeyResolver) Resolve(kid string) (any, bool) {
 
 func (r privKeyResolver) All() []any { return []any{r.key} }
 
-// TestHandler_Encrypted_JSONDefault_IgnoresMetadata confirms a
-// client that registered introspection_encrypted_response_alg / _enc
-// still receives the legacy JSON body when neither the Accept header
-// nor the JWT-force gate selects RFC 9701. Encryption is layered
-// strictly on top of the JWT path; a JSON-asking RP is unchanged.
-func TestHandler_Encrypted_JSONDefault_IgnoresMetadata(t *testing.T) {
+// TestHandler_Encrypted_MetadataForcesJWTShape confirms a client that
+// registered introspection_encrypted_response_alg / _enc receives the
+// RFC 9701 JWT response shape even when the Accept header does not ask
+// for application/token-introspection+jwt.
+func TestHandler_Encrypted_MetadataForcesJWTShape(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
@@ -130,12 +129,36 @@ func TestHandler_Encrypted_JSONDefault_IgnoresMetadata(t *testing.T) {
 		dump, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d body=%s", resp.StatusCode, dump)
 	}
-	if got := resp.Header.Get("Content-Type"); got != "application/json" {
-		t.Errorf("Content-Type=%q want application/json", got)
+	if got := resp.Header.Get("Content-Type"); got != jwtAccept {
+		t.Errorf("Content-Type=%q want %q", got, jwtAccept)
 	}
-	body := decodeJSON(t, resp)
-	if active, _ := body["active"].(bool); !active {
-		t.Errorf("active=%v want true; body=%v", body["active"], body)
+	raw := readBody(t, resp)
+	if got := strings.Count(raw, "."); got != 4 {
+		t.Fatalf("body has %d dots; want 4 (JWE); body=%q", got, raw)
+	}
+
+	resolver := privKeyResolver{kid: "rp-enc-1", key: priv}
+	dec, err := jose.Decrypt(raw, resolver)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	if dec.ContentType != "JWT" {
+		t.Errorf("cty=%q want JWT", dec.ContentType)
+	}
+	parsed, err := jwt.ParseSigned(string(dec.Plaintext), []josev4.SignatureAlgorithm{josev4.ES256})
+	if err != nil {
+		t.Fatalf("ParseSigned inner: %v", err)
+	}
+	claims := map[string]any{}
+	if err := parsed.Claims(f.publicSigner(t), &claims); err != nil {
+		t.Fatalf("inner Claims: %v", err)
+	}
+	intro, ok := claims["token_introspection"].(map[string]any)
+	if !ok {
+		t.Fatalf("token_introspection missing: %v", claims)
+	}
+	if active, _ := intro["active"].(bool); !active {
+		t.Errorf("active=%v want true; token_introspection=%v", intro["active"], intro)
 	}
 }
 

@@ -43,6 +43,7 @@ func newDeviceCode(now time.Time, id, userCode string) *store.DeviceCode {
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var deviceCodeCases = []subtest{
 	{"SaveFind", deviceCodeSaveFind},
+	{"SaveDoesNotMutateInput", deviceCodeSaveDoesNotMutateInput},
 	{"FindByUserCodeHidesDeviceCode", deviceCodeFindByUserCode},
 	{"UserCodeApprovalPath", deviceCodeUserCodeApprovalPath},
 	{"ApproveConsumeOnce", deviceCodeApproveConsumeOnce},
@@ -52,8 +53,30 @@ var deviceCodeCases = []subtest{
 	{"StrikesIncrement", deviceCodeStrikesIncrement},
 	{"PollViolationsIncrement", deviceCodePollViolationsIncrement},
 	{"Expired", deviceCodeExpired},
+	{"ExpiredSaveReleasesUserCode", deviceCodeExpiredSaveReleasesUserCode},
 	{"DuplicateUserCode", deviceCodeDuplicateUserCode},
 	{"TransitionMissing", deviceCodeTransitionMissing},
+}
+
+func deviceCodeSaveDoesNotMutateInput(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	rec := newDeviceCode(b.Now(), "dc-default-status", "AAAA-0101")
+	rec.Status = 0
+	if err := dc.Save(ctx, rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if rec.Status != 0 {
+		t.Fatalf("Save mutated input Status=%v, want zero", rec.Status)
+	}
+	got, err := dc.FindByDeviceCode(ctx, "dc-default-status")
+	if err != nil {
+		t.Fatalf("FindByDeviceCode: %v", err)
+	}
+	if got.Status != store.DeviceCodeStatusPending {
+		t.Fatalf("stored Status=%v want Pending", got.Status)
+	}
 }
 
 func deviceCodeUserCodeApprovalPath(t *testing.T, f Factory) {
@@ -283,6 +306,31 @@ func deviceCodeExpired(t *testing.T, f Factory) {
 	}
 	if _, err := dc.IncrementUserCodeStrike(ctx, "dc-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("IncrementUserCodeStrike expired: want ErrNotFound, got %v", err)
+	}
+}
+
+func deviceCodeExpiredSaveReleasesUserCode(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	expired := newDeviceCode(b.Now(), "dc-exp-old", "AAAA-0111")
+	expired.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := dc.Save(ctx, expired); err != nil {
+		t.Fatalf("Save expired: %v", err)
+	}
+	fresh := newDeviceCode(b.Now(), "dc-exp-new", "AAAA-0111")
+	if err := dc.Save(ctx, fresh); err != nil {
+		t.Fatalf("Save fresh with expired user_code: %v", err)
+	}
+	if _, err := dc.FindByDeviceCode(ctx, "dc-exp-old"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find old expired: want ErrNotFound, got %v", err)
+	}
+	got, err := dc.FindByUserCode(ctx, "AAAA-0111")
+	if err != nil {
+		t.Fatalf("FindByUserCode fresh: %v", err)
+	}
+	if got.UserCode != "AAAA-0111" {
+		t.Fatalf("fresh user_code mismatch: %+v", got)
 	}
 }
 

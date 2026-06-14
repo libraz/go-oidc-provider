@@ -277,6 +277,48 @@ func TestRegister_RejectsNegativeDefaultMaxAge(t *testing.T) {
 	}
 }
 
+func TestRegister_IgnoresStandardUnstoredMetadata(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+
+	body := minimalMetadata()
+	body["software_id"] = "software-123"
+	body["software_version"] = "2026.6"
+	body["tls_client_certificate_bound_access_tokens"] = true
+	body["backchannel_token_delivery_mode"] = "poll"
+	body["backchannel_client_notification_endpoint"] = "https://rp.test.invalid/ciba/callback"
+	body["backchannel_authentication_request_signing_alg"] = "ES256"
+	body["backchannel_user_code_parameter"] = true
+	body["authorization_signed_response_alg"] = "ES256"
+	body["authorization_details_types"] = []string{"payment_initiation"}
+
+	resp := f.post(t, body, iat)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 201 body=%s", resp.StatusCode, raw)
+	}
+	got := decodeBody(t, resp)
+	for _, ignored := range []string{
+		"software_id",
+		"software_version",
+		"tls_client_certificate_bound_access_tokens",
+		"backchannel_token_delivery_mode",
+		"backchannel_client_notification_endpoint",
+		"backchannel_authentication_request_signing_alg",
+		"backchannel_user_code_parameter",
+		"authorization_signed_response_alg",
+		"authorization_details_types",
+	} {
+		if _, ok := got[ignored]; ok {
+			t.Errorf("response echoed ignored metadata %q: %v", ignored, got[ignored])
+		}
+	}
+}
+
 // TestRegister_HappyPath_PostLogoutRedirectURIsRoundTrip confirms a
 // POST carrying a valid post_logout_redirect_uris list is accepted,
 // the value is persisted on the [store.Client] record, and the

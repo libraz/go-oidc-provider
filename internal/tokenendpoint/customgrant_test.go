@@ -354,6 +354,79 @@ func TestCustomGrant_BoundAccessToken_PlainBearer(t *testing.T) {
 	}
 }
 
+func TestCustomGrant_BoundAccessToken_JTIRegistryRegistersShadowRow(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:bound-jti-registry"
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			BoundAccessToken: &op.BoundAccessToken{
+				Subject: op.Subject("user-bound-jti"),
+				TTL:     2 * time.Minute,
+			},
+			Scope: []string{"read"},
+		},
+	}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithAccessTokenRevocationStrategy(op.RevocationStrategyJTIRegistry),
+			op.WithCustomGrant(handler),
+		),
+	)
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token", clock: clock}
+
+	client, secret := customGrantClient(t, prov, grantURN, []string{"read"}, nil)
+
+	resp := f.post(t, url.Values{"grant_type": []string{grantURN}}, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	at, _ := body["access_token"].(string)
+	if at == "" {
+		t.Fatal("access_token missing")
+	}
+	parsed, _, err := (&tokens.AccessTokenVerifier{
+		Keys:   mustKeySet(t, prov),
+		Issuer: prov.Issuer,
+		Clock:  clock,
+	}).Verify(at)
+	if err != nil {
+		t.Fatalf("Verify access token: %v", err)
+	}
+	rec, err := prov.Store.AccessTokens().Find(context.Background(), parsed.JTI)
+	if err != nil {
+		t.Fatalf("AccessTokens.Find: %v", err)
+	}
+	if rec == nil {
+		t.Fatalf("AccessTokens.Register MUST fire under JTIRegistry; no row for jti=%q", parsed.JTI)
+	}
+	if rec.GrantID != parsed.GrantID {
+		t.Fatalf("shadow row GrantID=%q want %q", rec.GrantID, parsed.GrantID)
+	}
+	if rec.Subject != "user-bound-jti" {
+		t.Fatalf("shadow row Subject=%q want user-bound-jti", rec.Subject)
+	}
+	n, err := prov.Store.AccessTokens().RevokeByGrant(context.Background(), parsed.GrantID)
+	if err != nil {
+		t.Fatalf("RevokeByGrant: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("RevokeByGrant touched %d rows, want 1", n)
+	}
+	rec, err = prov.Store.AccessTokens().Find(context.Background(), parsed.JTI)
+	if err != nil {
+		t.Fatalf("AccessTokens.Find after revoke: %v", err)
+	}
+	if rec == nil || !rec.Revoked {
+		t.Fatalf("custom-grant bound AT shadow row not revoked after grant cascade: %+v", rec)
+	}
+}
+
 // decodeJWTPayload base64url-decodes the second segment of a compact-
 // serialised JWT and returns it as a JSON object. The helper only
 // inspects the payload — the access-token verifier above is the
@@ -670,6 +743,57 @@ func TestCustomGrant_RefreshRotationPreservesBoundContext(t *testing.T) {
 	}
 	if _, ok := claims["act"].(map[string]any); !ok {
 		t.Fatalf("refreshed access token missing act claim: %v", claims)
+	}
+}
+
+func TestCustomGrant_RefreshTokenDroppedForMultiAudience(t *testing.T) {
+	t.Parallel()
+
+	const grantURN = "urn:example:grant-type:refresh-multi-audience"
+	handler := &recordingGrant{
+		name: grantURN,
+		response: op.CustomGrantResponse{
+			BoundAccessToken: &op.BoundAccessToken{
+				Subject:  op.Subject("public-subject-multi-aud"),
+				Audience: []string{"https://api-1.example.com", "https://api-2.example.com"},
+			},
+			IssueRefreshToken: true,
+			Subject:           op.Subject("public-subject-multi-aud"),
+			Scope:             []string{"read"},
+			Audience:          []string{"https://api-1.example.com", "https://api-2.example.com"},
+		},
+	}
+	prov := testkit.NewProvider(t, testkit.WithOptions(op.WithCustomGrant(handler)))
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/token"}
+
+	const secret = "shh-its-a-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := prov.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "client-cg-refresh-multi-aud",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{grantURN, "refresh_token"},
+		Scopes:                  []string{"read"},
+		Resources:               []string{"https://api-1.example.com", "https://api-2.example.com"},
+	})
+
+	resp := f.post(t, url.Values{"grant_type": []string{grantURN}}, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if _, ok := body["refresh_token"]; ok {
+		t.Fatalf("refresh_token must be omitted for multi-audience custom grants: %v", body)
+	}
+	claims := decodeJWTPayload(t, body["access_token"].(string))
+	aud, ok := claims["aud"].([]any)
+	if !ok || len(aud) != 2 {
+		t.Fatalf("access token aud=%T %[1]v want two audiences", claims["aud"])
 	}
 }
 

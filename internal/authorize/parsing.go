@@ -90,6 +90,8 @@ func ParseValues(v url.Values) (*Request, error) {
 		AuthorizationDetailsRaw: singles["authorization_details"],
 		GrantManagementAction:   singles["grant_management_action"],
 		GrantID:                 singles["grant_id"],
+		InternalAddAccount:      singles["_oidc_add_account"] == "1",
+		InternalChooserGroupID:  singles["_oidc_chooser_group"],
 	}, nil
 }
 
@@ -116,6 +118,8 @@ var singleParseFields = []string{
 	"authorization_details",
 	"grant_management_action",
 	"grant_id",
+	"_oidc_add_account",
+	"_oidc_chooser_group",
 }
 
 // parseSingleValues extracts every single-valued parameter from v,

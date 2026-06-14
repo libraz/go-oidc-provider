@@ -79,9 +79,13 @@ type AuthnLockoutStore interface {
 
 	// Put creates or replaces the lockout record for r.Subject with
 	// upsert semantics. The library uses Put for the slow paths:
-	// window rollover (FirstFailureAt re-stamped), success reset
-	// (FailedCount=0, LockedUntil=zero), and lockout stamping
-	// (LockedUntil set to a future time).
+	// window rollover (FirstFailureAt re-stamped) and success reset
+	// (FailedCount=0, LockedUntil=zero). It is also the fallback for
+	// lockout stamping (LockedUntil set to a future time) when the store
+	// does not implement [AuthnLockoutStamper]; because Put replaces the
+	// whole row, that fallback can lose a concurrent Increment (see
+	// AuthnLockoutStamper), so stores backing a real brute-force gate
+	// SHOULD implement the extension.
 	Put(ctx context.Context, r *AuthnLockoutRecord) error
 
 	// Increment atomically increments the FailedCount for subject and
@@ -101,4 +105,26 @@ type AuthnLockoutStore interface {
 	// the lockout gate runs in the lockout helper before the call to
 	// the underlying verifier.
 	Increment(ctx context.Context, subject string, now time.Time) (int, error)
+}
+
+// AuthnLockoutStamper is an optional extension of [AuthnLockoutStore]. A
+// store that implements it lets the lockout helper stamp LockedUntil with a
+// targeted atomic write instead of the read-modify-write
+// [AuthnLockoutStore.Put] over the whole row.
+//
+// The Put-based stamp is correct in isolation but races a concurrent
+// [AuthnLockoutStore.Increment]: Put writes back a row snapshot taken before
+// the concurrent increment landed, silently dropping it. That is the same
+// lost-update class the Increment contract defends against (M-AUTHN-4), and
+// it deflates the brute-force counter so the long-threshold lock is harder
+// to reach than designed. Stores backing a real brute-force gate SHOULD
+// implement StampLock; the reference in-memory store does.
+type AuthnLockoutStamper interface {
+	// StampLock atomically sets LockedUntil for subject without modifying
+	// FailedCount or FirstFailureAt. It MUST return [ErrNotFound] when no
+	// record exists for subject. Implementations MUST perform the write as
+	// a targeted update — SQL "UPDATE ... SET locked_until = ? WHERE
+	// subject = ?"; in-memory under the same lock Increment holds — so a
+	// concurrent Increment is never overwritten.
+	StampLock(ctx context.Context, subject string, lockedUntil time.Time) error
 }

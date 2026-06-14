@@ -247,6 +247,10 @@ type fixedDPoPClock struct{ now time.Time }
 
 func (c fixedDPoPClock) Now() time.Time { return c.now }
 
+type mutableClock struct{ now time.Time }
+
+func (c *mutableClock) Now() time.Time { return c.now }
+
 type recordingJTIStore struct {
 	jti       string
 	expiresAt time.Time
@@ -611,8 +615,45 @@ func TestPrivateKeyJWTVerifier_JTIKeyScopedByClient(t *testing.T) {
 	if jtis.jti != "clientassertion:client-1:shared-jti" {
 		t.Fatalf("jti key=%q want clientassertion:client-1:shared-jti", jtis.jti)
 	}
-	if want := now.Add(time.Minute); !jtis.expiresAt.Equal(want) {
+	if want := now.Add(2 * time.Minute); !jtis.expiresAt.Equal(want) {
 		t.Fatalf("expiresAt=%s want %s", jtis.expiresAt, want)
+	}
+}
+
+func TestPrivateKeyJWTVerifier_JTIReplayRejectedThroughLeeway(t *testing.T) {
+	t.Parallel()
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	pubKeys := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{{
+		Key: &priv.PublicKey, KeyID: "rp-key-1", Algorithm: string(josev4.ES256), Use: "sig",
+	}}}
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	clk := &mutableClock{now: now}
+	const tokenAud = "https://op.test/oidc/token" //nolint:gosec // not a credential.
+	assertion := signAssertion(t, priv, "rp-key-1", map[string]any{
+		"iss": "client-1",
+		"sub": "client-1",
+		"aud": tokenAud,
+		"jti": "leeway-replay",
+		"iat": now.Unix(),
+		"exp": now.Add(time.Minute).Unix(),
+	})
+	v := &clientauth.PrivateKeyJWTVerifier{
+		Resolver: staticResolver{keys: pubKeys},
+		JTIStore: inmem.New(inmem.WithClock(clk)).ConsumedJTIs(),
+		Audience: tokenAud,
+		Clock:    clk.Now,
+	}
+	if err := v.Verify(context.Background(), "client-1", assertion); err != nil {
+		t.Fatalf("first verify: %v", err)
+	}
+
+	clk.now = now.Add(time.Minute + 30*time.Second)
+	if err := v.Verify(context.Background(), "client-1", assertion); !errors.Is(err, clientauth.ErrAssertionReplayed) {
+		t.Fatalf("leeway replay err=%v want ErrAssertionReplayed", err)
 	}
 }
 

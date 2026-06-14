@@ -3,6 +3,7 @@ package oidcsql_test
 import (
 	"context"
 	databasesql "database/sql"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +179,24 @@ func TestSQLite_HashOnStore_RefreshToken(t *testing.T) {
 	if got.ID != rawRefreshID {
 		t.Fatalf("Find returned ID %q, want %q (caller-presented value)", got.ID, rawRefreshID)
 	}
+	if got.ParentID == nil {
+		t.Fatal("Find returned nil ParentID for child")
+	}
+	// The ParentID round-trip is a chain-walk operation, not a bearer
+	// credential: the parent digest resolves through RefreshChainResolver,
+	// never through the public Find credential path (see
+	// TestSQLite_RefreshDigestNotRedeemable).
+	resolver, ok := s.RefreshTokens().(store.RefreshChainResolver)
+	if !ok {
+		t.Fatal("SQL RefreshTokens must implement store.RefreshChainResolver")
+	}
+	parentByPointer, err := resolver.FindByStoredHandle(ctx, *got.ParentID)
+	if err != nil {
+		t.Fatalf("FindByStoredHandle(Find(child).ParentID): %v", err)
+	}
+	if parentByPointer.GrantID != "g" {
+		t.Fatalf("FindByStoredHandle(ParentID).GrantID=%q want g", parentByPointer.GrantID)
+	}
 
 	// RevokeChain walks the parent_id digest graph; revoking the
 	// root must mark the descendant too.
@@ -190,6 +209,56 @@ func TestSQLite_HashOnStore_RefreshToken(t *testing.T) {
 	}
 	if !child.Revoked {
 		t.Fatalf("child not revoked after RevokeChain on parent")
+	}
+}
+
+// TestSQLite_RefreshDigestNotRedeemable pins the hash-on-store
+// credential boundary for refresh tokens: the public Find / Consume
+// lookups MUST hash the presented value, so the stored digest itself —
+// the exact bytes an attacker would obtain from a database snapshot,
+// replica, or backup of oidc_refresh_tokens.id — is NOT redeemable as a
+// refresh token. The chain-walk resolver still resolves the same digest
+// because it is an internal revocation pointer, not a bearer credential.
+func TestSQLite_RefreshDigestNotRedeemable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _, now := openHashOnStoreFixture(t)
+
+	if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID:        rawRefreshID,
+		ClientID:  "c",
+		Subject:   "sub",
+		GrantID:   "g",
+		ExpiresAt: now.Add(time.Hour),
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// The value an attacker reads from the id column is the digest.
+	storedDigest := patterns.Digest(rawRefreshID)
+
+	if _, err := s.RefreshTokens().Find(ctx, storedDigest); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find(storedDigest): want ErrNotFound, got %v — digest redeemable as refresh token", err)
+	}
+	if _, err := s.RefreshTokens().Consume(ctx, storedDigest); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Consume(storedDigest): want ErrNotFound, got %v — digest redeemable as refresh token", err)
+	}
+
+	// The raw bearer secret still resolves and consumes normally.
+	if _, err := s.RefreshTokens().Find(ctx, rawRefreshID); err != nil {
+		t.Fatalf("Find(rawRefreshID): %v", err)
+	}
+
+	// The chain-walk resolver resolves the digest directly: chain
+	// revocation must keep working even though the credential path
+	// rejects it.
+	resolver, ok := s.RefreshTokens().(store.RefreshChainResolver)
+	if !ok {
+		t.Fatal("SQL RefreshTokens must implement store.RefreshChainResolver")
+	}
+	if _, err := resolver.FindByStoredHandle(ctx, storedDigest); err != nil {
+		t.Fatalf("FindByStoredHandle(storedDigest): %v", err)
 	}
 }
 

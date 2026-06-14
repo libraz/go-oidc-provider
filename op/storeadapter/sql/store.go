@@ -54,11 +54,12 @@ func WithClock(c Clock) Option {
 // "opaque_access_tokens", "grant_revocations", "revoked_jtis",
 // "grants", "sessions", "par_records", "interactions",
 // "consumed_jtis", "users", "initial_access_tokens",
-// "registration_access_tokens"); values are the physical identifiers
-// to use. Unknown logical keys cause [New] to return an error so typos
-// surface at construction time. Each physical identifier is validated
-// against the SQL standard regular identifier grammar before any query
-// is built.
+// "registration_access_tokens", "op_metadata", "device_codes",
+// "ciba_requests"); values are the physical identifiers to use.
+// Unknown logical keys cause [New] to return an error so typos surface
+// at construction time. Each physical identifier is validated against
+// the SQL standard regular identifier grammar before any query is
+// built.
 func WithNaming(overrides map[string]string) Option {
 	return func(cfg *config) {
 		if cfg.overrides == nil {
@@ -190,7 +191,99 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return fmt.Errorf("oidcsql: applying schema statement %q: %w", trimForError(stmt), err)
 		}
 	}
+	if err := s.validateSchema(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema invariant table; read-only.
+	"id",
+	"client_id",
+	"grant_id",
+	"parent_id",
+	"subject",
+	"subject_public",
+	"scope",
+	"resource",
+	"origin",
+	"auth_time",
+	"acr",
+	"amr",
+	"authorization_details",
+	"access_token_extra",
+	"dpop_jkt",
+	"mtls_cert_thumbprint",
+	"nonce",
+	"revoked",
+	"expires_at",
+	"consumed_at",
+	"created_at",
+}
+
+func (s *Store) validateSchema(ctx context.Context) error {
+	missing, err := s.missingColumns(ctx, s.names.refreshes, requiredRefreshTokenColumns)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("oidcsql: schema for %s is missing required columns: %s", s.names.refreshes, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func (s *Store) missingColumns(ctx context.Context, table string, required []string) ([]string, error) {
+	have, err := s.columnSet(ctx, table)
+	if err != nil {
+		return nil, err
+	}
+	missing := make([]string, 0)
+	for _, col := range required {
+		if !have[col] {
+			missing = append(missing, col)
+		}
+	}
+	return missing, nil
+}
+
+func (s *Store) columnSet(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, s.columnListQuery(), physicalTableName(table))
+	if err != nil {
+		return nil, fmt.Errorf("oidcsql: inspect columns for %s: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("oidcsql: scan columns for %s: %w", table, err)
+		}
+		out[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("oidcsql: iterate columns for %s: %w", table, err)
+	}
+	return out, nil
+}
+
+func (s *Store) columnListQuery() string {
+	switch s.dialect.name {
+	case "sqlite":
+		return "SELECT name FROM pragma_table_info(?)"
+	case "mysql":
+		return "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?"
+	case "postgres":
+		return "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1"
+	default:
+		return ""
+	}
+}
+
+func physicalTableName(table string) string {
+	if i := strings.LastIndex(table, "."); i >= 0 {
+		return table[i+1:]
+	}
+	return table
 }
 
 // splitStatements splits raw SQL into individual statements on

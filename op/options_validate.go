@@ -178,6 +178,7 @@ func (c *config) validateStaticClients() error {
 	opts := registrationendpoint.StaticClientValidationOptions{
 		AllowedGrantTypes:                    c.staticClientAllowedGrantTypes(),
 		AllowedResponseTypes:                 c.staticClientAllowedResponseTypes(),
+		AllowedClientAuthMethods:             c.profileAllowedAuthMethodNames(),
 		PairwiseEnabled:                      c.pairwiseEnabled(),
 		AllowLocalhostLoopback:               c.allowLocalhostLoopback,
 		AllowInsecureBackchannelLogoutForDev: c.allowInsecureBackchannelLogoutForDev,

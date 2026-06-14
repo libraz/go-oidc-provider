@@ -77,9 +77,9 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !applyPollDecision(ctx, w, deps, rec, in.DeviceCode, client.ID) {
 		return
 	}
-	authorized, ok := authorizeDeviceCodePoll(w, deps, client, rec, binding)
+	authorized, reason, ok := authorizeDeviceCodePoll(w, deps, client, rec, binding)
 	if !ok {
-		emitDeviceCodeReject(ctx, deps, client.ID, errInvalidGrant)
+		emitDeviceCodeReject(ctx, deps, client.ID, reason)
 		return
 	}
 	consumed, ok := consumeDeviceCode(ctx, w, deps, in.DeviceCode)
@@ -226,7 +226,7 @@ func authorizeDeviceCodePoll(
 	client *store.Client,
 	rec *store.DeviceCode,
 	binding tokenBinding,
-) (*dcgrant.Authorized, bool) {
+) (*dcgrant.Authorized, string, bool) {
 	authorized, err := dcgrant.Authorize(dcgrant.AuthorizeInput{
 		Client:                client,
 		Record:                rec,
@@ -235,12 +235,32 @@ func authorizeDeviceCodePoll(
 	})
 	if err != nil {
 		writeDeviceCodeAuthError(w, err)
-		return nil, false
+		return nil, deviceCodeAuthErrorCode(err), false
 	}
 	if !checkTokenScopeAllowlist(w, deps, client.ID, authorized.Scope) {
-		return nil, false
+		return nil, errInvalidScope, false
 	}
-	return authorized, true
+	return authorized, "", true
+}
+
+func deviceCodeAuthErrorCode(err error) string {
+	switch {
+	case errors.Is(err, dcgrant.ErrGrantNotPermitted):
+		return errUnauthorizedClient
+	case errors.Is(err, dcgrant.ErrScopeForbidden):
+		return errInvalidScope
+	case errors.Is(err, dcgrant.ErrPendingApproval):
+		return errAuthorizationPending
+	case errors.Is(err, dcgrant.ErrDenied):
+		return errAccessDenied
+	case errors.Is(err, dcgrant.ErrExpiredOrConsumed):
+		return errExpiredToken
+	case errors.Is(err, dcgrant.ErrCnfBindingMismatch),
+		errors.Is(err, dcgrant.ErrCnfBindingMissing):
+		return errInvalidGrant
+	default:
+		return errServerError
+	}
 }
 
 // writeDeviceCodeAuthError translates the [dcgrant.Err*] sentinels

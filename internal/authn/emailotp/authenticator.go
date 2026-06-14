@@ -75,7 +75,7 @@ var (
 	// [resendWindowCap]). The orchestrator surfaces it as a soft
 	// retryable failure (the SPA shows "please wait before
 	// requesting another code") rather than a chain-fatal error.
-	ErrTooManyOutstanding = errors.New("emailotp: too many outstanding send attempts")
+	ErrTooManyOutstanding = fmt.Errorf("emailotp: too many outstanding send attempts: %w", authn.ErrFactorAbort)
 )
 
 const (
@@ -335,6 +335,14 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	if in.Subject == "" {
 		return interaction.Step{}, ErrSubjectRequired
 	}
+	if a.lockout != nil {
+		if err := a.lockout.GuardBegin(ctx, in.Subject); err != nil {
+			if errors.Is(err, lockout.ErrLocked) {
+				return interaction.Step{}, ErrLocked
+			}
+			return interaction.Step{}, fmt.Errorf("emailotp: lockout guard: %w", err)
+		}
+	}
 	if len(in.Scratch) == 0 {
 		return a.handleSend(ctx, in)
 	}
@@ -516,12 +524,11 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		return interaction.Step{}, fmt.Errorf("emailotp: load record: %w", err)
 	}
 	res, verr := a.verifier.Verify(ctx, rec, code)
-	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeExpired && res.Outcome != OutcomeConsumed {
+	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeExpired && res.Outcome != OutcomeConsumed && res.Outcome != OutcomeSuccess {
 		// Locked / expired / consumed branches leave the record
 		// unchanged (verifier short-circuits before mutating
-		// counters); every other branch — including OutcomeSuccess,
-		// where ConsumedAt is now stamped — needs persisting so the
-		// single-use invariant survives a transient backend failure.
+		// counters); wrong-code and reset-required branches still need
+		// persisting. OutcomeSuccess is handled by atomic Consume below.
 		if perr := a.store.Put(ctx, res.Record); perr != nil {
 			return interaction.Step{}, fmt.Errorf("emailotp: persist record: %w", perr)
 		}
@@ -529,12 +536,15 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 	switch {
 	case verr == nil:
 		// Single-use semantics: the verifier has stamped ConsumedAt
-		// on the record and the Put above persisted it. A replay of
-		// the same code (e.g. from a leaked SPA log) hits the
-		// ConsumedAt guard on the next Verify and is rejected as
-		// ErrConsumed. Delete is intentionally NOT called: a
-		// transient Delete failure must not leave a re-redeemable
-		// record behind.
+		// on the record and Consume persists it atomically. A replay
+		// racing this request loses the Consume CAS and is rejected
+		// rather than receiving a second successful Result.
+		if perr := a.store.Consume(ctx, res.Record); perr != nil {
+			if errors.Is(perr, store.ErrAlreadyConsumed) {
+				return interaction.Step{}, ErrConsumed
+			}
+			return interaction.Step{}, fmt.Errorf("emailotp: consume record: %w", perr)
+		}
 		if a.lockout != nil {
 			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
 				return interaction.Step{}, fmt.Errorf("emailotp: lockout reset: %w", rerr)

@@ -193,3 +193,35 @@ func TestWithProfile_AutoEnablePopulatesRequiredFeatures(t *testing.T) {
 		}
 	}
 }
+
+// TestProfileAllowedAuthMethodNames_ExcludesMTLS pins that the helper's
+// documented contract — the wire list excludes the RFC 8705 mTLS methods
+// the runtime cannot enforce — matches its behaviour. A FAPI 2.0 profile
+// allows private_key_jwt plus the two mTLS methods; the helper must keep
+// private_key_jwt and drop both mTLS names so every consumer (discovery
+// advertisement and the static-client auth-method gate) inherits the
+// exclusion.
+func TestProfileAllowedAuthMethodNames_ExcludesMTLS(t *testing.T) {
+	t.Parallel()
+
+	c := &config{profiles: []profile.Profile{profile.FAPI2Baseline}}
+	got := c.profileAllowedAuthMethodNames()
+
+	for _, name := range got {
+		if m := AuthMethod(name); m == AuthTLSClientAuth || m == AuthSelfSignedTLSClientAuth {
+			t.Fatalf("profileAllowedAuthMethodNames returned mTLS method %q; doc promises exclusion", name)
+		}
+	}
+	if !containsString(got, string(AuthPrivateKeyJWT)) {
+		t.Fatalf("profileAllowedAuthMethodNames=%v, want it to retain private_key_jwt", got)
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}

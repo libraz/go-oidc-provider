@@ -34,15 +34,19 @@ func (s *cibaRequestStore) Save(ctx context.Context, req *store.CIBARequest) err
 	if req == nil {
 		return errors.New("oidcsql: nil CIBA request")
 	}
-	if req.Status == 0 {
-		req.Status = store.CIBARequestStatusPending
+	status := req.Status
+	if status == 0 {
+		status = store.CIBARequestStatusPending
+	}
+	if err := s.gcExpired(ctx); err != nil {
+		return err
 	}
 	idDigest := patterns.Digest(req.ID)
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.cibaSave,
 		idDigest, req.ClientID, req.Subject,
 		encodeStrings(req.Scope), encodeStrings(req.Resource), encodeStrings(req.ACRValues), req.ACR,
 		req.BindingMessage, req.UserCode, req.DPoPJKT, req.MTLSCertS256,
-		int64(req.Interval), int64(req.Status), timeToInt64(req.AuthTime), req.DenyReason,
+		int64(req.Interval), int64(status), timeToInt64(req.AuthTime), req.DenyReason,
 		int64(req.PollViolations), timePtrToInt64Ptr(req.LastPolledAt),
 		timeToInt64(req.ExpiresAt), timeToInt64(req.IssuedAt))
 	if err != nil {
@@ -50,6 +54,13 @@ func (s *cibaRequestStore) Save(ctx context.Context, req *store.CIBARequest) err
 			return store.ErrAlreadyExists
 		}
 		return wrapErr("ciba.Save", err)
+	}
+	return nil
+}
+
+func (s *cibaRequestStore) gcExpired(ctx context.Context) error {
+	if _, err := s.runner().ExecContext(ctx, s.parent.queries.cibaGC, s.now()); err != nil {
+		return wrapErr("ciba.GC", err)
 	}
 	return nil
 }

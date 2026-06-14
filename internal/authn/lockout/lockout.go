@@ -165,8 +165,6 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 // (M-AUTHN-4) closes the lost-update race the verifier-local counter
 // otherwise had: two concurrent verify calls each see the result of
 // their own increment, not a snapshot of the count before either ran.
-//
-//nolint:gocognit // verify counter enumerates lock / threshold / window branches in flat shape; refactor would obscure ordering.
 func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, error) {
 	if subject == "" {
 		return Outcome{}, errors.New("lockout: subject required")
@@ -216,19 +214,31 @@ func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, e
 		out.LockedUntil = now.Add(durationShort)
 	}
 	if !out.LockedUntil.IsZero() {
-		// Persist the lockout stamp through Put. Get to recover the
-		// FirstFailureAt the Increment wrote (or stamped during
-		// row-creation) so the row stays internally consistent.
-		current, gerr := c.store.Get(ctx, subject)
-		if gerr != nil {
-			return out, gerr
-		}
-		current.LockedUntil = out.LockedUntil
-		if perr := c.store.Put(ctx, current); perr != nil {
-			return out, perr
+		if err := c.stampLock(ctx, subject, out.LockedUntil); err != nil {
+			return out, err
 		}
 	}
 	return out, nil
+}
+
+// stampLock persists the LockedUntil stamp computed by RecordFailure. When
+// the store implements [store.AuthnLockoutStamper] the stamp is a targeted
+// atomic write that cannot lose a concurrent Increment (M-AUTHN-4). A store
+// without the extension falls back to a read-modify-write Get+Put: the Get
+// recovers the FirstFailureAt the Increment wrote so the row stays
+// internally consistent, but the Put replaces the whole row and may drop an
+// increment that lands between the Get and the Put under concurrency — which
+// is why the extension exists and the reference store implements it.
+func (c *Counter) stampLock(ctx context.Context, subject string, lockedUntil time.Time) error {
+	if stamper, ok := c.store.(store.AuthnLockoutStamper); ok {
+		return stamper.StampLock(ctx, subject, lockedUntil)
+	}
+	current, err := c.store.Get(ctx, subject)
+	if err != nil {
+		return err
+	}
+	current.LockedUntil = lockedUntil
+	return c.store.Put(ctx, current)
 }
 
 // Reset clears the cross-factor counter for subject. The per-factor

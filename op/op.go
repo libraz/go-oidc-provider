@@ -1149,10 +1149,14 @@ func deriveStateRefKey(cookieKey []byte) []byte {
 // When multiple profiles are active the result is the intersection
 // of every profile's allowed list — the most restrictive policy
 // wins, matching the "stricter MAY override looser" posture used
-// elsewhere in the configuration. The wire list keeps mTLS methods
-// (tls_client_auth / self_signed_tls_client_auth) because they are
-// advertised in discovery even though the [clientauth] package
-// does not enforce them directly.
+// elsewhere in the configuration. The returned list excludes the mTLS
+// methods (tls_client_auth / self_signed_tls_client_auth): mTLS client
+// authentication is tracked as v1.x work, the runtime client-auth
+// verifier does not negotiate it, and discovery must not advertise — nor
+// the static-client gate admit — a method the runtime cannot enforce.
+// The exclusion is applied here so every consumer of this list inherits
+// it, independent of the global support allowlist in the registration
+// validator.
 func (c *config) profileAllowedAuthMethodNames() []string {
 	if len(c.profiles) == 0 {
 		return nil
@@ -1174,7 +1178,24 @@ func (c *config) profileAllowedAuthMethodNames() []string {
 	if first {
 		return nil
 	}
-	return allowed
+	return withoutMTLSAuthMethods(allowed)
+}
+
+// withoutMTLSAuthMethods returns names with the RFC 8705 mTLS client-auth
+// methods removed, preserving order. The OP advertises and admits only the
+// methods its runtime verifier negotiates; mTLS client authentication is not
+// yet among them.
+func withoutMTLSAuthMethods(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		switch AuthMethod(name) {
+		case AuthTLSClientAuth, AuthSelfSignedTLSClientAuth:
+			continue
+		default:
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // intersectStrings returns the elements of a that also appear in b,

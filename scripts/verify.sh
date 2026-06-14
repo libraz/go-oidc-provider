@@ -22,7 +22,7 @@ log "goimports -l (no changes expected)"
 imports_diff="$("$GOIMPORTS" -l -local github.com/libraz/go-oidc-provider .)"
 if [ -n "$imports_diff" ]; then
   printf '%s\n' "$imports_diff" >&2
-  die "goimports would reformat the files above; run 'make fmt'"
+  die "goimports would reformat the files above; run 'make format'"
 fi
 
 while IFS=$'\t' read -r mod tags; do

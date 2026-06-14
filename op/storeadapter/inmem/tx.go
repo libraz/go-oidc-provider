@@ -575,8 +575,7 @@ func (s *grantStaging) findLatestMatching(subject, clientID string) *store.Grant
 
 // ListBySubject mirrors [grantStore.ListBySubject] over the staged
 // view: it walks the parent map plus the per-tx added / deleted
-// overlay and returns one entry per consented client (latest
-// UpdatedAt wins when historical rows exist).
+// overlay and returns every active grant for the subject.
 func (g *txGrants) ListBySubject(ctx context.Context, subject string) ([]*store.Grant, error) {
 	if g.tx.closed.Load() {
 		return nil, errTxClosed
@@ -584,9 +583,9 @@ func (g *txGrants) ListBySubject(ctx context.Context, subject string) ([]*store.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	latest := g.tx.grStaging.collectBySubject(subject)
-	out := make([]*store.Grant, 0, len(latest))
-	for _, rec := range latest {
+	grants := g.tx.grStaging.collectBySubject(subject)
+	out := make([]*store.Grant, 0, len(grants))
+	for _, rec := range grants {
 		out = append(out, cloneGrant(rec))
 	}
 	return out, nil
@@ -595,19 +594,16 @@ func (g *txGrants) ListBySubject(ctx context.Context, subject string) ([]*store.
 // collectBySubject is the staging-aware companion to
 // [grantStore.ListBySubject]: it walks the staged-add map and the
 // parent map (under read-lock), filtering out deletes and per-tx
-// overrides, and returns the latest grant per (subject, clientID).
+// overrides, and returns every active grant for the subject.
 // The helper is split out so [txGrants.ListBySubject] stays under
 // the project's gocognit cap.
-func (s *grantStaging) collectBySubject(subject string) map[string]*store.Grant {
-	latest := make(map[string]*store.Grant)
+func (s *grantStaging) collectBySubject(subject string) []*store.Grant {
+	out := make([]*store.Grant, 0)
 	consider := func(rec *store.Grant) {
 		if rec.Subject != subject {
 			return
 		}
-		current, ok := latest[rec.ClientID]
-		if !ok || rec.UpdatedAt.After(current.UpdatedAt) {
-			latest[rec.ClientID] = rec
-		}
+		out = append(out, rec)
 	}
 	for id, rec := range s.added {
 		if _, deleted := s.deleted[id]; deleted {
@@ -626,7 +622,7 @@ func (s *grantStaging) collectBySubject(subject string) map[string]*store.Grant 
 		}
 		consider(rec)
 	}
-	return latest
+	return out
 }
 
 func (g *txGrants) Delete(ctx context.Context, id string) error {

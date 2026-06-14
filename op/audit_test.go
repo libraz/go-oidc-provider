@@ -65,6 +65,25 @@ func TestAuditEvent_ConsentSessionMirror(t *testing.T) {
 	}
 }
 
+// TestAuditEvent_GrantManagementMirror keeps the public
+// op.AuditGrantManagementRevoked constant aligned with the raw string
+// the grant-management endpoint emits. The internal handler cannot
+// import op/, so the value is duplicated as a string
+// (auditGrantManagementRevoked in internal/grantmgmtendpoint/handler.go)
+// and this test pins them together.
+func TestAuditEvent_GrantManagementMirror(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]op.AuditEvent{
+		"grant_management.revoked": op.AuditGrantManagementRevoked,
+	}
+	for s, ev := range want {
+		if string(ev) != s {
+			t.Fatalf("AuditEvent %q has value %q, want %q", ev, string(ev), s)
+		}
+	}
+}
+
 // TestAuditEvent_RefreshChainRevokeMirror keeps the public
 // op.AuditRefreshChainRevokeFailed / op.AuditRefreshGrantRevokeFailed
 // constants aligned with the raw strings the refresh exchanger emits

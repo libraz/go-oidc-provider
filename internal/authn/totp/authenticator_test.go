@@ -354,3 +354,87 @@ func TestNewAuthenticator_RejectsNilArgs(t *testing.T) {
 		}
 	})
 }
+
+// acceptBlockedTOTPStore wraps a real [store.TOTPStore] and delegates all
+// methods except Accept. When blockAccept is true, Accept returns
+// [store.ErrAlreadyConsumed] unconditionally, simulating a concurrent
+// verification winning the CAS race against the current request.
+type acceptBlockedTOTPStore struct {
+	inner       store.TOTPStore
+	blockAccept bool
+}
+
+func (s *acceptBlockedTOTPStore) Get(ctx context.Context, subject string) (*store.TOTPRecord, error) {
+	return s.inner.Get(ctx, subject)
+}
+
+func (s *acceptBlockedTOTPStore) Put(ctx context.Context, r *store.TOTPRecord) error {
+	return s.inner.Put(ctx, r)
+}
+
+func (s *acceptBlockedTOTPStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
+	if s.blockAccept {
+		return store.ErrAlreadyConsumed
+	}
+	return s.inner.Accept(ctx, r)
+}
+
+func (s *acceptBlockedTOTPStore) Delete(ctx context.Context, subject string) error {
+	return s.inner.Delete(ctx, subject)
+}
+
+// TestAuthenticator_ContinueAcceptCASLossRePrompts pins the behaviour of
+// the CAS-loss branch in Continue: when the store's Accept loses the
+// compare-and-set race (another concurrent request already advanced the
+// LastAcceptedStep counter), the authenticator MUST re-emit the TOTP
+// prompt with nil error and MUST NOT produce an interaction.Result,
+// ensuring no subject is authenticated through the losing request.
+func TestAuthenticator_ContinueAcceptCASLossRePrompts(t *testing.T) {
+	t.Parallel()
+
+	codec, err := totp.NewCodec(newKey(t))
+	if err != nil {
+		t.Fatalf("NewCodec: %v", err)
+	}
+	secret, err := totp.GenerateSecret()
+	if err != nil {
+		t.Fatalf("GenerateSecret: %v", err)
+	}
+	clock := &fakeClock{t: time.Unix(1700000000, 0).UTC()}
+	verifier := &totp.Verifier{Clock: clock, Codec: codec}
+
+	realStore := inmem.New().TOTPs()
+	rec := newRecord(t, codec, "user-alice", secret, clock.t.Add(-time.Hour))
+	if err := realStore.Put(context.Background(), rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	blocked := &acceptBlockedTOTPStore{inner: realStore, blockAccept: true}
+	adapter, err := totp.NewAuthenticator(verifier, blocked)
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+
+	code := totp.Code(secret, clock.t)
+	step, err := adapter.Continue(context.Background(), op.ContinueInput{
+		Subject:    "user-alice",
+		AuthTime:   clock.t,
+		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: code}},
+	})
+
+	// Security invariant: the CAS-losing request must NOT authenticate the subject.
+	if step.Result != nil {
+		t.Errorf("CAS-loss path produced an authentication Result; no Result must be emitted: %+v", step.Result)
+	}
+	// The authenticator must re-prompt so the user can try again on
+	// the next TOTP step rather than receiving a chain-fatal error.
+	if err != nil {
+		t.Fatalf("err = %v, want nil (re-prompt, not error)", err)
+	}
+	if step.Prompt == nil {
+		t.Fatalf("expected re-prompt step, got %+v", step)
+	}
+	if step.Prompt.Type != totp.PromptType {
+		t.Errorf("Prompt.Type = %q, want %q", step.Prompt.Type, totp.PromptType)
+	}
+}

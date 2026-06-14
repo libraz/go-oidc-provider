@@ -4,10 +4,10 @@
 // ships a built-in [op.Interaction] for prompt=select_account that
 // emits an [interaction.ChooserPromptData] envelope listing every
 // account in the active chooser group; the SPA picks one and posts
-// back the SessionID. The /authorize endpoint also routes a fresh
-// prompt=login on top of an active session through
-// [sessions.Manager.AddAccount], so signing in as a second account
-// adds it to the chooser group rather than discarding the first.
+// back the SessionID. The chooser prompt also carries AddAccountURL;
+// following that URL starts a fresh login that is explicitly bound to
+// the current chooser group, so signing in as a second account adds it
+// rather than discarding the first.
 //
 // Run with the example build tag:
 //
@@ -18,12 +18,14 @@
 //  1. GET /oidc/auth?... → log in as alice (first account).
 //     The OP issues a chooser group, sets the session cookie, and
 //     redirects back to the RP with an authorization code.
-//  2. GET /oidc/auth?...&prompt=login → log in as bob (second
-//     account in the SAME browser).
-//     ensureSession sees the active session for alice, sees the
-//     subject mismatch, and routes to AddAccount instead of Issue —
+//  2. GET /oidc/auth?...&prompt=select_account → the chooser
+//     interaction enumerates alice and includes AddAccountURL.
+//  3. Follow AddAccountURL → log in as bob (second account in the
+//     SAME browser).
+//     ensureSession sees that this login originated from the chooser
+//     add-account link and routes to AddAccount instead of Issue —
 //     bob joins alice's chooser group.
-//  3. GET /oidc/auth?...&prompt=select_account → the chooser
+//  4. GET /oidc/auth?...&prompt=select_account again → the chooser
 //     interaction enumerates both accounts. Pick alice or bob; the
 //     orchestrator binds the picked subject and rebinds the cookie
 //     via [sessions.Manager.Switch] so the chooser group stays
@@ -106,8 +108,8 @@ func main() {
 	mux.Handle("/", provider)
 
 	log.Println("multi-account example listening on :8080 (built-in chooser via JSONDriver)")
-	log.Println("flow: log in as alice → /authorize?prompt=login as bob → /authorize?prompt=select_account")
-	log.Println("the chooser response is a Prompt{Type: \"interaction.chooser\", Data: ChooserPromptData{Accounts: [...]}}")
+	log.Println("flow: log in as alice → /authorize?prompt=select_account → follow AddAccountURL as bob → /authorize?prompt=select_account")
+	log.Println("the chooser response is a Prompt{Type: \"interaction.chooser\", Data: ChooserPromptData{Accounts: [...], AddAccountURL: \"...\"}}")
 	if err := serve.Listen(":8080", mux); err != nil {
 		log.Fatalf("listen: %v", err)
 	}

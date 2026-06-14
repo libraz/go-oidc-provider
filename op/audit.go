@@ -65,6 +65,14 @@ const (
 	AuditConsentRevoked           = AuditEvent("consent.revoked")
 )
 
+// Grant-management events. Fire from the OAuth 2.0 Grant Management
+// endpoint after a client successfully revokes one of its own grants.
+// The internal handler cannot import op (one-way import graph), so
+// the raw string is mirrored there and pinned by TestAuditEvent_GrantManagementMirror.
+const (
+	AuditGrantManagementRevoked = AuditEvent("grant_management.revoked")
+)
+
 // Code / token events. Fire from the authorize-code issuance path
 // and the token / revoke endpoints. AuditTokenRevokeFailed is the
 // /revoke companion to AuditTokenRevoked: the wire response stays
@@ -174,7 +182,6 @@ const (
 	// the retiring kid. The event is warn-level and carries the
 	// rejected kid in [Event.Extras] so dashboards can correlate
 	// against the rotation timeline without parsing the slog message.
-	// Tracks H-F1.
 	AuditKeyRetiredKidPresented = AuditEvent("key.retired_kid_presented")
 )
 

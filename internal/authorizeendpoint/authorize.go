@@ -638,12 +638,12 @@ func buildHintState(
 		selectAcct: containsString(req.Prompt, interaction.PromptSelectAccount),
 	}
 	if !out.forceLogin && out.hasSession && req.MaxAge != nil {
-		if now.UTC().Sub(active.Session.AuthTime.UTC()) > time.Duration(*req.MaxAge)*time.Second {
+		if *req.MaxAge == 0 || now.UTC().Sub(active.Session.AuthTime.UTC()) > time.Duration(*req.MaxAge)*time.Second {
 			out.forceLogin = true
 		}
 	}
-	if out.hasSession && len(req.ACRValues) > 0 {
-		out.acrUnsatisfied = !acrSatisfiedBySession(active.Session.ACR, req.ACRValues)
+	if out.hasSession {
+		out.acrUnsatisfied = acrUnsatisfiedByRequest(active.Session.ACR, req)
 	}
 	if out.hasSession {
 		if g, err := deps.Grants.FindBySubjectClient(ctx, active.Session.Subject, client.ID); err == nil {
@@ -715,6 +715,31 @@ func acrSatisfiedBySession(sessionACR string, requested []string) bool {
 		return false
 	}
 	return containsString(requested, sessionACR)
+}
+
+func acrUnsatisfiedByRequest(sessionACR string, req *authorize.Request) bool {
+	if req == nil {
+		return false
+	}
+	if len(req.ACRValues) > 0 && !acrSatisfiedBySession(sessionACR, req.ACRValues) {
+		return true
+	}
+	spec, ok := req.Claims.IDTokenSpec("acr")
+	if !ok || !spec.Essential {
+		return false
+	}
+	if len(spec.Values) == 0 && spec.Value == nil {
+		return sessionACR == ""
+	}
+	if value, ok := spec.Value.(string); ok && sessionACR == value {
+		return false
+	}
+	for _, candidate := range spec.Values {
+		if value, ok := candidate.(string); ok && sessionACR == value {
+			return false
+		}
+	}
+	return true
 }
 
 // decideHintPromptNone resolves the matrix when prompt=none is present.
@@ -800,36 +825,7 @@ func startInteraction(
 		return
 	}
 	now := deps.now().UTC()
-	willRunChooser := containsString(req.Prompt, interaction.PromptSelectAccount) && active != nil
-	interactionsRun := map[string]bool{}
-	// When the chooser will run, the picked subject may differ
-	// from the cookie-resolved one. The grant we looked up
-	// (against the current subject) does not authoritatively cover
-	// the picked subject's scope set, so do NOT pre-mark consent
-	// as already run. Consent re-evaluates after the chooser binds
-	// the picked subject.
-	if !willRunChooser && existing != nil && scopeIsSubset(req.Scope, existing.Scope) {
-		interactionsRun[consent.Name] = true
-	}
-	chooserGroupID := ""
-	if willRunChooser && active.Session != nil {
-		chooserGroupID = active.Session.ChooserGroupID
-	}
-	authnState := authn.State{
-		InteractionUID:  uid,
-		ClientID:        client.ID,
-		Client:          projectClientView(client),
-		Subject:         currentSubject(active),
-		RemoteIP:        clientIPFromRequest(r, deps),
-		UserAgent:       truncateUserAgent(r.UserAgent()),
-		AuthTime:        now,
-		ActiveFactorIdx: -1,
-		Phase:           authn.PhaseBeforeAuthn,
-		InteractionsRun: interactionsRun,
-		RequestedScopes: append([]string(nil), req.Scope...),
-		ACRValues:       append([]string(nil), req.ACRValues...),
-		ChooserGroupID:  chooserGroupID,
-	}
+	authnState := initialAuthnState(r, deps, req, client, active, existing, uid, now)
 	authnRaw, err := encodeAuthnState(authnState)
 	if err != nil {
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not marshal interaction state")
@@ -863,6 +859,69 @@ func startInteraction(
 	stampNoStore(w)
 	target := deps.authorizeRedirectBase() + "/" + uid
 	http.Redirect(w, r, target, http.StatusFound)
+}
+
+func initialAuthnState(
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	client *store.Client,
+	active *sessions.Active,
+	existing *store.Grant,
+	uid string,
+	now time.Time,
+) authn.State {
+	willRunChooser := containsString(req.Prompt, interaction.PromptSelectAccount) && active != nil
+	return authn.State{
+		InteractionUID:           uid,
+		ClientID:                 client.ID,
+		Client:                   projectClientView(client),
+		Subject:                  currentSubject(active),
+		RemoteIP:                 clientIPFromRequest(r, deps),
+		UserAgent:                truncateUserAgent(r.UserAgent()),
+		AuthTime:                 now,
+		ActiveFactorIdx:          -1,
+		Phase:                    authn.PhaseBeforeAuthn,
+		InteractionsRun:          initialInteractionsRun(req, existing, willRunChooser),
+		RequestedScopes:          append([]string(nil), req.Scope...),
+		ACRValues:                append([]string(nil), req.ACRValues...),
+		ChooserGroupID:           activeChooserGroupID(active, willRunChooser),
+		ChooserAddAccount:        chooserAddAccountRequested(req, active),
+		ChooserAddAccountGroupID: chooserAddAccountGroupID(req, active),
+	}
+}
+
+func initialInteractionsRun(req *authorize.Request, existing *store.Grant, willRunChooser bool) map[string]bool {
+	interactionsRun := map[string]bool{}
+	// When the chooser will run, the picked subject may differ from the
+	// cookie-resolved one. The grant we looked up (against the current
+	// subject) does not authoritatively cover the picked subject's scope
+	// set, so do NOT pre-mark consent as already run. Consent re-evaluates
+	// after the chooser binds the picked subject.
+	if !willRunChooser && existing != nil && scopeIsSubset(req.Scope, existing.Scope) {
+		interactionsRun[consent.Name] = true
+	}
+	return interactionsRun
+}
+
+func activeChooserGroupID(active *sessions.Active, willRunChooser bool) string {
+	if willRunChooser && active.Session != nil {
+		return active.Session.ChooserGroupID
+	}
+	return ""
+}
+
+func chooserAddAccountRequested(req *authorize.Request, active *sessions.Active) bool {
+	return req.InternalAddAccount && active != nil && active.Session != nil &&
+		active.Session.ChooserGroupID != "" &&
+		active.Session.ChooserGroupID == req.InternalChooserGroupID
+}
+
+func chooserAddAccountGroupID(req *authorize.Request, active *sessions.Active) string {
+	if chooserAddAccountRequested(req, active) {
+		return active.Session.ChooserGroupID
+	}
+	return ""
 }
 
 // userAgentMaxLen caps the [http.Request] User-Agent string the

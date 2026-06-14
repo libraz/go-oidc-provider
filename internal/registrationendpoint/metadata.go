@@ -106,6 +106,21 @@ type metadataWire struct {
 	BackchannelLogoutURI              string          `json:"backchannel_logout_uri,omitempty"`
 	BackchannelLogoutSessionRequired  bool            `json:"backchannel_logout_session_required,omitempty"`
 
+	// Standard metadata the library does not persist or enforce today.
+	// RFC 7591 §2 requires authorization servers to ignore metadata
+	// they do not understand; parse-and-drop keeps DisallowUnknownFields
+	// useful for truly misspelled local fields without rejecting common
+	// interoperable registrations.
+	SoftwareID                                 string   `json:"software_id,omitempty"`
+	SoftwareVersion                            string   `json:"software_version,omitempty"`
+	TLSClientCertificateBoundAccessTokens      *bool    `json:"tls_client_certificate_bound_access_tokens,omitempty"`
+	BackchannelTokenDeliveryMode               string   `json:"backchannel_token_delivery_mode,omitempty"`
+	BackchannelClientNotificationEndpoint      string   `json:"backchannel_client_notification_endpoint,omitempty"`
+	BackchannelAuthenticationRequestSigningAlg string   `json:"backchannel_authentication_request_signing_alg,omitempty"`
+	BackchannelUserCodeParameter               *bool    `json:"backchannel_user_code_parameter,omitempty"`
+	AuthorizationSignedResponseAlg             string   `json:"authorization_signed_response_alg,omitempty"`
+	AuthorizationDetailsTypes                  []string `json:"authorization_details_types,omitempty"`
+
 	// SoftwareStatement is parsed only so the handler can detect its
 	// presence and reject with invalid_software_statement; v1.0 does
 	// not implement RFC 7591 §3.1.1 software statement verification.

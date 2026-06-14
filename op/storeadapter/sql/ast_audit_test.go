@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -34,23 +35,7 @@ func TestQueriesIsSoleSQLBuilder(t *testing.T) {
 		"identifier.go": true,
 	}
 
-	// nameMap field names — the audit catches `... + n.<field>` and
-	// `... + s.parent.names.<field>` style concatenation. Listed here
-	// so a new field added to nameMap surfaces as a missing case.
-	nameMapFields := map[string]bool{
-		"clients":      true,
-		"authCodes":    true,
-		"refreshes":    true,
-		"accessTokens": true,
-		"grants":       true,
-		"sessions":     true,
-		"pars":         true,
-		"interactions": true,
-		"jtis":         true,
-		"users":        true,
-		"iats":         true,
-		"rats":         true,
-	}
+	nameMapFields := nameMapFieldSet(t)
 
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -95,6 +80,19 @@ func TestQueriesIsSoleSQLBuilder(t *testing.T) {
 			return true
 		})
 	}
+}
+
+func nameMapFieldSet(t *testing.T) map[string]bool {
+	t.Helper()
+	typ := reflect.TypeOf(nameMap{})
+	fields := make(map[string]bool, typ.NumField())
+	for i := range typ.NumField() {
+		fields[typ.Field(i).Name] = true
+	}
+	if len(fields) != len(defaultNames().all()) {
+		t.Fatalf("nameMap field count=%d, defaultNames().all()=%d", len(fields), len(defaultNames().all()))
+	}
+	return fields
 }
 
 // TestForbiddenSelector_DetectsConcatenation feeds the [forbiddenSelector]

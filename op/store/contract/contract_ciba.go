@@ -46,13 +46,36 @@ func newCIBARequest(now time.Time, id string) *store.CIBARequest {
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var cibaRequestCases = []subtest{
 	{"SaveFind", cibaSaveFind},
+	{"SaveDoesNotMutateInput", cibaSaveDoesNotMutateInput},
 	{"ApproveConsumeOnce", cibaApproveConsumeOnce},
 	{"ApproveConflictAfterDeny", cibaApproveConflictAfterDeny},
 	{"ConsumeConflictWhenDenied", cibaConsumeConflictWhenDenied},
 	{"RecordPollStampsTimestamp", cibaRecordPollStamps},
 	{"PollViolationsIncrement", cibaPollViolationsIncrement},
 	{"Expired", cibaExpired},
+	{"ExpiredSaveReleasesID", cibaExpiredSaveReleasesID},
 	{"TransitionMissing", cibaTransitionMissing},
+}
+
+func cibaSaveDoesNotMutateInput(t *testing.T, f Factory) {
+	b := f(t)
+	cr := requireCIBA(t, b.Store)
+	ctx := context.Background()
+	rec := newCIBARequest(b.Now(), "ar-default-status")
+	rec.Status = 0
+	if err := cr.Save(ctx, rec); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if rec.Status != 0 {
+		t.Fatalf("Save mutated input Status=%v, want zero", rec.Status)
+	}
+	got, err := cr.FindByAuthReqID(ctx, "ar-default-status")
+	if err != nil {
+		t.Fatalf("FindByAuthReqID: %v", err)
+	}
+	if got.Status != store.CIBARequestStatusPending {
+		t.Fatalf("stored Status=%v want Pending", got.Status)
+	}
 }
 
 func cibaSaveFind(t *testing.T, f Factory) {
@@ -215,6 +238,28 @@ func cibaExpired(t *testing.T, f Factory) {
 	}
 	if _, err := cr.IncrementPollViolation(ctx, "ar-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("IncrementPollViolation expired: want ErrNotFound, got %v", err)
+	}
+}
+
+func cibaExpiredSaveReleasesID(t *testing.T, f Factory) {
+	b := f(t)
+	cr := requireCIBA(t, b.Store)
+	ctx := context.Background()
+	expired := newCIBARequest(b.Now(), "ar-exp-reuse")
+	expired.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := cr.Save(ctx, expired); err != nil {
+		t.Fatalf("Save expired: %v", err)
+	}
+	fresh := newCIBARequest(b.Now(), "ar-exp-reuse")
+	if err := cr.Save(ctx, fresh); err != nil {
+		t.Fatalf("Save fresh with expired ID: %v", err)
+	}
+	got, err := cr.FindByAuthReqID(ctx, "ar-exp-reuse")
+	if err != nil {
+		t.Fatalf("FindByAuthReqID fresh: %v", err)
+	}
+	if got.Status != store.CIBARequestStatusPending {
+		t.Fatalf("fresh record status=%v want Pending", got.Status)
 	}
 }
 

@@ -1144,16 +1144,14 @@ func TestScenario_ENC_110_UserInfoJWEOnAcceptJWT(t *testing.T) {
 	}
 }
 
-// TestScenario_ENC_111_UserInfoJSONWhenAcceptOmitsJWT pins the OIDC
-// Core 1.0 §5.3.2 negotiation gate: even when a client registers
+// TestScenario_ENC_111_UserInfoJWEWhenAcceptOmitsJWT pins the OIDC
+// Core 1.0 §5.3.2 downgrade guard: when a client registers
 // userinfo_encrypted_response_alg / _enc, a /userinfo request whose
-// Accept header omits application/jwt MUST receive the legacy
-// application/json shape (plain claim object), not a JWE compact. The
-// encryption-negotiation gate is the explicit JWT-shape opt-in, not
-// the registered metadata.
+// Accept header omits application/jwt still receives a nested JWE.
+// Registered encryption metadata forces the JWT response shape.
 //
 // Spec: OIDC Core §5.3.2.
-func TestScenario_ENC_111_UserInfoJSONWhenAcceptOmitsJWT(t *testing.T) {
+func TestScenario_ENC_111_UserInfoJWEWhenAcceptOmitsJWT(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -1219,8 +1217,8 @@ func TestScenario_ENC_111_UserInfoJSONWhenAcceptOmitsJWT(t *testing.T) {
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+tok.AccessToken)
-	// Explicit Accept that does NOT mention application/jwt — the
-	// encryption-negotiation gate must NOT fire on this request.
+	// Explicit Accept that does NOT mention application/jwt. The
+	// registered encryption metadata still forces JWT/JWE shape.
 	req.Header.Set("Accept", "application/json")
 	resp, err := tk.HTTPClient(nil).Do(req)
 	if err != nil {
@@ -1231,22 +1229,19 @@ func TestScenario_ENC_111_UserInfoJSONWhenAcceptOmitsJWT(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, body)
 	}
-	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
-		t.Errorf("Content-Type=%q want application/json prefix", got)
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/jwt") {
+		t.Errorf("Content-Type=%q want application/jwt prefix", got)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	// Body must NOT be a JWE compact; its parts split should be 1
-	// (no dots), and it must parse as a JSON object carrying sub.
-	if got := scenariokit.JWEParts(strings.TrimSpace(string(body))); len(got) == 5 {
-		t.Fatalf("userinfo body parses as 5-part JWE despite Accept=application/json: %q", body)
+	jwe := strings.TrimSpace(string(body))
+	if got := scenariokit.JWEParts(jwe); len(got) != 5 {
+		t.Fatalf("userinfo body has %d parts, want 5 (raw=%q)", len(got), jwe)
 	}
-	var claims map[string]any
-	if err := json.Unmarshal(body, &claims); err != nil {
-		t.Fatalf("decode userinfo JSON: %v (raw=%q)", err, body)
-	}
+	inner := scenariokit.DecryptJWE(t, jwe, rp.Private)
+	claims := encVerifyInnerJWS(t, tk, inner)
 	if got, _ := claims["sub"].(string); got != scenariokit.DefaultSubject {
 		t.Errorf("sub=%v want %q", got, scenariokit.DefaultSubject)
 	}
@@ -1459,10 +1454,11 @@ func TestScenario_ENC_121_JARMErrorFallsBackToSignedOnly(t *testing.T) {
 
 // TestScenario_ENC_130_IntrospectionJWE pins the RFC 9701 §5 wrap: a
 // client that registered introspection_encrypted_response_alg / _enc
-// and asks Accept: application/token-introspection+jwt receives a 5-part
-// JWE wrapping the signed introspection JWT. The inner claim set carries
-// iss / aud / iat at the top level and active / client_id / exp inside
-// the `token_introspection` object (RFC 9701 §4 shape).
+// receives a 5-part JWE wrapping the signed introspection JWT even
+// when the Accept header omits application/token-introspection+jwt.
+// The inner claim set carries iss / aud / iat at the top level and
+// active / client_id / exp inside the `token_introspection` object
+// (RFC 9701 §4 shape).
 //
 // Spec: RFC 9701 §4 / §5.
 func TestScenario_ENC_130_IntrospectionJWE(t *testing.T) {
@@ -1535,7 +1531,6 @@ func TestScenario_ENC_130_IntrospectionJWE(t *testing.T) {
 		t.Fatalf("build /introspect request: %v", err)
 	}
 	introReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	introReq.Header.Set("Accept", "application/token-introspection+jwt")
 	introReq.SetBasicAuth(clientID, clientSecret)
 	introResp, err := tk.HTTPClient(nil).Do(introReq)
 	if err != nil {

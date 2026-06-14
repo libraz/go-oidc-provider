@@ -113,6 +113,36 @@ func TestClientCredentials_HappyPath(t *testing.T) {
 	}
 }
 
+func TestClientCredentials_AuthorizationDetailsAcceptedAndEchoed(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	client, secret := clientCredsClient(t, f.prov, []string{"payments"})
+
+	form := clientCredsForm("payments")
+	form.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	details, ok := body["authorization_details"].([]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("authorization_details=%T %[1]v want one element", body["authorization_details"])
+	}
+	el, _ := details[0].(map[string]any)
+	if el["type"] != "payment" || el["amount"] != "100" {
+		t.Fatalf("authorization_details[0]=%v want payment amount=100", el)
+	}
+	claims := decodeJWTPayload(t, body["access_token"].(string))
+	atDetails, ok := claims["authorization_details"].([]any)
+	if !ok || len(atDetails) != 1 {
+		t.Fatalf("access token authorization_details=%T %[1]v want one element", claims["authorization_details"])
+	}
+}
+
 // TestClientCredentials_RequestedScopeSubset narrows the response
 // scope to a subset of the client's registered set. The OP echoes the
 // narrowed scope verbatim per RFC 6749 §3.3.

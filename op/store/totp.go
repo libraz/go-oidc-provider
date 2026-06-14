@@ -91,6 +91,14 @@ type TOTPStore interface {
 	// success counter reset.
 	Put(ctx context.Context, r *TOTPRecord) error
 
+	// Accept atomically persists a successful verification result. It
+	// MUST succeed for at most one caller for a given TOTP step and
+	// MUST return [ErrAlreadyConsumed] when the stored
+	// LastAcceptedStep is already greater than or equal to
+	// r.LastAcceptedStep. Failed-code counter updates continue to use
+	// Put; Accept exists solely for the single-use success transition.
+	Accept(ctx context.Context, r *TOTPRecord) error
+
 	// Delete removes the enrolment for subject. It MUST return
 	// [ErrNotFound] if no such enrolment exists so callers can
 	// distinguish a no-op delete from a successful one. The library

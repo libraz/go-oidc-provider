@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS vault_renewal_slips (
     authorization_detail TEXT NOT NULL,
     access_token_extra   TEXT NOT NULL,
     parent_secret_digest TEXT,
+    parent_secret_raw    TEXT,
     dpop_thumb           TEXT NOT NULL,
     mtls_thumb           TEXT NOT NULL,
     nonce_echo           TEXT NOT NULL,

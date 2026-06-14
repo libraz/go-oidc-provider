@@ -127,6 +127,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Keys:                           keySet,
 			Clock:                          cfg.clock,
 			Scopes:                         scopes,
+			AuthorizationDetailTypes:       authorizationDetailRegistry(cfg),
 			DPoP:                           dpopVerifier,
 			DPoPNonces:                     cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
 			MTLS:                           mtlsVerifier,
@@ -222,6 +223,7 @@ func mountGrantManagementEndpoint(mux *http.ServeMux, cfg *config, assertionVeri
 		GrantRevocations:         cfg.store.GrantRevocations(),
 		RevocationStrategy:       cfg.atRevocation,
 		AccessTokenTTL:           cfg.accessTokenTTL,
+		Audit:                    cfg.effectiveAuditEmitter(),
 		SecretVerifier:           nil, // handler installs the Argon2id default.
 		AssertionVerifier:        assertionVerifier,
 		AllowedClientAuthMethods: cfg.allowedClientAuthMethods(),

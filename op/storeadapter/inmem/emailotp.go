@@ -62,6 +62,31 @@ func (s *emailOTPStore) Put(_ context.Context, r *store.EmailOTPRecord) error {
 	return nil
 }
 
+// Consume implements [store.EmailOTPStore].
+func (s *emailOTPStore) Consume(_ context.Context, r *store.EmailOTPRecord) error {
+	if r == nil {
+		return errors.New("inmem: nil email otp record")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.m[r.Subject]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(s.now()) {
+		return store.ErrNotFound
+	}
+	if !current.ConsumedAt.IsZero() {
+		return store.ErrAlreadyConsumed
+	}
+	if !slices.Equal(current.CodeSalt, r.CodeSalt) || !slices.Equal(current.CodeHash, r.CodeHash) {
+		return store.ErrAlreadyConsumed
+	}
+	next := cloneEmailOTPRecord(r)
+	s.m[r.Subject] = next
+	return nil
+}
+
 // Delete implements [store.EmailOTPStore].
 func (s *emailOTPStore) Delete(_ context.Context, subject string) error {
 	s.mu.Lock()

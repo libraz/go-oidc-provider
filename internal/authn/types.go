@@ -180,6 +180,21 @@ type State struct {
 	// after the chooser screen actually picked an account.
 	ChooserBoundSubject bool `json:"chooser_bound_subject,omitempty"`
 
+	// ChooserAddAccount reports that this interaction was started from
+	// the chooser prompt's AddAccountURL. The HTTP layer sets it only
+	// after resolving an active session whose chooser group matches the
+	// internal add-account marker in the authorization request. Terminal
+	// session establishment reads the flag to call AddAccount instead
+	// of Issue for a different-subject fresh login.
+	ChooserAddAccount bool `json:"chooser_add_account,omitempty"`
+
+	// ChooserAddAccountGroupID is the chooser group that an
+	// AddAccountURL-derived fresh login should join after authentication
+	// succeeds. It is separate from ChooserGroupID because that field
+	// also tells the built-in chooser interaction to render; AddAccount
+	// flows must run the authenticator chain instead.
+	ChooserAddAccountGroupID string `json:"chooser_add_account_group_id,omitempty"`
+
 	// ApprovedScopes is the scope subset the user accepted at the
 	// consent screen, recorded from the most recent
 	// [interaction.Result.Scope] the orchestrator observed. The
@@ -304,4 +319,15 @@ var (
 	// HTTP layer rejects the attempt rather than minting a session
 	// at a higher AAL than the factor actually achieved.
 	ErrAAL3RequiresUV = errors.New("authn: AAL3 factor requires user verification")
+
+	// ErrFactorAbort marks a terminal, user-input-driven factor failure
+	// that the HTTP layer renders as a 4xx (not a 500). Unlike
+	// [ErrFactorRetry] — a soft failure the orchestrator re-prompts — an
+	// abort means the factor cannot continue in this interaction: an
+	// expired or already-consumed one-time code, an active brute-force
+	// lockout, or a required factor reset. Per-factor adapters wrap their
+	// terminal sentinels with it so internal/authorizeendpoint can
+	// dispatch on the authn-level class without importing each factor's
+	// sentinels.
+	ErrFactorAbort = errors.New("authn: factor aborted")
 )

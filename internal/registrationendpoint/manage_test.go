@@ -261,6 +261,51 @@ func TestManage_Update_HappyPath_RotatesRAT(t *testing.T) {
 	}
 }
 
+func TestManage_Update_IgnoresStandardUnstoredMetadata(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	created := f.register(t, nil)
+	updated := minimalMetadata()
+	updated["client_name"] = "Client With Ignored Metadata"
+	updated["software_id"] = "software-456"
+	updated["software_version"] = "2026.7"
+	updated["tls_client_certificate_bound_access_tokens"] = true
+	updated["backchannel_token_delivery_mode"] = "ping"
+	updated["backchannel_client_notification_endpoint"] = "https://rp.test.invalid/ciba/ping"
+	updated["backchannel_authentication_request_signing_alg"] = "ES256"
+	updated["backchannel_user_code_parameter"] = false
+	updated["authorization_signed_response_alg"] = "ES256"
+	updated["authorization_details_types"] = []string{"payment_initiation"}
+
+	resp := f.manage(t, http.MethodPut, created.registrationClientURI, created.registrationAccessToken, updated)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 200 body=%s", resp.StatusCode, raw)
+	}
+	got := decodeBody(t, resp)
+	if got["client_name"] != "Client With Ignored Metadata" {
+		t.Fatalf("client_name=%v want update to persist", got["client_name"])
+	}
+	for _, ignored := range []string{
+		"software_id",
+		"software_version",
+		"tls_client_certificate_bound_access_tokens",
+		"backchannel_token_delivery_mode",
+		"backchannel_client_notification_endpoint",
+		"backchannel_authentication_request_signing_alg",
+		"backchannel_user_code_parameter",
+		"authorization_signed_response_alg",
+		"authorization_details_types",
+	} {
+		if _, ok := got[ignored]; ok {
+			t.Errorf("response echoed ignored metadata %q: %v", ignored, got[ignored])
+		}
+	}
+}
+
 func TestManage_Update_PublicToConfidential_MintsClientSecret(t *testing.T) {
 	t.Parallel()
 

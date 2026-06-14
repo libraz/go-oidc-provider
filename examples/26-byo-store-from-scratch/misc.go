@@ -102,7 +102,10 @@ type jtiStore struct {
 }
 
 const (
-	jtiInsert = `INSERT INTO vault_seen_tickets (ticket_digest, expires_epoch) VALUES (?, ?)`
+	jtiInsert = `
+INSERT INTO vault_seen_tickets (ticket_digest, expires_epoch) VALUES (?, ?)
+ON CONFLICT(ticket_digest) DO UPDATE SET expires_epoch = excluded.expires_epoch
+WHERE vault_seen_tickets.expires_epoch <> 0 AND vault_seen_tickets.expires_epoch <= ?`
 	jtiSelect = `SELECT expires_epoch FROM vault_seen_tickets WHERE ticket_digest = ?`
 )
 
@@ -110,12 +113,16 @@ const (
 // driver logs / replicas only ever see the digest, and a duplicate Mark
 // surfaces as ErrAlreadyConsumed.
 func (s *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) error {
-	_, err := s.q.ExecContext(ctx, jtiInsert, digest(jti), epochOf(expiresAt))
+	res, err := s.q.ExecContext(ctx, jtiInsert, digest(jti), epochOf(expiresAt), s.now().Unix())
 	if err != nil {
-		if isDuplicate(err) {
-			return store.ErrAlreadyConsumed
-		}
 		return fmt.Errorf("jtis.Mark: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("jtis.Mark.RowsAffected: %w", err)
+	}
+	if n == 0 {
+		return store.ErrAlreadyConsumed
 	}
 	return nil
 }

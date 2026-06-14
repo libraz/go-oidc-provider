@@ -276,8 +276,17 @@ type CIBARequestStore interface {
 	// the current poll result but before writing the response, so the next
 	// poll observes both the current timestamp and the escalated
 	// slow_down interval. A nextInterval value less than or equal to the
-	// current interval preserves the existing interval. Implementations
-	// MUST persist both fields atomically.
+	// current interval preserves the existing interval.
+	//
+	// Implementations MUST persist both fields atomically, but RecordPoll
+	// is an observation update, not a compare-and-set gate: its signature
+	// does not return the previous LastPolledAt / Interval. Under
+	// deliberately concurrent polling, two handlers that already read the
+	// same pre-poll snapshot can therefore make the same
+	// authorization_pending vs slow_down decision. This is accepted for
+	// the CIBA slow_down ladder; token issuance remains protected by
+	// Consume's single-use CAS.
+	//
 	// Returns [ErrNotFound] when the record does not exist; the library
 	// treats that as expired_token.
 	RecordPoll(ctx context.Context, authReqID string, when time.Time, nextInterval time.Duration) error

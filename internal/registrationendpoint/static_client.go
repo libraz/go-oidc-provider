@@ -26,6 +26,11 @@ type StaticClientValidationOptions struct {
 	// applies the library default {"code"}.
 	AllowedResponseTypes []string
 
+	// AllowedClientAuthMethods is the optional profile-level
+	// token_endpoint_auth_method whitelist. Empty applies no additional
+	// restriction beyond the library-supported method set.
+	AllowedClientAuthMethods []string
+
 	// PairwiseEnabled mirrors [Deps.PairwiseEnabled]. When false,
 	// "subject_type": "pairwise" is rejected.
 	PairwiseEnabled bool
@@ -132,7 +137,7 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 		opts.AllowInsecureBackchannelLogoutForDev,
 	)
 	if err == nil {
-		return nil
+		return validateStaticClientAuthMethod(metadata.TokenEndpointAuthMethod, opts.AllowedClientAuthMethods)
 	}
 	if ve, ok := asValidationError(err); ok {
 		return &StaticClientValidationError{
@@ -146,6 +151,24 @@ func ValidateStaticClient(c store.Client, opts StaticClientValidationOptions) er
 	return &StaticClientValidationError{
 		Code:        codeInvalidClientMetadata,
 		Description: err.Error(),
+	}
+}
+
+func validateStaticClientAuthMethod(method string, allowed []string) error {
+	if len(allowed) == 0 {
+		return nil
+	}
+	if method == "" {
+		method = defaultAuthMethod
+	}
+	for _, candidate := range allowed {
+		if method == candidate {
+			return nil
+		}
+	}
+	return &StaticClientValidationError{
+		Code:        codeInvalidClientMetadata,
+		Description: "token_endpoint_auth_method " + method + " is not allowed by active profile",
 	}
 }
 

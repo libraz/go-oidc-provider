@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,6 +196,10 @@ func dispatchTick(
 	// field; the POST handler accepts both routes, so the choice is
 	// the driver's.
 	prompt.CSRFToken = token
+	if err := stampChooserAddAccountURL(deps, &prompt, next, state); err != nil {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not build chooser add-account URL")
+		return
+	}
 	stampPromptLocale(r, deps, &prompt, next, state)
 	if err := deps.Driver.Render(w, r, prompt); err != nil {
 		// Render's own headers may already be partially written;
@@ -215,6 +221,12 @@ func writeAuthnError(w http.ResponseWriter, r *http.Request, deps resolved, stat
 		renderJSONError(w, http.StatusGone, errInvalidRequest, "interaction already complete")
 	case errors.Is(err, authn.ErrRiskDenied):
 		emitAuthorizeError(w, r, deps, state.Library.ToRequest(), errAccessDenied, "risk policy denied the request")
+	case errors.Is(err, authn.ErrFactorAbort):
+		// A terminal, user-input-driven factor failure (expired or
+		// already-consumed one-time code, active lockout, required
+		// reset). Render as a 4xx so the SPA / driver can distinguish it
+		// from a real server fault instead of surfacing a 500.
+		renderJSONError(w, http.StatusBadRequest, errInvalidRequest, "authentication factor cannot continue")
 	default:
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "orchestrator failed")
 	}
@@ -360,8 +372,10 @@ func terminateInteraction(
 	result interaction.Result,
 ) {
 	req := state.Library.ToRequest()
+	if !claimTerminalInteraction(w, r, deps, rec.ID) {
+		return
+	}
 	if result.Subject == "" {
-		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
@@ -393,6 +407,8 @@ func terminateInteraction(
 		ACR:                      acr,
 		ChooserGroupID:           authnState.ChooserGroupID,
 		ChooserSelectedSessionID: authnState.ChooserSelectedSessionID,
+		ChooserAddAccount:        authnState.ChooserAddAccount,
+		ChooserAddAccountGroupID: authnState.ChooserAddAccountGroupID,
 		// FreshAuthn signals that an authenticator factor ran during
 		// this interaction, so ensureSession can rotate the underlying
 		// session ID even when the resulting subject equals the
@@ -402,7 +418,6 @@ func terminateInteraction(
 		// did not run an authenticator leave Factors empty.
 		FreshAuthn: len(authnState.Factors) > 0,
 	}); err != nil {
-		_ = deps.Interactions.Delete(r.Context(), rec.ID)
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not establish session")
@@ -476,10 +491,21 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist authorization code")
 		return
 	}
-	_ = deps.Interactions.Delete(r.Context(), rec.ID)
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
 	emitAuthorizeSuccess(w, r, deps, req, codeID)
+}
+
+func claimTerminalInteraction(w http.ResponseWriter, r *http.Request, deps resolved, id string) bool {
+	if err := deps.Interactions.Delete(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			renderJSONError(w, http.StatusGone, errInvalidRequest, "interaction already complete")
+			return false
+		}
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not claim interaction")
+		return false
+	}
+	return true
 }
 
 // ensureSessionArgs bundles the inputs ensureSession consumes. The
@@ -493,6 +519,8 @@ type ensureSessionArgs struct {
 	ACR                      string
 	ChooserGroupID           string
 	ChooserSelectedSessionID string
+	ChooserAddAccount        bool
+	ChooserAddAccountGroupID string
 
 	// FreshAuthn reports whether an authenticator factor completed
 	// during this interaction. ensureSession reads it to decide
@@ -555,6 +583,14 @@ func pickSessionOutcome(ctx context.Context, deps resolved, in ensureSessionArgs
 		AuthTime: in.AuthTime,
 		AMR:      slices.Clone(in.AMR),
 		ACR:      in.ACR,
+	}
+	if in.ChooserAddAccount && in.ChooserAddAccountGroupID != "" {
+		out, err := deps.Sessions.AddAccount(ctx, in.ChooserAddAccountGroupID, login)
+		if err != nil {
+			return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: add account session: %w", err)
+		}
+		emitSessionCreated(ctx, deps, in.Subject, out.SessionID, out.ChooserGroupID, "add_account")
+		return out, nil
 	}
 	out, err := deps.Sessions.Issue(ctx, login)
 	if err != nil {
@@ -853,6 +889,85 @@ func encodeAuthnState(s authn.State) (json.RawMessage, error) {
 		return nil, fmt.Errorf("authorizeendpoint: encode authn state: %w", err)
 	}
 	return out, nil
+}
+
+// stampChooserAddAccountURL fills the chooser prompt's "add another
+// account" target from the persisted authorize request. The URL carries
+// OP-private markers; /authorize honours them only when the browser still
+// presents a session cookie for the same chooser group.
+//
+// The target is a bare query-parameter /authorize URL. When the deployment
+// mandates PAR (RequirePAR, e.g. FAPI 2.0) /authorize rejects any request that
+// lacks a request_uri before the markers are read, so such a URL is
+// unfollowable. Rather than hand the chooser UI a link the OP itself will
+// reject, the AddAccountURL is left empty under RequirePAR; a driver renders
+// the "add account" affordance only when the field is non-empty. PAR-minted
+// add-account re-entry is a separate feature, not wired in this path.
+func stampChooserAddAccountURL(deps resolved, prompt *interaction.Prompt, st authn.State, reqState authorize.RequestState) error {
+	if prompt == nil || prompt.Type != authn.ChooserPromptType || st.ChooserGroupID == "" {
+		return nil
+	}
+	if deps.RequirePAR {
+		return nil
+	}
+	data, ok := prompt.Data.(interaction.ChooserPromptData)
+	if !ok {
+		return nil
+	}
+	values, err := chooserAddAccountValues(reqState.Library, st.ChooserGroupID)
+	if err != nil {
+		return err
+	}
+	data.AddAccountURL = deps.AuthorizePath + "?" + values.Encode()
+	prompt.Data = data
+	return nil
+}
+
+func chooserAddAccountValues(s authorize.RequestSnapshot, chooserGroupID string) (url.Values, error) {
+	values := url.Values{}
+	setIfNotEmpty(values, "client_id", s.ClientID)
+	setIfNotEmpty(values, "response_type", s.ResponseType)
+	setIfNotEmpty(values, "redirect_uri", s.RedirectURI)
+	setIfNotEmpty(values, "state", s.State)
+	setIfNotEmpty(values, "nonce", s.Nonce)
+	setIfNotEmpty(values, "code_challenge", s.CodeChallenge)
+	setIfNotEmpty(values, "code_challenge_method", s.CodeChallengeMethod)
+	setIfNotEmpty(values, "scope", strings.Join(s.Scope, " "))
+	setIfNotEmpty(values, "resource", s.Resource)
+	setIfNotEmpty(values, "acr_values", strings.Join(s.ACRValues, " "))
+	setIfNotEmpty(values, "ui_locales", strings.Join(s.UILocales, " "))
+	if s.MaxAge != nil {
+		values.Set("max_age", strconv.FormatInt(int64(*s.MaxAge), 10))
+	}
+	setIfNotEmpty(values, "login_hint", s.LoginHint)
+	setIfNotEmpty(values, "response_mode", s.ResponseMode)
+	setIfNotEmpty(values, "dpop_jkt", s.DPoPJKT)
+	if s.Claims != nil {
+		raw, err := json.Marshal(s.Claims)
+		if err != nil {
+			return nil, fmt.Errorf("authorizeendpoint: marshal claims for chooser add-account: %w", err)
+		}
+		values.Set("claims", string(raw))
+	}
+	if len(s.AuthorizationDetails) > 0 {
+		raw, err := json.Marshal(s.AuthorizationDetails)
+		if err != nil {
+			return nil, fmt.Errorf("authorizeendpoint: marshal authorization_details for chooser add-account: %w", err)
+		}
+		values.Set("authorization_details", string(raw))
+	}
+	setIfNotEmpty(values, "grant_management_action", s.GrantManagementAction)
+	setIfNotEmpty(values, "grant_id", s.GrantID)
+	values.Set("prompt", interaction.PromptLogin)
+	values.Set("_oidc_add_account", "1")
+	values.Set("_oidc_chooser_group", chooserGroupID)
+	return values, nil
+}
+
+func setIfNotEmpty(values url.Values, name, value string) {
+	if value != "" {
+		values.Set(name, value)
+	}
 }
 
 // stampPromptLocale walks the §L.2 priority chain through the

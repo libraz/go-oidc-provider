@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/grantmgmtendpoint"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -24,6 +26,14 @@ func (c fixedClock) Now() time.Time { return c.now }
 
 const gmSecret = "grant-mgmt-secret" //nolint:gosec // G101: test fixture credential.
 
+type recordingAudit struct {
+	events []audit.Event
+}
+
+func (r *recordingAudit) Emit(_ context.Context, ev audit.Event) {
+	r.events = append(r.events, ev)
+}
+
 // fixture bundles an inmem store, a confidential client, and an httptest
 // server mounting the handler at the {grant_id} pattern the endpoint
 // expects. Tests drive the server over the wire — no handler is invoked
@@ -31,6 +41,7 @@ const gmSecret = "grant-mgmt-secret" //nolint:gosec // G101: test fixture creden
 type fixture struct {
 	store    *inmem.Store
 	client   *store.Client
+	audit    *recordingAudit
 	server   *httptest.Server
 	clock    fixedClock
 	endpoint string
@@ -60,10 +71,12 @@ func newFixture(tb testing.TB, configure func(*grantmgmtendpoint.Deps)) *fixture
 		tb.Fatalf("RegisterClient: %v", err)
 	}
 
+	auditRecorder := &recordingAudit{}
 	deps := grantmgmtendpoint.Deps{
 		Clients:                  st.Clients(),
 		Grants:                   st.Grants(),
 		RefreshTokens:            st.RefreshTokens(),
+		Audit:                    auditRecorder,
 		AllowedClientAuthMethods: []clientauth.Method{clientauth.MethodSecretBasic},
 		Clock:                    clock,
 	}
@@ -79,6 +92,7 @@ func newFixture(tb testing.TB, configure func(*grantmgmtendpoint.Deps)) *fixture
 	return &fixture{
 		store:    st,
 		client:   client,
+		audit:    auditRecorder,
 		server:   server,
 		clock:    clock,
 		endpoint: server.URL + "/grant_management",
@@ -191,6 +205,66 @@ func TestHandler_RevokeEnabled_DeletesOwnedGrant(t *testing.T) {
 	}
 	if _, err := f.store.Grants().Find(context.Background(), "grant-owned"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("grant still present after revoke: err=%v want ErrNotFound", err)
+	}
+	if got := len(f.audit.events); got != 1 {
+		t.Fatalf("audit events=%d want 1", got)
+	}
+	ev := f.audit.events[0]
+	if ev.Name != "grant_management.revoked" {
+		t.Errorf("audit name=%q want grant_management.revoked", ev.Name)
+	}
+	if ev.ClientID != f.client.ID {
+		t.Errorf("audit client_id=%q want %q", ev.ClientID, f.client.ID)
+	}
+	if ev.ActorID != "user-gm" {
+		t.Errorf("audit actor_id=%q want user-gm", ev.ActorID)
+	}
+	if ev.Extras["grant_id"] != "grant-owned" {
+		t.Errorf("audit grant_id=%v want grant-owned", ev.Extras["grant_id"])
+	}
+}
+
+func TestHandler_RevokeEnabled_DeletesDuplicateSubjectClientGrants(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+		d.RevokeEnabled = true
+	})
+	f.seedGrant(t, "grant-visible")
+	f.seedGrant(t, "grant-orphan")
+	if err := f.store.Grants().Save(context.Background(), &store.Grant{
+		ID:        "grant-other-subject",
+		Subject:   "other-user",
+		ClientID:  f.client.ID,
+		Scope:     []string{"openid"},
+		CreatedAt: f.clock.now,
+		UpdatedAt: f.clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save other subject: %v", err)
+	}
+
+	resp := f.do(t, http.MethodDelete, "grant-visible")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status=%d want 204", resp.StatusCode)
+	}
+	for _, id := range []string{"grant-visible", "grant-orphan"} {
+		if _, err := f.store.Grants().Find(context.Background(), id); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("%s still present after revoke: err=%v want ErrNotFound", id, err)
+		}
+	}
+	if _, err := f.store.Grants().Find(context.Background(), "grant-other-subject"); err != nil {
+		t.Errorf("other subject grant should remain: %v", err)
+	}
+	if got := len(f.audit.events); got != 1 {
+		t.Fatalf("audit events=%d want 1", got)
+	}
+	ids, ok := f.audit.events[0].Extras["revoked_grant_ids"].([]string)
+	if !ok {
+		t.Fatalf("revoked_grant_ids has type %T", f.audit.events[0].Extras["revoked_grant_ids"])
+	}
+	if !slices.Equal(ids, []string{"grant-orphan", "grant-visible"}) {
+		t.Fatalf("revoked_grant_ids=%v", ids)
 	}
 }
 

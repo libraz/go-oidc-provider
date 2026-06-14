@@ -35,13 +35,9 @@ func (s *deviceCodeStore) Save(_ context.Context, code *store.DeviceCode) error 
 	if code == nil {
 		return errors.New("inmem: nil device code")
 	}
-	if code.Status == 0 {
-		// Caller forgot to stamp the status; default to Pending so
-		// the lifecycle starts from a known state.
-		code.Status = store.DeviceCodeStatusPending
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.maybeGCLocked()
 	key := hashKey(code.ID)
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
@@ -50,10 +46,27 @@ func (s *deviceCodeStore) Save(_ context.Context, code *store.DeviceCode) error 
 		return store.ErrAlreadyExists
 	}
 	stored := cloneDeviceCode(code)
+	if stored.Status == 0 {
+		// Caller forgot to stamp the status; default the stored copy
+		// to Pending without mutating the caller-owned struct.
+		stored.Status = store.DeviceCodeStatusPending
+	}
 	stored.ID = key
 	s.m[key] = stored
 	s.userCodeIndex[code.UserCode] = key
 	return nil
+}
+
+func (s *deviceCodeStore) maybeGCLocked() {
+	for key, rec := range s.m {
+		if !isExpired(rec.ExpiresAt, s.clock) {
+			continue
+		}
+		delete(s.m, key)
+		if s.userCodeIndex[rec.UserCode] == key {
+			delete(s.userCodeIndex, rec.UserCode)
+		}
+	}
 }
 
 func (s *deviceCodeStore) FindByDeviceCode(_ context.Context, deviceCode string) (*store.DeviceCode, error) {

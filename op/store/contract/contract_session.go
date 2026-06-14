@@ -21,6 +21,7 @@ var sessionCases = []subtest{
 	{"SaveFind", sessionSaveFind},
 	{"Touch", sessionTouch},
 	{"TouchMissing", sessionTouchMissing},
+	{"TouchAfterDelete", sessionTouchAfterDelete},
 	{"Delete", sessionDelete},
 	{"Expired", sessionExpired},
 	{"ListByChooserGroup", sessionListByChooserGroup},
@@ -84,6 +85,25 @@ func sessionTouchMissing(t *testing.T, f Factory) {
 	err := b.Store.Sessions().Touch(context.Background(), "absent", b.Now(), b.Now())
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Touch missing: want ErrNotFound, got %v", err)
+	}
+}
+
+func sessionTouchAfterDelete(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	s := newSession(b.Now(), "s-touch-delete")
+	if err := b.Store.Sessions().Save(ctx, s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := b.Store.Sessions().Delete(ctx, s.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	err := b.Store.Sessions().Touch(ctx, s.ID, b.Now().Add(2*time.Hour), b.Now().Add(time.Minute))
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Touch after Delete: want ErrNotFound, got %v", err)
+	}
+	if _, err := b.Store.Sessions().Find(ctx, s.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find after Touch-after-Delete: want ErrNotFound, got %v", err)
 	}
 }
 

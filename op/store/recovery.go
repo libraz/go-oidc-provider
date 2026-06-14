@@ -76,6 +76,13 @@ type RecoveryStore interface {
 	// Regenerating a fresh batch overwrites the previous one wholesale.
 	Put(ctx context.Context, b *RecoveryBatch) error
 
+	// Consume atomically marks one recovery-code slot as consumed. It
+	// MUST succeed for at most one caller per slot and MUST return
+	// [ErrAlreadyConsumed] when the stored slot already has ConsumedAt
+	// set. The index is the slot index returned by the recovery
+	// verifier for the same batch.
+	Consume(ctx context.Context, b *RecoveryBatch, index int) error
+
 	// Delete removes the batch for subject. It MUST return [ErrNotFound]
 	// if no such batch exists so callers can distinguish a no-op delete
 	// from a successful one. The library invokes Delete when the user

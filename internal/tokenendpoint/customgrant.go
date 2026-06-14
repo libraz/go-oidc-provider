@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
+	tokenexchangegrant "github.com/libraz/go-oidc-provider/internal/customgrant/tokenexchange"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -85,7 +86,7 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	accessToken, accessTokenTTL, err := resolveCustomGrantAccessToken(deps, client, dispatchIn, resp, binding, grantID)
+	accessToken, accessTokenTTL, err := resolveCustomGrantAccessToken(ctx, deps, client, dispatchIn, resp, binding, grantID)
 	if err != nil {
 		writeCustomGrantError(w, err)
 		return
@@ -100,13 +101,18 @@ func handleCustomGrant(w http.ResponseWriter, r *http.Request, deps Deps, grantT
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
+	issuedTokenType := ""
+	if grantType == tokenexchangegrant.GrantType {
+		issuedTokenType = tokenexchangegrant.TokenTypeAccessToken
+	}
 	writeSuccess(w, successResponse{
-		AccessToken:  accessToken,
-		TokenType:    binding.tokenTypeFor(),
-		ExpiresIn:    int64(accessTokenTTL.Seconds()),
-		RefreshToken: refreshToken,
-		IDToken:      idToken,
-		Scope:        joinScope(resp.Scope),
+		AccessToken:     accessToken,
+		TokenType:       binding.tokenTypeFor(),
+		ExpiresIn:       int64(accessTokenTTL.Seconds()),
+		RefreshToken:    refreshToken,
+		IDToken:         idToken,
+		Scope:           joinScope(resp.Scope),
+		IssuedTokenType: issuedTokenType,
 	})
 }
 
@@ -148,6 +154,16 @@ func maybeIssueCustomGrantRefresh(
 			Level:    audit.LevelInfo,
 			Message:  "custom-grant refresh token dropped: response subject is empty",
 			ActorID:  "",
+			ClientID: client.ID,
+		})
+		return "", nil
+	}
+	if len(resp.Audience) > 1 {
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     customgrant.AuditEventRefreshDropped,
+			Level:    audit.LevelInfo,
+			Message:  "custom-grant refresh token dropped: response audience contains multiple resources",
+			ActorID:  subject,
 			ClientID: client.ID,
 		})
 		return "", nil
@@ -225,6 +241,7 @@ func customGrantRefreshSubject(resp customgrant.Response) string {
 // seam through which the bound-mint path enters the existing wire
 // pipeline; the handler-supplied path keeps the original semantics.
 func resolveCustomGrantAccessToken(
+	ctx context.Context,
 	deps Deps,
 	client *store.Client,
 	in customgrant.DispatchInput,
@@ -271,6 +288,19 @@ func resolveCustomGrantAccessToken(
 	signed, err := tokens.SignAccessToken(activeSigningKey(deps), claims)
 	if err != nil {
 		return "", 0, err
+	}
+	if deps.RevocationStrategy == store.RevocationStrategyJTIRegistry && deps.AccessTokens != nil {
+		if err := deps.AccessTokens.Register(ctx, store.AccessTokenRecord{
+			JTI:       jti,
+			GrantID:   grantID,
+			Subject:   subject,
+			ClientID:  client.ID,
+			Scopes:    append([]string(nil), resp.Scope...),
+			IssuedAt:  now,
+			ExpiresAt: time.Unix(claims.ExpiresAt, 0).UTC(),
+		}); err != nil {
+			return "", 0, err
+		}
 	}
 	return signed, ttl, nil
 }

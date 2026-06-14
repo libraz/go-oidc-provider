@@ -48,6 +48,29 @@ func (s *recoveryStore) Put(_ context.Context, b *store.RecoveryBatch) error {
 	return nil
 }
 
+// Consume implements [store.RecoveryStore].
+func (s *recoveryStore) Consume(_ context.Context, b *store.RecoveryBatch, index int) error {
+	if b == nil {
+		return errors.New("inmem: nil recovery batch")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.m[b.Subject]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if index < 0 || index >= len(current.Codes) || index >= len(b.Codes) {
+		return store.ErrNotFound
+	}
+	if !current.Codes[index].ConsumedAt.IsZero() {
+		return store.ErrAlreadyConsumed
+	}
+	next := cloneRecoveryBatch(current)
+	next.Codes[index].ConsumedAt = b.Codes[index].ConsumedAt
+	s.m[b.Subject] = next
+	return nil
+}
+
 // Delete implements [store.RecoveryStore].
 func (s *recoveryStore) Delete(_ context.Context, subject string) error {
 	s.mu.Lock()

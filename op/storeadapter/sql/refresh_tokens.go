@@ -24,8 +24,8 @@ func (s *refreshStore) runner() runner { return pickRunner(s.parent, s.tx) }
 // [store.RefreshTokenStore.Save]: both [store.RefreshToken.ID] and
 // [store.RefreshToken.ParentID] are bearer secrets, so the row stores
 // the SHA-256 digest of each via [patterns.Digest] and never the raw
-// value. The chain walk in [RevokeChain] already drives lookups by
-// id-digest, so the parent pointer is digested at the same call site.
+// value. Find accepts either a raw ID or a digest returned as ParentID,
+// so the digest-only schema still satisfies the store round-trip contract.
 func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 	idDigest := patterns.Digest(t.ID)
 	parentDigest := digestNullableID(t.ParentID)
@@ -60,14 +60,35 @@ func digestNullableID(s *string) any {
 	return patterns.Digest(*s)
 }
 
-// find resolves a row by hashing the presented id and comparing in
-// constant time against the stored digest. The returned record's ID
-// is restored to the caller's raw value so call sites observe the
-// same opaque bearer token they passed in; the parent_id digest stays
-// in the returned [store.RefreshToken.ParentID] because the chain
-// walk in [RevokeChain] consumes parent pointers as digests already.
+// find resolves a row by accepting either the raw bearer ID or an ID digest
+// previously returned as [store.RefreshToken.ParentID]. Public callers
+// present raw refresh_token strings; internal chain-root walks may present
+// the stored parent_id digest so Find round-trips its own ParentID output
+// without exposing raw parent secrets in the database.
 func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken, error) {
-	idDigest := patterns.Digest(id)
+	t, _, err := s.findStored(ctx, id)
+	return t, err
+}
+
+// findStored resolves a row presented as a BEARER CREDENTIAL: the presented id
+// is hashed and only the resulting digest is matched, so a stored digest leaked
+// from a database snapshot, replica, or backup cannot be redeemed by presenting
+// it verbatim. Find and Consume route here.
+func (s *refreshStore) findStored(ctx context.Context, id string) (*store.RefreshToken, string, error) {
+	return s.lookup(ctx, id, refreshCredentialKeys(id))
+}
+
+// findStoredByHandle resolves a row presented as an INTERNAL CHAIN HANDLE: a
+// stored parent/root digest previously returned by Find as
+// [store.RefreshToken.ParentID], or a raw root id from a depth-0 walk. Both
+// representations resolve. The tolerant lookup is safe here because the path is
+// reachable only from the OP's own replay-revocation walk (RevokeChain /
+// [store.RefreshChainResolver]), never the public credential Find/Consume.
+func (s *refreshStore) findStoredByHandle(ctx context.Context, id string) (*store.RefreshToken, string, error) {
+	return s.lookup(ctx, id, refreshHandleKeys(id))
+}
+
+func (s *refreshStore) lookup(ctx context.Context, id string, keys [2]string) (*store.RefreshToken, string, error) {
 	var (
 		t        store.RefreshToken
 		stored   string
@@ -84,35 +105,35 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 		authTime int64
 		origin   string
 	)
-	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshFind, idDigest).Scan(
+	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshFind, keys[0], keys[1]).Scan(
 		&stored, &t.ClientID, &t.Subject, &subPub, &t.GrantID,
 		&scope, &t.Resource, &origin, &authTime, &t.ACR, &amr, &details, &extra,
 		&parent, &consumed, &expires, &created,
 		&t.DPoPJKT, &t.MTLSCertThumbprint, &t.Nonce, &revoked)
 	if errors.Is(err, databasesql.ErrNoRows) {
-		return nil, store.ErrNotFound
+		return nil, "", store.ErrNotFound
 	}
 	if err != nil {
-		return nil, wrapErr("refreshes.Find", err)
+		return nil, "", wrapErr("refreshes.Find", err)
 	}
-	if !patterns.ConstantTimeKeyMatch(stored, idDigest) {
-		return nil, store.ErrNotFound
+	if !refreshKeyMatches(stored, keys) {
+		return nil, "", store.ErrNotFound
 	}
 	dec, err := decodeStrings(scope)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	amrDec, err := decodeStrings(amr)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	detailsDec, err := decodeObjectArray(details)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	extraDec, err := decodeMap(extra)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	t.ID = id
 	t.SubjectPublic = int64ToBool(subPub)
@@ -127,7 +148,27 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 	t.AMR = amrDec
 	t.AuthorizationDetails = detailsDec
 	t.AccessTokenExtra = extraDec
-	return &t, nil
+	return &t, stored, nil
+}
+
+// refreshCredentialKeys derives the lookup keys for a bearer-credential
+// presentation: the presented value is hashed and only the digest is matched
+// (both slots hold the digest), so possession of a stored digest alone never
+// resolves a row.
+func refreshCredentialKeys(id string) [2]string {
+	d := patterns.Digest(id)
+	return [2]string{d, d}
+}
+
+// refreshHandleKeys derives the lookup keys for an internal chain handle: the
+// value may be a raw id or a stored digest, so both representations resolve.
+func refreshHandleKeys(id string) [2]string {
+	return [2]string{patterns.Digest(id), id}
+}
+
+func refreshKeyMatches(stored string, keys [2]string) bool {
+	return patterns.ConstantTimeKeyMatch(stored, keys[0]) ||
+		patterns.ConstantTimeKeyMatch(stored, keys[1])
 }
 
 func (s *refreshStore) Find(ctx context.Context, id string) (*store.RefreshToken, error) {
@@ -138,8 +179,19 @@ func (s *refreshStore) Find(ctx context.Context, id string) (*store.RefreshToken
 	return t, nil
 }
 
+// FindByStoredHandle implements [store.RefreshChainResolver]. The handle is an
+// internal chain pointer (a stored parent/root digest previously returned as
+// [store.RefreshToken.ParentID], or a raw root id from a depth-0 walk), not a
+// bearer credential, so the tolerant lookup that accepts the digest verbatim is
+// safe here: it is reachable only from the OP's own replay-revocation walk,
+// never from the public Find/Consume credential path.
+func (s *refreshStore) FindByStoredHandle(ctx context.Context, handle string) (*store.RefreshToken, error) {
+	t, _, err := s.findStoredByHandle(ctx, handle)
+	return t, err
+}
+
 func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshToken, error) {
-	t, err := s.find(ctx, id)
+	t, storedID, err := s.findStored(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +199,7 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 		return t, store.ErrAlreadyConsumed
 	}
 	now := s.parent.clock.Now()
-	idDigest := patterns.Digest(id)
-	res, err := s.runner().ExecContext(ctx, s.parent.queries.refreshConsume, timeToInt64(now), idDigest)
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.refreshConsume, timeToInt64(now), storedID)
 	if err != nil {
 		return nil, wrapErr("refreshes.Consume", err)
 	}
@@ -172,12 +223,11 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 // trail). The walk is bounded by the chain depth, which the library
 // caps at the refresh-token TTL by construction.
 //
-// The walk operates entirely in the digest space: rootID is hashed
-// once on entry, every descendant lookup uses the parent_id digest
-// the row was stored with, and the BFS queue holds digests rather
-// than raw IDs. This keeps the rotation graph internally consistent
-// even though no code path outside this method ever observes the raw
-// IDs of the descendants.
+// The walk operates entirely in the stored-ID space: rootID may be a raw
+// bearer secret or a digest returned from Find, and findStored resolves it
+// to the exact id column value before the BFS starts. Descendant lookup
+// compares parent_id against those stored digest values, keeping the graph
+// internally consistent without ever persisting raw parent secrets.
 //
 // Atomicity (H-G3): when the substore is not already running inside a
 // caller-owned transaction the BFS auto-wraps itself in a fresh
@@ -211,13 +261,16 @@ func (s *refreshStore) RevokeChain(ctx context.Context, rootID string) error {
 //
 //nolint:gocognit // structure mirrors the prior inline BFS body.
 func (s *refreshStore) revokeChainBFS(ctx context.Context, rootID string) error {
-	if _, err := s.find(ctx, rootID); err != nil {
+	// rootID is a chain handle (a stored digest from FindRoot, or a raw root
+	// id for a depth-0 chain), not a bearer credential, so resolve it through
+	// the tolerant handle lookup rather than the hash-only credential path.
+	_, rootStoredID, err := s.findStoredByHandle(ctx, rootID)
+	if err != nil {
 		return err
 	}
 	now := s.parent.clock.Now()
-	rootDigest := patterns.Digest(rootID)
-	visited := map[string]struct{}{rootDigest: {}}
-	queue := []string{rootDigest}
+	visited := map[string]struct{}{rootStoredID: {}}
+	queue := []string{rootStoredID}
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]

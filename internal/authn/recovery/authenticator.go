@@ -45,11 +45,11 @@ var ErrCodeMissing = errors.New("recovery: code field is missing")
 
 // ErrLocked is returned when the shared cross-factor brute-force gate
 // is locked for the subject.
-var ErrLocked = errors.New("recovery: factor is locked")
+var ErrLocked = fmt.Errorf("recovery: factor is locked: %w", authn.ErrFactorAbort)
 
 // ErrResetRequired is returned when the shared cross-factor counter
 // crosses the long threshold and the user must reset/recover factors.
-var ErrResetRequired = errors.New("recovery: factor reset required")
+var ErrResetRequired = fmt.Errorf("recovery: factor reset required: %w", authn.ErrFactorAbort)
 
 // Authenticator is the [op.Authenticator] adapter for the single-use
 // recovery-code factor. It binds a [Verifier] (the primitive that
@@ -175,14 +175,14 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	}
 
 	res, verr := a.verifier.Verify(ctx, batch, code)
-	if verr == nil && res != nil && res.Batch != nil {
-		if perr := a.store.Put(ctx, res.Batch); perr != nil {
-			return interaction.Step{}, fmt.Errorf("recovery: persist batch: %w", perr)
-		}
-	}
-
 	switch {
 	case verr == nil:
+		if perr := a.store.Consume(ctx, res.Batch, res.Index); perr != nil {
+			if errors.Is(perr, store.ErrAlreadyConsumed) {
+				return interaction.Step{Prompt: a.prompt(batch)}, nil
+			}
+			return interaction.Step{}, fmt.Errorf("recovery: consume batch: %w", perr)
+		}
 		if a.lockout != nil {
 			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
 				return interaction.Step{}, fmt.Errorf("recovery: lockout reset: %w", rerr)

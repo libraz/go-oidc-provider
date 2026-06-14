@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -79,7 +80,7 @@ var (
 	// ErrLocked is returned when [Verifier.Verify] is called while
 	// LockedUntil is in the future. The Result.Outcome equals
 	// OutcomeLocked.
-	ErrLocked = errors.New("totp: factor is locked")
+	ErrLocked = fmt.Errorf("totp: factor is locked: %w", authn.ErrFactorAbort)
 
 	// ErrWrongCode is returned when the supplied code does not match
 	// any step in the skew window. The Result.Outcome equals
@@ -91,7 +92,7 @@ var (
 	// terminal state and route the user to the recovery / step-up
 	// reset flow; the verifier intentionally never disables the
 	// factor on its own.
-	ErrResetRequired = errors.New("totp: factor reset required")
+	ErrResetRequired = fmt.Errorf("totp: factor reset required: %w", authn.ErrFactorAbort)
 
 	// ErrNotConfirmed is returned when the supplied record has a zero
 	// ConfirmedAt timestamp. The library refuses to verify against an

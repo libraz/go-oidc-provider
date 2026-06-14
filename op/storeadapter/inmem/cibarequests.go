@@ -32,21 +32,30 @@ func (s *cibaRequestStore) Save(_ context.Context, req *store.CIBARequest) error
 	if req == nil {
 		return errors.New("inmem: nil ciba request")
 	}
-	if req.Status == 0 {
-		// Caller forgot to stamp the status; default to Pending so
-		// the lifecycle starts from a known state.
-		req.Status = store.CIBARequestStatusPending
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.maybeGCLocked()
 	key := hashKey(req.ID)
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
 	stored := cloneCIBARequest(req)
+	if stored.Status == 0 {
+		// Caller forgot to stamp the status; default the stored copy
+		// to Pending without mutating the caller-owned struct.
+		stored.Status = store.CIBARequestStatusPending
+	}
 	stored.ID = key
 	s.m[key] = stored
 	return nil
+}
+
+func (s *cibaRequestStore) maybeGCLocked() {
+	for key, rec := range s.m {
+		if isExpired(rec.ExpiresAt, s.clock) {
+			delete(s.m, key)
+		}
+	}
 }
 
 func (s *cibaRequestStore) FindByAuthReqID(_ context.Context, authReqID string) (*store.CIBARequest, error) {

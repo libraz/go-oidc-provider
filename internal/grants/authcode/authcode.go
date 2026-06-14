@@ -310,6 +310,15 @@ type Exchanged struct {
 	// into the exchanger, so the audit trail reflects the persistence
 	// layer's view of "when".
 	ConsumedAt time.Time
+
+	// IssuedAt is the wall-clock time at which the authorization code was
+	// first persisted (its [store.AuthorizationCode.CreatedAt]). The token
+	// endpoint uses it as the iat for the grant-tombstone mint-refusal
+	// probe: a grant tombstoned after the code was issued MUST refuse
+	// redemption even when the redemption happens later, so the probe is
+	// keyed on the code's issuance instant — not the redemption clock —
+	// mirroring the refresh path's use of the consumed token's IssuedAt.
+	IssuedAt time.Time
 }
 
 // Exchange consumes the code and verifies the bindings recorded at issuance.
@@ -378,6 +387,7 @@ func (e *Exchanger) Exchange(ctx context.Context, in ExchangeInput) (*Exchanged,
 		DPoPJKT:          rec.DPoPJKT,
 		HadCodeChallenge: rec.CodeChallenge != "",
 		ConsumedAt:       *rec.ConsumedAt,
+		IssuedAt:         rec.CreatedAt,
 	}, nil
 }
 

@@ -67,7 +67,7 @@ jobs:
 
           imports_diff="$("$gobin/goimports" -l -local github.com/libraz/go-oidc-provider .)"
           if [ -n "$imports_diff" ]; then
-            echo "::error::goimports would reformat the files below; run 'make fmt'"
+            echo "::error::goimports would reformat the files below; run 'make format'"
             printf '%s\n' "$imports_diff"
             exit 1
           fi

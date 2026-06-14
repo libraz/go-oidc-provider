@@ -597,29 +597,20 @@ func (s *grantStore) FindBySubjectClient(_ context.Context, subject, clientID st
 	return cloneGrant(best), nil
 }
 
-// ListBySubject mirrors [FindBySubjectClient] but enumerates every
-// grant the subject currently holds. The implementation walks the
-// in-memory map and returns clones so the caller can mutate the slice
-// without racing the store. When historical (per-update) records exist
-// for the same (subject, clientID) pair, the latest UpdatedAt wins —
-// the same precedence rule [FindBySubjectClient] applies — so the
-// caller observes one entry per consented client even if the embedder
-// has not pruned superseded rows.
+// ListBySubject enumerates every grant the subject currently holds.
+// The implementation walks the in-memory map and returns clones so the
+// caller can mutate the slice without racing the store. Unlike
+// FindBySubjectClient, it intentionally does not collapse duplicate
+// (subject, clientID) rows: callers that revoke by listing must see
+// every active grant so no orphaned token chain survives.
 func (s *grantStore) ListBySubject(_ context.Context, subject string) ([]*store.Grant, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	latest := make(map[string]*store.Grant)
+	out := make([]*store.Grant, 0)
 	for _, rec := range s.m {
 		if rec.Subject != subject {
 			continue
 		}
-		current, ok := latest[rec.ClientID]
-		if !ok || rec.UpdatedAt.After(current.UpdatedAt) {
-			latest[rec.ClientID] = rec
-		}
-	}
-	out := make([]*store.Grant, 0, len(latest))
-	for _, rec := range latest {
 		out = append(out, cloneGrant(rec))
 	}
 	return out, nil

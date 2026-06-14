@@ -331,6 +331,50 @@ func TestHandleCIBA_ApprovedRecord_HappyPath(t *testing.T) {
 	}
 }
 
+func TestHandleCIBA_AuthorizeFailureAuditReasonMatchesWireError(t *testing.T) {
+	t.Parallel()
+
+	emitter := &recordingEmitter{}
+	f := newCIBAFixture(t)
+	f.deps.Audit = emitter
+	f.seedCIBARequest(t, &store.CIBARequest{
+		ID:        "auth-req-scope-denied",
+		ClientID:  cibaTestClientID,
+		Subject:   "user-42",
+		Scope:     []string{"admin"},
+		Interval:  ciba.DefaultInterval,
+		ExpiresAt: f.clock.now.Add(time.Minute),
+		IssuedAt:  f.clock.now,
+		Status:    store.CIBARequestStatusPending,
+	})
+	if err := f.store.CIBARequests().Approve(context.Background(), "auth-req-scope-denied", "user-42", "", time.Time{}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	form := url.Values{"grant_type": {"urn:openid:params:grant-type:ciba"}}
+	form.Set("auth_req_id", "auth-req-scope-denied")
+
+	resp := f.post(t, form)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if got := cibaDecodeError(t, resp.Body.Bytes()); got != "invalid_scope" {
+		t.Fatalf("error=%s want invalid_scope", got)
+	}
+	var found *audit.Event
+	for i := range emitter.events {
+		if emitter.events[i].Name == ciba.AuditTokenRejected {
+			found = &emitter.events[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected audit event %q; got %v", ciba.AuditTokenRejected, eventNames(emitter.events))
+	}
+	if got := found.Extras["reason"]; got != "invalid_scope" {
+		t.Fatalf("audit reason=%v want invalid_scope", got)
+	}
+}
+
 func TestHandleCIBA_PollAbuseLockout(t *testing.T) {
 	t.Parallel()
 	f := newCIBAFixture(t)

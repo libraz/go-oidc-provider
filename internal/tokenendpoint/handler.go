@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
@@ -248,6 +249,12 @@ type Deps struct {
 	// when accepting a refresh-time scope override. A nil value
 	// disables only the per-scope AllowedClients allowlist check.
 	Scopes *scoperegistry.Registry
+
+	// AuthorizationDetailTypes is the RFC 9396 registry accepted at
+	// /token. A non-empty map enables the authorization_details
+	// request parameter for client_credentials and for authcode /
+	// refresh reductions against the originating grant.
+	AuthorizationDetailTypes map[string]authorizationdetails.Validator
 
 	// DPoP is the RFC 9449 proof verifier. A nil value disables DPoP
 	// processing entirely: the handler ignores the "DPoP" header,
@@ -539,6 +546,7 @@ type successResponse struct {
 	Scope                string           `json:"scope"`
 	AuthorizationDetails []map[string]any `json:"authorization_details,omitempty"`
 	GrantID              string           `json:"grant_id,omitempty"`
+	IssuedTokenType      string           `json:"issued_token_type,omitempty"`
 }
 
 // writeSuccess marshals body and writes it with the cache-control and

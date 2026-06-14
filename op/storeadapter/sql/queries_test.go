@@ -176,3 +176,23 @@ func TestBuildQueries_AppliesNamingOverrides(t *testing.T) {
 		t.Errorf("refreshSave missing override: %q", q.refreshSave)
 	}
 }
+
+func TestBuildQueries_GCQueriesPreserveZeroExpiry(t *testing.T) {
+	t.Parallel()
+
+	q, err := buildQueries(SQLite(), defaultNames())
+	if err != nil {
+		t.Fatalf("buildQueries: %v", err)
+	}
+	for name, query := range map[string]string{
+		"accessTokenGC":       q.accessTokenGC,
+		"opaqueAccessTokenGC": q.opaqueAccessTokenGC,
+		"jtiGC":               q.jtiGC,
+		"deviceCodeGC":        q.deviceCodeGC,
+		"cibaGC":              q.cibaGC,
+	} {
+		if !strings.Contains(query, "expires_at > 0 AND expires_at <") {
+			t.Errorf("%s query must preserve zero-expiry rows, got %q", name, query)
+		}
+	}
+}

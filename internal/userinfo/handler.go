@@ -233,8 +233,9 @@ func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, 
 // dispatchUserInfoResponse picks the response shape based on the
 // request's Accept header and the configured client metadata. The
 // default OIDC Core 1.0 §5.3.1.1 shape is application/json; the
-// JWT-shape (signed-only or signed-then-encrypted) fires only when
-// the request opts into it via Accept: application/jwt.
+// JWT-shape (signed-only or signed-then-encrypted) fires when the
+// request opts into it via Accept: application/jwt or when the
+// AT-bound client registered userinfo_encrypted_response_alg / _enc.
 //
 // On the JWT-shape path the handler MUST resolve the AT-bound client
 // before signing so a deleted client surfaces as invalid_token rather
@@ -248,8 +249,17 @@ func dispatchUserInfoResponse(
 	clientID string,
 	body map[string]any,
 ) {
-	if !wantsJWTShape(r) {
+	wantsJWT := wantsJWTShape(r)
+	client, ok := resolveClient(r.Context(), deps, clientID)
+	encryptionRegistered := ok && client != nil && client.UserInfoEncryptedResponseAlg != ""
+	if !wantsJWT && !encryptionRegistered {
 		writeJSON(w, body)
+		return
+	}
+	if !ok {
+		// Client was deleted between AT issuance and the JWT-shape
+		// userinfo call.
+		respondGenericInvalidToken(w)
 		return
 	}
 	// JWT-shape path requires the client metadata. Without it the
@@ -257,11 +267,6 @@ func dispatchUserInfoResponse(
 	// nil-store / empty-client_id case collapses onto signed-only
 	// (maybeEncryptUserInfo will short-circuit on
 	// ErrNoEncryptionConfigured).
-	if _, ok := resolveClient(r.Context(), deps, clientID); !ok {
-		// Client was deleted between AT issuance and the userinfo call.
-		respondGenericInvalidToken(w)
-		return
-	}
 	writeUserInfoJWT(r.Context(), w, deps, clientID, body)
 }
 

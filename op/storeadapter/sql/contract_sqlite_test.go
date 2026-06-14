@@ -3,11 +3,15 @@ package oidcsql_test
 import (
 	"context"
 	databasesql "database/sql"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	_ "modernc.org/sqlite"
 
+	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/store/contract"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
@@ -65,6 +69,104 @@ func TestSQLite_Contract(t *testing.T) {
 	contract.Run(t, newSQLiteFactory(t))
 }
 
+func TestSQLite_MigrateDetectsLegacyRefreshSchema(t *testing.T) {
+	t.Parallel()
+
+	db := openSQLite(t)
+	s, err := oidcsql.New(db, oidcsql.SQLite())
+	if err != nil {
+		t.Fatalf("oidcsql.New: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+CREATE TABLE oidc_refresh_tokens (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    parent_id TEXT,
+    subject TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT '[]',
+    expires_at INTEGER NOT NULL,
+    consumed_at INTEGER,
+    created_at INTEGER NOT NULL
+)`); err != nil {
+		t.Fatalf("create legacy refresh table: %v", err)
+	}
+	err = s.Migrate(context.Background())
+	if err == nil {
+		t.Fatal("Migrate succeeded against legacy refresh schema; want missing-column error")
+	}
+	if !strings.Contains(err.Error(), "schema for oidc_refresh_tokens is missing required columns") ||
+		!strings.Contains(err.Error(), "subject_public") ||
+		!strings.Contains(err.Error(), "authorization_details") {
+		t.Fatalf("Migrate error=%v, want missing refresh columns", err)
+	}
+}
+
+func TestSQLite_RefreshReplayFromNonRootRevokesDescendants(t *testing.T) {
+	t.Parallel()
+
+	b := newSQLiteFactory(t)(t)
+	ctx := context.Background()
+	now := b.Now()
+	clk := func() time.Time { return now }
+	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
+		Store: b.Store.RefreshTokens(),
+		Clock: clk,
+		TTL:   24 * time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	exchanger, err := refresh.NewExchanger(refresh.ExchangerConfig{
+		Store:    b.Store.RefreshTokens(),
+		Clock:    clk,
+		GraceTTL: -1,
+	})
+	if err != nil {
+		t.Fatalf("NewExchanger: %v", err)
+	}
+	issue := refresh.IssueInput{
+		ClientID: "client-1",
+		Subject:  "user-1",
+		GrantID:  "grant-1",
+		Scope:    []string{"openid"},
+	}
+
+	root, err := issuer.Issue(ctx, issue)
+	if err != nil {
+		t.Fatalf("Issue root: %v", err)
+	}
+	rootEx, err := exchanger.Exchange(ctx, refresh.ExchangeInput{Token: root, ClientID: "client-1"})
+	if err != nil {
+		t.Fatalf("Exchange root: %v", err)
+	}
+	issue.ParentID = &rootEx.ConsumedID
+	mid, err := issuer.Issue(ctx, issue)
+	if err != nil {
+		t.Fatalf("Issue mid: %v", err)
+	}
+	midEx, err := exchanger.Exchange(ctx, refresh.ExchangeInput{Token: mid, ClientID: "client-1"})
+	if err != nil {
+		t.Fatalf("Exchange mid: %v", err)
+	}
+	issue.ParentID = &midEx.ConsumedID
+	leaf, err := issuer.Issue(ctx, issue)
+	if err != nil {
+		t.Fatalf("Issue leaf: %v", err)
+	}
+
+	if _, err := exchanger.Exchange(ctx, refresh.ExchangeInput{Token: mid, ClientID: "client-1"}); !errors.Is(err, refresh.ErrTokenReplayed) {
+		t.Fatalf("replay mid err=%v want ErrTokenReplayed", err)
+	}
+	got, err := b.Store.RefreshTokens().Find(ctx, leaf)
+	if err != nil {
+		t.Fatalf("Find leaf: %v", err)
+	}
+	if got.ConsumedAt == nil || !got.Revoked {
+		t.Fatalf("leaf not revoked after non-root replay: %+v", got)
+	}
+}
+
 // TestSQLite_SessionStore_ConcurrentRotate pins the rotation
 // post-condition declared on [store.SessionStore] directly against the
 // SQL adapter. The free-standing helper is also exercised via
@@ -104,4 +206,96 @@ func TestSQLite_SessionStore_BatchListMatches(t *testing.T) {
 	t.Parallel()
 	b := newSQLiteFactory(t)(t)
 	contract.AssertSessionBatchListMatches(t, b.Store.Sessions(), 16, b.Now())
+}
+
+func TestSQLite_GCPreservesZeroExpiryAccessTokenRows(t *testing.T) {
+	t.Parallel()
+
+	b := newSQLiteFactory(t)(t)
+	ctx := context.Background()
+	now := b.Now()
+	at := b.Store.AccessTokens()
+	if err := at.Register(ctx, store.AccessTokenRecord{
+		JTI:       "zero-at",
+		GrantID:   "grant-zero",
+		Subject:   "sub-zero",
+		ClientID:  "client-zero",
+		Scopes:    []string{"read"},
+		IssuedAt:  now,
+		ExpiresAt: time.Time{},
+	}); err != nil {
+		t.Fatalf("Register zero access token: %v", err)
+	}
+	if err := at.Register(ctx, store.AccessTokenRecord{
+		JTI:       "expired-at",
+		GrantID:   "grant-expired",
+		Subject:   "sub-expired",
+		ClientID:  "client-expired",
+		Scopes:    []string{"read"},
+		IssuedAt:  now.Add(-2 * time.Hour),
+		ExpiresAt: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("Register expired access token: %v", err)
+	}
+
+	n, err := at.GC(ctx, now)
+	if err != nil {
+		t.Fatalf("AccessTokens.GC: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("AccessTokens.GC removed %d rows, want 1", n)
+	}
+	if got, err := at.Find(ctx, "zero-at"); err != nil || got == nil {
+		t.Fatalf("zero-expiry access token missing after GC: got=%+v err=%v", got, err)
+	}
+	if got, err := at.Find(ctx, "expired-at"); err != nil || got != nil {
+		t.Fatalf("expired access token survived GC: got=%+v err=%v", got, err)
+	}
+}
+
+func TestSQLite_GCPreservesZeroExpiryOpaqueAccessTokenRows(t *testing.T) {
+	t.Parallel()
+
+	b := newSQLiteFactory(t)(t)
+	ctx := context.Background()
+	now := b.Now()
+	opaque := b.Store.OpaqueAccessTokens()
+	if err := opaque.Save(ctx, &store.OpaqueAccessToken{
+		ID:        "zero-opaque-token",
+		GrantID:   "grant-zero",
+		Subject:   "sub-zero",
+		ClientID:  "client-zero",
+		Scope:     []string{"read"},
+		Audience:  "https://api.example.com",
+		IssuedAt:  now,
+		ExpiresAt: time.Time{},
+	}); err != nil {
+		t.Fatalf("Save zero opaque token: %v", err)
+	}
+	if err := opaque.Save(ctx, &store.OpaqueAccessToken{
+		ID:        "expired-opaque-token",
+		GrantID:   "grant-expired",
+		Subject:   "sub-expired",
+		ClientID:  "client-expired",
+		Scope:     []string{"read"},
+		Audience:  "https://api.example.com",
+		IssuedAt:  now.Add(-2 * time.Hour),
+		ExpiresAt: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("Save expired opaque token: %v", err)
+	}
+
+	n, err := opaque.GC(ctx, now)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.GC: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("OpaqueAccessTokens.GC removed %d rows, want 1", n)
+	}
+	if got, err := opaque.Find(ctx, "zero-opaque-token"); err != nil || got == nil {
+		t.Fatalf("zero-expiry opaque token missing after GC: got=%+v err=%v", got, err)
+	}
+	if got, err := opaque.Find(ctx, "expired-opaque-token"); err == nil || got != nil {
+		t.Fatalf("expired opaque token survived GC: got=%+v err=%v", got, err)
+	}
 }

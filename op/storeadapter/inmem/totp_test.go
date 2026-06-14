@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,5 +173,47 @@ func TestTOTPStore_PutClonesRecord(t *testing.T) {
 	}
 	if got.SecretCiphertext[0] == rec.SecretCiphertext[0] {
 		t.Errorf("post-Put mutation of caller record leaked into store")
+	}
+}
+
+func TestTOTPStore_AcceptRaceSingleWinner(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	ts := s.TOTPs()
+	ctx := context.Background()
+	rec := newTOTPRecord("user-alice")
+	if err := ts.Put(ctx, rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	accepted := *rec
+	accepted.LastAcceptedStep = 12345
+
+	var wins atomic.Int64
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := ts.Accept(ctx, &accepted)
+			switch {
+			case err == nil:
+				wins.Add(1)
+			case errors.Is(err, store.ErrAlreadyConsumed):
+			default:
+				t.Errorf("Accept: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("Accept wins=%d want 1", got)
+	}
+	got, err := ts.Get(ctx, rec.Subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LastAcceptedStep != accepted.LastAcceptedStep {
+		t.Fatalf("LastAcceptedStep=%d want %d", got.LastAcceptedStep, accepted.LastAcceptedStep)
 	}
 }

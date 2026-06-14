@@ -37,6 +37,7 @@ import (
 const (
 	txGrantType    = "urn:ietf:params:oauth:grant-type:token-exchange"
 	txClientSecret = "tx-client-secret"
+	txTokenTypeAT  = "urn:ietf:params:oauth:token-type:access_token" //nolint:gosec // RFC 8693 token type URN, not a credential.
 	// txCallerID names the calling client (the one performing the
 	// exchange). It is distinct from txSubjectClient so a default
 	// exchange exercises the impersonation path; tests that need a
@@ -531,6 +532,9 @@ func TestScenario_TX_013_TTLCappedToMinimumOfThree(t *testing.T) {
 	}
 	if expiresIn <= 0 {
 		t.Errorf("expires_in=%d non-positive", int64(expiresIn))
+	}
+	if got := body["issued_token_type"]; got != txTokenTypeAT {
+		t.Errorf("issued_token_type=%v want %s", got, txTokenTypeAT)
 	}
 }
 

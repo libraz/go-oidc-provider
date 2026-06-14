@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/grants/refresh"
 	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
@@ -51,6 +52,13 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !checkRefreshScopeAllowlist(w, deps, client.ID, in.RequestedScope) {
 		return
 	}
+	authorizationDetails, ok := parseTokenAuthorizationDetails(w, r, deps, client)
+	if !ok {
+		return
+	}
+	if !preflightRefreshBeforeConsume(ctx, w, deps, client.ID, in) {
+		return
+	}
 	exchanged, ok := exchangeRefresh(ctx, w, deps, client.ID, in)
 	if !ok {
 		return
@@ -58,7 +66,7 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !checkTokenScopeAllowlist(w, deps, client.ID, exchanged.Scope) {
 		return
 	}
-	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope) {
+	if !enforceStrictOfflineAccess(w, deps, exchanged.Scope, exchanged.Origin) {
 		return
 	}
 	if !enforceDPoPRefreshBinding(w, deps, dpopOut, exchanged.DPoPJKT) {
@@ -74,7 +82,7 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
-	issueRefreshResponse(ctx, w, deps, client, exchanged, binding)
+	issueRefreshResponse(ctx, w, deps, client, exchanged, binding, authorizationDetails)
 }
 
 // checkRefreshScopeAllowlist enforces the per-scope AllowedClients
@@ -101,6 +109,62 @@ func checkRefreshScopeAllowlist(
 		}
 	}
 	return true
+}
+
+func preflightRefreshBeforeConsume(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	clientID string,
+	in refreshInputs,
+) bool {
+	rec, err := deps.RefreshTokens.Find(ctx, in.Token)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return true
+		}
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return false
+	}
+	if rec.ConsumedAt != nil {
+		return true
+	}
+	if rec.ClientID != clientID {
+		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		return false
+	}
+	if !rec.ExpiresAt.IsZero() && deps.now().UTC().After(rec.ExpiresAt) {
+		writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token rejected")
+		return false
+	}
+	scope, ok := preflightRefreshScope(w, rec.Scope, in.RequestedScope)
+	if !ok {
+		return false
+	}
+	if deps.Scopes != nil && !checkTokenScopeAllowlist(w, deps, clientID, scope) {
+		return false
+	}
+	return enforceStrictOfflineAccess(w, deps, scope, rec.Origin)
+}
+
+func preflightRefreshScope(w http.ResponseWriter, granted, requested []string) ([]string, bool) {
+	if len(requested) == 0 {
+		return append([]string(nil), granted...), true
+	}
+	allowed := make(map[string]struct{}, len(granted))
+	for _, s := range granted {
+		allowed[s] = struct{}{}
+	}
+	out := make([]string, 0, len(requested))
+	for _, s := range requested {
+		if _, ok := allowed[s]; !ok {
+			writeError(w, http.StatusBadRequest, errInvalidScope,
+				"requested scope exceeds the original grant")
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
 }
 
 // refreshInputs is the de-structured view of the form parameters the
@@ -166,8 +230,11 @@ func exchangeRefresh(
 // deployment must accept that pre-flag refresh tokens are
 // invalidated on first use, which matches the ADR's "rejected on
 // first use" stance. Returns true when the request may proceed.
-func enforceStrictOfflineAccess(w http.ResponseWriter, deps Deps, scope []string) bool {
+func enforceStrictOfflineAccess(w http.ResponseWriter, deps Deps, scope []string, origin store.RefreshTokenOrigin) bool {
 	if !deps.StrictOfflineAccess {
+		return true
+	}
+	if origin == store.RefreshOriginCustomGrant {
 		return true
 	}
 	if oidcscope.ContainsOfflineAccess(scope) {
@@ -217,11 +284,16 @@ func issueRefreshResponse(
 	client *store.Client,
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
+	requestedAuthorizationDetails []map[string]any,
 ) {
 	now := deps.now().UTC()
 	authCtx := refreshAuthContext(ctx, deps, exchanged)
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
+		return
+	}
+	authorizationDetails, ok := reduceAuthorizationDetails(w, requestedAuthorizationDetails, authCtx.AuthorizationDetails)
+	if !ok {
 		return
 	}
 	// Opaque-format chains revoke the prior access token atomically
@@ -270,7 +342,7 @@ func issueRefreshResponse(
 		now,
 		authCtx.AuthTime,
 		binding,
-		authCtx.AuthorizationDetails,
+		authorizationDetails,
 		exchanged.AccessTokenExtra,
 	)
 	if err != nil {
@@ -286,6 +358,7 @@ func issueRefreshResponse(
 		AuthTime: authCtx.AuthTime,
 		ACR:      authCtx.ACR,
 		AMR:      authCtx.AMR,
+		Claims:   authCtx.Claims,
 		Nonce:    exchanged.Nonce,
 		Extra:    idTokenExtra,
 	})
@@ -302,7 +375,7 @@ func issueRefreshResponse(
 	}
 	var rotated string
 	if !exchanged.InGrace {
-		rotated, err = rotateRefreshToken(ctx, deps, client, exchanged, binding)
+		rotated, err = rotateRefreshToken(ctx, deps, client, refreshExchangedWithAuthorizationDetails(exchanged, authorizationDetails), binding)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return
@@ -315,9 +388,18 @@ func issueRefreshResponse(
 		RefreshToken:         rotated,
 		IDToken:              idToken,
 		Scope:                joinScope(exchanged.Scope),
-		AuthorizationDetails: authCtx.AuthorizationDetails,
+		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
 		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
+}
+
+func refreshExchangedWithAuthorizationDetails(exchanged *refresh.Exchanged, details []map[string]any) *refresh.Exchanged {
+	if exchanged == nil {
+		return nil
+	}
+	out := *exchanged
+	out.AuthorizationDetails = cloneAuthorizationDetails(details)
+	return &out
 }
 
 func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Exchanged) authContext {
@@ -332,7 +414,11 @@ func refreshAuthContext(ctx context.Context, deps Deps, exchanged *refresh.Excha
 	if len(exchanged.AMR) > 0 {
 		out.AMR = append([]string(nil), exchanged.AMR...)
 	}
-	if len(exchanged.AuthorizationDetails) > 0 {
+	// Grant Management replace/merge mutates the grant, not historical
+	// refresh-token records. While the grant exists it is the source of
+	// truth for RFC 9396 authorization_details; the record snapshot is
+	// only a fallback for custom grants or legacy/missing-grant chains.
+	if len(out.AuthorizationDetails) == 0 && len(exchanged.AuthorizationDetails) > 0 {
 		out.AuthorizationDetails = cloneAuthorizationDetails(exchanged.AuthorizationDetails)
 	}
 	return out
@@ -349,6 +435,7 @@ type refreshIDTokenInput struct {
 	AuthTime int64
 	ACR      string
 	AMR      []string
+	Claims   *authorize.ClaimsRequest
 
 	// Nonce is the OIDC Core 1.0 §3.1.2.1 nonce captured at the
 	// originating authorization request, threaded through the
@@ -383,7 +470,7 @@ func maybeMintRefreshIDToken(deps Deps, in refreshIDTokenInput) (string, error) 
 		ExpiresAt: tokens.ExpiresIn(in.Now, deps.IDTokenTTL),
 		AuthTime:  in.AuthTime,
 		Nonce:     in.Nonce,
-		ACR:       in.ACR,
+		ACR:       idTokenACRForClaims(in.ACR, in.Claims),
 		AMR:       append([]string(nil), in.AMR...),
 		Extra:     in.Extra,
 	}

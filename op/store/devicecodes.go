@@ -264,22 +264,25 @@ type DeviceCodeStore interface {
 	// without exposing the polling bearer device_code to the browser.
 	DenyByUserCode(ctx context.Context, userCode, reason string) error
 
-	// RecordPoll atomically updates [DeviceCode.LastPolledAt] to
-	// when AND [DeviceCode.Interval] to nextInterval. The library
-	// calls RecordPoll on every poll arrival before deciding the
-	// wire response so the next poll's slow_down ladder observes
-	// the latest timestamp; on a slow_down decision the library
-	// passes the doubled interval per RFC 8628 §3.5 ("If the
-	// interval is more than 5 seconds, the client MUST honor the
-	// new value") so a misbehaving device cannot keep hammering
-	// at the original bar by ignoring the elevated interval.
-	// Implementations MUST persist both fields atomically — a
-	// concurrent poll observing only the timestamp update would
-	// see a stale interval and let the attacker re-arm the gate.
-	// A nextInterval value less than or equal to the record's
-	// current Interval is taken as "no escalation this poll" and
-	// the existing Interval is preserved (the library passes the
-	// existing value verbatim on non-slow_down decisions).
+	// RecordPoll updates [DeviceCode.LastPolledAt] to when and
+	// [DeviceCode.Interval] to nextInterval when nextInterval is
+	// greater than the current value. The library calls RecordPoll on
+	// every poll arrival so later polls observe the latest timestamp;
+	// on a slow_down decision it passes the doubled interval per RFC
+	// 8628 §3.5. A nextInterval value less than or equal to the
+	// record's current Interval is taken as "no escalation this poll"
+	// and the existing Interval is preserved.
+	//
+	// Implementations MUST persist the timestamp and any interval
+	// escalation atomically, but RecordPoll is an observation update,
+	// not a compare-and-set gate: its signature does not return the
+	// previous LastPolledAt / Interval. Under deliberately concurrent
+	// polling, two handlers that already read the same pre-poll
+	// snapshot can therefore make the same authorization_pending vs
+	// slow_down decision. This is accepted for the device-code
+	// slow_down ladder; token issuance remains protected by Consume's
+	// single-use CAS.
+	//
 	// Returns [ErrNotFound] when the record does not exist; the
 	// library treats that as expired_token.
 	RecordPoll(ctx context.Context, deviceCode string, when time.Time, nextInterval time.Duration) error

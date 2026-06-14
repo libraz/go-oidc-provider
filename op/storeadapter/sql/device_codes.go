@@ -38,14 +38,18 @@ func (s *deviceCodeStore) Save(ctx context.Context, code *store.DeviceCode) erro
 	if code == nil {
 		return errors.New("oidcsql: nil device code")
 	}
-	if code.Status == 0 {
-		code.Status = store.DeviceCodeStatusPending
+	status := code.Status
+	if status == 0 {
+		status = store.DeviceCodeStatusPending
+	}
+	if err := s.gcExpired(ctx); err != nil {
+		return err
 	}
 	idDigest := patterns.Digest(code.ID)
 	_, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeSave,
 		idDigest, code.ClientID, code.UserCode, code.Subject,
 		encodeStrings(code.Scope), encodeStrings(code.Resource),
-		code.DPoPJKT, code.MTLSCertS256, int64(code.Interval), int64(code.Status),
+		code.DPoPJKT, code.MTLSCertS256, int64(code.Interval), int64(status),
 		timeToInt64(code.AuthTime), code.DenyReason,
 		int64(code.UserCodeStrikes), int64(code.PollViolations),
 		timePtrToInt64Ptr(code.LastPolledAt), timeToInt64(code.ExpiresAt), timeToInt64(code.IssuedAt))
@@ -54,6 +58,13 @@ func (s *deviceCodeStore) Save(ctx context.Context, code *store.DeviceCode) erro
 			return store.ErrAlreadyExists
 		}
 		return wrapErr("deviceCodes.Save", err)
+	}
+	return nil
+}
+
+func (s *deviceCodeStore) gcExpired(ctx context.Context) error {
+	if _, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeGC, s.now()); err != nil {
+		return wrapErr("deviceCodes.GC", err)
 	}
 	return nil
 }

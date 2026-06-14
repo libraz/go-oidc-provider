@@ -21,6 +21,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/store/contract"
 )
 
 func newTestStore(t *testing.T) (*scratchStore, *databasesql.DB) {
@@ -37,6 +38,20 @@ func newTestStore(t *testing.T) (*scratchStore, *databasesql.DB) {
 		t.Fatalf("migrate: %v", err)
 	}
 	return s, db
+}
+
+func TestStoreContract(t *testing.T) {
+	t.Parallel()
+
+	contract.Run(t, func(t *testing.T) contract.Backend {
+		t.Helper()
+		s, _ := newTestStore(t)
+		s.now = func() time.Time { return contract.Reference }
+		return contract.Backend{
+			Store: s,
+			Now:   s.now,
+		}
+	})
 }
 
 func TestAuthorizationCodes(t *testing.T) {

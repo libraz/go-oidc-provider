@@ -4,6 +4,7 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,55 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
+
+func allNamingOverrides(t *testing.T) map[string]string {
+	t.Helper()
+	keys := validNamingKeys(t)
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		out[key] = "tenant_" + key
+	}
+	return out
+}
+
+func validNamingKeys(t *testing.T) []string {
+	t.Helper()
+	db, err := databasesql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(map[string]string{"__invalid__": "valid_name"}))
+	if err == nil {
+		t.Fatal("New accepted invalid WithNaming key")
+	}
+	const marker = "valid keys: "
+	_, keysText, ok := strings.Cut(err.Error(), marker)
+	if !ok {
+		t.Fatalf("unknown-key error missing %q: %v", marker, err)
+	}
+	return strings.Split(strings.TrimSuffix(keysText, ")"), ", ")
+}
+
+func defaultTableNames(t *testing.T) []string {
+	t.Helper()
+	db, err := databasesql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	s, err := oidcsql.New(db, oidcsql.SQLite())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	re := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS (oidc_[a-z_]+)`)
+	matches := re.FindAllStringSubmatch(s.Schema(), -1)
+	out := make([]string, 0, len(matches))
+	for _, match := range matches {
+		out = append(out, match[1])
+	}
+	return out
+}
 
 // TestInjection_WithNamingRejectsHostileIdentifiers proves the
 // adapter refuses to construct itself when an attacker controls the
@@ -42,8 +92,7 @@ func TestInjection_WithNamingRejectsHostileIdentifiers(t *testing.T) {
 				t.Fatalf("Open: %v", err)
 			}
 			defer func() { _ = db.Close() }()
-			_, err = oidcsql.New(db, oidcsql.SQLite(),
-				oidcsql.WithNaming(map[string]string{"clients": tc.val}))
+			_, err = oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(map[string]string{"clients": tc.val}))
 			if err == nil {
 				t.Fatalf("New accepted hostile identifier %q", tc.val)
 			}
@@ -111,36 +160,18 @@ func TestSchema_RewritesAllTableNames(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(map[string]string{
-		"clients":                    "tenant_clients",
-		"refresh_tokens":             "tenant_rt",
-		"access_tokens":              "tenant_at",
-		"authorization_codes":        "tenant_codes",
-		"grants":                     "tenant_grants",
-		"sessions":                   "tenant_sessions",
-		"par_records":                "tenant_par",
-		"interactions":               "tenant_interactions",
-		"consumed_jtis":              "tenant_jtis",
-		"users":                      "tenant_users",
-		"initial_access_tokens":      "tenant_iats",
-		"registration_access_tokens": "tenant_rats",
-	}))
+	overrides := allNamingOverrides(t)
+	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(overrides))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	schema := s.Schema()
-	for _, want := range []string{
-		"tenant_clients", "tenant_rt", "tenant_at", "tenant_codes",
-		"tenant_grants", "tenant_sessions", "tenant_par", "tenant_interactions",
-		"tenant_jtis", "tenant_users", "tenant_iats", "tenant_rats",
-	} {
+	for _, want := range overrides {
 		if !strings.Contains(schema, want) {
 			t.Errorf("schema missing rewritten name %q", want)
 		}
 	}
-	for _, banned := range []string{
-		"oidc_clients", "oidc_refresh_tokens", "oidc_access_tokens",
-	} {
+	for _, banned := range defaultTableNames(t) {
 		if strings.Contains(schema, banned) {
 			t.Errorf("schema retained default name %q after rewrite", banned)
 		}

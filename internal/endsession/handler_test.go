@@ -322,6 +322,9 @@ func TestHandler_GETLogoutNoHint(t *testing.T) {
 			}
 		}
 	}
+	if got := resp.Header.Get("Referrer-Policy"); got != "same-origin" {
+		t.Errorf("Referrer-Policy=%q want same-origin", got)
+	}
 }
 
 // TestHandler_GETLogoutNoHintWithSession confirms the interstitial
@@ -475,6 +478,42 @@ func TestHandler_POSTLogoutNoHintForeignOrigin(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d want 400; foreign Origin must be rejected", resp.StatusCode)
+	}
+}
+
+func TestHandler_POSTLogoutNoHintNullOriginRejected(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	cookieValue, sessionID := h.issueSession(t)
+	getResp := h.doGET(t, url.Values{}, cookieValue)
+	defer getResp.Body.Close()
+	tok := readConfirmCookie(getResp)
+	if tok == "" {
+		t.Fatal("interstitial GET did not set the confirmation cookie")
+	}
+
+	form := url.Values{"logout_csrf": {tok}}
+	r := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		h.endSessionPath,
+		strings.NewReader(form.Encode()),
+	)
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = "op.example.com"
+	r.Header.Set("Origin", "null")
+	r.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: cookieValue})
+	r.AddCookie(&http.Cookie{Name: "__Host-oidc_logout_csrf", Value: tok})
+	w := httptest.NewRecorder()
+	h.handler.ServeHTTP(w, r)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400; null Origin must be rejected", resp.StatusCode)
+	}
+	if _, err := h.store.Sessions().Find(context.Background(), sessionID); err != nil {
+		t.Errorf("session record terminated by rejected POST: err=%v", err)
 	}
 }
 

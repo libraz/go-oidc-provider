@@ -187,9 +187,18 @@ type RefreshTokenStore interface {
 	Save(ctx context.Context, token *RefreshToken) error
 
 	// Find returns the refresh token identified by id without consuming
-	// it. The implementation MUST hash the presented id and look up the
-	// resulting digest, comparing against the stored hash in constant
-	// time. It MUST return [ErrNotFound] when no such record exists.
+	// it. id is a bearer credential: the implementation MUST hash the
+	// presented id and look up the resulting digest, comparing against
+	// the stored hash in constant time, and MUST NOT treat a stored
+	// digest presented verbatim as a match — otherwise a digest leaked
+	// from a database snapshot, replica, or backup would be redeemable
+	// as a refresh token. A backend that returns a one-way digest as
+	// [RefreshToken.ParentID] (so the raw parent secret never leaves
+	// storage) MUST also implement [RefreshChainResolver] so
+	// replay-revocation walks can resolve that digest without routing it
+	// back through this bearer-credential path; backends that return the
+	// raw parent identifier need not. It MUST return [ErrNotFound] when
+	// no such record exists.
 	Find(ctx context.Context, id string) (*RefreshToken, error)
 
 	// Consume atomically marks the refresh token as consumed and returns
@@ -221,4 +230,27 @@ type RefreshTokenStore interface {
 	// the rows, and a missing grant is not an error (returning nil is
 	// appropriate when no rows match).
 	RevokeByGrant(ctx context.Context, grantID string) error
+}
+
+// RefreshChainResolver is an OPTIONAL companion to [RefreshTokenStore]
+// implemented by backends that hash refresh-token IDs on store and therefore
+// return a one-way digest as [RefreshToken.ParentID]. Replay-revocation walks
+// use it to resolve a parent or chain root by its stored handle (the digest)
+// directly, keeping [RefreshTokenStore.Find] and [RefreshTokenStore.Consume]
+// strictly bearer-credential paths: a digest leaked from a database snapshot,
+// replica, or backup can never be redeemed as a refresh token, yet the chain
+// walk still follows the hashed parent pointers.
+//
+// Backends that store the raw parent identifier (for example the in-memory
+// reference adapter) need not implement it; their raw ParentID round-trips
+// through the generic Find. The chain-walk helper falls back to Find when this
+// interface is not implemented.
+type RefreshChainResolver interface {
+	// FindByStoredHandle resolves a record by a chain handle previously
+	// returned as a [RefreshToken.ParentID] or as a chain-root walk
+	// result. The handle is NOT a bearer credential — it is an internal
+	// chain pointer surfaced only to the OP's own revocation walk — so the
+	// implementation MAY match the stored digest directly. It MUST return
+	// [ErrNotFound] when no record matches.
+	FindByStoredHandle(ctx context.Context, handle string) (*RefreshToken, error)
 }

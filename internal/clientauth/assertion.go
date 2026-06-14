@@ -151,7 +151,7 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if err := validateAssertionClaims(claims, clientID, accepted, now, leeway); err != nil {
 		return err
 	}
-	expiresAt := assertionJTIExpiry(claims, now)
+	expiresAt := assertionJTIExpiry(claims, now, leeway)
 	if err := v.JTIStore.Mark(ctx, assertionJTIKey(clientID, claims.JTI), expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return ErrAssertionReplayed
@@ -274,9 +274,9 @@ func assertionJTIKey(clientID, jti string) string {
 	return "clientassertion:" + clientID + ":" + jti
 }
 
-func assertionJTIExpiry(claims AssertionClaims, now time.Time) time.Time {
-	expiresAt := time.Unix(claims.ExpiresAt, 0).UTC()
-	maxRetain := now.Add(maxAssertionLifetime)
+func assertionJTIExpiry(claims AssertionClaims, now time.Time, leeway time.Duration) time.Time {
+	expiresAt := time.Unix(claims.ExpiresAt, 0).UTC().Add(leeway)
+	maxRetain := now.Add(maxAssertionLifetime + leeway)
 	if expiresAt.After(maxRetain) {
 		return maxRetain
 	}

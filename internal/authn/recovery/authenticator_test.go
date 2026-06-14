@@ -287,3 +287,84 @@ func TestNewAuthenticator_RejectsNilArgs(t *testing.T) {
 		}
 	})
 }
+
+// consumeBlockedRecoveryStore wraps a real [store.RecoveryStore] and delegates
+// all methods except Consume. When blockConsume is true, Consume returns
+// [store.ErrAlreadyConsumed] unconditionally, simulating a concurrent
+// redemption winning the CAS race against the current request.
+type consumeBlockedRecoveryStore struct {
+	inner        store.RecoveryStore
+	blockConsume bool
+}
+
+func (s *consumeBlockedRecoveryStore) Get(ctx context.Context, subject string) (*store.RecoveryBatch, error) {
+	return s.inner.Get(ctx, subject)
+}
+
+func (s *consumeBlockedRecoveryStore) Put(ctx context.Context, b *store.RecoveryBatch) error {
+	return s.inner.Put(ctx, b)
+}
+
+func (s *consumeBlockedRecoveryStore) Consume(_ context.Context, _ *store.RecoveryBatch, _ int) error {
+	if s.blockConsume {
+		return store.ErrAlreadyConsumed
+	}
+	return nil
+}
+
+func (s *consumeBlockedRecoveryStore) Delete(ctx context.Context, subject string) error {
+	return s.inner.Delete(ctx, subject)
+}
+
+// TestAuthenticator_ContinueConsumeCASLossRePrompts pins the behaviour of
+// the CAS-loss branch in Continue: when the store's Consume loses the
+// compare-and-set race (another concurrent request already stamped ConsumedAt
+// on the same slot), the authenticator MUST re-emit the recovery-code prompt
+// with nil error and MUST NOT produce an interaction.Result, ensuring no
+// subject is authenticated through the losing request.
+func TestAuthenticator_ContinueConsumeCASLossRePrompts(t *testing.T) {
+	t.Parallel()
+
+	clk := &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)}
+	verifier := &recovery.Verifier{Clock: clk}
+	res, err := verifier.Generate(context.Background(), "user-alice")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	backing := inmem.New().RecoveryCodes()
+	if err := backing.Put(context.Background(), res.Batch); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	blocked := &consumeBlockedRecoveryStore{inner: backing, blockConsume: true}
+	adapter, err := recovery.NewAuthenticator(verifier, blocked)
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+
+	// Use a valid plaintext code. The verifier will match it and stamp
+	// the in-memory batch copy, then the store's Consume returns
+	// ErrAlreadyConsumed (simulating a concurrent winner).
+	step, err := adapter.Continue(context.Background(), op.ContinueInput{
+		Subject:    "user-alice",
+		AuthTime:   clk.t,
+		Submission: interaction.FormSubmission{Values: map[string]string{recovery.CodeFieldName: res.PlaintextCodes[0]}},
+	})
+
+	// Security invariant: the CAS-losing request must NOT authenticate the subject.
+	if step.Result != nil {
+		t.Errorf("CAS-loss path produced an authentication Result; no Result must be emitted: %+v", step.Result)
+	}
+	// The authenticator must re-prompt so the user can try again rather
+	// than receiving a chain-fatal error.
+	if err != nil {
+		t.Fatalf("err = %v, want nil (re-prompt, not error)", err)
+	}
+	if step.Prompt == nil {
+		t.Fatalf("expected re-prompt step, got %+v", step)
+	}
+	if step.Prompt.Type != recovery.PromptType {
+		t.Errorf("Prompt.Type = %q, want %q", step.Prompt.Type, recovery.PromptType)
+	}
+}

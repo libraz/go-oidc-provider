@@ -7,6 +7,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/refreshchain"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -306,39 +307,9 @@ func emitRevokeFailed(ctx context.Context, deps Deps, clientID, surface string, 
 	})
 }
 
-// findChainRoot follows parent pointers from startID up to the
-// chain's root, or returns ok=false when the walk fails or loops.
-// The walk terminates at the first record whose ParentID is nil;
-// [chainWalkLimit] caps the iteration count so a corrupted store
-// cannot loop forever.
-//
-// The walk consumes [op/store.RefreshTokenStore.Find] — whose
-// contract is "returns the refresh token identified by id" (see the
-// godoc on [op/store.RefreshTokenStore.Find] for the wire-level
-// statement). Both startID (the Find result of the bearer string
-// supplied by the client) and every [op/store.RefreshToken.ParentID]
-// it dereferences are interpreted as ID values, never as bearer
-// secrets. The contract assumes the backend's ID space and ParentID
-// pointer agree — the library guarantees this on every Save call —
-// and a backend that hashes bearer strings into the ID column simply
-// produces opaque IDs that this walk treats as such.
-//
-// The helper is a self-contained copy of
-// [internal/grants/refresh.findChainRoot]; we deliberately do not
-// import that package because its helper is unexported and the
-// revoke endpoint is otherwise independent of the rotation
-// machinery.
+// findChainRoot follows parent pointers from startID up to the chain's root,
+// using the shared refreshchain helper so /revoke and the refresh-token grant
+// honour the same ParentID round-trip contract.
 func findChainRoot(ctx context.Context, deps Deps, startID string) (string, bool) {
-	current := startID
-	for range chainWalkLimit {
-		rec, err := deps.RefreshTokens.Find(ctx, current)
-		if err != nil || rec == nil {
-			return "", false
-		}
-		if rec.ParentID == nil {
-			return current, true
-		}
-		current = *rec.ParentID
-	}
-	return "", false
+	return refreshchain.FindRoot(ctx, deps.RefreshTokens, startID, chainWalkLimit)
 }

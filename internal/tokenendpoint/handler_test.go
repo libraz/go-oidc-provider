@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/keys"
 	httptestutil "github.com/libraz/go-oidc-provider/internal/testutil/httptest"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
@@ -25,6 +27,18 @@ func jsonUnmarshal(data []byte, v any) error { return json.Unmarshal(data, v) }
 
 // decodeBase64URL decodes a base64url-no-pad string.
 func decodeBase64URL(s string) ([]byte, error) { return base64.RawURLEncoding.DecodeString(s) }
+
+func paymentAuthorizationDetailsOption() op.Option {
+	return op.WithAuthorizationDetailTypes(op.AuthorizationDetailType{
+		Type: "payment",
+		Validate: func(_ context.Context, el map[string]any, _ *store.Client) error {
+			if _, ok := el["amount"].(string); !ok {
+				return errors.New("amount is required")
+			}
+			return nil
+		},
+	})
+}
 
 // mustKeySet builds a [*keys.Set] from the testkit's active signer so
 // tests can hand it to a [tokens.AccessTokenVerifier]. The conversion
@@ -59,9 +73,17 @@ type fixture struct {
 // 2026-04-26 anchor matches the existing test suites and the docs'
 // "today" baseline.
 func newFixture(tb testing.TB) *fixture {
+	return newFixtureWithOptions(tb)
+}
+
+func newFixtureWithOptions(tb testing.TB, opts ...op.Option) *fixture {
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
-	prov := testkit.NewProvider(tb, testkit.WithClock(clock))
+	provOpts := []testkit.Option{testkit.WithClock(clock)}
+	if len(opts) > 0 {
+		provOpts = append(provOpts, testkit.WithOptions(opts...))
+	}
+	prov := testkit.NewProvider(tb, provOpts...)
 	return &fixture{
 		prov:     prov,
 		endpoint: prov.Server.URL + "/oidc/token",

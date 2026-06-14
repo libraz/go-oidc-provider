@@ -9,6 +9,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
+	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
@@ -130,6 +131,62 @@ func TestBeginRequiresSubjectAndEmitsSendPrompt(t *testing.T) {
 	}
 	if len(step.Prompt.Inputs) != 1 || step.Prompt.Inputs[0].Name != emailotp.EmailFieldName {
 		t.Errorf("Begin Inputs = %+v, want single email field", step.Prompt.Inputs)
+	}
+}
+
+func TestContinueCrossFactorLockoutSurfacesAsErrLocked(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	clock := &emailotp.FakeClock{T: now}
+	st := inmem.New(inmem.WithClock(clock))
+	users := &fakeUsers{users: map[string]*store.User{
+		"sub-1": {Subject: "sub-1", Claims: map[string]any{"email": "alice@example.com"}},
+	}}
+	mailer := &recordingMailer{}
+	a, err := emailotp.NewAuthenticator(emailotp.Config{
+		Mailer:         mailer,
+		Store:          st.EmailOTPs(),
+		Users:          users,
+		Clock:          clock,
+		SendLatencyPad: -1,
+	})
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+	counter, err := lockout.New(st.AuthnLockouts(), nil)
+	if err != nil {
+		t.Fatalf("lockout.New: %v", err)
+	}
+	for i := 1; i <= 30; i++ {
+		if _, err := counter.RecordFailure(context.Background(), "sub-1"); err != nil {
+			t.Fatalf("RecordFailure %d: %v", i, err)
+		}
+	}
+	a = a.WithLockout(counter)
+
+	_, err = a.Continue(context.Background(), authn.ContinueInput{
+		Subject: "sub-1",
+		Submission: interaction.FormSubmission{Values: map[string]string{
+			emailotp.EmailFieldName: "alice@example.com",
+		}},
+	})
+	if !errors.Is(err, emailotp.ErrLocked) {
+		t.Fatalf("send err=%v want ErrLocked", err)
+	}
+	if _, n := mailer.snapshot(); n != 0 {
+		t.Fatalf("mailer called %d times while locked", n)
+	}
+
+	_, err = a.Continue(context.Background(), authn.ContinueInput{
+		Subject: "sub-1",
+		Scratch: emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{
+			emailotp.CodeFieldName: "000000",
+		}},
+	})
+	if !errors.Is(err, emailotp.ErrLocked) {
+		t.Fatalf("verify err=%v want ErrLocked", err)
 	}
 }
 
@@ -503,5 +560,86 @@ func TestVerifyConsumedRecordRejectedDirect(t *testing.T) {
 	}
 	if res == nil || res.Outcome != emailotp.OutcomeConsumed {
 		t.Errorf("Outcome = %+v, want OutcomeConsumed", res)
+	}
+}
+
+// consumeBlockedStore wraps a real [store.EmailOTPStore] and delegates all
+// methods except Consume. When blockConsume is true, Consume returns
+// [store.ErrAlreadyConsumed] unconditionally, simulating a concurrent
+// redemption winning the CAS race against the current request.
+type consumeBlockedStore struct {
+	inner        store.EmailOTPStore
+	blockConsume bool
+}
+
+func (s *consumeBlockedStore) Get(ctx context.Context, subject string) (*store.EmailOTPRecord, error) {
+	return s.inner.Get(ctx, subject)
+}
+
+func (s *consumeBlockedStore) Put(ctx context.Context, r *store.EmailOTPRecord) error {
+	return s.inner.Put(ctx, r)
+}
+
+func (s *consumeBlockedStore) Consume(_ context.Context, _ *store.EmailOTPRecord) error {
+	if s.blockConsume {
+		return store.ErrAlreadyConsumed
+	}
+	return nil
+}
+
+func (s *consumeBlockedStore) Delete(ctx context.Context, subject string) error {
+	return s.inner.Delete(ctx, subject)
+}
+
+// TestContinueVerifyConsumeErrAlreadyConsumedReturnsSentinel pins the
+// security invariant for the CAS-loss path in handleVerify: when the store's
+// Consume loses the compare-and-set race (another concurrent request already
+// consumed the same OTP record), the authenticator MUST return ErrConsumed
+// and MUST NOT produce an interaction.Result, ensuring no subject is
+// authenticated. The test targets the verr==nil branch inside handleVerify
+// that calls store.Consume and handles ErrAlreadyConsumed.
+func TestContinueVerifyConsumeErrAlreadyConsumedReturnsSentinel(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	clock := &emailotp.FakeClock{T: now}
+	inner := inmem.New(inmem.WithClock(clock))
+	blocked := &consumeBlockedStore{inner: inner.EmailOTPs()}
+	users := &fakeUsers{users: map[string]*store.User{
+		"sub-1": {Subject: "sub-1", Claims: map[string]any{"email": "alice@example.com"}},
+	}}
+	mailer := &recordingMailer{}
+	a, err := emailotp.NewAuthenticator(emailotp.Config{
+		Mailer:         mailer,
+		Store:          blocked,
+		Users:          users,
+		Clock:          clock,
+		SendLatencyPad: -1,
+	})
+	if err != nil {
+		t.Fatalf("NewAuthenticator: %v", err)
+	}
+
+	// Drive the send step; blockConsume is still false so Put works normally.
+	code := driveSendStep(t, a, mailer, "sub-1")
+
+	// Flip the toggle: Consume will now return ErrAlreadyConsumed,
+	// simulating a concurrent request that won the CAS race.
+	blocked.blockConsume = true
+
+	step, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject:    "sub-1",
+		AuthTime:   now,
+		Scratch:    emailotp.ScratchVerify,
+		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: code}},
+	})
+
+	// Security invariant: the user must NOT be authenticated.
+	if step.Result != nil {
+		t.Errorf("CAS-loss path produced an authentication Result; no Result must be emitted: %+v", step.Result)
+	}
+	// The branch must return exactly ErrConsumed (not ErrExpired) so
+	// callers can distinguish the CAS-loss path from a pre-expired record.
+	if !errors.Is(err, emailotp.ErrConsumed) {
+		t.Errorf("err = %v, want ErrConsumed", err)
 	}
 }

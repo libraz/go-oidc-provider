@@ -159,6 +159,153 @@ func TestRefresh_UsesRefreshRecordAuthContextWithoutGrant(t *testing.T) {
 	}
 }
 
+func TestRefresh_AuthorizationDetailsCanBeReducedAtTokenEndpoint(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-rar-reduce" //nolint:gosec // test fixture token ID, not a credential.
+	const subject = "user-rar-reduce"
+	const grantID = "grant-rar-reduce"
+	granted := []map[string]any{
+		{"type": "payment", "amount": "100"},
+		{"type": "payment", "amount": "200"},
+	}
+	f.seedGrant(t, &store.Grant{
+		ID:                   grantID,
+		Subject:              subject,
+		ClientID:             client.ID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: granted,
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:                   tokenID,
+		ClientID:             client.ID,
+		Subject:              subject,
+		GrantID:              grantID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: granted,
+	})
+
+	form := refreshForm(tokenID, "")
+	form.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	details, ok := body["authorization_details"].([]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("authorization_details=%T %[1]v want one reduced element", body["authorization_details"])
+	}
+	rotated, _ := body["refresh_token"].(string)
+	got, err := f.prov.Store.RefreshTokens().Find(context.Background(), rotated)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(rotated): %v", err)
+	}
+	if len(got.AuthorizationDetails) != 1 || got.AuthorizationDetails[0]["amount"] != "100" {
+		t.Fatalf("rotated authorization_details=%v want amount=100 only", got.AuthorizationDetails)
+	}
+}
+
+func TestRefresh_AuthorizationDetailsGrantWinsOverStaleRefreshSnapshot(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-rar-stale-snapshot" //nolint:gosec // test fixture token ID, not a credential.
+	const subject = "user-rar-stale-snapshot"
+	const grantID = "grant-rar-stale-snapshot"
+	oldDetails := []map[string]any{{"type": "payment", "amount": "100000"}}
+	currentDetails := []map[string]any{{"type": "payment", "amount": "10"}}
+	f.seedGrant(t, &store.Grant{
+		ID:                   grantID,
+		Subject:              subject,
+		ClientID:             client.ID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: currentDetails,
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:                   tokenID,
+		ClientID:             client.ID,
+		Subject:              subject,
+		GrantID:              grantID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: oldDetails,
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	details, ok := body["authorization_details"].([]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("authorization_details=%T %[1]v want one current element", body["authorization_details"])
+	}
+	el, _ := details[0].(map[string]any)
+	if el["amount"] != "10" {
+		t.Fatalf("response authorization_details=%v want grant amount=10", details)
+	}
+	claims := decodeJWTPayload(t, body["access_token"].(string))
+	atDetails, ok := claims["authorization_details"].([]any)
+	if !ok || len(atDetails) != 1 {
+		t.Fatalf("access token authorization_details=%T %[1]v want one current element", claims["authorization_details"])
+	}
+	atEl, _ := atDetails[0].(map[string]any)
+	if atEl["amount"] != "10" {
+		t.Fatalf("access token authorization_details=%v want grant amount=10", atDetails)
+	}
+	rotated, _ := body["refresh_token"].(string)
+	got, err := f.prov.Store.RefreshTokens().Find(context.Background(), rotated)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(rotated): %v", err)
+	}
+	if len(got.AuthorizationDetails) != 1 || got.AuthorizationDetails[0]["amount"] != "10" {
+		t.Fatalf("rotated authorization_details=%v want grant amount=10", got.AuthorizationDetails)
+	}
+}
+
+func TestRefresh_AuthorizationDetailsOutsideGrantRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-rar-reject" //nolint:gosec // test fixture token ID, not a credential.
+	const subject = "user-rar-reject"
+	const grantID = "grant-rar-reject"
+	granted := []map[string]any{{"type": "payment", "amount": "100"}}
+	f.seedGrant(t, &store.Grant{
+		ID:                   grantID,
+		Subject:              subject,
+		ClientID:             client.ID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: granted,
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:                   tokenID,
+		ClientID:             client.ID,
+		Subject:              subject,
+		GrantID:              grantID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: granted,
+	})
+
+	form := refreshForm(tokenID, "")
+	form.Set("authorization_details", `[{"type":"payment","amount":"999"}]`)
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "invalid_authorization_details" {
+		t.Fatalf("error=%v want invalid_authorization_details", got)
+	}
+}
+
 func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	t.Parallel()
 
@@ -589,6 +736,13 @@ func TestRefresh_ScopeAllowedClients_RejectedWhenScopeOmitted(t *testing.T) {
 	if got := body["error"]; got != "invalid_scope" {
 		t.Errorf("error=%v want invalid_scope", got)
 	}
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find after rejection: %v", err)
+	}
+	if rec.ConsumedAt != nil {
+		t.Fatalf("refresh token must not be consumed on omitted-scope allowlist rejection (ConsumedAt=%v)", rec.ConsumedAt)
+	}
 }
 
 // TestRefresh_ScopeAllowedClients_Permitted is the positive
@@ -693,6 +847,56 @@ func TestRefresh_HonoursClaimsRequest_IDToken(t *testing.T) {
 	idClaims := decodeIDTokenClaims(t, idt)
 	if got := idClaims["email"]; got != "user@example.com" {
 		t.Errorf("id_token.email=%v want user@example.com (claims request not honoured on refresh path)", got)
+	}
+}
+
+func TestRefresh_IDTokenOmitsACRWhenClaimsRequestDisallowsStoredACR(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-claims-acr" //nolint:gosec // test fixture token ID, not a credential.
+	const subject = "user-claims-acr"
+	const grantID = "grant-claims-acr"
+
+	f.seedGrant(t, &store.Grant{
+		ID:       grantID,
+		Subject:  subject,
+		ClientID: client.ID,
+		Scope:    []string{"openid"},
+		ACR:      "urn:acr:low",
+		Claims: map[string]any{
+			"request": map[string]any{
+				"id_token": map[string]any{
+					"acr": map[string]any{
+						"essential": true,
+						"values":    []any{"urn:acr:high"},
+					},
+				},
+			},
+		},
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  subject,
+		GrantID:  grantID,
+		Scope:    []string{"openid"},
+	})
+
+	resp := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200, body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	idt, _ := body["id_token"].(string)
+	if idt == "" {
+		t.Fatal("id_token missing")
+	}
+	idClaims := decodeIDTokenClaims(t, idt)
+	if got, ok := idClaims["acr"]; ok {
+		t.Errorf("id_token acr=%v should be omitted when stored acr fails claims constraint", got)
 	}
 }
 

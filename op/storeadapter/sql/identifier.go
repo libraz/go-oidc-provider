@@ -104,7 +104,7 @@ func defaultNames() nameMap {
 // field on n. Unknown logical keys cause an error; this catches typos
 // at construction time rather than silently ignoring them.
 //
-//nolint:cyclop // 14-arm switch is irreducibly complex; one arm per nameMap field.
+//nolint:cyclop // 18-arm switch is irreducibly complex; one arm per nameMap field.
 func (n *nameMap) applyOverrides(overrides map[string]string) error {
 	for logical, physical := range overrides {
 		if err := validateIdentifier(physical); err != nil {

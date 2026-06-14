@@ -181,11 +181,10 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	}
 
 	res, verr := a.verifier.Verify(ctx, rec, code)
-	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked {
-		// OutcomeLocked is the only branch that leaves the record
-		// unchanged; everything else needs persisting (success
-		// clears counters, wrong-code bumps them, reset-required
-		// stamps the long lock).
+	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeSuccess {
+		// OutcomeLocked leaves the record unchanged and OutcomeSuccess
+		// is persisted through atomic Accept below. Wrong-code and
+		// reset-required branches still need Put.
 		if perr := a.store.Put(ctx, res.Record); perr != nil {
 			return interaction.Step{}, fmt.Errorf("totp: persist record: %w", perr)
 		}
@@ -193,6 +192,12 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 
 	switch {
 	case verr == nil:
+		if perr := a.store.Accept(ctx, res.Record); perr != nil {
+			if errors.Is(perr, store.ErrAlreadyConsumed) {
+				return interaction.Step{Prompt: a.prompt(rec)}, nil
+			}
+			return interaction.Step{}, fmt.Errorf("totp: accept record: %w", perr)
+		}
 		if a.lockout != nil {
 			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
 				return interaction.Step{}, fmt.Errorf("totp: lockout reset: %w", rerr)

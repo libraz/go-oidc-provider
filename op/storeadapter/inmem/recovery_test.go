@@ -3,6 +3,8 @@ package inmem_test
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,5 +179,48 @@ func TestRecoveryStore_PutClonesBatch(t *testing.T) {
 	}
 	if got.Codes[0].Hash == "tampered" {
 		t.Errorf("post-Put mutation of caller batch leaked into store")
+	}
+}
+
+func TestRecoveryStore_ConsumeRaceSingleWinner(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	rs := s.RecoveryCodes()
+	ctx := context.Background()
+	batch := newRecoveryBatch("user-alice")
+	if err := rs.Put(ctx, batch); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	consumed := *batch
+	consumed.Codes = append([]store.RecoveryCode(nil), batch.Codes...)
+	consumed.Codes[0].ConsumedAt = time.Now().UTC()
+
+	var wins atomic.Int64
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := rs.Consume(ctx, &consumed, 0)
+			switch {
+			case err == nil:
+				wins.Add(1)
+			case errors.Is(err, store.ErrAlreadyConsumed):
+			default:
+				t.Errorf("Consume: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("Consume wins=%d want 1", got)
+	}
+	got, err := rs.Get(ctx, batch.Subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Codes[0].ConsumedAt.IsZero() {
+		t.Fatal("ConsumedAt was not persisted")
 	}
 }

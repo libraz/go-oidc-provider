@@ -18,6 +18,7 @@ const (
 	errUnsupportedGrantType = "unsupported_grant_type"
 	errInvalidScope         = "invalid_scope"
 	errInvalidTarget        = "invalid_target"
+	errInvalidAuthzDetails  = "invalid_authorization_details"
 	errServerError          = "server_error"
 )
 

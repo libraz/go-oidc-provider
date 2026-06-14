@@ -288,6 +288,64 @@ func TestWithStaticClients_RejectsBadBackchannelLogoutURI(t *testing.T) {
 	}
 }
 
+func TestWithStaticClients_FAPIRejectsSecretAuthSeed(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOptsWithInmem(t),
+		op.WithProfile(profile.FAPI2Baseline),
+		op.WithStaticClients(op.ConfidentialClient{
+			ID:           "fapi-secret-client",
+			Secret:       "demo-secret",
+			RedirectURIs: []string{"https://app.example.com/cb"},
+			Scopes:       []string{"openid"},
+		}),
+	)...)
+	if err == nil {
+		t.Fatal("expected FAPI profile to reject client_secret_basic static client, got nil")
+	}
+	if !strings.Contains(err.Error(), "token_endpoint_auth_method client_secret_basic is not allowed by active profile") {
+		t.Errorf("err = %v, want profile auth-method diagnostic", err)
+	}
+}
+
+// TestWithStaticClients_FAPIRejectsMTLSAuthSeed pins that a FAPI static
+// client declaring an mTLS token-endpoint auth method (tls_client_auth /
+// self_signed_tls_client_auth) is rejected at construction. The runtime
+// client-auth verifier handles only none / client_secret_basic /
+// client_secret_post / private_key_jwt, so accepting an mTLS seed would
+// produce a client that boots clean yet can never authenticate at /token.
+// op.New must fail fast rather than admit that dead-on-arrival seed.
+func TestWithStaticClients_FAPIRejectsMTLSAuthSeed(t *testing.T) {
+	t.Parallel()
+
+	for _, method := range []op.AuthMethod{op.AuthTLSClientAuth, op.AuthSelfSignedTLSClientAuth} {
+		t.Run(string(method), func(t *testing.T) {
+			t.Parallel()
+
+			_, err := op.New(append(validBaseOptsWithInmem(t),
+				op.WithProfile(profile.FAPI2Baseline),
+				op.WithStaticClients(op.ConfidentialClient{
+					ID:           "fapi-mtls-client",
+					AuthMethod:   method,
+					RedirectURIs: []string{"https://app.example.com/cb"},
+					Scopes:       []string{"openid"},
+				}),
+			)...)
+			if err == nil {
+				t.Fatalf("expected FAPI profile to reject %s static client (runtime cannot enforce mTLS), got nil", method)
+			}
+			// The seed must be rejected because the runtime cannot enforce
+			// the method. The diagnostic references the method name; the
+			// exact wording ("not supported" from the global validator, or
+			// "not allowed by active profile" from the profile gate) is an
+			// implementation detail of which layer fires first.
+			if !strings.Contains(err.Error(), "token_endpoint_auth_method "+string(method)) {
+				t.Errorf("err = %v, want token_endpoint_auth_method diagnostic for %s", err, method)
+			}
+		})
+	}
+}
+
 // TestWithStaticClients_AcceptsHTTPLoopbackBackchannelWithDevOptIn
 // pins the dev / CI carve-out introduced by
 // [op.WithAllowInsecureBackchannelLogoutForDev]: a static seed

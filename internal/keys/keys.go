@@ -40,8 +40,7 @@ type Entry struct {
 	// retains a retiring kid in JWKS for RP cache warmth while the OP
 	// itself stops trusting the kid for verification — the rotation
 	// graceful-window is asymmetric on purpose so a forged token that
-	// reuses an old kid after the deadline cannot ride past
-	// [Set.Find]. Tracks H-F1.
+	// reuses an old kid after the deadline cannot ride past [Set.Find].
 	NotAfter time.Time
 }
 
@@ -86,7 +85,7 @@ func WithClock(now func() time.Time) SetOption {
 // WithRetiredKidObserver registers the [RetiredKidObserver] notified
 // when [Set.Find] rejects a retired kid. A nil observer (or omitting
 // the option) leaves the notification path silent — the rejection
-// still happens, but no audit event fires. Tracks H-F1.
+// still happens, but no audit event fires.
 func WithRetiredKidObserver(obs RetiredKidObserver) SetOption {
 	return func(c *setConfig) {
 		c.observer = obs

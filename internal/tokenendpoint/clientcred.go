@@ -42,6 +42,10 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !validateClientCredsResource(w, client, resource) {
 		return
 	}
+	authorizationDetails, ok := parseTokenAuthorizationDetails(w, r, deps, client)
+	if !ok {
+		return
+	}
 	authorized, ok := authorizeClientCreds(w, deps, client, requested)
 	if !ok {
 		return
@@ -57,7 +61,7 @@ func handleClientCredentials(w http.ResponseWriter, r *http.Request, deps Deps) 
 	if !enforceSenderConstraint(w, deps, binding) {
 		return
 	}
-	issueClientCredsResponse(ctx, w, deps, client, authorized.Scope, resource, binding)
+	issueClientCredsResponse(ctx, w, deps, client, authorized.Scope, resource, binding, authorizationDetails)
 }
 
 // parseClientCredsRequest extracts the optional "scope" and "resource"
@@ -219,6 +223,7 @@ func issueClientCredsResponse(
 	scope []string,
 	resource string,
 	binding tokenBinding,
+	authorizationDetails []map[string]any,
 ) {
 	now := deps.now().UTC()
 	// AuthTime is zero: client_credentials has no end-user to time-stamp.
@@ -237,15 +242,16 @@ func issueClientCredsResponse(
 	// subjects, and projecting client.ID would produce a value the
 	// resource server cannot correlate against any authenticated
 	// principal.
-	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, client.ID, "", scope, resource, now, 0, binding, nil)
+	accessToken, err := mintAccessToken(ctx, deps, client.ID, client.ID, client.ID, "", scope, resource, now, 0, binding, authorizationDetails)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
 	writeSuccess(w, successResponse{
-		AccessToken: accessToken,
-		TokenType:   binding.tokenTypeFor(),
-		ExpiresIn:   int64(deps.AccessTokenTTL.Seconds()),
-		Scope:       joinScope(scope),
+		AccessToken:          accessToken,
+		TokenType:            binding.tokenTypeFor(),
+		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
+		Scope:                joinScope(scope),
+		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
 	})
 }

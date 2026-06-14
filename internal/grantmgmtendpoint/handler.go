@@ -14,9 +14,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -60,6 +62,11 @@ type Deps struct {
 	// issued before the revoke until the tombstone is collected.
 	AccessTokenTTL time.Duration
 
+	// Audit receives grant-management events. Nil collapses to a
+	// no-op emitter so tests / embedders that do not opt in keep the
+	// endpoint behaviour unchanged.
+	Audit audit.Emitter
+
 	// Client-authentication wiring, identical to the sibling endpoints.
 	SecretVerifier           clientauth.SecretVerifier
 	AssertionVerifier        clientauth.AssertionVerifier
@@ -78,11 +85,20 @@ type Deps struct {
 	Clock Clock
 }
 
+const auditGrantManagementRevoked = "grant_management.revoked"
+
 func (d *Deps) now() time.Time {
 	if d.Clock != nil {
 		return d.Clock.Now()
 	}
 	return timex.Now()
+}
+
+func (d *Deps) audit() audit.Emitter {
+	if d.Audit != nil {
+		return d.Audit
+	}
+	return audit.Discard()
 }
 
 // queryResponse is the Grant Management draft query body. scopes is an
@@ -202,19 +218,56 @@ func serveQuery(w http.ResponseWriter, r *http.Request, deps Deps) {
 }
 
 func serveRevoke(w http.ResponseWriter, r *http.Request, deps Deps) {
-	_, g, ok := resolveOwnedGrant(w, r, deps)
+	client, g, ok := resolveOwnedGrant(w, r, deps)
 	if !ok {
 		return
 	}
-	if err := revokeGrantCascade(r.Context(), deps, g.ID); err != nil {
+	revokedGrantIDs, err := revokeSubjectClientCascade(r.Context(), deps, g)
+	if err != nil {
 		// The grant record could not be deleted, so it is still live and
 		// queryable; reporting 204 would be a false success. Surface a
 		// server_error and let the client retry.
 		writeError(w, http.StatusInternalServerError, "server_error", "could not revoke grant")
 		return
 	}
+	deps.audit().Emit(r.Context(), audit.Event{
+		Name:     auditGrantManagementRevoked,
+		Level:    audit.LevelInfo,
+		Message:  "grant management grant revoked",
+		ActorID:  g.Subject,
+		ClientID: client.ID,
+		Extras: map[string]any{
+			"grant_id":          g.ID,
+			"revoked_grant_ids": revokedGrantIDs,
+		},
+	})
 	stampNoStore(w)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func revokeSubjectClientCascade(ctx context.Context, deps Deps, g *store.Grant) ([]string, error) {
+	targets := map[string]struct{}{g.ID: {}}
+	grants, err := deps.Grants.ListBySubject(ctx, g.Subject)
+	if err != nil {
+		return nil, err
+	}
+	for _, cand := range grants {
+		if cand == nil || cand.Subject != g.Subject || cand.ClientID != g.ClientID {
+			continue
+		}
+		targets[cand.ID] = struct{}{}
+	}
+	ids := make([]string, 0, len(targets))
+	for id := range targets {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		if err := revokeGrantCascade(ctx, deps, id); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
 }
 
 // revokeGrantCascade tears the grant down: it tombstones / denylists the

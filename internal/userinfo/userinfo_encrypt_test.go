@@ -92,12 +92,11 @@ func (f *userInfoFixture) newJWTAcceptGet(tb testing.TB, token string) *http.Req
 	return req
 }
 
-// TestHandler_JSONShape_IgnoresEncryptionMetadata pins the §10.2 /
-// §5.3.2 contract that JWE wrapping fires only on the JWT-shape
-// branch. A client carrying userinfo_encrypted_response_alg / _enc
-// MUST still receive a plain application/json body when the request
-// did not opt into the JWT shape via Accept.
-func TestHandler_JSONShape_IgnoresEncryptionMetadata(t *testing.T) {
+// TestHandler_EncryptionMetadataForcesJWTShape pins the §10.2 /
+// §5.3.2 downgrade guard: a client carrying
+// userinfo_encrypted_response_alg / _enc receives a nested JWE even
+// when the request did not opt into the JWT shape via Accept.
+func TestHandler_EncryptionMetadataForcesJWTShape(t *testing.T) {
 	t.Parallel()
 
 	f := newUserInfoFixture(t)
@@ -118,12 +117,38 @@ func TestHandler_JSONShape_IgnoresEncryptionMetadata(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Content-Type"); got != "application/json" {
-		t.Errorf("Content-Type=%q want application/json", got)
+	if got := resp.Header.Get("Content-Type"); got != "application/jwt" {
+		t.Errorf("Content-Type=%q want application/jwt", got)
 	}
-	body := decodeBody(t, resp)
-	if body["sub"] != "user-1" {
-		t.Errorf("sub=%v want user-1", body["sub"])
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	got := strings.TrimSpace(string(raw))
+	if segs := strings.Split(got, "."); len(segs) != 5 {
+		t.Fatalf("body must be a 5-segment JWE, got %d segments: %s", len(segs), got)
+	}
+	jwe, err := josev4.ParseEncrypted(got,
+		[]josev4.KeyAlgorithm{josev4.RSA_OAEP_256},
+		[]josev4.ContentEncryption{josev4.A256GCM},
+	)
+	if err != nil {
+		t.Fatalf("ParseEncrypted: %v", err)
+	}
+	innerBytes, err := jwe.Decrypt(kp.priv)
+	if err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+	parsed, err := jwt.ParseSigned(string(innerBytes), []josev4.SignatureAlgorithm{josev4.ES256})
+	if err != nil {
+		t.Fatalf("ParseSigned inner: %v", err)
+	}
+	claims := map[string]any{}
+	if err := parsed.Claims(f.signer.Signer.Public(), &claims); err != nil {
+		t.Fatalf("verify inner Claims: %v", err)
+	}
+	if claims["sub"] != "user-1" {
+		t.Errorf("sub=%v want user-1", claims["sub"])
 	}
 }
 

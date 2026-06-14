@@ -3,8 +3,10 @@ package emailotp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -91,10 +93,10 @@ var (
 
 	// ErrExpired is returned when the persisted record's ExpiresAt
 	// is before the verifier's clock.
-	ErrExpired = errors.New("emailotp: code expired")
+	ErrExpired = fmt.Errorf("emailotp: code expired: %w", authn.ErrFactorAbort)
 
 	// ErrLocked is returned when rec.LockedUntil is in the future.
-	ErrLocked = errors.New("emailotp: factor is locked")
+	ErrLocked = fmt.Errorf("emailotp: factor is locked: %w", authn.ErrFactorAbort)
 
 	// ErrWrongCode is returned when the supplied code does not
 	// match the persisted hash. This is the only recoverable verify
@@ -106,13 +108,13 @@ var (
 	// lockThresholdLong. The orchestrator MUST treat this as a
 	// terminal state and route the user to the recovery / step-up
 	// reset flow.
-	ErrResetRequired = errors.New("emailotp: factor reset required")
+	ErrResetRequired = fmt.Errorf("emailotp: factor reset required: %w", authn.ErrFactorAbort)
 
 	// ErrConsumed is returned when the persisted record's ConsumedAt
 	// is non-zero. The caller MUST NOT advance the chain on this
 	// signal: the code has already been redeemed and a replay against
 	// the same record is rejected as if the code did not exist.
-	ErrConsumed = errors.New("emailotp: code already consumed")
+	ErrConsumed = fmt.Errorf("emailotp: code already consumed: %w", authn.ErrFactorAbort)
 )
 
 // Result is the verdict bundle [Verifier.Verify] returns. The Record
