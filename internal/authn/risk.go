@@ -163,6 +163,15 @@ type RiskOutcome struct {
 	// whose [Authenticator.AAL] meets MinAAL are admissible. When
 	// RequiredFactors is empty and MinAAL > AAL0, the orchestrator
 	// reads the directive as "any factor that meets MinAAL".
+	//
+	// MinAAL is honoured only on the legacy [Config.Authenticators]
+	// chain path (the orchestrator's eligible-authenticator filter).
+	// The [Config.LoginFlow] path does not consult MinAAL: factor
+	// selection there is driven by the compiled rules / decider, and
+	// the once-per-chain Risk consult reads only Decision and Score.
+	// A deployment that needs an assurance floor under LoginFlow
+	// encodes it as an explicit rule (a step whose Authenticator meets
+	// the floor) rather than through this field.
 	MinAAL AAL
 
 	// Reason is the audit reason code. Free-form is forbidden by

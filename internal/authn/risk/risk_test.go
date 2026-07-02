@@ -46,13 +46,14 @@ func TestRunPreFactorDenyShortCircuits(t *testing.T) {
 	}
 }
 
-// TestRunPreFactorRequirePropagatesFactors asserts RequiredFactors are
-// returned verbatim on a Require decision.
+// TestRunPreFactorRequirePropagatesFactors asserts RequiredFactors and
+// the MinAAL floor are returned verbatim on a Require decision.
 func TestRunPreFactorRequirePropagatesFactors(t *testing.T) {
 	t.Parallel()
 	a := stubAssessor{out: risk.Outcome{
 		Decision:        risk.Require,
 		RequiredFactors: []string{"passkey"},
+		MinAAL:          risk.AAL2,
 	}}
 	res, err := risk.RunPreFactor(context.Background(), a, risk.Input{})
 	if err != nil {
@@ -60,6 +61,31 @@ func TestRunPreFactorRequirePropagatesFactors(t *testing.T) {
 	}
 	if len(res.Required) != 1 || res.Required[0] != "passkey" {
 		t.Errorf("Required = %+v", res.Required)
+	}
+	if res.MinAAL != risk.AAL2 {
+		t.Errorf("MinAAL = %v, want AAL2", res.MinAAL)
+	}
+}
+
+// TestRunPreFactorMinAALWithoutRequiredFactors asserts the MinAAL floor
+// propagates even when RequiredFactors is empty — the "any factor that
+// meets MinAAL" directive the orchestrator applies as an assurance
+// filter on the whole registered chain.
+func TestRunPreFactorMinAALWithoutRequiredFactors(t *testing.T) {
+	t.Parallel()
+	a := stubAssessor{out: risk.Outcome{
+		Decision: risk.Require,
+		MinAAL:   risk.AAL2,
+	}}
+	res, err := risk.RunPreFactor(context.Background(), a, risk.Input{})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(res.Required) != 0 {
+		t.Errorf("Required = %+v, want empty", res.Required)
+	}
+	if res.MinAAL != risk.AAL2 {
+		t.Errorf("MinAAL = %v, want AAL2", res.MinAAL)
 	}
 }
 

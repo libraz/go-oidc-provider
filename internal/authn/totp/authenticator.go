@@ -40,6 +40,16 @@ var ErrSubjectRequired = errors.New("totp: subject is required")
 // to keep the error path explicit at the trust boundary.
 var ErrCodeMissing = errors.New("totp: code field is missing")
 
+// ErrRetry is returned by [Authenticator.Continue] on a recoverable
+// wrong-code submission. It wraps [authn.ErrFactorRetry] so the
+// orchestrator observes the failure through the
+// [authn.LoginAttemptObserver] feed, advances the shared brute-force
+// counter, and re-emits the prompt — the same path the password factor
+// takes on a wrong guess. Returning a nil-error re-prompt here instead
+// would leave 2FA guesses invisible to SIEM and the captcha step-up
+// gate.
+var ErrRetry = fmt.Errorf("totp: wrong code: %w", authn.ErrFactorRetry)
+
 // Authenticator is the [op.Authenticator] adapter for the RFC 6238
 // TOTP factor. It binds a [Verifier] (the primitive that does the
 // TOTP math + brute-force counter) to a [store.TOTPStore] (the
@@ -217,7 +227,12 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 				return interaction.Step{}, ErrLocked
 			}
 		}
-		return interaction.Step{Prompt: a.prompt(res.Record)}, nil
+		// Recoverable wrong guess: surface ErrRetry so the orchestrator
+		// records the failure and re-issues the prompt via Begin (which
+		// reloads the persisted, failure-incremented record). The
+		// AttemptsRemaining the SPA sees on the retry is therefore the
+		// same value a.prompt would have shown here.
+		return interaction.Step{}, ErrRetry
 	default:
 		// ErrLocked / ErrResetRequired / store-decryption failures
 		// flow through verbatim so the orchestrator can dispatch.

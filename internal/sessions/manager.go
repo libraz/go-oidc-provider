@@ -441,6 +441,53 @@ func (m *Manager) Switch(ctx context.Context, chooserGroupID, targetSessionID st
 	return Outcome{Cookie: value, ChooserGroupID: chooserGroupID, SessionID: targetSessionID}, nil
 }
 
+// SessionAuthContext is the authentication context a single session
+// recorded at login: the acr / amr / auth_time carried on the session
+// record. It is separate from [Account] because acr / amr are
+// server-side assurance values the chooser UI must never render, whereas
+// [Account] is UI-facing.
+type SessionAuthContext struct {
+	// ACR is the session's recorded Authentication Context Class
+	// Reference (empty when none was asserted).
+	ACR string
+
+	// AMR is a defensive copy of the session's Authentication Methods
+	// References (RFC 8176), in recorded order.
+	AMR []string
+
+	// AuthTime is the wall-clock time the session authenticated.
+	AuthTime time.Time
+}
+
+// AuthContext returns the authentication context of the session
+// identified by sessionID, validated to belong to chooserGroupID. It
+// mirrors [Manager.Switch]'s membership check but reads only the
+// auth-context fields instead of rebinding the cookie, so the account
+// chooser rebind path can seed a fresh grant / id_token with the chosen
+// session's assurance rather than silently downgrading it. A session
+// outside the group yields [ErrCookieInvalid]; a garbage-collected
+// session yields [ErrCurrentSessionExpired].
+func (m *Manager) AuthContext(ctx context.Context, chooserGroupID, sessionID string) (SessionAuthContext, error) {
+	if chooserGroupID == "" || sessionID == "" {
+		return SessionAuthContext{}, errors.New("sessions: AuthContext requires ChooserGroupID and SessionID")
+	}
+	sess, err := m.store.Find(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return SessionAuthContext{}, ErrCurrentSessionExpired
+		}
+		return SessionAuthContext{}, fmt.Errorf("sessions: find: %w", err)
+	}
+	if sess.ChooserGroupID != chooserGroupID {
+		return SessionAuthContext{}, ErrCookieInvalid
+	}
+	return SessionAuthContext{
+		ACR:      sess.ACR,
+		AMR:      append([]string(nil), sess.AMR...),
+		AuthTime: sess.AuthTime,
+	}, nil
+}
+
 // Account is a projection of [store.Session] suitable for rendering the
 // account chooser. It deliberately omits internal-only fields like
 // ChooserGroupID and ExpiresAt so the UI never accidentally leaks them.

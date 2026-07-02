@@ -148,7 +148,7 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 	if o.cfg.LoginFlow != nil {
 		return o.advanceLoginFlow(ctx, st, now)
 	}
-	required, denied, err := o.runRiskPreFactor(ctx, st, now)
+	required, minAAL, denied, err := o.runRiskPreFactor(ctx, st, now)
 	if err != nil {
 		return st, interaction.Step{}, err
 	}
@@ -156,7 +156,7 @@ func (o *Orchestrator) advanceAuthn(ctx context.Context, st State, now time.Time
 		return st, interaction.Step{}, ErrRiskDenied
 	}
 
-	candidates := o.eligibleAuthenticators(st, required)
+	candidates := o.eligibleAuthenticators(st, required, minAAL)
 	if len(candidates) == 0 {
 		return st, interaction.Step{}, ErrNoEligibleAuthenticator
 	}
@@ -217,14 +217,25 @@ type candidateAuthenticator struct {
 }
 
 // eligibleAuthenticators filters the registered chain by the
-// risk-required FactorType set (when non-empty) and by the
+// risk-required FactorType set (when non-empty), by the risk-required
+// minimum-assurance floor (when minAAL > AAL0), and by the
 // subject-required skip rule. The returned slice preserves the
 // configuration order so the orchestrator's "first candidate wins"
 // rule stays deterministic.
-func (o *Orchestrator) eligibleAuthenticators(st State, required []FactorType) []candidateAuthenticator {
+//
+// The two risk filters compose per the RiskOutcome contract: a
+// non-empty required set narrows the chain to those factor types, and
+// minAAL further excludes any candidate whose [Authenticator.AAL] is
+// below the floor. When required is empty but minAAL > AAL0 the
+// directive is "any registered factor that meets minAAL", so the AAL
+// filter alone applies — the whole chain is never returned unfiltered.
+func (o *Orchestrator) eligibleAuthenticators(st State, required []FactorType, minAAL AAL) []candidateAuthenticator {
 	out := make([]candidateAuthenticator, 0, len(o.cfg.Authenticators))
 	for i, a := range o.cfg.Authenticators {
 		if len(required) > 0 && !containsFactor(required, a.Type()) {
+			continue
+		}
+		if minAAL > AAL0 && a.AAL() < minAAL {
 			continue
 		}
 		if requiresSubject(a.Type()) && st.Subject == "" {

@@ -51,6 +51,16 @@ var ErrLocked = fmt.Errorf("recovery: factor is locked: %w", authn.ErrFactorAbor
 // crosses the long threshold and the user must reset/recover factors.
 var ErrResetRequired = fmt.Errorf("recovery: factor reset required: %w", authn.ErrFactorAbort)
 
+// ErrRetry is returned by [Authenticator.Continue] on a recoverable
+// wrong-code submission. It wraps [authn.ErrFactorRetry] so the
+// orchestrator observes the failure through the
+// [authn.LoginAttemptObserver] feed, advances the shared brute-force
+// counter, and re-emits the prompt — the same path the password factor
+// takes on a wrong guess. Returning a nil-error re-prompt here instead
+// would leave recovery-code guesses invisible to SIEM and the captcha
+// step-up gate.
+var ErrRetry = fmt.Errorf("recovery: invalid code: %w", authn.ErrFactorRetry)
+
 // Authenticator is the [op.Authenticator] adapter for the single-use
 // recovery-code factor. It binds a [Verifier] (the primitive that
 // hashes / matches / consumes codes) to a [store.RecoveryStore] (the
@@ -202,7 +212,10 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 				return interaction.Step{}, ErrLocked
 			}
 		}
-		return interaction.Step{Prompt: a.prompt(batch)}, nil
+		// Recoverable wrong guess: surface ErrRetry so the orchestrator
+		// records the failure and advances the brute-force counter, then
+		// re-issues the prompt via Begin.
+		return interaction.Step{}, ErrRetry
 	default:
 		// ErrAllConsumed / ErrNoCodes / hash-format failures flow
 		// through verbatim so the orchestrator can dispatch to the

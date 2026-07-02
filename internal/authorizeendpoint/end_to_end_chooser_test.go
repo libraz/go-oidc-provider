@@ -248,6 +248,191 @@ func TestEndToEnd_ChooserSelectAccount_HappyPath(t *testing.T) {
 	}
 }
 
+// TestEndToEnd_ChooserSelectAccount_SeedsACRAMRFromSession pins the
+// account-chooser assurance fallback: when the user picks an existing
+// session (select_account) no authenticator runs, so the chain carries
+// no factors. The terminate path MUST seed acr / amr from the chosen
+// session record rather than emitting an empty acr / nil amr, so the
+// minted id_token reflects the assurance the picked session already
+// achieved.
+func TestEndToEnd_ChooserSelectAccount_SeedsACRAMRFromSession(t *testing.T) {
+	t.Parallel()
+	clock := fakeClock{now: time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)}
+	cookieKey := []byte(chooserCookieKey)
+	tk := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithCookieKeys(cookieKey)),
+	)
+	const secret = "rp-secret"
+	hasher := clientauth.Argon2id{}
+	hash, err := hasher.Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	rp := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      "rp-chooser-acr",
+		SecretHash:              hash,
+		RedirectURIs:            []string{"https://rp.testkit.invalid/callback"},
+		Scopes:                  []string{"openid", "profile", "email"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+
+	const wantACR = "urn:mace:incommon:iap:silver"
+	wantAMR := []string{"pwd", "otp"}
+
+	mgr, _ := newChooserSessionsManager(t, tk.Store.Sessions(), cookieKey, clock)
+	ctx := context.Background()
+	sessA, err := mgr.Issue(ctx, sessions.Login{Subject: "user-A", AuthTime: clock.now})
+	if err != nil {
+		t.Fatalf("Issue user-A: %v", err)
+	}
+	// user-B's session already reached AAL2 (password + TOTP). This is
+	// the assurance the chooser re-entry must carry into the id_token.
+	sessB, err := mgr.AddAccount(ctx, sessA.ChooserGroupID, sessions.Login{
+		Subject:  "user-B",
+		AuthTime: clock.now,
+		ACR:      wantACR,
+		AMR:      wantAMR,
+	})
+	if err != nil {
+		t.Fatalf("AddAccount user-B: %v", err)
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := tk.HTTPClient(jar)
+
+	values := e2eAuthorizeValues(rp.ID, rp.RedirectURIs[0])
+	values.Set("prompt", "select_account")
+	authReq, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		tk.Server.URL+"/oidc/auth?"+values.Encode(), http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest /authorize: %v", err)
+	}
+	authReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	authResp, err := client.Do(authReq)
+	if err != nil {
+		t.Fatalf("GET /authorize: %v", err)
+	}
+	defer authResp.Body.Close()
+	location, err := authResp.Location()
+	if err != nil {
+		t.Fatalf("Location: %v", err)
+	}
+	interactionURL := tk.Server.URL + location.Path
+	interactionCookie := findCookie(authResp.Cookies(), cookie.InteractionProfile.Name)
+	if interactionCookie == nil {
+		t.Fatal("__Host-oidc_interaction cookie missing on authorize 302")
+	}
+
+	stepReq, err := http.NewRequestWithContext(ctx, http.MethodGet, interactionURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("NewRequest GET interaction: %v", err)
+	}
+	stepReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	stepReq.AddCookie(interactionCookie)
+	stepResp, err := client.Do(stepReq)
+	if err != nil {
+		t.Fatalf("GET interaction: %v", err)
+	}
+	defer stepResp.Body.Close()
+	step := decodeMap(t, stepResp)
+	if got, _ := step["type"].(string); got != "interaction.chooser" {
+		t.Fatalf("prompt type = %q, want interaction.chooser", got)
+	}
+	stateRef, _ := step["state_ref"].(string)
+	csrfCookie := findCookie(stepResp.Cookies(), cookie.CSRFProfile.Name)
+	if csrfCookie == nil {
+		t.Fatal("csrf cookie missing on interaction GET")
+	}
+
+	body := map[string]any{
+		"state_ref": stateRef,
+		"values":    map[string]string{"session_id": sessB.SessionID},
+	}
+	rawBody, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, interactionURL, bytes.NewReader(rawBody))
+	if err != nil {
+		t.Fatalf("NewRequest POST interaction: %v", err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("Origin", tk.Issuer)
+	postReq.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	postReq.AddCookie(csrfCookie)
+	postReq.AddCookie(interactionCookie)
+	postReq.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: sessA.Cookie})
+	postResp, err := client.Do(postReq)
+	if err != nil {
+		t.Fatalf("POST chooser: %v", err)
+	}
+	defer postResp.Body.Close()
+
+	finalResp := completeConsentIfPrompted(t, client, interactionURL, tk.Issuer, csrfCookie.Value, postResp)
+	defer finalResp.Body.Close()
+	if finalResp.StatusCode != http.StatusFound {
+		dump, _ := io.ReadAll(finalResp.Body)
+		t.Fatalf("final status=%d body=%s", finalResp.StatusCode, string(dump))
+	}
+	rpRedirect, err := finalResp.Location()
+	if err != nil {
+		t.Fatalf("Location after chooser: %v", err)
+	}
+	code := rpRedirect.Query().Get("code")
+	if code == "" {
+		t.Fatalf("no code in %s", rpRedirect.String())
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {rp.RedirectURIs[0]},
+		"code_verifier": {e2eVerifier},
+	}
+	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		tk.Server.URL+"/oidc/token", strings.NewReader(tokenForm.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest /token: %v", err)
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenReq.SetBasicAuth(rp.ID, secret)
+	tokenResp, err := client.Do(tokenReq)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer tokenResp.Body.Close()
+	if tokenResp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(tokenResp.Body)
+		t.Fatalf("/token status=%d body=%s", tokenResp.StatusCode, string(dump))
+	}
+	tokenBody := decodeMap(t, tokenResp)
+	idt, _ := tokenBody["id_token"].(string)
+	if idt == "" {
+		t.Fatalf("id_token missing: %v", tokenBody)
+	}
+	idClaims := decodeIDTokenPayload(t, idt)
+	if got, _ := idClaims["sub"].(string); got != "user-B" {
+		t.Errorf("id_token sub = %q, want user-B", got)
+	}
+	if got, _ := idClaims["acr"].(string); got != wantACR {
+		t.Errorf("id_token acr = %q, want %q (seeded from chosen session)", got, wantACR)
+	}
+	rawAMR, _ := idClaims["amr"].([]any)
+	gotAMR := make([]string, 0, len(rawAMR))
+	for _, v := range rawAMR {
+		if s, ok := v.(string); ok {
+			gotAMR = append(gotAMR, s)
+		}
+	}
+	if strings.Join(gotAMR, ",") != strings.Join(wantAMR, ",") {
+		t.Errorf("id_token amr = %v, want %v (seeded from chosen session)", gotAMR, wantAMR)
+	}
+}
+
 // TestEndToEnd_ChooserAddAccountURL_AddsAccountToExistingGroup drives the
 // public multi-account path rather than seeding the second account directly:
 // a chooser prompt renders AddAccountURL, the browser follows it with the

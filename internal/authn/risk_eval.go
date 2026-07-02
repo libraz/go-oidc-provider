@@ -21,19 +21,19 @@ import (
 // TokenExchange) a one-line addition rather than a copy-paste.
 
 // runRiskPreFactor consults the assessor at PreFactor and returns the
-// factor-type filter the orchestrator should apply (empty = no
-// filter), plus a denied flag.
-func (o *Orchestrator) runRiskPreFactor(ctx context.Context, st State, now time.Time) ([]FactorType, bool, error) {
+// factor-type filter the orchestrator should apply (empty = no filter),
+// the minimum-assurance floor (AAL0 = no floor), plus a denied flag.
+func (o *Orchestrator) runRiskPreFactor(ctx context.Context, st State, now time.Time) ([]FactorType, AAL, bool, error) {
 	in := buildRiskInput(st, "")
 	in.AuthTime = now
 	res, err := risk.RunPreFactor(ctx, o.riskAssessor, in)
 	if err != nil {
-		return nil, false, err
+		return nil, AAL0, false, err
 	}
 	if res.Denied {
-		return nil, true, nil
+		return nil, AAL0, true, nil
 	}
-	return factorTypesFromStrings(res.Required), false, nil
+	return factorTypesFromStrings(res.Required), aalFromPkg(res.MinAAL), false, nil
 }
 
 // runRiskPostFactor consults the assessor after a successful factor

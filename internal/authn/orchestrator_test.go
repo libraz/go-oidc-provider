@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/netip"
 	"strings"
@@ -350,6 +351,70 @@ func TestTickRiskRequireSelectsPasskey(t *testing.T) {
 	}
 }
 
+// TestTickRiskMinAALWithoutRequiredFactors exercises the MinAAL
+// directive on the legacy Authenticators path: an assessor returns
+// Require with MinAAL AAL2 and an empty RequiredFactors set. The
+// orchestrator must read this as "any registered factor that meets
+// AAL2": a user whose only factor is AAL1 has no eligible candidate
+// (step-up denied), while a user with an AAL2 factor proceeds with it.
+func TestTickRiskMinAALWithoutRequiredFactors(t *testing.T) {
+	t.Parallel()
+
+	riskRequireAAL2 := func() *stubRisk {
+		return &stubRisk{
+			assess: func(_ context.Context, in op.RiskInput) (op.RiskOutcome, error) {
+				if in.Stage == op.RiskPreFactor {
+					return op.RiskOutcome{
+						Decision: op.RiskRequire,
+						MinAAL:   op.AAL2,
+					}, nil
+				}
+				return op.RiskOutcome{Decision: op.RiskAllow}, nil
+			},
+		}
+	}
+
+	t.Run("aal1-only-denied", func(t *testing.T) {
+		t.Parallel()
+
+		pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
+		o, err := authn.New(authn.Config{
+			Authenticators: []op.Authenticator{pw},
+			Risk:           riskRequireAAL2(),
+			StateRefSigner: newSigner(t),
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, _, err = o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+		if !errors.Is(err, authn.ErrNoEligibleAuthenticator) {
+			t.Fatalf("Tick err = %v, want ErrNoEligibleAuthenticator", err)
+		}
+	})
+
+	t.Run("aal2-proceeds", func(t *testing.T) {
+		t.Parallel()
+
+		pw := buildSuccessAuthenticator(op.FactorPassword, op.AAL1, "pwd")
+		pk := buildSuccessAuthenticator(op.FactorPasskey, op.AAL2, "hwk")
+		o, err := authn.New(authn.Config{
+			Authenticators: []op.Authenticator{pw, pk},
+			Risk:           riskRequireAAL2(),
+			StateRefSigner: newSigner(t),
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		_, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+		if err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+		if step.Prompt == nil || step.Prompt.Type != "auth.passkey" {
+			t.Fatalf("expected auth.passkey prompt (AAL1 password filtered out), got %+v", step.Prompt)
+		}
+	})
+}
+
 // 4. Risk Deny.
 func TestTickRiskDeny(t *testing.T) {
 	t.Parallel()
@@ -373,6 +438,104 @@ func TestTickRiskDeny(t *testing.T) {
 		t.Fatalf("Tick err = %v, want ErrRiskDenied", err)
 	}
 }
+
+// TestTickOTPWrongCodeObservesFailureAndTripsCaptcha pins the failure-
+// observation contract for OTP-style factors. A wrong code surfaces as
+// an ErrFactorRetry-wrapping error — the shape the TOTP / email-OTP /
+// recovery adapters now return — so the orchestrator MUST fire the
+// observer and advance the brute-force counter on every miss (unlike
+// the old nil-error re-prompt, which left SIEM blind). Once the counter
+// reaches the captcha threshold, a fresh advance interposes the captcha.
+func TestTickOTPWrongCodeObservesFailureAndTripsCaptcha(t *testing.T) {
+	t.Parallel()
+
+	// Mirror the sentinel shape the OTP adapters emit on a wrong guess.
+	wrongCode := fmt.Errorf("otp: wrong code: %w", authn.ErrFactorRetry)
+	otp := &stubAuthenticator{
+		typeID:  op.FactorTOTP,
+		aal:     op.AAL2,
+		amr:     "otp",
+		prompts: []string{"auth.totp"},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &interaction.Prompt{
+				Type: "auth.totp",
+				Data: interaction.TOTPPromptData{},
+			}}, nil
+		},
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{}, wrongCode
+		},
+	}
+	obs := &recordingObserver{}
+	captcha := &stubCaptcha{verify: func(_ context.Context, _ op.CaptchaInput) error { return nil }}
+	o, err := authn.New(authn.Config{
+		Authenticators: []op.Authenticator{otp},
+		Observers:      []op.LoginAttemptObserver{obs},
+		Captcha:        captcha,
+		StateRefSigner: newSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// OTP is a second factor; the subject is pre-bound so the factor is
+	// eligible without a preceding identifying factor.
+	st := initialState()
+	st.Subject = "user-1"
+
+	st, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("first Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
+		t.Fatalf("expected auth.totp prompt, got %+v", step.Prompt)
+	}
+
+	for i := 1; i <= captchaFailureThresholdForTest; i++ {
+		st, step, err = o.Tick(context.Background(), st, authn.Input{
+			Submission: &interaction.FormSubmission{
+				StateRef: step.Prompt.StateRef,
+				Values:   map[string]string{"code": "000000"},
+			},
+			Now: fakeNow(),
+		})
+		if err != nil {
+			t.Fatalf("wrong-code Tick %d: %v", i, err)
+		}
+		if st.LastFailures != i {
+			t.Errorf("LastFailures after miss %d = %d, want %d", i, st.LastFailures, i)
+		}
+		// Each miss re-emits the factor prompt so the SPA can retry.
+		if step.Prompt == nil || step.Prompt.Type != "auth.totp" {
+			t.Fatalf("miss %d: expected re-emitted auth.totp prompt, got %+v", i, step.Prompt)
+		}
+	}
+
+	failures := 0
+	for _, e := range obs.snapshot() {
+		if e.Outcome == op.AttemptFailure && e.Factor == op.FactorTOTP {
+			failures++
+		}
+	}
+	if failures != captchaFailureThresholdForTest {
+		t.Errorf("observer AttemptFailure events = %d, want %d", failures, captchaFailureThresholdForTest)
+	}
+
+	// A fresh advance (no submission) now interposes the captcha gate
+	// because LastFailures has reached the threshold.
+	_, captchaStep, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("post-threshold Tick: %v", err)
+	}
+	if captchaStep.Prompt == nil || captchaStep.Prompt.Type != "captcha" {
+		t.Fatalf("expected captcha prompt after %d failures, got %+v", captchaFailureThresholdForTest, captchaStep.Prompt)
+	}
+}
+
+// captchaFailureThresholdForTest mirrors the orchestrator's internal
+// captchaFailureThreshold constant. It is redeclared here because the
+// constant is unexported and the test lives in the _test package.
+const captchaFailureThresholdForTest = 3
 
 // 5. Captcha challenge after 3 failures, then verify and continue.
 func TestTickCaptchaAfterThreeFailures(t *testing.T) {

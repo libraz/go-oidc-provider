@@ -357,6 +357,58 @@ func csrfFromForm(r *http.Request) string {
 	return r.PostForm.Get("csrf_token")
 }
 
+// resolveGrantACRAMR determines the acr/amr the grant and id_token
+// carry, plus the auth time to stamp on the result. On an account
+// chooser (select_account) re-entry the user picked an existing session
+// instead of running an authenticator, so authnState.Factors is empty
+// and [authn.Aggregate] yields acr=""/amr=nil; in that case the auth
+// context is seeded from the chosen session and the ACR resolver is
+// bypassed, mirroring applyFirstPartySkip on the auto-grant path (both
+// copy the session's assurance verbatim rather than re-deriving it from
+// an AAL0 factor set) so the grant does not silently downgrade to
+// no-acr / no-amr. Otherwise the configured ACR resolver runs.
+func resolveGrantACRAMR(
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+	req *authorize.Request,
+	authnState authn.State,
+	subject string,
+	authTime time.Time,
+) (string, []string, time.Time) {
+	acr, amr, level := authn.Aggregate(authnState.Factors)
+	chooserReentry := len(authnState.Factors) == 0 && authnState.ChooserBoundSubject &&
+		authnState.ChooserGroupID != "" && authnState.ChooserSelectedSessionID != ""
+	switch {
+	case chooserReentry:
+		if authCtx, err := deps.Sessions.AuthContext(r.Context(), authnState.ChooserGroupID, authnState.ChooserSelectedSessionID); err == nil {
+			acr = authCtx.ACR
+			amr = authCtx.AMR
+			if !authCtx.AuthTime.IsZero() {
+				authTime = authCtx.AuthTime
+			}
+		}
+	case deps.ACRResolver != nil:
+		out := deps.ACRResolver(r.Context(), ACRResolveInput{
+			RequestedACRValues: append([]string(nil), req.ACRValues...),
+			CompletedKinds:     append([]string(nil), authnState.CompletedStepKinds...),
+			InternalAAL:        level,
+			Subject:            subject,
+			ClientID:           rec.ClientID,
+			RequestedScopes:    append([]string(nil), req.Scope...),
+		})
+		if !out.OK {
+			acr = ""
+		} else {
+			acr = out.ACR
+			if out.AMR != nil {
+				amr = append([]string(nil), out.AMR...)
+			}
+		}
+	}
+	return acr, amr, authTime
+}
+
 // terminateInteraction is the happy-path branch of a Tick that
 // returned [interaction.Step.Result]. It mints a session for the
 // bound subject, records / refreshes the grant for the requested
@@ -381,25 +433,8 @@ func terminateInteraction(
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
 		return
 	}
-	acr, amr, level := authn.Aggregate(authnState.Factors)
-	if deps.ACRResolver != nil {
-		out := deps.ACRResolver(r.Context(), ACRResolveInput{
-			RequestedACRValues: append([]string(nil), req.ACRValues...),
-			CompletedKinds:     append([]string(nil), authnState.CompletedStepKinds...),
-			InternalAAL:        level,
-			Subject:            result.Subject,
-			ClientID:           rec.ClientID,
-			RequestedScopes:    append([]string(nil), req.Scope...),
-		})
-		if !out.OK {
-			acr = ""
-		} else {
-			acr = out.ACR
-			if out.AMR != nil {
-				amr = append([]string(nil), out.AMR...)
-			}
-		}
-	}
+	acr, amr, authTime := resolveGrantACRAMR(r, deps, rec, req, authnState, result.Subject, result.AuthTime)
+	result.AuthTime = authTime
 	if err := ensureSession(w, r, deps, ensureSessionArgs{
 		Subject:                  result.Subject,
 		AuthTime:                 result.AuthTime,

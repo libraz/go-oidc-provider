@@ -412,7 +412,7 @@ func TestContinueVerifyCorrectCodeEmitsResult(t *testing.T) {
 	}
 }
 
-func TestContinueVerifyWrongCodeReEmitsPromptAndIncrementsCounter(t *testing.T) {
+func TestContinueVerifyWrongCodeReturnsRetryAndIncrementsCounter(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
 	a, mailer, recStore := newFixture(t, now)
@@ -423,11 +423,16 @@ func TestContinueVerifyWrongCodeReEmitsPromptAndIncrementsCounter(t *testing.T) 
 		Scratch:    emailotp.ScratchVerify,
 		Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: "000000"}},
 	})
-	if err != nil {
-		t.Fatalf("Continue (verify wrong): %v", err)
+	// A wrong code must route through ErrFactorRetry so the orchestrator
+	// observes the failure and advances the brute-force counter.
+	if !errors.Is(err, emailotp.ErrRetry) {
+		t.Fatalf("Continue (verify wrong) err = %v, want emailotp.ErrRetry", err)
 	}
-	if step.Prompt == nil || step.Prompt.Type != emailotp.PromptTypeVerify {
-		t.Fatalf("expected re-emitted verify prompt, got %+v", step)
+	if !errors.Is(err, authn.ErrFactorRetry) {
+		t.Fatalf("Continue (verify wrong) err = %v, want to wrap authn.ErrFactorRetry", err)
+	}
+	if step.Prompt != nil || step.Result != nil {
+		t.Fatalf("expected empty step on retry error, got %+v", step)
 	}
 	rec, err := recStore.Get(context.Background(), "sub-1")
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/interaction"
@@ -231,7 +232,7 @@ func TestAuthenticator_ContinueSuccessReturnsResult(t *testing.T) {
 	}
 }
 
-func TestAuthenticator_ContinueWrongCodeReEmitsPrompt(t *testing.T) {
+func TestAuthenticator_ContinueWrongCodeReturnsRetry(t *testing.T) {
 	t.Parallel()
 
 	f := newAdapterFixture(t)
@@ -240,18 +241,17 @@ func TestAuthenticator_ContinueWrongCodeReEmitsPrompt(t *testing.T) {
 		AuthTime:   f.authTime,
 		Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: "000000"}},
 	})
-	if err != nil {
-		t.Fatalf("Continue returned err = %v, want nil for wrong code", err)
+	// A wrong code must route through ErrFactorRetry so the orchestrator
+	// observes the failure and advances the brute-force counter, rather
+	// than silently re-emitting the prompt.
+	if !errors.Is(err, totp.ErrRetry) {
+		t.Fatalf("Continue err = %v, want totp.ErrRetry", err)
 	}
-	if step.Prompt == nil {
-		t.Fatalf("expected re-emit Prompt, got %+v", step)
+	if !errors.Is(err, authn.ErrFactorRetry) {
+		t.Fatalf("Continue err = %v, want to wrap authn.ErrFactorRetry", err)
 	}
-	data, ok := step.Prompt.Data.(interaction.TOTPPromptData)
-	if !ok {
-		t.Fatalf("Prompt.Data type = %T, want interaction.TOTPPromptData", step.Prompt.Data)
-	}
-	if data.AttemptsRemaining != 29 {
-		t.Errorf("AttemptsRemaining = %d, want 29 after one miss", data.AttemptsRemaining)
+	if step.Prompt != nil || step.Result != nil {
+		t.Fatalf("expected empty step on retry error, got %+v", step)
 	}
 
 	rec, err := f.store.Get(context.Background(), f.subject)

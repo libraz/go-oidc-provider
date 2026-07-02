@@ -48,6 +48,21 @@ const (
 	ScoreHigh
 )
 
+// AAL mirrors authn.AAL. It is redeclared here so the risk sub-package
+// can carry a minimum-assurance directive without importing
+// internal/authn (which would form an import cycle: the parent imports
+// this package). The parent maps between authn.AAL and this type at the
+// call site; the ladders are intentionally identical.
+type AAL int
+
+// AAL values mirror authn.AAL (AAL0 is the zero value: no directive).
+const (
+	AAL0 AAL = iota
+	AAL1
+	AAL2
+	AAL3
+)
+
 // Input mirrors authn.RiskInput. The parent fills it from State.
 type Input struct {
 	Stage      Stage
@@ -61,13 +76,20 @@ type Input struct {
 	AuthTime   time.Time
 }
 
-// Outcome mirrors authn.RiskOutcome. The orchestrator reads only
-// Decision, RequiredFactors, and Score — MinAAL / Reason are carried
-// through for parity but not interpreted by the helpers in this pkg.
+// Outcome mirrors authn.RiskOutcome. The helpers in this package
+// interpret Decision, RequiredFactors, Score, and MinAAL; Reason is
+// omitted because it is an audit-only field the parent reads directly
+// off authn.RiskOutcome and never routes through this seam.
+//
+// MinAAL constrains RequiredFactors: on a Require decision the parent
+// admits only factors whose Authenticator.AAL meets MinAAL. When
+// RequiredFactors is empty and MinAAL > AAL0, the directive means "any
+// registered factor that meets MinAAL".
 type Outcome struct {
 	Decision        Decision
 	RequiredFactors []string
 	Score           Score
+	MinAAL          AAL
 }
 
 // Assessor is the duck-typed authn.RiskAssessor. The parent passes its
@@ -80,7 +102,11 @@ type Assessor interface {
 // PreFactorResult is the output of the PreFactor consult helper.
 type PreFactorResult struct {
 	Required []string
-	Denied   bool
+	// MinAAL is the minimum-assurance directive carried from the
+	// Require outcome. AAL0 means "no assurance floor"; the parent
+	// applies it as a filter on the eligible-authenticator set.
+	MinAAL AAL
+	Denied bool
 }
 
 // RunPreFactor consults assessor at PreFactor and returns the
@@ -100,7 +126,7 @@ func RunPreFactor(ctx context.Context, assessor Assessor, in Input) (PreFactorRe
 	case Deny:
 		return PreFactorResult{Denied: true}, nil
 	case Require:
-		return PreFactorResult{Required: out.RequiredFactors}, nil
+		return PreFactorResult{Required: out.RequiredFactors, MinAAL: out.MinAAL}, nil
 	default:
 		return PreFactorResult{}, nil
 	}

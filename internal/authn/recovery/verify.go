@@ -69,9 +69,9 @@ var (
 	// a batch, so the condition is treated as store corruption — the
 	// verifier refuses to walk the oversized list because each
 	// unmatched slot would trigger an argon2id derivation, and an
-	// unbounded slot count is the amplification vector flagged by the
-	// 2026-05-07 system review (S-10). The outcome equals
-	// [OutcomeInvalid] so the orchestrator routes the failure through
+	// unbounded slot count is a CPU/memory amplification vector. The
+	// outcome equals [OutcomeInvalid] so the orchestrator routes the
+	// failure through
 	// the same "this is broken, alert the operator" path it uses for
 	// hash-format faults.
 	ErrBatchOversized = errors.New("recovery: batch exceeds maxBatchSize")

@@ -76,6 +76,24 @@ var (
 	// retryable failure (the SPA shows "please wait before
 	// requesting another code") rather than a chain-fatal error.
 	ErrTooManyOutstanding = fmt.Errorf("emailotp: too many outstanding send attempts: %w", authn.ErrFactorAbort)
+
+	// ErrRetry is returned by [Authenticator.Continue] on a recoverable
+	// wrong-code submission at the verify step. It wraps
+	// [authn.ErrFactorRetry] so the orchestrator observes the failure
+	// through the [authn.LoginAttemptObserver] feed and advances the
+	// shared brute-force counter — the same path the password factor
+	// takes on a wrong guess. Returning a nil-error re-prompt here
+	// instead would leave 2FA guesses invisible to SIEM and the captcha
+	// step-up gate.
+	ErrRetry = fmt.Errorf("emailotp: wrong code: %w", authn.ErrFactorRetry)
+
+	// ErrDeliver is returned by [Authenticator.Continue] when the
+	// [Mailer] fails to hand off the code. It is a distinct sentinel so
+	// the send step can apply the constant-time latency pad to the
+	// delivery-failure branch as well, keeping the matched-email
+	// response indistinguishable in timing from the unmatched-email
+	// branch.
+	ErrDeliver = errors.New("emailotp: code delivery failed")
 )
 
 const (
@@ -353,14 +371,15 @@ func (a *Authenticator) handleSend(ctx context.Context, in authn.ContinueInput) 
 	start := a.clock.Now()
 	step, err := a.handleSendInner(ctx, in, start)
 	// The latency pad is applied unconditionally on the success
-	// path AND on the [ErrTooManyOutstanding] / mailer-failure
-	// branch so an attacker cannot pivot between error types to
-	// bypass the constant-time response. Hard configuration errors
-	// (ErrEmailMissing, ErrEmailNotBound, store outages on the user
-	// lookup) do NOT apply the pad: those cannot be triggered by
-	// per-request inputs that vary across registered subjects, so
-	// the pad would only inflate latency without closing a channel.
-	if err == nil || errors.Is(err, ErrTooManyOutstanding) {
+	// path AND on the [ErrTooManyOutstanding] / [ErrDeliver]
+	// (mailer-failure) branches so an attacker cannot pivot between
+	// error types to bypass the constant-time response. Hard
+	// configuration errors (ErrEmailMissing, ErrEmailNotBound, store
+	// outages on the user lookup) do NOT apply the pad: those cannot be
+	// triggered by per-request inputs that vary across registered
+	// subjects, so the pad would only inflate latency without closing a
+	// channel.
+	if err == nil || errors.Is(err, ErrTooManyOutstanding) || errors.Is(err, ErrDeliver) {
 		// The PadUntil error (context cancellation) is intentionally
 		// dropped: the original Continue result is the more useful
 		// signal for the SPA, and the wrapping orchestrator already
@@ -419,7 +438,7 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 			Subject:   in.Subject,
 			ClientID:  in.ClientID,
 		}); err != nil {
-			return interaction.Step{}, fmt.Errorf("emailotp: deliver code: %w", err)
+			return interaction.Step{}, fmt.Errorf("%w: %w", ErrDeliver, err)
 		}
 		rec.SentAt = now
 	}
@@ -564,10 +583,11 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 				return interaction.Step{}, ErrLocked
 			}
 		}
-		return interaction.Step{
-			Prompt:  a.verifyPromptFromRecord(ctx, rec),
-			Scratch: scratchVerify,
-		}, nil
+		// Recoverable wrong guess: surface ErrRetry so the orchestrator
+		// records the failure and advances the brute-force counter. The
+		// failure-incremented record is already persisted above, so the
+		// re-issued send prompt (via Begin) reflects the updated state.
+		return interaction.Step{}, ErrRetry
 	case errors.Is(verr, ErrConsumed):
 		// Treat a replay attempt as a generic expiry from the SPA's
 		// perspective so the response shape stays constant with the
@@ -611,14 +631,6 @@ func (a *Authenticator) verifyPrompt(boundEmail string, expiresAt time.Time) *in
 			MaxLen:   codeLen,
 		}},
 	}
-}
-
-func (a *Authenticator) verifyPromptFromRecord(ctx context.Context, rec *store.EmailOTPRecord) *interaction.Prompt {
-	bound := ""
-	if user, err := a.users.FindBySubject(ctx, rec.Subject); err == nil {
-		bound = claimEmail(user)
-	}
-	return a.verifyPrompt(bound, rec.ExpiresAt)
 }
 
 // claimEmail extracts the "email" claim from a [store.User]. The
