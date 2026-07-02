@@ -13,7 +13,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/35-encrypted-id-token
+//	(cd examples/35-encrypted-id-token && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

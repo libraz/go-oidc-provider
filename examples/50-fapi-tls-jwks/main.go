@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/50-fapi-tls-jwks
+//	(cd examples/50-fapi-tls-jwks && go run -tags example .)
 //
 // The example expects a JWKS file at ./client.jwks.json (any
 // well-formed RFC 7517 set will do — the loader strips "d" if
@@ -94,7 +94,7 @@ func main() {
 	cert := os.Getenv("FAPI_CERT")
 	key := os.Getenv("FAPI_KEY")
 	if cert == "" || key == "" {
-		log.Println("FAPI_CERT / FAPI_KEY not set; skipping TLS listen — try `FAPI_CERT=cert.pem FAPI_KEY=key.pem go run -tags example ./examples/50-fapi-tls-jwks`")
+		log.Println("FAPI_CERT / FAPI_KEY not set; skipping TLS listen — try `(cd examples/50-fapi-tls-jwks && FAPI_CERT=cert.pem FAPI_KEY=key.pem go run -tags example .)`")
 		return
 	}
 	log.Println("FAPI TLS example listening on :8443 (TLS 1.2 only, RSA-keyed AEAD allowlist)")

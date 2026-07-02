@@ -60,7 +60,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/26-byo-store-from-scratch
+//	(cd examples/26-byo-store-from-scratch && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

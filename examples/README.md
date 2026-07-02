@@ -6,7 +6,7 @@ All examples build behind the `example` build tag, so they are excluded from
 `go test ./...` and from production `go.sum`:
 
 ```sh
-go run -tags example ./examples/01-minimal
+(cd examples/01-minimal && go run -tags example .)
 ```
 
 Embedder-side install (the same versions every example pins):
@@ -40,7 +40,7 @@ docker compose -f examples/09-redis-volatile/compose.yaml down -v
 
 `08-composite-hot-cold` is the no-docker counterpart of `09`: the same
 `composite.With(...)` wiring with `inmem` standing in for the volatile half, so
-it boots with `go run -tags example ./examples/08-composite-hot-cold`.
+it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 
 ## I want to…
 

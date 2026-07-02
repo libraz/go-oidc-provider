@@ -24,7 +24,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/16-custom-interaction
+//	(cd examples/16-custom-interaction && go run -tags example .)
 //
 // Manual verification:
 //

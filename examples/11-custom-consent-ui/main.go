@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/11-custom-consent-ui
+//	(cd examples/11-custom-consent-ui && go run -tags example .)
 //
 // Manual verification:
 //

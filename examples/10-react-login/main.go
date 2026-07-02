@@ -8,7 +8,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/10-react-login
+//	(cd examples/10-react-login && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

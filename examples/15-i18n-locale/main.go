@@ -11,7 +11,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/15-i18n-locale
+//	(cd examples/15-i18n-locale && go run -tags example .)
 //
 // Startup runs an in-process self-verify probe that drives every row
 // of the priority chain through an httptest server and prints a

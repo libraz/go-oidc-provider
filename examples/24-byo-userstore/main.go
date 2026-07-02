@@ -26,7 +26,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/24-byo-userstore
+//	(cd examples/24-byo-userstore && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

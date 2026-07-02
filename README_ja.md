@@ -138,7 +138,7 @@ docs サイトの
 配下のページに対応する。
 
 ```sh
-go run -tags example ./examples/01-minimal
+(cd examples/01-minimal && go run -tags example .)
 ```
 
 ## コミュニティ

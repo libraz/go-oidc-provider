@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/34-pairwise-saas
+//	(cd examples/34-pairwise-saas && go run -tags example .)
 //
 // The example is self-contained: a single binary builds the OP,
 // drives an in-process self-verify probe against the same

@@ -33,7 +33,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/33-token-exchange-delegation
+//	(cd examples/33-token-exchange-delegation && go run -tags example .)
 //
 // The example is self-contained: a single binary stands up the OP on
 // :8090, runs a self-verify probe in-process, and exits 0 on success.

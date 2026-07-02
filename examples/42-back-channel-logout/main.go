@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/42-back-channel-logout
+//	(cd examples/42-back-channel-logout && go run -tags example .)
 //
 // The example boots two HTTP servers in the same process:
 //

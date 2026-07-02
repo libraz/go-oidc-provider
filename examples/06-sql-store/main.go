@@ -9,7 +9,7 @@
 //
 // Run with:
 //
-//	go run -tags example ./examples/06-sql-store
+//	(cd examples/06-sql-store && go run -tags example .)
 //
 // The example creates a fresh database file under the OS temp
 // directory, applies the embedded v1 schema, and serves the OP on

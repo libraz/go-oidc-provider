@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/61-claims-request
+//	(cd examples/61-claims-request && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

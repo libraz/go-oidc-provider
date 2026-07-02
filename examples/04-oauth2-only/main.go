@@ -19,7 +19,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/04-oauth2-only
+//	(cd examples/04-oauth2-only && go run -tags example .)
 //
 // Drive the OAuth-only path end-to-end:
 //

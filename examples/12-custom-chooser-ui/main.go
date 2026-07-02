@@ -12,7 +12,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/12-custom-chooser-ui
+//	(cd examples/12-custom-chooser-ui && go run -tags example .)
 //
 // Browser walkthrough:
 //

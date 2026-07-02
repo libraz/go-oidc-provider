@@ -13,7 +13,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/31-device-code-cli
+//	(cd examples/31-device-code-cli && go run -tags example .)
 //
 // The example is self-contained: a single binary stands up the OP
 // on :8089, runs an in-process self-verify probe against an

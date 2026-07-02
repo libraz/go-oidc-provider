@@ -12,7 +12,7 @@
 //
 // Run with:
 //
-//	go run -tags example ./examples/25-byo-table-names
+//	(cd examples/25-byo-table-names && go run -tags example .)
 //
 // The example renames all eighteen OP-internal tables under an "auth_"
 // prefix, applies the rewritten schema, logs the physical tables the

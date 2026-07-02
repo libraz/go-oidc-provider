@@ -10,7 +10,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/32-ciba-pos
+//	(cd examples/32-ciba-pos && go run -tags example .)
 //
 // The example is self-contained: a single binary stands up the OP on
 // :8080, drives the CIBA wire protocol against itself, decodes the

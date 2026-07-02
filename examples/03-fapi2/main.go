@@ -10,7 +10,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/03-fapi2
+//	(cd examples/03-fapi2 && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

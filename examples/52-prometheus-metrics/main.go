@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/52-prometheus-metrics
+//	(cd examples/52-prometheus-metrics && go run -tags example .)
 //
 // Then read the curated counters:
 //

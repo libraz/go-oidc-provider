@@ -8,7 +8,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/60-scopes-public-private
+//	(cd examples/60-scopes-public-private && go run -tags example .)
 //
 // Then inspect:
 //

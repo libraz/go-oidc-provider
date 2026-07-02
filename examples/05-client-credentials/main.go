@@ -7,7 +7,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/05-client-credentials
+//	(cd examples/05-client-credentials && go run -tags example .)
 //
 // Then exchange the credential for an access token:
 //

@@ -14,7 +14,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/40-first-party-skip-consent
+//	(cd examples/40-first-party-skip-consent && go run -tags example .)
 //
 // The "first-party-app" client is registered as a public client and
 // listed in [op.WithFirstPartyClients]; it round-trips through

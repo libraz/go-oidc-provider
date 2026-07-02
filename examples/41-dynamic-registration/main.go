@@ -9,7 +9,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/41-dynamic-registration
+//	(cd examples/41-dynamic-registration && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

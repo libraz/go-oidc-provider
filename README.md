@@ -142,7 +142,7 @@ maps to a use-case page on the docs site under
 [Use cases](https://go-oidc-provider.libraz.net/use-cases/).
 
 ```sh
-go run -tags example ./examples/01-minimal
+(cd examples/01-minimal && go run -tags example .)
 ```
 
 ## Community

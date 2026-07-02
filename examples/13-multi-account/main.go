@@ -11,7 +11,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/13-multi-account
+//	(cd examples/13-multi-account && go run -tags example .)
 //
 // Browser walkthrough:
 //

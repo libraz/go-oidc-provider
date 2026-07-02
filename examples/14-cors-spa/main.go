@@ -12,7 +12,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/14-cors-spa
+//	(cd examples/14-cors-spa && go run -tags example .)
 //
 // Then verify the preflight from the SPA origin:
 //

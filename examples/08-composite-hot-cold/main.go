@@ -36,7 +36,7 @@
 //   - :9090 — the RP, built from examples/internal/rpkit. It exposes
 //     /, /login, /callback, /me.
 //
-//     go run -tags example ./examples/08-composite-hot-cold
+//     (cd examples/08-composite-hot-cold && go run -tags example .)
 //     open http://127.0.0.1:9090/
 //     # sign in as demo / demo, approve consent
 //

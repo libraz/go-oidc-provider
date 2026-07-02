@@ -12,7 +12,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/51-dpop-nonce
+//	(cd examples/51-dpop-nonce && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

@@ -7,7 +7,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/01-minimal
+//	(cd examples/01-minimal && go run -tags example .)
 //
 // Two listeners come up in the same process:
 //

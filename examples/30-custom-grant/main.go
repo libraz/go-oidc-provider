@@ -8,7 +8,7 @@
 //
 // Run with the example build tag:
 //
-//	go run -tags example ./examples/30-custom-grant
+//	(cd examples/30-custom-grant && go run -tags example .)
 //
 // The example is self-contained: a single binary stands up the OP on
 // :8088, runs an in-process self-verify probe before the public listener
