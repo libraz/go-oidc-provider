@@ -26,15 +26,15 @@ Message Signing.
 ## Install
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.3
+go get github.com/libraz/go-oidc-provider/op@v0.9.4
 ```
 
 Go 1.25+. Storage adapters are published as sub-modules so their
 dependencies stay out of your `go.sum` until you opt in:
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.3
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.4
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.4
 ```
 
 ## Quickstart

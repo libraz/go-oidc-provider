@@ -27,7 +27,7 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリ。
 ## インストール
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.3
+go get github.com/libraz/go-oidc-provider/op@v0.9.4
 ```
 
 Go 1.25+。DB / Redis ドライバを引き込むストアアダプタはサブモジュール
@@ -35,8 +35,8 @@ Go 1.25+。DB / Redis ドライバを引き込むストアアダプタはサブ�
 依存は入らない。
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.3
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.4
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.4
 ```
 
 ## クイックスタート

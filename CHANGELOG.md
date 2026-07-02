@@ -14,7 +14,12 @@ The main module and the storage-adapter sub-modules
 tag. Embedders pull each sub-module independently:
 
 ```
-# v0.9.3 (latest)
+# v0.9.4 (latest)
+go get github.com/libraz/go-oidc-provider@v0.9.4
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.4
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.4
+
+# v0.9.3
 go get github.com/libraz/go-oidc-provider@v0.9.3
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.3
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.3
@@ -34,6 +39,100 @@ go get github.com/libraz/go-oidc-provider@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
+
+## [v0.9.4] — 2026-07-02
+
+A security-hardening release: no new protocol surface, but a broad sweep of
+correctness and abuse-resistance fixes across token exchange, mTLS binding,
+the authenticator chain, refresh-token rotation, and the storage adapters.
+Two device-grant options are added and the device-code lifetime is decoupled
+from the access-token TTL (see Changed).
+
+### Added
+
+- `op.WithDeviceCodeExpiry` and `op.WithDeviceCodePollInterval` — the
+  device-code lifetime and poll interval are now independent, configurable
+  options defaulting to the device-grant defaults, instead of being derived
+  from the access-token TTL.
+
+### Changed
+
+- **BREAKING — the device-code lifetime is decoupled from the access-token
+  TTL.** The device flow previously derived its code lifetime and poll interval
+  from the access-token TTL, so a short access-token lifetime made the device
+  flow unusable. They now default to the device-grant defaults and are set
+  independently via `WithDeviceCodeExpiry` / `WithDeviceCodePollInterval`.
+  *Migration:* deployments that relied on a custom access-token TTL to size the
+  device-code window must set the new options explicitly.
+- **BREAKING — a non-zero refresh grace period is rejected under a FAPI 2.0
+  profile at construction.** `op.New` now fails fast instead of silently
+  allowing a refresh-token replay window that the FAPI 2.0 contract forbids.
+  *Migration:* remove the refresh grace-period option from FAPI-profiled
+  providers.
+- The CIBA `binding_message` is validated (trim, length bound, control-character
+  rejection) and persisted raw instead of HTML-escaped, so the authentication
+  device shows the value the consumption device sent; the transaction-confirmation
+  interlock is no longer broken for messages containing `& < > " '`.
+- Strict-CORS responses now expose `DPoP-Nonce`, `WWW-Authenticate`, and
+  `x-fapi-interaction-id` so a browser SPA can complete the DPoP nonce-retry loop.
+- The unused `SubjectProjector` field on the authorize endpoint is removed;
+  subject projection stays wired at the token, userinfo, and introspection
+  endpoints.
+
+### Fixed
+
+- **Refresh replay-revocation race.** A rotation save can no longer outrun a
+  concurrent chain revocation: the SQL adapter re-checks the parent under a row
+  lock inside the rotation transaction, and the in-memory adapter performs the
+  parent-still-alive check inside the same critical section as the insert. A
+  replayed stolen refresh token's rotated descendant is now reliably revoked.
+- Expired refresh tokens read as not-found on the SQL adapter, matching the
+  in-memory adapter, so an expired-token replay no longer produces a false
+  `replay_detected` audit and chain-revoke cascade.
+- **mTLS token-binding collapse.** With a client-certificate forwarding header
+  configured and a trusted proxy peer, the forwarded header certificate is
+  authoritative for the `cnf` binding and a handshake/header thumbprint mismatch
+  is rejected (`ErrCertSourceConflict`, 400 `invalid_request`) rather than
+  silently binding the proxy's own certificate. `writeMTLSError` now maps
+  `ErrCertUntrusted` to 401 `invalid_client` instead of falling through to 500.
+- **`MinAAL` step-up enforcement** on the legacy authenticator chain:
+  `RiskOutcome.MinAAL` is threaded from the risk assessor through the pre-factor
+  consult into candidate selection, excluding authenticators below the required
+  assurance level.
+- The account-chooser (`select_account`) re-entry path seeds `acr` / `amr` /
+  auth time from the selected session, so a chooser-only grant no longer
+  downgrades to empty `acr` / nil `amr` in the id_token.
+- The sector-identifier resolver evicts a stale entry on a content-hash change
+  (a legitimately updated sector document recovers without an OP restart) and
+  rejects a document with trailing bytes after the JSON array; pairwise
+  sector-host derivation uses the URL hostname (port independent).
+- The Redis chooser-group index key is given a TTL so abandoned sets no longer
+  accumulate and evict live session keys under a volatile `maxmemory` policy.
+- SQL table-name overrides are validated to be pairwise-distinct and
+  non-colliding at construction, and the schema rewrite uses a single-pass
+  exact-name substitution.
+- `ConfidentialClient.TokenEndpointAuthSigningAlg` is now persisted by `seed()`;
+  `WithMTLSProxy` config is stored on the provider config instead of a
+  package-global map (no leak on hot-reload); the custom-grant clock access is
+  nil-safe; and the kid-present JWE decrypt path gains the same alg/key-shape
+  pre-check as its siblings.
+
+### Security
+
+- **Token-exchange down-scope invariant (RFC 8693).** The policy decision is
+  re-verified after it is applied: the granted scope must remain a subset of the
+  requested (subject-token-bounded) scope and the granted audience a subset of
+  the requested audience. A broadening decision is rejected with `invalid_scope`
+  / `invalid_target` plus an audit event, closing a privilege-escalation path
+  where a policy bug could mint tokens for scopes or audiences the
+  `subject_token` never carried. Subject-token audiences are normalised to the
+  RFC 8707 canonical form before comparison.
+- **2FA brute-force visibility.** TOTP, email-OTP, and recovery wrong-code
+  branches route through the shared retry path, so a failure increments the
+  counter and fires the observer, letting the captcha gate engage; the email-OTP
+  delivery-failure branch is padded to stay constant-time.
+- Audit events record a non-reversible fingerprint of the authorization code and
+  refresh token instead of the raw secret.
 
 ## [v0.9.3] — 2026-06-14
 
@@ -788,7 +887,8 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.4...HEAD
+[v0.9.4]: https://github.com/libraz/go-oidc-provider/compare/v0.9.3...v0.9.4
 [v0.9.3]: https://github.com/libraz/go-oidc-provider/compare/v0.9.2...v0.9.3
 [v0.9.2]: https://github.com/libraz/go-oidc-provider/compare/v0.9.1...v0.9.2
 [v0.9.1]: https://github.com/libraz/go-oidc-provider/compare/v0.9.0...v0.9.1
