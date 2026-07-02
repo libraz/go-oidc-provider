@@ -171,11 +171,14 @@ func TestCertificateFromRequest_WrongPEMType(t *testing.T) {
 	}
 }
 
-// TestCertificateFromRequest_PrefersHandshake confirms that when both
-// a TLS handshake cert AND a header cert are present, the handshake
-// wins. This protects against an attacker who controls only the
-// header (e.g. by sneaking it past a misconfigured proxy).
-func TestCertificateFromRequest_PrefersHandshake(t *testing.T) {
+// TestCertificateFromRequest_ConflictOnTrustedProxy confirms that when a
+// forwarding header is configured, the request arrives from a trusted
+// proxy, AND both a handshake leaf and a header cert are present but
+// DISAGREE, the function refuses with [mtls.ErrCertSourceConflict]
+// instead of silently binding to one source. On a dual-mTLS / mesh hop
+// the handshake leaf is the proxy's own client cert; binding to it would
+// collapse the sender-constraint to the proxy.
+func TestCertificateFromRequest_ConflictOnTrustedProxy(t *testing.T) {
 	t.Parallel()
 
 	handshake := generateLeaf(t)
@@ -184,12 +187,9 @@ func TestCertificateFromRequest_PrefersHandshake(t *testing.T) {
 	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{handshake}}
 	req.Header.Set("X-Client-Cert", pemEncode(t, header))
 
-	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
-	if err != nil {
-		t.Fatalf("CertificateFromRequest: %v", err)
-	}
-	if mtls.Thumbprint(got) != mtls.Thumbprint(handshake) {
-		t.Errorf("expected handshake cert to win over header cert")
+	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
+	if !errors.Is(err, mtls.ErrCertSourceConflict) {
+		t.Errorf("err=%v want ErrCertSourceConflict (proxy handshake cert MUST NOT silently win over the forwarded cert)", err)
 	}
 }
 

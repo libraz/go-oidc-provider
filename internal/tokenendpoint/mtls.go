@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 )
 
@@ -97,10 +98,12 @@ func requireMTLSMatch(w http.ResponseWriter, r *http.Request, deps Deps, boundTh
 
 // writeMTLSError translates an [mtls.Err*] sentinel onto the wire
 // form. The mapping keeps the same OAuth envelope codes the rest of
-// the token endpoint uses: invalid_request for malformed inputs and
-// invalid_grant for a refresh whose binding does not satisfy. The
-// wrapped sentinel cause is dropped to avoid leaking timing-side-
-// channel signal; logs retain it via [errors.Unwrap].
+// the token endpoint uses: invalid_request for malformed or conflicting
+// inputs, invalid_grant for a refresh whose binding does not satisfy,
+// and invalid_client (RFC 8705 §3) for a client cert that fails chain
+// validation against the configured trust anchors. The wrapped sentinel
+// cause is dropped to avoid leaking timing-side-channel signal; logs
+// retain it via [errors.Unwrap].
 func writeMTLSError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, mtls.ErrNoClientCert):
@@ -109,6 +112,11 @@ func writeMTLSError(w http.ResponseWriter, err error) {
 	case errors.Is(err, mtls.ErrCertMalformed):
 		writeError(w, http.StatusBadRequest, errInvalidRequest,
 			"client certificate malformed")
+	case errors.Is(err, mtls.ErrCertSourceConflict):
+		writeError(w, http.StatusBadRequest, errInvalidRequest,
+			"client certificate sources disagree")
+	case errors.Is(err, mtls.ErrCertUntrusted):
+		endpointsupport.WriteInvalidClient(w, false, "client certificate is not trusted")
 	case errors.Is(err, mtls.ErrThumbprintMismatch):
 		writeError(w, http.StatusBadRequest, errInvalidGrant,
 			"client certificate does not match the bound thumbprint")

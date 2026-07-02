@@ -2,6 +2,8 @@ package mtls_test
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -126,6 +128,137 @@ func TestCertificateFromRequest_HeaderWithoutTrustedProxiesRejects(t *testing.T)
 	_, err := mtls.CertificateFromRequest(req, cfg)
 	if !errors.Is(err, mtls.ErrNoClientCert) {
 		t.Errorf("err=%v want ErrNoClientCert (HeaderName without TrustedProxies MUST fail closed)", err)
+	}
+}
+
+// TestCertificateFromRequest_HeaderPrecedenceOverProxyHandshake pins the
+// dual-mTLS / mesh fix: when the forwarding header is configured and the
+// request arrives from a trusted proxy, a handshake leaf that DISAGREES
+// with the forwarded cert MUST NOT be silently bound. The internal
+// handshake carries the proxy's OWN client cert; binding to it would
+// collapse the sender-constraint to the proxy's thumbprint. The function
+// refuses with [ErrCertSourceConflict] instead of picking a source.
+func TestCertificateFromRequest_HeaderPrecedenceOverProxyHandshake(t *testing.T) {
+	t.Parallel()
+
+	proxyCert := generateLeaf(t)  // proxy's own client cert on the internal hop
+	clientCert := generateLeaf(t) // the real client cert forwarded in the header
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "10.0.0.5:54321"
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{proxyCert}}
+	req.Header.Set("X-Client-Cert", pemEncode(t, clientCert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
+	}
+	_, err := mtls.CertificateFromRequest(req, cfg)
+	if !errors.Is(err, mtls.ErrCertSourceConflict) {
+		t.Fatalf("err=%v want ErrCertSourceConflict (proxy handshake cert MUST NOT silently win)", err)
+	}
+}
+
+// TestCertificateFromRequest_HeaderCertBindsWhenHandshakeAbsent proves the
+// forwarded cert is what the binding uses on the trusted-proxy path when
+// the internal hop presents no client cert of its own.
+func TestCertificateFromRequest_HeaderCertBindsWhenHandshakeAbsent(t *testing.T) {
+	t.Parallel()
+
+	clientCert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "10.0.0.5:54321"
+	req.Header.Set("X-Client-Cert", pemEncode(t, clientCert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
+	}
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(clientCert) {
+		t.Errorf("bound cert is not the forwarded header cert")
+	}
+}
+
+// TestCertificateFromRequest_HeaderMatchingHandshakeAccepted covers the
+// benign case where the proxy re-presents the same cert on both channels:
+// the thumbprints agree, so there is no conflict and the forwarded cert is
+// returned.
+func TestCertificateFromRequest_HeaderMatchingHandshakeAccepted(t *testing.T) {
+	t.Parallel()
+
+	clientCert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "10.0.0.5:54321"
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{clientCert}}
+	req.Header.Set("X-Client-Cert", pemEncode(t, clientCert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
+	}
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(clientCert) {
+		t.Errorf("bound cert differs from the presented cert")
+	}
+}
+
+// TestCertificateFromRequest_NoHeaderConfiguredHandshakeUnchanged is the
+// regression guard for the default OFCS / op-demo config: with no
+// forwarding header configured, the handshake leaf is returned verbatim
+// even if the request happens to carry a (non-configured) cert header.
+// This is the byte-identical direct-TLS path.
+func TestCertificateFromRequest_NoHeaderConfiguredHandshakeUnchanged(t *testing.T) {
+	t.Parallel()
+
+	handshakeCert := generateLeaf(t)
+	strayCert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "10.0.0.5:54321"
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{handshakeCert}}
+	// A stray header MUST be ignored because cfg.HeaderName is unset.
+	req.Header.Set("X-Client-Cert", pemEncode(t, strayCert))
+
+	cfg := mtls.ProxyConfig{} // default: direct-TLS only
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(handshakeCert) {
+		t.Errorf("default path did not return the handshake cert")
+	}
+}
+
+// TestCertificateFromRequest_UntrustedSourceHandshakeStillWins confirms
+// that when a header is configured but the request did NOT arrive from a
+// trusted proxy, the header is ignored and the direct handshake leaf is
+// returned unchanged (a direct client cannot spoof, and a legitimate
+// direct-TLS client is still honoured).
+func TestCertificateFromRequest_UntrustedSourceHandshakeStillWins(t *testing.T) {
+	t.Parallel()
+
+	handshakeCert := generateLeaf(t)
+	strayCert := generateLeaf(t)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+	req.RemoteAddr = "203.0.113.7:55555" // outside the allow-list
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{handshakeCert}}
+	req.Header.Set("X-Client-Cert", pemEncode(t, strayCert))
+
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
+	}
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(handshakeCert) {
+		t.Errorf("untrusted-source path did not return the handshake cert")
 	}
 }
 

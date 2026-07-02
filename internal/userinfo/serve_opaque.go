@@ -21,11 +21,11 @@ func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDep
 	if !ok {
 		return
 	}
-	out, ok := assembleClaims(r.Context(), w, deps, claims)
+	out, client, ok := assembleClaims(r.Context(), w, deps, claims)
 	if !ok {
 		return
 	}
-	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out)
+	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out, client)
 }
 
 // resolveOpaqueAccessTokenAt handles the ADR 0024 opaque-format path

@@ -223,11 +223,11 @@ func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, 
 	if !enforceRevocationStatus(r.Context(), w, deps, claims) {
 		return
 	}
-	out, ok := assembleClaims(r.Context(), w, deps, claims)
+	out, client, ok := assembleClaims(r.Context(), w, deps, claims)
 	if !ok {
 		return
 	}
-	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out)
+	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out, client)
 }
 
 // dispatchUserInfoResponse picks the response shape based on the
@@ -242,15 +242,25 @@ func serveUserInfoJWT(w http.ResponseWriter, r *http.Request, deps HandlerDeps, 
 // than a body the RP cannot route. A nil [HandlerDeps.Clients] (the
 // embedder did not wire a client store, e.g. legacy tests) collapses
 // onto the JSON shape because there is no metadata to consult.
+//
+// resolved is the [*store.Client] the pairwise subject projection already
+// fetched (see [assembleClaims]); when non-nil it is reused so the client
+// store is hit at most once per request. A nil resolved falls back to a
+// lazy [resolveClient] here, which is the non-pairwise path where the
+// projection did not need the client.
 func dispatchUserInfoResponse(
 	r *http.Request,
 	w http.ResponseWriter,
 	deps HandlerDeps,
 	clientID string,
 	body map[string]any,
+	resolved *store.Client,
 ) {
 	wantsJWT := wantsJWTShape(r)
-	client, ok := resolveClient(r.Context(), deps, clientID)
+	client, ok := resolved, resolved != nil
+	if !ok {
+		client, ok = resolveClient(r.Context(), deps, clientID)
+	}
 	encryptionRegistered := ok && client != nil && client.UserInfoEncryptedResponseAlg != ""
 	if !wantsJWT && !encryptionRegistered {
 		writeJSON(w, body)
@@ -678,29 +688,34 @@ func respondGenericInvalidToken(w http.ResponseWriter) {
 // the client observes the pairwise value end-to-end. The opaque-format
 // path leaves "gid" empty and stamps the raw subject on the claims it
 // hands here, so the pivot is a no-op on that branch.
+// The returned [*store.Client] is the AT-bound client resolved by the
+// pairwise subject projection, or nil when no projector is configured (the
+// non-pairwise path resolves the client lazily in
+// [dispatchUserInfoResponse]). Threading it out lets the caller reuse a
+// single [store.ClientStore.GetClient] per request in the pairwise config.
 func assembleClaims(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps HandlerDeps,
 	claims *tokens.AccessTokenClaims,
-) (map[string]any, bool) {
+) (map[string]any, *store.Client, bool) {
 	rawSubject, ok := resolveRawSubject(ctx, w, deps, claims)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	user, err := deps.UserStore.FindBySubject(ctx, rawSubject)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			respondGenericInvalidToken(w)
-			return nil, false
+			return nil, nil, false
 		}
 		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return nil, false
+		return nil, nil, false
 	}
 	source := userClaims(user)
-	publicSubject, ok := projectResponseSubject(ctx, w, deps, rawSubject, claims.ClientID)
+	publicSubject, client, ok := projectResponseSubject(ctx, w, deps, rawSubject, claims.ClientID)
 	if !ok {
-		return nil, false
+		return nil, nil, false
 	}
 	out, err := Build(Input{
 		Subject:           publicSubject,
@@ -711,9 +726,9 @@ func assembleClaims(
 	})
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return nil, false
+		return nil, nil, false
 	}
-	return out, true
+	return out, client, true
 }
 
 // resolveRawSubject returns the OP-internal stable subject identifier
@@ -760,26 +775,33 @@ func resolveRawSubject(
 	return g.Subject, true
 }
 
+// projectResponseSubject converts the raw OP-internal subject into the
+// per-client public "sub" value. When a [HandlerDeps.SubjectProjector] is
+// configured it resolves the AT-bound client and returns it alongside the
+// projected subject so the caller can thread the same [*store.Client] into
+// the response-shape dispatch without a second [store.ClientStore.GetClient]
+// round-trip. The non-pairwise path (nil projector) returns a nil client
+// and the caller resolves lazily where it is actually needed.
 func projectResponseSubject(
 	ctx context.Context,
 	w http.ResponseWriter,
 	deps HandlerDeps,
 	rawSubject, clientID string,
-) (string, bool) {
+) (string, *store.Client, bool) {
 	if deps.SubjectProjector == nil {
-		return rawSubject, true
+		return rawSubject, nil, true
 	}
 	client, ok := resolveClient(ctx, deps, clientID)
 	if !ok {
 		respondGenericInvalidToken(w)
-		return "", false
+		return "", nil, false
 	}
 	projected, err := deps.SubjectProjector(ctx, rawSubject, client)
 	if err != nil || projected == "" {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return "", false
+		return "", nil, false
 	}
-	return projected, true
+	return projected, client, true
 }
 
 // lookupClaimsRequest resolves the OIDC Core 1.0 §5.5 "claims" payload

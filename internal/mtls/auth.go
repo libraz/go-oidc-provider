@@ -256,8 +256,9 @@ func derFromDNString(dn string) ([]byte, bool) {
 // same encoding path the cert library used when emitting
 // [x509.Certificate.RawSubject]. Attributes outside the catalogue
 // (organisationalUnit pseudo-OIDs, extension fields) fall onto the
-// string-compare path; the conservative posture matches the audit-
-// finding scope (CN/O/OU/L/ST/C/STREET/POSTALCODE/SERIALNUMBER/DC/UID).
+// string-compare path; the catalogue covers the attributes the standard
+// library canonicalises verbatim
+// (CN/O/OU/L/ST/C/STREET/POSTALCODE/SERIALNUMBER/DC/UID).
 //
 //nolint:gochecknoglobals // closed catalogue; immutable.
 var knownDNAttributes = map[string]asn1.ObjectIdentifier{

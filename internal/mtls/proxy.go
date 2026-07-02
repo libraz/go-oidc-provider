@@ -101,22 +101,37 @@ func parsePrefixOrAddr(raw string) (netip.Prefix, error) {
 }
 
 // CertificateFromRequest returns the leaf client certificate associated
-// with r. The function checks two sources, in order:
+// with r. The source it trusts depends on whether the deployment wired
+// a reverse-proxy forwarding header:
 //
-//  1. The TLS handshake — when [http.Request.TLS] is non-nil and carries
-//     at least one peer certificate, the leaf is returned verbatim.
-//  2. The configured proxy header — when [ProxyConfig.HeaderName] is
-//     non-empty, the request carries that header, AND
-//     [http.Request.RemoteAddr] resolves to an IP inside one of
-//     [ProxyConfig.TrustedProxies]. A header from an untrusted source
-//     is ignored even when present; the function returns
-//     [ErrNoClientCert] in that case so the caller cannot distinguish
-//     "no header" from "untrusted header" through the wire response.
+//   - Direct-TLS deployment ([ProxyConfig.HeaderName] empty): the TLS
+//     handshake leaf ([http.Request.TLS.PeerCertificates][0]) is the only
+//     trusted source. This is the default and is left byte-for-byte
+//     unchanged from a handshake-only implementation.
+//   - Reverse-proxy deployment ([ProxyConfig.HeaderName] set AND
+//     [http.Request.RemoteAddr] inside one of [ProxyConfig.TrustedProxies]):
+//     the FORWARDED cert in the configured header is authoritative and
+//     takes precedence over any handshake leaf. On a dual-mTLS / mesh hop
+//     the internal handshake carries the proxy's OWN client cert while the
+//     header carries the real client cert; binding to the handshake leaf
+//     would silently collapse the sender-constraint to the proxy. When
+//     both a handshake leaf and a forwarded cert are present and their
+//     thumbprints disagree, the function returns [ErrCertSourceConflict]
+//     rather than picking a source.
 //
-// The function returns [ErrNoClientCert] when neither source yields a
-// cert and [ErrCertMalformed] when a header is present, the source is
-// trusted, but the payload cannot be parsed. The caller maps the
-// sentinel onto a wire status without inspecting the wrapped cause.
+// A header from an untrusted source (RemoteAddr outside the allow-list)
+// is ignored even when present; the direct handshake leaf, if any, is
+// returned and otherwise the function yields [ErrNoClientCert] so the
+// caller cannot distinguish "no header" from "untrusted header" through
+// the wire response. A [ProxyConfig.HeaderName] configured without any
+// [ProxyConfig.TrustedProxies] disables the header path entirely (fail
+// closed): falling back to "trust every source" would defeat the §3.1
+// binding contract by letting any client forge the header.
+//
+// The function returns [ErrNoClientCert] when no source yields a cert and
+// [ErrCertMalformed] when a header is present, the source is trusted, but
+// the payload cannot be parsed. The caller maps the sentinel onto a wire
+// status without inspecting the wrapped cause.
 //
 // Multi-cert headers (a chain rather than a leaf) are tolerated by
 // reading only the first PEM block; subsequent blocks are intermediate
@@ -125,28 +140,62 @@ func CertificateFromRequest(r *http.Request, cfg ProxyConfig) (*x509.Certificate
 	if r == nil {
 		return nil, fmt.Errorf("%w: nil request", ErrNoClientCert)
 	}
-	if cert := certFromTLSHandshake(r); cert != nil {
-		return cert, nil
+	handshake := certFromTLSHandshake(r)
+	// Header-path precedence is gated strictly on (HeaderName configured
+	// AND the immediate peer is a trusted proxy). Both conditions must
+	// hold so a direct-TLS deployment (HeaderName empty) keeps the
+	// handshake-only behaviour exactly.
+	if headerPathActive(r, cfg) {
+		return certFromTrustedHeader(r, cfg, handshake)
 	}
+	if handshake != nil {
+		return handshake, nil
+	}
+	// Either no header is configured, or a header is configured but the
+	// request did not arrive from a trusted proxy (allow-list empty or
+	// RemoteAddr outside it), so the header is ignored to stop a direct
+	// client from spoofing a cert. Both collapse onto "no client cert".
+	return nil, ErrNoClientCert
+}
+
+// headerPathActive reports whether the forwarded-cert header is both
+// configured and admissible for this request: a non-empty
+// [ProxyConfig.HeaderName], a non-empty [ProxyConfig.TrustedProxies]
+// allow-list, and an [http.Request.RemoteAddr] inside that allow-list.
+// The direct-TLS default (empty HeaderName) always returns false so the
+// handshake-only path stays untouched.
+func headerPathActive(r *http.Request, cfg ProxyConfig) bool {
 	if cfg.HeaderName == "" {
-		return nil, ErrNoClientCert
+		return false
 	}
-	// Header path requires BOTH a configured header name AND a
-	// trusted-proxy allow-list. An empty allow-list means "header
-	// path disabled at this deployment"; falling back to "trust
-	// every source" would defeat the §3.1 binding contract by
-	// letting any client forge the header.
 	if len(cfg.TrustedProxies) == 0 {
-		return nil, ErrNoClientCert
+		return false
 	}
-	if !remoteIsTrusted(r.RemoteAddr, cfg.TrustedProxies) {
-		return nil, ErrNoClientCert
-	}
+	return remoteIsTrusted(r.RemoteAddr, cfg.TrustedProxies)
+}
+
+// certFromTrustedHeader resolves the client cert for a request that
+// arrived from a trusted proxy with a forwarding header configured. The
+// forwarded cert is authoritative; the handshake leaf (when present) is
+// only consulted to detect a source conflict.
+//
+// An absent header yields [ErrNoClientCert]: the client presented no cert
+// to the proxy, and any handshake leaf here belongs to the proxy itself
+// (mesh / dual mTLS) and MUST NOT be bound. A handshake leaf that
+// disagrees with the forwarded cert yields [ErrCertSourceConflict].
+func certFromTrustedHeader(r *http.Request, cfg ProxyConfig, handshake *x509.Certificate) (*x509.Certificate, error) {
 	raw := r.Header.Get(cfg.HeaderName)
 	if raw == "" {
 		return nil, ErrNoClientCert
 	}
-	return parseHeaderCert(raw)
+	headerCert, err := parseHeaderCert(raw)
+	if err != nil {
+		return nil, err
+	}
+	if handshake != nil && Thumbprint(handshake) != Thumbprint(headerCert) {
+		return nil, ErrCertSourceConflict
+	}
+	return headerCert, nil
 }
 
 // remoteIsTrusted reports whether remoteAddr lies inside any of the
