@@ -10,10 +10,12 @@ module github.com/libraz/go-oidc-provider/examples/internal/rpkit
 
 go 1.25.0
 
+toolchain go1.26.4
+
 require (
 	github.com/coreos/go-oidc/v3 v3.11.0
 	github.com/go-jose/go-jose/v4 v4.0.2
 	golang.org/x/oauth2 v0.24.0
 )
 
-require golang.org/x/crypto v0.25.0 // indirect
+require golang.org/x/crypto v0.53.0 // indirect

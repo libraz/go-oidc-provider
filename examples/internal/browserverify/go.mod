@@ -11,6 +11,8 @@ module github.com/libraz/go-oidc-provider/examples/internal/browserverify
 
 go 1.26
 
+toolchain go1.26.4
+
 require github.com/chromedp/chromedp v0.15.1
 
 require (
@@ -20,5 +22,5 @@ require (
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 )

@@ -11,3 +11,5 @@
 module github.com/libraz/go-oidc-provider/examples/internal/apiverify
 
 go 1.26
+
+toolchain go1.26.4

@@ -11,6 +11,8 @@ module github.com/libraz/go-oidc-provider/examples/internal/seedkit
 
 go 1.25.0
 
+toolchain go1.26.4
+
 require (
 	github.com/libraz/go-oidc-provider v0.0.0-00010101000000-000000000000
 	rsc.io/qr v0.2.0
@@ -34,9 +36,9 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/crypto v0.40.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/crypto v0.53.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )
 
