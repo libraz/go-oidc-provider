@@ -26,10 +26,52 @@ func (s *refreshStore) runner() runner { return pickRunner(s.parent, s.tx) }
 // the SHA-256 digest of each via [patterns.Digest] and never the raw
 // value. Find accepts either a raw ID or a digest returned as ParentID,
 // so the digest-only schema still satisfies the store round-trip contract.
+//
+// A rotation Save (non-nil ParentID) is guarded against the RFC 9700
+// §2.2.2 replay-revocation race: it returns [store.ErrAlreadyConsumed]
+// (rolling the descendant back) when a concurrent RevokeChain revoked
+// the parent chain link, so a rotation cannot outrun a replay cascade.
+// Root saves and duplicate collisions retain their prior semantics
+// ([store.ErrAlreadyExists] on a hashed-ID collision).
 func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
+	// A root-of-chain Save has no parent link to race a revocation
+	// cascade against, so it takes the plain single-statement path.
+	if t.ParentID == nil {
+		return s.insert(ctx, s.runner(), t)
+	}
+	// A rotation Save (non-nil ParentID) must not win a race against a
+	// concurrent RevokeChain: RFC 9700 §2.2.2 requires the whole chain
+	// to die once a replay is detected, so a descendant persisted after
+	// the cascade scanned would keep the attacker's chain alive until
+	// natural expiry. When the substore already runs inside a
+	// caller-owned transaction the caller scopes atomicity; otherwise
+	// wrap the insert and a parent-still-alive re-check in one short
+	// transaction (see [refreshStore.saveRotation]).
+	if s.tx != nil {
+		return s.saveRotation(ctx, s.runner(), t)
+	}
+	tx, err := s.parent.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapErr("refreshes.Save.begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.saveRotation(ctx, tx, t); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return wrapErr("refreshes.Save.commit", err)
+	}
+	return nil
+}
+
+// insert persists t verbatim through the shared refreshSave template. It
+// is the single raw write both the root-chain path and the guarded
+// rotation path funnel through, so the column order lives in exactly one
+// place.
+func (s *refreshStore) insert(ctx context.Context, run runner, t *store.RefreshToken) error {
 	idDigest := patterns.Digest(t.ID)
 	parentDigest := digestNullableID(t.ParentID)
-	_, err := s.runner().ExecContext(ctx, s.parent.queries.refreshSave,
+	_, err := run.ExecContext(ctx, s.parent.queries.refreshSave,
 		idDigest, t.ClientID, t.GrantID, parentDigest, t.Subject,
 		boolToInt64(t.SubjectPublic), encodeStrings(t.Scope), t.Resource,
 		string(t.Origin), timeToInt64(t.AuthTime), t.ACR, encodeStrings(t.AMR),
@@ -41,6 +83,35 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 			return store.ErrAlreadyExists
 		}
 		return wrapErr("refreshes.Save", err)
+	}
+	return nil
+}
+
+// saveRotation inserts a rotated descendant and then re-reads its parent
+// under a row lock (see [Dialect.forUpdate]). A concurrent RevokeChain
+// that tombstones the parent either blocks this re-check until it
+// commits (so the parent reads back revoked) or is itself forced to
+// observe the freshly inserted descendant and revoke it. If the parent
+// was revoked meanwhile the rotation is treated as a replay: the caller
+// rolls the transaction back so the descendant never becomes redeemable,
+// and [store.ErrAlreadyConsumed] is returned to mirror the sentinel the
+// exchanger already maps a replayed chain onto. A missing parent (GC'd
+// or unknown) proves no revocation, so the rotation is kept.
+func (s *refreshStore) saveRotation(ctx context.Context, run runner, t *store.RefreshToken) error {
+	if err := s.insert(ctx, run, t); err != nil {
+		return err
+	}
+	parentDigest := patterns.Digest(*t.ParentID)
+	var revoked int64
+	err := run.QueryRowContext(ctx, s.parent.queries.refreshParentRevoked, parentDigest).Scan(&revoked)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return wrapErr("refreshes.Save.recheck", err)
+	}
+	if revoked != 0 {
+		return store.ErrAlreadyConsumed
 	}
 	return nil
 }
@@ -74,8 +145,23 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 // is hashed and only the resulting digest is matched, so a stored digest leaked
 // from a database snapshot, replica, or backup cannot be redeemed by presenting
 // it verbatim. Find and Consume route here.
+//
+// A row whose ExpiresAt has already passed is treated as absent
+// ([store.ErrNotFound]), matching [store.RefreshTokenStore.Find] and
+// [store.RefreshTokenStore.Consume]'s documented contract and the
+// in-memory reference adapter: an expired refresh token MUST NOT be
+// treated as a live, replayable credential (a token that expired
+// naturally is not evidence of a replay attempt, so surfacing it as
+// "already consumed" would trigger a false chain-revocation cascade).
 func (s *refreshStore) findStored(ctx context.Context, id string) (*store.RefreshToken, string, error) {
-	return s.lookup(ctx, id, refreshCredentialKeys(id))
+	t, stored, err := s.lookup(ctx, id, refreshCredentialKeys(id))
+	if err != nil {
+		return nil, "", err
+	}
+	if isExpired(t.ExpiresAt, s.parent.clock) {
+		return nil, "", store.ErrNotFound
+	}
+	return t, stored, nil
 }
 
 // findStoredByHandle resolves a row presented as an INTERNAL CHAIN HANDLE: a

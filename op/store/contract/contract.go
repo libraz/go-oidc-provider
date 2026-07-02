@@ -76,6 +76,8 @@ func Run(t *testing.T, f Factory) {
 		{"GrantRevocationStore", grantRevocationCases},
 		{"DeviceCodeStore", deviceCodeCases},
 		{"CIBARequestStore", cibaRequestCases},
+		{"MetadataStore", metadataStoreCases},
+		{"UserStore", userStoreCases},
 		{"Transactional", transactionalCases},
 	}
 
@@ -370,6 +372,7 @@ var refreshCases = []subtest{
 	{"ParentIDRoundTrip", refreshParentIDRoundTrip},
 	{"RevokeChain", refreshRevokeChain},
 	{"RevokeChainMissing", refreshRevokeChainMissing},
+	{"Expired", refreshExpired},
 }
 
 func refreshSaveFindConsume(t *testing.T, f Factory) {
@@ -519,6 +522,28 @@ func refreshRevokeChainMissing(t *testing.T, f Factory) {
 	}
 }
 
+// refreshExpired pins the normative rule declared on
+// [store.RefreshTokenStore.Find] and [store.RefreshTokenStore.Consume]:
+// a token whose ExpiresAt has already passed MUST read as ErrNotFound,
+// never as a live or already-consumed record. A backend that surfaces
+// an expired token as replayable would let an expired-token presentation
+// trigger a false replay-revocation cascade against the token's siblings.
+func refreshExpired(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	rt := newRefresh(b.Now(), "rt-exp", nil)
+	rt.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := b.Store.RefreshTokens().Find(ctx, "rt-exp"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find expired: want ErrNotFound, got %v", err)
+	}
+	if _, err := b.Store.RefreshTokens().Consume(ctx, "rt-exp"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Consume expired: want ErrNotFound, got %v", err)
+	}
+}
+
 // assertRevoked asserts that a refresh token is either absent or has
 // ConsumedAt set. The contract permits backends to delete or to mark.
 func assertRevoked(t *testing.T, s store.Store, id string) {
@@ -660,5 +685,82 @@ func grantDelete(t *testing.T, f Factory) {
 	err := b.Store.Grants().Delete(ctx, "g-del")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("repeat Delete: want ErrNotFound, got %v", err)
+	}
+}
+
+// --- MetadataStore -------------------------------------------------------
+
+// requireMetadata skips the current test when the backend has not
+// provisioned [store.MetadataStore] ([store.Store.Metadata] MAY return
+// nil per its godoc).
+func requireMetadata(t *testing.T, s store.Store) store.MetadataStore {
+	t.Helper()
+	meta := s.Metadata()
+	if meta == nil {
+		t.Skip("backend does not provision store.MetadataStore")
+	}
+	return meta
+}
+
+//nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
+var metadataStoreCases = []subtest{
+	{"SetGetRoundTrip", metadataSetGetRoundTrip},
+	{"GetMissing", metadataGetMissing},
+}
+
+func metadataSetGetRoundTrip(t *testing.T, f Factory) {
+	b := f(t)
+	meta := requireMetadata(t, b.Store)
+	ctx := context.Background()
+	if err := meta.Set(ctx, "contract_test_key", "v1"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	got, err := meta.Get(ctx, "contract_test_key")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "v1" {
+		t.Fatalf("Get: want %q, got %q", "v1", got)
+	}
+	// Set replaces any existing value under the key.
+	if err := meta.Set(ctx, "contract_test_key", "v2"); err != nil {
+		t.Fatalf("Set overwrite: %v", err)
+	}
+	got, err = meta.Get(ctx, "contract_test_key")
+	if err != nil {
+		t.Fatalf("Get after overwrite: %v", err)
+	}
+	if got != "v2" {
+		t.Fatalf("Get after overwrite: want %q, got %q", "v2", got)
+	}
+}
+
+func metadataGetMissing(t *testing.T, f Factory) {
+	b := f(t)
+	meta := requireMetadata(t, b.Store)
+	_, err := meta.Get(context.Background(), "contract_absent_key")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Get missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// --- UserStore -------------------------------------------------------------
+
+// UserStore is read-only from the library's perspective (embedders own
+// the write path through their own admin plane), so the harness has no
+// generic seed hook to exercise a round trip. The absent-subject
+// contract is the one guarantee every backend can be asserted against
+// without a backend-specific seeding mechanism.
+
+//nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
+var userStoreCases = []subtest{
+	{"FindMissing", userStoreFindMissing},
+}
+
+func userStoreFindMissing(t *testing.T, f Factory) {
+	b := f(t)
+	_, err := b.Store.Users().FindBySubject(context.Background(), "contract-absent-subject")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("FindBySubject missing: want ErrNotFound, got %v", err)
 	}
 }

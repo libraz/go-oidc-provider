@@ -39,6 +39,7 @@ type queries struct {
 	// refresh tokens
 	refreshSave                string
 	refreshFind                string
+	refreshParentRevoked       string
 	refreshConsume             string
 	refreshRevokeChainUpdate   string
 	refreshRevokeChainChildren string
@@ -212,6 +213,13 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		refreshFind: d.rebind(
 			"SELECT id, client_id, subject, subject_public, grant_id, scope, resource, origin, auth_time, acr, amr, authorization_details, access_token_extra, parent_id, consumed_at, expires_at, created_at, dpop_jkt, mtls_cert_thumbprint, nonce, revoked" +
 				" FROM " + n.refreshes + " WHERE id IN (?, ?)"),
+		// refreshParentRevoked re-reads a rotation parent's revoked flag
+		// inside the guarded Save transaction. The FOR UPDATE suffix (on
+		// engines that support it) serialises the read against a
+		// concurrent RevokeChain UPDATE so a rotation cannot slip a live
+		// descendant past a replay cascade (RFC 9700 §2.2.2).
+		refreshParentRevoked: d.rebind(
+			"SELECT revoked FROM " + n.refreshes + " WHERE id = ?" + d.forUpdate()),
 		refreshConsume: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL"),
 		refreshRevokeChainUpdate: d.rebind(

@@ -149,6 +149,23 @@ func (d Dialect) upsertDoNothing(key string) string {
 	return " ON DUPLICATE KEY UPDATE " + key + " = " + key
 }
 
+// forUpdate returns the row-locking suffix the guarded rotation Save
+// appends to its parent re-check SELECT so a concurrent chain
+// revocation and the rotation cannot both miss each other (RFC 9700
+// §2.2.2). PostgreSQL and MySQL take a "FOR UPDATE" row lock so the
+// re-check serialises against RevokeChain's parent UPDATE: whichever
+// transaction locks the parent row first forces the other to observe
+// its outcome. SQLite has no row-level FOR UPDATE, but its transactions
+// serialise writers at the database level once the rotation's INSERT
+// has taken the write lock, so the empty suffix is already race-free
+// there.
+func (d Dialect) forUpdate() string {
+	if d.name == "sqlite" {
+		return ""
+	}
+	return " FOR UPDATE"
+}
+
 // greatestExpr returns the dialect-appropriate two-argument max-of
 // scalar expression. SQLite exposes MAX as a variadic scalar function;
 // PostgreSQL and MySQL spell the same shape GREATEST. The grant

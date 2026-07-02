@@ -198,19 +198,25 @@ type RefreshTokenStore interface {
 	// replay-revocation walks can resolve that digest without routing it
 	// back through this bearer-credential path; backends that return the
 	// raw parent identifier need not. It MUST return [ErrNotFound] when
-	// no such record exists.
+	// no such record exists OR when the record's ExpiresAt has already
+	// passed: an expired refresh token MUST read identically to an
+	// absent one, never as a live record, so callers cannot mistake
+	// natural expiry for replay evidence.
 	Find(ctx context.Context, id string) (*RefreshToken, error)
 
 	// Consume atomically marks the refresh token as consumed and returns
 	// the resulting record. The implementation MUST hash the presented
 	// id and look up the resulting digest. It MUST return [ErrNotFound]
-	// when the record is absent, [ErrAlreadyConsumed] when the record's
-	// ConsumedAt was already set on entry, and a non-nil error if the
-	// compare-and-set fails. When returning ErrAlreadyConsumed,
-	// implementations MUST also return the consumed record if it is still
-	// available so callers can recover the chain root for replay
-	// revocation. The returned record's ConsumedAt MUST be non-nil on
-	// success.
+	// when the record is absent OR expired (see [RefreshTokenStore.Find]),
+	// [ErrAlreadyConsumed] when the record's ConsumedAt was already set
+	// on entry, and a non-nil error if the compare-and-set fails. The
+	// expiry check MUST take precedence over the already-consumed check
+	// so an expired-and-consumed row still reads as ErrNotFound rather
+	// than triggering a false replay-revocation cascade. When returning
+	// ErrAlreadyConsumed, implementations MUST also return the consumed
+	// record if it is still available so callers can recover the chain
+	// root for replay revocation. The returned record's ConsumedAt MUST
+	// be non-nil on success.
 	Consume(ctx context.Context, id string) (*RefreshToken, error)
 
 	// RevokeChain revokes every refresh token in the rotation chain whose

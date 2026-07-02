@@ -364,7 +364,23 @@ func (s *refreshStore) Save(_ context.Context, token *store.RefreshToken) error 
 	if _, exists := s.m[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	s.m[key] = storeRefresh(token, key)
+	stored := storeRefresh(token, key)
+	// Close the replay-revocation TOCTOU (RFC 9700 §2.2.2): a rotation
+	// Save and a concurrent RevokeChain both take this mutex, so the
+	// parent-still-alive check below and the insert form a single
+	// critical section that no chain-revocation walk can interleave. If
+	// the parent link was already tombstoned by a racing cascade, the
+	// rotated descendant descends from a revoked chain and MUST NOT be
+	// redeemable regardless of when it was minted: stamp it consumed +
+	// revoked before it enters the map so no Find / Consume / grace path
+	// ever treats it as live. The happy-path parent (consumed by
+	// legitimate rotation, Revoked == false) is untouched.
+	if token.ParentID != nil {
+		if parent, ok := s.m[hashKey(*token.ParentID)]; ok && parent.Revoked {
+			markRevoked(stored, s.clock.Now())
+		}
+	}
+	s.m[key] = stored
 	return nil
 }
 
