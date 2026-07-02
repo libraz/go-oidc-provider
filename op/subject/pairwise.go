@@ -131,22 +131,26 @@ func resolveSector(c *store.Client) (string, error) {
 }
 
 // hostOf parses raw as an absolute URL and returns the lower-cased
-// host. The library enforces the OIDC Core §5 "https only" rule for
+// hostname with any port stripped, matching OIDC Core 1.0 §8.1's
+// "host component" sector derivation (and
+// [internal/sector.Resolver]'s resolution of the same value). The
+// library enforces the OIDC Core §5 "https only" rule for
 // sector_identifier_uri at the metadata-validation site (the
 // dynamic-registration mount) — Pairwise itself does not re-check
 // the scheme because it is consumed downstream of validation.
 func hostOf(raw string) (string, error) {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Hostname() == "" {
 		return "", ErrInvalidSectorURL
 	}
-	return strings.ToLower(u.Host), nil
+	return strings.ToLower(u.Hostname()), nil
 }
 
-// uniqueHosts collapses redirectURIs to their distinct host values,
-// preserving order so the function is deterministic for tests.
-// Malformed URIs and entries without a host are skipped silently;
-// the caller decides how to surface the empty result.
+// uniqueHosts collapses redirectURIs to their distinct hostname
+// values (port stripped, matching [hostOf]), preserving order so the
+// function is deterministic for tests. Malformed URIs and entries
+// without a host are skipped silently; the caller decides how to
+// surface the empty result.
 func uniqueHosts(uris []string) []string {
 	if len(uris) == 0 {
 		return nil
@@ -155,10 +159,10 @@ func uniqueHosts(uris []string) []string {
 	out := make([]string, 0, len(uris))
 	for _, raw := range uris {
 		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
+		if err != nil || u.Hostname() == "" {
 			continue
 		}
-		host := strings.ToLower(u.Host)
+		host := strings.ToLower(u.Hostname())
 		if _, dup := seen[host]; dup {
 			continue
 		}

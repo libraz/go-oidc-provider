@@ -2,23 +2,27 @@ package op
 
 import (
 	"net/netip"
-	"sync"
 
 	"github.com/libraz/go-oidc-provider/internal/mtls"
 )
 
 // WithMTLSProxy configures the reverse-proxy header path the OP
-// consults for client certificates. The OP looks for the cert in
-// [http.Request.TLS.PeerCertificates] first; only when no TLS
-// handshake cert is present does it fall back to the header named by
-// headerName, AND only when the request's RemoteAddr lies inside one
-// of the trustedCIDRs ranges.
+// consults for client certificates. When the request arrives from a
+// trusted source — its RemoteAddr lies inside one of the trustedCIDRs
+// ranges — the cert forwarded in the header named by headerName is
+// authoritative and takes precedence over any TLS-handshake cert. On a
+// dual-mTLS / mesh hop the internal handshake carries the proxy's OWN
+// client cert while the header carries the real client cert; if both
+// are present and their thumbprints disagree the OP refuses the request
+// rather than binding to the proxy's cert (which would degrade the
+// sender-constraint to a bearer token). Requests from any other source
+// ignore the header entirely and fall back to the TLS-handshake cert.
 //
-// The two-part requirement closes the symmetric spoofing vector
-// behind H-FAPI-1: an attacker who reaches the OP directly (bypassing
-// the reverse proxy) MUST NOT be able to forge a client certificate
-// by setting the header. The OP fails closed on any untrusted source,
-// returning the same wire response as a request without a cert.
+// The trusted-source requirement closes the symmetric spoofing vector:
+// an attacker who reaches the OP directly (bypassing the reverse proxy)
+// MUST NOT be able to forge a client certificate by setting the header.
+// The OP fails closed on any untrusted source, returning the same wire
+// response as a request without a cert.
 //
 // trustedCIDRs entries may be IPv4 / IPv6 CIDR notation
 // ("10.0.0.0/8", "fd00::/8") or bare IP literals ("192.168.1.1");
@@ -32,6 +36,11 @@ import (
 // path is honoured for every request handled by the [Provider].
 // Embedders who construct an [internal/mtls.Verifier] themselves can
 // still pass the recorded value via [MTLSProxyConfig].
+//
+// The recorded state lives on the [Provider]'s own configuration
+// (not a package-level registry), so two [Provider] instances never
+// share or leak each other's proxy configuration, and the state is
+// collected along with the Provider once it becomes unreachable.
 //
 // Stable since v0.x.
 func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
@@ -56,10 +65,10 @@ func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
 				Cause:       err,
 			}
 		}
-		mtlsProxyStore.Store(c, mtlsProxyState{
+		c.mtlsProxy = mtlsProxyState{
 			header:  headerName,
 			trusted: prefixes,
-		})
+		}
 		return nil
 	})
 }
@@ -88,12 +97,8 @@ func loadMTLSProxyConfig(cfg *config) mtls.ProxyConfig {
 	if cfg == nil {
 		return mtls.ProxyConfig{}
 	}
-	v, ok := mtlsProxyStore.Load(cfg)
-	if !ok {
-		return mtls.ProxyConfig{}
-	}
-	state, ok := v.(mtlsProxyState)
-	if !ok {
+	state := cfg.mtlsProxy
+	if state.header == "" && len(state.trusted) == 0 {
 		return mtls.ProxyConfig{}
 	}
 	return mtls.ProxyConfig{
@@ -102,21 +107,11 @@ func loadMTLSProxyConfig(cfg *config) mtls.ProxyConfig {
 	}
 }
 
-// mtlsProxyState is the recorded shape of [WithMTLSProxy]. The struct
-// is package-private; embedders read the projection through
-// [MTLSProxyConfig] so the storage shape can evolve without breaking
-// callers.
+// mtlsProxyState is the recorded shape of [WithMTLSProxy], carried on
+// [config.mtlsProxy]. The struct is package-private; embedders read
+// the projection through [MTLSProxyConfig] so the storage shape can
+// evolve without breaking callers.
 type mtlsProxyState struct {
 	header  string
 	trusted []netip.Prefix
 }
-
-// mtlsProxyStore associates a [WithMTLSProxy] state with the
-// [config] pointer the option was applied to. The sync.Map keying
-// keeps the new option self-contained in this file (no field added
-// to the existing config struct) at the cost of one map lookup at
-// boot — the cost is one-time and the storage is freed when the
-// Provider is garbage-collected.
-//
-//nolint:gochecknoglobals // small package-local registry; one entry per Provider construction.
-var mtlsProxyStore sync.Map

@@ -12,8 +12,13 @@ package op
 // the helper enforces the salt length requirement and threads the
 // salt onto the config so the dynamic-registration mount accepts
 // "subject_type": "pairwise" on inbound RFC 7591 metadata. Calling
-// WithSubjectGenerator with a [subject.Pairwise] value bypasses
-// those flags and is rejected at construction time.
+// WithSubjectGenerator with a [subject.Pairwise] value bypasses those
+// flags SILENTLY — WithSubjectGenerator only rejects a nil generator,
+// it does not inspect the concrete type it is handed. The supplied
+// generator still computes pairwise subjects, but
+// [config.pairwiseEnabled] remains false, so the dynamic-registration
+// mount continues to reject "subject_type": "pairwise" on inbound
+// metadata and no client can opt in to the strategy this option wired.
 //
 // At most one of [WithSubjectGenerator] and [WithPairwiseSubject]
 // may be supplied per construction; the second invocation fails with

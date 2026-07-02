@@ -248,6 +248,39 @@ func TestPairwise_SectorURLHostIsLowercased(t *testing.T) {
 	}
 }
 
+// TestPairwise_SectorURLPortIsIgnored pins OIDC Core 1.0 §8.1: the
+// sector is the sector_identifier_uri's host component, not its
+// authority (host:port). A sector_identifier_uri that only differs
+// from another by an explicit port MUST resolve to the same sector
+// and therefore the same pairwise subject.
+func TestPairwise_SectorURLPortIsIgnored(t *testing.T) {
+	t.Parallel()
+	g := subject.Pairwise(fixedSalt())
+	withPort, err := g.Generate(context.Background(), subject.GeneratorInput{
+		InternalUserID: "port-user",
+		Client: &store.Client{
+			ID:                  "client-port",
+			SectorIdentifierURI: "https://sector.example:8443/redirects.json",
+		},
+	})
+	if err != nil {
+		t.Fatalf("withPort Generate: %v", err)
+	}
+	withoutPort, err := g.Generate(context.Background(), subject.GeneratorInput{
+		InternalUserID: "port-user",
+		Client: &store.Client{
+			ID:                  "client-no-port",
+			SectorIdentifierURI: "https://sector.example/redirects.json",
+		},
+	})
+	if err != nil {
+		t.Fatalf("withoutPort Generate: %v", err)
+	}
+	if withPort != withoutPort {
+		t.Fatalf("sector port affected output: withPort=%q withoutPort=%q", withPort, withoutPort)
+	}
+}
+
 func TestPairwise_OutputIsBase64URLNoPad(t *testing.T) {
 	t.Parallel()
 	out, err := subject.Pairwise(fixedSalt()).Generate(context.Background(), subject.GeneratorInput{

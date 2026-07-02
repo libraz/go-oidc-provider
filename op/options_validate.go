@@ -578,6 +578,15 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 				" requires WithDPoPNonceSource when WithFeature(DPoP) is active",
 		}
 	}
+	if isFAPI2Profile(p) && c.refreshGracePeriodSet && !c.refreshGracePeriodIsZero {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" requires WithRefreshGracePeriod(0); FAPI 2.0 §J.7.2 §3.1.7 " +
+				"forbids a replay-tolerant grace window for a replayed " +
+				"refresh token under this profile",
+		}
+	}
 	return nil
 }
 

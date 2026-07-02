@@ -268,6 +268,7 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 		GrantTypes:                       grants,
 		ResponseTypes:                    responses,
 		TokenEndpointAuthMethod:          method.String(),
+		TokenEndpointAuthSigningAlg:      c.TokenEndpointAuthSigningAlg,
 		SecretHash:                       hash,
 		Source:                           store.ClientSourceStatic,
 		PostLogoutRedirectURIs:           slices.Clone(c.PostLogoutRedirectURIs),

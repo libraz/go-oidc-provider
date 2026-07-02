@@ -18,10 +18,11 @@ const (
 
 	// RefreshToken selects the refresh_token grant from RFC 6749 §6.
 	// The library issues refresh tokens only when the granted scope
-	// includes "openid" AND the client lists "refresh_token" in
-	// [op.store.Client.GrantTypes]; non-OIDC clients therefore do not
-	// silently accumulate long-lived credentials. The "offline_access"
-	// scope is accepted for OIDC compatibility but is not the gate.
+	// includes both "openid" AND "offline_access" AND the client
+	// lists "refresh_token" in [op.store.Client.GrantTypes],
+	// matching OIDC Core 1.0 §11; non-OIDC clients and requests that
+	// omit "offline_access" therefore do not silently accumulate
+	// long-lived credentials.
 	RefreshToken
 
 	// ClientCredentials selects the client_credentials grant from

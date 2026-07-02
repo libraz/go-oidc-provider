@@ -12,9 +12,9 @@ package op
 //
 // When a [Provider] is constructed with [WithDPoPNonceSource]:
 //
-//   - The /token and /userinfo handlers reject DPoP proofs that do
-//     not carry an acceptable "nonce" claim, returning the RFC 9449
-//     `use_dpop_nonce` challenge so the client can retry.
+//   - The /token, /par, and /userinfo handlers reject DPoP proofs
+//     that do not carry an acceptable "nonce" claim, returning the
+//     RFC 9449 `use_dpop_nonce` challenge so the client can retry.
 //   - Every challenge response stamps a fresh value from
 //     [IssueNonce] into the `DPoP-Nonce` response header.
 //

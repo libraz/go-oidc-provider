@@ -199,8 +199,8 @@ func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 
 // WithDPoPNonceSource opts the provider into the RFC 9449 §8 / §9
 // server-supplied nonce flow for DPoP proofs. With a non-nil source
-// wired, the /token and /userinfo handlers reject any DPoP proof
-// whose "nonce" claim is absent or not accepted by
+// wired, the /token, /par, and /userinfo handlers reject any DPoP
+// proof whose "nonce" claim is absent or not accepted by
 // [DPoPNonceSource.Validate], emitting the spec-mandated
 // `use_dpop_nonce` challenge along with a fresh value from
 // [DPoPNonceSource.IssueNonce] in the response's `DPoP-Nonce`

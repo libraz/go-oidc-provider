@@ -186,13 +186,18 @@ type VerifierConfig struct {
 	// flag is also honoured when [JTIs] is nil so JAR can be wired
 	// in test setups without a JTI store.
 	//
-	// Profile interaction: under any FAPI-family profile
-	// (FAPI2Baseline, FAPI2MessageSigning, FAPICIBA) the [op.New]
-	// wiring layer hard-codes this field to false so the §10.8
-	// reading is enforced uniformly. There is intentionally no
-	// embedder-facing option to flip it back: the FAPI MUST is
-	// add-only, and any opt-out would have to live next to the
-	// profile-activation site rather than as a verifier-level knob.
+	// Profile interaction: the [op.New] wiring layer leaves this
+	// field true for OIDC Core, FAPI2Baseline, and
+	// FAPI2MessageSigning, because RFC 9101 §6.1 marks "jti" as
+	// OPTIONAL and neither FAPI 2.0 profile promotes it to MUST; the
+	// §10.8 replay-defence floor is still preserved through [JTIs]
+	// for every jti a request object does carry. FAPICIBA is the
+	// sole profile that flips the field to false: the FAPI-CIBA
+	// Profile §5.2.2 promotes jti to MUST on the backchannel
+	// authentication request object, so a jti-less object under that
+	// profile is rejected with [ErrJTIMissing]. There is no
+	// embedder-facing option to override either default; the setting
+	// lives at the profile-activation site.
 	AllowMissingJTI bool
 
 	// MaxLifetime, when positive, caps how far "exp" may lie in the

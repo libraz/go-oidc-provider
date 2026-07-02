@@ -149,6 +149,34 @@ func TestConfidentialClient_SeedHonoursAuthMethod(t *testing.T) {
 	}
 }
 
+// TestConfidentialClient_SeedCopiesAuthSigningAlg pins that
+// TokenEndpointAuthSigningAlg round-trips through seed() onto the
+// store record. The field is only meaningful when the client
+// authenticates with private_key_jwt, but ConfidentialClient carries
+// it so callers can share seed construction code with
+// [PrivateKeyJWTClient]; a seed() that dropped the field would
+// silently widen the OP's accepted client_assertion "alg" set for
+// this client.
+func TestConfidentialClient_SeedCopiesAuthSigningAlg(t *testing.T) {
+	t.Parallel()
+
+	c := ConfidentialClient{
+		ID:                          "demo-conf-alg",
+		Secret:                      "s3cret-please-rotate",
+		RedirectURIs:                []string{"https://app.example.com/cb"},
+		Scopes:                      []string{"openid"},
+		TokenEndpointAuthSigningAlg: "ES256",
+	}
+	got, err := c.seed()
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if got.TokenEndpointAuthSigningAlg != "ES256" {
+		t.Errorf("TokenEndpointAuthSigningAlg = %q, want %q",
+			got.TokenEndpointAuthSigningAlg, "ES256")
+	}
+}
+
 // TestPrivateKeyJWTClient_SeedFields pins the private_key_jwt
 // invariants: TokenEndpointAuthMethod set to private_key_jwt, JWKS
 // embedded inline byte-for-byte, Source ClientSourceStatic, and no

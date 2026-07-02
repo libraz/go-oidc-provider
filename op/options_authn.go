@@ -106,11 +106,18 @@ const mfaEncryptionKeyLen = 32
 // 30 cumulative failures, 24-hour at 90.
 //
 // Backends MUST guarantee atomic increment on
-// [store.AuthnLockoutStore.Increment] (the SQL adapter does
-// "UPDATE ... SET failed_count = failed_count + 1"; in-memory backends
-// hold a mutex around the read-modify-write). The library serialises
-// every other access through the lockout helper so the atomicity
+// [store.AuthnLockoutStore.Increment] (in-memory backends hold a
+// mutex around the read-modify-write). The library serialises every
+// other access through the lockout helper so the atomicity
 // requirement is the only invariant backends need to honour.
+//
+// Persistence is the embedder's responsibility: the shipped SQL
+// adapter does not implement [store.AuthnLockoutStore] (there is no
+// authn-factor lockout table in its schema). Embedders that want
+// this counter to survive a restart or be shared across replicas
+// supply their own [store.AuthnLockoutStore] backed by their SQL
+// schema (or another durable backend); the in-memory reference
+// ([inmem.Store.AuthnLockouts]) is process-local only.
 //
 // The default (nil store, option unset) preserves the per-factor
 // counters that ship in [internal/authn/totp] and
