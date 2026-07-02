@@ -254,6 +254,9 @@ func (s *refreshStore) find(ctx context.Context, id string) (*store.RefreshToken
 	t.ExpiresAt = timeOf(expires)
 	t.CreatedAt = timeOf(created)
 	t.Revoked = void == 1
+	if expiredStrict(t.ExpiresAt, s.now()) {
+		return nil, store.ErrNotFound
+	}
 	return &t, nil
 }
 
