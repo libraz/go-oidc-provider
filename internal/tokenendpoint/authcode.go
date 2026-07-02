@@ -151,7 +151,7 @@ func exchangeAuthCode(
 		ActorID:  exchanged.Subject,
 		ClientID: in.ClientID,
 		Extras: map[string]any{
-			"code_id":     in.Code,
+			"code_id":     audit.Fingerprint(in.Code),
 			"grant_id":    exchanged.GrantID,
 			"scope":       append([]string(nil), exchanged.Scope...),
 			"consumed_at": exchanged.ConsumedAt,

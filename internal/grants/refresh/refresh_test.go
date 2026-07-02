@@ -1184,8 +1184,12 @@ func TestExchange_Replay_EmitsReplayDetectedAuditEvent(t *testing.T) {
 		if ev.Level != audit.LevelWarn {
 			t.Fatalf("level=%v want %v", ev.Level, audit.LevelWarn)
 		}
-		if got := ev.Extras["refresh_token_id"]; got != root {
-			t.Fatalf("extras.refresh_token_id=%v want %q", got, root)
+		wantFingerprint := audit.Fingerprint(root)
+		if got := ev.Extras["refresh_token_id"]; got != wantFingerprint {
+			t.Fatalf("extras.refresh_token_id=%v want %q", got, wantFingerprint)
+		}
+		if got, ok := ev.Extras["refresh_token_id"].(string); !ok || got == root {
+			t.Fatalf("extras.refresh_token_id=%v must not equal the raw token %q", ev.Extras["refresh_token_id"], root)
 		}
 	}
 	if !found {

@@ -11,6 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -45,12 +46,16 @@ func handleUpdate(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 	if !ok {
 		return
 	}
-	if !isJSONContent(r.Header.Get("Content-Type")) {
+	if !endpointsupport.IsJSONContent(r.Header.Get("Content-Type")) {
 		writeRegistrationError(w, http.StatusBadRequest, codeInvalidRequest,
 			"content-type must be application/json")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	// The cap matches the token and PAR endpoints so the DCR JSON body
+	// shares the same posture as the OAuth form-encoded surfaces (RFC 7591
+	// §2 metadata is small, kilobytes at most, so 64 KiB is well above any
+	// legitimate payload).
+	endpointsupport.LimitFormBody(w, r)
 	metadata, extras, err := parseClientMetadataWithExtras(r.Body)
 	if err != nil {
 		writeRegistrationError(w, http.StatusBadRequest, codeInvalidClientMetadata, "malformed JSON")

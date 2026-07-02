@@ -1,9 +1,10 @@
-// Package patterns hosts the small, behaviour-pinned helpers that the
-// in-memory, SQL, and Redis store adapters were independently
-// re-implementing before Wave 2C of the v0.9.1 refactor folded the
-// duplicates together. The package is intentionally tiny: every helper
-// has a single, well-documented behavioural contract, and adapter code
-// is expected to call the helpers verbatim rather than wrap them.
+// Package patterns hosts the small, behaviour-pinned helpers shared by
+// the in-memory, SQL, and Redis store adapters so the expiry / not-
+// found / dedup / pagination semantics live in one place instead of
+// being re-implemented per adapter. The package is intentionally tiny:
+// every helper has a single, well-documented behavioural contract, and
+// adapter code is expected to call the helpers verbatim rather than
+// wrap them.
 //
 // # Audience
 //

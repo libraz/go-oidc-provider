@@ -39,12 +39,6 @@ const (
 	opAuditSessionCreated = "session.created"
 )
 
-// maxAuthorizeFormBytes caps POST /authorize request body size. Authorize
-// requests are tiny in practice; this ceiling is well above any legitimate
-// payload (the largest field, request_object, comfortably fits in a few
-// KiB) while bounding memory use against pathological inputs (gosec G120).
-const maxAuthorizeFormBytes = 64 * 1024
-
 // serveAuthorize is the request-scoped entry point for /authorize. It runs
 // the validator from [internal/authorize], resolves the active session,
 // decides whether the request can be served silently or needs an
@@ -61,7 +55,7 @@ func serveAuthorize(w http.ResponseWriter, r *http.Request, deps resolved) {
 				"content-type must be application/x-www-form-urlencoded", "")
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxAuthorizeFormBytes)
+		endpointsupport.LimitFormBody(w, r)
 	}
 	values, err := extractAuthorizeValues(r)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -256,8 +257,12 @@ func TestAudit_CodeConsumed_OnAuthCodeExchange(t *testing.T) {
 	if extras == nil {
 		t.Fatalf("extras missing on code.consumed: %v", rec)
 	}
-	if got := extras["code_id"]; got != codeID {
-		t.Errorf("extras.code_id=%v want %s", got, codeID)
+	wantCodeFingerprint := audit.Fingerprint(codeID)
+	if got := extras["code_id"]; got != wantCodeFingerprint {
+		t.Errorf("extras.code_id=%v want %s", got, wantCodeFingerprint)
+	}
+	if got, ok := extras["code_id"].(string); !ok || got == codeID {
+		t.Errorf("extras.code_id=%v must not equal the raw code %s", extras["code_id"], codeID)
 	}
 	if got := extras["grant_id"]; got != grantID {
 		t.Errorf("extras.grant_id=%v want %s", got, grantID)

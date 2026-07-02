@@ -25,12 +25,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// maxGrantMgmtFormBytes caps the request body the endpoint parses for
-// client-authentication parameters (client_assertion). The grant
-// management endpoint is GET / DELETE and rarely carries a body; the cap
-// mirrors the sibling endpoints' defence against memory exhaustion.
-const maxGrantMgmtFormBytes = 64 * 1024
-
 // Clock is the structural wall-clock dependency.
 type Clock interface {
 	Now() time.Time
@@ -172,8 +166,8 @@ func resolveOwnedGrant(w http.ResponseWriter, r *http.Request, deps Deps) (*stor
 	// auth flow through the request headers regardless. The body is
 	// size-capped first (a GET / DELETE rarely carries one, but the cap
 	// is cheap defence against memory exhaustion).
-	r.Body = http.MaxBytesReader(w, r.Body, maxGrantMgmtFormBytes)
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, "invalid_request", "malformed request")
 		return nil, nil, false
 	}

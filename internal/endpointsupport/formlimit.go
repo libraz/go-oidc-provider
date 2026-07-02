@@ -1,24 +1,37 @@
 package endpointsupport
 
-import "net/http"
+import (
+	"net/http"
 
-// MaxFormBytes caps the size of an application/x-www-form-urlencoded
-// request body the OP's form-accepting endpoints will read. RFC 6749 /
-// 7009 / 7662 / 9126 / OIDC RP-Initiated Logout 1.0 each describe
-// modest payloads — the access token / id_token_hint / client
-// assertion are the largest fields and comfortably fit in a few KiB —
-// so 64 KiB is well above any legitimate request while bounding memory
-// use against pathological inputs (gosec G120). The constant is shared
-// across endpoints so a regression that drops the cap on one endpoint
-// is caught by a uniform constant rather than a copy-pasted literal.
-const MaxFormBytes = 64 * 1024
+	"github.com/libraz/go-oidc-provider/internal/httpx"
+)
+
+// MaxFormBytes caps the size of the request body every body-accepting
+// OP endpoint reads before parsing it — application/x-www-form-urlencoded
+// (token, PAR, introspect, revoke, device_authorization, bc-authorize,
+// authorize POST, end_session POST, grant management, userinfo POST) as
+// well as the application/json DCR bodies (register / manage) that share
+// the same posture. RFC 6749 / 7009 / 7591 / 7592 / 7662 / 9126 / OIDC
+// RP-Initiated Logout 1.0 each describe modest payloads — the access
+// token / id_token_hint / client assertion / client metadata are the
+// largest fields and comfortably fit in a few KiB — so 64 KiB is well
+// above any legitimate request while bounding memory use against
+// pathological inputs (gosec G120).
+//
+// The value is sourced from [httpx.MaxFormBytes] so the 64 KiB ceiling
+// has exactly one definition project-wide; every endpoint reads it
+// through this alias rather than declaring its own copy.
+const MaxFormBytes = httpx.MaxFormBytes
 
 // LimitFormBody installs an [http.MaxBytesReader] cap on r.Body sized
-// at [MaxFormBytes]. Endpoints call this immediately before ParseForm
-// so a multi-megabyte body is short-circuited at read time. The helper
-// is the consolidated form of the per-endpoint MaxBytesReader call so
-// the cap stays uniform across token / introspect / revoke / par /
-// register / userinfo / end_session.
+// at [MaxFormBytes]. This is the single shared body-size gate every OP
+// endpoint calls immediately before ParseForm (or, for the DCR JSON
+// endpoints, before decoding the body) so a multi-megabyte body is
+// short-circuited at read time rather than fully buffered. Despite the
+// name, the helper is content-type agnostic — it merely wraps r.Body in
+// [http.MaxBytesReader] — so the DCR endpoints reuse it for their
+// application/json bodies rather than declaring a second byte-cap
+// mechanism for the same 64 KiB ceiling.
 //
 // The function is a no-op when r or w is nil; callers that hand in a
 // constructed request always pass both, but the defensive guard makes

@@ -10,13 +10,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clone"
 )
 
-// maxBodyBytes caps the size of a /register request body. The RFC 7591
-// §2 metadata is small (kilobytes at most); a 64 KiB ceiling is far
-// above any legitimate payload while bounding memory use against
-// pathological inputs (gosec G120). The cap matches the token and PAR
-// endpoints so the three surfaces share a single posture.
-const maxBodyBytes = 64 * 1024
-
 // ClientMetadata is the internal-package mirror of op.ClientMetadata.
 // internal/* must not import op/, so the type is declared
 // here and the op layer converts between the two through a thin shim.

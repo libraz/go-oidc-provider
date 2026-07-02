@@ -202,6 +202,17 @@ func intersectAllowedHeaders(requested string) string {
 	return strings.Join(out, ", ")
 }
 
+// exposedHeaders is the fixed Access-Control-Expose-Headers value
+// stamped on every strict-CORS actual response. Without this header a
+// browser JS caller cannot read a cross-origin response header even
+// when it is present on the wire: DPoP-Nonce carries the RFC 9449 §8
+// nonce-retry challenge, WWW-Authenticate carries the error detail a
+// public-client SPA needs to branch on, and x-fapi-interaction-id lets
+// a FAPI conformant SPA correlate its own logs with the OP's. Omitting
+// this header silently breaks the browser-side nonce-retry loop even
+// though the server-side contract is otherwise correct.
+const exposedHeaders = "DPoP-Nonce, WWW-Authenticate, x-fapi-interaction-id"
+
 // stampActual writes the response headers required on a non-preflight
 // cross-origin request. Browsers consult these to decide whether the JS
 // caller may read the response body.
@@ -209,6 +220,7 @@ func (s *Strict) stampActual(w http.ResponseWriter, origin string) {
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", origin)
 	h.Set("Access-Control-Allow-Credentials", "true")
+	h.Set("Access-Control-Expose-Headers", exposedHeaders)
 }
 
 // Public is the open CORS profile applied to discovery and JWKS. Anyone may

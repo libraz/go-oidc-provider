@@ -46,14 +46,6 @@ const (
 	// the two surfaces accept the same set of clock-skewed tokens.
 	defaultLeeway = 30 * time.Second
 
-	// maxFormBytes caps the size of an /introspect request body. The
-	// endpoint accepts only the form-encoded shape RFC 7662 §2.1
-	// describes; a 64 KiB ceiling is far above any legitimate request
-	// (the token itself is the largest field, and even a JWT comfortably
-	// fits in a few KiB) while bounding memory use against pathological
-	// inputs (gosec G120).
-	maxFormBytes = 64 * 1024
-
 	// tokenTypeBearer is the value the "token_type" introspection claim
 	// carries for both opaque and JWT bearer tokens (RFC 7662 §2.2).
 	// RFC 9449 §6 does not rename the type for DPoP-bound tokens — the
@@ -290,8 +282,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}

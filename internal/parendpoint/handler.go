@@ -34,13 +34,6 @@ const (
 	// uniform across the library.
 	DefaultTTL = 60 * time.Second
 
-	// maxFormBytes caps the size of a /par request body. The endpoint
-	// accepts only the form-encoded shape RFC 9126 §2.1 describes; a
-	// 64 KiB ceiling is far above any legitimate request (the largest
-	// field, request, comfortably fits in a few KiB) while bounding
-	// memory use against pathological inputs (gosec G120).
-	maxFormBytes = 64 * 1024
-
 	// uriByteLength is the entropy of the request_uri identifier. RFC 9126
 	// §2.2 mandates "sufficient entropy that guessing is infeasible";
 	// 32 bytes (256 bits) is the same posture the library uses for

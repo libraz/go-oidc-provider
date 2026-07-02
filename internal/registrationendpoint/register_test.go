@@ -256,6 +256,34 @@ func TestRegister_HappyPath_MintsConfidentialClient(t *testing.T) {
 	}
 }
 
+// TestRegister_BodyTooLarge pins the 64 KiB body-size ceiling the
+// handler installs via endpointsupport.LimitFormBody before decoding
+// the JSON metadata document. A body comfortably above the cap must be
+// rejected as invalid_client_metadata / "malformed JSON" — the same
+// wire shape the endpoint produced when it wrapped r.Body in
+// http.MaxBytesReader directly, prior to routing through the shared
+// limiter.
+func TestRegister_BodyTooLarge(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, op.RegistrationOption{})
+	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
+
+	oversized := `{"redirect_uris":["https://rp.test.invalid/callback"],"client_name":"` +
+		strings.Repeat("a", 70*1024) + `"}`
+	resp := f.post(t, oversized, iat)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 400 body=%s", resp.StatusCode, raw)
+	}
+	got := decodeBody(t, resp)
+	if got["error"] != "invalid_client_metadata" {
+		t.Fatalf("error=%v want invalid_client_metadata", got["error"])
+	}
+}
+
 func TestRegister_RejectsNegativeDefaultMaxAge(t *testing.T) {
 	t.Parallel()
 

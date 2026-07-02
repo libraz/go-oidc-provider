@@ -364,16 +364,3 @@ func registrationClientURI(issuer, mountPrefix, registerPath, clientID string) s
 	}
 	return issuer + prefix + registerPath + "/" + clientID
 }
-
-// isJSONContent reports whether ct is application/json, tolerating
-// optional parameters (charset, etc.). Mirrors the helper in the
-// token / par endpoints so the three surfaces stay aligned.
-func isJSONContent(ct string) bool {
-	if ct == "" {
-		return false
-	}
-	if i := strings.IndexByte(ct, ';'); i >= 0 {
-		ct = ct[:i]
-	}
-	return strings.EqualFold(strings.TrimSpace(ct), "application/json")
-}

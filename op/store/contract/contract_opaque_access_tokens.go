@@ -37,9 +37,9 @@ var opaqueAccessTokenCases = []subtest{
 }
 
 // requireOpaqueAccessTokens fetches the substore handle and skips the
-// current test when the backend opts out by returning nil. Backends that
-// do not enable opaque-format issuance (Wave 2-A) are allowed to return
-// nil from [store.Store.OpaqueAccessTokens]; the contract still exercises
+// current test when the backend opts out by returning nil. Backends
+// that do not enable opaque-format issuance are allowed to return nil
+// from [store.Store.OpaqueAccessTokens]; the contract still exercises
 // every backend that does ship the substore.
 func requireOpaqueAccessTokens(t *testing.T, s store.Store) store.OpaqueAccessTokenStore {
 	t.Helper()

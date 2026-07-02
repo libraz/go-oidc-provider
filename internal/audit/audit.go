@@ -2,6 +2,8 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 
 	"github.com/libraz/go-oidc-provider/internal/redact"
@@ -213,4 +215,19 @@ func appendIfSet(attrs []slog.Attr, key, value string) []slog.Attr {
 		return attrs
 	}
 	return append(attrs, slog.String(key, value))
+}
+
+// Fingerprint derives a short, non-reversible identifier from a
+// one-time secret (an authorization code or refresh token) for use in
+// [Event.Extras]. Handlers that need to correlate an audit record with
+// the consumed secret MUST call this instead of placing the raw value
+// in Extras: the key-name matching in [extraAttr] only protects
+// records that flow through this package's own [Slog] emitter, and a
+// custom [Emitter] the embedder wires in via op.WithAuditLogger has no
+// such guarantee. The digest is truncated to 8 bytes (64 bits), ample
+// for audit-trail correlation without keeping a meaningfully
+// reversible surface.
+func Fingerprint(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:8])
 }

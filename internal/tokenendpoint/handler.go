@@ -66,14 +66,6 @@ const (
 	// bytes (128 bits) is well above the birthday bound for any single
 	// deployment and matches the RFC 9068 §4 guidance.
 	jtiByteLength = 16
-
-	// maxFormBytes caps the size of a token-endpoint request body. The
-	// endpoint accepts only the form-encoded shape RFC 6749 §3.2
-	// describes; a 64 KiB ceiling is far above any legitimate request
-	// (the largest field, a private_key_jwt assertion, comfortably fits
-	// in a few KiB) while bounding memory use against pathological
-	// inputs (gosec G120).
-	maxFormBytes = 64 * 1024
 )
 
 // tokenSingleValuedParams is the closed list of /token form parameters
@@ -441,8 +433,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}

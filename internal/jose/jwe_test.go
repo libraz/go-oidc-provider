@@ -252,6 +252,28 @@ func TestDecrypt_KidAbsentNoMatchingAlg(t *testing.T) {
 	}
 }
 
+// TestDecrypt_KidPresentAlgKeyShapeMismatch mirrors
+// [TestDecrypt_KidAbsentNoMatchingAlg] for the kid-present branch: a
+// resolver that returns a key whose Go type does not match the
+// protected-header `alg` (an EC key for an RSA-OAEP-256 ciphertext)
+// must be refused uniformly with [jose.ErrJWEDecryptFailed]. This
+// pins the alg/key-shape pre-check the kid-present path applies
+// before ever calling into go-jose's Decrypt, so the failure never
+// depends on go-jose's own internal validation order.
+func TestDecrypt_KidPresentAlgKeyShapeMismatch(t *testing.T) {
+	t.Parallel()
+
+	rsaKey := mustRSAKey(t)
+	jwe := mustEncryptForTest(t, &rsaKey.PublicKey, "k1")
+
+	ecKey := mustECKey(t, elliptic.P256())
+	resolver := singleKeyResolver{kid: "k1", key: ecKey}
+	_, err := jose.Decrypt(jwe, resolver)
+	if !errors.Is(err, jose.ErrJWEDecryptFailed) {
+		t.Fatalf("Decrypt kid-present alg/key mismatch: want ErrJWEDecryptFailed, got %v", err)
+	}
+}
+
 // TestDecrypt_KidAbsentTrialCapEnforced asserts that more than
 // [MaxKidlessTrialKeys] alg-compatible candidates are refused without
 // running any trial decrypt. Deployments with realistic enc-keyset sizes

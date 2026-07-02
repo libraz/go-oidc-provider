@@ -155,6 +155,48 @@ func TestStrict_ActualRequest_Allowed_StampsCORS(t *testing.T) {
 	}
 }
 
+// TestStrict_ActualRequest_Allowed_ExposesNonceAndFapiHeaders pins the
+// fix for the browser-side RFC 9449 §8 DPoP nonce-retry loop: a
+// browser SPA cannot read a cross-origin response header without an
+// explicit Access-Control-Expose-Headers grant, even when the header
+// is present on the wire. WWW-Authenticate and x-fapi-interaction-id
+// share the same defect for the same reason (error detail /
+// correlation id readability).
+func TestStrict_ActualRequest_Allowed_ExposesNonceAndFapiHeaders(t *testing.T) {
+	t.Parallel()
+
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
+	r := newReq(t, http.MethodPost, "/oidc/token")
+	r.Header.Set("Origin", "https://app.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	got := rec.Header().Get("Access-Control-Expose-Headers")
+	for _, want := range []string{"DPoP-Nonce", "WWW-Authenticate", "x-fapi-interaction-id"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Access-Control-Expose-Headers=%q must contain %q", got, want)
+		}
+	}
+}
+
+// TestStrict_ActualRequest_Rejected_NoExposeHeaders confirms a
+// disallowed origin gets no Access-Control-Expose-Headers, matching
+// the "no CORS headers at all" posture applied to every other strict
+// CORS header on a rejected origin.
+func TestStrict_ActualRequest_Rejected_NoExposeHeaders(t *testing.T) {
+	t.Parallel()
+
+	h := cors.NewStrict(newAllow(t, "https://app.example.com"), nil).Handler(nextOK())
+	r := newReq(t, http.MethodPost, "/oidc/token")
+	r.Header.Set("Origin", "https://attacker.example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "" {
+		t.Errorf("Access-Control-Expose-Headers=%q must be absent for a rejected origin", got)
+	}
+}
+
 func TestStrict_ActualRequest_Rejected_NoCORS_StillServes(t *testing.T) {
 	t.Parallel()
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/httpx"
 )
 
 // TestMaxFormBytes_ConstantPin guards the documented 64 KiB cap; a
@@ -18,6 +19,20 @@ func TestMaxFormBytes_ConstantPin(t *testing.T) {
 	t.Parallel()
 	if endpointsupport.MaxFormBytes != 64*1024 {
 		t.Fatalf("MaxFormBytes=%d, want 65536 (64 KiB)", endpointsupport.MaxFormBytes)
+	}
+}
+
+// TestMaxFormBytes_SharesHTTPXConstant confirms endpointsupport.MaxFormBytes
+// aliases httpx.MaxFormBytes rather than declaring an independent copy of
+// the 64 KiB value. Every OP endpoint that installs a body-size cap
+// ultimately reads this one constant, so a regression that lets the two
+// definitions drift apart is caught here rather than surfacing as a
+// per-endpoint behavioral inconsistency.
+func TestMaxFormBytes_SharesHTTPXConstant(t *testing.T) {
+	t.Parallel()
+	if endpointsupport.MaxFormBytes != httpx.MaxFormBytes {
+		t.Fatalf("endpointsupport.MaxFormBytes=%d, httpx.MaxFormBytes=%d: want equal (single shared const)",
+			endpointsupport.MaxFormBytes, httpx.MaxFormBytes)
 	}
 }
 

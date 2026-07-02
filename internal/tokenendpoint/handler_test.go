@@ -284,6 +284,32 @@ func TestHandler_WrongContentType(t *testing.T) {
 	assertCacheControl(t, resp)
 }
 
+// TestHandler_BodyTooLarge pins the 64 KiB body-size ceiling the
+// endpoint installs via endpointsupport.LimitFormBody before ParseForm
+// runs. A body comfortably above the cap must be rejected as
+// invalid_request before grant dispatch — the same wire shape the
+// endpoint produced when it wrapped r.Body in http.MaxBytesReader
+// directly, prior to routing through the shared limiter.
+func TestHandler_BodyTooLarge(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("code", strings.Repeat("a", 70*1024))
+	resp := f.post(t, form, "", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "invalid_request" {
+		t.Errorf("error=%v want invalid_request", body["error"])
+	}
+	assertCacheControl(t, resp)
+}
+
 // TestHandler_UnknownGrantType yields unsupported_grant_type per
 // RFC 6749 §5.2. The chosen grant_type is a deliberately bogus value
 // that no RFC defines, so the test stays green even as future

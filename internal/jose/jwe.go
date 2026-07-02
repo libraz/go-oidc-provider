@@ -276,6 +276,16 @@ func decryptWithResolver(obj *josev4.JSONWebEncryption, resolver EncryptionKeyRe
 		if !found {
 			return nil, fmt.Errorf("%w: %q", ErrJWEKidUnknown, kid)
 		}
+		// Pre-validate the resolved key's Go type against the protected-
+		// header `alg` before attempting Decrypt, mirroring the check
+		// [filterKeysForAlg] applies on the kid-absent trial path. go-jose
+		// v4 already rejects an alg/key-shape mismatch inside Decrypt, so
+		// this is defence-in-depth rather than an active gap; it keeps the
+		// kid-present and kid-absent branches validating consistently
+		// rather than relying solely on the underlying library's behaviour.
+		if !keyMatchesAlg(priv, alg) {
+			return nil, fmt.Errorf("%w: kid match", ErrJWEDecryptFailed)
+		}
 		pt, derr := obj.Decrypt(priv)
 		if derr != nil {
 			return nil, fmt.Errorf("%w: kid match", ErrJWEDecryptFailed)

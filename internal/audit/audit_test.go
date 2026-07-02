@@ -196,6 +196,34 @@ func TestSlog_MasksFreeformStringExtras(t *testing.T) {
 	}
 }
 
+// TestFingerprint_DeterministicAndNonReversible pins the contract
+// callers rely on when placing a one-time secret's derived identifier
+// into [audit.Event.Extras]: the same input always yields the same
+// output (so records can be correlated), distinct inputs yield
+// distinct output (no accidental collisions in realistic usage), and
+// the digest itself never equals the raw secret it was derived from.
+func TestFingerprint_DeterministicAndNonReversible(t *testing.T) {
+	t.Parallel()
+
+	const secretA = "authorization-code-value-abc123"
+	const secretB = "authorization-code-value-xyz789"
+
+	gotA1 := audit.Fingerprint(secretA)
+	gotA2 := audit.Fingerprint(secretA)
+	if gotA1 != gotA2 {
+		t.Fatalf("Fingerprint not deterministic: %q vs %q", gotA1, gotA2)
+	}
+	if gotA1 == secretA {
+		t.Fatalf("Fingerprint must not equal the raw secret: %q", gotA1)
+	}
+	if gotB := audit.Fingerprint(secretB); gotB == gotA1 {
+		t.Fatalf("Fingerprint collided for distinct inputs: %q", gotB)
+	}
+	if len(gotA1) != 16 {
+		t.Fatalf("Fingerprint length = %d, want 16 (8 hex-encoded bytes)", len(gotA1))
+	}
+}
+
 func TestSlog_LevelMapping(t *testing.T) {
 	t.Parallel()
 

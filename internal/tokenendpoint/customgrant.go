@@ -323,7 +323,7 @@ func resolveCustomGrantIDToken(deps Deps, client *store.Client, resp customgrant
 	if resp.Subject == "" {
 		return "", errors.New("custom_grant: openid-scoped response has empty Subject")
 	}
-	now := deps.clockFunc()()
+	now := deps.now().UTC()
 	claims := tokens.IDTokenClaims{
 		Issuer:    deps.Issuer,
 		Subject:   resp.Subject,

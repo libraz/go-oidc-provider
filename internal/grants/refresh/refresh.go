@@ -585,13 +585,18 @@ func (e *Exchanger) tryGrace(ctx context.Context, in ExchangeInput) (*Exchanged,
 	return exchanged, true, nil
 }
 
+// emitReplayDetected fires [auditRefreshReplayDetected]. The Extras
+// carry a [audit.Fingerprint] of the presented token rather than the
+// raw value: the token is the bearer secret itself, and a custom
+// [audit.Emitter] the embedder wires in has no guarantee of routing
+// through the key-name redaction the built-in Slog emitter applies.
 func (e *Exchanger) emitReplayDetected(ctx context.Context, presentedID string) {
 	e.audit.Emit(ctx, audit.Event{
 		Name:    auditRefreshReplayDetected,
 		Level:   audit.LevelWarn,
 		Message: "refresh-token replay detected",
 		Extras: map[string]any{
-			"refresh_token_id": presentedID,
+			"refresh_token_id": audit.Fingerprint(presentedID),
 		},
 	})
 }

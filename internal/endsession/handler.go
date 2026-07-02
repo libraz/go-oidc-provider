@@ -36,13 +36,6 @@ var endSessionSingleValuedParams = []string{
 	confirmTokenField,
 }
 
-// maxFormBytes caps the size of a POST /end_session request body. The
-// endpoint accepts only the form-encoded shape; even a generously
-// sized id_token_hint comfortably fits in a few KiB. 64 KiB is well
-// above any legitimate payload while bounding memory use against
-// pathological inputs (gosec G120).
-const maxFormBytes = 64 * 1024
-
 // maxQueryBytes caps the byte-length of [http.Request.URL.RawQuery] on
 // the GET branch of /end_session. RFC 9700 §2.4 recommends keeping
 // query strings short to reduce log-leak amplification; 8 KiB is well
@@ -163,9 +156,6 @@ type Deps struct {
 	// row per grant rather than one row per AT under that grant. A
 	// nil value disables the substore and the handler falls back to
 	// whichever legacy behaviour [RevocationStrategy] selects.
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	GrantRevocations store.GrantRevocationStore
 
 	// RevocationStrategy selects the JWT access-token revocation
@@ -173,9 +163,6 @@ type Deps struct {
 	// [store.RevocationStrategyGrantTombstone], which is the
 	// documented default; the library wires this from
 	// [op.WithAccessTokenRevocationStrategy].
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
 	// Audit is the structured audit-event sink. A nil Emitter falls
@@ -265,8 +252,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 //     browser history.
 //
 // Other parameters (id_token_hint, post_logout_redirect_uri,
-// client_id) inherit the [maxQueryBytes] / [maxFormBytes] gate
-// readValues installed; the per-field cap here applies to the one
+// client_id) inherit the [maxQueryBytes] / [endpointsupport.MaxFormBytes]
+// gate readValues installed; the per-field cap here applies to the one
 // value that flows back to the user agent.
 func validateRequestBounds(w http.ResponseWriter, req request) bool {
 	if len(req.state) > maxStateBytes {
@@ -333,8 +320,8 @@ func readValues(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
 			writeLogoutError(w, http.StatusBadRequest, descContentTypeRequired)
 			return nil, false
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-		if err := r.ParseForm(); err != nil {
+		endpointsupport.LimitFormBody(w, r)
+		if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 			writeLogoutError(w, http.StatusBadRequest, descMalformedForm)
 			return nil, false
 		}

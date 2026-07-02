@@ -14,8 +14,7 @@
 //     bounded [Policy]. The legacy verifiers capped the derived-key
 //     length but accepted arbitrary memory / iteration / parallelism
 //     / salt sizes, which let a corrupted store or a hostile import
-//     turn one verify into an unbounded CPU / memory burst (audit
-//     finding S-02 / S-10).
+//     turn one verify into an unbounded CPU / memory burst.
 //
 // The package returns three sentinel errors, deliberately disjoint so
 // callers can collapse the structural / policy axes onto their own

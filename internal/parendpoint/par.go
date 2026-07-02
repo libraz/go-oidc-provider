@@ -15,6 +15,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jar"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -44,8 +45,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}

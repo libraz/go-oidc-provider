@@ -38,14 +38,6 @@ const (
 	// clock-skewed tokens.
 	defaultLeeway = 30 * time.Second
 
-	// maxFormBytes caps the size of a /revoke request body. The
-	// endpoint accepts only the form-encoded shape RFC 7009 §2.1
-	// describes; a 64 KiB ceiling is far above any legitimate
-	// request (the token itself is the largest field, and even a
-	// JWT comfortably fits in a few KiB) while bounding memory use
-	// against pathological inputs (gosec G120).
-	maxFormBytes = 64 * 1024
-
 	// hintAccessToken / hintRefreshToken are the two values RFC 7009
 	// §2.1 defines for "token_type_hint". The handler honours them
 	// to skip a lookup but always falls through on miss.
@@ -154,9 +146,6 @@ type Deps struct {
 	// flow through this endpoint write a per-grant tombstone instead.
 	// A nil value disables the substore and the handler falls back to
 	// whichever legacy behaviour [RevocationStrategy] selects.
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	GrantRevocations store.GrantRevocationStore
 
 	// RevocationStrategy selects the JWT access-token revocation
@@ -164,9 +153,6 @@ type Deps struct {
 	// [store.RevocationStrategyGrantTombstone], which is the
 	// documented default; the library wires this from
 	// [op.WithAccessTokenRevocationStrategy].
-	//
-	// Wave 2 plumbs this field; the handler logic that consumes it
-	// lands in subsequent waves.
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
 	// Audit is the structured audit-event sink. A nil Emitter falls
@@ -245,8 +231,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps, verifier *tokens.A
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}
