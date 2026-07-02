@@ -4,6 +4,7 @@
   "description": "go-oidc-provider — fapi-ciba-id1 (FAPI-CIBA poll mode, JAR + DPoP)",
   "consent": false,
   "server": {
+    "allow_unexpected_metadata_fields": ["registration_endpoint_auth_methods_supported"],
     "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
   },
   "resource": {

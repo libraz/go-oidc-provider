@@ -4,6 +4,7 @@
   "description": "go-oidc-provider — oidcc-back-channel-rp-initiated-logout-test (RP-Initiated Logout + back-channel logout_token)",
   "consent": false,
   "server": {
+    "allow_unexpected_metadata_fields": ["registration_endpoint_auth_methods_supported"],
     "discoveryUrl": "https://host.docker.internal:9443/.well-known/openid-configuration"
   },
   "client": {
