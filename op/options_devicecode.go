@@ -4,7 +4,9 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
 
@@ -83,6 +85,80 @@ func WithDeviceVerificationURI(uri string) Option {
 		c.deviceVerificationURI = trimmed
 		return nil
 	})
+}
+
+// WithDeviceCodeExpiry overrides the lifetime advertised to the
+// device as `expires_in` on the RFC 8628 §3.2 device-authorization
+// response, and stamped on the persisted device_code record.
+//
+// This knob is intentionally independent of [WithAccessTokenTTL]:
+// RFC 8628 leaves the device_code lifetime unspecified, and a
+// deployment running a short access-token TTL (seconds to a couple
+// of minutes) would otherwise make the device flow impractical — a
+// user needs time to reach a secondary device, read the user_code,
+// and complete the verification ceremony. The library default is
+// [devicecode.DefaultExpiresIn] (10 minutes) when this option is
+// not called.
+//
+// A non-positive duration is rejected at the option site.
+//
+// Stable since v0.x.
+func WithDeviceCodeExpiry(ttl time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if ttl <= 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDeviceCodeExpiry requires a positive duration",
+			}
+		}
+		c.deviceCodeExpiry = ttl
+		return nil
+	})
+}
+
+// WithDeviceCodePollInterval overrides the value advertised to the
+// device as `interval` on the RFC 8628 §3.2 device-authorization
+// response — the minimum number of seconds the device MUST wait
+// between polls of the token endpoint. The library default is
+// [devicecode.DefaultInterval] (5 seconds) when this option is not
+// called.
+//
+// A non-positive duration is rejected at the option site.
+//
+// Stable since v0.x.
+func WithDeviceCodePollInterval(interval time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if interval <= 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithDeviceCodePollInterval requires a positive duration",
+			}
+		}
+		c.deviceCodePollInterval = interval
+		return nil
+	})
+}
+
+// effectiveDeviceCodeExpiry returns the device_code lifetime the
+// /device_authorization handler advertises, resolved against the
+// library default when the embedder has not called
+// [WithDeviceCodeExpiry].
+func (c *config) effectiveDeviceCodeExpiry() time.Duration {
+	if c.deviceCodeExpiry <= 0 {
+		return devicecode.DefaultExpiresIn
+	}
+	return c.deviceCodeExpiry
+}
+
+// effectiveDeviceCodePollInterval returns the poll interval the
+// /device_authorization handler advertises, resolved against the
+// library default when the embedder has not called
+// [WithDeviceCodePollInterval].
+func (c *config) effectiveDeviceCodePollInterval() time.Duration {
+	if c.deviceCodePollInterval <= 0 {
+		return devicecode.DefaultInterval
+	}
+	return c.deviceCodePollInterval
 }
 
 // validateDeviceCodeGrant enforces the substore-presence invariant

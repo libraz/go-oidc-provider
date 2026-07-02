@@ -495,7 +495,6 @@ func mountAuthorizeHandlers(
 		ClaimsParameterEnabled:        cfg.claimsParameterSupported(),
 		ACRResolver:                   newACRResolver(cfg),
 		LocaleResolver:                locales,
-		SubjectProjector:              buildSubjectProjector(cfg),
 		ProxyTrust:                    proxyTrust,
 		ClientEncJWKs:                 encResolver,
 		FirstPartyClients:             firstPartyClientSet(cfg),
@@ -588,7 +587,8 @@ func mountDeviceAuthorizationEndpoint(
 			DPoPNonces:               cfg.dpopNonces,
 			MTLS:                     mtlsVerifier,
 			RequireSenderConstraint:  cfg.requireSenderConstrainedTokens(),
-			AccessTokenTTL:           cfg.accessTokenTTL,
+			DeviceCodeTTL:            cfg.effectiveDeviceCodeExpiry(),
+			PollInterval:             cfg.effectiveDeviceCodePollInterval(),
 			Audit:                    cfg.effectiveAuditEmitter(),
 		})),
 	)

@@ -82,4 +82,18 @@ const (
 	// access token whose grant_id matches the device_code so the
 	// per-grant cascade fires inside the library.
 	AuditRevoked = "device_code.revoked"
+
+	// AuditPollObservationFailed is emitted when the token-endpoint
+	// device_code grant observed a non-nil error from
+	// [store.DeviceCodeStore.RecordPoll]. The wire response is
+	// unchanged — the poll decision still proceeds because the
+	// stamp is best-effort observability rather than a single-use
+	// gate — but the slow_down ladder reads a stale LastPolledAt on
+	// the next poll, which may skip violations. The event is
+	// warn-level so a transient substore outage that quietly
+	// defeats the ladder is still visible. Extras carry: client_id,
+	// error (the stringified store error). Mirrors
+	// [github.com/libraz/go-oidc-provider/internal/ciba.AuditPollObservationFailed]
+	// for the CIBA surface.
+	AuditPollObservationFailed = "device_code.poll_observation.failed"
 )

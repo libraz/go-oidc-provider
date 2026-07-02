@@ -18,6 +18,7 @@ import "errors"
 //   - ErrMissingScope             → invalid_request.
 //   - ErrScopeMissingOpenID       → invalid_scope.
 //   - ErrBindingMessageTooLong    → invalid_binding_message.
+//   - ErrBindingMessageInvalidChar → invalid_binding_message.
 //   - ErrInvalidRequestedExpiry   → invalid_request.
 //   - ErrUnboundUnderFAPI         → invalid_request.
 //   - ErrInvalidResource          → invalid_target.
@@ -58,6 +59,15 @@ var (
 	// allows the OP to enforce a length limit; this is the limit.
 	// Maps to invalid_binding_message.
 	ErrBindingMessageTooLong = errors.New("ciba: binding_message exceeds 50 characters")
+
+	// ErrBindingMessageInvalidChar signals that the supplied
+	// binding_message contains a Unicode control character. CIBA
+	// Core §7.1's anti-phishing interlock depends on the
+	// authentication and consumption devices displaying an
+	// identical string; control characters could be used to spoof
+	// or truncate the rendered message. Maps to
+	// invalid_binding_message.
+	ErrBindingMessageInvalidChar = errors.New("ciba: binding_message contains a control character")
 
 	// ErrInvalidRequestedExpiry signals that the requested_expiry
 	// parameter was supplied but failed to parse as a positive

@@ -21,7 +21,12 @@ func TestValidateBindingMessage(t *testing.T) {
 		{name: "empty is valid", in: "", want: "", wantErr: nil},
 		{name: "whitespace-only collapses to empty", in: "   ", want: "", wantErr: nil},
 		{name: "ascii passthrough", in: "Approve transfer", want: "Approve transfer", wantErr: nil},
-		{name: "html escaped", in: `pay <b>$5</b>`, want: "pay &lt;b&gt;$5&lt;/b&gt;", wantErr: nil},
+		{
+			name:    "html metacharacters pass through raw (not escaped)",
+			in:      `pay <b>$5</b> & "quoted" 'val'`,
+			want:    `pay <b>$5</b> & "quoted" 'val'`,
+			wantErr: nil,
+		},
 		{name: "exactly 50 runes", in: strings.Repeat("a", 50), want: strings.Repeat("a", 50), wantErr: nil},
 		{name: "51 ascii rejected", in: strings.Repeat("a", 51), want: "", wantErr: ciba.ErrBindingMessageTooLong},
 		{
@@ -35,6 +40,24 @@ func TestValidateBindingMessage(t *testing.T) {
 			in:      strings.Repeat("あ", 51),
 			want:    "",
 			wantErr: ciba.ErrBindingMessageTooLong,
+		},
+		{
+			name:    "embedded newline rejected as control character",
+			in:      "line1\nline2",
+			want:    "",
+			wantErr: ciba.ErrBindingMessageInvalidChar,
+		},
+		{
+			name:    "embedded NUL rejected as control character",
+			in:      "amount\x00forged",
+			want:    "",
+			wantErr: ciba.ErrBindingMessageInvalidChar,
+		},
+		{
+			name:    "embedded tab rejected as control character",
+			in:      "pay\tnow",
+			want:    "",
+			wantErr: ciba.ErrBindingMessageInvalidChar,
 		},
 	}
 

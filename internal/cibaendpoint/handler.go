@@ -50,13 +50,6 @@ const (
 	// authorization codes, refresh tokens, and device codes — well
 	// above any "guessing infeasible" bar.
 	authReqIDByteLength = 32
-
-	// maxFormBytes caps the size of a /bc-authorize request body.
-	// The endpoint accepts only the form-encoded shape CIBA Core
-	// §7.1 describes; a 64 KiB ceiling is far above any legitimate
-	// request while bounding memory use against pathological
-	// inputs (gosec G120).
-	maxFormBytes = 64 * 1024
 )
 
 // Clock is the package-local view of the wall clock. It mirrors
@@ -398,8 +391,8 @@ func parseAndValidateForm(w http.ResponseWriter, r *http.Request) bool {
 			"content-type must be application/x-www-form-urlencoded")
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return false
 	}

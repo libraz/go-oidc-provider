@@ -142,9 +142,12 @@ type CIBARequest struct {
 
 	// BindingMessage is the human-readable string the client supplied
 	// for display on the authentication device (CIBA Core §7.1). The
-	// library length-caps the value at 50 characters and HTML-escapes
-	// it before invoking the notification driver; backends store the
-	// canonicalised form.
+	// library length-caps the value at 50 characters and rejects
+	// Unicode control characters, but otherwise stores the value
+	// verbatim (no HTML-escaping or other transformation) so the
+	// authentication and consumption devices render an identical
+	// string, as CIBA's anti-phishing interlock requires. Any
+	// rendering-context escaping is the embedder's responsibility.
 	BindingMessage string
 
 	// UserCode is the optional out-of-band confirmation value the

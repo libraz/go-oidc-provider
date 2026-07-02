@@ -537,6 +537,24 @@ type config struct {
 	// option site (absolute URL with a non-empty host).
 	deviceVerificationURI string
 
+	// deviceCodeExpiry is the lifetime advertised to the device as
+	// `expires_in` and stamped on the persisted device_code record.
+	// Zero before [config.applyDefaults] runs; the defaults pass
+	// populates it with [devicecode.DefaultExpiresIn]. This knob is
+	// intentionally independent of [config.accessTokenTTL]: RFC 8628
+	// leaves the device_code lifetime unspecified, and a deployment
+	// that runs a short access-token TTL must still give a
+	// distracted user enough time to reach a secondary device.
+	// See [WithDeviceCodeExpiry].
+	deviceCodeExpiry time.Duration
+
+	// deviceCodePollInterval is the value advertised to the device
+	// as `interval` (RFC 8628 §3.2). Zero before
+	// [config.applyDefaults] runs; the defaults pass populates it
+	// with [devicecode.DefaultInterval]. See
+	// [WithDeviceCodePollInterval].
+	deviceCodePollInterval time.Duration
+
 	// cibaGrantEnabled records the explicit [WithCIBA] opt-in. When
 	// true the construction-time validator requires the configured
 	// [store.Store] to expose a non-nil [store.CIBARequestStore]
@@ -602,6 +620,14 @@ type config struct {
 	// content-encryption advertisement.
 	encryptionEncsAllowed    []string
 	encryptionEncsAllowedSet bool
+
+	// mtlsProxy stores the [WithMTLSProxy] state. The zero value
+	// (empty header, nil trusted list) means the header path is
+	// disabled and the verifier consults TLS-handshake certs only.
+	// The field lives on config (not a package-level registry) so its
+	// lifetime is tied to the owning [Provider]: once the Provider is
+	// unreachable, this field is collected with it.
+	mtlsProxy mtlsProxyState
 }
 
 // claimsParameterSupported returns the effective discovery

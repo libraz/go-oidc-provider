@@ -257,6 +257,18 @@ const (
 	// out-of-band — can subscribe to this event and call
 	// [store.AccessTokenRegistry.RevokeByGrant] themselves.
 	AuditDeviceCodeRevoked = AuditEvent("device_code.revoked")
+
+	// AuditDeviceCodePollObservationFailed fires when the
+	// token-endpoint device_code grant observed a substore fault
+	// while persisting the LastPolledAt stamp on a poll. The wire
+	// response is unchanged — the poll decision still proceeds,
+	// fail-open, because the stamp is best-effort observability
+	// rather than a single-use gate — but SOC tooling needs the
+	// signal so a transient store outage that quietly defeats the
+	// slow_down ladder is visible. Warn-level: a healthy deployment
+	// should never emit this event. Mirrors
+	// [AuditCIBAPollObservationFailed] for the device-flow surface.
+	AuditDeviceCodePollObservationFailed = AuditEvent("device_code.poll_observation.failed")
 )
 
 // CIBA events. Fire from the /bc-authorize endpoint, the embedder's

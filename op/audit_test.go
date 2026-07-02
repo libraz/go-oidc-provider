@@ -145,6 +145,7 @@ func TestAuditEvent_DeviceCodeMirror(t *testing.T) {
 		"device_code.token.rejected":                     op.AuditDeviceCodeTokenRejected,
 		"device_code.token.slow_down":                    op.AuditDeviceCodeTokenSlowDown,
 		"device_code.revoked":                            op.AuditDeviceCodeRevoked,
+		"device_code.poll_observation.failed":            op.AuditDeviceCodePollObservationFailed,
 	}
 	for s, ev := range want {
 		if string(ev) != s {

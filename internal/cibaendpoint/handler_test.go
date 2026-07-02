@@ -411,6 +411,25 @@ func TestServe_RejectsBindingMessageTooLong(t *testing.T) {
 	}
 }
 
+func TestServe_RejectsBindingMessageControlChar(t *testing.T) {
+	t.Parallel()
+	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
+	s := newTestStore(t, clock)
+	deps := newDeps(s, clock)
+	form := url.Values{}
+	form.Set("scope", "openid")
+	form.Set("login_hint", "alice")
+	form.Set("binding_message", "pay\nnow")
+	rec := httptest.NewRecorder()
+	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if got := decodeError(t, rec.Body.Bytes()); got != wireInvalidBindingMessage {
+		t.Fatalf("error = %q, want %q", got, wireInvalidBindingMessage)
+	}
+}
+
 func TestServe_RejectsRequestedExpiryNonNumeric(t *testing.T) {
 	t.Parallel()
 	clock := fixedClock{now: time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)}
@@ -438,7 +457,7 @@ func TestServe_HappyPath(t *testing.T) {
 	form := url.Values{}
 	form.Set("scope", "openid profile")
 	form.Set("login_hint", "alice")
-	form.Set("binding_message", "hello & welcome")
+	form.Set("binding_message", `hello & <welcome> "friend"`)
 	rec := httptest.NewRecorder()
 	cibaendpoint.Handler(deps).ServeHTTP(rec, newRequest(form))
 	if rec.Code != http.StatusOK {
@@ -464,8 +483,8 @@ func TestServe_HappyPath(t *testing.T) {
 	if rec2.Subject != "user-123" {
 		t.Fatalf("subject = %q, want user-123", rec2.Subject)
 	}
-	if rec2.BindingMessage != "hello &amp; welcome" {
-		t.Fatalf("binding_message = %q, want HTML-escaped", rec2.BindingMessage)
+	if rec2.BindingMessage != `hello & <welcome> "friend"` {
+		t.Fatalf("binding_message = %q, want raw (unescaped) round-trip through validation + store", rec2.BindingMessage)
 	}
 	if rec2.Status != store.CIBARequestStatusPending {
 		t.Fatalf("status = %v, want pending", rec2.Status)

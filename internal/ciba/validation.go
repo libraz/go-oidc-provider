@@ -1,10 +1,10 @@
 package ciba
 
 import (
-	"html"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -16,15 +16,29 @@ const MaxBindingMessageRunes = 50
 
 // ValidateBindingMessage returns the canonical form of the supplied
 // binding_message: empty input is treated as "not supplied" and
-// returned as ("", nil); any other value is HTML-escaped (so the
-// embedder's authentication device may render it verbatim) and
+// returned as ("", nil); any other value is trimmed and
 // length-checked against [MaxBindingMessageRunes] (rune count, not
 // byte count, so a string of multibyte runes is not falsely
 // rejected).
 //
-// When the trimmed value exceeds the cap the function returns
-// [ErrBindingMessageTooLong]. The caller maps this to the
-// invalid_binding_message wire code.
+// The returned value is the RAW trimmed input — it is deliberately
+// NOT HTML-escaped or otherwise transformed. CIBA Core §7.1's
+// anti-phishing interlock requires the authentication device to
+// display the identical value the consumption device requested;
+// escaping here would make the two devices show different strings.
+// Any rendering-context escaping (HTML, terminal, etc.) is the
+// embedder's responsibility at the point the value is displayed.
+//
+// The function still guards against display-spoofing: a
+// binding_message containing a Unicode control character (category
+// Cc, which includes CR/LF/NUL and other non-printable code points)
+// is rejected with [ErrBindingMessageInvalidChar], since such
+// characters could be used to truncate or forge the rendered
+// message on the authentication device.
+//
+// When the trimmed value exceeds the length cap the function
+// returns [ErrBindingMessageTooLong]. Both sentinels map to the
+// invalid_binding_message wire code at the caller.
 func ValidateBindingMessage(s string) (string, error) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" {
@@ -33,7 +47,12 @@ func ValidateBindingMessage(s string) (string, error) {
 	if utf8.RuneCountInString(trimmed) > MaxBindingMessageRunes {
 		return "", ErrBindingMessageTooLong
 	}
-	return html.EscapeString(trimmed), nil
+	for _, r := range trimmed {
+		if unicode.IsControl(r) {
+			return "", ErrBindingMessageInvalidChar
+		}
+	}
+	return trimmed, nil
 }
 
 // ValidateScope splits the raw scope parameter on ASCII whitespace

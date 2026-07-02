@@ -41,13 +41,6 @@ const (
 	// "guessing infeasible" requirement.
 	deviceCodeByteLength = 32
 
-	// maxFormBytes caps the size of a /device_authorization request
-	// body. The endpoint accepts only the form-encoded shape RFC
-	// 8628 §3.1 describes; a 64 KiB ceiling is far above any
-	// legitimate request while bounding memory use against
-	// pathological inputs (gosec G120).
-	maxFormBytes = 64 * 1024
-
 	// userCodeRetryBudget bounds how many user_code regeneration
 	// attempts the handler performs before giving up on a
 	// collision. Reaching the budget is treated as a fatal
@@ -146,10 +139,14 @@ type Deps struct {
 	// silently downgrade through device flow.
 	RequireSenderConstraint bool
 
-	// AccessTokenTTL is the lifetime advertised to the device as
-	// expires_in. Zero or negative falls back to
+	// DeviceCodeTTL is the device_code lifetime advertised to the
+	// device as expires_in (RFC 8628 §3.2). This is deliberately
+	// independent of the OP's access-token TTL: a deployment running
+	// a short access-token lifetime must still give a distracted
+	// user enough time to reach a secondary device and complete the
+	// verification ceremony. Zero or negative falls back to
 	// [devicecode.DefaultExpiresIn].
-	AccessTokenTTL time.Duration
+	DeviceCodeTTL time.Duration
 
 	// PollInterval is the value advertised to the device as
 	// `interval`. Zero or negative falls back to
@@ -183,10 +180,10 @@ func (d *Deps) now() time.Time {
 // expiresIn returns the device_code lifetime resolved against the
 // default.
 func (d *Deps) expiresIn() time.Duration {
-	if d.AccessTokenTTL <= 0 {
+	if d.DeviceCodeTTL <= 0 {
 		return devicecode.DefaultExpiresIn
 	}
-	return d.AccessTokenTTL
+	return d.DeviceCodeTTL
 }
 
 // pollInterval returns the advertised poll interval resolved
@@ -284,8 +281,8 @@ func serve(w http.ResponseWriter, r *http.Request, deps Deps) {
 			"content-type must be application/x-www-form-urlencoded")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
+	endpointsupport.LimitFormBody(w, r)
+	if err := r.ParseForm(); err != nil { //nolint:gosec // body bounded by LimitFormBody above
 		writeError(w, http.StatusBadRequest, errInvalidRequest, "malformed form body")
 		return
 	}

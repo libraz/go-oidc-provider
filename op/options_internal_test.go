@@ -9,7 +9,9 @@ package op
 
 import (
 	"testing"
+	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/devicecode"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -214,6 +216,42 @@ func TestProfileAllowedAuthMethodNames_ExcludesMTLS(t *testing.T) {
 	}
 	if !containsString(got, string(AuthPrivateKeyJWT)) {
 		t.Fatalf("profileAllowedAuthMethodNames=%v, want it to retain private_key_jwt", got)
+	}
+}
+
+// TestEffectiveDeviceCodeExpiry_DefaultsAndOverride pins the H1
+// resolution contract for the device_code TTL knob: a zero-value
+// [config.deviceCodeExpiry] resolves to [devicecode.DefaultExpiresIn]
+// and an embedder-supplied value via [WithDeviceCodeExpiry] wins.
+// The knob is deliberately independent of [config.accessTokenTTL].
+func TestEffectiveDeviceCodeExpiry_DefaultsAndOverride(t *testing.T) {
+	t.Parallel()
+
+	c := &config{}
+	if got, want := c.effectiveDeviceCodeExpiry(), devicecode.DefaultExpiresIn; got != want {
+		t.Fatalf("effectiveDeviceCodeExpiry() = %v, want default %v", got, want)
+	}
+
+	c.deviceCodeExpiry = 20 * time.Minute
+	if got, want := c.effectiveDeviceCodeExpiry(), 20*time.Minute; got != want {
+		t.Fatalf("effectiveDeviceCodeExpiry() = %v, want override %v", got, want)
+	}
+}
+
+// TestEffectiveDeviceCodePollInterval_DefaultsAndOverride mirrors
+// [TestEffectiveDeviceCodeExpiry_DefaultsAndOverride] for the
+// advertised poll `interval`.
+func TestEffectiveDeviceCodePollInterval_DefaultsAndOverride(t *testing.T) {
+	t.Parallel()
+
+	c := &config{}
+	if got, want := c.effectiveDeviceCodePollInterval(), devicecode.DefaultInterval; got != want {
+		t.Fatalf("effectiveDeviceCodePollInterval() = %v, want default %v", got, want)
+	}
+
+	c.deviceCodePollInterval = 15 * time.Second
+	if got, want := c.effectiveDeviceCodePollInterval(), 15*time.Second; got != want {
+		t.Fatalf("effectiveDeviceCodePollInterval() = %v, want override %v", got, want)
 	}
 }
 
