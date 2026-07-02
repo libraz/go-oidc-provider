@@ -96,7 +96,7 @@ func (h *Handler) lookupJWT(ctx context.Context, raw, urn string) (lookupResult,
 			ClientID:      claims.ClientID,
 			Subject:       claims.Subject,
 			Scope:         append([]string(nil), claims.Scope...),
-			Audience:      append([]string(nil), claims.Audience...),
+			Audience:      normaliseAudience(claims.Audience),
 			ExpiresAt:     time.Unix(claims.ExpiresAt, 0).UTC(),
 			Confirmation:  confirmationFromCnf(claims.Confirmation),
 			Act:           act,
@@ -141,7 +141,7 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 		return lookupResult{reason: "expired"}, errTokenInvalid
 	}
 	scope := splitScope(idClaims.Scope)
-	aud := decodeAudience(idClaims.AudienceRaw)
+	aud := normaliseAudience(decodeAudience(idClaims.AudienceRaw))
 	clientID := idClaims.AuthorizedParty
 	if clientID == "" {
 		clientID = idClaims.ClientID
@@ -198,7 +198,7 @@ func (h *Handler) lookupOpaqueAccessToken(ctx context.Context, raw string) (look
 	}
 	var aud []string
 	if rec.Audience != "" {
-		aud = []string{rec.Audience}
+		aud = []string{normaliseResource(rec.Audience)}
 	}
 	return lookupResult{
 		view: TokenView{
@@ -314,6 +314,21 @@ func splitScope(s string) []string {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// normaliseAudience applies the RFC 8707 §2 canonicalisation rule to
+// every entry of aud so [TokenView.Audience] carries the same
+// normalised form the policy-facing godoc promises. A nil input
+// yields nil so callers do not need to special-case the empty set.
+func normaliseAudience(aud []string) []string {
+	if len(aud) == 0 {
+		return nil
+	}
+	out := make([]string, len(aud))
+	for i, v := range aud {
+		out[i] = normaliseResource(v)
 	}
 	return out
 }

@@ -60,6 +60,26 @@ func scopeSubset(want, have []string) bool {
 	return true
 }
 
+// audienceSubset reports whether every entry of granted appears in
+// requested. Both sides are canonicalised per RFC 8707 §2 before the
+// comparison so a policy-granted "HTTPS://API.EXAMPLE/" matches a
+// requested "https://api.example". An empty granted vacuously passes.
+func audienceSubset(granted, requested []string) bool {
+	if len(granted) == 0 {
+		return true
+	}
+	idx := make(map[string]struct{}, len(requested))
+	for _, v := range requested {
+		idx[normaliseResource(v)] = struct{}{}
+	}
+	for _, v := range granted {
+		if _, ok := idx[normaliseResource(v)]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // intersectScope returns the entries of want that also appear in
 // allowed, preserving want's order. The function is the natural
 // "narrow want by allowed" operation; an empty allowed yields an

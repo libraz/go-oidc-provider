@@ -319,6 +319,31 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 			clientIDOf(req.Client), subjectView.Subject, nil)
 		return customgrant.Response{}, invalidScope("granted scope cannot be empty")
 	}
+	// RFC 8693 §2.1 — a policy decision may only narrow, never broaden.
+	// The granted scope MUST remain a subset of the subject-bounded
+	// requested scope and the granted audience MUST remain a subset of
+	// the RFC 8707-normalised requested audience; a policy that returns
+	// a broader set is a privilege escalation and is rejected here.
+	if !scopeSubset(grantedScope, requestedScope) {
+		h.emit(ctx, auditScopeInflationBlocked, audit.LevelWarn,
+			"token-exchange rejected: policy granted scope inflates beyond requested scope",
+			clientIDOf(req.Client), subjectView.Subject,
+			map[string]any{
+				"granted":   grantedScope,
+				"requested": requestedScope,
+			})
+		return customgrant.Response{}, invalidScope("granted scope exceeds the requested scope")
+	}
+	if !audienceSubset(grantedAudience, requestedAudience) {
+		h.emit(ctx, auditAudienceBlocked, audit.LevelWarn,
+			"token-exchange rejected: policy granted audience inflates beyond requested audience",
+			clientIDOf(req.Client), subjectView.Subject,
+			map[string]any{
+				"granted":   grantedAudience,
+				"requested": requestedAudience,
+			})
+		return customgrant.Response{}, invalidTarget("granted audience exceeds the requested audience")
+	}
 	ttl, ttlReason := h.computeTTL(grantedTTL, subjectView.ExpiresAt)
 	if ttlReason != "" {
 		h.emit(ctx, auditTTLCapped, audit.LevelInfo,
