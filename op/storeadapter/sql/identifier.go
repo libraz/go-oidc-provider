@@ -3,6 +3,8 @@ package oidcsql
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -152,7 +154,46 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 				logical, strings.Join(knownNamingKeys, ", "))
 		}
 	}
+	return n.checkCollisions()
+}
+
+// checkCollisions rejects a nameMap whose 18 resolved physical names
+// are not pairwise distinct. WithNaming lets an embedder rename any
+// subset of tables; without this check, two overrides that resolve to
+// the same physical name — or an override that collides with a
+// logical name the caller left at its default — would silently
+// corrupt both the migration DDL ([rewriteSchema]) and the query
+// layer ([buildQueries]): every statement targeting the collided name
+// would read and write whichever substore's rows happen to share the
+// table, with no construction-time signal that anything is wrong.
+//
+// [nameMap.all] and [knownNamingKeys] are maintained in the same
+// field order, so the index into knownNamingKeys names the logical
+// key responsible for each resolved physical name in the error
+// message.
+func (n nameMap) checkCollisions() error {
+	names := n.all()
+	seen := make(map[string]string, len(names))
+	for i, name := range names {
+		label := logicalKeyAt(i)
+		if prior, ok := seen[name]; ok {
+			return fmt.Errorf(
+				"oidcsql: WithNaming collision: logical tables %q and %q both resolve to physical name %q",
+				prior, label, name)
+		}
+		seen[name] = label
+	}
 	return nil
+}
+
+// logicalKeyAt returns the [knownNamingKeys] entry at i, or a
+// placeholder if the two tables have drifted out of sync (guarded by
+// TestNameMapFieldOrderMatchesKnownNamingKeys).
+func logicalKeyAt(i int) string {
+	if i < 0 || i >= len(knownNamingKeys) {
+		return fmt.Sprintf("<index %d>", i)
+	}
+	return knownNamingKeys[i]
 }
 
 // all returns the resolved physical names in a stable order. It is the
@@ -223,36 +264,65 @@ var knownNamingKeys = []string{
 // rewritten schema via [Store.Schema] so embedders can copy-paste it
 // into their migration tooling; the in-process [Store.Migrate]
 // helper drives this same string.
+//
+// The substitution runs as a SINGLE pass built from an alternation of
+// the exact default table names, ordered longest-first, applied with
+// [regexp.Regexp.ReplaceAllStringFunc]. Matching the exact names — not
+// whole identifier tokens — is required because the DDL embeds a table
+// name inside its secondary-index names (e.g.
+// "idx_oidc_access_tokens_expires_at"), and those occurrences must be
+// rewritten alongside the CREATE TABLE statement so the schema stays
+// internally consistent. A sequence of independent strings.ReplaceAll
+// calls is unsafe here: if one override's resolved value contains
+// another default name as a substring, a later pass would match inside
+// the already-substituted text and corrupt it. The single pass cannot
+// exhibit that failure mode because replacement text is never handed
+// back through the matcher, and longest-first ordering resolves any
+// name that is a substring of another at the same start position.
 func rewriteSchema(raw []byte, n nameMap) string {
-	src := string(raw)
 	defaults := defaultNames()
-	pairs := []struct {
-		from, to string
-	}{
-		{defaults.clients, n.clients},
-		{defaults.authCodes, n.authCodes},
-		{defaults.refreshes, n.refreshes},
-		{defaults.accessTokens, n.accessTokens},
-		{defaults.opaqueAccessTokens, n.opaqueAccessTokens},
-		{defaults.grantTombstones, n.grantTombstones},
-		{defaults.revokedJTIs, n.revokedJTIs},
-		{defaults.grants, n.grants},
-		{defaults.sessions, n.sessions},
-		{defaults.pars, n.pars},
-		{defaults.interactions, n.interactions},
-		{defaults.jtis, n.jtis},
-		{defaults.users, n.users},
-		{defaults.iats, n.iats},
-		{defaults.rats, n.rats},
-		{defaults.metadata, n.metadata},
-		{defaults.deviceCodes, n.deviceCodes},
-		{defaults.cibaRequests, n.cibaRequests},
+	replacements := map[string]string{
+		defaults.clients:            n.clients,
+		defaults.authCodes:          n.authCodes,
+		defaults.refreshes:          n.refreshes,
+		defaults.accessTokens:       n.accessTokens,
+		defaults.opaqueAccessTokens: n.opaqueAccessTokens,
+		defaults.grantTombstones:    n.grantTombstones,
+		defaults.revokedJTIs:        n.revokedJTIs,
+		defaults.grants:             n.grants,
+		defaults.sessions:           n.sessions,
+		defaults.pars:               n.pars,
+		defaults.interactions:       n.interactions,
+		defaults.jtis:               n.jtis,
+		defaults.users:              n.users,
+		defaults.iats:               n.iats,
+		defaults.rats:               n.rats,
+		defaults.metadata:           n.metadata,
+		defaults.deviceCodes:        n.deviceCodes,
+		defaults.cibaRequests:       n.cibaRequests,
 	}
-	for _, p := range pairs {
-		if p.from == p.to {
-			continue
+	names := make([]string, 0, len(replacements))
+	for from := range replacements {
+		names = append(names, from)
+	}
+	// Longest-first (ties broken alphabetically for a deterministic
+	// pattern) so a name that is a substring of another is offered to
+	// the alternation first.
+	sort.Slice(names, func(i, j int) bool {
+		if len(names[i]) != len(names[j]) {
+			return len(names[i]) > len(names[j])
 		}
-		src = strings.ReplaceAll(src, p.from, p.to)
+		return names[i] < names[j]
+	})
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = regexp.QuoteMeta(name)
 	}
-	return src
+	pattern := regexp.MustCompile(strings.Join(quoted, "|"))
+	return pattern.ReplaceAllStringFunc(string(raw), func(match string) string {
+		if to, ok := replacements[match]; ok {
+			return to
+		}
+		return match
+	})
 }

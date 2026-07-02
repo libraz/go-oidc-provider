@@ -210,6 +210,36 @@ func TestResolve_RejectsEmptyBody(t *testing.T) {
 	}
 }
 
+func TestResolve_RejectsTrailingDataAfterJSONArray(t *testing.T) {
+	t.Parallel()
+	// A syntactically valid JSON array followed by trailing garbage:
+	// the array alone would decode cleanly, but OIDC Core 1.0 §5
+	// defines the document as exactly one JSON array, so the trailing
+	// bytes must reject the whole document rather than being silently
+	// ignored.
+	body := []byte(`["https://rp.example/cb"]` + "\ngarbage-after-array")
+	srv := newJSONServer(t, body, "application/json")
+	r := resolverWithServer(t, srv)
+	_, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"})
+	if !errors.Is(err, ErrSectorMalformed) {
+		t.Fatalf("err = %v, want wrap of ErrSectorMalformed", err)
+	}
+}
+
+func TestResolve_RejectsSecondJSONValueAfterArray(t *testing.T) {
+	t.Parallel()
+	// Two concatenated JSON values: the decoder accepts the first
+	// (the array) and dec.More() must catch the second rather than
+	// silently discarding it.
+	body := []byte(`["https://rp.example/cb"]` + `["https://evil.example/cb"]`)
+	srv := newJSONServer(t, body, "application/json")
+	r := resolverWithServer(t, srv)
+	_, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"})
+	if !errors.Is(err, ErrSectorMalformed) {
+		t.Fatalf("err = %v, want wrap of ErrSectorMalformed", err)
+	}
+}
+
 func TestResolve_RejectsRedirectURINotInDocument(t *testing.T) {
 	t.Parallel()
 	body, _ := json.Marshal([]string{"https://rp.example/cb"})
@@ -254,6 +284,41 @@ func TestResolve_DetectsContentChangeAfterCacheExpiry(t *testing.T) {
 	_, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"})
 	if !errors.Is(err, ErrSectorContentChanged) {
 		t.Fatalf("err = %v, want wrap of ErrSectorContentChanged", err)
+	}
+}
+
+func TestResolve_RecoversAfterContentChangeWithoutRestart(t *testing.T) {
+	t.Parallel()
+	original, _ := json.Marshal([]string{"https://rp.example/cb"})
+	rotated, _ := json.Marshal([]string{"https://rp.example/cb", "https://rp.example/cb2"})
+	current := original
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(current)
+	}))
+	t.Cleanup(srv.Close)
+
+	clock := &fakeClock{now: time.Date(2026, 5, 3, 0, 0, 0, 0, time.UTC)}
+	r := resolverWithServer(t, srv, WithClock(clock), WithTTL(time.Hour))
+
+	if _, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"}); err != nil {
+		t.Fatalf("first Resolve: %v", err)
+	}
+	current = rotated
+	clock.now = clock.now.Add(2 * time.Hour) // expire the cache
+
+	// The RP legitimately rotated its sector document: the resolver
+	// MUST surface the change once...
+	if _, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb", "https://rp.example/cb2"}); !errors.Is(err, ErrSectorContentChanged) {
+		t.Fatalf("second Resolve err = %v, want wrap of ErrSectorContentChanged", err)
+	}
+	// ...but MUST NOT stay permanently poisoned: a subsequent resolve
+	// against the now-stable rotated document succeeds without a
+	// process restart, and a client sharing the same
+	// sector_identifier_uri is not permanently broken.
+	clock.now = clock.now.Add(2 * time.Hour) // expire the cache again
+	if _, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb", "https://rp.example/cb2"}); err != nil {
+		t.Fatalf("third Resolve (post-eviction recovery): %v", err)
 	}
 }
 

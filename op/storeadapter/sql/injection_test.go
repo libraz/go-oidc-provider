@@ -181,6 +181,92 @@ func TestSchema_RewritesAllTableNames(t *testing.T) {
 	}
 }
 
+// TestNew_RejectsCollidingWithNamingOverrides proves construction
+// fails when two overrides resolve to the same physical table name.
+// Without this gate, the query layer and the migration DDL would
+// silently share one physical table between two logical record kinds
+// with no construction-time signal.
+func TestNew_RejectsCollidingWithNamingOverrides(t *testing.T) {
+	t.Parallel()
+	db, err := databasesql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(map[string]string{
+		"clients": "shared_physical_name",
+		"grants":  "shared_physical_name",
+	}))
+	if err == nil {
+		t.Fatal("New accepted two WithNaming overrides that collide on the same physical name")
+	}
+	if !strings.Contains(err.Error(), "shared_physical_name") {
+		t.Errorf("collision error %q does not name the offending physical name", err)
+	}
+}
+
+// TestNew_RejectsWithNamingCollidingWithUnoverriddenDefault proves
+// construction fails when an override's physical name collides with
+// a logical table the caller left at its default, not only when two
+// overrides collide with each other.
+func TestNew_RejectsWithNamingCollidingWithUnoverriddenDefault(t *testing.T) {
+	t.Parallel()
+	db, err := databasesql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	// "grants" is never mentioned in the override map, so it keeps its
+	// default physical name ("oidc_grants"); renaming "clients" onto
+	// that exact string must still be rejected.
+	_, err = oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(map[string]string{
+		"clients": "oidc_grants",
+	}))
+	if err == nil {
+		t.Fatal("New accepted a WithNaming override colliding with an un-overridden default")
+	}
+}
+
+// TestSchema_RewriteSurvivesSubstringOverride pins the specific
+// corruption mode a sequential strings.ReplaceAll rewrite is prone to:
+// an override whose resolved value happens to contain another
+// default table name as a substring. If the rewriter reprocessed
+// already-substituted text (as a naive multi-pass ReplaceAll chain
+// does), the second table's rename pass would match inside the first
+// table's already-rewritten name and mangle it. The single-pass,
+// token-based rewriter must not exhibit this failure: both renamed
+// tables must appear in the schema exactly as configured, and
+// Migrate must succeed against the result.
+func TestSchema_RewriteSurvivesSubstringOverride(t *testing.T) {
+	t.Parallel()
+	db, err := databasesql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	// "oidc_authorization_codes_v2" embeds the *default* authorization-codes
+	// table name as a literal prefix substring, so a rewrite pass that
+	// later targets that default name is the exact scenario that could
+	// corrupt it under the old multi-pass ReplaceAll scheme.
+	s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithNaming(map[string]string{
+		"clients":             "oidc_authorization_codes_v2",
+		"authorization_codes": "ac_new",
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	schema := s.Schema()
+	if !strings.Contains(schema, "CREATE TABLE IF NOT EXISTS oidc_authorization_codes_v2") {
+		t.Errorf("schema lost the clients override; got:\n%s", schema)
+	}
+	if !strings.Contains(schema, "CREATE TABLE IF NOT EXISTS ac_new") {
+		t.Errorf("schema lost the authorization_codes override; got:\n%s", schema)
+	}
+	if err := s.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+}
+
 // TestSchema_DefaultsCompile is a smoke test that the embedded SQLite
 // schema is well-formed: an empty in-memory database can absorb every
 // CREATE TABLE / CREATE INDEX statement and immediately serve a write.

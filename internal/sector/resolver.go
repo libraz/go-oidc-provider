@@ -244,6 +244,17 @@ func (r *Resolver) Resolve(ctx context.Context, sectorIdentifierURI string, regi
 		return "", err
 	}
 	if existing, ok := r.cache.peek(sectorIdentifierURI); ok && existing.hash != hash {
+		// Evict the stale entry before surfacing the mismatch: leaving
+		// it in place would compare every future Resolve call against
+		// the same now-obsolete hash, permanently poisoning DCR for
+		// every client sharing this sector_identifier_uri until the
+		// process restarts. The caller still observes
+		// ErrSectorContentChanged once as the change-detection signal,
+		// but the eviction means the very next Resolve call for this
+		// URI sees a clean cache miss and repopulates with the new
+		// document's hash, so a legitimate RP-side rotation recovers
+		// without operator intervention.
+		r.cache.evict(sectorIdentifierURI)
 		return "", fmt.Errorf("%w: %w", ErrSectorFetch, ErrSectorContentChanged)
 	}
 	if err := verifySubset(uris, registered); err != nil {
@@ -370,6 +381,15 @@ func parseSectorDocument(body []byte) ([]string, error) {
 	if err := dec.Decode(&uris); err != nil {
 		return nil, fmt.Errorf("%w: %w (%w)", ErrSectorFetch, ErrSectorMalformed, err)
 	}
+	// A pure JSON array document has nothing left in the stream after
+	// the top-level array closes. dec.More reports true when trailing
+	// bytes follow (e.g. a second JSON value, or non-JSON garbage
+	// appended after the array); OIDC Core 1.0 §5 defines the sector
+	// document as exactly one JSON array, so trailing data makes the
+	// document malformed even though the array itself decoded cleanly.
+	if dec.More() {
+		return nil, fmt.Errorf("%w: %w (trailing data after JSON array)", ErrSectorFetch, ErrSectorMalformed)
+	}
 	return uris, nil
 }
 
@@ -489,4 +509,15 @@ func (c *cache) put(uri string, entry *cacheEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[uri] = entry
+}
+
+// evict removes any stored entry for uri. It is called after a
+// content-hash mismatch is detected so a legitimate document rotation
+// at the RP does not permanently poison future resolutions of the same
+// sector_identifier_uri (see the call site in [Resolver.Resolve]).
+// Evicting an absent key is a no-op.
+func (c *cache) evict(uri string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, uri)
 }

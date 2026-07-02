@@ -66,9 +66,11 @@ func (s *sessionStore) chooserGroupKey(groupID string) string {
 // changes the ChooserGroupID of an existing record, the secondary
 // index is updated atomically: the ID is removed from the previous
 // group's SET before it is added to the new one. The parent record
-// SET and the index SADD are issued through a Redis pipeline so a
-// single round-trip keeps Save proportional to the network latency
-// of one command.
+// SET, the index SADD, and the index's TTL maintenance (see the
+// ExpireNX / ExpireGT comment below) are issued through a single
+// Redis pipeline so Save stays proportional to the latency of one
+// round trip regardless of whether the session belongs to a chooser
+// group.
 func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	if sess == nil {
 		return errors.New("oidcredis: nil session")
@@ -103,7 +105,30 @@ func (s *sessionStore) Save(ctx context.Context, sess *store.Session) error {
 	pipe := s.parent.client.TxPipeline()
 	pipe.Set(ctx, s.sessionKey(sess.ID), payload, ttl)
 	if sess.ChooserGroupID != "" {
-		pipe.SAdd(ctx, s.chooserGroupKey(sess.ChooserGroupID), sess.ID)
+		groupKey := s.chooserGroupKey(sess.ChooserGroupID)
+		pipe.SAdd(ctx, groupKey, sess.ID)
+		// The chooser-group SET is a secondary index, not a session
+		// record itself, so it never got a TTL of its own: under
+		// volatile-* maxmemory policies Redis only evicts keys that
+		// carry an expiry, so a TTL-less index key survives eviction
+		// pressure at the expense of the live, TTL-bearing session
+		// keys the index points at — the opposite of the intended
+		// priority. Give the index the same bounded lifetime as the
+		// sessions it tracks:
+		//   - ExpireNX bootstraps a TTL onto a freshly created group
+		//     key (or a legacy key persisted forever by a pre-fix
+		//     adapter version); it is a no-op once any TTL exists.
+		//   - ExpireGT then extends the TTL whenever the incoming
+		//     session's expiry is later than the group's current
+		//     expiry, so a short-lived cohort member's Save never
+		//     truncates visibility for a longer-lived sibling still
+		//     resident in the same chooser group.
+		// Exactly one of the two ever applies for a given pipeline
+		// execution: NX only fires when no TTL exists yet, which is
+		// also the one state GT can never satisfy (Redis treats "no
+		// TTL" as infinite for GT/LT comparison purposes).
+		pipe.ExpireNX(ctx, groupKey, ttl)
+		pipe.ExpireGT(ctx, groupKey, ttl)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("oidcredis: SET session: %w", err)

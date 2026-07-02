@@ -2,6 +2,7 @@
 package oidcsql
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -125,6 +126,84 @@ func TestRewriteSchema_RenamesEveryTable(t *testing.T) {
 				t.Errorf("%s: default table name %q survived rewriteSchema; "+
 					"its rename pair is missing from rewriteSchema", d.name, def)
 			}
+		}
+	}
+}
+
+// TestApplyOverrides_CollisionBetweenTwoOverridesRejected proves
+// applyOverrides rejects a naming map whose two distinct logical keys
+// resolve to the same physical table name. Without this check the
+// query layer and the migration DDL would silently target one shared
+// table for two record kinds.
+func TestApplyOverrides_CollisionBetweenTwoOverridesRejected(t *testing.T) {
+	t.Parallel()
+	n := defaultNames()
+	err := n.applyOverrides(map[string]string{
+		"clients": "shared_name",
+		"grants":  "shared_name",
+	})
+	if err == nil {
+		t.Fatal("want collision error, got nil")
+	}
+	if !strings.Contains(err.Error(), "shared_name") {
+		t.Errorf("error %q does not name the colliding physical name", err)
+	}
+}
+
+// TestApplyOverrides_CollisionWithUnoverriddenDefaultRejected proves
+// the collision check also fires when only one side of the clash was
+// explicitly overridden — the other logical table kept its default
+// physical name.
+func TestApplyOverrides_CollisionWithUnoverriddenDefaultRejected(t *testing.T) {
+	t.Parallel()
+	n := defaultNames()
+	err := n.applyOverrides(map[string]string{"clients": defaultNames().grants})
+	if err == nil {
+		t.Fatal("want collision error, got nil")
+	}
+}
+
+// TestApplyOverrides_DistinctOverridesAccepted is the positive
+// counterpart: a naming map whose resolved physical names remain
+// pairwise distinct MUST still construct successfully.
+func TestApplyOverrides_DistinctOverridesAccepted(t *testing.T) {
+	t.Parallel()
+	n := defaultNames()
+	if err := n.applyOverrides(map[string]string{
+		"clients": "tenant_clients",
+		"grants":  "tenant_grants",
+	}); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+}
+
+// TestNameMapFieldOrderMatchesKnownNamingKeys pins the invariant
+// [nameMap.checkCollisions] depends on: nameMap.all() and
+// knownNamingKeys must stay in the same field order so the collision
+// error can name the correct logical key by index. A default nameMap
+// has no duplicate values, so pairing each resolved name 1:1 with its
+// logical key and round-tripping through applyOverrides with that same
+// key set must not report a spurious collision.
+func TestNameMapFieldOrderMatchesKnownNamingKeys(t *testing.T) {
+	t.Parallel()
+	if len(defaultNames().all()) != len(knownNamingKeys) {
+		t.Fatalf("nameMap.all() has %d entries, knownNamingKeys has %d",
+			len(defaultNames().all()), len(knownNamingKeys))
+	}
+	overrides := make(map[string]string, len(knownNamingKeys))
+	for i, key := range knownNamingKeys {
+		overrides[key] = fmt.Sprintf("ord_%d_%s", i, key)
+	}
+	n := defaultNames()
+	if err := n.applyOverrides(overrides); err != nil {
+		t.Fatalf("applyOverrides: %v", err)
+	}
+	got := n.all()
+	for i, key := range knownNamingKeys {
+		want := overrides[key]
+		if got[i] != want {
+			t.Errorf("nameMap.all()[%d] = %q, want %q (field order drifted from knownNamingKeys[%d]=%q)",
+				i, got[i], want, i, key)
 		}
 	}
 }
