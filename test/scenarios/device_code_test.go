@@ -70,14 +70,16 @@ func newDevProvider(t *testing.T, scopes []string) *devProvider {
 // [newDevProvider]: it threads resources onto the registered client's
 // Resources allowlist so /device_authorization can admit the values
 // the test row sends. A nil/empty resources slice matches the
-// default helper.
-func newDevProviderWithResources(t *testing.T, scopes, resources []string) *devProvider {
+// default helper. extra testkit options (e.g. a pinned clock) are
+// appended so a row can make the OP's notion of "now" deterministic.
+func newDevProviderWithResources(t *testing.T, scopes, resources []string, extra ...testkit.Option) *devProvider {
 	t.Helper()
 	hash, err := op.HashClientSecret(devClientSecret)
 	if err != nil {
 		t.Fatalf("HashClientSecret: %v", err)
 	}
-	tk := testkit.NewProvider(t, testkit.WithOptions(op.WithDeviceCodeGrant()))
+	opts := append([]testkit.Option{testkit.WithOptions(op.WithDeviceCodeGrant())}, extra...)
+	tk := testkit.NewProvider(t, opts...)
 	client := tk.RegisterClient(t, testkit.ClientFixture{
 		ID:                      "dev-rp",
 		SecretHash:              hash,
@@ -1295,7 +1297,13 @@ func TestScenario_DEV_097_DeviceAuthGetReturnsMethodNotAllowed(t *testing.T) {
 // Spec: RFC 8628 §3.5 (slow_down).
 func TestScenario_DEV_098_TokenSlowDownOnPollTooSoon(t *testing.T) {
 	t.Parallel()
-	p := newDevProvider(t, []string{"openid"})
+	// Pin the OP clock so both rapid polls observe the same instant: the
+	// gap between them is deterministically zero (< FastPollFloor), so the
+	// slow_down ladder is exercised without depending on wall-clock
+	// scheduling. Under a loaded -race run the previous real-clock form
+	// could see a >interval gap and flip to authorization_pending.
+	clock := newAdvanceableClock(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
+	p := newDevProviderWithResources(t, []string{"openid"}, nil, testkit.WithClock(clock))
 
 	deviceCode := p.issueDeviceCode(t, "openid")
 	rec, err := p.tk.Store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
