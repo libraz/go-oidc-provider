@@ -198,6 +198,97 @@ func TestStoreJWKSResolver_NilStoreRejected(t *testing.T) {
 	}
 }
 
+// fakeFreshURLFetcher implements both the plain fetch and the
+// cache-bypassing FetchFresh so the resolver's RefreshJWKS seam can be
+// exercised. Each method returns its own keyset so a test can tell which
+// path ran.
+type fakeFreshURLFetcher struct {
+	cached *josev4.JSONWebKeySet
+	fresh  *josev4.JSONWebKeySet
+	freshN *int
+}
+
+func (f fakeFreshURLFetcher) Fetch(_ context.Context, _ string) (*josev4.JSONWebKeySet, error) {
+	return f.cached, nil
+}
+
+func (f fakeFreshURLFetcher) FetchFresh(_ context.Context, _ string) (*josev4.JSONWebKeySet, error) {
+	*f.freshN++
+	return f.fresh, nil
+}
+
+func TestStoreJWKSResolver_RefreshJWKSRefetchesURI(t *testing.T) {
+	t.Parallel()
+
+	var cached, fresh josev4.JSONWebKeySet
+	if err := json.Unmarshal([]byte(sampleJWK), &cached); err != nil {
+		t.Fatalf("seed cached: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"keys":[{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","use":"sig","kid":"k2","alg":"ES256"}]}`), &fresh); err != nil {
+		t.Fatalf("seed fresh: %v", err)
+	}
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"url-only": {ID: "url-only", JWKsURI: "https://client.example.com/jwks"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	freshN := 0
+	r.SetURLFetcher(fakeFreshURLFetcher{cached: &cached, fresh: &fresh, freshN: &freshN})
+
+	got, err := r.RefreshJWKS(context.Background(), "url-only")
+	if err != nil {
+		t.Fatalf("RefreshJWKS: %v", err)
+	}
+	if len(got.Keys) != 1 || got.Keys[0].KeyID != "k2" {
+		t.Errorf("got Keys=%+v, want the FetchFresh keyset (kid k2)", got.Keys)
+	}
+	if freshN != 1 {
+		t.Errorf("FetchFresh calls=%d, want 1", freshN)
+	}
+}
+
+func TestStoreJWKSResolver_RefreshJWKSInlineReturnsInline(t *testing.T) {
+	t.Parallel()
+
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"inline": {ID: "inline", JWKs: json.RawMessage(sampleJWK)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	got, err := r.RefreshJWKS(context.Background(), "inline")
+	if err != nil {
+		t.Fatalf("RefreshJWKS: %v", err)
+	}
+	if len(got.Keys) != 1 || got.Keys[0].KeyID != "k1" {
+		t.Errorf("got Keys=%+v, want the inline keyset (kid k1)", got.Keys)
+	}
+}
+
+func TestStoreJWKSResolver_RefreshJWKSUnsupportedFetcher(t *testing.T) {
+	t.Parallel()
+
+	r, err := clientauth.NewStoreJWKSResolver(fakeClientStore{
+		seed: map[string]*store.Client{
+			"url-only": {ID: "url-only", JWKsURI: "https://client.example.com/jwks"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStoreJWKSResolver: %v", err)
+	}
+	// fakeURLFetcher implements only Fetch, not FetchFresh.
+	r.SetURLFetcher(fakeURLFetcher{keys: &josev4.JSONWebKeySet{}})
+	_, err = r.RefreshJWKS(context.Background(), "url-only")
+	if !errors.Is(err, clientauth.ErrJWKSURIUnsupported) {
+		t.Errorf("err=%v, want ErrJWKSURIUnsupported", err)
+	}
+}
+
 func TestStoreJWKSResolver_EmptyKeysSlice(t *testing.T) {
 	t.Parallel()
 

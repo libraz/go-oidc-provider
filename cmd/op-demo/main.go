@@ -453,16 +453,59 @@ func commonOptions(cfg runConfig, opStore store.Store, st *inmem.Store, priv *ec
 		// The transport is constructed locally so the dial-time SSRF
 		// gate the JWKS fetcher relies on can rewire DialContext on a
 		// fresh *http.Transport rather than mutating
-		// http.DefaultTransport. The TLSClientConfig only widens trust;
-		// chain validation stays on (InsecureSkipVerify is left false).
+		// http.DefaultTransport.
+		//
+		// OFCS publishes its RP-side jwks_uri / request_uri endpoints at
+		// https://localhost.emobix.co.uk:8443, but the runner's nginx
+		// serves a self-signed certificate whose subject is CN=localhost
+		// with no subjectAltName. A default TLS dial therefore fails
+		// hostname verification ("localhost" != "localhost.emobix.co.uk")
+		// before the OP can fetch a dynamically registered client's keys,
+		// and the oidcc-registration-jwks-uri /
+		// oidcc-refresh-token-rp-key-rotation modules surface only as a
+		// token-endpoint 401. chainOnlyTLSConfig keeps full chain
+		// validation against the pinned OFCS CA and drops just the DNS
+		// name match — a dev-only accommodation for the conformance rig.
 		opts = append(opts, op.WithJWKSHTTPTransport(&http.Transport{
-			TLSClientConfig: &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				RootCAs:    cfg.extraCAs,
-			},
+			TLSClientConfig: chainOnlyTLSConfig(cfg.extraCAs),
 		}))
 	}
 	return opts
+}
+
+// chainOnlyTLSConfig returns a client TLS config that verifies the peer
+// certificate chain against pool but skips the DNS hostname match. It
+// exists solely for the OFCS conformance harness, whose nginx serves a
+// SAN-less CN=localhost certificate on the localhost.emobix.co.uk vhost
+// (see the call site). InsecureSkipVerify disables Go's built-in
+// verification — which bundles the hostname check — and
+// VerifyPeerCertificate reinstates full chain validation against pool
+// without a DNSName, so trust stays anchored to the pinned CA. A
+// production OP MUST verify the hostname and MUST NOT set this.
+func chainOnlyTLSConfig(pool *x509.CertPool) *tls.Config {
+	// VerifyConnection (rather than VerifyPeerCertificate) so the manual
+	// chain check also runs on a resumed TLS session — a resumed handshake
+	// would otherwise skip VerifyPeerCertificate and bypass the pin.
+	verify := func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return errors.New("op-demo: no peer certificate presented")
+		}
+		intermediates := x509.NewCertPool()
+		for _, c := range cs.PeerCertificates[1:] {
+			intermediates.AddCert(c)
+		}
+		_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
+			Roots:         pool,
+			Intermediates: intermediates,
+		})
+		return err
+	}
+	return &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		RootCAs:            pool,
+		InsecureSkipVerify: true, //nolint:gosec // chain verified in VerifyConnection; only the hostname match is dropped for the dev-only OFCS rig
+		VerifyConnection:   verify,
+	}
 }
 
 // profileOptions dispatches to the per-profile helper that returns the

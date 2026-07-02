@@ -78,6 +78,10 @@ from the access-token TTL (see Changed).
 - The unused `SubjectProjector` field on the authorize endpoint is removed;
   subject projection stays wired at the token, userinfo, and introspection
   endpoints.
+- The Go toolchain is pinned to `go1.26.4` across the root module, the
+  storeadapter sub-modules, and the examples, and the `golang.org/x/*`
+  dependencies (`crypto`, `sync`, `sys`, `mod`, `net`, `text`, `tools`,
+  `telemetry`) are bumped to their current patched releases.
 
 ### Fixed
 
@@ -116,6 +120,13 @@ from the access-token TTL (see Changed).
   package-global map (no leak on hot-reload); the custom-grant clock access is
   nil-safe; and the kid-present JWE decrypt path gains the same alg/key-shape
   pre-check as its siblings.
+- **RP key rotation for `private_key_jwt` clients that register a `jwks_uri`.**
+  When a client-assertion is signed with a key whose `kid` is absent from the
+  OP's cached copy of the client's `jwks_uri` keyset — the signal that the RP
+  rotated its keys — the OP now performs a single cache-bypassing refetch and
+  retries verification, instead of rejecting the assertion until the cache TTL
+  lapses. The refetch is throttled per URL so an assertion replayed with random
+  unknown `kid`s cannot amplify into unbounded outbound fetches.
 
 ### Security
 

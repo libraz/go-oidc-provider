@@ -34,6 +34,15 @@ type URLFetcher interface {
 	Fetch(ctx context.Context, url string) (*josev4.JSONWebKeySet, error)
 }
 
+// freshURLFetcher is the optional extension a [URLFetcher] implements to
+// support a cache-bypassing refetch. The production
+// [github.com/libraz/go-oidc-provider/internal/jar.Fetcher] satisfies it;
+// a fetcher that only implements [URLFetcher] simply loses key-rotation
+// recovery (the resolver falls back to the cached keyset).
+type freshURLFetcher interface {
+	FetchFresh(ctx context.Context, url string) (*josev4.JSONWebKeySet, error)
+}
+
 // StoreJWKSResolver is a [JWKSResolver] backed by an
 // [store.ClientStore]. It resolves a clientID to the client's
 // inline-registered JWKs ([store.Client.JWKs]). When the client has
@@ -123,4 +132,43 @@ func (r *StoreJWKSResolver) JWKS(ctx context.Context, clientID string) (*josev4.
 		return nil, ErrJWKSNotConfigured
 	}
 	return &keys, nil
+}
+
+// RefreshJWKS forces a cache-bypassing refetch of a jwks_uri-registered
+// client's keyset, so an assertion signed with a key the client rotated
+// in after the OP last cached its keyset can still authenticate. It is
+// consulted by [PrivateKeyJWTVerifier.Verify] only after a verification
+// miss, and only when the assertion's kid is absent from the cached set.
+//
+// Inline-JWKs clients cannot rotate out-of-band, so RefreshJWKS returns
+// their inline keyset unchanged (equivalent to [StoreJWKSResolver.JWKS]).
+// A jwks_uri client whose fetcher does not implement [freshURLFetcher]
+// yields [ErrJWKSURIUnsupported]; the verifier treats that as "no fresh
+// keys available" and leaves the original miss in place.
+func (r *StoreJWKSResolver) RefreshJWKS(ctx context.Context, clientID string) (*josev4.JSONWebKeySet, error) {
+	client, err := r.clients.GetClient(ctx, clientID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, ErrJWKSNotConfigured
+		}
+		return nil, fmt.Errorf("clientauth: client lookup: %w", err)
+	}
+	if len(client.JWKs) != 0 {
+		return r.JWKS(ctx, clientID)
+	}
+	if client.JWKsURI == "" {
+		return nil, ErrJWKSNotConfigured
+	}
+	fresh, ok := r.urlFetcher.(freshURLFetcher)
+	if r.urlFetcher == nil || !ok {
+		return nil, ErrJWKSURIUnsupported
+	}
+	keys, err := fresh.FetchFresh(ctx, client.JWKsURI)
+	if err != nil {
+		return nil, fmt.Errorf("clientauth: refetch JWKs: %w", err)
+	}
+	if keys == nil || len(keys.Keys) == 0 {
+		return nil, ErrJWKSNotConfigured
+	}
+	return keys, nil
 }

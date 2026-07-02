@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	josev4 "github.com/go-jose/go-jose/v4"
+
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -76,6 +78,81 @@ func TestJWKSCache_HitWithinTTL(t *testing.T) {
 	if got := hits.Load(); got != 1 {
 		t.Errorf("hits=%d want 1", got)
 	}
+}
+
+func TestFetchFresh_BypassesFreshCacheThenThrottles(t *testing.T) {
+	t.Parallel()
+
+	// A rotating server: the served kid flips after the first response so
+	// a forced refetch observes a genuinely different keyset. hits counts
+	// the network round-trips FetchFresh actually made.
+	hits := &atomic.Int32{}
+	body := func(kid string) string {
+		return `{"keys":[{"kty":"EC","crv":"P-256","x":"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU","y":"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0","kid":"` + kid + `"}]}`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := hits.Add(1)
+		w.Header().Set("Content-Type", "application/jwk-set+json")
+		w.Header().Set("Cache-Control", "max-age=300")
+		if n == 1 {
+			_, _ = w.Write([]byte(body("k1")))
+			return
+		}
+		_, _ = w.Write([]byte(body("k2")))
+	}))
+	defer srv.Close()
+
+	clock := &movableClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	f := NewFetcher(clock)
+	f.SetAllowPrivate(true) // httptest binds to 127.0.0.1.
+
+	// Prime the positive cache (kid k1), well inside its 300s TTL.
+	if _, err := f.Fetch(context.Background(), srv.URL); err != nil {
+		t.Fatalf("prime fetch: %v", err)
+	}
+
+	// FetchFresh must bypass the still-fresh cache and observe the rotated
+	// keyset (kid k2), even though a plain Fetch would return k1.
+	got, err := f.FetchFresh(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("FetchFresh 1: %v", err)
+	}
+	if len(got.Keys) != 1 || got.Keys[0].KeyID != "k2" {
+		t.Fatalf("FetchFresh returned kid %v, want k2", keyIDs(got))
+	}
+	if n := hits.Load(); n != 2 {
+		t.Fatalf("hits=%d after first FetchFresh, want 2", n)
+	}
+
+	// A second FetchFresh inside the throttle window must not hit the
+	// network; it returns the cached (now k2) keyset.
+	got, err = f.FetchFresh(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("FetchFresh 2: %v", err)
+	}
+	if len(got.Keys) != 1 || got.Keys[0].KeyID != "k2" {
+		t.Fatalf("throttled FetchFresh returned kid %v, want cached k2", keyIDs(got))
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("hits=%d after throttled FetchFresh, want still 2", n)
+	}
+
+	// Past the throttle window a forced refetch is allowed again.
+	clock.now = clock.now.Add(minForcedRefreshInterval + time.Second)
+	if _, err := f.FetchFresh(context.Background(), srv.URL); err != nil {
+		t.Fatalf("FetchFresh 3: %v", err)
+	}
+	if n := hits.Load(); n != 3 {
+		t.Errorf("hits=%d after throttle window elapsed, want 3", n)
+	}
+}
+
+func keyIDs(set *josev4.JSONWebKeySet) []string {
+	out := make([]string, 0, len(set.Keys))
+	for i := range set.Keys {
+		out = append(out, set.Keys[i].KeyID)
+	}
+	return out
 }
 
 func TestJWKSCache_RevalidatesViaETag(t *testing.T) {

@@ -51,6 +51,17 @@ const (
 	// to collapse bursts without delaying recovery from a transient RP
 	// outage by more than a few seconds.
 	defaultJWKSNegativeTTL = 5 * time.Second
+
+	// minForcedRefreshInterval throttles [Fetcher.FetchFresh], the
+	// cache-bypassing refetch used when a client-assertion carries a
+	// kid absent from the cached keyset (an RP that rotated its
+	// jwks_uri keys). Without a throttle an attacker could replay
+	// assertions bearing random unknown kids to force one outbound
+	// fetch per inbound request; capping forced refreshes to one per
+	// URL per interval bounds that to a trickle while still letting a
+	// genuine rotation propagate within seconds — well inside the
+	// delay an RP waits after rotating before it relies on the new key.
+	minForcedRefreshInterval = 20 * time.Second
 )
 
 // jwksCache is a tiny thread-safe TTL cache keyed by the JWKs URL. It
@@ -64,7 +75,10 @@ type jwksCache struct {
 	mu       sync.RWMutex
 	entries  map[string]*jwksEntry
 	failures map[string]*jwksFailure
-	clock    timex.Clock
+	// forced records the last time a cache-bypassing refetch ran for a
+	// URL, so [jwksCache.tryForced] can throttle FetchFresh per URL.
+	forced map[string]time.Time
+	clock  timex.Clock
 }
 
 // jwksEntry is the stored projection of one keyset. Keys is the parsed
@@ -95,8 +109,25 @@ func newJWKSCache(clock timex.Clock) *jwksCache {
 	return &jwksCache{
 		entries:  make(map[string]*jwksEntry),
 		failures: make(map[string]*jwksFailure),
+		forced:   make(map[string]time.Time),
 		clock:    clock,
 	}
+}
+
+// tryForced reports whether a cache-bypassing refetch is permitted for
+// url right now, recording the attempt when it returns true. It returns
+// false while a previous forced refetch sits inside interval, so a burst
+// of assertions bearing unknown kids collapses to at most one outbound
+// fetch per interval per URL.
+func (c *jwksCache) tryForced(url string, interval time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.clock.Now()
+	if last, ok := c.forced[url]; ok && now.Sub(last) < interval {
+		return false
+	}
+	c.forced[url] = now
+	return true
 }
 
 // get returns the cached entry for url if it is still within its TTL.
@@ -284,6 +315,47 @@ func (f *Fetcher) Fetch(ctx context.Context, jwksURI string) (*josev4.JSONWebKey
 		if entry, ok := f.cache.get(jwksURI); ok {
 			return entry.keys, nil
 		}
+		keys, err := f.doFetch(ctx, jwksURI)
+		if err != nil {
+			f.cache.putFailure(jwksURI, err, defaultJWKSNegativeTTL)
+			return nil, err
+		}
+		return keys, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	keys, ok := v.(*josev4.JSONWebKeySet)
+	if !ok {
+		return nil, fmt.Errorf("%w: singleflight returned %T", ErrJWKSFetch, v)
+	}
+	return keys, nil
+}
+
+// FetchFresh forces a cache-bypassing refetch of jwksURI, used when a
+// caller (client-assertion verification) holds a cached keyset that no
+// longer contains the key a signature names — the signal that the RP
+// rotated the keys published at its jwks_uri. Unlike [Fetcher.Fetch] it
+// does not short-circuit on a still-fresh positive-cache entry; it goes
+// straight to the network (via a conditional GET, so an unchanged
+// upstream still costs only a 304) and stores the result.
+//
+// Forced refetches are throttled per URL by [minForcedRefreshInterval]
+// so a client replaying assertions with random unknown kids cannot
+// amplify into unbounded outbound fetches. When the throttle denies the
+// refetch the current cached keyset is returned unchanged (the caller's
+// re-verification then fails cleanly, without a network round-trip); if
+// nothing is cached the throttle is not applied, because there is no
+// entry to protect and the first fetch must be allowed to proceed.
+func (f *Fetcher) FetchFresh(ctx context.Context, jwksURI string) (*josev4.JSONWebKeySet, error) {
+	cached, cacheHit := f.cache.get(jwksURI)
+	if cacheHit && !f.cache.tryForced(jwksURI, minForcedRefreshInterval) {
+		return cached.keys, nil
+	}
+	// A distinct singleflight key keeps this forced path from collapsing
+	// onto an in-flight ordinary Fetch, whose inner re-check would return
+	// the stale positive-cache entry and defeat the refresh.
+	v, err, _ := f.flight.Do(jwksURI+"\x00fresh", func() (any, error) {
 		keys, err := f.doFetch(ctx, jwksURI)
 		if err != nil {
 			f.cache.putFailure(jwksURI, err, defaultJWKSNegativeTTL)

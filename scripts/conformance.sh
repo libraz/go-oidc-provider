@@ -356,6 +356,28 @@ compose_cmd() {
   printf 'docker compose -p %q -f %q' "${COMPOSE_PROJECT}" "${COMPOSE_FILE}"
 }
 
+extract_ofcs_ca() {
+  # Pin the live OFCS nginx self-signed cert into OFCS_CA_FILE so
+  # op-demo's JWKS fetcher trusts the runner-controlled jwks_uri
+  # endpoints OFCS serves over TLS. The nginx image ships its own cert,
+  # which changes whenever the pinned IMAGE_TAG is bumped; extracting it
+  # from the running listener here (rather than relying on a hand-copied
+  # file) keeps the bundle from going stale against the current suite and
+  # silently failing the jwks_uri-dependent modules
+  # (oidcc-registration-jwks-uri / oidcc-refresh-token-rp-key-rotation),
+  # which surface only as an INTERRUPTED result with no OP-side error.
+  local hostport="${OFCS_API#*://}"
+  local pem
+  if pem="$(printf '' | openssl s_client -connect "${hostport}" \
+        -servername localhost.emobix.co.uk 2>/dev/null \
+        | openssl x509 2>/dev/null)" && [[ -n "${pem}" ]]; then
+    printf '%s\n' "${pem}" > "${OFCS_CA_FILE}"
+    echo "[ofcs-up] pinned OFCS CA -> ${OFCS_CA_FILE}"
+  else
+    echo "[ofcs-up] WARNING: could not extract OFCS CA from ${hostport}; jwks_uri modules may fail" >&2
+  fi
+}
+
 cmd_ofcs_up() {
   if [[ ! -f "${TRUSTSTORE_FILE}" ]]; then
     echo "[ofcs-up] missing ${TRUSTSTORE_FILE}; run \`$0 certs\` first" >&2
@@ -373,6 +395,7 @@ cmd_ofcs_up() {
     if curl -sk --max-time 2 -o /dev/null -w '%{http_code}' \
          "${OFCS_API}/" 2>/dev/null | grep -qE '^(200|302|401|403|404)$'; then
       echo "[ofcs-up] OFCS UI reachable after ${i}s"
+      extract_ofcs_ca
       return 0
     fi
     sleep 1

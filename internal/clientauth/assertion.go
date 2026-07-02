@@ -116,8 +116,6 @@ type PrivateKeyJWTVerifier struct {
 }
 
 // Verify implements [AssertionVerifier].
-//
-//nolint:cyclop // Verify enumerates the RFC 7523 client-assertion gates in flat shape; refactor would obscure spec mapping.
 func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion string) error {
 	if v.Resolver == nil || v.JTIStore == nil || v.Clock == nil || v.Audience == "" {
 		return errors.New("authn: PrivateKeyJWTVerifier missing required fields")
@@ -134,13 +132,9 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if !assertionAlgAllowed(ctx, v.Resolver, clientID, jws) {
 		return ErrCredentialsInvalid
 	}
-	keys, err := v.Resolver.JWKS(ctx, clientID)
-	if err != nil || keys == nil || len(keys.Keys) == 0 {
-		return ErrCredentialsInvalid
-	}
-	payload, err := verifySignature(jws, keys)
+	payload, err := resolveAndVerify(ctx, v.Resolver, clientID, jws)
 	if err != nil {
-		return ErrCredentialsInvalid
+		return err
 	}
 	claims, err := decodeAssertionClaims(payload)
 	if err != nil {
@@ -159,6 +153,91 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 		return fmt.Errorf("authn: jti store: %w", err)
 	}
 	return nil
+}
+
+// resolveAndVerify resolves the client's keyset and verifies the
+// assertion signature against it. On a verification miss that a key
+// rotation could explain (see [refreshedKeysOnKIDMiss]) it refetches the
+// keyset once and retries. Any failure collapses to
+// [ErrCredentialsInvalid] so the wire response never distinguishes
+// "unknown client" / "no keys" / "bad signature".
+func resolveAndVerify(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) ([]byte, error) {
+	keys, err := resolver.JWKS(ctx, clientID)
+	if err != nil || keys == nil || len(keys.Keys) == 0 {
+		return nil, ErrCredentialsInvalid
+	}
+	if payload, vErr := verifySignature(jws, keys); vErr == nil {
+		return payload, nil
+	}
+	// RP key rotation: the assertion may be signed with a key the client
+	// rotated in after the OP last cached its jwks_uri keyset. When the
+	// signing kid is absent from the cached set and the resolver supports
+	// a (throttled) refetch, pull the current keyset once and retry.
+	refreshed, ok := refreshedKeysOnKIDMiss(ctx, resolver, clientID, jws, keys)
+	if !ok {
+		return nil, ErrCredentialsInvalid
+	}
+	payload, err := verifySignature(jws, refreshed)
+	if err != nil {
+		return nil, ErrCredentialsInvalid
+	}
+	return payload, nil
+}
+
+// jwksRefresher is the optional extension a [JWKSResolver] implements to
+// expose a cache-bypassing keyset refetch for RP key rotation. The
+// production [StoreJWKSResolver] satisfies it; a resolver that does not
+// simply forgoes rotation recovery.
+type jwksRefresher interface {
+	RefreshJWKS(ctx context.Context, clientID string) (*josev4.JSONWebKeySet, error)
+}
+
+// refreshedKeysOnKIDMiss returns a freshly-fetched keyset, and true, when
+// a verification miss is plausibly a rotated-out key: the resolver
+// supports a refetch AND the assertion's signing kid is absent from the
+// keyset just tried. It returns ok=false when rotation cannot explain the
+// miss (resolver has no refetch, kid is present so the signature is
+// simply wrong, or the refetch failed), so the caller rejects without a
+// wasted retry.
+func refreshedKeysOnKIDMiss(
+	ctx context.Context,
+	resolver JWKSResolver,
+	clientID string,
+	jws *josev4.JSONWebSignature,
+	tried *josev4.JSONWebKeySet,
+) (*josev4.JSONWebKeySet, bool) {
+	refresher, ok := resolver.(jwksRefresher)
+	if !ok || !assertionKIDAbsent(jws, tried) {
+		return nil, false
+	}
+	fresh, err := refresher.RefreshJWKS(ctx, clientID)
+	if err != nil || fresh == nil || len(fresh.Keys) == 0 {
+		return nil, false
+	}
+	return fresh, true
+}
+
+// assertionKIDAbsent reports whether the assertion's signing key id is
+// missing from keys. A signature with no kid is treated as absent (a
+// single-key rotation still warrants one refetch); an empty keyset is
+// absent by definition.
+func assertionKIDAbsent(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) bool {
+	if len(jws.Signatures) == 0 {
+		return false
+	}
+	kid := jws.Signatures[0].Header.KeyID
+	if keys == nil || len(keys.Keys) == 0 {
+		return true
+	}
+	if kid == "" {
+		return true
+	}
+	for i := range keys.Keys {
+		if keys.Keys[i].KeyID == kid {
+			return false
+		}
+	}
+	return true
 }
 
 func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) bool {
