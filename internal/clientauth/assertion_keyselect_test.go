@@ -17,7 +17,7 @@ import (
 
 // keyselectAud is the token-endpoint audience the key-selection tests
 // mint assertions for.
-const keyselectAud = "https://op.test/oidc/token" //nolint:gosec // endpoint URL, not a credential.
+const keyselectAud = "https://op.test/oidc/token"
 
 func rsaSigJWK(pub *rsa.PublicKey, kid string) josev4.JSONWebKey {
 	return josev4.JSONWebKey{Key: pub, KeyID: kid, Algorithm: string(josev4.RS256), Use: "sig"}

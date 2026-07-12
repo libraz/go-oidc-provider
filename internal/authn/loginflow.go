@@ -651,7 +651,7 @@ func (o *Orchestrator) recordLoginFlowResult(ctx context.Context, st State, step
 // [ErrInvalidStateRef] (a stale token from an earlier step cannot
 // drive the current one).
 //
-//nolint:gocognit // submission dispatcher enumerates step / AAL / factor branches in flat shape; refactor would obscure flow ordering.
+//nolint:gocognit,cyclop // submission dispatcher enumerates step / AAL / factor branches in flat shape; refactor would obscure flow ordering.
 func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, in Input, kind string) (State, interaction.Step, error) {
 	flow := o.cfg.LoginFlow
 	if flow == nil || st.ActiveStepKind == "" || st.ActiveStepKind != kind {
