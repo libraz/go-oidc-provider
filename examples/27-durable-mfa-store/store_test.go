@@ -55,6 +55,7 @@ func sampleRecord() *store.TOTPRecord {
 }
 
 func TestPutGetRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
 	ctx := context.Background()
 
@@ -84,6 +85,7 @@ func TestPutGetRoundTrip(t *testing.T) {
 }
 
 func TestGetNotFound(t *testing.T) {
+	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
 	_, err := s.Get(context.Background(), "absent")
 	if !errors.Is(err, store.ErrNotFound) {
@@ -92,6 +94,7 @@ func TestGetNotFound(t *testing.T) {
 }
 
 func TestPutNilRecord(t *testing.T) {
+	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
 	if err := s.Put(context.Background(), nil); err == nil {
 		t.Fatal("Put(nil) = nil, want error")
@@ -99,6 +102,7 @@ func TestPutNilRecord(t *testing.T) {
 }
 
 func TestAccept(t *testing.T) {
+	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
 	ctx := context.Background()
 
@@ -151,6 +155,7 @@ func TestAccept(t *testing.T) {
 }
 
 func TestAcceptNilRecord(t *testing.T) {
+	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
 	if err := s.Accept(context.Background(), nil); err == nil {
 		t.Fatal("Accept(nil) = nil, want error")
@@ -158,6 +163,7 @@ func TestAcceptNilRecord(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
+	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
 	ctx := context.Background()
 
@@ -177,6 +183,7 @@ func TestDelete(t *testing.T) {
 }
 
 func TestZeroTimeRoundTrip(t *testing.T) {
+	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
 	ctx := context.Background()
 
@@ -202,6 +209,7 @@ func TestZeroTimeRoundTrip(t *testing.T) {
 // written through one connection survives a Close and reopen of the
 // same file, ciphertext bytes and all.
 func TestDurability(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "durable.db")
 	ctx := context.Background()
 
