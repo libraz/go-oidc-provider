@@ -13,7 +13,7 @@ Embedder-side install (the same versions every example pins):
 
 ```sh
 go get github.com/libraz/go-oidc-provider/op@v0.9.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0    # examples 06 / 07 / 08 / 09
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0    # examples 06 / 07 / 08 / 09 / 27
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0  # example 09
 ```
 
@@ -69,6 +69,7 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | require password + TOTP at every login (always-on 2FA) | [`20-mfa-totp`](20-mfa-totp/main.go) |
 | require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
 | step a logged-in session up to a higher ACR (RFC 9470) | [`23-step-up`](23-step-up/main.go) |
+| persist MFA factors (TOTP) on a real database | [`27-durable-mfa-store`](27-durable-mfa-store/main.go) |
 | drive a TV / IoT / CLI tool via RFC 8628 device authorization | [`31-device-code-cli`](31-device-code-cli/main.go) |
 | issue tokens via Client-Initiated Backchannel Authentication (CIBA) | [`32-ciba-pos`](32-ciba-pos/main.go) |
 | exchange a service token for an audience-narrowed token (RFC 8693) | [`33-token-exchange-delegation`](33-token-exchange-delegation/main.go) |

@@ -130,6 +130,18 @@ Bring your own backend by implementing the substore interfaces in
 | `redis` | `op/storeadapter/redis` | Volatile substores (`InteractionStore`, `ConsumedJTIStore`). **Sub-module.** Refuses to start without TLS (`rediss://`) and AUTH unless `WithDevModeAllowPlaintext` is set explicitly. |
 | `composite` | `op/storeadapter/composite` | Hot/cold splitter — durable substores to one backend, volatile to another, while enforcing the transactional-cluster invariant. |
 
+**Authentication-factor stores are embedder-owned.** The adapters above persist
+the OIDC/OAuth substores. The factors a login flow can require — TOTP, passkey,
+recovery codes, email OTP, and the brute-force lockout counter — are separate
+substores (`store.TOTPStore`, `store.PasskeyStore`, `store.RecoveryStore`,
+`store.EmailOTPStore`, `store.AuthnLockoutStore`) injected through the
+authenticator config, because their schema and encryption-key management are
+deployment decisions. Only the `inmem` reference implements them, so a
+production deployment supplies its own durable versions.
+[`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go) is a
+copy-and-adapt template: a SQL-backed `store.TOTPStore` sharing one database
+with the core adapter.
+
 DynamoDB is planned for v1.x as an additional sub-module. Background:
 [Operations — multi-instance](https://go-oidc-provider.libraz.net/operations/multi-instance).
 
