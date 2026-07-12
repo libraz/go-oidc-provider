@@ -321,10 +321,15 @@ func verifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) (
 			return payload, nil
 		}
 		trials++
-		// Bound the kid-less sweep. Kid-present candidate sets are already
-		// bounded to the keys sharing that exact kid, so the cap applies
-		// only to the kid-less branch.
-		if header.KeyID == "" && trials >= jose.MaxKidlessTrialKeys {
+		// Bound the trial verifications regardless of whether a kid was
+		// named. The kid-less branch trials every alg/shape-matching key,
+		// but a kid-present branch is only bounded to a single key when the
+		// keyset carries at most one key per kid — nothing enforces kid
+		// uniqueness, so a client serving many same-kid, same-alg keys would
+		// otherwise reopen the per-key amplification the cap exists to close.
+		// A legitimate client has at most a handful of keys sharing an exact
+		// kid (rotation overlap), well under the cap.
+		if trials >= jose.MaxKidlessTrialKeys {
 			break
 		}
 	}

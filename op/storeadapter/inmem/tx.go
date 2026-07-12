@@ -753,9 +753,10 @@ func (p *txPARs) Consume(ctx context.Context, uri string) (*store.PushedAuthRequ
 	if rec == nil {
 		return nil, store.ErrNotFound
 	}
-	if isExpired(rec.ExpiresAt, p.tx.clock) {
-		return nil, store.ErrNotFound
-	}
+	// Consume enforces single-use only; expiry is gated at presentation
+	// by Find (see store.PushedAuthRequestStore.Consume). An interactive
+	// login that outlives the request_uri lifetime still redeems here,
+	// matching the non-transactional parStore.Consume and the SQL adapter.
 	if rec.ConsumedAt != nil {
 		return nil, store.ErrAlreadyConsumed
 	}

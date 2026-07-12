@@ -425,6 +425,39 @@ var transactionalCases = []subtest{
 	{"BeginRollback", txBeginRollback},
 	{"RollbackAfterCommitNoOp", txRollbackAfterCommitNoOp},
 	{"CrossSubstore", txCrossSubstore},
+	{"PARConsumeExpiredStillRedeems", txPARConsumeExpiredStillRedeems},
+}
+
+// txPARConsumeExpiredStillRedeems mirrors [parConsumeExpiredStillRedeems] on
+// the transactional path: an embedder that consumes the request_uri inside a
+// BeginTx transaction (so the consume is atomic with the authorization code's
+// existence) MUST see the same single-use-only Consume contract — expiry is
+// gated at presentation by Find, not at Consume. This pins the two Consume
+// implementations against drift.
+func txPARConsumeExpiredStillRedeems(t *testing.T, f Factory) {
+	b := f(t)
+	txr := requireTransactional(t, b.Store)
+	ctx := context.Background()
+	par := newPAR(b.Now(), "urn:par:tx-exp-consume")
+	par.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := b.Store.PushedAuthRequests().Save(ctx, par); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	tx, err := txr.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	got, err := tx.PushedAuthRequests().Consume(ctx, "urn:par:tx-exp-consume")
+	if err != nil {
+		t.Fatalf("tx Consume expired-but-unconsumed: want success, got %v", err)
+	}
+	if got.ConsumedAt == nil {
+		t.Fatal("tx Consume returned ConsumedAt=nil")
+	}
+	if _, err := tx.PushedAuthRequests().Consume(ctx, "urn:par:tx-exp-consume"); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("second tx Consume: want ErrAlreadyConsumed, got %v", err)
+	}
 }
 
 func txBeginCommit(t *testing.T, f Factory) {

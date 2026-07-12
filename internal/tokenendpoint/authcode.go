@@ -380,11 +380,13 @@ func issueAuthCodeResponse(
 			Extra:       idTokenExtra,
 		})
 		if err != nil {
+			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
+			revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
 			writeError(w, http.StatusInternalServerError, errServerError, "")
 			return
 		}
@@ -404,6 +406,7 @@ func issueAuthCodeResponse(
 		authCtx.withAuthorizationDetails(authorizationDetails),
 	)
 	if err != nil {
+		revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
@@ -412,11 +415,8 @@ func issueAuthCodeResponse(
 		// format, persisted — before the tombstone refusal fired. Revoke
 		// the opaque-AT row too (not just the refresh token) so a refused
 		// mint does not leave an orphaned, still-valid access token that
-		// lingers until TTL/GC. The store is nil for JWT-only embedders;
-		// guard the call. Idempotent when no row matches.
-		if deps.OpaqueAccessTokens != nil {
-			_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, exchanged.GrantID)
-		}
+		// lingers until TTL/GC.
+		revokeOrphanedOpaqueAccessToken(ctx, deps, exchanged.GrantID)
 		if refreshToken != "" {
 			_ = deps.RefreshTokens.RevokeByGrant(ctx, exchanged.GrantID)
 		}
@@ -432,6 +432,19 @@ func issueAuthCodeResponse(
 		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
 		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
 	})
+}
+
+// revokeOrphanedOpaqueAccessToken revokes the opaque access-token row minted
+// for grantID when the auth-code exchange fails after the row was persisted
+// but before the token value reached the client. The raw token is never
+// written to the response (or logged) on these error paths, so no party holds
+// a usable bearer; this only stops a dead, still-valid row from lingering
+// until TTL/GC. The store is nil for JWT-only embedders; guard the call.
+// Idempotent when no row matches.
+func revokeOrphanedOpaqueAccessToken(ctx context.Context, deps Deps, grantID string) {
+	if deps.OpaqueAccessTokens != nil {
+		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+	}
 }
 
 // enforceAuthCodeGrantTombstoneMintRefusal refuses to mint tokens when the

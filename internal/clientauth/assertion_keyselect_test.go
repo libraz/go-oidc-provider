@@ -115,3 +115,42 @@ func TestPrivateKeyJWTVerifier_KidlessTrialCapBoundsSweep(t *testing.T) {
 		t.Fatalf("signer within kid-less trial cap rejected: %v", err)
 	}
 }
+
+// TestPrivateKeyJWTVerifier_DuplicateKidTrialCapBoundsSweep pins that the
+// trial cap also bounds a kid-present sweep. A `kid` is meant to name one
+// key, but nothing enforces uniqueness: a client can serve many keys sharing
+// an exact kid. Without capping the kid-present branch, an assertion naming
+// that kid would force one RSA verify per duplicate — reopening the very
+// amplification the kid gate exists to close. Exactly jose.MaxKidlessTrialKeys
+// duplicates are trialled; a signer positioned beyond that bound is
+// unreachable, while one within it authenticates.
+func TestPrivateKeyJWTVerifier_DuplicateKidTrialCapBoundsSweep(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	signer := newRSAKey(t)
+
+	const dupKID = "shared"
+	trialCap := jose.MaxKidlessTrialKeys
+	decoys := make([]josev4.JSONWebKey, 0, trialCap)
+	for range trialCap {
+		decoys = append(decoys, rsaSigJWK(&newRSAKey(t).PublicKey, dupKID))
+	}
+
+	// Signer sits one past the cap behind trialCap same-kid decoys: the
+	// sweep over keys.Key(dupKID) breaks after trialCap failed verifies,
+	// before reaching it.
+	beyondCap := &josev4.JSONWebKeySet{Keys: append(append([]josev4.JSONWebKey{}, decoys...), rsaSigJWK(&signer.PublicKey, dupKID))}
+	beyond := signRSAAssertion(t, signer, dupKID, keyselectClaims(now, "j-dupkid-beyond"))
+	if err := keyselectVerifier(t, beyondCap, now).Verify(context.Background(), "client-1", beyond); !errors.Is(err, clientauth.ErrCredentialsInvalid) {
+		t.Fatalf("signer beyond duplicate-kid trial cap was reached: err=%v want ErrCredentialsInvalid", err)
+	}
+
+	// Positive control: signer within the bound (cap-1 same-kid decoys
+	// before it) still authenticates.
+	withinCap := &josev4.JSONWebKeySet{Keys: append(append([]josev4.JSONWebKey{}, decoys[:trialCap-1]...), rsaSigJWK(&signer.PublicKey, dupKID))}
+	within := signRSAAssertion(t, signer, dupKID, keyselectClaims(now, "j-dupkid-within"))
+	if err := keyselectVerifier(t, withinCap, now).Verify(context.Background(), "client-1", within); err != nil {
+		t.Fatalf("signer within duplicate-kid trial cap rejected: %v", err)
+	}
+}
