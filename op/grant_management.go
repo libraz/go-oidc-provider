@@ -11,9 +11,9 @@ import (
 // actions are supplied at the authorization endpoint; query / revoke are
 // operations on the grant management endpoint (GET / DELETE).
 //
-// Experimental: the Grant Management spec is an IETF draft (see ADR 0006
-// for the pinned revision); the enum and its option MAY change to track a
-// wire-incompatible draft bump before v1.0.
+// Experimental: the Grant Management spec is an IETF draft (see the
+// homepage's design judgment #31); the enum and its option MAY change to
+// track a wire-incompatible draft bump before v1.0.
 type GrantManagementAction string
 
 const (
@@ -61,8 +61,8 @@ func (a GrantManagementAction) valid() bool {
 //
 // Enabling this implicitly turns on [feature.GrantManagement].
 //
-// Experimental: tracks an IETF draft (ADR 0006); the surface MAY change on
-// a wire-incompatible draft bump before v1.0.
+// Experimental: tracks an IETF draft (design judgment #31); the surface MAY
+// change on a wire-incompatible draft bump before v1.0.
 func WithGrantManagement(actions []GrantManagementAction, actionRequired bool) Option {
 	return optionFunc(func(c *config) error {
 		if len(actions) == 0 {

@@ -12,9 +12,9 @@ All examples build behind the `example` build tag, so they are excluded from
 Embedder-side install (the same versions every example pins):
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0    # examples 06 / 07 / 08 / 09 / 27
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0  # example 09
+go get github.com/libraz/go-oidc-provider/op@v0.9.5
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.5    # examples 06 / 07 / 08 / 09 / 27
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.5  # example 09
 ```
 
 Each row in the table below also maps to a use-case page on the docs site under

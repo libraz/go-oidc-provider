@@ -20,9 +20,9 @@ import (
 // TestApplyDefaults_HTMLDriverDefault confirms the plan 005 §3.4
 // promise: with neither [WithInteractionDriver] nor [WithSPAUI] supplied
 // the OP boots with [interaction.HTMLDriver] as its default driver,
-// so an embedder who calls only the four required options
-// (WithIssuer / WithStore / WithKeyset / WithCookieKeys) still gets a
-// working HTML login surface.
+// so an embedder using the default authorization-code grant set with
+// the required constructor options (WithIssuer / WithStore / WithKeyset
+// / WithCookieKeys) still gets a working HTML login surface.
 func TestApplyDefaults_HTMLDriverDefault(t *testing.T) {
 	t.Parallel()
 
