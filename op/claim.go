@@ -151,6 +151,13 @@ type ScopeSet map[ScopeName]struct{}
 // ParseScopeSet splits an OAuth-style space-delimited scope string
 // into a [ScopeSet]. Empty input yields an empty (non-nil) set so
 // callers can use the result without nil checks.
+//
+// This public helper tokenises on any Unicode whitespace run (via
+// [strings.Fields]) — a deliberate superset of the RFC 6749 §3.3
+// separator (ASCII space, 0x20). The library's internal, wire-facing
+// scope parsing is strictly 0x20-only, so a scope string containing tabs
+// or newlines splits here but not on the protocol path. Spec-conformant
+// scope strings (0x20-separated) tokenise identically under both.
 func ParseScopeSet(raw string) ScopeSet {
 	out := ScopeSet{}
 	for _, tok := range strings.Fields(raw) {

@@ -189,7 +189,13 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 	case verr == nil:
 		if perr := a.store.Consume(ctx, res.Batch, res.Index); perr != nil {
 			if errors.Is(perr, store.ErrAlreadyConsumed) {
-				return interaction.Step{Prompt: a.prompt(batch)}, nil
+				// A concurrent request already consumed this slot (a
+				// replay lost the CAS). Surface ErrRetry rather than a
+				// silent nil re-prompt so the orchestrator emits the
+				// LoginAttempt observer event and advances the counter —
+				// the sibling email-OTP factor is non-silent in the same
+				// case, and a swallowed replay is an audit blind spot.
+				return interaction.Step{}, ErrRetry
 			}
 			return interaction.Step{}, fmt.Errorf("recovery: consume batch: %w", perr)
 		}

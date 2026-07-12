@@ -83,6 +83,31 @@ func TestWithAccessTokenTTL_RejectsNegative(t *testing.T) {
 	}
 }
 
+func TestWithPARLifetime_RejectsNegative(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t), op.WithPARLifetime(-1*time.Second))...)
+	if err == nil {
+		t.Fatal("expected error for negative PAR lifetime, got nil")
+	}
+	if !strings.Contains(err.Error(), "non-negative") {
+		t.Errorf("err = %v, want it to mention non-negative", err)
+	}
+}
+
+func TestWithPARLifetime_AcceptsZeroAndCustom(t *testing.T) {
+	t.Parallel()
+
+	// Zero opts into the PAR endpoint's own default (60s); a positive
+	// value is threaded to the record lifetime. Both must construct.
+	if _, err := op.New(append(validBaseOpts(t), op.WithPARLifetime(0))...); err != nil {
+		t.Fatalf("zero PAR lifetime: %v", err)
+	}
+	if _, err := op.New(append(validBaseOpts(t), op.WithPARLifetime(5*time.Minute))...); err != nil {
+		t.Fatalf("custom PAR lifetime: %v", err)
+	}
+}
+
 func TestWithAccessTokenTTL_AcceptsZero(t *testing.T) {
 	t.Parallel()
 

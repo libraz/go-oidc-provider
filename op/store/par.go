@@ -63,8 +63,12 @@ type PushedAuthRequestStore interface {
 	// it. The implementation MUST hash the presented uri and look up
 	// the resulting digest, comparing against the stored hash in
 	// constant time. It MUST return [ErrNotFound] when no such record
-	// exists. Find is exposed for diagnostics and pre-flight
-	// validation; the authoritative single-use check lives in
+	// exists, and — mirroring the sibling substores (RefreshToken,
+	// Session, Interaction) — MUST also return [ErrNotFound] for a
+	// record whose ExpiresAt has passed. Find is the expiry gate: the
+	// authorization endpoint calls it when the request_uri is presented,
+	// so an expired request_uri is rejected at presentation. The
+	// authoritative single-use check lives in
 	// [PushedAuthRequestStore.Consume].
 	Find(ctx context.Context, uri string) (*PushedAuthRequest, error)
 
@@ -75,5 +79,16 @@ type PushedAuthRequestStore interface {
 	// ConsumedAt was already set on entry, and a non-nil error if the
 	// compare-and-set fails. The returned record's ConsumedAt MUST be
 	// non-nil on success.
+	//
+	// Consume enforces single-use only; it MUST NOT reject a record
+	// solely because its ExpiresAt has passed. Expiry is gated at
+	// presentation by [PushedAuthRequestStore.Find], which the
+	// authorization endpoint calls when the request_uri is resolved. An
+	// interactive login (password + second factor + consent) that
+	// outlives the request_uri lifetime reaches Consume only after Find
+	// already admitted the request, so applying the expiry gate again
+	// here would fail the flow at code emission for no security benefit.
+	// The record's own single-use invariant, plus store-side GC of
+	// expired rows, remain the durability bounds.
 	Consume(ctx context.Context, uri string) (*PushedAuthRequest, error)
 }

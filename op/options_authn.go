@@ -99,11 +99,22 @@ const mfaEncryptionKeyLen = 32
 
 // WithAuthnLockoutStore wires the cross-factor brute-force counter
 // (M-AUTHN-1). When a non-nil store is supplied, every built-in
-// second-factor [Step] (StepTOTP, StepEmailOTP) consults the same
-// per-subject counter so an attacker pivoting between factors cannot
-// double their guess budget. The store backs the rolling 24-hour
-// window described in 02-product-design.md §M.6: a 1-hour lockout at
-// 30 cumulative failures, 24-hour at 90.
+// second-factor [Step] (StepTOTP, StepEmailOTP, StepRecoveryCode)
+// consults the same per-subject counter so an attacker pivoting between
+// factors cannot double their guess budget. The store backs the rolling
+// 24-hour window described in 02-product-design.md §M.6: a 1-hour lockout
+// at 30 cumulative failures, 24-hour at 90.
+//
+// Scope — the counter attaches ONLY to the built-in possession/recovery
+// factors above. It is deliberately NOT attached to the primary
+// credential factor (password / passkey) or to [ExternalStep] custom
+// factors: the primary credential's brute-force defence is the
+// embedder's user store (which owns the password hash, its own attempt
+// throttling, and account-lock policy), and a custom factor's guessing
+// budget is owned by whatever the embedder wraps behind [ExternalStep].
+// An embedder that wants the primary or a custom factor to share this
+// cross-factor counter wraps its authenticator with the factor package's
+// own WithLockout helper before registering it.
 //
 // Backends MUST guarantee atomic increment on
 // [store.AuthnLockoutStore.Increment] (in-memory backends hold a

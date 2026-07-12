@@ -408,6 +408,15 @@ func issueAuthCodeResponse(
 		return
 	}
 	if !enforceAuthCodeGrantTombstoneMintRefusal(ctx, w, deps, exchanged.GrantID, exchanged.IssuedAt) {
+		// The access token was already minted — and, for the opaque token
+		// format, persisted — before the tombstone refusal fired. Revoke
+		// the opaque-AT row too (not just the refresh token) so a refused
+		// mint does not leave an orphaned, still-valid access token that
+		// lingers until TTL/GC. The store is nil for JWT-only embedders;
+		// guard the call. Idempotent when no row matches.
+		if deps.OpaqueAccessTokens != nil {
+			_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, exchanged.GrantID)
+		}
 		if refreshToken != "" {
 			_ = deps.RefreshTokens.RevokeByGrant(ctx, exchanged.GrantID)
 		}

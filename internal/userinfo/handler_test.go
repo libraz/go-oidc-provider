@@ -118,6 +118,21 @@ func (f *userInfoFixture) newGet(tb testing.TB, token string) *http.Request {
 	return req
 }
 
+// newGetDPoP builds a GET /userinfo request presenting the token under the
+// RFC 9449 §7.1 "DPoP" authentication scheme, as a DPoP-bound access token
+// MUST be. The caller still sets the "DPoP" proof header separately.
+func (f *userInfoFixture) newGetDPoP(tb testing.TB, token string) *http.Request {
+	tb.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, f.endpoint, http.NoBody)
+	if err != nil {
+		tb.Fatalf("NewRequest: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "DPoP "+token)
+	}
+	return req
+}
+
 func TestHandler_HappyPath_OpenIDEmail(t *testing.T) {
 	t.Parallel()
 

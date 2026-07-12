@@ -508,6 +508,33 @@ func (o *Orchestrator) evalLoginFlowCaptchaRulesPrePrimary(ctx context.Context, 
 	return false, st, interaction.Step{}, nil
 }
 
+// loginFlowCaptchaPending reports whether a captcha challenge would
+// interpose before the next factor prompt right now. It mirrors the
+// captcha decision [advanceLoginFlow] makes — the built-in failure
+// threshold ([captchaRequired]) plus any not-yet-completed captcha-shaped
+// rule whose predicate currently matches — so the wrong-code retry
+// shortcut in [handleLoginFlowSubmission] does not re-emit a factor's
+// verify prompt when a challenge is due. When it returns true the caller
+// falls through to the dispatcher, which emits the captcha.
+func (o *Orchestrator) loginFlowCaptchaPending(st State, flow *CompiledLoginFlow) bool {
+	if o.captchaRequired(st) {
+		return true
+	}
+	lc := o.loginFlowContext(st)
+	for i, r := range flow.rules {
+		if !r.then.isCaptcha {
+			continue
+		}
+		if containsString(st.CompletedStepKinds, r.then.kind) {
+			continue
+		}
+		if recoverPredicate(o.logger, i, r.when, lc) {
+			return true
+		}
+	}
+	return false
+}
+
 // evalLoginFlowRules walks the compiled rule list in declaration
 // order and dispatches the first matching, not-yet-completed step.
 // Predicate panics are recovered per plan 005 H1-D §3 invariant 3.
@@ -646,7 +673,6 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 		if !step.isCaptcha {
 			o.observeFailure(ctx, st, in.Now, step.auth.Type())
 		}
-		st.FactorScratch = nil
 		// Soft failures (wrong password, etc.) advance the failure
 		// counter and re-emit the same factor's prompt so the SPA
 		// can let the user retry. Hard failures (store outage,
@@ -656,14 +682,32 @@ func (o *Orchestrator) handleLoginFlowSubmission(ctx context.Context, st State, 
 			if !step.isCaptcha {
 				st.LastFailures++
 			}
+			// A multi-step factor (e.g. email-OTP on its verify screen)
+			// returns the sub-prompt to re-show alongside ErrFactorRetry.
+			// Preserve its scratch and re-emit that prompt so a wrong-code
+			// retry stays on the verify screen instead of restarting the
+			// factor at its send screen (which would discard a usable code
+			// and burn the resend budget). This shortcut is taken only when
+			// no captcha needs to interpose; otherwise we fall through to
+			// the dispatcher so the challenge runs first.
+			if cont.Prompt != nil && !step.isCaptcha && !o.loginFlowCaptchaPending(st, flow) {
+				st.FactorScratch = cont.Scratch
+				next, emitted, perr := o.emitLoginFlowPrompt(st, kind, *cont.Prompt, in.Now)
+				if perr != nil {
+					return st, interaction.Step{}, perr
+				}
+				return next, emitted, nil
+			}
 			// Re-enter the dispatcher so a captcha-shaped rule whose
 			// predicate just became true (e.g., RuleAfterFailedAttempts
 			// crossing its threshold) can interpose. When no rule fires
 			// the dispatcher falls through to Primary and re-emits the
 			// same factor's prompt.
+			st.FactorScratch = nil
 			st.ActiveStepKind = ""
 			return o.advanceLoginFlow(ctx, st, in.Now)
 		}
+		st.FactorScratch = nil
 		return st, interaction.Step{}, err
 	}
 	if cont.Prompt != nil {

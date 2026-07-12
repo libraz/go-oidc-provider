@@ -99,6 +99,96 @@ func newClient() *store.Client {
 	return &store.Client{ID: testClientID}
 }
 
+// rotatingResolver models a jwks_uri client that rotated its keyset after
+// the OP cached it: Resolve returns the stale set (missing the new kid),
+// ResolveFresh returns the rotated set. It satisfies the optional
+// key-rotation-recovery seam the production resolver implements.
+type rotatingResolver struct {
+	stale, fresh *josev4.JSONWebKeySet
+	freshCalls   int
+}
+
+func (r *rotatingResolver) Resolve(context.Context, *store.Client) (*josev4.JSONWebKeySet, error) {
+	return r.stale, nil
+}
+
+func (r *rotatingResolver) ResolveFresh(context.Context, *store.Client) (*josev4.JSONWebKeySet, error) {
+	r.freshCalls++
+	return r.fresh, nil
+}
+
+// TestVerify_JWKSRotationRecovery pins the /authorize·/par·CIBA parity
+// with the private_key_jwt path: when a jwks_uri client signs a request
+// object with a key rotated in after the OP cached its keyset, the
+// verifier forces one cache-bypassing refetch and succeeds instead of
+// failing with invalid_request_object until the cache TTL lapses.
+func TestVerify_JWKSRotationRecovery(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, jwk, _ := signedRequestObject(t, happyClaims(now), "kid-rotated")
+	fresh := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*jwk}}
+	// The stale/cached set carries an unrelated key so key selection by
+	// the rotated kid misses and triggers the recovery path.
+	_, staleJWK, _ := signedRequestObject(t, happyClaims(now), "kid-old")
+	stale := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*staleJWK}}
+
+	res := &rotatingResolver{stale: stale, fresh: fresh}
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:          testIssuer,
+		Resolver:        res,
+		Clock:           fakeClock{now: now},
+		AllowMissingNbf: true,
+		AllowMissingJTI: true,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	client := &store.Client{ID: testClientID, JWKsURI: "https://rp.example.com/jwks"}
+	obj, err := v.Verify(context.Background(), raw, testClientID, client)
+	if err != nil {
+		t.Fatalf("Verify after rotation: %v", err)
+	}
+	if obj.Claims["state"] != "s" {
+		t.Errorf("Claims[state]=%v want s", obj.Claims["state"])
+	}
+	if res.freshCalls != 1 {
+		t.Errorf("freshCalls=%d want exactly 1 forced refetch", res.freshCalls)
+	}
+}
+
+// TestVerify_JWKSRotationRecovery_SkippedForInlineClient pins the guard:
+// an inline-JWKs client (no jwks_uri) cannot rotate out-of-band, so a key
+// miss must NOT trigger a refetch and the original miss stands.
+func TestVerify_JWKSRotationRecovery_SkippedForInlineClient(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	raw, _, _ := signedRequestObject(t, happyClaims(now), "kid-rotated")
+	_, staleJWK, _ := signedRequestObject(t, happyClaims(now), "kid-old")
+	stale := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*staleJWK}}
+	fresh := &josev4.JSONWebKeySet{Keys: []josev4.JSONWebKey{*staleJWK}}
+
+	res := &rotatingResolver{stale: stale, fresh: fresh}
+	v, err := jar.NewVerifier(jar.VerifierConfig{
+		Issuer:          testIssuer,
+		Resolver:        res,
+		Clock:           fakeClock{now: now},
+		AllowMissingNbf: true,
+		AllowMissingJTI: true,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	client := &store.Client{ID: testClientID} // inline-only: no JWKsURI
+	if _, err := v.Verify(context.Background(), raw, testClientID, client); !errors.Is(err, jar.ErrNoMatchingJWK) {
+		t.Fatalf("err=%v want ErrNoMatchingJWK", err)
+	}
+	if res.freshCalls != 0 {
+		t.Errorf("freshCalls=%d want 0 (inline client must not refetch)", res.freshCalls)
+	}
+}
+
 func TestVerify_HappyPath(t *testing.T) {
 	t.Parallel()
 

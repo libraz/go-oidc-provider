@@ -359,6 +359,18 @@ func enforceDPoPCnf(
 		respondDPoPInvalid(w, "DPoP verification is not enabled")
 		return false
 	}
+	// RFC 9449 §7.1: a DPoP-bound access token MUST be presented with the
+	// "DPoP" authentication scheme, not "Bearer" (and not via the POST
+	// access_token body channel, which carries no scheme). The proof check
+	// below would also reject a request that lacks a valid proof, but a
+	// Bearer-scheme presentation of a sender-constrained token is itself a
+	// §7.1 violation and blurs the signal the scheme is meant to carry, so
+	// reject it up front. enforceDPoPCnf is only reached for jkt-bound
+	// tokens, so this never affects plain bearer tokens.
+	if _, scheme, _ := endpointsupport.BearerCredentialFromHeader(r.Header.Get("Authorization")); scheme != endpointsupport.BearerSchemeDPoP {
+		respondDPoPInvalid(w, "DPoP-bound access token must use the DPoP authentication scheme")
+		return false
+	}
 	header := r.Header.Get("DPoP")
 	if header == "" {
 		respondDPoPInvalid(w, "DPoP proof required")

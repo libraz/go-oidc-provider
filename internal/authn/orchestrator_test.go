@@ -928,6 +928,119 @@ func TestTickFactorScratchRoundtrip(t *testing.T) {
 	}
 }
 
+// TestTickMultiStepFactorWrongCodeReShowsVerifyStep pins M-3 on the
+// legacy chain: a multi-step factor (send screen -> verify screen, as
+// email-OTP) that returns its verify prompt alongside ErrFactorRetry on
+// a wrong guess is re-shown the VERIFY prompt with its scratch preserved,
+// rather than restarted at the send screen. A restart would discard the
+// still-valid delivered code and burn the resend budget. The final
+// correct-code submission proves Continue kept seeing the verify scratch.
+func TestTickMultiStepFactorWrongCodeReShowsVerifyStep(t *testing.T) {
+	t.Parallel()
+
+	const (
+		sendType   = "auth.email_otp.send"
+		verifyType = "auth.email_otp.verify"
+	)
+	verifyScratch := []byte{0x01}
+	wrongCode := fmt.Errorf("emailotp: wrong code: %w", authn.ErrFactorRetry)
+	var seenScratch [][]byte
+	otp := &stubAuthenticator{
+		typeID:  op.FactorEmailOTP,
+		aal:     op.AAL2,
+		amr:     "otp",
+		prompts: []string{sendType, verifyType},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &interaction.Prompt{Type: sendType}}, nil
+		},
+		continueFn: func(_ context.Context, in op.ContinueInput) (interaction.Step, error) {
+			seenScratch = append(seenScratch, append([]byte(nil), in.Scratch...))
+			if len(in.Scratch) == 0 {
+				// Send step: deliver the code and advance to verify.
+				return interaction.Step{Prompt: &interaction.Prompt{Type: verifyType}, Scratch: verifyScratch}, nil
+			}
+			if in.Submission.Values["code"] == "correct" {
+				return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+			}
+			// Wrong guess on the verify screen: re-show verify, keep scratch.
+			return interaction.Step{Prompt: &interaction.Prompt{Type: verifyType}, Scratch: verifyScratch}, wrongCode
+		},
+	}
+	o, err := authn.New(authn.Config{
+		Authenticators: []op.Authenticator{otp},
+		StateRefSigner: newSigner(t),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	st := initialState()
+	st.Subject = "user-1"
+
+	// Begin -> send prompt.
+	st, step, err := o.Tick(context.Background(), st, authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("begin Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != sendType {
+		t.Fatalf("expected send prompt, got %+v", step.Prompt)
+	}
+
+	// Submit email -> verify prompt, scratch stored.
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"email": "a@b.c"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("send Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != verifyType {
+		t.Fatalf("expected verify prompt after send, got %+v", step.Prompt)
+	}
+	if !bytes.Equal(st.FactorScratch, verifyScratch) {
+		t.Fatalf("FactorScratch = %q, want verify scratch after send", st.FactorScratch)
+	}
+
+	// Wrong code -> RE-SHOW verify (not send), scratch preserved, counter up.
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"code": "000000"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("wrong-code Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != verifyType {
+		t.Fatalf("wrong code must re-show verify prompt, got %+v", step.Prompt)
+	}
+	if !bytes.Equal(st.FactorScratch, verifyScratch) {
+		t.Fatalf("FactorScratch = %q, want verify scratch preserved on retry", st.FactorScratch)
+	}
+	if st.LastFailures != 1 {
+		t.Errorf("LastFailures = %d, want 1", st.LastFailures)
+	}
+
+	// Correct code on the still-live verify step -> success.
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"code": "correct"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("correct-code Tick: %v", err)
+	}
+	if step.Result == nil || step.Result.Subject != "user-1" {
+		t.Fatalf("expected success Result, got %+v", step)
+	}
+	// The factor never returned to the send step: every Continue after the
+	// first saw the verify scratch (the retry did not reset it to empty).
+	if len(seenScratch) != 3 {
+		t.Fatalf("Continue calls = %d, want 3", len(seenScratch))
+	}
+	for i, s := range seenScratch[1:] {
+		if !bytes.Equal(s, verifyScratch) {
+			t.Errorf("Continue #%d scratch = %q, want verify scratch", i+2, s)
+		}
+	}
+}
+
 // buildSuccessAuthenticator constructs a stubAuthenticator that emits
 // a generic prompt on Begin and returns a Result with subject "user-1"
 // on Continue. Tests that need different subjects override the

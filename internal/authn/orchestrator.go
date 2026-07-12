@@ -286,15 +286,18 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 	})
 	if err != nil {
 		o.observeFailure(ctx, st, in.Now, auth.Type())
-		st.FactorScratch = nil
 		// Soft failures wrap [ErrFactorRetry]; observe the failure
 		// (already done), advance the brute-force counter, and
-		// re-emit the same factor's prompt so the SPA can offer a
-		// retry. Hard failures bubble up so the HTTP layer can
-		// surface 5xx / 4xx unchanged.
+		// re-emit the factor's prompt so the SPA can offer a retry.
+		// Hard failures bubble up so the HTTP layer can surface 5xx /
+		// 4xx unchanged. Scratch is cleared only on the hard-failure
+		// path; the retry helper decides whether to preserve it (a
+		// multi-step factor re-showing its current sub-step) or reset
+		// it (a single-step factor restarting via Begin).
 		if errors.Is(err, ErrFactorRetry) {
-			return o.softRetryAuthFactor(ctx, st, auth, in.Now, err)
+			return o.softRetryAuthFactor(ctx, st, auth, step, in.Now, err)
 		}
+		st.FactorScratch = nil
 		return st, interaction.Step{}, err
 	}
 	if step.Prompt != nil {
@@ -333,8 +336,24 @@ func (o *Orchestrator) handleAuthSubmission(ctx context.Context, st State, in In
 // when Begin cannot produce a retry prompt so the HTTP layer renders
 // the original auth-failure response rather than swallowing the
 // failure into a generic 5xx.
-func (o *Orchestrator) softRetryAuthFactor(ctx context.Context, st State, auth Authenticator, now time.Time, origErr error) (State, interaction.Step, error) {
+func (o *Orchestrator) softRetryAuthFactor(ctx context.Context, st State, auth Authenticator, cont interaction.Step, now time.Time, origErr error) (State, interaction.Step, error) {
 	st.LastFailures++
+	// A multi-step factor (e.g. email-OTP on its verify screen) returns
+	// the sub-prompt to re-show alongside ErrFactorRetry. Preserve its
+	// scratch (emitFactorPrompt mirrors cont.Scratch into
+	// [State.FactorScratch]) so the retry stays on the same sub-step
+	// instead of restarting the factor at its first screen and
+	// discarding any delivered challenge.
+	if cont.Prompt != nil {
+		next, emitted, perr := o.emitFactorPrompt(st, auth, cont, now)
+		if perr != nil {
+			return st, interaction.Step{}, perr
+		}
+		return next, emitted, nil
+	}
+	// Single-step factor: restart via Begin. Clear the scratch first so
+	// the re-issued prompt starts from a clean slate.
+	st.FactorScratch = nil
 	retry, berr := auth.Begin(ctx, BeginInput{
 		Subject:  st.Subject,
 		ClientID: st.ClientID,

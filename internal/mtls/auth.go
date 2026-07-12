@@ -116,6 +116,16 @@ const MethodSelfSignedTLSClientAuth = "self_signed_tls_client_auth"
 // A nil cert returns [ErrNoClientCert] so the caller can distinguish
 // "no cert at all" from "cert presented but does not satisfy the
 // registered method".
+//
+// Status: this verifier is complete but not yet wired into the token
+// endpoint's client-authentication dispatch, so RFC 8705 §2
+// tls_client_auth / self_signed_tls_client_auth are not selectable as a
+// token_endpoint_auth_method today. Wiring it requires the embedder's TLS
+// terminator (reverse proxy or [tls.Config.ClientCAs]) to surface the
+// verified client certificate to the token endpoint; that plumbing is a
+// follow-up. The mTLS *token binding* path (cnf.x5t#S256), which needs
+// only the presented cert thumbprint, IS wired and independent of this
+// client-authentication verifier.
 func VerifyClientAuth(method string, cert *x509.Certificate, expected ClientMatcher, jwks []byte) error {
 	switch method {
 	case MethodTLSClientAuth:

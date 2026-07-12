@@ -853,9 +853,9 @@ func (s *parStore) Consume(_ context.Context, uri string) (*store.PushedAuthRequ
 	if !constantTimeKeyMatch(rec.URI, key) {
 		return nil, store.ErrNotFound
 	}
-	if isExpired(rec.ExpiresAt, s.clock) {
-		return nil, store.ErrNotFound
-	}
+	// Consume enforces single-use only; expiry is gated at presentation
+	// by Find (see store.PushedAuthRequestStore.Consume). An interactive
+	// login that outlives the request_uri lifetime still redeems here.
 	if rec.ConsumedAt != nil {
 		return nil, store.ErrAlreadyConsumed
 	}

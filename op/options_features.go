@@ -139,6 +139,35 @@ func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 	})
 }
 
+// WithPARLifetime overrides the lifetime of a request_uri issued by the
+// PAR endpoint (RFC 9126 §2.2). Zero means "use the library default"
+// (60 seconds). A negative value is rejected at the option site so the
+// misconfiguration surfaces at startup.
+//
+// The lifetime bounds only how long the client has to present the
+// request_uri at /authorize: the expiry is checked when the request_uri
+// is resolved there, not when the authorization code is later emitted.
+// An interactive login (password + second factor + consent) that runs
+// longer than the lifetime therefore still completes — the request_uri
+// is single-use, and single-use, not expiry, is what the store enforces
+// at code emission. Deployments whose clients push a request_uri and
+// only redirect the browser some time later can raise this to widen the
+// presentation window; RFC 9126 §2.2 suggests a short value (typically
+// 60 seconds).
+// Stable since v0.x.
+func WithPARLifetime(ttl time.Duration) Option {
+	return optionFunc(func(c *config) error {
+		if ttl < 0 {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithPARLifetime requires a non-negative duration",
+			}
+		}
+		c.parLifetime = ttl
+		return nil
+	})
+}
+
 // WithStrictOfflineAccess flips the refresh-token issuance gate to
 // the strict reading of OIDC Core 1.0 §11: refresh tokens are issued
 // only when the granted scope contains "offline_access" (in addition

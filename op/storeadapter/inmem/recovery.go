@@ -62,6 +62,14 @@ func (s *recoveryStore) Consume(_ context.Context, b *store.RecoveryBatch, index
 	if index < 0 || index >= len(current.Codes) || index >= len(b.Codes) {
 		return store.ErrNotFound
 	}
+	// The batch may have been regenerated between the caller's Get and
+	// this Consume. A hash mismatch means the presented code belongs to a
+	// superseded batch and MUST NOT redeem a slot of the current one —
+	// otherwise a code the user revoked by regenerating could still burn
+	// a fresh slot (revocation bypass). Mirrors emailOTPStore.Consume.
+	if current.Codes[index].Hash != b.Codes[index].Hash {
+		return store.ErrAlreadyConsumed
+	}
 	if !current.Codes[index].ConsumedAt.IsZero() {
 		return store.ErrAlreadyConsumed
 	}

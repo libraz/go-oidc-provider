@@ -25,11 +25,16 @@ func ParseJWKSet(raw []byte) ([]JWK, error) {
 		if !key.Valid() {
 			return nil, ErrUnsupportedKeyShape
 		}
-		pub, ok := key.Key.(crypto.PublicKey)
-		if !ok {
+		// crypto.PublicKey is an alias for `any`, so the previous
+		// `key.Key.(crypto.PublicKey)` assertion never failed and admitted
+		// private (and symmetric) keys as if they were verification keys.
+		// A JWKS advertised for signature verification MUST carry only
+		// public asymmetric keys; reject anything else. IsPublic reports
+		// false for private and symmetric (oct) keys.
+		if !key.IsPublic() {
 			return nil, ErrUnsupportedKeyShape
 		}
-		out = append(out, JWK{Algorithm: key.Algorithm, Key: pub})
+		out = append(out, JWK{Algorithm: key.Algorithm, Key: key.Key})
 	}
 	return out, nil
 }

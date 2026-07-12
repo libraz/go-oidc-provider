@@ -275,10 +275,14 @@ type Deps struct {
 	// the same thumbprint so subsequent refreshes are gated on the
 	// same cert.
 	//
-	// DPoP and MTLS are mutually exclusive on a single token: when
-	// both are presented at /token the handler prefers DPoP (cnf.jkt)
-	// and skips the mTLS binding so the wire shape stays
-	// unambiguous.
+	// When BOTH a DPoP proof and a client certificate are presented at
+	// /token, the issued token carries both confirmation members —
+	// cnf.jkt (DPoP) and cnf.x5t#S256 (mTLS) — per RFC 7800 §3, which
+	// admits a multi-member cnf (see tokenBinding.confirmation). The
+	// token_type stays "DPoP" (tokenBinding.tokenTypeFor), and a holder
+	// must satisfy whichever binding the verifying party checks.
+	// Presenting both is an unusual deployment (mTLS transport plus a
+	// DPoP header); the common case carries exactly one member.
 	MTLS *mtls.Verifier
 
 	// RequireSenderConstrainedTokens, when true, makes the endpoint

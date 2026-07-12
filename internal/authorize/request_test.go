@@ -683,6 +683,72 @@ func TestRequest_Validate_PKCEPolicyConditional(t *testing.T) {
 	})
 }
 
+// TestRequest_Validate_PublicClientAlwaysRequiresPKCE pins that a
+// public or native client MUST carry code_challenge even under the
+// non-FAPI default profile (Policy{PKCERequired:false}). Public clients
+// cannot authenticate at the token endpoint, so PKCE is their only
+// defence against authorization-code interception (RFC 8252 §8.1 /
+// OAuth 2.1 §7.6). Confidential clients keep the profile-conditional
+// behaviour: an absent challenge is accepted when the flag is off.
+func TestRequest_Validate_PublicClientAlwaysRequiresPKCE(t *testing.T) {
+	t.Parallel()
+
+	build := func(t *testing.T) *authorize.Request {
+		t.Helper()
+		v := goodValues()
+		v.Del("code_challenge")
+		v.Del("code_challenge_method")
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		return req
+	}
+
+	t.Run("public_client_rejected_without_challenge_in_default_profile", func(t *testing.T) {
+		t.Parallel()
+		client := goodClient()
+		client.PublicClient = true
+		err := build(t).Validate(client, nil, authorize.Policy{PKCERequired: false})
+		if !errors.Is(err, authorize.ErrPKCERequired) {
+			t.Fatalf("err=%v want ErrPKCERequired", err)
+		}
+	})
+
+	t.Run("native_client_rejected_without_challenge_in_default_profile", func(t *testing.T) {
+		t.Parallel()
+		client := goodClient()
+		client.ApplicationType = "native"
+		err := build(t).Validate(client, nil, authorize.Policy{PKCERequired: false})
+		if !errors.Is(err, authorize.ErrPKCERequired) {
+			t.Fatalf("err=%v want ErrPKCERequired", err)
+		}
+	})
+
+	t.Run("public_client_accepted_with_challenge", func(t *testing.T) {
+		t.Parallel()
+		client := goodClient()
+		client.PublicClient = true
+		v := goodValues() // carries code_challenge + method
+		req, err := authorize.ParseValues(v)
+		if err != nil {
+			t.Fatalf("ParseValues: %v", err)
+		}
+		if err := req.Validate(client, nil, authorize.Policy{PKCERequired: false}); err != nil {
+			t.Fatalf("Validate: %v want nil", err)
+		}
+	})
+
+	t.Run("confidential_client_still_optional_in_default_profile", func(t *testing.T) {
+		t.Parallel()
+		// Regression guard: the public-client gate MUST NOT leak into
+		// confidential clients, which stay governed by PKCERequired alone.
+		if err := build(t).Validate(goodClient(), nil, authorize.Policy{PKCERequired: false}); err != nil {
+			t.Fatalf("Validate: %v want nil (confidential client, flag off)", err)
+		}
+	})
+}
+
 // TestRequest_Validate_OpenIDScopeOptional covers the policy-
 // conditional gate for the OIDC Core 1.0 §3.1.2.1 "openid" scope
 // requirement. With Policy{OpenIDScopeOptional:false} (the default)

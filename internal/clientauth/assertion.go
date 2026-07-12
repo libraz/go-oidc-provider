@@ -120,6 +120,9 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 	if v.Resolver == nil || v.JTIStore == nil || v.Clock == nil || v.Audience == "" {
 		return errors.New("authn: PrivateKeyJWTVerifier missing required fields")
 	}
+	// Install a per-request client memo so the resolver's alg-pin, JWKS,
+	// and rotation-refetch seams share one GetClient round-trip.
+	ctx = withClientMemo(ctx)
 	leeway := v.Leeway
 	if leeway <= 0 {
 		leeway = 60 * time.Second
@@ -164,6 +167,16 @@ func (v *PrivateKeyJWTVerifier) Verify(ctx context.Context, clientID, assertion 
 func resolveAndVerify(ctx context.Context, resolver JWKSResolver, clientID string, jws *josev4.JSONWebSignature) ([]byte, error) {
 	keys, err := resolver.JWKS(ctx, clientID)
 	if err != nil || keys == nil || len(keys.Keys) == 0 {
+		// Timing uniformity (L-14): a known client with no usable JWKS
+		// (unconfigured keys, a resolver/fetch error, or an empty set)
+		// would otherwise return without any signature work and complete
+		// measurably faster than the wrong-signature path, letting an
+		// attacker distinguish "client has no keys" from "client has keys,
+		// bad signature". Burn one fixed-cost verify so the two branches
+		// share a floor. Perfect leveling is impossible (the verify branch
+		// trials 1..MaxKidlessTrialKeys keys), but the gross zero-vs-some
+		// gap is what an attacker measures.
+		dummyJWTVerify()
 		return nil, ErrCredentialsInvalid
 	}
 	if payload, vErr := verifySignature(jws, keys); vErr == nil {
@@ -255,29 +268,64 @@ func assertionAlgAllowed(ctx context.Context, resolver JWKSResolver, clientID st
 	return jws.Signatures[0].Header.Algorithm == pin
 }
 
-// verifySignature tries every key in keys and returns the verified
-// payload on the first success. It returns an error if no key validates.
+// verifySignature returns the verified payload on the first candidate key
+// that validates the assertion, or an error if none do.
 //
-// Each candidate key is first gated through [jose.AssertAlgKeyShape]:
-// the OP's own signing keys are held to the RFC 7518 §3.3 / RFC 8725
-// §3.2 floor (RSA >= 2048 bits, curve pinned to the declared alg), and
-// a client registering a weaker or mismatched key MUST NOT receive a
-// laxer check than the OP applies to itself. A key whose shape does not
-// match the declared alg is skipped rather than handed to go-jose, so a
-// sub-floor key can never satisfy the assertion. Compliant keys are
-// unaffected: the gate is a superset of what go-jose already enforces.
+// Candidate selection bounds the CPU an attacker can force per request
+// (the assertion endpoints run before client authentication, so a garbage
+// signature against a maximally large JWKS would otherwise trigger one
+// RSA verify per registered key):
+//   - When the assertion header names a `kid` (RFC 7515 §4.1.4), only
+//     keys bearing that kid are trialled — an O(1) lookup instead of a
+//     full-keyset sweep. A named-but-unknown kid matches nothing; the
+//     miss is surfaced so the caller's rotation-refetch path can retry.
+//   - A kid-less assertion trials the alg/shape-matching keys but caps
+//     the number of actual verifications at [jose.MaxKidlessTrialKeys],
+//     mirroring the kid-less bound the JWE decrypt path already applies.
+//
+// Each candidate is first gated through [jose.AssertAlgKeyShape]: the
+// OP's own signing keys are held to the RFC 7518 §3.3 / RFC 8725 §3.2
+// floor (RSA >= 2048 bits, curve pinned to the declared alg), and a
+// client registering a weaker or mismatched key MUST NOT receive a laxer
+// check than the OP applies to itself. A key whose shape does not match
+// the declared alg is skipped rather than handed to go-jose (and does not
+// count against the kid-less trial cap), so a sub-floor key can never
+// satisfy the assertion. Compliant keys are unaffected: the gate is a
+// superset of what go-jose already enforces.
 func verifySignature(jws *josev4.JSONWebSignature, keys *josev4.JSONWebKeySet) ([]byte, error) {
-	alg := ""
-	if len(jws.Signatures) > 0 {
-		alg = jws.Signatures[0].Header.Algorithm
+	if len(jws.Signatures) == 0 {
+		return nil, errors.New("authn: assertion has no signatures")
 	}
-	for i := range keys.Keys {
-		if jose.AssertAlgKeyShape(alg, keys.Keys[i].Key) != nil {
+	header := jws.Signatures[0].Header
+	alg := header.Algorithm
+
+	candidates := keys.Keys
+	if header.KeyID != "" {
+		candidates = keys.Key(header.KeyID)
+		if len(candidates) == 0 {
+			// The named kid is absent from this keyset. Do NOT fall back
+			// to trialling every key: that would restore the amplification
+			// the kid gate removes. The caller consults the rotation
+			// refetch path (assertionKIDAbsent) on this miss.
+			return nil, errors.New("authn: assertion signature does not verify")
+		}
+	}
+
+	trials := 0
+	for i := range candidates {
+		if jose.AssertAlgKeyShape(alg, candidates[i].Key) != nil {
 			continue
 		}
-		payload, err := jws.Verify(keys.Keys[i])
+		payload, err := jws.Verify(candidates[i])
 		if err == nil {
 			return payload, nil
+		}
+		trials++
+		// Bound the kid-less sweep. Kid-present candidate sets are already
+		// bounded to the keys sharing that exact kid, so the cap applies
+		// only to the kid-less branch.
+		if header.KeyID == "" && trials >= jose.MaxKidlessTrialKeys {
+			break
 		}
 	}
 	return nil, errors.New("authn: assertion signature does not verify")

@@ -316,13 +316,15 @@ func (s *consumeBlockedRecoveryStore) Delete(ctx context.Context, subject string
 	return s.inner.Delete(ctx, subject)
 }
 
-// TestAuthenticator_ContinueConsumeCASLossRePrompts pins the behaviour of
+// TestAuthenticator_ContinueConsumeCASLossRetries pins the behaviour of
 // the CAS-loss branch in Continue: when the store's Consume loses the
 // compare-and-set race (another concurrent request already stamped ConsumedAt
-// on the same slot), the authenticator MUST re-emit the recovery-code prompt
-// with nil error and MUST NOT produce an interaction.Result, ensuring no
-// subject is authenticated through the losing request.
-func TestAuthenticator_ContinueConsumeCASLossRePrompts(t *testing.T) {
+// on the same slot), the authenticator MUST surface a soft
+// [authn.ErrFactorRetry] (via recovery.ErrRetry) — not a silent nil
+// re-prompt — so the orchestrator emits the LoginAttempt observer event and
+// advances the brute-force counter, and MUST NOT produce an
+// interaction.Result so no subject is authenticated through the losing request.
+func TestAuthenticator_ContinueConsumeCASLossRetries(t *testing.T) {
 	t.Parallel()
 
 	clk := &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)}
@@ -356,15 +358,10 @@ func TestAuthenticator_ContinueConsumeCASLossRePrompts(t *testing.T) {
 	if step.Result != nil {
 		t.Errorf("CAS-loss path produced an authentication Result; no Result must be emitted: %+v", step.Result)
 	}
-	// The authenticator must re-prompt so the user can try again rather
-	// than receiving a chain-fatal error.
-	if err != nil {
-		t.Fatalf("err = %v, want nil (re-prompt, not error)", err)
-	}
-	if step.Prompt == nil {
-		t.Fatalf("expected re-prompt step, got %+v", step)
-	}
-	if step.Prompt.Type != recovery.PromptType {
-		t.Errorf("Prompt.Type = %q, want %q", step.Prompt.Type, recovery.PromptType)
+	// The CAS loss (a lost replay) must surface as a soft retry so the
+	// orchestrator observes the failure and advances the counter, rather
+	// than being swallowed as a silent nil re-prompt.
+	if !errors.Is(err, recovery.ErrRetry) {
+		t.Fatalf("err = %v, want it to wrap recovery.ErrRetry (soft retry)", err)
 	}
 }

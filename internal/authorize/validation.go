@@ -55,7 +55,7 @@ func (req *Request) Validate(client *store.Client, scopes *scoperegistry.Registr
 	if err := req.validateNonce(policy.NonceRequired); err != nil {
 		return err
 	}
-	if err := req.validatePKCE(policy.PKCERequired); err != nil {
+	if err := req.validatePKCE(policy.PKCERequired || clientRequiresPKCE(client)); err != nil {
 		return err
 	}
 	if err := req.validatePrompt(); err != nil {
@@ -82,11 +82,24 @@ func (req *Request) validateRedirectTarget(client *store.Client) error {
 
 func redirectURIMatches(client *store.Client, requested string) bool {
 	for _, candidate := range client.RedirectURIs {
-		if candidate == requested || (clientAllowsLoopbackWildcard(client) && loopbackRedirectMatchesAnyPort(candidate, requested)) {
+		if LoopbackURIMatches(client, candidate, requested) {
 			return true
 		}
 	}
 	return false
+}
+
+// LoopbackURIMatches reports whether requested matches the registered
+// candidate for client, honouring the RFC 8252 §7.3 loopback any-port
+// allowance for native / public clients (a native app registers
+// http://127.0.0.1/cb but binds an ephemeral port at runtime). It is the
+// shared primitive behind both the redirect_uri check here and the
+// end_session post_logout_redirect_uri check in [internal/endsession], so
+// the two surfaces treat native loopback callbacks identically instead of
+// the logout path enforcing a stricter exact-match than /authorize.
+func LoopbackURIMatches(client *store.Client, registered, requested string) bool {
+	return registered == requested ||
+		(clientAllowsLoopbackWildcard(client) && loopbackRedirectMatchesAnyPort(registered, requested))
 }
 
 func clientAllowsLoopbackWildcard(client *store.Client) bool {
@@ -253,14 +266,29 @@ func (req *Request) validateNonce(required bool) error {
 	return nil
 }
 
+// clientRequiresPKCE reports whether the client type mandates PKCE
+// regardless of the OP-wide [Policy.PKCERequired] flag. Public clients —
+// including native apps per RFC 8252 §8.1 and the OAuth 2.1 draft §7.6 —
+// MUST use PKCE on the authorization-code flow: they cannot authenticate
+// at the token endpoint, so PKCE is the only defence against the
+// authorization-code interception attack (a stolen code is unusable
+// without the verifier). Confidential clients authenticate with client
+// credentials and remain governed by [Policy.PKCERequired] alone.
+func clientRequiresPKCE(client *store.Client) bool {
+	if client == nil {
+		return false
+	}
+	return client.PublicClient || strings.EqualFold(client.ApplicationType, "native")
+}
+
 // validatePKCE enforces the OP's PKCE policy and delegates challenge
 // format checks to [pkce.ValidateChallenge]. When required is true,
 // every request MUST carry a code_challenge (FAPI 2.0 / OAuth 2.1
-// posture). When required is false, an absent challenge falls
-// through silently and the PKCE flow is opted out for this request;
-// a present challenge is still format-validated so a half-supplied
-// pair (challenge but no method, or vice versa) produces a clear
-// error rather than silent acceptance.
+// posture, or a public / native client per [clientRequiresPKCE]). When
+// required is false, an absent challenge falls through silently and the
+// PKCE flow is opted out for this request; a present challenge is still
+// format-validated so a half-supplied pair (challenge but no method, or
+// vice versa) produces a clear error rather than silent acceptance.
 func (req *Request) validatePKCE(required bool) error {
 	if req.CodeChallenge == "" {
 		if required {

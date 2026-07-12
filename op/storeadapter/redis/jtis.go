@@ -33,15 +33,27 @@ func (j *jtiStore) jtiKey(jti string) string {
 
 // Mark records jti as consumed. It returns [store.ErrAlreadyConsumed]
 // when the same jti has been marked before, even when the previous
-// expiresAt has not yet been reached. expiresAt drives the SETEX TTL;
-// expiresAt in the past returns nil without writing (per the contract,
-// already-expired records may be treated as absent on subsequent reads).
+// expiresAt has not yet been reached. A non-zero expiresAt drives the
+// SETNX TTL; expiresAt in the past returns nil without writing (per the
+// contract, already-expired records may be treated as absent on
+// subsequent reads).
+//
+// A zero expiresAt means "no expiry" — the project-wide convention the
+// inmem and SQL adapters honour by retaining the marker permanently.
+// Redis expresses that as a SETNX with a zero TTL (a persistent key);
+// dropping such a marker would silently disable replay protection for
+// any caller that passes a zero expiry (a third-party grant handler or
+// an embedder marking a JTI directly). The past-dated short-circuit
+// therefore applies only to a genuinely non-zero, elapsed expiresAt.
 func (j *jtiStore) Mark(ctx context.Context, jti string, expiresAt time.Time) error {
-	ttl := jtiTTL(j.parent.clock.Now(), expiresAt)
-	if ttl <= 0 {
-		// Past-dated marker: nothing to record, since any subsequent
-		// Has call would treat the entry as absent anyway.
-		return nil
+	var ttl time.Duration // zero => persistent key (SETNX with no expiration).
+	if !expiresAt.IsZero() {
+		ttl = jtiTTL(j.parent.clock.Now(), expiresAt)
+		if ttl <= 0 {
+			// Past-dated marker: nothing to record, since any subsequent
+			// Has call would treat the entry as absent anyway.
+			return nil
+		}
 	}
 	ok, err := j.parent.client.SetNX(ctx, j.jtiKey(jti), "1", ttl).Result()
 	if err != nil {

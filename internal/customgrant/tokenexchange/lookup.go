@@ -11,6 +11,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -140,7 +141,7 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 	if idClaims.ExpiresAt > 0 && now.Unix() > idClaims.ExpiresAt {
 		return lookupResult{reason: "expired"}, errTokenInvalid
 	}
-	scope := splitScope(idClaims.Scope)
+	scope := oidcscope.Parse(idClaims.Scope)
 	aud := normaliseAudience(decodeAudience(idClaims.AudienceRaw))
 	clientID := idClaims.AuthorizedParty
 	if clientID == "" {
@@ -293,24 +294,6 @@ func extractActFromRaw(raw json.RawMessage) map[string]any {
 	var out map[string]any
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// splitScope splits a space-delimited RFC 6749 §3.3 scope string.
-func splitScope(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, " ")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
 	}
 	if len(out) == 0 {
 		return nil

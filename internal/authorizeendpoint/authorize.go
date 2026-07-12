@@ -363,7 +363,12 @@ func dispatchAuthorize(
 		emitAuthorizeError(w, r, deps, req, errServerError, "session backend unavailable")
 		return
 	}
-	if errors.Is(sessErr, sessions.ErrCurrentSessionExpired) {
+	if errors.Is(sessErr, sessions.ErrCurrentSessionExpired) || errors.Is(sessErr, sessions.ErrCookieInvalid) {
+		// Clear the session cookie on BOTH a decodable-but-expired session
+		// and a tampered/undecodable cookie. Without the ErrCookieInvalid
+		// arm a corrupted cookie is treated as "no session" but left in the
+		// browser, so every subsequent request re-sends the garbage value
+		// and re-fails the decode; expiring it lets the browser start clean.
 		clearCookie(w, cookie.SessionProfile)
 	}
 	hint := computeAuthorizeHint(r.Context(), deps, req, client, active, now)

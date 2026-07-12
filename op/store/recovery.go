@@ -81,6 +81,15 @@ type RecoveryStore interface {
 	// [ErrAlreadyConsumed] when the stored slot already has ConsumedAt
 	// set. The index is the slot index returned by the recovery
 	// verifier for the same batch.
+	//
+	// The presented b.Codes[index].Hash MUST match the stored slot's
+	// Hash. An implementation MUST reject (with [ErrAlreadyConsumed]) a
+	// Consume whose slot hash differs from the current batch's, so a code
+	// from a batch that was regenerated between Get and Consume cannot
+	// redeem a slot of the new batch — the very act of regenerating after
+	// a suspected leak is what revokes the old codes, and honouring a
+	// stale hash here would defeat it. This mirrors the
+	// [EmailOTPStore.Consume] hash-match precondition.
 	Consume(ctx context.Context, b *RecoveryBatch, index int) error
 
 	// Delete removes the batch for subject. It MUST return [ErrNotFound]

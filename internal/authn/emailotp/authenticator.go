@@ -120,6 +120,16 @@ const (
 	// retransmits) while keeping the SMTP cost amplification small.
 	resendWindowCap = 5
 
+	// recordRetention is how long a record stays readable via
+	// [store.EmailOTPStore.Get] after the last write, independent of the
+	// code's ExpiresAt. It equals the 24-hour brute-force window (the
+	// longest rate-limit / lockout horizon on the record) so the resend
+	// cap and the failure counter survive a code that expired mid-attack;
+	// dropping the record at code expiry would silently reset both. Every
+	// write re-stamps RetainUntil from the current clock, so retention
+	// always covers whichever window is still live.
+	recordRetention = 24 * time.Hour
+
 	// constantSendLatency is the minimum total elapsed wall time
 	// [handleSend] returns after, regardless of whether the supplied
 	// email matched the subject's bound address. The pad defends
@@ -429,6 +439,10 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 	}
 	carryVerifyCounters(rec, prior)
 	advanceSendWindow(rec, prior, now)
+	// Retain the record (and its rate-limit / brute-force counters) past
+	// the code's ExpiresAt so an attacker pacing to the code TTL cannot
+	// reset the resend cap or the lockout progress. See recordRetention.
+	rec.RetainUntil = now.Add(recordRetention)
 	if constantTimeEqualEmails(email, bound) {
 		if err := a.mailer.Send(ctx, Message{
 			To:        bound,
@@ -548,6 +562,10 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		// unchanged (verifier short-circuits before mutating
 		// counters); wrong-code and reset-required branches still need
 		// persisting. OutcomeSuccess is handled by atomic Consume below.
+		// Re-stamp RetainUntil so a failed attempt extends the record's
+		// retention (and thus the surviving brute-force counter) rather
+		// than letting it lapse at the original code's ExpiresAt.
+		res.Record.RetainUntil = a.clock.Now().Add(recordRetention)
 		if perr := a.store.Put(ctx, res.Record); perr != nil {
 			return interaction.Step{}, fmt.Errorf("emailotp: persist record: %w", perr)
 		}
@@ -585,9 +603,14 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		}
 		// Recoverable wrong guess: surface ErrRetry so the orchestrator
 		// records the failure and advances the brute-force counter. The
-		// failure-incremented record is already persisted above, so the
-		// re-issued send prompt (via Begin) reflects the updated state.
-		return interaction.Step{}, ErrRetry
+		// failure-incremented record is already persisted above. Return
+		// the verify prompt alongside ErrRetry so the orchestrator
+		// re-shows the code-entry screen with the delivered code still
+		// valid, rather than restarting the factor at the send screen —
+		// a restart would discard a usable code and burn the resend
+		// budget (a handful of typos would trip the resend cap and abort
+		// the chain, leaving the per-record verify budget unreachable).
+		return a.retryVerifyStep(ctx, in.Subject, rec.ExpiresAt), ErrRetry
 	case errors.Is(verr, ErrConsumed):
 		// Treat a replay attempt as a generic expiry from the SPA's
 		// perspective so the response shape stays constant with the
@@ -599,6 +622,26 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 		// so the orchestrator can dispatch.
 		return interaction.Step{}, verr
 	}
+}
+
+// retryVerifyStep builds the verify-prompt re-emission the orchestrator
+// re-shows on a recoverable wrong-code guess. It re-resolves the bound
+// email to keep the [interaction.EmailOTPVerifyPromptData.MaskedEmail]
+// identical to the first render. A store failure or an unbound address
+// degrades to a bare [interaction.Step]: the orchestrator then falls
+// back to restarting the factor rather than turning a wrong guess into a
+// chain-fatal error. The returned Step carries [scratchVerify] so the
+// orchestrator preserves the verify sub-step across the retry.
+func (a *Authenticator) retryVerifyStep(ctx context.Context, subject string, expiresAt time.Time) interaction.Step {
+	user, err := a.users.FindBySubject(ctx, subject)
+	if err != nil {
+		return interaction.Step{}
+	}
+	bound := claimEmail(user)
+	if bound == "" {
+		return interaction.Step{}
+	}
+	return interaction.Step{Prompt: a.verifyPrompt(bound, expiresAt), Scratch: scratchVerify}
 }
 
 func (a *Authenticator) sendPrompt() *interaction.Prompt {

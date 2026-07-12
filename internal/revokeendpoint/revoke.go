@@ -8,6 +8,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/refreshchain"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -204,6 +205,11 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 		emitRevokeFailed(ctx, deps, authenticatedClientID, "refresh_chain", err)
 		return false
 	}
+	// RFC 7009 §2.1 SHOULD: revoking a refresh token also invalidates the
+	// access tokens issued under the same grant. Mirror the /end_session
+	// cascade so a client that revokes to contain a compromise is not left
+	// with live access tokens until their own exp.
+	cascadeRevokeAccessTokens(ctx, deps, rec.GrantID)
 	emitRevoked(ctx, deps, revokedEvent{
 		ClientID: authenticatedClientID,
 		Subject:  rec.Subject,
@@ -211,6 +217,47 @@ func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token s
 		GrantID:  rec.GrantID,
 	})
 	return true
+}
+
+// cascadeRevokeAccessTokens propagates a refresh-token revocation to the
+// access tokens issued under the same grant (RFC 7009 §2.1 SHOULD),
+// mirroring the /end_session cascade. Both the JWT-strategy path and the
+// opaque substore run best-effort: a store fault must not disturb the RFC
+// 7009 §2.2 "always 200" wire posture, so errors are swallowed here (the
+// refresh-chain revocation itself already succeeded before this runs).
+func cascadeRevokeAccessTokens(ctx context.Context, deps Deps, grantID string) {
+	if grantID == "" {
+		return
+	}
+	now := revokeNow(deps)
+	_ = endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+		AccessTokens:       deps.AccessTokens,
+		GrantRevocations:   deps.GrantRevocations,
+		RevocationStrategy: deps.RevocationStrategy,
+	}, grantID, now, revokeTombstoneRetention(deps.AccessTokenTTL), "revoke")
+	if deps.OpaqueAccessTokens != nil {
+		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+	}
+}
+
+// revokeTombstoneRetention returns the grant-tombstone retention window
+// (AT TTL + 5-minute clock-skew grace; one-hour fallback for a zero TTL),
+// mirroring the /end_session cascade's tombstoneRetention.
+func revokeTombstoneRetention(ttl time.Duration) time.Duration {
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	return ttl + 5*time.Minute
+}
+
+// revokeNow returns the wall-clock reading the cascade stamps on tombstone
+// RevokedAt / ExpiresAt: a configured [Deps.Clock] wins, else
+// [timex.SystemClock] (the single sanctioned wall-clock seam).
+func revokeNow(deps Deps) time.Time {
+	if deps.Clock != nil {
+		return deps.Clock.Now().UTC()
+	}
+	return timex.SystemClock.Now().UTC()
 }
 
 // revokeOpaqueAccessToken handles the ADR 0024 opaque-format branch.

@@ -252,6 +252,47 @@ func TestSend_PriorRecordIsNotOverwrittenByQuickResend(t *testing.T) {
 	}
 }
 
+// TestSend_WindowCapSurvivesCodeExpiry pins the #16 fix: an attacker who
+// exhausts the resend cap and then paces just past the code TTL (so the
+// code record would previously be read as absent) MUST still be blocked
+// while inside the 1-hour resend window. Before the RetainUntil retention
+// fix, the record vanished at code expiry, the resend counter reset, and
+// the cap degraded from 5/hour to roughly 5 per code-TTL.
+func TestSend_WindowCapSurvivesCodeExpiry(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	clock := &emailotp.FakeClock{T: now}
+	a := newFixtureWithClock(t, clock)
+
+	// Five sends reach the rolling-window cap.
+	for i := range 5 {
+		clock.T = now.Add(time.Duration(i) * 31 * time.Second)
+		if _, err := a.Continue(context.Background(), authn.ContinueInput{
+			Subject: "sub-1",
+			Submission: interaction.FormSubmission{Values: map[string]string{
+				emailotp.EmailFieldName: "alice@example.com",
+			}},
+		}); err != nil {
+			t.Fatalf("send #%d: %v", i+1, err)
+		}
+	}
+
+	// Advance past the code TTL (so the code itself is dead) but well
+	// within both the 1-hour resend window and the record retention.
+	clock.T = now.Add(emailotp.DefaultCodeTTL + time.Minute)
+
+	// The sixth send must still be rejected: the cap did not reset.
+	_, err := a.Continue(context.Background(), authn.ContinueInput{
+		Subject: "sub-1",
+		Submission: interaction.FormSubmission{Values: map[string]string{
+			emailotp.EmailFieldName: "alice@example.com",
+		}},
+	})
+	if !errors.Is(err, emailotp.ErrTooManyOutstanding) {
+		t.Errorf("post-code-expiry send err = %v, want ErrTooManyOutstanding (cap must survive code expiry)", err)
+	}
+}
+
 func sendOnce(t *testing.T, a *emailotp.Authenticator, email string) interaction.Step {
 	t.Helper()
 	step, err := a.Continue(context.Background(), authn.ContinueInput{

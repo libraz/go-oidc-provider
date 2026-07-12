@@ -445,6 +445,9 @@ func parseScope(w http.ResponseWriter, form url.Values, client *store.Client, sc
 	if raw == "" {
 		return filterScopeAllowedClients(w, slices.Clone(client.Scopes), client.ID, scopes)
 	}
+	// strings.Fields (any Unicode whitespace) is a deliberate superset of
+	// the RFC 6749 §3.3 0x20 separator; spec-conformant inputs tokenise
+	// identically to the wire-facing 0x20-only internal/oidcscope path.
 	requested := strings.Fields(raw)
 	allowed := make(map[string]struct{}, len(client.Scopes))
 	for _, s := range client.Scopes {

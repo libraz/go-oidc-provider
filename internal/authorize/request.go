@@ -171,7 +171,12 @@ type Policy struct {
 	// PKCERequired forces every authorization-code request to carry a
 	// code_challenge. Embedders configure this through the public
 	// [op.WithProfile] surface; the validator does not consult the
-	// profile itself, only the resolved bit.
+	// profile itself, only the resolved bit. Independent of this flag,
+	// public and native clients ALWAYS require PKCE (see
+	// clientRequiresPKCE): they cannot authenticate at the token endpoint,
+	// so PKCE is their only defence against authorization-code
+	// interception (RFC 8252 §8.1 / OAuth 2.1 §7.6). This bit therefore
+	// only governs confidential clients under a non-FAPI profile.
 	PKCERequired bool
 
 	// NonceRequired forces every authorization request to carry a

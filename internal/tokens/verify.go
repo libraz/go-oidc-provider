@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
 	"github.com/libraz/go-oidc-provider/internal/keys"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
@@ -314,7 +314,7 @@ func decodeAccessTokenClaims(payload []byte) (*AccessTokenClaims, error) {
 		IssuedAt:             w.IssuedAt,
 		ExpiresAt:            w.ExpiresAt,
 		JTI:                  w.JTI,
-		Scope:                splitScope(w.Scope),
+		Scope:                oidcscope.Parse(w.Scope),
 		AuthTime:             w.AuthTime,
 		ACR:                  w.ACR,
 		AMR:                  w.AMR,
@@ -345,26 +345,4 @@ func decodeAudience(raw json.RawMessage) ([]string, error) {
 		return nil, fmt.Errorf("decode aud: %w", err)
 	}
 	return multi, nil
-}
-
-// splitScope inverts [joinScope]. RFC 6749 §3.3 separates scopes with a
-// single ASCII space; consecutive spaces (which the spec disallows) are
-// tolerated here by dropping empty fields so a misbehaving issuer does
-// not propagate empty scope strings into the public slice.
-func splitScope(scope string) []string {
-	if scope == "" {
-		return nil
-	}
-	parts := strings.Split(scope, " ")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p == "" {
-			continue
-		}
-		out = append(out, p)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }

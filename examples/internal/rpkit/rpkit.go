@@ -66,8 +66,16 @@ type CodeFlow struct {
 	claimsRequest string // JSON-encoded §5.5 claims param, "" to omit
 
 	mu      sync.Mutex
-	pending map[string]string // state -> code_verifier
-	last    map[string]any    // last verified id_token claims (single-user demo)
+	pending map[string]pendingAuth // state -> per-request PKCE verifier + nonce
+	last    map[string]any         // last verified id_token claims (single-user demo)
+}
+
+// pendingAuth holds the per-authorization-request secrets the callback
+// needs to correlate: the PKCE code_verifier and the OIDC nonce. Both are
+// bound to the opaque state value and consumed once on callback.
+type pendingAuth struct {
+	verifier string
+	nonce    string
 }
 
 // New runs OIDC discovery against opts.Issuer and returns a CodeFlow
@@ -97,7 +105,7 @@ func New(ctx context.Context, opts Options) (*CodeFlow, error) {
 		issuer:   opts.Issuer,
 		cfg:      cfg,
 		verifier: provider.Verifier(&oidc.Config{ClientID: opts.ClientID}),
-		pending:  make(map[string]string),
+		pending:  make(map[string]pendingAuth),
 	}
 	if opts.ClaimsRequest != nil {
 		raw, err := json.Marshal(opts.ClaimsRequest)
@@ -165,9 +173,14 @@ func (cf *CodeFlow) startLogin(w http.ResponseWriter, r *http.Request, acrValues
 		http.Error(w, "rpkit: generate code_verifier: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	nonce, err := randURL(16)
+	if err != nil {
+		http.Error(w, "rpkit: generate nonce: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	cf.mu.Lock()
-	cf.pending[state] = verifier
+	cf.pending[state] = pendingAuth{verifier: verifier, nonce: nonce}
 	cf.mu.Unlock()
 
 	sum := sha256.Sum256([]byte(verifier))
@@ -176,6 +189,9 @@ func (cf *CodeFlow) startLogin(w http.ResponseWriter, r *http.Request, acrValues
 	authOpts := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
+		// OIDC Core §3.1.2.1 nonce: bound into the ID Token and verified
+		// on callback to defend against ID-Token replay.
+		oauth2.SetAuthURLParam("nonce", nonce),
 	}
 	if cf.claimsRequest != "" {
 		authOpts = append(authOpts,
@@ -225,7 +241,7 @@ func (cf *CodeFlow) callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cf.mu.Lock()
-	verifier, ok := cf.pending[state]
+	pa, ok := cf.pending[state]
 	delete(cf.pending, state)
 	cf.mu.Unlock()
 	if !ok {
@@ -234,7 +250,7 @@ func (cf *CodeFlow) callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tok, err := cf.cfg.Exchange(r.Context(), code,
-		oauth2.SetAuthURLParam("code_verifier", verifier),
+		oauth2.SetAuthURLParam("code_verifier", pa.verifier),
 	)
 	if err != nil {
 		http.Error(w, "rpkit: token exchange: "+err.Error(), http.StatusBadGateway)
@@ -250,6 +266,13 @@ func (cf *CodeFlow) callback(w http.ResponseWriter, r *http.Request) {
 	idt, err := cf.verifier.Verify(r.Context(), rawID)
 	if err != nil {
 		http.Error(w, "rpkit: verify id_token: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	// OIDC Core §3.1.3.7 step 11: the ID Token's nonce MUST equal the value
+	// sent on the authorization request. A mismatch (or absent nonce)
+	// indicates a replayed or cross-request token.
+	if idt.Nonce != pa.nonce {
+		http.Error(w, "rpkit: id_token nonce mismatch", http.StatusBadGateway)
 		return
 	}
 

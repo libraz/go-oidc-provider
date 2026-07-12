@@ -260,7 +260,9 @@ func TestUserInfo_DualBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	missProof.Header.Set("Authorization", "Bearer "+token)
+	// jkt-bound token → DPoP scheme; this case omits the proof header to
+	// exercise the missing-proof rejection.
+	missProof.Header.Set("Authorization", "DPoP "+token)
 	missProof.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
 	rec = httptest.NewRecorder()
 	f.prov.OP.ServeHTTP(rec, missProof)
@@ -287,7 +289,10 @@ func newRequestDualProof(
 	if err != nil {
 		tb.Fatalf("NewRequest: %v", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	// The dual-bound token carries cnf.jkt, so RFC 9449 §7.1 requires the
+	// DPoP authentication scheme (not Bearer) even though a cert is also
+	// presented.
+	req.Header.Set("Authorization", "DPoP "+token)
 	req.Header.Set("DPoP", proofFor(tb, key, "GET", "https://op.testkit.invalid/oidc/userinfo", now, jti, dpop.AccessTokenHash(token)))
 	if cert != nil {
 		req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}

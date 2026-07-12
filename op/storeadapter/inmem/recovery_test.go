@@ -182,6 +182,51 @@ func TestRecoveryStore_PutClonesBatch(t *testing.T) {
 	}
 }
 
+// TestRecoveryStore_ConsumeRejectsStaleHashAfterRegenerate pins #19: a
+// recovery code from a batch that was regenerated between Get and Consume
+// MUST NOT redeem a slot of the new batch. Regenerating is exactly how a
+// user revokes leaked codes, so honouring the stale hash would be a
+// revocation bypass.
+func TestRecoveryStore_ConsumeRejectsStaleHashAfterRegenerate(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	rs := s.RecoveryCodes()
+	ctx := context.Background()
+
+	// Original batch the attacker holds a code from.
+	stale := newRecoveryBatch("user-alice")
+	if err := rs.Put(ctx, stale); err != nil {
+		t.Fatalf("Put stale: %v", err)
+	}
+	// User regenerates: a fresh batch with different hashes replaces it.
+	fresh := newRecoveryBatch("user-alice")
+	fresh.Codes = []store.RecoveryCode{
+		{Hash: "$argon2id$v=19$m=65536,t=3,p=1$c2FsdAAAAAAAAAAA$aGFzaC1mcmVzaDAwMDAwMDAwMDAwMDAwMDAwMA"},
+		{Hash: "$argon2id$v=19$m=65536,t=3,p=1$c2FsdAAAAAAAAAAA$aGFzaC1mcmVzaDExMTExMTExMTExMTExMTExMQ"},
+	}
+	if err := rs.Put(ctx, fresh); err != nil {
+		t.Fatalf("Put fresh: %v", err)
+	}
+
+	// Consuming with the stale batch's code MUST be rejected.
+	consumed := *stale
+	consumed.Codes = append([]store.RecoveryCode(nil), stale.Codes...)
+	consumed.Codes[0].ConsumedAt = time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	if err := rs.Consume(ctx, &consumed, 0); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("Consume with stale hash: want ErrAlreadyConsumed, got %v", err)
+	}
+
+	// The fresh batch's slot 0 must remain unconsumed.
+	got, err := rs.Get(ctx, "user-alice")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.Codes[0].ConsumedAt.IsZero() {
+		t.Error("stale code burned a slot of the regenerated batch (revocation bypass)")
+	}
+}
+
 func TestRecoveryStore_ConsumeRaceSingleWinner(t *testing.T) {
 	t.Parallel()
 

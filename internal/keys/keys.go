@@ -209,24 +209,6 @@ func (s *Set) Find(keyID string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// Resolve adapts [Set.Find] onto the [internal/jose.KeyResolver] shape:
-// it returns the public half of the matching entry's signer when [Find]
-// reports the kid live, ok=false otherwise (unknown OR retired). The
-// method exists so [internal/jose.Verify] can consume a [*Set] without
-// the jose package importing this one — closing the import cycle that
-// would otherwise arise from [jose.KeyShape] being referenced inside
-// [NewSet].
-//
-// Callers MUST treat ok=false as a hard rejection (no trial decode);
-// see the comment on [Set.Find] for the full rationale.
-func (s *Set) Resolve(keyID string) (crypto.PublicKey, bool) {
-	entry, ok := s.Find(keyID)
-	if !ok {
-		return nil, false
-	}
-	return entry.Signer.Public(), true
-}
-
 // nowOrSystem returns the wall-clock reading the retirement gate uses.
 // A nil [Set.now] (defensively possible if a caller built the struct
 // outside [NewSet]) collapses onto [timex.SystemClock], so the gate

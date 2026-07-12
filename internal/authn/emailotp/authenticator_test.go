@@ -431,8 +431,17 @@ func TestContinueVerifyWrongCodeReturnsRetryAndIncrementsCounter(t *testing.T) {
 	if !errors.Is(err, authn.ErrFactorRetry) {
 		t.Fatalf("Continue (verify wrong) err = %v, want to wrap authn.ErrFactorRetry", err)
 	}
-	if step.Prompt != nil || step.Result != nil {
-		t.Fatalf("expected empty step on retry error, got %+v", step)
+	// M-3: a wrong code re-shows the verify prompt (delivered code still
+	// valid) instead of restarting at the send screen. The step carries
+	// the verify scratch so the orchestrator preserves the sub-step.
+	if step.Result != nil {
+		t.Fatalf("expected no Result on retry, got %+v", step.Result)
+	}
+	if step.Prompt == nil || step.Prompt.Type != emailotp.PromptTypeVerify {
+		t.Fatalf("expected verify prompt on retry, got %+v", step.Prompt)
+	}
+	if string(step.Scratch) != string(emailotp.ScratchVerify) {
+		t.Fatalf("expected verify scratch on retry, got %v", step.Scratch)
 	}
 	rec, err := recStore.Get(context.Background(), "sub-1")
 	if err != nil {

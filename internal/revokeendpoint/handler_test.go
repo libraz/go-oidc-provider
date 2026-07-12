@@ -391,6 +391,54 @@ func TestHandler_RefreshToken_Revokes(t *testing.T) {
 	assertConsumedOrGone(t, f, rec.ID)
 }
 
+// TestHandler_RefreshToken_CascadesToAccessTokens pins #22 / RFC 7009
+// §2.1: revoking a refresh token also invalidates the access tokens
+// issued under the same grant, so a client cannot revoke to contain a
+// compromise yet be left with a live access token until its own exp.
+func TestHandler_RefreshToken_CascadesToAccessTokens(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	client, secret := f.confidentialClient(t, "client-rt-cascade")
+	const grantID = "grant-rt-cascade"
+
+	f.saveRefreshToken(t, &store.RefreshToken{
+		ID:        "rt-cascade-1",
+		ClientID:  client.ID,
+		Subject:   "user-cascade",
+		GrantID:   grantID,
+		Scope:     []string{"openid"},
+		ExpiresAt: f.clock.now.Add(24 * time.Hour),
+		CreatedAt: f.clock.now,
+	})
+	// An opaque access token issued under the same grant.
+	f.saveOpaqueAccessToken(t, &store.OpaqueAccessToken{
+		ID:        "at-cascade-1",
+		ClientID:  client.ID,
+		Subject:   "user-cascade",
+		GrantID:   grantID,
+		Scope:     []string{"openid"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	})
+
+	form := url.Values{"token": {"rt-cascade-1"}, "token_type_hint": {"refresh_token"}}
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	assertEmptySuccess(t, resp)
+
+	got, err := f.prov.Store.OpaqueAccessTokens().Find(context.Background(), "at-cascade-1")
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return // deletion is an acceptable "no longer usable" outcome
+		}
+		t.Fatalf("Find access token after refresh revoke: %v", err)
+	}
+	if got == nil || !got.Revoked {
+		t.Errorf("access token under grant still live after refresh revoke; got=%+v", got)
+	}
+}
+
 // TestHandler_RefreshToken_NotFound returns HTTP 200 + empty body
 // when the presented token does not match any stored record.
 func TestHandler_RefreshToken_NotFound(t *testing.T) {

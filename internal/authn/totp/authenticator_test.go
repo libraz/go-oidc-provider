@@ -383,13 +383,15 @@ func (s *acceptBlockedTOTPStore) Delete(ctx context.Context, subject string) err
 	return s.inner.Delete(ctx, subject)
 }
 
-// TestAuthenticator_ContinueAcceptCASLossRePrompts pins the behaviour of
+// TestAuthenticator_ContinueAcceptCASLossRetries pins the behaviour of
 // the CAS-loss branch in Continue: when the store's Accept loses the
 // compare-and-set race (another concurrent request already advanced the
-// LastAcceptedStep counter), the authenticator MUST re-emit the TOTP
-// prompt with nil error and MUST NOT produce an interaction.Result,
-// ensuring no subject is authenticated through the losing request.
-func TestAuthenticator_ContinueAcceptCASLossRePrompts(t *testing.T) {
+// LastAcceptedStep counter), the authenticator MUST surface a soft
+// [authn.ErrFactorRetry] (via totp.ErrRetry) — not a silent nil re-prompt
+// — so the orchestrator emits the LoginAttempt observer event and advances
+// the brute-force counter, and MUST NOT produce an interaction.Result so
+// no subject is authenticated through the losing request.
+func TestAuthenticator_ContinueAcceptCASLossRetries(t *testing.T) {
 	t.Parallel()
 
 	codec, err := totp.NewCodec(newKey(t))
@@ -426,15 +428,10 @@ func TestAuthenticator_ContinueAcceptCASLossRePrompts(t *testing.T) {
 	if step.Result != nil {
 		t.Errorf("CAS-loss path produced an authentication Result; no Result must be emitted: %+v", step.Result)
 	}
-	// The authenticator must re-prompt so the user can try again on
-	// the next TOTP step rather than receiving a chain-fatal error.
-	if err != nil {
-		t.Fatalf("err = %v, want nil (re-prompt, not error)", err)
-	}
-	if step.Prompt == nil {
-		t.Fatalf("expected re-prompt step, got %+v", step)
-	}
-	if step.Prompt.Type != totp.PromptType {
-		t.Errorf("Prompt.Type = %q, want %q", step.Prompt.Type, totp.PromptType)
+	// The CAS loss (a lost replay) must surface as a soft retry so the
+	// orchestrator observes the failure and advances the counter, rather
+	// than being swallowed as a silent nil re-prompt.
+	if !errors.Is(err, totp.ErrRetry) {
+		t.Fatalf("err = %v, want it to wrap totp.ErrRetry (soft retry)", err)
 	}
 }

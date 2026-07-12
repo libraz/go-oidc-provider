@@ -51,6 +51,7 @@ type config struct {
 	mountPrefix          string
 	endpoints            Endpoints
 	grants               []grant.Type
+	grantsSet            bool
 	features             []feature.Flag
 	profiles             []profile.Profile
 	interactionD         interaction.Driver
@@ -195,6 +196,15 @@ type config struct {
 	// "offline_access"; conventional online refresh continues to use
 	// refreshTokenTTL. See [WithRefreshTokenOfflineTTL].
 	refreshTokenOfflineTTL time.Duration
+
+	// parLifetime overrides the lifetime of a persisted PAR record's
+	// request_uri (RFC 9126 §2.2). Zero defers to the PAR endpoint's
+	// own default (60s). The lifetime governs only how long the client
+	// has to present the request_uri at /authorize; once the request is
+	// resolved there, an interactive login that outlives the window
+	// still completes, because single-use — not expiry — is what the
+	// store enforces at code emission. See [WithPARLifetime].
+	parLifetime time.Duration
 
 	// strictOfflineAccess flips the refresh-token issuance gate to the
 	// OIDC Core 1.0 §11 strict reading: refresh tokens are issued only
@@ -965,6 +975,17 @@ func WithEndpoints(e Endpoints) Option {
 // Stable since v0.1.
 func WithGrants(grants ...grant.Type) Option {
 	return optionFunc(func(c *config) error {
+		// Reject a second call rather than silently replacing the first
+		// set: a caller composing option slices from several helpers must
+		// not have an earlier WithGrants (e.g. refresh_token + device_code)
+		// vanish under a later one. Mirrors WithProfile /
+		// WithDiscoveryMetadata, whose duplicate calls also error.
+		if c.grantsSet {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithGrants may be called at most once",
+			}
+		}
 		if len(grants) == 0 {
 			return &Error{
 				Code:        codeConfiguration,
@@ -988,6 +1009,7 @@ func WithGrants(grants ...grant.Type) Option {
 			seen[g] = struct{}{}
 		}
 		c.grants = append([]grant.Type(nil), grants...)
+		c.grantsSet = true
 		return nil
 	})
 }

@@ -195,6 +195,7 @@ var parCases = []subtest{
 	{"SaveFind", parSaveFind},
 	{"ConsumeOnce", parConsumeOnce},
 	{"Expired", parExpired},
+	{"ConsumeExpiredStillRedeems", parConsumeExpiredStillRedeems},
 }
 
 func parSaveFind(t *testing.T, f Factory) {
@@ -243,6 +244,30 @@ func parExpired(t *testing.T, f Factory) {
 	}
 	if _, err := b.Store.PushedAuthRequests().Find(ctx, "urn:par:exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Find expired: want ErrNotFound, got %v", err)
+	}
+}
+
+// parConsumeExpiredStillRedeems pins the single-use-only Consume contract:
+// expiry is gated at presentation by Find, so a request_uri whose lifetime
+// elapsed during an interactive login still redeems exactly once at code
+// emission. Consuming a second time is the replay that MUST fail.
+func parConsumeExpiredStillRedeems(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	par := newPAR(b.Now(), "urn:par:exp-consume")
+	par.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := b.Store.PushedAuthRequests().Save(ctx, par); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := b.Store.PushedAuthRequests().Consume(ctx, "urn:par:exp-consume")
+	if err != nil {
+		t.Fatalf("Consume expired-but-unconsumed: want success, got %v", err)
+	}
+	if got.ConsumedAt == nil {
+		t.Fatal("Consume returned ConsumedAt=nil")
+	}
+	if _, err := b.Store.PushedAuthRequests().Consume(ctx, "urn:par:exp-consume"); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("second Consume: want ErrAlreadyConsumed, got %v", err)
 	}
 }
 
@@ -308,6 +333,7 @@ var jtiCases = []subtest{
 	{"HasMissing", jtiHasMissing},
 	{"Replay", jtiReplay},
 	{"ExpiredMarkerCanBeReplaced", jtiExpiredMarkerCanBeReplaced},
+	{"ZeroExpiryPersists", jtiZeroExpiryPersists},
 }
 
 func jtiMarkHas(t *testing.T, f Factory) {
@@ -365,6 +391,29 @@ func jtiExpiredMarkerCanBeReplaced(t *testing.T, f Factory) {
 	}
 	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-expired", b.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("fresh Mark after expired marker: %v", err)
+	}
+}
+
+// jtiZeroExpiryPersists pins the project-wide "zero time means no expiry"
+// convention for replay markers: a jti marked with a zero expiresAt must
+// be retained permanently (Has stays true) and must reject a later Mark
+// as a replay. A backend that dropped the zero-expiry marker would
+// silently lose replay protection for any caller passing a zero expiry.
+func jtiZeroExpiryPersists(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-zero", time.Time{}); err != nil {
+		t.Fatalf("Mark zero-expiry: %v", err)
+	}
+	got, err := b.Store.ConsumedJTIs().Has(ctx, "jti-zero")
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if !got {
+		t.Fatal("Has returned false for a zero-expiry (permanent) marker")
+	}
+	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-zero", time.Time{}); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("replay of zero-expiry marker: want ErrAlreadyConsumed, got %v", err)
 	}
 }
 

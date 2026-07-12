@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -440,7 +441,12 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 		return false
 	}
 	for _, uri := range client.PostLogoutRedirectURIs {
-		if uri == postLogout {
+		// Honour the same RFC 8252 §7.3 loopback any-port allowance as the
+		// /authorize redirect_uri check: a native client registers a fixed
+		// loopback URI but binds an ephemeral port at logout time, so an
+		// exact-match-only gate here would reject a callback /authorize
+		// would have accepted.
+		if authorize.LoopbackURIMatches(client, uri, postLogout) {
 			return true
 		}
 	}

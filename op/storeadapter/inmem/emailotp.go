@@ -17,11 +17,15 @@ import (
 // it freely, and every Put clones the supplied pointer so a later
 // mutation by the caller does not leak into the map.
 //
-// Records whose ExpiresAt is strictly before [Clock.Now()] are treated
-// as absent: Get returns [store.ErrNotFound]. The expired record is
-// left in the map for diagnostic purposes; production backends
-// typically run a sweeper, but the reference implementation
-// deliberately omits one to keep the surface tiny.
+// Records whose retention horizon is strictly before [Clock.Now()] are
+// treated as absent: Get returns [store.ErrNotFound]. The horizon is
+// [store.EmailOTPRecord.RetainUntil] (falling back to ExpiresAt when
+// RetainUntil is zero) so the rate-limit / brute-force counters outlive
+// the code's ExpiresAt — an expired code is still rejected by Consume /
+// the verifier, but its counters remain readable while any window is
+// live. The stale record is left in the map for diagnostic purposes;
+// production backends typically run a sweeper, but the reference
+// implementation deliberately omits one to keep the surface tiny.
 type emailOTPStore struct {
 	clock Clock
 	mu    sync.RWMutex
@@ -40,7 +44,15 @@ func (s *emailOTPStore) Get(_ context.Context, subject string) (*store.EmailOTPR
 	if !ok {
 		return nil, store.ErrNotFound
 	}
-	if !rec.ExpiresAt.IsZero() && rec.ExpiresAt.Before(s.now()) {
+	// Retention is governed by RetainUntil (independent of the code's
+	// ExpiresAt) so the rate-limit / brute-force counters survive an
+	// expired code. RetainUntil==zero falls back to ExpiresAt so records
+	// written before this field existed keep their old behaviour.
+	horizon := rec.RetainUntil
+	if horizon.IsZero() {
+		horizon = rec.ExpiresAt
+	}
+	if !horizon.IsZero() && horizon.Before(s.now()) {
 		return nil, store.ErrNotFound
 	}
 	return cloneEmailOTPRecord(rec), nil

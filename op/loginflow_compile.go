@@ -147,7 +147,7 @@ func buildPrimaryPassword(s PrimaryPassword) (authn.Authenticator, error) { //no
 // builder validates RP-side configuration up-front so a misconfigured
 // PrimaryPasskey surfaces at op.New time rather than at the first
 // authorize request.
-func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
+func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -168,6 +168,13 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //noli
 			Description: "PrimaryPasskey rejected by parser",
 			Cause:       err,
 		}
+	}
+	// Share the embedder-supplied clock so the WebAuthn session /
+	// challenge expiry window uses the same instant as the rest of the
+	// flow (WithClock contract). The Clock field lives on the Verifier,
+	// not Config; a nil clock leaves the Verifier's SystemClock fallback.
+	if v != nil && clock != nil {
+		v.Clock = clock
 	}
 	auth, err := passkey.NewAuthenticator(v, s.Store)
 	if err != nil {
@@ -203,7 +210,7 @@ func buildPrimaryPasskey(s PrimaryPasskey) (authn.Authenticator, error) { //noli
 // the call-site reads the counter off the [config] before invoking
 // the builder so the function signature remains stable across
 // deployments that opt out of the cross-factor defence.
-func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
+func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, clock timex.Clock) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -225,7 +232,11 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (a
 			Cause:       err,
 		}
 	}
-	verifier := &totp.Verifier{Codec: codec}
+	// Share the embedder-supplied clock so the TOTP step window and the
+	// per-record lockout stamp read the same instant as the cross-factor
+	// counter and the rest of the flow (WithClock contract). Nil falls
+	// back to SystemClock.
+	verifier := &totp.Verifier{Codec: codec, Clock: clock}
 	return totp.NewAuthenticator(verifier, s.Store)
 }
 
@@ -262,6 +273,11 @@ func attachLockoutCounter(auth authn.Authenticator, c *config) authn.Authenticat
 	case *recovery.Authenticator:
 		return t.WithLockout(counter)
 	default:
+		// Primary credential factors (password / passkey) and custom
+		// ExternalStep authenticators are intentionally excluded from the
+		// cross-factor counter (see WithAuthnLockoutStore godoc): their
+		// brute-force defence is owned by the embedder's user store or the
+		// wrapped custom factor, not this shared 2FA gate.
 		return auth
 	}
 }
@@ -317,7 +333,7 @@ func selectTOTPKeys(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte) (
 // of the [emailotp.Message] payload type.
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-func buildStepEmailOTP(s StepEmailOTP) (authn.Authenticator, error) {
+func buildStepEmailOTP(s StepEmailOTP, clock timex.Clock) (authn.Authenticator, error) {
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -345,6 +361,10 @@ func buildStepEmailOTP(s StepEmailOTP) (authn.Authenticator, error) {
 		Users:          s.Users,
 		CodeTTL:        s.CodeTTL,
 		SendLatencyPad: s.SendLatencyPad,
+		// Share the embedder-supplied clock so the code TTL, resend
+		// window, and per-record lockout stamp read the same instant as
+		// the rest of the flow (WithClock contract). Nil -> SystemClock.
+		Clock: clock,
 	})
 }
 
@@ -355,14 +375,17 @@ func buildStepEmailOTP(s StepEmailOTP) (authn.Authenticator, error) {
 // [internal/authn/recovery].
 //
 //nolint:ireturn // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
-func buildStepRecoveryCode(s StepRecoveryCode) (authn.Authenticator, error) {
+func buildStepRecoveryCode(s StepRecoveryCode, clock timex.Clock) (authn.Authenticator, error) {
 	if s.Store == nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "StepRecoveryCode.Store is nil",
 		}
 	}
-	verifier := &recovery.Verifier{}
+	// Share the embedder-supplied clock so the recovery-code lockout
+	// stamp reads the same instant as the rest of the flow (WithClock
+	// contract). Nil falls back to SystemClock.
+	verifier := &recovery.Verifier{Clock: clock}
 	return recovery.NewAuthenticator(verifier, s.Store)
 }
 

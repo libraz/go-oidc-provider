@@ -348,7 +348,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest /userinfo: %v", err)
 	}
-	uinfoReq.Header.Set("Authorization", "Bearer "+at)
+	uinfoReq.Header.Set("Authorization", "DPoP "+at)
 	uinfoReq.Header.Set("DPoP", makeProof(t, key, "GET", userinfoURL, clock.now, "jti-uinfo-1", dpop.AccessTokenHash(at)))
 	uinfoResp, err := client.Do(uinfoReq)
 	if err != nil {
@@ -365,7 +365,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest /userinfo plain: %v", err)
 	}
-	plainReq.Header.Set("Authorization", "Bearer "+at)
+	plainReq.Header.Set("Authorization", "DPoP "+at)
 	plainResp, err := client.Do(plainReq)
 	if err != nil {
 		t.Fatalf("Do /userinfo plain: %v", err)
@@ -381,7 +381,7 @@ func TestE2E_DPoP_FullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest /userinfo other: %v", err)
 	}
-	otherReq.Header.Set("Authorization", "Bearer "+at)
+	otherReq.Header.Set("Authorization", "DPoP "+at)
 	otherReq.Header.Set("DPoP", makeProof(t, other, "GET", userinfoURL, clock.now, "jti-uinfo-other", dpop.AccessTokenHash(at)))
 	otherResp, err := client.Do(otherReq)
 	if err != nil {

@@ -745,6 +745,49 @@ func TestHandler_BadIDTokenSignature(t *testing.T) {
 	}
 }
 
+// TestHandler_PostLogoutLoopbackAnyPortForNativeClient pins L-8: a
+// native / public client that registered a fixed loopback
+// post_logout_redirect_uri may log out to the same URI on any port, the
+// RFC 8252 §7.3 allowance /authorize already grants for redirect_uri. An
+// exact-match-only gate would reject the ephemeral-port callback the app
+// actually binds.
+func TestHandler_PostLogoutLoopbackAnyPortForNativeClient(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	const nativeID = "client-native-logout"
+	if err := h.store.RegisterClient(context.Background(), &store.Client{
+		ID:                      nativeID,
+		RedirectURIs:            []string{"http://127.0.0.1/callback"},
+		PostLogoutRedirectURIs:  []string{"http://127.0.0.1/callback"},
+		GrantTypes:              []string{"authorization_code"},
+		ResponseTypes:           []string{"code"},
+		Scopes:                  []string{"openid"},
+		TokenEndpointAuthMethod: "none",
+		PublicClient:            true,
+		ApplicationType:         "native",
+	}); err != nil {
+		t.Fatalf("RegisterClient(native): %v", err)
+	}
+
+	idToken := h.signIDToken(t, func(c map[string]any) { c["aud"] = nativeID })
+	v := url.Values{}
+	v.Set("id_token_hint", idToken)
+	v.Set("client_id", nativeID)
+	// Registered without a port; requested on an ephemeral one.
+	const requested = "http://127.0.0.1:49152/callback"
+	v.Set("post_logout_redirect_uri", requested)
+
+	resp := h.doGET(t, v, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status=%d want 302 (native loopback any-port must match); body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	if got := resp.Header.Get("Location"); got != requested {
+		t.Errorf("Location=%q want %q", got, requested)
+	}
+}
+
 func TestHandler_UnregisteredPostLogoutURI(t *testing.T) {
 	t.Parallel()
 

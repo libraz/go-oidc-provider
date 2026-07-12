@@ -861,28 +861,28 @@ func projectExternalStep(where string, ext ExternalStep) (authn.LoginFlowStep, e
 func projectBuiltinStep(where string, s Step, cfg *config) (authn.LoginFlowStep, error) {
 	switch v := s.(type) {
 	case PrimaryPasskey:
-		auth, err := buildPrimaryPasskey(v)
+		auth, err := buildPrimaryPasskey(v, clockShimOrNil(cfg.clock))
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
 		return authn.LoginFlowStep{Kind: string(StepKindPasskey), Authenticator: auth}, nil
 	case StepTOTP:
 		fallbackCurrent, fallbackPrev := totpFallbackKeys(cfg)
-		auth, err := buildStepTOTP(v, fallbackCurrent, fallbackPrev)
+		auth, err := buildStepTOTP(v, fallbackCurrent, fallbackPrev, clockShimOrNil(cfg.clock))
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
 		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindTOTP), Authenticator: auth}, nil
 	case StepEmailOTP:
-		auth, err := buildStepEmailOTP(v)
+		auth, err := buildStepEmailOTP(v, clockShimOrNil(cfg.clock))
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}
 		auth = attachLockoutCounter(auth, cfg)
 		return authn.LoginFlowStep{Kind: string(StepKindEmailOTP), Authenticator: auth}, nil
 	case StepRecoveryCode:
-		auth, err := buildStepRecoveryCode(v)
+		auth, err := buildStepRecoveryCode(v, clockShimOrNil(cfg.clock))
 		if err != nil {
 			return authn.LoginFlowStep{}, projectStepError(where, err)
 		}

@@ -43,6 +43,25 @@ func TestWithGrants_RejectsDuplicate(t *testing.T) {
 	}
 }
 
+// TestWithGrants_RejectsSecondCall pins #26: a second WithGrants must
+// error rather than silently replacing the first set, so a caller that
+// composes option slices from several helpers cannot lose an earlier
+// grant set under a later one.
+func TestWithGrants_RejectsSecondCall(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(append(validBaseOpts(t),
+		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken),
+		op.WithGrants(grant.AuthorizationCode),
+	)...)
+	if err == nil {
+		t.Fatal("expected error for a second WithGrants call, got nil")
+	}
+	if !strings.Contains(err.Error(), "at most once") {
+		t.Errorf("err = %v, want it to mention 'at most once'", err)
+	}
+}
+
 func TestWithFeature_DuplicateIsIdempotent(t *testing.T) {
 	t.Parallel()
 

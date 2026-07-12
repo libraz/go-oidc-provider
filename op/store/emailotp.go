@@ -38,10 +38,28 @@ type EmailOTPRecord struct {
 	SentAt time.Time
 
 	// ExpiresAt is the wall-clock time at which the issued code stops
-	// being acceptable. Reads after this time return [ErrNotFound] from
-	// the inmem reference and SHOULD do the same in production
-	// backends; the library re-checks expiry on every verify regardless.
+	// being acceptable. The library re-checks it on every verify
+	// (Verify returns an "expired" outcome past this instant) and
+	// [EmailOTPStore.Consume] MUST reject a code past it, so a stale
+	// code can never be redeemed. ExpiresAt governs CODE validity only;
+	// record retention is governed by [EmailOTPRecord.RetainUntil].
 	ExpiresAt time.Time
+
+	// RetainUntil is the wall-clock time until which the record MUST
+	// remain readable via [EmailOTPStore.Get], independent of the code's
+	// ExpiresAt. The rate-limit and brute-force bookkeeping below
+	// (FailedCount / LockedUntil / SendCount / SendWindowStart / ...)
+	// outlives a single code: were the record dropped the moment the
+	// code expired, an attacker who paces to the code TTL would see the
+	// resend cap and the lockout counter silently reset. The library
+	// stamps RetainUntil to the far edge of the longest active window
+	// (the 24-hour brute-force window) on every write, so Get keeps
+	// returning the record — and its counters — while any window is
+	// live, while Verify / Consume still reject the expired code.
+	//
+	// A zero value means "retention defaults to ExpiresAt" so a backend
+	// or caller that predates this field keeps its previous behaviour.
+	RetainUntil time.Time
 
 	// FailedCount is the cumulative number of wrong codes the user has
 	// entered within the current 24-hour window. It increments on every
@@ -107,8 +125,14 @@ type EmailOTPRecord struct {
 // rate-limit counters.
 type EmailOTPStore interface {
 	// Get returns the pending challenge for subject. It MUST return
-	// [ErrNotFound] when no challenge exists; any other non-nil error
-	// indicates a backend fault.
+	// [ErrNotFound] when no challenge exists or when the record's
+	// [EmailOTPRecord.RetainUntil] has passed (falling back to
+	// [EmailOTPRecord.ExpiresAt] when RetainUntil is zero). Get MUST NOT
+	// drop a record merely because its code ExpiresAt elapsed while
+	// RetainUntil is still in the future: the rate-limit / brute-force
+	// counters on the record must survive the code so the caller re-reads
+	// them (the code itself is separately rejected by Verify / Consume).
+	// Any other non-nil error indicates a backend fault.
 	Get(ctx context.Context, subject string) (*EmailOTPRecord, error)
 
 	// Put creates or replaces the pending challenge for r.Subject.

@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -146,7 +147,7 @@ func rotateAndUpdate(
 		RedirectURIs:                slices.Clone(m.RedirectURIs),
 		GrantTypes:                  slices.Clone(m.GrantTypes),
 		ResponseTypes:               slices.Clone(m.ResponseTypes),
-		Scopes:                      splitScopes(m.Scope),
+		Scopes:                      oidcscope.Parse(m.Scope),
 		TokenEndpointAuthMethod:     m.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg: m.TokenEndpointAuthSigningAlg,
 		// Preserve the existing secret hash unless the

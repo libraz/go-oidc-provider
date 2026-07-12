@@ -55,13 +55,18 @@ func ValidateBindingMessage(s string) (string, error) {
 	return trimmed, nil
 }
 
-// ValidateScope splits the raw scope parameter on ASCII whitespace
-// (RFC 6749 §3.3 scope-token separator) and verifies that the
+// ValidateScope splits the raw scope parameter and verifies that the
 // openid scope value is a member. The function returns
 // [ErrMissingScope] when the parameter is empty or blank, and
 // [ErrScopeMissingOpenID] when openid is absent from the resulting
 // list. Duplicates are preserved; the caller is responsible for any
 // further normalisation.
+//
+// Tokenisation uses [strings.Fields] (any Unicode whitespace run), a
+// deliberate superset of the RFC 6749 §3.3 separator (ASCII space,
+// 0x20) so a lenient CIBA client that separates scopes with tabs still
+// authenticates. Spec-conformant (0x20-separated) inputs tokenise
+// identically to the wire-facing 0x20-only path in [internal/oidcscope].
 func ValidateScope(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, ErrMissingScope

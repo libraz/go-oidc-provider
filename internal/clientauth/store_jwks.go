@@ -69,7 +69,10 @@ func NewStoreJWKSResolver(clients store.ClientStore) (*StoreJWKSResolver, error)
 	if clients == nil {
 		return nil, errors.New("clientauth: NewStoreJWKSResolver requires a ClientStore")
 	}
-	return &StoreJWKSResolver{clients: clients}, nil
+	// Wrap the store so the three GetClient seams a single assertion
+	// verification hits (alg pin, JWKS lookup, rotation refetch) collapse
+	// to one backing-store round-trip per request context (see clientmemo.go).
+	return &StoreJWKSResolver{clients: memoClientStore{inner: clients}}, nil
 }
 
 // SetURLFetcher attaches a [URLFetcher] so the resolver can honour

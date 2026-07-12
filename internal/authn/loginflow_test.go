@@ -1023,6 +1023,195 @@ func TestLoginFlowSoftFactorErrorReemitsPrompt(t *testing.T) {
 	}
 }
 
+// multiStepFactorStub models email-OTP's two-screen shape for the
+// LoginFlow M-3 retry tests: Begin and the first Continue (empty scratch)
+// emit the "send" screen; every later Continue works the "verify" screen.
+// A wrong code re-emits the verify prompt alongside ErrFactorRetry so the
+// orchestrator can keep the user on the verify screen; the code "correct"
+// grants.
+func multiStepFactorStub() *stubAuthenticator {
+	const (
+		sendType   = "auth.email_otp.send"
+		verifyType = "auth.email_otp.verify"
+	)
+	verifyScratch := []byte{0x01}
+	return &stubAuthenticator{
+		typeID:  op.FactorEmailOTP,
+		aal:     op.AAL2,
+		amr:     "otp",
+		prompts: []string{sendType, verifyType},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &interaction.Prompt{Type: sendType}}, nil
+		},
+		continueFn: func(_ context.Context, in op.ContinueInput) (interaction.Step, error) {
+			if len(in.Scratch) == 0 {
+				return interaction.Step{Prompt: &interaction.Prompt{Type: verifyType}, Scratch: verifyScratch}, nil
+			}
+			if in.Submission.Values["code"] == "correct" {
+				return interaction.Step{Result: &interaction.Result{Subject: "user-1", AuthTime: fakeNow()}}, nil
+			}
+			return interaction.Step{Prompt: &interaction.Prompt{Type: verifyType}, Scratch: verifyScratch}, fmt.Errorf("emailotp: wrong code: %w", authn.ErrFactorRetry)
+		},
+	}
+}
+
+// driveToEmailOTPVerify runs the password primary then the email-OTP send
+// screen, returning the state and the verify prompt's Step so a test can
+// submit a code against it.
+func driveToEmailOTPVerify(t *testing.T, o *authn.Orchestrator) (authn.State, interaction.Step) {
+	t.Helper()
+	st, step, err := o.Tick(context.Background(), initialState(), authn.Input{Now: fakeNow()})
+	if err != nil {
+		t.Fatalf("primary begin: %v", err)
+	}
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"password": "x"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("primary continue: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.email_otp.send" {
+		t.Fatalf("expected email_otp.send prompt, got %+v", step.Prompt)
+	}
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"email": "a@b.c"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("send continue: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.email_otp.verify" {
+		t.Fatalf("expected email_otp.verify prompt, got %+v", step.Prompt)
+	}
+	return st, step
+}
+
+// TestLoginFlowMultiStepFactorWrongCodeReShowsVerifyStep pins M-3 on the
+// LoginFlow path: a wrong code on the email-OTP verify screen re-shows
+// the VERIFY prompt (delivered code still valid), not the send screen,
+// and a subsequent correct code grants — proving the verify scratch was
+// preserved across the retry rather than being reset by a restart.
+func TestLoginFlowMultiStepFactorWrongCodeReShowsVerifyStep(t *testing.T) {
+	t.Parallel()
+
+	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+	otp := multiStepFactorStub()
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			{
+				When: func(authn.LoginFlowContext) bool { return true },
+				Then: authn.LoginFlowStep{Kind: "myorg.email_otp", Authenticator: otp},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	st, step := driveToEmailOTPVerify(t, o)
+
+	// Wrong code -> re-show verify (not send), scratch preserved.
+	st, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"code": "000000"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("wrong-code Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "auth.email_otp.verify" {
+		t.Fatalf("wrong code must re-show verify prompt, got %+v", step.Prompt)
+	}
+	if len(st.FactorScratch) == 0 {
+		t.Fatalf("verify scratch must be preserved on retry, got empty")
+	}
+	if st.LastFailures != 1 {
+		t.Errorf("LastFailures = %d, want 1", st.LastFailures)
+	}
+	if st.ActiveStepKind != "myorg.email_otp" {
+		t.Errorf("ActiveStepKind = %q, want myorg.email_otp (still on the factor)", st.ActiveStepKind)
+	}
+
+	// Correct code on the still-live verify step -> grant.
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"code": "correct"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("correct-code Tick: %v", err)
+	}
+	if step.Result == nil || step.Result.Subject != "user-1" {
+		t.Fatalf("expected grant, got %+v", step)
+	}
+}
+
+// TestLoginFlowMultiStepFactorRetryYieldsToCaptchaRule pins that the M-3
+// verify-re-show shortcut does NOT bypass a pending captcha rule. A
+// captcha-shaped rule whose predicate flips on the first failed attempt
+// MUST interpose after a wrong code on the verify screen, rather than the
+// factor silently re-showing its own prompt and skipping the challenge.
+func TestLoginFlowMultiStepFactorRetryYieldsToCaptchaRule(t *testing.T) {
+	t.Parallel()
+
+	pw := successAuth(op.FactorPassword, op.AAL1, "pwd", "user-1")
+	otp := multiStepFactorStub()
+	captchaPrompt := interaction.Prompt{Type: "captcha"}
+	captchaAuth := &stubAuthenticator{
+		typeID:  "myorg.captcha",
+		aal:     op.AAL1,
+		amr:     "captcha",
+		prompts: []string{captchaPrompt.Type},
+		beginFn: func(_ context.Context, _ op.BeginInput) (interaction.Step, error) {
+			return interaction.Step{Prompt: &captchaPrompt}, nil
+		},
+		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
+			return interaction.Step{Result: &interaction.Result{}}, nil
+		},
+	}
+	flow, err := authn.CompileLoginFlow(authn.LoginFlowSpec{
+		Primary: authn.LoginFlowStep{Kind: "myorg.password", Authenticator: pw},
+		Rules: []authn.LoginFlowRule{
+			// Captcha declared first so it wins over the email-OTP rule
+			// once its predicate flips on the first failed verify attempt.
+			{
+				When: func(lc authn.LoginFlowContext) bool { return lc.FailedAttempts >= 1 },
+				Then: authn.LoginFlowStep{Kind: "myorg.captcha", Authenticator: captchaAuth, IsCaptcha: true},
+			},
+			{
+				When: func(authn.LoginFlowContext) bool { return true },
+				Then: authn.LoginFlowStep{Kind: "myorg.email_otp", Authenticator: otp},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileLoginFlow: %v", err)
+	}
+	o, err := authn.New(authn.Config{LoginFlow: flow, StateRefSigner: newSigner(t)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	st, step := driveToEmailOTPVerify(t, o)
+
+	// Wrong code -> the pending captcha rule interposes instead of the
+	// verify prompt re-showing.
+	_, step, err = o.Tick(context.Background(), st, authn.Input{
+		Submission: &interaction.FormSubmission{StateRef: step.Prompt.StateRef, Values: map[string]string{"code": "000000"}},
+		Now:        fakeNow(),
+	})
+	if err != nil {
+		t.Fatalf("wrong-code Tick: %v", err)
+	}
+	if step.Prompt == nil || step.Prompt.Type != "captcha" {
+		t.Fatalf("wrong code with a pending captcha rule must emit captcha, got %+v", step.Prompt)
+	}
+}
+
 // TestLoginFlowCaptchaRuleFiresAfterFailedAttempts pins the contract
 // that a captcha-shaped rule (e.g. RuleAfterFailedAttempts(3,
 // StepCaptcha)) actually interposes between the failing credential

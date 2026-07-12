@@ -1470,6 +1470,69 @@ func TestAuthCode_GrantTombstoneRefusesAfterElapsedTime(t *testing.T) {
 	}
 }
 
+// TestAuthCode_GrantTombstoneMintRefusalRevokesOpaqueAccessToken pins
+// L-3: the access token is minted (and, in the opaque format, persisted)
+// before the grant-tombstone mint refusal fires. The refusal path MUST
+// revoke that opaque-AT row too, not just the refresh token, so a refused
+// mint does not leave a still-valid access token orphaned until TTL/GC.
+// Observability: a second RevokeByGrant after the refused request finds
+// zero LIVE rows only if the refusal already revoked the minted one.
+func TestAuthCode_GrantTombstoneMintRefusalRevokesOpaqueAccessToken(t *testing.T) {
+	t.Parallel()
+
+	f := opaqueFormatFixture(t)
+	client, secret := f.confidentialClientFixture(t)
+	verifier, challenge := pkcePair()
+	const codeID = "code-tombstone-opaque-orphan"
+	const grantID = "grant-tombstone-opaque-orphan"
+	const subject = "user-tombstone-opaque-orphan"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "offline_access"},
+	})
+	// Code issued an hour before redemption; grant tombstoned a minute
+	// before redemption (strictly after the code, before "now") so the
+	// mint-refusal fires on redemption.
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "offline_access"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		CreatedAt:           f.clock.now.Add(-time.Hour),
+		ExpiresAt:           f.clock.now.Add(time.Minute),
+	})
+	if err := f.prov.Store.GrantRevocations().RevokeGrant(context.Background(), store.GrantTombstone{
+		GrantID:   grantID,
+		RevokedAt: f.clock.now.Add(-time.Minute),
+		ExpiresAt: f.clock.now.Add(time.Hour),
+		Reason:    "test",
+	}); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+
+	// The mint persisted an opaque AT row before refusal. If the refusal
+	// path revoked it, a second RevokeByGrant newly-revokes nothing.
+	n, err := f.prov.Store.OpaqueAccessTokens().RevokeByGrant(context.Background(), grantID)
+	if err != nil {
+		t.Fatalf("RevokeByGrant: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("mint refusal orphaned %d live opaque AT row(s) for the tombstoned grant", n)
+	}
+}
+
 // TestAuthCode_Replay_GrantTombstone_NoPerATFlips pins the storage-
 // shape contract of ADR 0025: the GrantTombstone cascade replaces
 // the per-AT row updates of ADR 0013. Under

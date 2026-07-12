@@ -10,6 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clone"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
+	"github.com/libraz/go-oidc-provider/internal/oidcscope"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -168,7 +169,7 @@ func persistRegistration(ctx context.Context, w http.ResponseWriter, deps Deps, 
 		RedirectURIs:                      slices.Clone(m.RedirectURIs),
 		GrantTypes:                        slices.Clone(m.GrantTypes),
 		ResponseTypes:                     slices.Clone(m.ResponseTypes),
-		Scopes:                            splitScopes(m.Scope),
+		Scopes:                            oidcscope.Parse(m.Scope),
 		TokenEndpointAuthMethod:           m.TokenEndpointAuthMethod,
 		TokenEndpointAuthSigningAlg:       m.TokenEndpointAuthSigningAlg,
 		SecretHash:                        secretHash,
@@ -348,29 +349,6 @@ func newClientSecret() (raw, hash string, err error) {
 		return "", "", err
 	}
 	return raw, hash, nil
-}
-
-// splitScopes returns the space-separated list as a fresh slice. An
-// empty input returns nil rather than an empty slice so the
-// downstream JSON encoder omits the field.
-func splitScopes(scope string) []string {
-	if scope == "" {
-		return nil
-	}
-	out := make([]string, 0, 4)
-	start := 0
-	for i := 0; i <= len(scope); i++ {
-		if i == len(scope) || scope[i] == ' ' {
-			if i > start {
-				out = append(out, scope[start:i])
-			}
-			start = i + 1
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // writeRegistrationResponse marshals body and writes it with the

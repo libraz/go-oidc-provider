@@ -227,6 +227,45 @@ func TestHandler_HappyPath_ClientSecretBasic(t *testing.T) {
 	}
 }
 
+// TestHandler_HappyPath_CustomPARLifetime pins the WithPARLifetime wiring
+// (op.WithPARLifetime -> config.parLifetime -> op_router -> parendpoint.
+// Deps.TTL): a non-default lifetime must reach both the advertised
+// expires_in and the persisted record's ExpiresAt, guarding the
+// option-to-wire gap class this repo is prone to.
+func TestHandler_HappyPath_CustomPARLifetime(t *testing.T) {
+	t.Parallel()
+
+	const lifetime = 5 * time.Minute
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(op.WithFeature(feature.PAR), op.WithPARLifetime(lifetime)),
+	)
+	f := &fixture{prov: prov, endpoint: prov.Server.URL + "/oidc/par", clock: clock}
+
+	client, secret := f.confidentialClient(t)
+	form := goodAuthorizeForm(client.ID, client.RedirectURIs[0])
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		dump, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d want 201; body=%s", resp.StatusCode, dump)
+	}
+	body := decodeJSON(t, resp)
+	if expires, _ := body["expires_in"].(float64); expires != lifetime.Seconds() {
+		t.Errorf("expires_in=%v want %v", body["expires_in"], lifetime.Seconds())
+	}
+	uri, _ := body["request_uri"].(string)
+	rec, err := f.prov.Store.PushedAuthRequests().Find(context.Background(), uri)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if want := clock.now.Add(lifetime); !rec.ExpiresAt.Equal(want) {
+		t.Errorf("ExpiresAt=%v want %v", rec.ExpiresAt, want)
+	}
+}
+
 // TestHandler_HappyPath_PublicClient confirms a public client with
 // TokenEndpointAuthMethod="none" can push an authorization request without
 // presenting a secret.

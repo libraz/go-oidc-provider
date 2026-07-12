@@ -26,20 +26,35 @@ const (
 // channel, multi-channel rejection) on top of this primitive; only
 // the header-parsing slice is shared.
 func BearerFromHeader(value string) (string, bool) {
-	for _, scheme := range []string{BearerSchemeBearer + " ", BearerSchemeDPoP + " "} {
-		if len(value) <= len(scheme) {
+	tok, _, ok := BearerCredentialFromHeader(value)
+	return tok, ok
+}
+
+// BearerCredentialFromHeader is [BearerFromHeader] that also reports which
+// scheme carried the credential — [BearerSchemeBearer] (RFC 6750 §2.1) or
+// [BearerSchemeDPoP] (RFC 9449 §7.1). A resource server that must reject a
+// DPoP-bound token presented under the wrong scheme (RFC 9449 §7.1
+// requires the "DPoP" scheme for sender-constrained tokens) consults the
+// scheme; callers that only need the token use [BearerFromHeader]. The
+// scheme is returned in its canonical spelling regardless of the input
+// header's case. When no recognised credential is present, all three
+// returns are zero ("", "", false).
+func BearerCredentialFromHeader(value string) (token, scheme string, ok bool) {
+	for _, s := range []string{BearerSchemeBearer, BearerSchemeDPoP} {
+		prefix := s + " "
+		if len(value) <= len(prefix) {
 			continue
 		}
-		if !strings.EqualFold(value[:len(scheme)], scheme) {
+		if !strings.EqualFold(value[:len(prefix)], prefix) {
 			continue
 		}
-		tok := strings.TrimSpace(value[len(scheme):])
+		tok := strings.TrimSpace(value[len(prefix):])
 		if tok == "" {
-			return "", false
+			return "", "", false
 		}
-		return tok, true
+		return tok, s, true
 	}
-	return "", false
+	return "", "", false
 }
 
 // IsFormContent reports whether ct is application/x-www-form-urlencoded.

@@ -155,6 +155,13 @@ type Deps struct {
 	// [op.WithAccessTokenRevocationStrategy].
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
+	// AccessTokenTTL is the issued access-token lifetime. It sizes the
+	// grant-tombstone retention window (AT TTL + clock-skew grace) when a
+	// refresh-token revocation cascades to the grant's access tokens
+	// (RFC 7009 §2.1). A zero value falls back to a one-hour ceiling,
+	// mirroring the /end_session cascade.
+	AccessTokenTTL time.Duration
+
 	// Audit is the structured audit-event sink. A nil Emitter falls
 	// back to [audit.Discard] so the handler can call the emitter
 	// unconditionally. The /revoke endpoint emits "token.revoke_failed"

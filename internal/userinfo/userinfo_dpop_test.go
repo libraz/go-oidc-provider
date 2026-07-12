@@ -97,13 +97,39 @@ func TestUserInfo_DPoP_HappyPath(t *testing.T) {
 		c.Confirmation = map[string]string{"jkt": key.jkt}
 	})
 	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-1", dpop.AccessTokenHash(token))
-	req := f.newGet(t, token)
+	req := f.newGetDPoP(t, token)
 	req.Header.Set("DPoP", proof)
 	resp := f.doRequest(t, req)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+}
+
+// TestUserInfo_DPoP_BearerSchemeRejected pins L-9 (RFC 9449 §7.1): a
+// DPoP-bound access token presented under the "Bearer" scheme — even with
+// an otherwise-valid proof header — is rejected. Sender-constrained
+// tokens MUST use the "DPoP" authentication scheme; accepting Bearer would
+// blur the sender-constraint signal the scheme carries.
+func TestUserInfo_DPoP_BearerSchemeRejected(t *testing.T) {
+	t.Parallel()
+
+	f := dpopUserInfoFixture(t)
+	f.putUser(t, "user-1", map[string]any{"email": "alice@example.com"})
+	key := newDPoPProofKey(t)
+	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
+		c.Scope = []string{"openid", "email"}
+		c.Confirmation = map[string]string{"jkt": key.jkt}
+	})
+	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-bearer-scheme", dpop.AccessTokenHash(token))
+	// Wrong scheme (Bearer) but a valid proof header: must still be rejected.
+	req := f.newGet(t, token)
+	req.Header.Set("DPoP", proof)
+	resp := f.doRequest(t, req)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status=%d want 401 (DPoP-bound token under Bearer scheme must be rejected)", resp.StatusCode)
 	}
 }
 
@@ -118,7 +144,7 @@ func TestUserInfo_DPoP_MissingProof(t *testing.T) {
 	token := f.signAccessToken(t, func(c *tokens.AccessTokenClaims) {
 		c.Confirmation = map[string]string{"jkt": key.jkt}
 	})
-	resp := f.doRequest(t, f.newGet(t, token))
+	resp := f.doRequest(t, f.newGetDPoP(t, token))
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -142,7 +168,7 @@ func TestUserInfo_DPoP_DifferentKey(t *testing.T) {
 		c.Confirmation = map[string]string{"jkt": bound.jkt}
 	})
 	proof := proofFor(t, other, "GET", f.endpoint, f.clock.now, "jti-uinfo-other", dpop.AccessTokenHash(token))
-	req := f.newGet(t, token)
+	req := f.newGetDPoP(t, token)
 	req.Header.Set("DPoP", proof)
 	resp := f.doRequest(t, req)
 	defer resp.Body.Close()
@@ -166,7 +192,7 @@ func TestUserInfo_DPoP_ATHMismatch(t *testing.T) {
 	// ath hashes a different value; the request still presents the
 	// real token.
 	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-ath", dpop.AccessTokenHash("not-the-real-token"))
-	req := f.newGet(t, token)
+	req := f.newGetDPoP(t, token)
 	req.Header.Set("DPoP", proof)
 	resp := f.doRequest(t, req)
 	defer resp.Body.Close()
@@ -211,7 +237,7 @@ func TestUserInfo_DPoP_Replay(t *testing.T) {
 	})
 	proof := proofFor(t, key, "GET", f.endpoint, f.clock.now, "jti-uinfo-replay", dpop.AccessTokenHash(token))
 
-	req1 := f.newGet(t, token)
+	req1 := f.newGetDPoP(t, token)
 	req1.Header.Set("DPoP", proof)
 	first := f.doRequest(t, req1)
 	first.Body.Close()
@@ -220,7 +246,7 @@ func TestUserInfo_DPoP_Replay(t *testing.T) {
 	}
 
 	// Same proof again — replay store must reject.
-	req2 := f.newGet(t, token)
+	req2 := f.newGetDPoP(t, token)
 	req2.Header.Set("DPoP", proof)
 	second := f.doRequest(t, req2)
 	defer second.Body.Close()

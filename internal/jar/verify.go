@@ -77,6 +77,22 @@ type JWKSResolver interface {
 	Resolve(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error)
 }
 
+// freshJWKSResolver is the optional extension a [JWKSResolver] implements
+// to support a cache-bypassing refetch of a jwks_uri client's keyset. The
+// production [DefaultResolver] satisfies it; a resolver that only
+// implements [JWKSResolver] simply loses key-rotation recovery — a request
+// object signed with a key the RP rotated in after the OP last cached its
+// keyset fails with invalid_request_object until the cache TTL lapses.
+//
+// This mirrors the private_key_jwt recovery path
+// (clientauth.StoreJWKSResolver.RefreshJWKS): the token endpoint already
+// retries once against fresh keys, so /authorize, /par, and CIBA (which
+// share this verifier) must do the same for the RP experience to stay
+// consistent across endpoints.
+type freshJWKSResolver interface {
+	ResolveFresh(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error)
+}
+
 // EncryptionResolver is the type alias the public verifier exposes for
 // the JWE decryption seam. It mirrors [jose.EncryptionKeyResolver] so
 // callers can plumb a [keys.EncryptionSet] (or any other resolver)
@@ -395,7 +411,10 @@ func (v *Verifier) verifySignature(ctx context.Context, parsed *Object, client *
 	}
 	jwk, err := pickKey(keys, parsed.KeyID)
 	if err != nil {
-		return nil, err
+		jwk, err = v.pickFromRefreshedKeys(ctx, parsed, client, err)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Defence-in-depth: hold the client-supplied verification key to the
 	// same RFC 7518 §3.3 / RFC 8725 §3.2 floor the OP applies to its own
@@ -410,6 +429,38 @@ func (v *Verifier) verifySignature(ctx context.Context, parsed *Object, client *
 		return nil, fmt.Errorf("%w: %w", ErrSigInvalid, err)
 	}
 	return payload, nil
+}
+
+// pickFromRefreshedKeys performs the key-rotation-recovery retry when the
+// initial key selection missed. It applies only to a jwks_uri client (an
+// inline-JWKs client cannot rotate out-of-band) whose resolver supports a
+// cache-bypassing refetch; in every other case, or when the refreshed set
+// still lacks the key, it returns the original miss unchanged so the wire
+// response and error precedence are preserved. The forced refetch is
+// throttled per URL by the fetcher (minForcedRefreshInterval), so a bogus
+// kid cannot be used to hammer the RP's jwks_uri endpoint.
+func (v *Verifier) pickFromRefreshedKeys(
+	ctx context.Context,
+	parsed *Object,
+	client *store.Client,
+	miss error,
+) (*josev4.JSONWebKey, error) {
+	if !errors.Is(miss, ErrNoMatchingJWK) || client.JWKsURI == "" || len(client.JWKs) != 0 {
+		return nil, miss
+	}
+	fresh, ok := v.resolver.(freshJWKSResolver)
+	if !ok {
+		return nil, miss
+	}
+	keys, err := fresh.ResolveFresh(ctx, client)
+	if err != nil || keys == nil || len(keys.Keys) == 0 {
+		return nil, miss
+	}
+	jwk, err := pickKey(keys, parsed.KeyID)
+	if err != nil {
+		return nil, miss
+	}
+	return jwk, nil
 }
 
 // maybeDecrypt detects a JWE-shaped raw (5-segment compact form per
@@ -852,6 +903,13 @@ func (r *DefaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4
 	return r.inner.Resolve(ctx, c)
 }
 
+// ResolveFresh implements the optional [freshJWKSResolver] key-rotation
+// recovery seam so a request object signed with a freshly rotated RP key
+// verifies without waiting out the JWKS cache TTL.
+func (r *DefaultResolver) ResolveFresh(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
+	return r.inner.ResolveFresh(ctx, c)
+}
+
 // Resolve implements [JWKSResolver].
 func (r *defaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
 	if len(c.JWKs) > 0 {
@@ -863,6 +921,23 @@ func (r *defaultResolver) Resolve(ctx context.Context, c *store.Client) (*josev4
 	}
 	if c.JWKsURI != "" {
 		return r.fetcher.Fetch(ctx, c.JWKsURI)
+	}
+	return nil, ErrJWKSConfigured
+}
+
+// ResolveFresh mirrors [defaultResolver.Resolve] but forces a
+// cache-bypassing refetch for a jwks_uri client. Inline-JWKs clients
+// cannot rotate out-of-band, so their keyset is returned unchanged.
+func (r *defaultResolver) ResolveFresh(ctx context.Context, c *store.Client) (*josev4.JSONWebKeySet, error) {
+	if len(c.JWKs) > 0 {
+		keys, err := parseJWKS(c.JWKs)
+		if err != nil {
+			return nil, err
+		}
+		return keys, nil
+	}
+	if c.JWKsURI != "" {
+		return r.fetcher.FetchFresh(ctx, c.JWKsURI)
 	}
 	return nil, ErrJWKSConfigured
 }

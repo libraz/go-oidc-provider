@@ -5,14 +5,23 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/authn/recovery"
 	"github.com/libraz/go-oidc-provider/internal/authn/totp"
+	"github.com/libraz/go-oidc-provider/op/interaction"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
+
+// fixedTestClock is a constant clock satisfying both op.Clock and
+// inmem.Clock so a test can pin the whole flow to one instant.
+type fixedTestClock struct{ t time.Time }
+
+func (c fixedTestClock) Now() time.Time { return c.t }
 
 // stubTOTPKey returns a 32-byte key padded from the supplied seed. The
 // helper avoids hard-coded byte literals that would lint-trip as
@@ -27,6 +36,50 @@ type testEmailDeliveryFunc func(context.Context, string, string) error
 
 func (f testEmailDeliveryFunc) Send(ctx context.Context, address, code string) error {
 	return f(ctx, address, code)
+}
+
+// TestProjectBuiltinStep_ThreadsWithClockToFactor pins #17: the clock
+// supplied through WithClock must reach the built-in factor verifiers, not
+// only the cross-factor lockout counter. Observed through email-OTP — the
+// persisted challenge's timestamps are stamped from the factor's clock, so
+// a threaded WithClock makes them land in the injected year rather than
+// wall time. Before the fix, buildStepEmailOTP dropped cfg.clock and the
+// verifier fell back to SystemClock.
+func TestProjectBuiltinStep_ThreadsWithClockToFactor(t *testing.T) {
+	t.Parallel()
+
+	fixed := fixedTestClock{t: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)}
+	st := inmem.New(inmem.WithClock(fixed))
+	st.PutUser(context.Background(), &store.User{
+		Subject: "sub-clock",
+		Claims:  map[string]any{"email": "alice@example.com"},
+	})
+	cfg := &config{clock: fixed}
+	step := StepEmailOTP{
+		Store:          st.EmailOTPs(),
+		Sender:         testEmailDeliveryFunc(func(context.Context, string, string) error { return nil }),
+		Users:          st.Users(),
+		SendLatencyPad: -1, // disable the constant-time pad for the test
+	}
+	lfStep, err := projectBuiltinStep("rule", step, cfg)
+	if err != nil {
+		t.Fatalf("projectBuiltinStep: %v", err)
+	}
+	if _, err := lfStep.Authenticator.Continue(context.Background(), authn.ContinueInput{
+		Subject: "sub-clock",
+		Submission: interaction.FormSubmission{Values: map[string]string{
+			emailotp.EmailFieldName: "alice@example.com",
+		}},
+	}); err != nil {
+		t.Fatalf("Continue (send): %v", err)
+	}
+	rec, err := st.EmailOTPs().Get(context.Background(), "sub-clock")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.SentAt.Year() != 2020 {
+		t.Fatalf("SentAt=%v: WithClock was not threaded to the email-OTP verifier (want a 2020-stamped time)", rec.SentAt)
+	}
 }
 
 // TestSelectTOTPKeys_PerStepWins pins the more-specific-wins contract:
@@ -97,7 +150,7 @@ func TestBuildStepTOTP_PerStepKeyShapesCipher(t *testing.T) {
 	}
 
 	st := inmem.New()
-	if _, err := buildStepTOTP(StepTOTP{Store: st.TOTPs(), EncryptionKey: perStep}, fallback, nil); err != nil {
+	if _, err := buildStepTOTP(StepTOTP{Store: st.TOTPs(), EncryptionKey: perStep}, fallback, nil, nil); err != nil {
 		t.Fatalf("buildStepTOTP: %v", err)
 	}
 

@@ -322,6 +322,7 @@ func mountPAREndpoint(
 			Scopes:                        scopes,
 			AuthorizationDetailTypes:      authorizationDetailRegistry(cfg),
 			Clock:                         cfg.clock,
+			TTL:                           cfg.parLifetime, // zero defers to parendpoint.DefaultTTL (60s).
 			JAR:                           jarVerifier,
 			DPoP:                          dpopVerifier,
 			DPoPNonces:                    cfg.dpopNonces, // nil leaves the use_dpop_nonce challenge disabled.
@@ -408,6 +409,7 @@ func mountRevocationEndpoint(
 			OpaqueAccessTokens:       cfg.store.OpaqueAccessTokens(),
 			GrantRevocations:         cfg.store.GrantRevocations(),
 			RevocationStrategy:       cfg.atRevocation,
+			AccessTokenTTL:           cfg.accessTokenTTL,
 			Audit:                    cfg.effectiveAuditEmitter(),
 		})),
 	)
