@@ -14,7 +14,12 @@ The main module and the storage-adapter sub-modules
 tag. Embedders pull each sub-module independently:
 
 ```
-# v0.9.4 (latest)
+# v0.9.5 (latest)
+go get github.com/libraz/go-oidc-provider@v0.9.5
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.5
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.5
+
+# v0.9.4
 go get github.com/libraz/go-oidc-provider@v0.9.4
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.4
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.4
@@ -39,6 +44,87 @@ go get github.com/libraz/go-oidc-provider@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
+
+## [v0.9.5] — 2026-07-13
+
+A security-hardening release: no new protocol surface, but a broad sweep of
+abuse-resistance and correctness fixes across PKCE enforcement,
+`private_key_jwt` key selection, DPoP token binding, the authenticator chain,
+PAR consume semantics, and session-cookie handling, plus a round of dependency
+updates. One new option (`WithPARLifetime`) is added and one behaviour change is
+breaking (PKCE is now mandatory for public and native clients).
+
+### Added
+
+- `op.WithPARLifetime` — override the lifetime of a `request_uri` issued by the
+  PAR endpoint (RFC 9126 §2.2; default 60 seconds). Zero selects the default; a
+  negative value is rejected at construction. The lifetime bounds only the
+  presentation window at `/authorize` — the `request_uri` stays single-use at
+  code emission, so an interactive login that outlives the lifetime still
+  completes.
+- A runnable durable SQL-backed `store.TOTPStore` example
+  (`examples/27-durable-mfa-store`) as a copy-and-adapt template for the
+  embedder-owned authentication-factor persistence gap, covered by contract and
+  durability tests. Authentication-factor stores (TOTP, passkey, recovery codes,
+  email OTP, lockout) are the embedder's responsibility; only the in-memory
+  reference ships an implementation.
+
+### Changed
+
+- **BREAKING — PKCE (`code_challenge`) is now mandatory for public and native
+  clients at `/authorize`, independent of the active profile.** A public or
+  native client that omits `code_challenge` receives `invalid_request` at the
+  authorization endpoint and no authorization code is issued; the OP never issues
+  a non-PKCE code to these clients. *Migration:* register public and native
+  clients with PKCE (S256). The token-endpoint PKCE downgrade guard remains as
+  defense in depth.
+- The `private_key_jwt` assertion verification key is selected by JWS `kid`
+  (RFC 7515 §4.1.4), and trial verifications are capped whether or not a `kid` is
+  present. `kid` uniqueness is unenforced, so a client serving many keys —
+  including same-`kid`, same-`alg` duplicates — can no longer force one signature
+  verify per key, bounding a DoS-amplification vector.
+- Dependency updates: `go-webauthn/webauthn` v0.13.4 → v0.17.4,
+  `golang-jwt/jwt/v5` v5.2.3 → v5.3.1, `golang.org/x/crypto` v0.53 → v0.54, and
+  the SQL drivers (`go-sql-driver/mysql` v1.10.0, `jackc/pgx/v5` v5.10.0,
+  `modernc.org/sqlite` v1.53). The unmaintained `mitchellh/mapstructure`
+  dependency is replaced by the maintained `go-viper/mapstructure/v2` fork.
+
+### Fixed
+
+- Re-show the email-OTP verify prompt on a wrong code — preserving the delivered
+  code — instead of restarting at the send screen, while still yielding to a
+  pending captcha challenge.
+- Honour the RFC 8252 loopback any-port allowance for `post_logout_redirect_uri`
+  on native and public clients, matching `redirect_uri`.
+- Surface a retryable, audit-visible error on TOTP and recovery
+  compare-and-swap loss instead of silently re-prompting.
+- Align the transactional in-memory PAR `Consume` — and the
+  byo-store-from-scratch reference store — with the `PushedAuthRequestStore`
+  contract: `Consume` enforces single-use only, and expiry is gated at
+  presentation by `Find`, so an interactive login that outlives the `request_uri`
+  lifetime still redeems exactly once. Pinned with a new transactional contract
+  case so the implementations cannot drift.
+- Equalise the `private_key_jwt` no-keys rejection timing with the
+  wrong-signature path, and memoize the per-request client-store lookup during
+  assertion verification (collapsing 2–4 `GetClient` calls into one).
+
+### Security
+
+- Reject DPoP-bound access tokens presented under the `Bearer` scheme at
+  `/userinfo`; RFC 9449 §7.1 requires the `DPoP` scheme for sender-constrained
+  tokens.
+- Clear a tampered or undecodable session cookie at the authorization endpoint
+  instead of carrying it forward.
+- Reject private and symmetric keys during JWKS parsing; the prior type assertion
+  was a no-op that let non-public key material through.
+- Revoke the persisted opaque access-token row on every post-mint `server_error`
+  path (id_token mint/encrypt failure, refresh-issuance failure, and the
+  grant-tombstone mint refusal) via a shared helper, so no orphaned still-valid
+  token lingers until TTL or GC.
+- Raise the pinned Go toolchain to `go1.26.5` across the root module, the
+  storage-adapter sub-modules, and CI to pick up the `crypto/tls` fix for
+  GO-2026-5856 (Encrypted Client Hello privacy leak); the previously pinned
+  `go1.26.4` is affected.
 
 ## [v0.9.4] — 2026-07-02
 
@@ -898,7 +984,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.4...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...HEAD
+[v0.9.5]: https://github.com/libraz/go-oidc-provider/compare/v0.9.4...v0.9.5
 [v0.9.4]: https://github.com/libraz/go-oidc-provider/compare/v0.9.3...v0.9.4
 [v0.9.3]: https://github.com/libraz/go-oidc-provider/compare/v0.9.2...v0.9.3
 [v0.9.2]: https://github.com/libraz/go-oidc-provider/compare/v0.9.1...v0.9.2
