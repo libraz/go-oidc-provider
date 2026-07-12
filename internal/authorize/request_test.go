@@ -870,6 +870,20 @@ func TestRequest_Validate_NoncePolicyConditional(t *testing.T) {
 
 // TestParseValues_DuplicateParameter covers both duplicate branches:
 // identical and conflicting repeats are rejected alike.
+// TestParseValues_DuplicateParameter pins the HTTP-parameter-pollution
+// gate: a single-valued authorization request parameter that appears more
+// than once is a hard [ErrDuplicateParameter], whether the repeated
+// values are identical or conflicting. Rejecting the pollution at parse
+// time is what stops a duplicated request parameter from ever reaching
+// the response builder and being reflected as a duplicated response
+// parameter.
+//
+// Tracks: CVE-2026-9689 (Keycloak) — HTTP parameter pollution on the OIDC
+// redirect_uri let a repeated request parameter be reflected into the
+// authorization response as a duplicated response parameter. The
+// structural property is that a repeated single-valued request parameter
+// (redirect_uri / state / response_type) is rejected before any response
+// is built.
 func TestParseValues_DuplicateParameter(t *testing.T) {
 	t.Parallel()
 
@@ -878,6 +892,17 @@ func TestParseValues_DuplicateParameter(t *testing.T) {
 
 		v := goodValues()
 		v["state"] = []string{"state-abc", "state-abc"}
+		_, err := authorize.ParseValues(v)
+		if !errors.Is(err, authorize.ErrDuplicateParameter) {
+			t.Fatalf("err=%v want ErrDuplicateParameter", err)
+		}
+	})
+
+	t.Run("redirect_uri_duplicate_rejected", func(t *testing.T) {
+		t.Parallel()
+
+		v := goodValues()
+		v["redirect_uri"] = []string{"https://rp.example/cb", "https://rp.example/cb"}
 		_, err := authorize.ParseValues(v)
 		if !errors.Is(err, authorize.ErrDuplicateParameter) {
 			t.Fatalf("err=%v want ErrDuplicateParameter", err)

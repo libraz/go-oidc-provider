@@ -54,6 +54,21 @@ advisories:
     threat: T-01
     status: covered
     notes: Keycloak wildcard redirect URI parser confusion via multi-@ userinfo.
+  - id: CVE-2026-9689
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-9689
+    threat: T-01
+    status: covered
+    notes: |
+      Keycloak HTTP parameter pollution on the OIDC redirect URI let a
+      duplicated request parameter be reflected into the authorization
+      response as a duplicated response parameter. Structural property:
+      the authorize parser (singleValue / singleEntry) rejects any
+      single-valued parameter that appears more than once with
+      ErrDuplicateParameter, before any response is built — so a polluted
+      redirect_uri can never reach the response builder.
+      TestParseValues_DuplicateParameter pins it (identical, conflicting,
+      redirect_uri, and repeated-scope cases).
 
   # --- T-02 State / nonce / PKCE required ---------------------------
   - id: CVE-2024-10318
@@ -308,6 +323,23 @@ advisories:
       the algorithm policy). TestAlgorithm_IsAllowed pins the helper-
       level default-false that the fail-open inverts.
 
+  - id: CVE-2026-29000
+    severity: P0
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-29000
+    threat: T-06
+    status: covered
+    notes: |
+      pac4j-jwt (CVSS 10.0): a JWE whose decrypted payload is an
+      unsigned/plain JWT (alg=none inner) was treated as authenticated,
+      letting an attacker holding only the recipient's public encryption
+      key forge a request. Structural property: decryption confers
+      confidentiality, never authentication — every decrypted plaintext
+      is routed through jar.Parse -> jose.ParseSigned, whose closed
+      signing-alg allow-list rejects "none" before any claim is trusted.
+      TestVerify_RejectsJWEWrappedUnsignedJWT pins it by encrypting an
+      alg=none inner JWT into a JWE and asserting the JAR verifier
+      rejects it (ErrParse).
+
   # --- T-07 Replay --------------------------------------------------
   - id: CVE-2020-15222
     severity: P0
@@ -336,6 +368,23 @@ advisories:
     threat: T-07
     status: covered
     notes: Keycloak refresh token reuse bypass via TOCTOU race.
+  - id: CVE-2026-37982
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-37982
+    threat: T-07
+    status: covered
+    notes: |
+      Keycloak required-action email links (WebAuthn / TOTP enrollment,
+      account management) had broken one-time-use semantics, so an
+      intercepted link could be replayed to enroll an attacker
+      authenticator — silent takeover. Structural property: any
+      single-use action / enrollment credential must be atomically
+      consumed on first use and rejected on replay. Pinned on the OP's
+      email-delivered single-use surface by
+      TestContinueVerifyReplayRejected (emailotp), which verifies a code
+      once and asserts a second submission of the same code is rejected
+      (ErrExpired). Recovery codes carry the same property
+      (TestVerify_RejectsConsumedCode).
 
   # --- T-08 Outbound fetch / SSRF ----------------------------------
   - id: CVE-2026-1180
@@ -395,6 +444,25 @@ advisories:
           TestBuildRedirectError_EncodesHostileBytes_NoXSS,
           TestBuildRedirectError_StripsControlBytes, and
           TestWriteFormPost_EscapesRedirectAndJWT.
+  - id: CVE-2026-44681
+    severity: P1
+    source: https://github.com/advisories/GHSA-r95x-qfjj-fjj2
+    threat: T-11
+    status: covered
+    notes: |
+      Authlib (alias GHSA-r95x-qfjj-fjj2): a malformed authorization
+      request that selected the implicit / hybrid grant while omitting
+      the openid scope was redirected to a fully attacker-chosen URL —
+      an open redirect on the error path. Structural property: an error
+      response may only be redirected to an already-validated redirect
+      URI; an unresolved / unvalidated redirect target must render a
+      first-party error page, never a redirect.
+      TestAuthorize_RejectsBadRedirectURIWithJSON pins the negative leg
+      (unvalidated redirect_uri → first-party 400 JSON, no redirect);
+      TestAuthorize_RejectsBadResponseTypeWithRedirect pins the positive
+      leg (a validated redirect_uri does carry the error back). Implicit
+      / hybrid response types are additionally rejected outright
+      (CVE-2024-10318, T-02), so the specific Authlib vector cannot arise.
 
   # --- T-12 Session fixation ---------------------------------------
   - id: GHSA-xhpr-465j-7p9q
@@ -466,6 +534,58 @@ advisories:
       property as 9r3w — covered by the same two-layer mitigation
       (orchestrator step ordering + adapter subject-required gate).
 
+  # --- T-16 passkey / WebAuthn -------------------------------------
+  - id: CVE-2026-28787
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-28787
+    threat: T-16
+    status: tracking
+    notes: |
+      OneUptime WebAuthn: the ceremony challenge was returned to the
+      client and accepted back at verification instead of being stored
+      server-side, so a captured assertion replayed indefinitely (W3C
+      WebAuthn L2 §13.4.3). Structural property: the challenge must be
+      minted and held server-side, bound to the session, and consumed
+      single-use; a returned-by-client challenge is never trusted. Flip
+      candidate: confirm the passkey authenticator's challenge store
+      pins server-side single-use; add a replay test if a gap exists.
+
+  # --- T-19 DPoP (RFC 9449) ----------------------------------------
+  - id: CVE-2026-54431
+    severity: P1
+    source: https://github.com/advisories/GHSA-3pf6-g4x4-jm46
+    threat: T-19
+    status: covered
+    notes: |
+      liboauth2 (alias GHSA-3pf6-g4x4-jm46): the DPoP verifier accepted
+      a proof whose jwk header embedded private key material, violating
+      RFC 9449 §4.3 step 7 ("reject such a proof"). Structural property:
+      the DPoP proof's embedded jwk must be a public key only — any
+      private parameter is a hard reject before signature verification.
+      parseProof gates on !jwk.IsPublic(); TestVerify_RejectsPrivateKey-
+      InJWKHeader pins it by minting a proof whose jwk header carries the
+      private EC "d" component and asserting ErrProofMalformed.
+
+  # --- T-22 CIBA / device_code -------------------------------------
+  - id: CVE-2026-9798
+    severity: P2
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-9798
+    threat: T-22
+    status: covered
+    notes: |
+      Keycloak CIBA authentication flow bypassed the brute-force account
+      lockout that the interactive login enforces — an alternate authn
+      path that received a separate brute-force budget. Structural
+      property: every OP-side credential factor consults one shared
+      per-subject cross-factor lockout.Counter with no notion of factor
+      type, so no flow obtains a fresh budget.
+      TestCrossFactorPivotTriggersLockout pins it (failures attributed to
+      different factors accumulate against one counter to the lock
+      threshold). CIBA user authentication in this library is out-of-band
+      on the authentication device, so it adds no separate OP-side
+      credential-verification path to bypass; CIBA's own abuse surface is
+      polling, gated separately by ciba.poll_abuse.lockout.
+
   # --- Out-of-scope (not OP responsibility) ------------------------
   - id: GHSA-gr79-9v6v-gc9r
     severity: P1
@@ -515,3 +635,37 @@ advisories:
       egress control is embedder-owned; the OP does not make outbound
       calls to client-supplied URLs in this library's CIBA surface.
       Reviewed and excluded.
+  - id: CVE-2026-54430
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-54430
+    threat: T-08
+    status: out-of-scope
+    out_of_scope_reason: |
+      liboauth2 AWS-ALB JWKS resolver SSRF: kid from an unverified JWT
+      header was appended to a base URL and fetched before signature
+      verification. The AWS-ALB verifier surface does not exist in this
+      library, and the jwks_uri SSRF class it shares is already covered
+      by CVE-2026-1180 (T-08); outbound egress is the embedder's network
+      boundary per CLAUDE.md. Reviewed and excluded.
+  - id: GHSA-3gx8-q682-38mx
+    severity: P1
+    source: https://github.com/roadiz/core-bundle-dev-app/security/advisories/GHSA-3gx8-q682-38mx
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      roadiz/openid generated an OIDC nonce but never stored or validated
+      it on callback — an ID-token replay. This is a relying-party
+      responsibility: the OP mints the nonce into the ID token, and the
+      client verifies it against its stored value. The OP owns no nonce
+      validation on the callback. Reviewed and excluded.
+  - id: GHSA-wxw3-q3m9-c3jr
+    severity: P2
+    source: https://github.com/advisories/GHSA-wxw3-q3m9-c3jr
+    threat: T-02
+    status: out-of-scope
+    out_of_scope_reason: |
+      Better Auth login CSRF: the OAuth state nonce was not bound to the
+      stored session, so any state value was accepted at callback. State
+      generation and callback verification are the relying-party's
+      responsibility; the OP echoes state verbatim per RFC 6749 and does
+      not own the client's state binding. Reviewed and excluded.

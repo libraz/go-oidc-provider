@@ -207,6 +207,39 @@ func TestVerify_PassesThroughBareJWS(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsJWEWrappedUnsignedJWT pins that decrypting a JWE
+// never launders an unsigned inner token into an authenticated request.
+// A JWE whose plaintext is an "alg":"none" JWT (empty signature) MUST be
+// rejected: decryption confers confidentiality, never authentication, so
+// the inner token still has to clear the JWS allow-list before any claim
+// is trusted.
+//
+// Tracks: CVE-2026-29000 (pac4j-jwt) — a JWE whose decrypted payload was
+// an unsigned / plain inner JWT was accepted as authenticated, letting an
+// attacker holding only the recipient's public encryption key forge a
+// request. The structural property is that every decrypted plaintext is
+// routed through [Parse] -> [internal/jose.ParseSigned], whose closed
+// signing-alg allow-list rejects "none" before the claim bag is read.
+func TestVerify_RejectsJWEWrappedUnsignedJWT(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, jwks := makeRequestObject(t, happyClaims(now))
+	priv := mustRSAKey(t)
+
+	// An unsigned "alg":"none" JWT: header {"alg":"none"}, payload {},
+	// empty signature segment. This is the primitive the pac4j bypass
+	// smuggled inside a JWE and had accepted as an authenticated request.
+	const noneJWT = "eyJhbGciOiJub25lIn0.e30."
+	jwe := mustEncryptToJWE(t, noneJWT, &priv.PublicKey, "enc-1")
+
+	v := newJWEVerifier(t, now, jwks, &staticEncryptionResolver{kid: "enc-1", priv: priv})
+	_, err := v.Verify(context.Background(), jwe, testClientID, newClient())
+	if !errors.Is(err, jar.ErrParse) {
+		t.Fatalf("err=%v want ErrParse (JWE-wrapped alg=none inner must be rejected)", err)
+	}
+}
+
 // tamperJWEAlg rewrites the protected header's `alg` value to the
 // supplied (possibly disallowed) string and returns the re-serialised
 // compact JWE. The helper exists because go-jose v4 will not produce

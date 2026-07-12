@@ -313,6 +313,51 @@ func TestVerify_MissingJWK(t *testing.T) {
 	}
 }
 
+// TestVerify_RejectsPrivateKeyInJWKHeader pins RFC 9449 §4.3 step 7: a
+// DPoP proof whose embedded "jwk" header carries private key material
+// (the EC "d" component) MUST be rejected. The "jwk" header is reserved
+// for the client's public key; a private component signals a malformed /
+// hostile proof, and accepting it leaks key material through a header the
+// spec forbids from carrying it.
+//
+// Tracks: CVE-2026-54431 (liboauth2) — the DPoP verifier returned
+// success for a proof whose jwk header embedded the private EC key,
+// violating RFC 9449 §4.3 step 7. The structural property is that the
+// embedded jwk must be public-only; any private parameter is a hard
+// reject before the claim bag is trusted.
+func TestVerify_RejectsPrivateKeyInJWKHeader(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	key := newES256Key(t)
+	// Embed the FULL private key in the jwk header (Key: key.priv, not
+	// its Public()); the serialised JWK then carries the private "d"
+	// component — the exact malformed proof RFC 9449 §4.3 step 7 rejects.
+	privJWK := josev4.JSONWebKey{Key: key.priv}
+	signer, err := josev4.NewSigner(
+		josev4.SigningKey{Algorithm: key.alg, Key: key.priv},
+		(&josev4.SignerOptions{}).
+			WithType("dpop+jwt").
+			WithHeader("jwk", privJWK),
+	)
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	raw, err := jwt.Signed(signer).Claims(goodClaims(now)).Serialize()
+	if err != nil {
+		t.Fatalf("Serialize: %v", err)
+	}
+	v := newVerifier(t, now)
+	_, perr := v.Verify(context.Background(), dpop.VerifyInput{
+		ProofHeader: raw,
+		Method:      "POST",
+		URL:         mustParseURL(t, "https://op.example/oidc/token"),
+		TLS:         true,
+	})
+	if !errors.Is(perr, dpop.ErrProofMalformed) {
+		t.Fatalf("err=%v want ErrProofMalformed (private key in jwk header)", perr)
+	}
+}
+
 func TestVerify_BadSignature(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)

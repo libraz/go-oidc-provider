@@ -534,6 +534,17 @@ func TestContinueVerifySuccessStampsConsumedAt(t *testing.T) {
 // TestContinueVerifyReplayRejected asserts a second verify against the
 // same code (e.g. from a leaked SPA log) is rejected, exercising the
 // ConsumedAt guard added for H-AUTHN-1.
+// TestContinueVerifyReplayRejected pins single-use on the email-delivered
+// OTP: a code that verified once is atomically consumed and a second
+// submission of the same code is rejected. This is the OP's analogue of
+// an email-delivered action link, whose one-time-use property must hold
+// so an intercepted code cannot be redeemed a second time.
+//
+// Tracks: CVE-2026-37982 (Keycloak) — required-action email links
+// (WebAuthn / TOTP enrollment) had broken one-time-use semantics, so an
+// intercepted link replayed to enroll an attacker authenticator. The
+// structural property this pins is that an email-delivered single-use
+// credential is consume-once-then-reject on replay.
 func TestContinueVerifyReplayRejected(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)

@@ -22,6 +22,17 @@ import (
 // shared point of authority for both factors; any future refactor
 // that splits the counter into per-factor instances (which would
 // defeat M-AUTHN-1) breaks this test.
+//
+// Tracks: CVE-2026-9798 (Keycloak) — a CIBA authentication flow bypassed
+// the brute-force account lockout that interactive login enforces, i.e.
+// an alternate authentication flow received a separate brute-force
+// budget. The structural property this pins is that every OP-side
+// credential factor shares one per-subject counter with no notion of
+// factor type, so no flow can obtain a fresh budget. (CIBA user
+// authentication in this library is out-of-band on the authentication
+// device, so it adds no separate OP-side credential-verification path to
+// bypass; CIBA's own abuse surface is polling, gated separately by
+// ciba.poll_abuse.lockout.)
 func TestCrossFactorPivotTriggersLockout(t *testing.T) {
 	t.Parallel()
 	subject := "alice"

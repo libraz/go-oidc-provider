@@ -262,6 +262,20 @@ func TestAuthorize_RejectsUnknownClient(t *testing.T) {
 	}
 }
 
+// TestAuthorize_RejectsBadRedirectURIWithJSON pins the open-redirect-on-
+// error gate: when the redirect_uri does not resolve to a registered
+// value it is never used as a redirect target. The OP renders a
+// first-party 400 JSON error instead of bouncing the user agent to the
+// unvalidated URL. Paired with TestAuthorize_RejectsBadResponseTypeWith-
+// Redirect (a *validated* redirect_uri does carry the error back), the
+// two pin the invariant: an error is only redirected once the redirect
+// target has passed registration validation.
+//
+// Tracks: CVE-2026-44681 (Authlib) — a malformed authorization request
+// (implicit/hybrid grant with the openid scope omitted) was redirected
+// to a fully attacker-chosen URL. The structural property is that an
+// unvalidated redirect target must produce a first-party error page,
+// never a redirect.
 func TestAuthorize_RejectsBadRedirectURIWithJSON(t *testing.T) {
 	t.Parallel()
 
