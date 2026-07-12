@@ -2,8 +2,9 @@
 # Install developer tools pinned in tools/tools.go.
 #
 # tools/ is a sibling module so its dependencies (golangci-lint, gofumpt,
-# goimports, govulncheck, go-licenses) do not bleed into the main go.mod.
-# We resolve the pinned versions from tools/go.mod and install each one.
+# goimports, govulncheck) do not bleed into the main go.mod. We resolve the
+# pinned versions from tools/go.mod and install each one. (go-licenses is not
+# installed here — scripts/licenses.sh runs it via `go run <pkg>@<version>`.)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
