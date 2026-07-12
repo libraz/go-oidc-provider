@@ -528,6 +528,41 @@ func (r *allCallCounterResolver) All() []any {
 	return r.keys
 }
 
+func TestEncryptionKeyResolverFuncNilSafeAndDelegates(t *testing.T) {
+	t.Parallel()
+
+	var empty jose.EncryptionKeyResolverFunc
+	if got, ok := empty.Resolve("kid-1"); ok || got != nil {
+		t.Fatalf("empty Resolve = (%v, %v), want (nil, false)", got, ok)
+	}
+	if got := empty.All(); got != nil {
+		t.Fatalf("empty All = %v, want nil", got)
+	}
+
+	key := &rsa.PrivateKey{}
+	resolver := jose.EncryptionKeyResolverFunc{
+		ResolveFn: func(kid string) (any, bool) {
+			if kid != "kid-1" {
+				return nil, false
+			}
+			return key, true
+		},
+		AllFn: func() []any {
+			return []any{key}
+		},
+	}
+	if got, ok := resolver.Resolve("kid-1"); !ok || got != key {
+		t.Fatalf("Resolve(kid-1) = (%v, %v), want key,true", got, ok)
+	}
+	if got, ok := resolver.Resolve("missing"); ok || got != nil {
+		t.Fatalf("Resolve(missing) = (%v, %v), want nil,false", got, ok)
+	}
+	all := resolver.All()
+	if len(all) != 1 || all[0] != key {
+		t.Fatalf("All() = %v, want single configured key", all)
+	}
+}
+
 func mustRSAKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	k, err := rsa.GenerateKey(rand.Reader, 2048)

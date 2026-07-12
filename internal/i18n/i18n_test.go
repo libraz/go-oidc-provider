@@ -388,11 +388,73 @@ func TestResolver_BundleFallbackReportsMatch(t *testing.T) {
 	}
 }
 
+func TestResolver_DefaultAndAvailableAreStable(t *testing.T) {
+	t.Parallel()
+
+	en, _ := i18n.NewBundle(i18n.English, nil)
+	ja, _ := i18n.NewBundle(i18n.Japanese, nil)
+	r, err := i18n.NewResolver(i18n.Japanese, en, ja)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	if got := r.Default(); got != i18n.Japanese {
+		t.Fatalf("Default() = %q, want ja", got)
+	}
+	got := r.Available()
+	want := []i18n.Tag{i18n.English, i18n.Japanese}
+	if len(got) != len(want) {
+		t.Fatalf("Available() len = %d, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Available()[%d] = %q, want %q; all=%v", i, got[i], want[i], got)
+		}
+	}
+
+	got[0] = "mutated"
+	again := r.Available()
+	if again[0] != i18n.English {
+		t.Fatalf("Available returned mutable internal slice; got %v", again)
+	}
+}
+
+func TestNewResolver_DefaultFallbacks(t *testing.T) {
+	t.Parallel()
+
+	en, _ := i18n.NewBundle(i18n.English, nil)
+	ja, _ := i18n.NewBundle(i18n.Japanese, nil)
+	r, err := i18n.NewResolver("zz", ja, en)
+	if err != nil {
+		t.Fatalf("NewResolver with English fallback: %v", err)
+	}
+	if got := r.Default(); got != i18n.English {
+		t.Fatalf("Default() = %q, want English fallback", got)
+	}
+
+	fr, _ := i18n.NewBundle("fr", nil)
+	r, err = i18n.NewResolver("", fr, ja)
+	if err != nil {
+		t.Fatalf("NewResolver with first-bundle fallback: %v", err)
+	}
+	if got := r.Default(); got != "fr" {
+		t.Fatalf("Default() = %q, want first registered bundle", got)
+	}
+}
+
 func TestNewResolver_RequiresAtLeastOneBundle(t *testing.T) {
 	t.Parallel()
 
 	if _, err := i18n.NewResolver(i18n.English); err == nil {
 		t.Fatalf("expected error on empty bundle list")
+	}
+}
+
+func TestNewResolver_RejectsNilBundle(t *testing.T) {
+	t.Parallel()
+
+	if _, err := i18n.NewResolver(i18n.English, nil); err == nil {
+		t.Fatalf("expected error on nil bundle")
 	}
 }
 

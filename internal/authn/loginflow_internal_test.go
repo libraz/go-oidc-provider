@@ -6,6 +6,23 @@ import (
 	"time"
 )
 
+func TestLoginFlowDecisionConstructorsSatisfySealedInterface(t *testing.T) {
+	t.Parallel()
+
+	decisions := []LoginFlowDecision{
+		LoginFlowAllow{},
+		LoginFlowPass{},
+		LoginFlowRequire{Step: LoginFlowStep{Kind: "myorg.totp"}},
+		LoginFlowDeny{Reason: "policy.denied"},
+	}
+	for _, decision := range decisions {
+		if decision == nil {
+			t.Fatalf("decision %T is nil", decision)
+		}
+		decision.isLoginFlowDecision()
+	}
+}
+
 // TestLoginFlowContextProjectionRoundtripsState pins every populated
 // State field that the projector is expected to surface on
 // LoginFlowContext. The projector is the single seam between the

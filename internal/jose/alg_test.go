@@ -37,6 +37,28 @@ func TestAlgorithm_IsAllowed(t *testing.T) {
 	}
 }
 
+func TestAlgorithm_StringReturnsWireValue(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		alg  jose.Algorithm
+		want string
+	}{
+		{"allowed", jose.AlgPS256, "PS256"},
+		{"unspecified", jose.AlgUnspecified, ""},
+		{"unknown preserved", jose.Algorithm("RS384"), "RS384"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.alg.String(); got != tc.want {
+				t.Fatalf("Algorithm(%q).String() = %q, want %q", tc.alg, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseAlgorithm(t *testing.T) {
 	t.Parallel()
 

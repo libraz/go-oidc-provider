@@ -317,6 +317,27 @@ func TestExchange_ReplayCarriesGrantIDWhenStoreReturnsConsumedRecord(t *testing.
 	}
 }
 
+func TestReplayErrorPreservesSentinelAndGrantID(t *testing.T) {
+	t.Parallel()
+
+	err := &authcode.ReplayError{GrantID: "grant-7"}
+	if got := err.Error(); got != authcode.ErrCodeReplayed.Error() {
+		t.Fatalf("ReplayError.Error() = %q, want %q", got, authcode.ErrCodeReplayed.Error())
+	}
+	if !errors.Is(err, authcode.ErrCodeReplayed) {
+		t.Fatalf("ReplayError must unwrap to ErrCodeReplayed")
+	}
+	if got := authcode.ReplayGrantID(err); got != "grant-7" {
+		t.Fatalf("ReplayGrantID = %q, want grant-7", got)
+	}
+	if got := authcode.ReplayGrantID(authcode.ErrCodeReplayed); got != "" {
+		t.Fatalf("ReplayGrantID on bare sentinel = %q, want empty", got)
+	}
+	if got := authcode.ReplayGrantID(nil); got != "" {
+		t.Fatalf("ReplayGrantID(nil) = %q, want empty", got)
+	}
+}
+
 // TestExchange_RejectsClientMismatch pins the (code, client_id) half
 // of RFC 6749 §4.1.3's tuple-binding contract: a code issued to one
 // client MUST NOT be exchangeable by another client, regardless of

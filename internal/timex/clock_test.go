@@ -18,6 +18,18 @@ func TestSystemClock_Monotonic(t *testing.T) {
 	}
 }
 
+func TestNowUsesSystemClock(t *testing.T) {
+	t.Parallel()
+
+	before := timex.SystemClock.Now()
+	got := timex.Now()
+	after := timex.SystemClock.Now()
+
+	if got.Before(before) || got.After(after) {
+		t.Fatalf("Now() = %v, want within SystemClock window [%v, %v]", got, before, after)
+	}
+}
+
 func TestClockFunc_DriversFakeTime(t *testing.T) {
 	t.Parallel()
 
