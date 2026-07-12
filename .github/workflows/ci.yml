@@ -23,13 +23,13 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Lint, govulncheck and the gofumpt/goimports binaries live in
-      # tools/go.mod pins the minimum toolchain. Use the fixed 1.26.4
+      # tools/go.mod pins the minimum toolchain. Use the fixed 1.26.5
       # patch level so govulncheck does not flag stdlib CVEs already
       # fixed upstream.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.5"
           cache-dependency-path: |
@@ -40,7 +40,7 @@ jobs:
             op/storeadapter/redis/go.sum
 
       - name: Cache pinned tool binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/bin
           key: go-tools-${{ runner.os }}-${{ hashFiles('tools/go.mod', 'tools/go.sum', 'tools/tools.go') }}
@@ -85,11 +85,11 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Single Go version: pin the patched stdlib version used by the
       # module directives so x509 / template / http2 fixes are present.
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.5"
           cache-dependency-path: |
@@ -135,7 +135,7 @@ jobs:
           done
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: cover.root.out,cover.sql.out,cover.redis.out
@@ -147,9 +147,9 @@ jobs:
     name: examples
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.5"
           cache-dependency-path: |
@@ -164,9 +164,9 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26.5"
           cache-dependency-path: |
@@ -174,7 +174,7 @@ jobs:
             tools/go.sum
 
       - name: Cache pinned tool binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/bin
           key: go-tools-${{ runner.os }}-${{ hashFiles('tools/go.mod', 'tools/go.sum', 'tools/tools.go') }}
