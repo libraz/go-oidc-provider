@@ -94,9 +94,9 @@ func (s *parStore) Consume(ctx context.Context, uri string) (*store.PushedAuthRe
 	if err != nil {
 		return nil, err
 	}
-	if expiredStrict(rec.ExpiresAt, s.now()) {
-		return nil, store.ErrNotFound
-	}
+	// Consume enforces single-use only; expiry is gated at presentation by
+	// Find (see store.PushedAuthRequestStore.Consume). An interactive login
+	// that outlives the request_uri lifetime still redeems here exactly once.
 	if rec.ConsumedAt != nil {
 		return nil, store.ErrAlreadyConsumed
 	}
