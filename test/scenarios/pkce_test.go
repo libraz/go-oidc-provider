@@ -294,9 +294,16 @@ func TestScenario_PKCE_007_PublicClientCodeRequiresPKCE(t *testing.T) {
 		TokenEndpointAuthMethod: "none",
 	})
 
-	// Drive /authorize with the canonical code_challenge / method
-	// fields blanked so the OP issues a non-PKCE code. Extra
-	// overrides the canonical entries (see [AuthorizeParams.Values]).
+	// A public client MUST use PKCE (RFC 9700 §2.1.1 / OAuth 2.1 §4.1.1)
+	// regardless of the OP-wide profile posture. Driving /authorize with
+	// the code_challenge / method fields blanked is rejected up front with
+	// an invalid_request authorization-response error: the OP never issues
+	// a non-PKCE code to a public client. Extra overrides the canonical
+	// entries (see [AuthorizeParams.Values]).
+	//
+	// The token endpoint keeps a PKCE downgrade guard as defense in depth,
+	// but a public client can no longer reach it through a normal authorize
+	// round-trip now that the authorization endpoint refuses the request.
 	flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
 		ClientID:    clientID,
 		RedirectURI: callback,
@@ -305,30 +312,14 @@ func TestScenario_PKCE_007_PublicClientCodeRequiresPKCE(t *testing.T) {
 			"code_challenge_method": {""},
 		},
 	})
-	if flow.Code == "" {
-		t.Fatalf("non-PKCE authorize must succeed under the legacy posture: %+v", flow)
+	if flow.Code != "" {
+		t.Fatalf("public client without PKCE must not receive an authorization code: %+v", flow)
 	}
-
-	// Public clients authenticate with no client_secret. Submit the
-	// code without a code_verifier — the downgrade guard fires.
-	tok := scenariokit.ExchangeCode(t, tk, scenariokit.ExchangeCodeRequest{
-		Code:        flow.Code,
-		RedirectURI: callback,
-		Extra:       url.Values{"client_id": {clientID}},
-	})
-	if tok.StatusCode != http.StatusBadRequest {
-		t.Fatalf("/token status=%d body=%v want 400", tok.StatusCode, tok.Raw)
+	if flow.Error != "invalid_request" {
+		t.Fatalf("error=%q want invalid_request: %+v", flow.Error, flow)
 	}
-	gotErr, _ := tok.Raw["error"].(string)
-	if gotErr != "invalid_grant" {
-		t.Errorf("error=%q want invalid_grant", gotErr)
-	}
-	desc, _ := tok.Raw["error_description"].(string)
-	if !strings.Contains(strings.ToLower(desc), "pkce") {
-		t.Errorf("error_description=%q want it to mention PKCE", desc)
-	}
-	if tok.AccessToken != "" || tok.IDToken != "" || tok.RefreshToken != "" {
-		t.Errorf("downgrade guard must not mint tokens: %+v", tok.Raw)
+	if !strings.Contains(strings.ToLower(flow.ErrorDesc), "code_challenge") {
+		t.Errorf("error_description=%q want it to mention code_challenge", flow.ErrorDesc)
 	}
 }
 
