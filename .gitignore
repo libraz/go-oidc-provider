@@ -84,8 +84,8 @@ conformance/render/
 
 # Internal-only artefacts (kept locally, never committed). The OSS-facing
 # documentation lives in README.md, CHANGELOG.md, SECURITY.md, NOTICE,
-# and CONTRIBUTING.md. The entire docs/ tree is internal working
+# and CONTRIBUTING.md. The entire backup/ tree is internal working
 # material and not part of the published repository.
 CLAUDE.md
 .claude/
-docs/
+backup/
