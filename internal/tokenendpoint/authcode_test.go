@@ -163,7 +163,12 @@ func TestAuthCode_AuthorizationDetailsCanBeReducedAtTokenEndpoint(t *testing.T) 
 	}
 }
 
-func TestAuthCode_NoOfflineAccess_DoesNotIssueRefreshToken(t *testing.T) {
+// TestAuthCode_LaxDefault_IssuesRefreshWithoutOfflineAccess pins the
+// lax reading of OIDC Core 1.0 §11 (the historical default): a
+// refresh-capable client whose granted scope contains "openid" but
+// not "offline_access" still receives a refresh token. Strict issuance
+// is covered by TestAuthCode_StrictOfflineAccess_NoRefreshWithoutOfflineAccess.
+func TestAuthCode_LaxDefault_IssuesRefreshWithoutOfflineAccess(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t)
@@ -197,8 +202,52 @@ func TestAuthCode_NoOfflineAccess_DoesNotIssueRefreshToken(t *testing.T) {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
 	body := decodeJSON(t, resp)
+	if rt, ok := body["refresh_token"].(string); !ok || rt == "" {
+		t.Fatalf("refresh_token must be issued under the lax default: %v", body)
+	}
+}
+
+// TestAuthCode_StrictOfflineAccess_NoRefreshWithoutOfflineAccess pins
+// the strict reading opted into via op.WithStrictOfflineAccess: with
+// the flag set, a granted scope that lacks "offline_access" suppresses
+// refresh-token issuance (same wire shape as a client without the
+// refresh_token grant) even though "openid" is present.
+func TestAuthCode_StrictOfflineAccess_NoRefreshWithoutOfflineAccess(t *testing.T) {
+	t.Parallel()
+
+	f := strictFixture(t)
+	client, secret := strictConfidentialClient(t, f)
+	verifier, challenge := pkcePair()
+	const codeID = "code-strict-no-offline"
+	const grantID = "grant-strict-no-offline"
+	const subject = "user-1"
+	redirect := client.RedirectURIs[0]
+
+	f.seedGrant(t, &store.Grant{
+		ID: grantID, Subject: subject, ClientID: client.ID,
+		Scope: []string{"openid", "email"},
+	})
+	f.seedAuthCode(t, &store.AuthorizationCode{
+		ID:                  codeID,
+		ClientID:            client.ID,
+		Subject:             subject,
+		GrantID:             grantID,
+		RedirectURI:         redirect,
+		Scope:               []string{"openid", "email"},
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+		Nonce:               "nonce-strict-no-offline",
+	})
+
+	resp := f.post(t, authCodeForm(codeID, redirect, verifier), client.ID, secret)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d want 200", resp.StatusCode)
+	}
+	body := decodeJSON(t, resp)
 	if _, ok := body["refresh_token"]; ok {
-		t.Fatalf("refresh_token must be absent without offline_access: %v", body)
+		t.Fatalf("refresh_token must be absent under strict mode without offline_access: %v", body)
 	}
 }
 

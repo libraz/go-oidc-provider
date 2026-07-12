@@ -840,7 +840,7 @@ func maybeIssueRefreshToken(
 	subjectPublic bool,
 	authCtx authContext,
 ) (string, error) {
-	if !clientPermitsRefresh(client, scope) {
+	if !clientPermitsRefresh(client, scope, deps.StrictOfflineAccess) {
 		return "", nil
 	}
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{

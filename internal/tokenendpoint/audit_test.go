@@ -170,11 +170,14 @@ func TestAudit_ClientAuthnFailure_BadSecret(t *testing.T) {
 	}
 }
 
-// TestAudit_TokenIssued_NoOfflineAccessNoRefreshEvent pins the new
-// issuance gate: an authcode exchange without offline_access still
-// succeeds, but it does not issue a refresh token and therefore MUST
-// NOT emit the refresh-token "token.issued" audit event.
-func TestAudit_TokenIssued_NoOfflineAccessNoRefreshEvent(t *testing.T) {
+// TestAudit_TokenIssued_LaxDefaultIssuesRefreshWithoutOfflineAccess
+// pins the lax reading of OIDC Core 1.0 §11 (the historical default):
+// an authcode exchange whose granted scope contains "openid" but not
+// "offline_access" still issues a refresh token to a refresh-capable
+// client, and therefore emits the "token.issued" audit event with
+// extras.offline_access=false. Strict-mode issuance is exercised
+// separately via op.WithStrictOfflineAccess.
+func TestAudit_TokenIssued_LaxDefaultIssuesRefreshWithoutOfflineAccess(t *testing.T) {
 	t.Parallel()
 
 	f, capture := auditFixture(t)
@@ -206,8 +209,16 @@ func TestAudit_TokenIssued_NoOfflineAccessNoRefreshEvent(t *testing.T) {
 		t.Fatalf("status=%d want 200", resp.StatusCode)
 	}
 
-	if rec := capture.findEvent(t, "token.issued"); rec != nil {
-		t.Fatalf("token.issued must not be emitted without offline_access; got=%v", rec)
+	rec := capture.findEvent(t, "token.issued")
+	if rec == nil {
+		t.Fatalf("token.issued not emitted under lax default; capture=%s", capture.buf.String())
+	}
+	extras, _ := rec["extras"].(map[string]any)
+	if extras == nil {
+		t.Fatalf("extras missing on token.issued: %v", rec)
+	}
+	if got := extras["offline_access"]; got != false {
+		t.Errorf("extras.offline_access=%v want false", got)
 	}
 }
 
