@@ -54,11 +54,12 @@ type EncryptionKey struct {
 
 	// NotAfter is the optional retirement deadline for the entry.
 	// Zero (the default) means "never retires"; a non-zero value
-	// pins the rotation gate so the OP refuses to decrypt JWE
-	// addressed to this kid on or after the deadline. The public
-	// half stays advertised in JWKS for cache warmth (mirroring the
-	// signing-keyset's rotation-grace pattern documented at
-	// [SigningKey.NotAfter]).
+	// is the hard retirement deadline: on or after it the OP refuses
+	// to decrypt JWE addressed to this kid and stops advertising the
+	// public half in JWKS. Set the deadline only after the JWKS cache
+	// overlap and the longest accepted request lifetime have elapsed;
+	// publishing a key after it can no longer decrypt requests would
+	// cause RPs to select an unusable recipient.
 	NotAfter time.Time
 }
 
@@ -66,8 +67,10 @@ type EncryptionKey struct {
 // OP uses to decrypt inbound JWE and publishes on the JWKs endpoint
 // with use=enc. The first entry is the active key for outbound JWE
 // (id_token / userinfo / JARM / introspection encryption); subsequent
-// entries are kept in JWKS so an RP whose cache still holds an old
-// kid can route to it during a rotation overlap.
+// entries are published only until their respective NotAfter deadline.
+// During a rotation overlap, retain the retiring entry and use
+// [WithJWKSRotationActive] to shorten JWKS caching; remove it only after
+// that overlap and the longest accepted request lifetime have elapsed.
 //
 // EncryptionKeyset is a value type; callers MAY share it across
 // Providers as long as every contained key is itself safe for

@@ -186,6 +186,33 @@ func TestEncryptionSet_JWKS_PublishesUseEnc(t *testing.T) {
 	}
 }
 
+// TestEncryptionSet_JWKS_OmitsRetiredEntries keeps publication aligned with
+// decryption: a recipient that is no longer accepted must not remain in the
+// OP JWKS for an RP to select.
+func TestEncryptionSet_JWKS_OmitsRetiredEntries(t *testing.T) {
+	t.Parallel()
+
+	deadline := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	set, err := keys.NewEncryptionSet(
+		[]keys.EncryptionEntry{
+			{KeyID: "active", PrivateKey: mustRSA(t)},
+			{KeyID: "retired", PrivateKey: mustRSA(t), NotAfter: deadline},
+		},
+		keys.WithClock(func() time.Time { return deadline }),
+	)
+	if err != nil {
+		t.Fatalf("NewEncryptionSet: %v", err)
+	}
+
+	jwks := set.JWKS()
+	if len(jwks.Keys) != 1 || jwks.Keys[0].KeyID != "active" {
+		t.Fatalf("JWKS = %#v, want only active key", jwks.Keys)
+	}
+	if _, ok := set.Resolve("retired"); ok {
+		t.Fatal("Resolve(retired) succeeded after its publication/decryption deadline")
+	}
+}
+
 // TestEncryptionSet_ExplicitECDHESVariant asserts that an ECDH-ES key
 // can pin a specific key-wrap variant via [EncryptionEntry.Algorithm];
 // the published JWK reflects the explicit alg rather than the inferred

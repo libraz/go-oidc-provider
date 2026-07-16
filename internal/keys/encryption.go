@@ -238,17 +238,23 @@ func (s *EncryptionSet) All() []any {
 	return out
 }
 
-// JWKS returns the public JWKs view of the [EncryptionSet]. Every
-// entry is published with use=enc; retired entries remain visible
-// (mirroring the signing-side rotation-grace pattern) so RPs see the
-// public key for as long as their cache holds it.
+// JWKS returns the public JWKs view of the [EncryptionSet]. Every live
+// entry is published with use=enc. Entries at or past NotAfter are omitted,
+// matching [Resolve] and [All]: advertising an encryption key after the OP
+// has stopped decrypting for it would direct RPs to an unusable recipient.
 //
 // The returned value is a shallow copy: the slice header is fresh
 // but the keys are shared. Callers MUST NOT mutate the returned
 // [josev4.JSONWebKey] values.
 func (s *EncryptionSet) JWKS() josev4.JSONWebKeySet {
-	out := josev4.JSONWebKeySet{Keys: make([]josev4.JSONWebKey, len(s.jwks.Keys))}
-	copy(out.Keys, s.jwks.Keys)
+	now := s.nowOrSystem()
+	out := josev4.JSONWebKeySet{Keys: make([]josev4.JSONWebKey, 0, len(s.jwks.Keys))}
+	for i, entry := range s.entries {
+		if !entry.NotAfter.IsZero() && !now.Before(entry.NotAfter) {
+			continue
+		}
+		out.Keys = append(out.Keys, s.jwks.Keys[i])
+	}
 	return out
 }
 
