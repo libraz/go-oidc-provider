@@ -62,6 +62,14 @@ const (
 	// genuine rotation propagate within seconds — well inside the
 	// delay an RP waits after rotating before it relies on the new key.
 	minForcedRefreshInterval = 20 * time.Second
+
+	// defaultJWKSCacheEntries bounds every URL-indexed cache map. A JAR
+	// deployment normally has one URL per registered client; this cap keeps
+	// hostile registrations from making process memory grow forever.
+	defaultJWKSCacheEntries = 256
+
+	// defaultJWKSMaxKeys bounds parsed key count in addition to the body cap.
+	defaultJWKSMaxKeys = 64
 )
 
 // jwksCache is a tiny thread-safe TTL cache keyed by the JWKs URL. It
@@ -77,8 +85,10 @@ type jwksCache struct {
 	failures map[string]*jwksFailure
 	// forced records the last time a cache-bypassing refetch ran for a
 	// URL, so [jwksCache.tryForced] can throttle FetchFresh per URL.
-	forced map[string]time.Time
-	clock  timex.Clock
+	forced     map[string]time.Time
+	clock      timex.Clock
+	maxEntries int
+	sequence   uint64
 }
 
 // jwksEntry is the stored projection of one keyset. Keys is the parsed
@@ -88,6 +98,7 @@ type jwksEntry struct {
 	keys   *josev4.JSONWebKeySet
 	etag   string
 	expiry time.Time
+	used   uint64
 }
 
 // jwksFailure is the negative-cache entry. The cache stores the most
@@ -107,10 +118,11 @@ func newJWKSCache(clock timex.Clock) *jwksCache {
 		clock = timex.SystemClock
 	}
 	return &jwksCache{
-		entries:  make(map[string]*jwksEntry),
-		failures: make(map[string]*jwksFailure),
-		forced:   make(map[string]time.Time),
-		clock:    clock,
+		entries:    make(map[string]*jwksEntry),
+		failures:   make(map[string]*jwksFailure),
+		forced:     make(map[string]time.Time),
+		clock:      clock,
+		maxEntries: defaultJWKSCacheEntries,
 	}
 }
 
@@ -123,6 +135,10 @@ func (c *jwksCache) tryForced(url string, interval time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := c.clock.Now()
+	c.pruneLocked(now, "")
+	if _, exists := c.forced[url]; !exists {
+		c.evictForcedLocked()
+	}
 	if last, ok := c.forced[url]; ok && now.Sub(last) < interval {
 		return false
 	}
@@ -135,13 +151,15 @@ func (c *jwksCache) tryForced(url string, interval time.Duration) bool {
 // network round-trip; entries with an ETag past their TTL are still
 // returned (with hit=false) so the caller can issue a conditional GET.
 func (c *jwksCache) get(url string) (*jwksEntry, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	e, ok := c.entries[url]
 	if !ok {
 		return nil, false
 	}
 	now := c.clock.Now()
+	c.sequence++
+	e.used = c.sequence
 	if now.Before(e.expiry) {
 		return e, true
 	}
@@ -159,10 +177,17 @@ func (c *jwksCache) put(url, etag string, keys *josev4.JSONWebKeySet, ttl time.D
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := c.clock.Now()
+	c.pruneLocked(now, url)
+	if _, exists := c.entries[url]; !exists {
+		c.evictEntriesLocked()
+	}
+	c.sequence++
 	c.entries[url] = &jwksEntry{
 		keys:   keys,
 		etag:   etag,
-		expiry: c.clock.Now().Add(ttl),
+		expiry: now.Add(ttl),
+		used:   c.sequence,
 	}
 	delete(c.failures, url)
 }
@@ -177,9 +202,14 @@ func (c *jwksCache) putFailure(url string, err error, ttl time.Duration) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := c.clock.Now()
+	c.pruneLocked(now, "")
+	if _, exists := c.failures[url]; !exists {
+		c.evictFailuresLocked()
+	}
 	c.failures[url] = &jwksFailure{
 		err:    err,
-		expiry: c.clock.Now().Add(ttl),
+		expiry: now.Add(ttl),
 	}
 }
 
@@ -197,6 +227,65 @@ func (c *jwksCache) getFailure(url string) (bool, error) {
 		return true, f.err
 	}
 	return false, nil
+}
+
+// pruneLocked drops expired negative/forced records and expired positive
+// entries other than keep. Keeping the currently revalidated URL preserves
+// ETag conditional GET after its freshness TTL elapsed.
+func (c *jwksCache) pruneLocked(now time.Time, keep string) {
+	for url, entry := range c.entries {
+		if url != keep && !now.Before(entry.expiry) {
+			delete(c.entries, url)
+		}
+	}
+	for url, failure := range c.failures {
+		if !now.Before(failure.expiry) {
+			delete(c.failures, url)
+		}
+	}
+	for url, last := range c.forced {
+		if now.Sub(last) >= minForcedRefreshInterval {
+			delete(c.forced, url)
+		}
+	}
+}
+
+func (c *jwksCache) limit() int {
+	if c.maxEntries <= 0 {
+		return defaultJWKSCacheEntries
+	}
+	return c.maxEntries
+}
+
+func (c *jwksCache) evictEntriesLocked() {
+	for len(c.entries) >= c.limit() {
+		var oldest string
+		var used uint64
+		for url, entry := range c.entries {
+			if oldest == "" || entry.used < used {
+				oldest, used = url, entry.used
+			}
+		}
+		delete(c.entries, oldest)
+	}
+}
+
+func (c *jwksCache) evictFailuresLocked() {
+	for len(c.failures) >= c.limit() {
+		for url := range c.failures {
+			delete(c.failures, url)
+			break
+		}
+	}
+}
+
+func (c *jwksCache) evictForcedLocked() {
+	for len(c.forced) >= c.limit() {
+		for url := range c.forced {
+			delete(c.forced, url)
+			break
+		}
+	}
 }
 
 // Fetcher fetches a JWKs document from a remote URL with caching,
@@ -472,6 +561,9 @@ func parseJWKS(body []byte) (*josev4.JSONWebKeySet, error) {
 	var keys josev4.JSONWebKeySet
 	if err := json.Unmarshal(body, &keys); err != nil {
 		return nil, fmt.Errorf("%w: parse jwks: %w", ErrJWKSFetch, err)
+	}
+	if len(keys.Keys) > defaultJWKSMaxKeys {
+		return nil, fmt.Errorf("%w: jwks contains %d keys (limit %d)", ErrJWKSFetch, len(keys.Keys), defaultJWKSMaxKeys)
 	}
 	return &keys, nil
 }

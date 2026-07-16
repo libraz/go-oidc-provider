@@ -80,6 +80,48 @@ func TestJWKSCache_HitWithinTTL(t *testing.T) {
 	}
 }
 
+func TestJWKSCache_BoundsURLCardinalityAndRetainsRecentEntry(t *testing.T) {
+	t.Parallel()
+
+	clock := &movableClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	cache := newJWKSCache(clock)
+	cache.maxEntries = 2
+	keys := &josev4.JSONWebKeySet{}
+	cache.put("https://rp.example/a", "", keys, time.Hour)
+	cache.put("https://rp.example/b", "", keys, time.Hour)
+	// Touch a so b becomes the least-recently used entry.
+	if _, ok := cache.get("https://rp.example/a"); !ok {
+		t.Fatal("cache entry a missing before eviction")
+	}
+	cache.put("https://rp.example/c", "", keys, time.Hour)
+	if len(cache.entries) != 2 {
+		t.Fatalf("entries=%d want bounded 2", len(cache.entries))
+	}
+	if _, ok := cache.entries["https://rp.example/a"]; !ok {
+		t.Fatal("recent entry a was evicted")
+	}
+	if _, ok := cache.entries["https://rp.example/b"]; ok {
+		t.Fatal("least-recent entry b was not evicted")
+	}
+
+	for i := range 5 {
+		cache.putFailure(fmt.Sprintf("https://rp.example/f%d", i), errors.New("unreachable"), time.Hour)
+		cache.tryForced(fmt.Sprintf("https://rp.example/r%d", i), time.Hour)
+	}
+	if len(cache.failures) > 2 || len(cache.forced) > 2 {
+		t.Fatalf("unbounded auxiliary maps: failures=%d forced=%d", len(cache.failures), len(cache.forced))
+	}
+}
+
+func TestParseJWKS_RejectsExcessiveKeyCount(t *testing.T) {
+	t.Parallel()
+
+	body := `{"keys":[` + strings.Repeat(`{"kty":"EC"},`, defaultJWKSMaxKeys) + `{"kty":"EC"}]}`
+	if _, err := parseJWKS([]byte(body)); err == nil {
+		t.Fatal("parseJWKS accepted an excessive key count")
+	}
+}
+
 func TestFetchFresh_BypassesFreshCacheThenThrottles(t *testing.T) {
 	t.Parallel()
 
