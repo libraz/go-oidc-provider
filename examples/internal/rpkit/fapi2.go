@@ -23,6 +23,8 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/libraz/go-oidc-provider/internal/timex"
 )
 
 // FAPI2Options configures a FAPI 2.0 Baseline Relying Party. The RP
@@ -45,6 +47,9 @@ type FAPI2Options struct {
 	// ClientKeyID is the JWS "kid" header for ClientPrivateKey. The
 	// OP looks up the verifying public key by this kid.
 	ClientKeyID string
+
+	// Clock supplies JWT and DPoP timestamps. Nil uses timex.SystemClock.
+	Clock timex.Clock
 }
 
 // FAPI2Flow drives a FAPI 2.0 Baseline Authorization Code flow:
@@ -63,6 +68,7 @@ type FAPI2Flow struct {
 	// access token's "cnf" claim; reusing the key keeps every token
 	// the RP holds bound to the same proof key.
 	dpopKey *ecdsa.PrivateKey
+	clock   timex.Clock
 
 	endpoints discoveryDoc
 	verifier  *oidc.IDTokenVerifier
@@ -88,6 +94,10 @@ func NewFAPI2(ctx context.Context, opts FAPI2Options) (*FAPI2Flow, error) {
 	}
 	if opts.ClientKeyID == "" {
 		return nil, errors.New("rpkit: FAPI2Options.ClientKeyID is required")
+	}
+	clock := opts.Clock
+	if clock == nil {
+		clock = timex.SystemClock
 	}
 
 	provider, err := oidc.NewProvider(ctx, opts.Issuer)
@@ -121,6 +131,7 @@ func NewFAPI2(ctx context.Context, opts FAPI2Options) (*FAPI2Flow, error) {
 		clientKey:   opts.ClientPrivateKey,
 		clientKID:   opts.ClientKeyID,
 		dpopKey:     dpopKey,
+		clock:       clock,
 		endpoints:   doc,
 		verifier:    provider.Verifier(&oidc.Config{ClientID: opts.ClientID}),
 		pending:     make(map[string]string),
@@ -269,7 +280,7 @@ func (f *FAPI2Flow) me(w http.ResponseWriter, _ *http.Request) {
 // attachClientAssertion adds private_key_jwt fields to form per
 // RFC 7521 / RFC 7523. aud == issuer per FAPI 2.0 §5.2.2.
 func (f *FAPI2Flow) attachClientAssertion(form url.Values) error {
-	now := time.Now()
+	now := f.clock.Now()
 	jti, err := randURL(16)
 	if err != nil {
 		return err
@@ -340,55 +351,25 @@ func (f *FAPI2Flow) exchange(ctx context.Context, code, codeVerifier string) (*t
 		return nil, fmt.Errorf("client_assertion: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		f.endpoints.TokenEndpoint, strings.NewReader(form.Encode()))
+	status, headers, body, err := f.exchangeRequest(ctx, form, "")
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	dpop, err := f.signDPoP(http.MethodPost, f.endpoints.TokenEndpoint, "")
-	if err != nil {
-		return nil, fmt.Errorf("DPoP proof: %w", err)
-	}
-	req.Header.Set("DPoP", dpop)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(resp.Body)
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusBadRequest {
+	if status == http.StatusUnauthorized || status == http.StatusBadRequest {
 		// RFC 9449 §8 nonce challenge: retry once with the supplied
 		// DPoP-Nonce. The OP issues the nonce out-of-band; the RP just
 		// echoes it in the next proof.
-		if nonce := resp.Header.Get("DPoP-Nonce"); nonce != "" {
+		if nonce := headers.Get("DPoP-Nonce"); nonce != "" {
 			log.Printf("rpkit: DPoP nonce challenge received, retrying")
-			req2, err := http.NewRequestWithContext(ctx, http.MethodPost,
-				f.endpoints.TokenEndpoint, strings.NewReader(form.Encode()))
+			status, _, body, err = f.exchangeRequest(ctx, form, nonce)
 			if err != nil {
 				return nil, err
 			}
-			req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			dpop2, err := f.signDPoPWithNonce(http.MethodPost, f.endpoints.TokenEndpoint, "", nonce)
-			if err != nil {
-				return nil, fmt.Errorf("DPoP proof retry: %w", err)
-			}
-			req2.Header.Set("DPoP", dpop2)
-			resp2, err := http.DefaultClient.Do(req2)
-			if err != nil {
-				return nil, err
-			}
-			defer func() { _ = resp2.Body.Close() }()
-			body, _ = io.ReadAll(resp2.Body)
-			resp = resp2
 		}
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token endpoint %d: %s", resp.StatusCode, string(body))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("token endpoint %d: %s", status, string(body))
 	}
 	var tr tokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
@@ -400,11 +381,29 @@ func (f *FAPI2Flow) exchange(ctx context.Context, code, codeVerifier string) (*t
 	return &tr, nil
 }
 
-// signDPoP builds a RFC 9449 DPoP proof. ath stays empty for token
-// endpoint requests; the access-token-bound form is for resource
-// server calls and is out of scope for the demo.
-func (f *FAPI2Flow) signDPoP(htm, htu, ath string) (string, error) {
-	return f.signDPoPWithNonce(htm, htu, ath, "")
+// exchangeRequest sends a single DPoP-bound authorization-code exchange and
+// returns a detached response snapshot so callers do not retain an open body.
+func (f *FAPI2Flow) exchangeRequest(ctx context.Context, form url.Values, nonce string) (int, http.Header, []byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.endpoints.TokenEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	dpop, err := f.signDPoPWithNonce(http.MethodPost, f.endpoints.TokenEndpoint, "", nonce)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("DPoP proof: %w", err)
+	}
+	req.Header.Set("DPoP", dpop)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("read token response: %w", err)
+	}
+	return resp.StatusCode, resp.Header.Clone(), body, nil
 }
 
 func (f *FAPI2Flow) signDPoPWithNonce(htm, htu, ath, nonce string) (string, error) {
@@ -423,7 +422,7 @@ func (f *FAPI2Flow) signDPoPWithNonce(htm, htu, ath, nonce string) (string, erro
 	pc := proofClaims{
 		HTM: htm,
 		HTU: htu,
-		IAT: time.Now().Unix(),
+		IAT: f.clock.Now().Unix(),
 		JTI: jti,
 	}
 	if ath != "" {

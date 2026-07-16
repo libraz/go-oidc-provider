@@ -55,6 +55,13 @@ type proc struct {
 // module directory and starts the binary with its working directory set
 // there, so relative asset paths resolve.
 func buildAndStart(t *testing.T, dir string) *proc {
+	return buildAndStartWithEnv(t, dir, nil)
+}
+
+// buildAndStartWithEnv is buildAndStart with environment overrides for
+// examples whose listener address, TLS materials, or input assets must be
+// isolated per test run.
+func buildAndStartWithEnv(t *testing.T, dir string, env []string) *proc {
 	t.Helper()
 
 	bin := filepath.Join(t.TempDir(), "example.bin")
@@ -70,6 +77,7 @@ func buildAndStart(t *testing.T, dir string) *proc {
 	}
 	cmd := exec.Command(bin)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {

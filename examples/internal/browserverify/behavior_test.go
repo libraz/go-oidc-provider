@@ -56,10 +56,8 @@ func htmlLogin(ctx context.Context, spec exampleSpec) error {
 // the real browser carrying the OP's __Host- session cookie across a fresh
 // top-level navigation, which a single httptest round-trip never exercises.
 func TestBehavior01MinimalSSO(t *testing.T) {
-	chrome := findChrome()
-	if chrome == "" {
-		t.Skip("no Chrome/Chromium binary found (set CHROME_BIN to override); skipping")
-	}
+	chrome := requireChrome(t)
+	executedBrowserCases.Add(1)
 	spec := exampleSpec{dir: "../../01-minimal", username: "demo", password: "demo", wantSub: "demo-user"}
 
 	stop, _ := startExample(t, spec.dir)

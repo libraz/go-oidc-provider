@@ -11,7 +11,8 @@
 //
 //	(cd examples/50-fapi-tls-jwks && go run -tags example .)
 //
-// The example expects a JWKS file at ./client.jwks.json (any
+// The example expects a JWKS file at ./client.jwks.json (or the path in
+// FAPI_JWKS; any
 // well-formed RFC 7517 set will do — the loader strips "d" if
 // present). The OP listens on TLS 1.2 only because Go's TLS 1.3
 // cipher list is not configurable from crypto/tls — pinning to
@@ -27,7 +28,9 @@
 //     the set contains private "d" parameters, LoadPublicJWKS strips
 //     them before the bytes would be registered on a client.
 //  2. Set FAPI_CERT and FAPI_KEY to a local certificate/key pair to
-//     start the TLS listener on :8443.
+//     start the TLS listener on :8443. Set FAPI_ISSUER to the public
+//     HTTPS issuer that matches the listener (and FAPI_ADDR when :8443
+//     is unsuitable).
 //  3. Run `openssl s_client -connect 127.0.0.1:8443 -tls1_2` and
 //     inspect the negotiated TLS 1.2 cipher.
 //
@@ -52,7 +55,12 @@ import (
 func main() {
 	keys := devkeys.MustEphemeral("fapi-1")
 
-	const jwksPath = "client.jwks.json"
+	const (
+		clientID      = "fapi-tls-jwks-client"
+		defaultIssuer = "https://op.example.com"
+		defaultAddr   = ":8443"
+	)
+	jwksPath := envOr("FAPI_JWKS", "client.jwks.json")
 	pub, err := op.LoadPublicJWKS(jwksPath)
 	if err != nil {
 		// In a real deployment the JWKS comes from the operator's
@@ -63,10 +71,10 @@ func main() {
 	if len(pub) == 0 {
 		log.Fatalf("LoadPublicJWKS returned empty bytes")
 	}
-	_ = pub // would be passed to op.PrivateKeyJWTClient.JWKS
+	issuer := envOr("FAPI_ISSUER", defaultIssuer)
 
 	provider, err := op.New(
-		op.WithIssuer("https://op.example.com"),
+		op.WithIssuer(issuer),
 		op.WithStore(inmem.New()),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
@@ -77,13 +85,23 @@ func main() {
 		// embedder who instead terminates mTLS at the OP opts in via
 		// op.WithFeature(feature.MTLS) and the DPoP default steps aside.
 		op.WithProfile(profile.FAPI2Baseline),
+		// Register the public JWKS as the verifier key material for the
+		// client that authenticates at /token with private_key_jwt. The
+		// loader above strips private JWK members before this value reaches
+		// the OP, so the signing key stays exclusively with the RP.
+		op.WithStaticClients(op.PrivateKeyJWTClient{
+			ID:         clientID,
+			JWKS:       pub,
+			GrantTypes: []string{"client_credentials"},
+			Scopes:     []string{"api:read"},
+		}),
 	)
 	if err != nil {
 		log.Fatalf("op.New: %v", err)
 	}
 
 	srv := &http.Server{
-		Addr:              ":8443",
+		Addr:              envOr("FAPI_ADDR", defaultAddr),
 		Handler:           provider,
 		TLSConfig:         op.FAPITLSConfig(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -94,12 +112,18 @@ func main() {
 	cert := os.Getenv("FAPI_CERT")
 	key := os.Getenv("FAPI_KEY")
 	if cert == "" || key == "" {
-		log.Println("FAPI_CERT / FAPI_KEY not set; skipping TLS listen — try `(cd examples/50-fapi-tls-jwks && FAPI_CERT=cert.pem FAPI_KEY=key.pem go run -tags example .)`")
-		return
+		log.Fatal("FAPI_CERT and FAPI_KEY are required; TLS must be exercised by this example")
 	}
-	log.Println("FAPI TLS example listening on :8443 (TLS 1.2 only, RSA-keyed AEAD allowlist)")
+	log.Printf("FAPI TLS example listening on %s (issuer %s; TLS 1.2 only, RSA-keyed AEAD allowlist)", srv.Addr, issuer)
 	// TLS listener; serve.Listen does not handle TLS termination.
 	if err := srv.ListenAndServeTLS(cert, key); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
+}
+
+func envOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }

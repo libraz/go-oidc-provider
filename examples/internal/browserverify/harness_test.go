@@ -37,6 +37,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -47,6 +48,24 @@ const (
 	defaultRPBase   = "http://127.0.0.1:9090"
 	defaultOPIssuer = "http://127.0.0.1:8080"
 )
+
+// BROWSERVERIFY_REQUIRED turns this normally developer-friendly harness into
+// a release gate. In that mode a missing browser and a run with zero actual
+// browser cases are failures rather than successful skips.
+const browserVerifyRequiredEnv = "BROWSERVERIFY_REQUIRED"
+
+var executedBrowserCases atomic.Int64
+
+func browserVerifyRequired() bool { return os.Getenv(browserVerifyRequiredEnv) == "1" }
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if code == 0 && browserVerifyRequired() && executedBrowserCases.Load() == 0 {
+		fmt.Fprintln(os.Stderr, "browserverify: required mode executed zero browser cases")
+		code = 1
+	}
+	os.Exit(code)
+}
 
 type exampleSpec struct {
 	dir      string
@@ -88,10 +107,8 @@ type exampleSpec struct {
 func runRoundTrip(t *testing.T, spec exampleSpec) {
 	t.Helper()
 
-	chrome := findChrome()
-	if chrome == "" {
-		t.Skip("no Chrome/Chromium binary found (set CHROME_BIN to override); skipping browser round-trip")
-	}
+	chrome := requireChrome(t)
+	executedBrowserCases.Add(1)
 
 	stop, logPath := startExample(t, spec.dir)
 	defer stop()
@@ -142,6 +159,18 @@ func runRoundTrip(t *testing.T, spec exampleSpec) {
 		}
 	}
 	t.Logf("round-trip OK: /me rendered iss=%s sub=%s claims=%v", defaultOPIssuer, spec.wantSub, spec.wantClaims)
+}
+
+func requireChrome(t *testing.T) string {
+	t.Helper()
+	if chrome := findChrome(); chrome != "" {
+		return chrome
+	}
+	if browserVerifyRequired() {
+		t.Fatalf("no Chrome/Chromium binary found (set CHROME_BIN to override); required browser verification cannot run")
+	}
+	t.Skip("no Chrome/Chromium binary found (set CHROME_BIN to override); skipping browser round-trip")
+	return "" // unreachable; keeps the compiler aware that t.Skip returns.
 }
 
 // startExample compiles the example under the "example" build tag and
@@ -474,10 +503,13 @@ func waitURLContains(ctx context.Context, want string) error {
 
 // findChrome resolves a Chrome/Chromium binary: CHROME_BIN wins, then a
 // short list of PATH names, then the macOS app bundle. Returns "" when
-// none is found so the test can skip cleanly.
+// none is found so optional test runs can skip and required runs can fail.
 func findChrome() string {
 	if env := os.Getenv("CHROME_BIN"); env != "" {
-		return env
+		if path, err := exec.LookPath(env); err == nil {
+			return path
+		}
+		return ""
 	}
 	for _, name := range []string{
 		"google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "chrome",

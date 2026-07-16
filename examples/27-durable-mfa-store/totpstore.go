@@ -97,10 +97,8 @@ func (s *sqliteTOTPStore) Get(ctx context.Context, subject string) (*store.TOTPR
 	}, nil
 }
 
-// Put implements [store.TOTPStore] with upsert semantics: an existing
-// row for r.Subject is overwritten in full. The library calls Put for
-// the initial confirmation, every brute-force counter update, and the
-// post-success counter reset.
+// Put implements [store.TOTPStore] with upsert semantics. It is used for
+// enrolment setup; verification transitions use CompareAndSwap or Accept.
 func (s *sqliteTOTPStore) Put(ctx context.Context, r *store.TOTPRecord) error {
 	if r == nil {
 		return errors.New("sqliteTOTPStore: nil totp record")
@@ -125,6 +123,66 @@ func (s *sqliteTOTPStore) Put(ctx context.Context, r *store.TOTPRecord) error {
 		r.LastAcceptedStep,
 	)
 	return err
+}
+
+// CompareAndSwap implements [store.TOTPStore]. The expected snapshot is part
+// of the UPDATE predicate, so a concurrent success or failure cannot be
+// overwritten by a stale wrong-code update. It returns ErrAlreadyConsumed for
+// a stale snapshot and ErrNotFound when the enrolment no longer exists.
+func (s *sqliteTOTPStore) CompareAndSwap(ctx context.Context, previous, next *store.TOTPRecord) error {
+	if previous == nil || next == nil || previous.Subject == "" || next.Subject != previous.Subject {
+		return errors.New("sqliteTOTPStore: invalid totp compare-and-swap record")
+	}
+	const q = `UPDATE mfa_totp_enrolments SET
+		secret_ciphertext  = ?,
+		confirmed_at       = ?,
+		failed_count       = ?,
+		first_failure_at   = ?,
+		locked_until       = ?,
+		last_accepted_step = ?
+	WHERE subject = ?
+		AND secret_ciphertext = ?
+		AND confirmed_at = ?
+		AND failed_count = ?
+		AND first_failure_at = ?
+		AND locked_until = ?
+		AND last_accepted_step = ?`
+	res, err := s.db.ExecContext(ctx, q,
+		next.SecretCiphertext,
+		timeToUnixNanos(next.ConfirmedAt),
+		int64(next.FailedCount),
+		timeToUnixNanos(next.FirstFailureAt),
+		timeToUnixNanos(next.LockedUntil),
+		next.LastAcceptedStep,
+		previous.Subject,
+		previous.SecretCiphertext,
+		timeToUnixNanos(previous.ConfirmedAt),
+		int64(previous.FailedCount),
+		timeToUnixNanos(previous.FirstFailureAt),
+		timeToUnixNanos(previous.LockedUntil),
+		previous.LastAcceptedStep,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 1 {
+		return nil
+	}
+	var exists int
+	err = s.db.QueryRowContext(ctx,
+		`SELECT 1 FROM mfa_totp_enrolments WHERE subject = ?`, previous.Subject,
+	).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return store.ErrAlreadyConsumed
 }
 
 // Accept implements [store.TOTPStore]. It persists a successful

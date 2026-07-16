@@ -23,12 +23,14 @@
 //
 // Drive the OAuth-only path end-to-end:
 //
-//	# 1) start the example, then visit
-//	open 'http://127.0.0.1:8080/oidc/auth?client_id=oauth-cli&response_type=code&redirect_uri=http://localhost:5173/cb&scope=api:read&state=xyz&code_challenge=E9Melhoa2OoLrgRBe5dh8nlEpV-vH4qlHWAHfsmrCzs&code_challenge_method=S256'
+//	# 1) start the example, derive a matching RFC 7636 S256 pair, then visit.
+//	VERIFIER='oauth2-only-example-verifier-0123456789-ABCDEFGHIJKLMN'
+//	CHALLENGE="$(printf %s "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+//	open "http://127.0.0.1:8080/oidc/auth?client_id=oauth-cli&response_type=code&redirect_uri=http://localhost:5173/cb&scope=api:read&state=xyz&code_challenge=${CHALLENGE}&code_challenge_method=S256"
 //
 //	# 2) after the consent screen, exchange the returned code:
 //	curl -u oauth-cli:oauth2-only-demo-secret-rotate-me \
-//	     -d 'grant_type=authorization_code&code=<CODE>&redirect_uri=http://localhost:5173/cb&code_verifier=<VERIFIER>' \
+//	     -d "grant_type=authorization_code&code=<CODE>&redirect_uri=http://localhost:5173/cb&code_verifier=${VERIFIER}" \
 //	     http://127.0.0.1:8080/oidc/token | jq
 //
 // The /token response carries access_token but NOT id_token because

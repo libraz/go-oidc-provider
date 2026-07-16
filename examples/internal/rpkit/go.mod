@@ -14,8 +14,9 @@ toolchain go1.26.5
 
 require (
 	github.com/coreos/go-oidc/v3 v3.11.0
-	github.com/go-jose/go-jose/v4 v4.0.2
+	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/libraz/go-oidc-provider v0.0.0-00010101000000-000000000000
 	golang.org/x/oauth2 v0.24.0
 )
 
-require golang.org/x/crypto v0.53.0 // indirect
+replace github.com/libraz/go-oidc-provider => ../../..

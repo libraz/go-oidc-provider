@@ -5,10 +5,11 @@
 // runtime does not require this extension, but it is useful for embedders
 // that perform their own maintenance or migration writes.
 //
-// store.Tx exposes only AuthorizationCodes / Grants / RefreshTokens /
-// PushedAuthRequests / Commit / Rollback. AccessTokens() is exported here as
-// an optional convenience for callers that hold the concrete *scratchTx; it is
-// not part of the public store.Tx contract.
+// store.Tx exposes AuthorizationCodes, Grants, RefreshTokens,
+// PushedAuthRequests, AccessTokens, OpaqueAccessTokens, and
+// GrantRevocations, plus Commit / Rollback. This minimal example does not
+// implement opaque access tokens or grant-revocation tombstones, so those two
+// transaction accessors return nil just like their parent-store accessors.
 
 package main
 
@@ -53,11 +54,18 @@ func (t *scratchTx) PushedAuthRequests() store.PushedAuthRequestStore {
 	return &parStore{q: t.tx, now: t.parent.now}
 }
 
-// AccessTokens returns the tx-bound registry. store.Tx does not declare this
-// method; it is available only to callers that hold the concrete *scratchTx.
+// AccessTokens returns the tx-bound registry.
 func (t *scratchTx) AccessTokens() store.AccessTokenRegistry {
 	return &accessTokenStore{q: t.tx}
 }
+
+// OpaqueAccessTokens returns nil because this minimal store does not support
+// opaque access tokens. A complete adapter returns its tx-bound substore here.
+func (t *scratchTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
+
+// GrantRevocations returns nil because this minimal store does not persist
+// JWT grant tombstones. A complete adapter returns its tx-bound substore here.
+func (t *scratchTx) GrantRevocations() store.GrantRevocationStore { return nil }
 
 func (t *scratchTx) Commit() error {
 	if t.done {

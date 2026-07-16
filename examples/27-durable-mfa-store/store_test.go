@@ -162,6 +162,42 @@ func TestAcceptNilRecord(t *testing.T) {
 	}
 }
 
+// TestCompareAndSwapRejectsStaleFailure proves the example store preserves a
+// concurrent successful replay-state advance instead of writing an old
+// wrong-code snapshot over it.
+func TestCompareAndSwapRejectsStaleFailure(t *testing.T) {
+	t.Parallel()
+	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
+	ctx := context.Background()
+
+	previous := sampleRecord()
+	previous.LastAcceptedStep = 10
+	previous.FailedCount = 2
+	if err := s.Put(ctx, previous); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	accepted := *previous
+	accepted.LastAcceptedStep = 11
+	accepted.FailedCount = 0
+	if err := s.Accept(ctx, &accepted); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	staleFailure := *previous
+	staleFailure.FailedCount++
+	if err := s.CompareAndSwap(ctx, previous, &staleFailure); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap(stale) = %v, want ErrAlreadyConsumed", err)
+	}
+	got, err := s.Get(ctx, previous.Subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LastAcceptedStep != accepted.LastAcceptedStep || got.FailedCount != accepted.FailedCount {
+		t.Fatalf("stale CAS rolled back state: got step=%d failures=%d, want step=%d failures=%d", got.LastAcceptedStep, got.FailedCount, accepted.LastAcceptedStep, accepted.FailedCount)
+	}
+}
+
 func TestDelete(t *testing.T) {
 	t.Parallel()
 	s := newMigratedStore(t, filepath.Join(t.TempDir(), "totp.db"))
