@@ -155,19 +155,53 @@ func TestInteractionKey_PrefixedWithPlainID(t *testing.T) {
 	}
 }
 
-func TestWithMaxValueBytes_ClampedToReasonableRange(t *testing.T) {
+func TestWithMaxValueBytes_RejectsOutOfRange(t *testing.T) {
 	t.Parallel()
-	cfg := &config{maxValueBytes: MaxValueBytes}
+	cfg := buildConfig(nil)
 	WithMaxValueBytes(512)(cfg) // below 1 KiB floor
-	if cfg.maxValueBytes != MaxValueBytes {
-		t.Fatalf("below-floor value accepted: %d", cfg.maxValueBytes)
+	if cfg.optionErr == nil || !strings.Contains(cfg.optionErr.Error(), "WithMaxValueBytes") {
+		t.Fatalf("below-floor value error=%v, want validation error", cfg.optionErr)
 	}
+	cfg = buildConfig(nil)
 	WithMaxValueBytes(2 * 1024 * 1024)(cfg) // above 1 MiB ceiling
-	if cfg.maxValueBytes != MaxValueBytes {
-		t.Fatalf("above-ceiling value accepted: %d", cfg.maxValueBytes)
+	if cfg.optionErr == nil || !strings.Contains(cfg.optionErr.Error(), "WithMaxValueBytes") {
+		t.Fatalf("above-ceiling value error=%v, want validation error", cfg.optionErr)
 	}
+	cfg = buildConfig(nil)
 	WithMaxValueBytes(8192)(cfg)
-	if cfg.maxValueBytes != 8192 {
+	if cfg.optionErr != nil || cfg.maxValueBytes != 8192 {
 		t.Fatalf("in-range value rejected: %d", cfg.maxValueBytes)
+	}
+}
+
+func TestWithKeyPrefix_Validation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		prefix string
+		valid  bool
+	}{
+		{prefix: "tenant:", valid: true},
+		{prefix: "tenant-prod_1:", valid: true},
+		{prefix: "", valid: false},
+		{prefix: "tenant", valid: false},
+		{prefix: "tenant space:", valid: false},
+	} {
+		cfg := buildConfig(nil)
+		WithKeyPrefix(tc.prefix)(cfg)
+		if (cfg.optionErr == nil) != tc.valid {
+			t.Errorf("prefix %q optionErr=%v, valid=%v", tc.prefix, cfg.optionErr, tc.valid)
+		}
+	}
+}
+
+func TestNew_RejectsInvalidOptionBeforeNetwork(t *testing.T) {
+	t.Parallel()
+	_, err := New(context.Background(),
+		WithDSN("rediss://localhost:6379/0"),
+		WithRedisAuth("", "secret"),
+		WithMaxValueBytes(1),
+	)
+	if err == nil || !strings.Contains(err.Error(), "WithMaxValueBytes") {
+		t.Fatalf("New invalid option error=%v, want WithMaxValueBytes validation error", err)
 	}
 }

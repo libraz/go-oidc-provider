@@ -14,9 +14,12 @@
 //   - [github.com/libraz/go-oidc-provider/op/store.InteractionStore] —
 //     short-lived UI state surviving redirects across login / consent /
 //     step-up screens.
+//   - [github.com/libraz/go-oidc-provider/op/store.SessionStore] — browser
+//     session state with Redis TTL. It is intentionally non-transactional:
+//     compose it with a durable backend for grants and credentials.
 //
 // The transactional cluster substores (AuthorizationCodes, RefreshTokens,
-// Grants, Sessions, PushedAuthRequests, AccessTokens) and the long-lived
+// Grants, PushedAuthRequests, AccessTokens) and the long-lived
 // substores (Clients, Users, IATs, RATs) are deliberately out of scope.
 // The first-cut canonical deployment is therefore SQL durable + Redis
 // volatile, composed through

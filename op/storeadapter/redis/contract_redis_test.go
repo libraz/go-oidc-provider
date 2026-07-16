@@ -5,6 +5,7 @@ package oidcredis_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,7 +35,8 @@ func (c fixedClock) Now() time.Time { return c.now }
 // sub-test by mapping each request to a distinct prefix. The container
 // terminates via [testing.T.Cleanup] after the parent test (and all
 // parallel sub-tests) finish. If Docker is not reachable the parent
-// test is skipped rather than failed.
+// test is skipped rather than failed. RELEASE_CONTRACT_REQUIRED=1 upgrades
+// that absence to a failure for release gates.
 //
 // The harness deliberately uses the plaintext-with-AUTH variant inside
 // the container (the testcontainers redis module does not expose a
@@ -57,6 +59,9 @@ func newRedisFactory(t *testing.T) contract.Factory {
 		),
 	)
 	if err != nil {
+		if os.Getenv("RELEASE_CONTRACT_REQUIRED") == "1" {
+			t.Fatalf("redis container required for release contract: %v", err)
+		}
 		t.Skipf("redis container unavailable (Docker not running?): %v", err)
 	}
 	t.Cleanup(func() {

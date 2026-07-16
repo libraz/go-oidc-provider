@@ -60,6 +60,7 @@ type config struct {
 	allowPlaintext    bool
 	maxValueBytes     int
 	plaintextWarnSink func(string)
+	optionErr         error
 }
 
 // WithDSN supplies the Redis connection string. The scheme MUST be
@@ -98,9 +99,11 @@ func WithClock(c Clock) Option {
 // chooses; the adapter does not rewrite the supplied value.
 func WithKeyPrefix(prefix string) Option {
 	return func(cfg *config) {
-		if prefix != "" {
-			cfg.prefix = prefix
+		if err := validateKeyPrefix(prefix); err != nil {
+			cfg.setOptionErr(err)
+			return
 		}
+		cfg.prefix = prefix
 	}
 }
 
@@ -142,9 +145,11 @@ func WithDevModeAllowPlaintext(warnSink func(string)) Option {
 // protection.
 func WithMaxValueBytes(n int) Option {
 	return func(cfg *config) {
-		if n >= 1024 && n <= 1024*1024 {
-			cfg.maxValueBytes = n
+		if n < 1024 || n > 1024*1024 {
+			cfg.setOptionErr(fmt.Errorf("oidcredis: WithMaxValueBytes(%d) is outside [1024, 1048576]", n))
+			return
 		}
+		cfg.maxValueBytes = n
 	}
 }
 
@@ -220,6 +225,9 @@ func buildConfig(opts []Option) *config {
 }
 
 func validateConfig(cfg *config) (*url.URL, error) {
+	if cfg.optionErr != nil {
+		return nil, cfg.optionErr
+	}
 	if cfg.dsn == "" {
 		return nil, errors.New("oidcredis: WithDSN is required")
 	}
@@ -234,6 +242,28 @@ func validateConfig(cfg *config) (*url.URL, error) {
 		return nil, errors.New("oidcredis: WithRedisAuth is required (or supply WithDevModeAllowPlaintext)")
 	}
 	return parsed, nil
+}
+
+func (cfg *config) setOptionErr(err error) {
+	if cfg.optionErr == nil {
+		cfg.optionErr = err
+	}
+}
+
+func validateKeyPrefix(prefix string) error {
+	if prefix == "" {
+		return errors.New("oidcredis: WithKeyPrefix must not be empty")
+	}
+	if !strings.HasSuffix(prefix, ":") {
+		return errors.New("oidcredis: WithKeyPrefix must end with ':'")
+	}
+	for _, r := range prefix {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == ':' {
+			continue
+		}
+		return fmt.Errorf("oidcredis: WithKeyPrefix contains invalid character %q", r)
+	}
+	return nil
 }
 
 func buildClientOptions(cfg *config, parsed *url.URL) (*redis.Options, error) {

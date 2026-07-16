@@ -139,7 +139,7 @@ RFC 別のマトリックスは
 |---|---|---|
 | `inmem` | `op/storeadapter/inmem` | リファレンス実装。開発・テスト向け。[`op/store/contract`](op/store/contract) のコントラクトハーネスはこれに対して走る。 |
 | `sql` | `op/storeadapter/sql` | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。**別モジュール。** `go test -tags=testcontainers` で全サブストアを実エンジン（testcontainers）に対して走らせる。 |
-| `redis` | `op/storeadapter/redis` | 揮発性のサブストア（`InteractionStore` / `ConsumedJTIStore`）向け。**別モジュール。** TLS（`rediss://`）と AUTH が無いと起動を拒否する（明示的な `WithDevModeAllowPlaintext` のみ例外）。 |
+| `redis` | `op/storeadapter/redis` | 揮発性のサブストア（`InteractionStore` / `ConsumedJTIStore` / `SessionStore`）向け。**別モジュール。** Session は Redis TTL に従うため、grant / credential は durable backend と合成する。TLS（`rediss://`）と AUTH が無いと起動を拒否する（明示的な `WithDevModeAllowPlaintext` のみ例外）。 |
 | `composite` | `op/storeadapter/composite` | ホット/コールドの振り分け役。永続サブストアを一方のバックエンド、揮発性を他方へ振り分けつつ、トランザクショナルクラスタの不変条件を強制する。 |
 
 **認証ファクタのストアは組み込み側が所有します。** 上記のアダプタが永続化
