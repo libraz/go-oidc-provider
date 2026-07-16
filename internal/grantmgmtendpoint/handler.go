@@ -13,6 +13,7 @@ package grantmgmtendpoint
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -267,23 +268,27 @@ func revokeSubjectClientCascade(ctx context.Context, deps Deps, g *store.Grant) 
 // revokeGrantCascade tears the grant down: it tombstones / denylists the
 // JWT access tokens, revokes the opaque access tokens and refresh tokens
 // bound to the grant, then deletes the grant record so a subsequent query
-// reports it gone. Mirrors the token endpoint's grant teardown. The
-// token-substore steps are best-effort (the JWT tombstone alone already
-// blocks token use), but a failure to delete the grant record is returned
-// because the grant would otherwise remain live and the caller must not be
-// told the revoke succeeded.
+// reports it gone. Mirrors the token endpoint's grant teardown. Every
+// security-state write must succeed before deletion: otherwise the caller
+// receives a server error and can retry while the grant remains queryable.
 func revokeGrantCascade(ctx context.Context, deps Deps, grantID string) error {
 	now := deps.now().UTC()
-	_ = endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+	if err := endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		RevocationStrategy: deps.RevocationStrategy,
-	}, grantID, now, deps.AccessTokenTTL+5*time.Minute, "grant_management_revoke")
+	}, grantID, now, deps.AccessTokenTTL+5*time.Minute, "grant_management_revoke"); err != nil {
+		return fmt.Errorf("grant management: revoke JWT access tokens: %w", err)
+	}
 	if deps.OpaqueAccessTokens != nil {
-		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+		if _, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID); err != nil {
+			return fmt.Errorf("grant management: revoke opaque access tokens: %w", err)
+		}
 	}
 	if deps.RefreshTokens != nil {
-		_ = deps.RefreshTokens.RevokeByGrant(ctx, grantID)
+		if err := deps.RefreshTokens.RevokeByGrant(ctx, grantID); err != nil {
+			return fmt.Errorf("grant management: revoke refresh tokens: %w", err)
+		}
 	}
 	return deps.Grants.Delete(ctx, grantID)
 }

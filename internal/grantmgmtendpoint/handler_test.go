@@ -279,6 +279,30 @@ func (s deleteFailsGrantStore) Delete(context.Context, string) error {
 	return errors.New("simulated backend delete failure")
 }
 
+type revokeFailsRefreshStore struct {
+	store.RefreshTokenStore
+}
+
+func (s revokeFailsRefreshStore) RevokeByGrant(context.Context, string) error {
+	return errors.New("simulated refresh revoke failure")
+}
+
+type revokeFailsOpaqueAccessTokenStore struct {
+	store.OpaqueAccessTokenStore
+}
+
+func (s revokeFailsOpaqueAccessTokenStore) RevokeByGrant(context.Context, string) (int, error) {
+	return 0, errors.New("simulated opaque access-token revoke failure")
+}
+
+type revokeFailsAccessTokenRegistry struct {
+	store.AccessTokenRegistry
+}
+
+func (s revokeFailsAccessTokenRegistry) RevokeByGrant(context.Context, string) (int, error) {
+	return 0, errors.New("simulated JWT access-token revoke failure")
+}
+
 // TestHandler_RevokeDeleteFailure_Returns500 pins that a failure to delete
 // the grant record surfaces as 500 server_error (not a false 204): the
 // grant is still live and queryable, so reporting success would be a lie.
@@ -305,5 +329,65 @@ func TestHandler_RevokeDeleteFailure_Returns500(t *testing.T) {
 	// The grant must remain findable: the revoke did not complete.
 	if _, err := f.store.Grants().Find(context.Background(), "grant-stuck"); err != nil {
 		t.Errorf("grant should still be findable after a failed revoke: %v", err)
+	}
+}
+
+// TestHandler_RevokeSecurityCascadeFailure_Returns500 pins the fail-closed
+// ordering: no security-revocation failure may be hidden behind a successful
+// grant delete and 204 response. Keeping the grant makes the DELETE retryable.
+func TestHandler_RevokeSecurityCascadeFailure_Returns500(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		configure func(*grantmgmtendpoint.Deps)
+	}{
+		{
+			name: "refresh tokens",
+			configure: func(d *grantmgmtendpoint.Deps) {
+				d.RefreshTokens = revokeFailsRefreshStore{}
+			},
+		},
+		{
+			name: "opaque access tokens",
+			configure: func(d *grantmgmtendpoint.Deps) {
+				d.OpaqueAccessTokens = revokeFailsOpaqueAccessTokenStore{}
+			},
+		},
+		{
+			name: "JWT access tokens",
+			configure: func(d *grantmgmtendpoint.Deps) {
+				d.RevocationStrategy = store.RevocationStrategyJTIRegistry
+				d.AccessTokens = revokeFailsAccessTokenRegistry{}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFixture(t, func(d *grantmgmtendpoint.Deps) {
+				d.RevokeEnabled = true
+				tt.configure(d)
+			})
+			f.seedGrant(t, "grant-stuck")
+
+			resp := f.do(t, http.MethodDelete, "grant-stuck")
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusInternalServerError {
+				t.Fatalf("status=%d want 500", resp.StatusCode)
+			}
+			body := decodeError(t, resp)
+			if body["error"] != "server_error" {
+				t.Errorf("error=%v want server_error", body["error"])
+			}
+			if _, err := f.store.Grants().Find(context.Background(), "grant-stuck"); err != nil {
+				t.Errorf("grant should remain retryable after failed cascade: %v", err)
+			}
+			if got := len(f.audit.events); got != 0 {
+				t.Errorf("success audit events=%d want 0", got)
+			}
+		})
 	}
 }

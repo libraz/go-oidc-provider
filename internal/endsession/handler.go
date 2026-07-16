@@ -2,6 +2,8 @@ package endsession
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"time"
@@ -135,9 +137,9 @@ type Deps struct {
 	// OpaqueAccessTokens cascades the per-grant opaque-format access
 	// tokens (ADR 0024) alongside the JWT cascade. The two cascades
 	// run independently because they belong to different substores;
-	// failures on either are swallowed (best-effort, mirrors the
-	// other store calls in this handler). A nil value disables the
-	// opaque cascade — the embedder either has no opaque-AT
+	// failures are returned to the logout path for accurate auditing
+	// while remaining non-blocking for the browser response. A nil value
+	// disables the opaque cascade — the embedder either has no opaque-AT
 	// deployments or has not wired the substore.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
 
@@ -457,37 +459,39 @@ func validatePostLogout(w http.ResponseWriter, client *store.Client, postLogout 
 // terminateSession is the success-path side effect: read the session
 // cookie, delete the underlying session record, dispatch a
 // back-channel logout fan-out to the affected RPs, and clear the
-// cookie in the response. Failures during the store call are best-
-// effort — the user's intent is to log out, and a transient store
-// fault should not surface as a 5xx — but the cookie is always
-// cleared so the browser stops authenticating future requests with
-// stale state.
+// cookie in the response. Store and downstream revocation failures are
+// deliberately non-blocking for the browser response, but they are recorded
+// as distinct audit events rather than being misreported as a successful
+// session destruction. The cookie is always cleared so the browser stops
+// authenticating future requests with stale state.
 func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 	sid, subject := readSessionFingerprint(r, deps)
 	if sid != "" {
-		// Logout is documented as idempotent; ignoring the error here
-		// is consistent with the manager's ErrNotFound contract and
-		// matches how /authorize treats expired sessions.
-		_ = deps.Sessions.Logout(r.Context(), sid)
-		deps.audit().Emit(r.Context(), audit.Event{
-			Name:      "session.destroyed",
-			Level:     audit.LevelInfo,
-			Message:   "session destroyed",
-			ActorID:   subject,
-			SessionID: sid,
-		})
+		err := deps.Sessions.Logout(r.Context(), sid)
+		switch {
+		case err == nil:
+			deps.audit().Emit(r.Context(), audit.Event{Name: "session.destroyed", Level: audit.LevelInfo, Message: "session destroyed", ActorID: subject, SessionID: sid})
+		case errors.Is(err, store.ErrNotFound):
+			deps.audit().Emit(r.Context(), audit.Event{Name: "session.already_absent", Level: audit.LevelInfo, Message: "session was already absent", ActorID: subject, SessionID: sid})
+		default:
+			deps.audit().Emit(r.Context(), audit.Event{Name: "session.destroy_failed", Level: audit.LevelError, Message: "session logout persistence failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+		}
 	}
 	if subject != "" {
-		revokeAccessTokens(r.Context(), deps, subject)
+		if err := revokeAccessTokens(r.Context(), deps, subject); err != nil {
+			deps.audit().Emit(r.Context(), audit.Event{Name: "logout.token_revoke_failed", Level: audit.LevelError, Message: "logout token revocation failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+		}
 		if deps.Backchannel != nil {
 			// Back-channel fan-out is best-effort: per-RP failures
 			// are recorded as audit events inside the coordinator
 			// so a broken downstream cannot stall the user-visible
 			// logout.
-			_, _ = deps.Backchannel.Notify(r.Context(), backchannel.Notice{
+			if _, err := deps.Backchannel.Notify(r.Context(), backchannel.Notice{
 				Subject:   subject,
 				SessionID: sid,
-			})
+			}); err != nil {
+				deps.audit().Emit(r.Context(), audit.Event{Name: "logout.back_channel.resolve_failed", Level: audit.LevelError, Message: "back-channel logout target resolution failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+			}
 		}
 	}
 	clearSessionCookie(w)
@@ -517,27 +521,33 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 // apply to them.
 //
 // A nil [Deps.Grants] short-circuits both branches — the embedder
-// has not opted into the registry surface. Per-call errors are
-// swallowed: the user's intent is to sign out, and a transient store
-// fault must not surface as a 5xx.
-func revokeAccessTokens(ctx context.Context, deps Deps, subject string) {
+// has not opted into the registry surface. The caller keeps logout
+// user-visible-successful, but receives any store errors to emit an accurate
+// audit event.
+func revokeAccessTokens(ctx context.Context, deps Deps, subject string) error {
 	if deps.Grants == nil {
-		return
+		return nil
 	}
 	grants, err := deps.Grants.ListBySubject(ctx, subject)
 	if err != nil {
-		return
+		return fmt.Errorf("list grants: %w", err)
 	}
 	now := endSessionNow(deps)
+	var errs []error
 	for _, g := range grants {
 		if g == nil || g.ID == "" {
 			continue
 		}
-		revokeJWTAccessTokensForGrant(ctx, deps, g.ID, now)
+		if err := revokeJWTAccessTokensForGrant(ctx, deps, g.ID, now); err != nil {
+			errs = append(errs, fmt.Errorf("grant %s JWT: %w", g.ID, err))
+		}
 		if deps.OpaqueAccessTokens != nil {
-			_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, g.ID)
+			if _, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, g.ID); err != nil {
+				errs = append(errs, fmt.Errorf("grant %s opaque: %w", g.ID, err))
+			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // revokeJWTAccessTokensForGrant applies the JWT cascade for one grant
@@ -549,8 +559,8 @@ func revokeJWTAccessTokensForGrant(
 	deps Deps,
 	grantID string,
 	now time.Time,
-) {
-	_ = endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
+) error {
+	return endpointsupport.RevokeJWTAccessTokensByGrant(ctx, endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
 		RevocationStrategy: deps.RevocationStrategy,

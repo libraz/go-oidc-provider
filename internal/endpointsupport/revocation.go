@@ -108,9 +108,10 @@ type JWTGrantCascadeOpts struct {
 //     fall back to the JTI registry so partially migrated deployments
 //     keep the cascade semantics they already had.
 //
-// The helper intentionally swallows store errors: callers decide how the
-// failure is surfaced (or not) on the wire, but they all share the same
-// "best effort, no panic" write posture.
+// Store errors are returned to the caller. Each endpoint decides whether its
+// user-visible contract is fail-closed (for example Grant Management revoke)
+// or best-effort (for example browser logout), while sharing the same cascade
+// implementation.
 func RevokeJWTAccessTokensByGrant(
 	ctx context.Context,
 	opts JWTGrantCascadeOpts,
