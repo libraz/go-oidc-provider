@@ -60,7 +60,6 @@ func TestAALStringAndACRURIStableWireValues(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -87,7 +86,6 @@ func TestFactorTypeNamespaceClassification(t *testing.T) {
 		authn.FactorRecoveryCode,
 		authn.FactorEmailOTP,
 	} {
-		typ := typ
 		t.Run(typ.String(), func(t *testing.T) {
 			t.Parallel()
 
@@ -116,7 +114,6 @@ func TestFactorTypeNamespaceClassification(t *testing.T) {
 		{name: "dotted prefix is enough", typ: "vendor.", wantBuiltin: false, wantUserDefined: true},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

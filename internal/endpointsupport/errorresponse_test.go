@@ -29,7 +29,6 @@ func TestBearerCredentialFromHeaderReportsCanonicalScheme(t *testing.T) {
 		{name: "empty token", header: "Bearer   ", wantOK: false},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -62,7 +61,6 @@ func TestLooksLikeJWTRequiresCompactJWSWithJSONObjectHeader(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString([]byte(`{`)) + "." + payload + "." + signature,
 	}
 	for _, token := range cases {
-		token := token
 		t.Run(token, func(t *testing.T) {
 			t.Parallel()
 			if endpointsupport.LooksLikeJWT(token) {
@@ -123,7 +121,6 @@ func TestWriteAuthnErrorMapsSentinelsToOAuthEnvelopes(t *testing.T) {
 		},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

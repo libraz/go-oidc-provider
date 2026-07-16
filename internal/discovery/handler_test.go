@@ -1,6 +1,7 @@
 package discovery_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 func TestHandlerServesDiscoveryDocumentForGetAndHead(t *testing.T) {
 	t.Parallel()
 
-	doc := discovery.Document{
+	doc := discovery.Document{ //nolint:gosec // fixture contains public endpoint URLs, not credentials.
 		Issuer:                           "https://issuer.example",
 		AuthorizationEndpoint:            "https://issuer.example/auth",
 		TokenEndpoint:                    "https://issuer.example/token",
@@ -30,7 +31,7 @@ func TestHandlerServesDiscoveryDocumentForGetAndHead(t *testing.T) {
 	}
 
 	get := httptest.NewRecorder()
-	h.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil))
+	h.ServeHTTP(get, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/.well-known/openid-configuration", nil))
 	if get.Code != http.StatusOK {
 		t.Fatalf("GET status = %d, body = %s", get.Code, get.Body.String())
 	}
@@ -49,7 +50,7 @@ func TestHandlerServesDiscoveryDocumentForGetAndHead(t *testing.T) {
 	}
 
 	head := httptest.NewRecorder()
-	h.ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/.well-known/openid-configuration", nil))
+	h.ServeHTTP(head, httptest.NewRequestWithContext(context.Background(), http.MethodHead, "/.well-known/openid-configuration", nil))
 	if head.Code != http.StatusOK {
 		t.Fatalf("HEAD status = %d", head.Code)
 	}
@@ -70,7 +71,7 @@ func TestHandlerRejectsUnsupportedMethods(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/.well-known/openid-configuration", strings.NewReader("{}")))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/.well-known/openid-configuration", strings.NewReader("{}")))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST status = %d, want 405", rec.Code)
 	}

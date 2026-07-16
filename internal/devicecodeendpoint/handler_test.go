@@ -225,7 +225,7 @@ func TestHandlerRejectsMalformedRequestsBeforeIssuance(t *testing.T) {
 	t.Run("get method", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodGet, "/device_authorization", nil)
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/device_authorization", nil)
 		rec := httptest.NewRecorder()
 		devicecodeendpoint.Handler(deps).ServeHTTP(rec, req)
 		if rec.Code != http.StatusMethodNotAllowed {
@@ -240,7 +240,7 @@ func TestHandlerRejectsMalformedRequestsBeforeIssuance(t *testing.T) {
 	t.Run("wrong content type", func(t *testing.T) {
 		t.Parallel()
 
-		req := httptest.NewRequest(http.MethodPost, "/device_authorization", strings.NewReader("client_id=device-client"))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/device_authorization", strings.NewReader("client_id=device-client"))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		devicecodeendpoint.Handler(deps).ServeHTTP(rec, req)
@@ -402,7 +402,7 @@ func newFixture(tb testing.TB, now time.Time, client store.Client) (*inmem.Store
 func postForm(tb testing.TB, deps devicecodeendpoint.Deps, form url.Values) *httptest.ResponseRecorder {
 	tb.Helper()
 
-	req := httptest.NewRequest(http.MethodPost, "/device_authorization", strings.NewReader(form.Encode()))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/device_authorization", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 	devicecodeendpoint.Handler(deps).ServeHTTP(rec, req)

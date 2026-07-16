@@ -65,7 +65,6 @@ func TestWriteErrorNonceChallengeStillWritesBodyWhenNonceUnavailable(t *testing.
 	t.Parallel()
 
 	for _, src := range []dpop.NonceSource{nil, staticNonceSource(""), failingNonceSource{}} {
-		src := src
 		t.Run(fmt.Sprintf("%T", src), func(t *testing.T) {
 			t.Parallel()
 
@@ -100,7 +99,6 @@ func TestWriteErrorMapsDPoPSentinelsToOAuthEnvelope(t *testing.T) {
 		{name: "unknown", err: errors.New("transport fault"), status: http.StatusInternalServerError, code: "server_error"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

@@ -26,7 +26,6 @@ func TestNormaliseResourceAppliesRFC8707CanonicalForm(t *testing.T) {
 		{name: "parseable but not absolute left untouched", in: "/relative/path/", want: "/relative/path/"},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -136,7 +135,6 @@ func TestWireErrorWritesOAuthJSONEnvelope(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
