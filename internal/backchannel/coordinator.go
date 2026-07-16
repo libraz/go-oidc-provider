@@ -18,6 +18,12 @@ import (
 // latency without leaving long-lived signed material in flight.
 const DefaultTokenTTL = 2 * time.Minute
 
+// DefaultMaxConcurrentDeliveries bounds simultaneous outbound logout requests.
+const DefaultMaxConcurrentDeliveries = 8
+
+// DefaultMaxTargets bounds the post-deduplication audience set for one logout.
+const DefaultMaxTargets = 256
+
 // auditEvent names lifted from op.AuditEvent. The internal package
 // references them as raw strings so the import graph stays one-way
 // (op depends on internal, not the reverse). The op package guards
@@ -25,6 +31,7 @@ const DefaultTokenTTL = 2 * time.Minute
 const (
 	eventDelivered         = "logout.back_channel.delivered"
 	eventFailed            = "logout.back_channel.failed"
+	eventOverflow          = "logout.back_channel.overflow"
 	eventNoSessionsForSubj = "bcl.no_sessions_for_subject"
 )
 
@@ -80,8 +87,8 @@ func (p SessionDurabilityPosture) String() string {
 // (every active grant for the terminating subject becomes a candidate)
 // and looks each up in the [op/store.ClientStore]. Clients without a
 // registered backchannel_logout_uri are skipped silently — they have
-// opted out by configuration, not by error. Each delivery runs in its
-// own goroutine; the coordinator blocks until all deliveries complete
+// opted out by configuration, not by error. Deliveries run through a bounded
+// worker pool; the coordinator blocks until all admitted deliveries complete
 // or the parent context expires.
 type Coordinator struct {
 	issuer           string
@@ -94,6 +101,8 @@ type Coordinator struct {
 	clock            timex.Clock
 	tokenTTL         time.Duration
 	posture          SessionDurabilityPosture
+	maxConcurrent    int
+	maxTargets       int
 }
 
 // Config carries the construction-time dependencies for [NewCoordinator].
@@ -148,6 +157,14 @@ type Config struct {
 	// unexpected gaps under durable placement. Default
 	// [PostureVolatile].
 	SessionDurabilityPosture SessionDurabilityPosture
+
+	// MaxConcurrentDeliveries limits active outbound requests. Zero selects
+	// [DefaultMaxConcurrentDeliveries]; negative values are invalid.
+	MaxConcurrentDeliveries int
+
+	// MaxTargets limits the deduplicated audience set. Zero selects
+	// [DefaultMaxTargets]; negative values are invalid.
+	MaxTargets int
 }
 
 // NewCoordinator validates cfg and returns a ready-to-use
@@ -166,6 +183,12 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if cfg.Grants == nil {
 		return nil, errors.New("backchannel: Config.Grants is nil")
 	}
+	if cfg.MaxConcurrentDeliveries < 0 {
+		return nil, errors.New("backchannel: Config.MaxConcurrentDeliveries is negative")
+	}
+	if cfg.MaxTargets < 0 {
+		return nil, errors.New("backchannel: Config.MaxTargets is negative")
+	}
 	deliverer := cfg.Deliverer
 	if deliverer == nil {
 		deliverer = NewHTTPDeliverer(DefaultTimeout)
@@ -182,6 +205,14 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if ttl <= 0 {
 		ttl = DefaultTokenTTL
 	}
+	maxConcurrent := cfg.MaxConcurrentDeliveries
+	if maxConcurrent == 0 {
+		maxConcurrent = DefaultMaxConcurrentDeliveries
+	}
+	maxTargets := cfg.MaxTargets
+	if maxTargets == 0 {
+		maxTargets = DefaultMaxTargets
+	}
 	return &Coordinator{
 		issuer:           cfg.Issuer,
 		signing:          cfg.Signing,
@@ -193,6 +224,8 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		clock:            clock,
 		tokenTTL:         ttl,
 		posture:          cfg.SessionDurabilityPosture,
+		maxConcurrent:    maxConcurrent,
+		maxTargets:       maxTargets,
 	}, nil
 }
 
@@ -247,20 +280,47 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 		c.emitNoSessionsForSubject(ctx, notice)
 		return 0, nil
 	}
+	if len(targets) > c.maxTargets {
+		c.emitOverflow(ctx, notice, len(targets)-c.maxTargets)
+		targets = targets[:c.maxTargets]
+	}
 	now := c.clock.Now().UTC()
 	iat := now.Unix()
 	exp := now.Add(c.tokenTTL).Unix()
 
+	jobs := make(chan Target)
+	workers := min(c.maxConcurrent, len(targets))
 	var wg sync.WaitGroup
-	for _, t := range targets {
+	for range workers {
 		wg.Add(1)
-		go func(target Target) {
+		go func() {
 			defer wg.Done()
-			c.dispatchOne(ctx, target, notice, iat, exp)
-		}(t)
+			for target := range jobs {
+				c.dispatchOne(ctx, target, notice, iat, exp)
+			}
+		}()
 	}
+	for _, target := range targets {
+		jobs <- target
+	}
+	close(jobs)
 	wg.Wait()
 	return len(targets), nil
+}
+
+func (c *Coordinator) emitOverflow(ctx context.Context, notice Notice, dropped int) {
+	c.emitter.Emit(ctx, audit.Event{
+		Name:      eventOverflow,
+		Level:     audit.LevelWarn,
+		Message:   "back-channel logout target limit exceeded",
+		ActorID:   notice.Subject,
+		SessionID: notice.SessionID,
+		RequestID: notice.RequestID,
+		Extras: map[string]any{
+			"dropped_targets": dropped,
+			"max_targets":     c.maxTargets,
+		},
+	})
 }
 
 // resolveTargets walks the grants returned by the store, looks each

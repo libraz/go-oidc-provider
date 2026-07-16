@@ -93,19 +93,16 @@ func WithCORSOrigins(origins ...string) Option {
 	})
 }
 
-// WithBackchannelLogoutHTTPClient injects the [*http.Client] the
+// WithBackchannelLogoutHTTPClient supplies the outbound Transport the
 // back-channel logout coordinator uses when POSTing Logout Tokens to
 // relying parties. Most embedders do not need this — the package
-// default (a fresh client with [WithBackchannelLogoutTimeout] applied
-// and a CheckRedirect that refuses 3xx hops) is correct for the spec
-// posture.
-// Pass a custom client when the deployment already maintains a shared
-// outbound transport (instrumentation, proxy resolution, custom
-// dialer, …). Embedders that override the client SHOULD preserve a
-// CheckRedirect that returns [http.ErrUseLastResponse] so the OP
-// continues to refuse redirects on a sensitive POST (back-channel
-// logout targets cannot be redirected without forging the audience
-// the signed Logout Token commits to).
+// default is correct for the spec posture.
+//
+// The coordinator copies only [http.Client.Transport]. It always applies
+// [WithBackchannelLogoutTimeout], rejects redirects, and wraps the transport
+// with URL-time and dial-time SSRF checks. This keeps instrumentation, proxy
+// resolution, and custom dialers available without allowing a full client
+// override to weaken delivery integrity.
 // Stable since v0.1.
 func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 	return optionFunc(func(c *config) error {

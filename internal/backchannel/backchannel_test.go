@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -203,6 +204,58 @@ func TestHTTPDeliverer_RefusesRedirect(t *testing.T) {
 	}
 }
 
+// TestHTTPDeliverer_CustomClientCannotReenableRedirects verifies the public
+// custom-client seam preserves its Transport but not its weaker redirect
+// policy. Before this regression fix, a default http.Client followed the 307
+// and posted the signed logout token to the second target.
+func TestHTTPDeliverer_CustomClientCannotReenableRedirects(t *testing.T) {
+	t.Parallel()
+
+	var redirected atomic.Int32
+	destination := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		redirected.Add(1)
+	}))
+	defer destination.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Redirect(w, nil, destination.URL, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+
+	d := backchannel.NewHTTPDeliverer(time.Second)
+	d.AllowPrivateNetwork = true
+	d.Client = &http.Client{Transport: origin.Client().Transport}
+	if err := d.Deliver(context.Background(), backchannel.Target{URL: origin.URL}, "tok"); err == nil {
+		t.Fatal("Deliver succeeded after redirect; want redirect refusal")
+	}
+	if got := redirected.Load(); got != 0 {
+		t.Fatalf("redirect destination received %d requests; want 0", got)
+	}
+}
+
+// TestHTTPDeliverer_CustomClientCannotDisableTimeout verifies a supplied
+// client with Timeout=0 cannot turn the per-RP delivery budget into an
+// unbounded wait.
+func TestHTTPDeliverer_CustomClientCannotDisableTimeout(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := backchannel.NewHTTPDeliverer(20 * time.Millisecond)
+	d.AllowPrivateNetwork = true
+	d.Client = &http.Client{Transport: srv.Client().Transport, Timeout: 0}
+	started := time.Now()
+	if err := d.Deliver(context.Background(), backchannel.Target{URL: srv.URL}, "tok"); err == nil {
+		t.Fatal("Deliver succeeded after configured timeout; want error")
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("Deliver waited %s; custom client bypassed configured timeout", elapsed)
+	}
+}
+
 type recordingEmitter struct {
 	mu     sync.Mutex
 	events []audit.Event
@@ -294,6 +347,79 @@ func TestCoordinator_FansOutToRegisteredClients(t *testing.T) {
 		if ev.Name != "logout.back_channel.delivered" {
 			t.Errorf("audit event = %q, want delivered", ev.Name)
 		}
+	}
+}
+
+// TestCoordinator_BoundsFanout proves a subject with many grants cannot cause
+// one logout request to create unbounded goroutines or outbound deliveries.
+func TestCoordinator_BoundsFanout(t *testing.T) {
+	t.Parallel()
+	_, signing := mustKey(t)
+	st := inmem.New()
+	rec := &recordingEmitter{}
+	var active, peak, calls atomic.Int32
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	deliver := backchannel.DelivererFunc(func(context.Context, backchannel.Target, string) error {
+		current := active.Add(1)
+		for {
+			old := peak.Load()
+			if current <= old || peak.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		if calls.Add(1) <= 2 {
+			started <- struct{}{}
+		}
+		<-release
+		active.Add(-1)
+		return nil
+	})
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer: "https://op.example.com", Signing: signing, Clients: st.Clients(), Grants: st.Grants(),
+		Deliverer: deliver, Emitter: rec, Clock: fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
+		MaxConcurrentDeliveries: 2, MaxTargets: 3,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	now := time.Now()
+	for i := range 5 {
+		id := fmt.Sprintf("rp-%d", i)
+		saveClient(t, st, &store.Client{ID: id, BackchannelLogoutURI: "https://" + id + ".example/logout"})
+		saveGrant(t, st, &store.Grant{ID: "grant-" + id, Subject: "user", ClientID: id, CreatedAt: now, UpdatedAt: now})
+	}
+	done := make(chan struct{})
+	var notified int
+	go func() {
+		notified, err = coord.Notify(context.Background(), backchannel.Notice{Subject: "user", SessionID: "sid"})
+		close(done)
+	}()
+	<-started
+	<-started
+	if got := peak.Load(); got != 2 {
+		t.Fatalf("concurrent deliveries=%d, want 2", got)
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Notify did not finish")
+	}
+	if err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if notified != 3 || calls.Load() != 3 {
+		t.Fatalf("notified=%d calls=%d, want 3 each", notified, calls.Load())
+	}
+	foundOverflow := false
+	for _, event := range rec.snapshot() {
+		if event.Name == "logout.back_channel.overflow" {
+			foundOverflow = event.Extras["dropped_targets"] == 2
+		}
+	}
+	if !foundOverflow {
+		t.Fatal("missing overflow audit event with dropped target count")
 	}
 }
 

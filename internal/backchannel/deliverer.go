@@ -122,10 +122,10 @@ type HTTPDeliverer struct {
 // one lazily on first use so a caller that flips
 // [HTTPDeliverer.AllowPrivateNetwork] (or wires a stub
 // [HTTPDeliverer.Resolver]) after construction sees the change
-// reflected in the dial-time deny-list. Callers that want to inject
-// a fully-custom [*http.Client] may set [HTTPDeliverer.Client]
-// directly but MUST install the same redirect / timeout policy or
-// accept the security trade-off.
+// reflected in the dial-time deny-list. Callers may set
+// [HTTPDeliverer.Client] to supply a custom outbound transport. Only its
+// Transport is used: redirect handling, request timeout, and the dial-time
+// deny-list always remain under this deliverer's policy.
 //
 // The dial-time hook in [internal/netsec.NewHTTPClient] re-checks the
 // kernel-resolved address against the same deny-list that fires at
@@ -140,11 +140,11 @@ func NewHTTPDeliverer(timeout time.Duration) *HTTPDeliverer {
 }
 
 // resolveClient returns the [*securefetch.Client] [Deliver] should
-// use. The helper honours an embedder-supplied [HTTPDeliverer.Client]
-// when set (forwarding it through the policy's
-// WithHTTPClientForTest seam) and otherwise constructs the hardened
-// envelope from scratch using the current [HTTPDeliverer.AllowPrivateNetwork]
-// flag.
+// use. The helper accepts an embedder-supplied [HTTPDeliverer.Client]'s
+// transport as its base, while always constructing the surrounding hardened
+// envelope using the current [HTTPDeliverer.AllowPrivateNetwork] flag. A
+// caller cannot weaken redirect, timeout, or dial-time policy by supplying a
+// full client.
 func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 	d.fetchOnce.Do(func() {
 		policy := securefetch.Policy{
@@ -155,7 +155,7 @@ func (d *HTTPDeliverer) resolveClient() *securefetch.Client {
 			Resolver:            d.Resolver,
 		}
 		if d.Client != nil {
-			policy = policy.WithHTTPClientForTest(d.Client)
+			policy.BaseTransport = d.Client.Transport
 		}
 		d.fetchClient = securefetch.NewClient(policy)
 	})
