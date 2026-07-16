@@ -219,6 +219,7 @@ var requiredRefreshTokenColumns = []string{ //nolint:gochecknoglobals // schema 
 	"expires_at",
 	"consumed_at",
 	"created_at",
+	"retry_response",
 }
 
 func (s *Store) validateSchema(ctx context.Context) error {

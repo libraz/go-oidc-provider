@@ -114,7 +114,8 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     revoked SMALLINT NOT NULL DEFAULT 0,
     expires_at BIGINT NOT NULL,
     consumed_at BIGINT,
-    created_at BIGINT NOT NULL
+    created_at BIGINT NOT NULL,
+    retry_response BYTEA
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_parent ON oidc_refresh_tokens(parent_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_grant ON oidc_refresh_tokens(grant_id);

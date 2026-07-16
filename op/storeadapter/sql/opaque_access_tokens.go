@@ -149,6 +149,20 @@ func (s *opaqueAccessTokenStore) RevokeByGrant(ctx context.Context, grantID stri
 	return int(n), nil
 }
 
+// RevokeByClient implements [store.RevokeByClient]. Dynamic client
+// registration calls this optional capability after DELETE /register/{id}
+// so opaque bearer rows belonging to the deleted client become inactive.
+func (s *opaqueAccessTokenStore) RevokeByClient(ctx context.Context, clientID string) error {
+	if clientID == "" {
+		return nil
+	}
+	if _, err := s.runner().ExecContext(ctx,
+		s.parent.queries.opaqueAccessTokenRevokeByClient, clientID); err != nil {
+		return wrapErr("opaqueAccessTokens.RevokeByClient", err)
+	}
+	return nil
+}
+
 // GC implements [store.OpaqueAccessTokenStore]. Drops every row whose
 // expires_at is strictly before cutoff.
 func (s *opaqueAccessTokenStore) GC(ctx context.Context, cutoff time.Time) (int, error) {

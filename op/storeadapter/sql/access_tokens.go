@@ -82,6 +82,20 @@ func (s *accessTokenStore) RevokeByGrant(ctx context.Context, grantID string) (i
 	return int(n), nil
 }
 
+// RevokeByClient implements [store.RevokeByClient]. Dynamic client
+// registration calls this optional capability after DELETE /register/{id}
+// so JTI-registry rows belonging to the deleted client cannot remain active
+// until their individual expiry.
+func (s *accessTokenStore) RevokeByClient(ctx context.Context, clientID string) error {
+	if clientID == "" {
+		return nil
+	}
+	if _, err := s.runner().ExecContext(ctx, s.parent.queries.accessTokenRevokeByClient, clientID); err != nil {
+		return wrapErr("accessTokens.RevokeByClient", err)
+	}
+	return nil
+}
+
 func (s *accessTokenStore) GC(ctx context.Context, cutoff time.Time) (int, error) {
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.accessTokenGC, timeToInt64(cutoff))
 	if err != nil {

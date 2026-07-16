@@ -45,7 +45,7 @@ package inmem
 import (
 	"context"
 	"errors"
-	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -327,6 +327,7 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			added:   make(map[string]*store.RefreshToken),
 			updated: make(map[string]*store.RefreshToken),
 			revoked: make(map[string]struct{}),
+			retries: make(map[string][]byte),
 		},
 		grStaging: &grantStaging{
 			parent:  s.grants,
@@ -338,6 +339,9 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			added:   make(map[string]*store.PushedAuthRequest),
 			updated: make(map[string]*store.PushedAuthRequest),
 		},
+		accessTokens:       accessTokenSnapshot(s.accessTokens),
+		opaqueAccessTokens: opaqueAccessTokenSnapshot(s.opaqueAccessTokens),
+		grantRevocations:   grantRevocationSnapshot(s.grantRevocations),
 	}
 	return t, nil
 }
@@ -345,13 +349,14 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 // --- RefreshTokenStore -------------------------------------------------------
 
 type refreshStore struct {
-	mu    sync.RWMutex
-	clock Clock
-	m     map[string]*store.RefreshToken
+	mu      sync.RWMutex
+	clock   Clock
+	m       map[string]*store.RefreshToken
+	retries map[string][]byte
 }
 
 func newRefreshStore(c Clock) *refreshStore {
-	return &refreshStore{clock: c, m: make(map[string]*store.RefreshToken)}
+	return &refreshStore{clock: c, m: make(map[string]*store.RefreshToken), retries: make(map[string][]byte)}
 }
 
 func (s *refreshStore) Save(_ context.Context, token *store.RefreshToken) error {
@@ -382,6 +387,39 @@ func (s *refreshStore) Save(_ context.Context, token *store.RefreshToken) error 
 	}
 	s.m[key] = stored
 	return nil
+}
+
+// SaveRotationWithRetry persists a successor and its sealed retry response in
+// one mutex-held critical section. The retry key is the hashed predecessor, so
+// an in-memory dump cannot turn the lookup key into a bearer credential.
+func (s *refreshStore) SaveRotationWithRetry(_ context.Context, token *store.RefreshToken, sealed []byte) error {
+	if token == nil || token.ParentID == nil || len(sealed) == 0 {
+		return errors.New("inmem: retryable refresh rotation requires successor, parent, and sealed response")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := hashKey(token.ID)
+	if _, exists := s.m[key]; exists {
+		return store.ErrAlreadyExists
+	}
+	stored := storeRefresh(token, key)
+	parentKey := hashKey(*token.ParentID)
+	if parent, ok := s.m[parentKey]; ok && parent.Revoked {
+		markRevoked(stored, s.clock.Now())
+	}
+	s.m[key] = stored
+	s.retries[parentKey] = append([]byte(nil), sealed...)
+	return nil
+}
+
+func (s *refreshStore) LoadRetryResponse(_ context.Context, predecessorID string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sealed, ok := s.retries[hashKey(predecessorID)]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return append([]byte(nil), sealed...), nil
 }
 
 func (s *refreshStore) Find(_ context.Context, id string) (*store.RefreshToken, error) {
@@ -671,24 +709,22 @@ func cloneGrant(g *store.Grant) *store.Grant {
 	}
 	out := *g
 	out.Scope = slices.Clone(g.Scope)
-	out.Claims = maps.Clone(g.Claims)
+	out.Claims = cloneMap(g.Claims)
 	out.AMR = slices.Clone(g.AMR)
 	out.AuthorizationDetails = cloneObjectArray(g.AuthorizationDetails)
 	return &out
 }
 
 // cloneObjectArray deep-copies a []map[string]any (the RFC 9396
-// authorization_details) so a stored grant cannot be mutated through a
-// caller-held reference. The inner map values are not themselves cloned:
-// authorization_details elements decode from JSON into scalar / nested
-// values the store treats as immutable.
+// authorization_details), including nested JSON maps and arrays, so a stored
+// grant cannot be mutated through a caller-held reference.
 func cloneObjectArray(in []map[string]any) []map[string]any {
 	if in == nil {
 		return nil
 	}
 	out := make([]map[string]any, len(in))
 	for i, m := range in {
-		out[i] = maps.Clone(m)
+		out[i] = cloneMap(m)
 	}
 	return out
 }
@@ -699,9 +735,55 @@ func cloneMap(in map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(in))
 	for k, v := range in {
-		out[k] = v
+		out[k] = cloneJSONValue(v)
 	}
 	return out
+}
+
+// cloneJSONValue recursively copies maps and slices while preserving their Go
+// type. Claims and authorization details accept arbitrary JSON-compatible
+// values, so cloning only map[string]any / []any would still alias legitimate
+// typed values such as []string or map[string][]any.
+func cloneJSONValue(v any) any {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() {
+		return nil
+	}
+	return cloneJSONReflect(rv).Interface()
+}
+
+func cloneJSONReflect(v reflect.Value) reflect.Value {
+	switch v.Kind() {
+	case reflect.Interface:
+		if v.IsNil() {
+			return reflect.Zero(v.Type())
+		}
+		out := reflect.New(v.Type()).Elem()
+		out.Set(cloneJSONReflect(v.Elem()))
+		return out
+	case reflect.Map:
+		if v.IsNil() {
+			return reflect.Zero(v.Type())
+		}
+		out := reflect.MakeMapWithSize(v.Type(), v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			out.SetMapIndex(iter.Key(), cloneJSONReflect(iter.Value()))
+		}
+		return out
+	case reflect.Slice:
+		if v.IsNil() {
+			return reflect.Zero(v.Type())
+		}
+		out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+		length := v.Len()
+		for i := range length {
+			out.Index(i).Set(cloneJSONReflect(v.Index(i)))
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 // --- SessionStore ------------------------------------------------------------
@@ -1114,7 +1196,7 @@ func cloneUser(u *store.User) *store.User {
 	}
 	out := *u
 	if u.Claims != nil {
-		out.Claims = maps.Clone(u.Claims)
+		out.Claims = cloneMap(u.Claims)
 	}
 	return &out
 }

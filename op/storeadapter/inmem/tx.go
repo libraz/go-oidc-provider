@@ -25,10 +25,13 @@ type tx struct {
 
 	closed atomic.Bool
 
-	acStaging  *authCodeStaging
-	rtStaging  *refreshStaging
-	grStaging  *grantStaging
-	parStaging *parStaging
+	acStaging          *authCodeStaging
+	rtStaging          *refreshStaging
+	grStaging          *grantStaging
+	parStaging         *parStaging
+	accessTokens       *accessTokenStore
+	opaqueAccessTokens *opaqueAccessTokenStore
+	grantRevocations   *grantRevocationStore
 }
 
 // AuthorizationCodes returns the transactional authorization-code substore.
@@ -51,6 +54,18 @@ func (t *tx) PushedAuthRequests() store.PushedAuthRequestStore {
 	return &txPARs{tx: t}
 }
 
+func (t *tx) AccessTokens() store.AccessTokenRegistry {
+	return txAccessTokens{tx: t}
+}
+
+func (t *tx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return txOpaqueAccessTokens{tx: t}
+}
+
+func (t *tx) GrantRevocations() store.GrantRevocationStore {
+	return txGrantRevocations{tx: t}
+}
+
 // Commit flushes every staged write to the owning Store and releases the tx
 // mutex. After Commit the tx is closed; further substore calls return an
 // error.
@@ -63,7 +78,63 @@ func (t *tx) Commit() error {
 	t.rtStaging.flush()
 	t.grStaging.flush()
 	t.parStaging.flush()
+	flushAccessTokenSnapshot(t.owner.accessTokens, t.accessTokens)
+	flushOpaqueAccessTokenSnapshot(t.owner.opaqueAccessTokens, t.opaqueAccessTokens)
+	flushGrantRevocationSnapshot(t.owner.grantRevocations, t.grantRevocations)
 	return nil
+}
+
+func accessTokenSnapshot(parent *accessTokenStore) *accessTokenStore {
+	out := newAccessTokenStore()
+	parent.mu.RLock()
+	defer parent.mu.RUnlock()
+	for id, rec := range parent.m {
+		out.m[id] = cloneAccessToken(rec)
+	}
+	return out
+}
+
+func flushAccessTokenSnapshot(parent, snapshot *accessTokenStore) {
+	parent.mu.Lock()
+	defer parent.mu.Unlock()
+	parent.m = snapshot.m
+}
+
+func opaqueAccessTokenSnapshot(parent *opaqueAccessTokenStore) *opaqueAccessTokenStore {
+	out := newOpaqueAccessTokenStore()
+	parent.mu.RLock()
+	defer parent.mu.RUnlock()
+	for id, rec := range parent.m {
+		out.m[id] = cloneOpaqueAccessToken(rec)
+	}
+	return out
+}
+
+func flushOpaqueAccessTokenSnapshot(parent, snapshot *opaqueAccessTokenStore) {
+	parent.mu.Lock()
+	defer parent.mu.Unlock()
+	parent.m = snapshot.m
+}
+
+func grantRevocationSnapshot(parent *grantRevocationStore) *grantRevocationStore {
+	out := newGrantRevocationStore()
+	parent.mu.RLock()
+	defer parent.mu.RUnlock()
+	for id, rec := range parent.tombstones {
+		v := *rec
+		out.tombstones[id] = &v
+	}
+	for id, rec := range parent.denylist {
+		v := *rec
+		out.denylist[id] = &v
+	}
+	return out
+}
+
+func flushGrantRevocationSnapshot(parent, snapshot *grantRevocationStore) {
+	parent.mu.Lock()
+	defer parent.mu.Unlock()
+	parent.tombstones, parent.denylist = snapshot.tombstones, snapshot.denylist
 }
 
 // Rollback discards every staged write and releases the tx mutex. Rollback is
@@ -99,6 +170,7 @@ func (t *tx) clearStaging() {
 		clear(t.rtStaging.added)
 		clear(t.rtStaging.updated)
 		clear(t.rtStaging.revoked)
+		clear(t.rtStaging.retries)
 	}
 	if t.grStaging != nil {
 		clear(t.grStaging.added)
@@ -108,6 +180,114 @@ func (t *tx) clearStaging() {
 		clear(t.parStaging.added)
 		clear(t.parStaging.updated)
 	}
+}
+
+// The auxiliary atomic-cluster stores use private snapshots rather than the
+// delta staging used by the older stores above. Keep their handles bound to
+// the transaction as well: returning a raw snapshot would allow writes after
+// Commit or Rollback, violating Tx's closed-handle contract.
+type txAccessTokens struct{ tx *tx }
+
+func (s txAccessTokens) Register(ctx context.Context, rec store.AccessTokenRecord) error {
+	if s.tx.closed.Load() {
+		return errTxClosed
+	}
+	return s.tx.accessTokens.Register(ctx, rec)
+}
+
+func (s txAccessTokens) Find(ctx context.Context, jti string) (*store.AccessTokenRecord, error) {
+	if s.tx.closed.Load() {
+		return nil, errTxClosed
+	}
+	return s.tx.accessTokens.Find(ctx, jti)
+}
+
+func (s txAccessTokens) RevokeByJTI(ctx context.Context, jti string) error {
+	if s.tx.closed.Load() {
+		return errTxClosed
+	}
+	return s.tx.accessTokens.RevokeByJTI(ctx, jti)
+}
+
+func (s txAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
+	if s.tx.closed.Load() {
+		return 0, errTxClosed
+	}
+	return s.tx.accessTokens.RevokeByGrant(ctx, grantID)
+}
+
+func (s txAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
+	if s.tx.closed.Load() {
+		return 0, errTxClosed
+	}
+	return s.tx.accessTokens.GC(ctx, cutoff)
+}
+
+type txOpaqueAccessTokens struct{ tx *tx }
+
+func (s txOpaqueAccessTokens) Save(ctx context.Context, tok *store.OpaqueAccessToken) error {
+	if s.tx.closed.Load() {
+		return errTxClosed
+	}
+	return s.tx.opaqueAccessTokens.Save(ctx, tok)
+}
+
+func (s txOpaqueAccessTokens) Find(ctx context.Context, id string) (*store.OpaqueAccessToken, error) {
+	if s.tx.closed.Load() {
+		return nil, errTxClosed
+	}
+	return s.tx.opaqueAccessTokens.Find(ctx, id)
+}
+
+func (s txOpaqueAccessTokens) RevokeByID(ctx context.Context, id string) error {
+	if s.tx.closed.Load() {
+		return errTxClosed
+	}
+	return s.tx.opaqueAccessTokens.RevokeByID(ctx, id)
+}
+
+func (s txOpaqueAccessTokens) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
+	if s.tx.closed.Load() {
+		return 0, errTxClosed
+	}
+	return s.tx.opaqueAccessTokens.RevokeByGrant(ctx, grantID)
+}
+
+func (s txOpaqueAccessTokens) GC(ctx context.Context, cutoff time.Time) (int, error) {
+	if s.tx.closed.Load() {
+		return 0, errTxClosed
+	}
+	return s.tx.opaqueAccessTokens.GC(ctx, cutoff)
+}
+
+type txGrantRevocations struct{ tx *tx }
+
+func (s txGrantRevocations) RevokeGrant(ctx context.Context, tombstone store.GrantTombstone) error {
+	if s.tx.closed.Load() {
+		return errTxClosed
+	}
+	return s.tx.grantRevocations.RevokeGrant(ctx, tombstone)
+}
+
+func (s txGrantRevocations) RevokeJTI(ctx context.Context, revoked store.RevokedJTI) error {
+	if s.tx.closed.Load() {
+		return errTxClosed
+	}
+	return s.tx.grantRevocations.RevokeJTI(ctx, revoked)
+}
+
+func (s txGrantRevocations) IsRevoked(ctx context.Context, grantID, jti string, iat time.Time) (bool, error) {
+	if s.tx.closed.Load() {
+		return false, errTxClosed
+	}
+	return s.tx.grantRevocations.IsRevoked(ctx, grantID, jti, iat)
+}
+
+func (s txGrantRevocations) GC(ctx context.Context, cutoff time.Time) (int, error) {
+	if s.tx.closed.Load() {
+		return 0, errTxClosed
+	}
+	return s.tx.grantRevocations.GC(ctx, cutoff)
 }
 
 // --- staging: authorization codes -------------------------------------------
@@ -232,6 +412,7 @@ type refreshStaging struct {
 	added   map[string]*store.RefreshToken
 	updated map[string]*store.RefreshToken
 	revoked map[string]struct{} // chain roots whose descendants must be revoked at flush
+	retries map[string][]byte   // hashed predecessor -> sealed response
 }
 
 func (s *refreshStaging) flush() {
@@ -242,6 +423,9 @@ func (s *refreshStaging) flush() {
 	}
 	for id, rec := range s.updated {
 		s.parent.m[id] = rec
+	}
+	for parent, sealed := range s.retries {
+		s.parent.retries[parent] = append([]byte(nil), sealed...)
 	}
 	for root := range s.revoked {
 		// At flush time, traverse the now-merged map to revoke
@@ -277,6 +461,40 @@ func (r *txRefreshes) Save(ctx context.Context, token *store.RefreshToken) error
 	}
 	st.added[key] = storeRefresh(token, key)
 	return nil
+}
+
+func (r *txRefreshes) SaveRotationWithRetry(ctx context.Context, token *store.RefreshToken, sealed []byte) error {
+	if r.tx.closed.Load() {
+		return errTxClosed
+	}
+	if token == nil || token.ParentID == nil || len(sealed) == 0 {
+		return errors.New("inmem: retryable refresh rotation requires successor, parent, and sealed response")
+	}
+	if err := r.Save(ctx, token); err != nil {
+		return err
+	}
+	r.tx.rtStaging.retries[hashKey(*token.ParentID)] = append([]byte(nil), sealed...)
+	return nil
+}
+
+func (r *txRefreshes) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
+	if r.tx.closed.Load() {
+		return nil, errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	key := hashKey(predecessorID)
+	if sealed, ok := r.tx.rtStaging.retries[key]; ok {
+		return append([]byte(nil), sealed...), nil
+	}
+	r.tx.rtStaging.parent.mu.RLock()
+	defer r.tx.rtStaging.parent.mu.RUnlock()
+	sealed, ok := r.tx.rtStaging.parent.retries[key]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return append([]byte(nil), sealed...), nil
 }
 
 func (r *txRefreshes) Find(ctx context.Context, id string) (*store.RefreshToken, error) {

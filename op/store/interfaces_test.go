@@ -208,6 +208,9 @@ func (fakeTx) Grants() store.GrantStore                         { return fakeGra
 func (fakeTx) RefreshTokens() store.RefreshTokenStore           { return fakeRefreshStore{} }
 func (fakeTx) Sessions() store.SessionStore                     { return fakeSessionStore{} }
 func (fakeTx) PushedAuthRequests() store.PushedAuthRequestStore { return fakePARStore{} }
+func (fakeTx) AccessTokens() store.AccessTokenRegistry          { return fakeAccessTokenRegistry{} }
+func (fakeTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return fakeOpaqueAccessTokenStore{} }
+func (fakeTx) GrantRevocations() store.GrantRevocationStore     { return fakeGrantRevocationStore{} }
 func (fakeTx) Commit() error                                    { return nil }
 func (fakeTx) Rollback() error                                  { return nil }
 

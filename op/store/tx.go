@@ -56,6 +56,12 @@ type Tx interface {
 	// this transaction.
 	PushedAuthRequests() PushedAuthRequestStore
 
+	AccessTokens() AccessTokenRegistry
+
+	OpaqueAccessTokens() OpaqueAccessTokenStore
+
+	GrantRevocations() GrantRevocationStore
+
 	// Commit finalises every change made through the substore handles
 	// returned by this Tx. After Commit returns successfully the Tx
 	// MUST NOT be used; further calls return an implementation-defined

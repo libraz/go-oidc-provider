@@ -124,6 +124,12 @@ func (d Dialect) excludedRef(col string) string {
 	return "new." + col
 }
 
+// existingRef qualifies a target-row column inside an UPSERT expression.
+// PostgreSQL and MySQL otherwise consider it ambiguous with the incoming row.
+func (d Dialect) existingRef(table, col string) string {
+	return table + "." + col
+}
+
 // upsertAlias returns the row alias clause appended after VALUES on
 // MySQL and an empty string on the other engines. MySQL 8.0.20+
 // supports `INSERT ... VALUES (...) AS new ON DUPLICATE KEY UPDATE
@@ -135,18 +141,18 @@ func (d Dialect) upsertAlias() string {
 	return " AS new"
 }
 
-// upsertDoNothing returns the dialect-appropriate "ignore the conflict"
-// tail. SQLite and PostgreSQL spell it `ON CONFLICT(key) DO NOTHING`;
-// MySQL has no DO NOTHING form, so the substore re-binds the key
-// column to itself in `ON DUPLICATE KEY UPDATE` which is a no-op the
-// optimiser elides. Used by [GrantRevocationStore.RevokeJTI] where a
-// second insert against an already-denylisted JTI must not perturb the
-// existing row's audit fields.
-func (d Dialect) upsertDoNothing(key string) string {
+// upsertDoNothingQualified accepts the target table name for MySQL's
+// self-assignment spelling, where the incoming-row alias makes the RHS
+// ambiguous when it is left unqualified.
+func (d Dialect) upsertDoNothingQualified(key, table string) string {
 	if d.upsertConflict {
 		return " ON CONFLICT(" + key + ") DO NOTHING"
 	}
-	return " ON DUPLICATE KEY UPDATE " + key + " = " + key
+	right := key
+	if table != "" {
+		right = table + "." + key
+	}
+	return " ON DUPLICATE KEY UPDATE " + key + " = " + right
 }
 
 // forUpdate returns the row-locking suffix the guarded rotation Save

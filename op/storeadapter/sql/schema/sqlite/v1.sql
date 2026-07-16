@@ -115,7 +115,8 @@ CREATE TABLE IF NOT EXISTS oidc_refresh_tokens (
     revoked INTEGER NOT NULL DEFAULT 0,
     expires_at INTEGER NOT NULL,
     consumed_at INTEGER,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    retry_response BLOB
 );
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_parent ON oidc_refresh_tokens(parent_id);
 CREATE INDEX IF NOT EXISTS idx_oidc_refresh_tokens_grant ON oidc_refresh_tokens(grant_id);

@@ -4,6 +4,7 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -20,11 +21,19 @@ func newGrantStore(s *Store, tx *databasesql.Tx) *grantStore {
 func (s *grantStore) runner() runner { return pickRunner(s.parent, s.tx) }
 
 func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
-	_, err := s.runner().ExecContext(ctx, s.parent.queries.grantSave,
+	claims, err := encodeMap(g.Claims)
+	if err != nil {
+		return fmt.Errorf("oidcsql: grants.Save claims: %w", err)
+	}
+	details, err := encodeObjectArray(g.AuthorizationDetails)
+	if err != nil {
+		return fmt.Errorf("oidcsql: grants.Save authorization details: %w", err)
+	}
+	_, err = s.runner().ExecContext(ctx, s.parent.queries.grantSave,
 		g.ID, g.Subject, g.ClientID,
-		encodeStrings(g.Scope), encodeMap(g.Claims),
+		encodeStrings(g.Scope), claims,
 		timeToInt64(g.AuthTime), g.ACR, encodeStrings(g.AMR),
-		encodeObjectArray(g.AuthorizationDetails),
+		details,
 		timeToInt64(g.CreatedAt), timeToInt64(g.UpdatedAt))
 	if err != nil {
 		return wrapErr("grants.Save", err)

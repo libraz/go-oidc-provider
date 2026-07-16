@@ -4,6 +4,7 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
@@ -64,6 +65,61 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 	return nil
 }
 
+// SaveRotationWithRetry persists the successor and its already-encrypted
+// response cache in one database transaction. The cache is attached to the
+// consumed predecessor (t.ParentID), so a grace retry never needs a raw child
+// identifier from the hash-on-store schema.
+func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, t *store.RefreshToken, sealed []byte) error {
+	if t == nil || t.ParentID == nil || len(sealed) == 0 {
+		return errors.New("oidcsql: retryable refresh rotation requires successor, parent, and sealed response")
+	}
+	if s.tx != nil {
+		return s.saveRotationWithRetry(ctx, s.runner(), t, sealed)
+	}
+	tx, err := s.parent.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapErr("refreshes.SaveRotationWithRetry.begin", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.saveRotationWithRetry(ctx, tx, t, sealed); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return wrapErr("refreshes.SaveRotationWithRetry.commit", err)
+	}
+	return nil
+}
+
+func (s *refreshStore) saveRotationWithRetry(ctx context.Context, run runner, t *store.RefreshToken, sealed []byte) error {
+	if err := s.saveRotation(ctx, run, t); err != nil {
+		return err
+	}
+	res, err := run.ExecContext(ctx, s.parent.queries.refreshRetrySave, sealed, patterns.Digest(*t.ParentID))
+	if err != nil {
+		return wrapErr("refreshes.SaveRotationWithRetry.cache", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return wrapErr("refreshes.SaveRotationWithRetry.cache.RowsAffected", err)
+	}
+	if n != 1 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
+func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
+	var sealed []byte
+	err := s.runner().QueryRowContext(ctx, s.parent.queries.refreshRetryFind, patterns.Digest(predecessorID)).Scan(&sealed)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, wrapErr("refreshes.LoadRetryResponse", err)
+	}
+	return append([]byte(nil), sealed...), nil
+}
+
 // insert persists t verbatim through the shared refreshSave template. It
 // is the single raw write both the root-chain path and the guarded
 // rotation path funnel through, so the column order lives in exactly one
@@ -71,11 +127,19 @@ func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
 func (s *refreshStore) insert(ctx context.Context, run runner, t *store.RefreshToken) error {
 	idDigest := patterns.Digest(t.ID)
 	parentDigest := digestNullableID(t.ParentID)
-	_, err := run.ExecContext(ctx, s.parent.queries.refreshSave,
+	details, err := encodeObjectArray(t.AuthorizationDetails)
+	if err != nil {
+		return fmt.Errorf("oidcsql: refreshes.Save authorization details: %w", err)
+	}
+	extra, err := encodeMap(t.AccessTokenExtra)
+	if err != nil {
+		return fmt.Errorf("oidcsql: refreshes.Save access token extra: %w", err)
+	}
+	_, err = run.ExecContext(ctx, s.parent.queries.refreshSave,
 		idDigest, t.ClientID, t.GrantID, parentDigest, t.Subject,
 		boolToInt64(t.SubjectPublic), encodeStrings(t.Scope), t.Resource,
 		string(t.Origin), timeToInt64(t.AuthTime), t.ACR, encodeStrings(t.AMR),
-		encodeObjectArray(t.AuthorizationDetails), encodeMap(t.AccessTokenExtra),
+		details, extra,
 		t.DPoPJKT, t.MTLSCertThumbprint, t.Nonce, boolToInt64(t.Revoked),
 		timeToInt64(t.ExpiresAt), timePtrToInt64Ptr(t.ConsumedAt), timeToInt64(t.CreatedAt))
 	if err != nil {

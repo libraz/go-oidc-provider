@@ -3,6 +3,8 @@ package oidcsql
 
 import (
 	"encoding/json"
+	"errors"
+	"math"
 	"testing"
 )
 
@@ -20,7 +22,10 @@ func TestObjectArray_RoundTrip_NumberFidelity(t *testing.T) {
 		{"type": "payment_initiation", "amount": json.Number(bigAmount)},
 	}
 
-	encoded := encodeObjectArray(in)
+	encoded, err := encodeObjectArray(in)
+	if err != nil {
+		t.Fatalf("encodeObjectArray: %v", err)
+	}
 	out, err := decodeObjectArray(encoded)
 	if err != nil {
 		t.Fatalf("decodeObjectArray: %v", err)
@@ -43,11 +48,35 @@ func TestObjectArray_RoundTrip_NumberFidelity(t *testing.T) {
 func TestObjectArray_RoundTrip_Nil(t *testing.T) {
 	t.Parallel()
 
-	out, err := decodeObjectArray(encodeObjectArray(nil))
+	encoded, err := encodeObjectArray(nil)
+	if err != nil {
+		t.Fatalf("encodeObjectArray(nil): %v", err)
+	}
+	out, err := decodeObjectArray(encoded)
 	if err != nil {
 		t.Fatalf("decodeObjectArray: %v", err)
 	}
 	if out != nil {
 		t.Errorf("decoded=%v want nil", out)
+	}
+}
+
+func TestJSONEncoders_RejectNonJSONValues(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		fn   func() error
+	}{
+		{"map function", func() error { _, err := encodeMap(map[string]any{"bad": func() {}}); return err }},
+		{"map NaN", func() error { _, err := encodeMap(map[string]any{"bad": math.NaN()}); return err }},
+		{"object array channel", func() error { _, err := encodeObjectArray([]map[string]any{{"bad": make(chan int)}}); return err }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tc.fn(); !errors.Is(err, ErrInvalidJSON) {
+				t.Fatalf("encoder error=%v, want ErrInvalidJSON", err)
+			}
+		})
 	}
 }

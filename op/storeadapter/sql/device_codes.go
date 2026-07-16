@@ -157,6 +157,14 @@ func (s *deviceCodeStore) RecordPoll(ctx context.Context, deviceCode string, whe
 		return wrapErr("deviceCodes.RecordPoll.RowsAffected", err)
 	}
 	if n == 0 {
+		// MySQL reports zero affected rows when a valid poll repeats the
+		// exact same timestamp and interval. Distinguish that no-op update
+		// from a missing / expired row before returning ErrNotFound.
+		if _, findErr := s.FindByDeviceCode(ctx, deviceCode); findErr == nil {
+			return nil
+		} else if !errors.Is(findErr, store.ErrNotFound) {
+			return findErr
+		}
 		// Missing or expired; the library treats both as expired_token.
 		return store.ErrNotFound
 	}

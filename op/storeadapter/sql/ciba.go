@@ -115,6 +115,13 @@ func (s *cibaRequestStore) RecordPoll(ctx context.Context, authReqID string, whe
 		return wrapErr("ciba.RecordPoll.RowsAffected", err)
 	}
 	if n == 0 {
+		// MySQL counts an update writing identical poll values as zero
+		// rows. Resolve the record before treating this as not found.
+		if _, findErr := s.FindByAuthReqID(ctx, authReqID); findErr == nil {
+			return nil
+		} else if !errors.Is(findErr, store.ErrNotFound) {
+			return findErr
+		}
 		return store.ErrNotFound
 	}
 	return nil

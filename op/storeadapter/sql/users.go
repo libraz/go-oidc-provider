@@ -4,6 +4,7 @@ import (
 	"context"
 	databasesql "database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -82,8 +83,12 @@ func (s *userStore) scanUser(ctx context.Context, query, arg string) (*store.Use
 // table can seed records without writing to it directly. Backends
 // that perform upsert treat PutUser as idempotent.
 func (s *Store) PutUser(ctx context.Context, u *store.User) error {
-	_, err := s.db.ExecContext(ctx, s.queries.userPut,
-		u.Subject, encodeMap(u.Claims), timeToInt64(u.UpdatedAt))
+	claims, err := encodeMap(u.Claims)
+	if err != nil {
+		return fmt.Errorf("oidcsql: users.Put claims: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, s.queries.userPut,
+		u.Subject, claims, timeToInt64(u.UpdatedAt))
 	if err != nil {
 		return wrapErr("users.Put", err)
 	}
@@ -102,6 +107,10 @@ func (s *Store) PutUserWithPassword(ctx context.Context, u *store.User, username
 	if u == nil {
 		return errors.New("oidcsql: PutUserWithPassword: user is nil")
 	}
+	claims, err := encodeMap(u.Claims)
+	if err != nil {
+		return fmt.Errorf("oidcsql: users.PutWithPassword claims: %w", err)
+	}
 	var (
 		usernameArg any = username
 		hashArg     any = passwordHash
@@ -112,8 +121,8 @@ func (s *Store) PutUserWithPassword(ctx context.Context, u *store.User, username
 	if len(passwordHash) == 0 {
 		hashArg = nil
 	}
-	_, err := s.db.ExecContext(ctx, s.queries.userPutWithPassword,
-		u.Subject, encodeMap(u.Claims), timeToInt64(u.UpdatedAt), usernameArg, hashArg)
+	_, err = s.db.ExecContext(ctx, s.queries.userPutWithPassword,
+		u.Subject, claims, timeToInt64(u.UpdatedAt), usernameArg, hashArg)
 	if err != nil {
 		return wrapErr("users.PutWithPassword", err)
 	}

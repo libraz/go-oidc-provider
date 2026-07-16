@@ -260,3 +260,28 @@ type RefreshChainResolver interface {
 	// [ErrNotFound] when no record matches.
 	FindByStoredHandle(ctx context.Context, handle string) (*RefreshToken, error)
 }
+
+// RefreshRetryResponseStore is the optional durable companion to
+// [RefreshTokenStore] used by RFC 9700's delivery grace window. A successful
+// rotation stores an encrypted token response against its consumed predecessor
+// in the same backend operation that persists the successor. On a retry, the
+// OP reads the sealed response by the presented predecessor and re-emits the
+// exact successor credential instead of creating a second chain branch.
+//
+// The byte slice is already encrypted by the token endpoint. Backends MUST
+// treat it as opaque, key it by a one-way digest of predecessorID, and retain
+// it no longer than the predecessor's refresh-token lifetime. Implementations
+// that cannot make the successor insert and cache write atomic MUST NOT expose
+// this interface.
+type RefreshRetryResponseStore interface {
+	// SaveRotationWithRetry atomically persists successor and associates sealed
+	// with successor.ParentID. ParentID MUST be non-nil; a root token has no
+	// retryable predecessor. The method shares Save's collision and replay
+	// semantics.
+	SaveRotationWithRetry(ctx context.Context, successor *RefreshToken, sealed []byte) error
+
+	// LoadRetryResponse returns the sealed response associated with predecessorID
+	// or ErrNotFound when no retry response exists. predecessorID is a bearer
+	// credential and implementations MUST never allow a stored digest to match.
+	LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error)
+}

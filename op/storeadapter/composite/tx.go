@@ -37,6 +37,16 @@ func (t *compositeTx) PushedAuthRequests() store.PushedAuthRequestStore {
 	return t.inner.PushedAuthRequests()
 }
 
+func (t *compositeTx) AccessTokens() store.AccessTokenRegistry { return t.inner.AccessTokens() }
+
+func (t *compositeTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return t.inner.OpaqueAccessTokens()
+}
+
+func (t *compositeTx) GrantRevocations() store.GrantRevocationStore {
+	return t.inner.GrantRevocations()
+}
+
 // Commit finalises the underlying anchor transaction. The error is returned
 // verbatim so callers can match adapter-specific sentinels (for example
 // [store.ErrConflict] from a SQL backend's optimistic-locking probe).

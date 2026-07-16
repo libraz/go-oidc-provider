@@ -6,6 +6,7 @@ import (
 	"context"
 	databasesql "database/sql"
 	"fmt"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -28,7 +29,8 @@ const mysqlImage = "mysql:8.4"
 // [testing.T.Cleanup] after the parent test (and all parallel
 // sub-tests) finishes. If Docker is not reachable the parent test is
 // skipped rather than failed — opt-in tests must not break a default
-// `go test` run.
+// `go test` run. RELEASE_CONTRACT_REQUIRED=1 upgrades that absence to
+// a failure for release gates.
 func newMySQLFactory(t *testing.T) contract.Factory {
 	t.Helper()
 	ctx := context.Background()
@@ -39,6 +41,9 @@ func newMySQLFactory(t *testing.T) contract.Factory {
 		mysqlmod.WithDatabase("oidc_admin"),
 	)
 	if err != nil {
+		if os.Getenv("RELEASE_CONTRACT_REQUIRED") == "1" {
+			t.Fatalf("mysql container required for release contract: %v", err)
+		}
 		t.Skipf("mysql container unavailable (Docker not running?): %v", err)
 	}
 	t.Cleanup(func() {

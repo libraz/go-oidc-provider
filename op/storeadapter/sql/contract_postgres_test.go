@@ -7,6 +7,7 @@ import (
 	databasesql "database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,7 +31,8 @@ const postgresImage = "postgres:16-alpine"
 // fresh database per sub-test. The container terminates via
 // [testing.T.Cleanup] after the parent test (and all parallel
 // sub-tests) finishes. If Docker is not reachable the parent test is
-// skipped rather than failed.
+// skipped rather than failed. RELEASE_CONTRACT_REQUIRED=1 upgrades that
+// absence to a failure for release gates.
 func newPostgresFactory(t *testing.T) contract.Factory {
 	t.Helper()
 	ctx := context.Background()
@@ -46,6 +48,9 @@ func newPostgresFactory(t *testing.T) contract.Factory {
 		),
 	)
 	if err != nil {
+		if os.Getenv("RELEASE_CONTRACT_REQUIRED") == "1" {
+			t.Fatalf("postgres container required for release contract: %v", err)
+		}
 		t.Skipf("postgres container unavailable (Docker not running?): %v", err)
 	}
 	t.Cleanup(func() {

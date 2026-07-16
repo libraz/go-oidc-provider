@@ -45,21 +45,25 @@ type queries struct {
 	refreshRevokeChainChildren string
 	refreshRevokeByGrant       string
 	refreshRevokeByClient      string
+	refreshRetrySave           string
+	refreshRetryFind           string
 	grantDeleteByClient        string
 
 	// access tokens
-	accessTokenRegister      string
-	accessTokenFind          string
-	accessTokenRevokeByJTI   string
-	accessTokenRevokeByGrant string
-	accessTokenGC            string
+	accessTokenRegister       string
+	accessTokenFind           string
+	accessTokenRevokeByJTI    string
+	accessTokenRevokeByGrant  string
+	accessTokenRevokeByClient string
+	accessTokenGC             string
 
 	// opaque access tokens
-	opaqueAccessTokenSave          string
-	opaqueAccessTokenFind          string
-	opaqueAccessTokenRevokeByID    string
-	opaqueAccessTokenRevokeByGrant string
-	opaqueAccessTokenGC            string
+	opaqueAccessTokenSave           string
+	opaqueAccessTokenFind           string
+	opaqueAccessTokenRevokeByID     string
+	opaqueAccessTokenRevokeByGrant  string
+	opaqueAccessTokenRevokeByClient string
+	opaqueAccessTokenGC             string
 
 	// grant revocation (ADR 0025)
 	grantTombstoneUpsert string
@@ -230,6 +234,10 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE grant_id = ?"),
 		refreshRevokeByClient: d.rebind(
 			"UPDATE " + n.refreshes + " SET consumed_at = COALESCE(consumed_at, ?), revoked = 1 WHERE client_id = ?"),
+		refreshRetrySave: d.rebind(
+			"UPDATE " + n.refreshes + " SET retry_response = ? WHERE id = ?"),
+		refreshRetryFind: d.rebind(
+			"SELECT retry_response FROM " + n.refreshes + " WHERE id = ? AND retry_response IS NOT NULL"),
 		grantDeleteByClient: d.rebind(
 			"DELETE FROM " + n.grants + " WHERE client_id = ?"),
 
@@ -245,6 +253,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE jti = ?"),
 		accessTokenRevokeByGrant: d.rebind(
 			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
+		accessTokenRevokeByClient: d.rebind(
+			"UPDATE " + n.accessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0"),
 		accessTokenGC: d.rebind(
 			"DELETE FROM " + n.accessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
 
@@ -262,6 +272,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE token_hash = ?"),
 		opaqueAccessTokenRevokeByGrant: d.rebind(
 			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE grant_id = ? AND revoked = 0"),
+		opaqueAccessTokenRevokeByClient: d.rebind(
+			"UPDATE " + n.opaqueAccessTokens + " SET revoked = 1 WHERE client_id = ? AND revoked = 0"),
 		opaqueAccessTokenGC: d.rebind(
 			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
 
@@ -279,8 +291,8 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 				" (grant_id, revoked_at, expires_at, reason)" +
 				" VALUES (?, ?, ?, ?)" + d.upsertAlias() +
 				d.upsertOnConflict("grant_id",
-					"revoked_at="+d.greatestExpr(d.excludedRef("revoked_at"), "revoked_at")+
-						", expires_at="+d.greatestExpr(d.excludedRef("expires_at"), "expires_at"))),
+					"revoked_at="+d.greatestExpr(d.excludedRef("revoked_at"), d.existingRef(n.grantTombstones, "revoked_at"))+
+						", expires_at="+d.greatestExpr(d.excludedRef("expires_at"), d.existingRef(n.grantTombstones, "expires_at")))),
 		grantTombstoneFind: d.rebind(
 			"SELECT revoked_at FROM " + n.grantTombstones + " WHERE grant_id = ?"),
 		grantTombstoneGC: d.rebind(
@@ -289,7 +301,7 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"INSERT INTO " + n.revokedJTIs +
 				" (jti, grant_id, expires_at)" +
 				" VALUES (?, ?, ?)" + d.upsertAlias() +
-				d.upsertDoNothing("jti")),
+				d.upsertDoNothingQualified("jti", n.revokedJTIs)),
 		revokedJTIFind: d.rebind(
 			"SELECT expires_at FROM " + n.revokedJTIs + " WHERE jti = ?"),
 		revokedJTIGC: d.rebind(

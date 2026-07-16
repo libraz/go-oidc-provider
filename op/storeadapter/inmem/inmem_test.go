@@ -1,6 +1,7 @@
 package inmem_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -373,6 +374,88 @@ func TestGrant_DefensiveCopy_AuthorizationDetails(t *testing.T) {
 	}
 }
 
+// TestJSONFields_DefensiveCopyNestedValues pins the ownership boundary for
+// every JSON-shaped field. The in-memory adapter must match SQL's JSON
+// round-trip: neither a Save input nor a Find result may retain a nested map
+// or slice owned by the caller.
+func TestJSONFields_DefensiveCopyNestedValues(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+
+	nested := map[string]any{"actor": map[string]any{"roles": []string{"reader"}}}
+	g := &store.Grant{
+		ID:                   "nested-grant",
+		Subject:              "sub",
+		ClientID:             "client",
+		Claims:               nested,
+		AuthorizationDetails: []map[string]any{{"locations": []any{map[string]any{"country": "JP"}}}},
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	if err := s.Grants().Save(ctx, g); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+	// Mutate the caller-owned nested input after Save.
+	nested["actor"].(map[string]any)["roles"].([]string)[0] = "admin"
+	g.AuthorizationDetails[0]["locations"].([]any)[0].(map[string]any)["country"] = "US"
+
+	got, err := s.Grants().Find(ctx, g.ID)
+	if err != nil {
+		t.Fatalf("Find grant: %v", err)
+	}
+	got.Claims["actor"].(map[string]any)["roles"].([]string)[0] = "operator"
+	got.AuthorizationDetails[0]["locations"].([]any)[0].(map[string]any)["country"] = "DE"
+
+	again, err := s.Grants().Find(ctx, g.ID)
+	if err != nil {
+		t.Fatalf("Find grant again: %v", err)
+	}
+	if role := again.Claims["actor"].(map[string]any)["roles"].([]string)[0]; role != "reader" {
+		t.Errorf("nested claim role=%q, want reader", role)
+	}
+	if country := again.AuthorizationDetails[0]["locations"].([]any)[0].(map[string]any)["country"]; country != "JP" {
+		t.Errorf("nested authorization detail country=%q, want JP", country)
+	}
+
+	s.PutUser(ctx, &store.User{Subject: "nested-user", Claims: nested, UpdatedAt: now})
+	nested["actor"].(map[string]any)["roles"].([]string)[0] = "owner"
+	user, err := s.Users().FindBySubject(ctx, "nested-user")
+	if err != nil {
+		t.Fatalf("Find user: %v", err)
+	}
+	if role := user.Claims["actor"].(map[string]any)["roles"].([]string)[0]; role != "admin" {
+		t.Errorf("nested user role=%q, want admin", role)
+	}
+
+	extra := map[string]any{"act": map[string]any{"chain": []any{"original"}}}
+	if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID:               "nested-refresh",
+		ClientID:         "client",
+		Subject:          "sub",
+		GrantID:          "nested-grant",
+		AccessTokenExtra: extra,
+		ExpiresAt:        now.Add(time.Hour),
+		CreatedAt:        now,
+	}); err != nil {
+		t.Fatalf("Save refresh token: %v", err)
+	}
+	extra["act"].(map[string]any)["chain"].([]any)[0] = "tampered"
+	refresh, err := s.RefreshTokens().Find(ctx, "nested-refresh")
+	if err != nil {
+		t.Fatalf("Find refresh token: %v", err)
+	}
+	refresh.AccessTokenExtra["act"].(map[string]any)["chain"].([]any)[0] = "mutated"
+	againRefresh, err := s.RefreshTokens().Find(ctx, "nested-refresh")
+	if err != nil {
+		t.Fatalf("Find refresh token again: %v", err)
+	}
+	if got := againRefresh.AccessTokenExtra["act"].(map[string]any)["chain"].([]any)[0]; got != "original" {
+		t.Errorf("nested AccessTokenExtra=%q, want original", got)
+	}
+}
+
 func TestFind_DefensiveCopy(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference
@@ -482,6 +565,153 @@ func TestTx_RollbackDiscardsRefreshChain(t *testing.T) {
 	}
 	if _, err := s.RefreshTokens().Find(ctx, "child"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Find child after rollback: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestTx_AtomicAuxiliaryStores(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+
+	tx, err := s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	if err := tx.AccessTokens().Register(ctx, store.AccessTokenRecord{
+		JTI: "tx-jti", GrantID: "tx-grant", ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Register access token: %v", err)
+	}
+	if err := tx.OpaqueAccessTokens().Save(ctx, &store.OpaqueAccessToken{
+		ID: "tx-opaque", GrantID: "tx-grant", ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Save opaque access token: %v", err)
+	}
+	if err := tx.GrantRevocations().RevokeGrant(ctx, store.GrantTombstone{
+		GrantID: "tx-revoked", RevokedAt: now, ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	if rec, err := s.AccessTokens().Find(ctx, "tx-jti"); err != nil || rec != nil {
+		t.Fatalf("access token visible before commit: rec=%+v err=%v", rec, err)
+	}
+	if _, err := s.OpaqueAccessTokens().Find(ctx, "tx-opaque"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("opaque token visible before commit: want ErrNotFound, got %v", err)
+	}
+	if revoked, err := s.GrantRevocations().IsRevoked(ctx, "tx-revoked", "", now); err != nil || revoked {
+		t.Fatalf("tombstone visible before commit: revoked=%v err=%v", revoked, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	if rec, err := s.AccessTokens().Find(ctx, "tx-jti"); err != nil || rec == nil {
+		t.Fatalf("access token missing after commit: rec=%+v err=%v", rec, err)
+	}
+	if rec, err := s.OpaqueAccessTokens().Find(ctx, "tx-opaque"); err != nil || rec == nil {
+		t.Fatalf("opaque token missing after commit: rec=%+v err=%v", rec, err)
+	}
+	if revoked, err := s.GrantRevocations().IsRevoked(ctx, "tx-revoked", "", now); err != nil || !revoked {
+		t.Fatalf("tombstone missing after commit: revoked=%v err=%v", revoked, err)
+	}
+	if err := tx.AccessTokens().Register(ctx, store.AccessTokenRecord{JTI: "after-close"}); err == nil {
+		t.Fatal("access token write after commit must fail")
+	}
+
+	tx, err = s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx for rollback: %v", err)
+	}
+	if err := tx.AccessTokens().Register(ctx, store.AccessTokenRecord{JTI: "rollback-jti"}); err != nil {
+		t.Fatalf("Register rollback access token: %v", err)
+	}
+	if err := tx.OpaqueAccessTokens().Save(ctx, &store.OpaqueAccessToken{ID: "rollback-opaque"}); err != nil {
+		t.Fatalf("Save rollback opaque token: %v", err)
+	}
+	if err := tx.GrantRevocations().RevokeGrant(ctx, store.GrantTombstone{GrantID: "rollback-grant", RevokedAt: now}); err != nil {
+		t.Fatalf("Revoke rollback grant: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if rec, err := s.AccessTokens().Find(ctx, "rollback-jti"); err != nil || rec != nil {
+		t.Fatalf("access token survived rollback: rec=%+v err=%v", rec, err)
+	}
+	if _, err := s.OpaqueAccessTokens().Find(ctx, "rollback-opaque"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("opaque token survived rollback: want ErrNotFound, got %v", err)
+	}
+	if revoked, err := s.GrantRevocations().IsRevoked(ctx, "rollback-grant", "", now); err != nil || revoked {
+		t.Fatalf("tombstone survived rollback: revoked=%v err=%v", revoked, err)
+	}
+}
+
+func TestTx_RefreshRetryResponse_AtomicRotation(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+	if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID: "retry-parent", ClientID: "client", Subject: "subject", GrantID: "grant", Scope: []string{"openid"}, ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save parent: %v", err)
+	}
+
+	parent := "retry-parent"
+	successor := func(id string) *store.RefreshToken {
+		return &store.RefreshToken{ID: id, ClientID: "client", Subject: "subject", GrantID: "grant", Scope: []string{"openid"}, ParentID: &parent, ExpiresAt: now.Add(time.Hour), CreatedAt: now}
+	}
+
+	tx, err := s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	if _, err := tx.RefreshTokens().Consume(ctx, parent); err != nil {
+		t.Fatalf("Consume in tx: %v", err)
+	}
+	retries, ok := tx.RefreshTokens().(store.RefreshRetryResponseStore)
+	if !ok {
+		t.Fatal("transactional refresh store does not implement RefreshRetryResponseStore")
+	}
+	if err := retries.SaveRotationWithRetry(ctx, successor("retry-rolled-back"), []byte("sealed-rollback")); err != nil {
+		t.Fatalf("SaveRotationWithRetry in tx: %v", err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	gotParent, err := s.RefreshTokens().Find(ctx, parent)
+	if err != nil || gotParent.ConsumedAt != nil {
+		t.Fatalf("parent changed after rollback: rec=%+v err=%v", gotParent, err)
+	}
+	if _, err := s.RefreshTokens().Find(ctx, "retry-rolled-back"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("successor survived rollback: want ErrNotFound, got %v", err)
+	}
+	directRetries := s.RefreshTokens().(store.RefreshRetryResponseStore)
+	if _, err := directRetries.LoadRetryResponse(ctx, parent); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("retry response survived rollback: want ErrNotFound, got %v", err)
+	}
+
+	tx, err = s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx for commit: %v", err)
+	}
+	if _, err := tx.RefreshTokens().Consume(ctx, parent); err != nil {
+		t.Fatalf("Consume for commit: %v", err)
+	}
+	retries = tx.RefreshTokens().(store.RefreshRetryResponseStore)
+	sealed := []byte("sealed-commit")
+	if err := retries.SaveRotationWithRetry(ctx, successor("retry-committed"), sealed); err != nil {
+		t.Fatalf("SaveRotationWithRetry for commit: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if got, err := directRetries.LoadRetryResponse(ctx, parent); err != nil || !bytes.Equal(got, sealed) {
+		t.Fatalf("retry response after commit: got=%q err=%v", got, err)
+	}
+	if rec, err := s.RefreshTokens().Find(ctx, "retry-committed"); err != nil || rec == nil {
+		t.Fatalf("successor missing after commit: rec=%+v err=%v", rec, err)
 	}
 }
 

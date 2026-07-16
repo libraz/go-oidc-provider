@@ -3,11 +3,17 @@ package oidcsql
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
+
+// ErrInvalidJSON is returned when an embedder supplies a map or
+// authorization-details value that JSON cannot represent (for example NaN,
+// a function, channel, or cycle). Store writes reject it before executing SQL.
+var ErrInvalidJSON = errors.New("oidcsql: value is not JSON-serializable")
 
 // encodeStrings serialises a []string column. The adapter stores
 // slices as JSON text (for SQLite) or JSON/JSONB (for MySQL/Postgres);
@@ -41,15 +47,15 @@ func decodeStrings(b []byte) ([]string, error) {
 
 // encodeMap serialises a map[string]any column. nil maps encode as
 // the JSON null literal so the round-trip preserves "no claims".
-func encodeMap(m map[string]any) []byte {
+func encodeMap(m map[string]any) ([]byte, error) {
 	if m == nil {
-		return []byte("null")
+		return []byte("null"), nil
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		panic(fmt.Sprintf("oidcsql: marshal map[string]any: %v", err)) //nolint:forbidigo // infallible: encoding/json never errors on map[string]any with primitive values.
+		return nil, fmt.Errorf("%w: map[string]any: %w", ErrInvalidJSON, err)
 	}
-	return b
+	return b, nil
 }
 
 // decodeMap deserialises a column written by encodeMap. The literal
@@ -68,15 +74,15 @@ func decodeMap(b []byte) (map[string]any, error) {
 // encodeObjectArray serialises a []map[string]any column (the RFC 9396
 // authorization_details). A nil slice encodes as the JSON null literal so
 // the round-trip preserves "no authorization_details".
-func encodeObjectArray(a []map[string]any) []byte {
+func encodeObjectArray(a []map[string]any) ([]byte, error) {
 	if a == nil {
-		return []byte("null")
+		return []byte("null"), nil
 	}
 	b, err := json.Marshal(a)
 	if err != nil {
-		panic(fmt.Sprintf("oidcsql: marshal []map[string]any: %v", err)) //nolint:forbidigo // infallible: the elements decode from JSON, so they re-marshal.
+		return nil, fmt.Errorf("%w: []map[string]any: %w", ErrInvalidJSON, err)
 	}
-	return b
+	return b, nil
 }
 
 // decodeObjectArray deserialises a column written by encodeObjectArray.
