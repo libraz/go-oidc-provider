@@ -3,6 +3,7 @@ package inmem
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 
@@ -44,6 +45,21 @@ func (s *totpStore) Put(_ context.Context, r *store.TOTPRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.m[r.Subject] = cloneTOTPRecord(r)
+	return nil
+}
+
+// CompareAndSwap implements [store.TOTPStore].
+func (s *totpStore) CompareAndSwap(_ context.Context, previous, next *store.TOTPRecord) error {
+	if previous == nil || next == nil || previous.Subject == "" || next.Subject != previous.Subject {
+		return errors.New("inmem: invalid totp compare-and-swap record")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.m[previous.Subject]
+	if !ok || !reflect.DeepEqual(current, previous) {
+		return store.ErrAlreadyConsumed
+	}
+	s.m[next.Subject] = cloneTOTPRecord(next)
 	return nil
 }
 

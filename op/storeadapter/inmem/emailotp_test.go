@@ -1,6 +1,7 @@
 package inmem_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -117,5 +118,124 @@ func TestEmailOTPStore_ConsumeRaceSingleWinner(t *testing.T) {
 	}
 	if got.ConsumedAt.IsZero() {
 		t.Fatal("ConsumedAt was not persisted")
+	}
+}
+
+// TestEmailOTPStore_CompareAndSwapCannotUndoConsume pins the failure-write
+// race: a stale wrong-code snapshot must never clear ConsumedAt after another
+// request successfully redeems the same challenge.
+func TestEmailOTPStore_CompareAndSwapCannotUndoConsume(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	s := inmem.New(inmem.WithClock(&emailOTPTestClock{now: now}))
+	ctx := context.Background()
+	rec := &store.EmailOTPRecord{
+		Subject: "alice", CodeSalt: []byte("salt"), CodeHash: []byte("hash"),
+		ExpiresAt: now.Add(time.Hour), RetainUntil: now.Add(24 * time.Hour),
+	}
+	if err := s.EmailOTPs().Put(ctx, rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	stale, err := s.EmailOTPs().Get(ctx, rec.Subject)
+	if err != nil {
+		t.Fatalf("Get stale: %v", err)
+	}
+	success := *stale
+	success.ConsumedAt = now
+	if err := s.EmailOTPs().Consume(ctx, &success); err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	failure := *stale
+	failure.FailedCount++
+	if err := s.EmailOTPs().CompareAndSwap(ctx, stale, &failure); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap stale failure err=%v want ErrAlreadyConsumed", err)
+	}
+	current, err := s.EmailOTPs().Get(ctx, rec.Subject)
+	if err != nil {
+		t.Fatalf("Get current: %v", err)
+	}
+	if current.ConsumedAt.IsZero() {
+		t.Fatal("stale failure write cleared ConsumedAt")
+	}
+}
+
+// TestEmailOTPStore_CompareAndSwapCannotUndoResend pins the companion
+// interleaving: a wrong-code update based on the old challenge must not put
+// its hash or counters back after a resend atomically installed a new one.
+func TestEmailOTPStore_CompareAndSwapCannotUndoResend(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	s := inmem.New(inmem.WithClock(&emailOTPTestClock{now: now}))
+	old := &store.EmailOTPRecord{
+		Subject:     "subject",
+		CodeSalt:    []byte("old-salt"),
+		CodeHash:    []byte("old-hash"),
+		ExpiresAt:   now.Add(time.Minute),
+		RetainUntil: now.Add(time.Hour),
+	}
+	if err := s.EmailOTPs().Put(ctx, old); err != nil {
+		t.Fatalf("Put(old): %v", err)
+	}
+
+	newChallenge := *old
+	newChallenge.CodeSalt = []byte("new-salt")
+	newChallenge.CodeHash = []byte("new-hash")
+	newChallenge.SendCount = 2
+	if err := s.EmailOTPs().CompareAndSwap(ctx, old, &newChallenge); err != nil {
+		t.Fatalf("CompareAndSwap(resend): %v", err)
+	}
+
+	staleFailure := *old
+	staleFailure.FailedCount = 1
+	if err := s.EmailOTPs().CompareAndSwap(ctx, old, &staleFailure); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap(stale failure) = %v, want ErrAlreadyConsumed", err)
+	}
+	got, err := s.EmailOTPs().Get(ctx, old.Subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got.CodeHash, newChallenge.CodeHash) || got.FailedCount != newChallenge.FailedCount || got.SendCount != newChallenge.SendCount {
+		t.Fatalf("stale CAS rolled back replacement: got %+v, want new challenge", got)
+	}
+}
+
+// TestEmailOTPStore_CompareAndSwapResendSingleWinner pins the atomic send
+// reservation used before the mailer side effect. All contenders observe the
+// same prior record, but exactly one may install its replacement challenge.
+func TestEmailOTPStore_CompareAndSwapResendSingleWinner(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	ctx := context.Background()
+	prior := newEmailOTPRecord("alice")
+	if err := s.EmailOTPs().Put(ctx, prior); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	snapshot, err := s.EmailOTPs().Get(ctx, prior.Subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	const contenders = 16
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for i := range contenders {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			next := *snapshot
+			next.CodeHash = []byte{byte(i + 1)} //nolint:gosec // i is bounded by contenders (16).
+			if err := s.EmailOTPs().CompareAndSwap(ctx, snapshot, &next); err == nil {
+				wins.Add(1)
+			} else if !errors.Is(err, store.ErrAlreadyConsumed) {
+				t.Errorf("CompareAndSwap contender %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if got := wins.Load(); got != 1 {
+		t.Fatalf("CAS resend winners=%d want 1", got)
 	}
 }

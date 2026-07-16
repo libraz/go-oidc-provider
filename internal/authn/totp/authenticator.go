@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
@@ -182,71 +183,92 @@ func (a *Authenticator) Continue(ctx context.Context, in authn.ContinueInput) (i
 			return interaction.Step{}, fmt.Errorf("totp: lockout guard: %w", err)
 		}
 	}
-	rec, err := a.store.Get(ctx, in.Subject)
-	if err != nil {
-		return interaction.Step{}, fmt.Errorf("totp: load record: %w", err)
-	}
-	if rec == nil {
-		return interaction.Step{}, store.ErrNotFound
-	}
+	for retries := 0; ; retries++ {
+		if retries == 16 {
+			return interaction.Step{}, ErrRetry
+		}
+		rec, err := a.store.Get(ctx, in.Subject)
+		if err != nil {
+			return interaction.Step{}, fmt.Errorf("totp: load record: %w", err)
+		}
+		if rec == nil {
+			return interaction.Step{}, store.ErrNotFound
+		}
 
-	res, verr := a.verifier.Verify(ctx, rec, code)
-	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeSuccess {
-		// OutcomeLocked leaves the record unchanged and OutcomeSuccess
-		// is persisted through atomic Accept below. Wrong-code and
-		// reset-required branches still need Put.
-		if perr := a.store.Put(ctx, res.Record); perr != nil {
-			return interaction.Step{}, fmt.Errorf("totp: persist record: %w", perr)
+		previous := cloneRecord(rec)
+		res, verr := a.verifier.Verify(ctx, rec, code)
+		if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeSuccess {
+			// OutcomeLocked leaves the record unchanged and OutcomeSuccess
+			// is persisted through atomic Accept below. Wrong-code and
+			// reset-required branches use CAS to retain every update.
+			if perr := a.store.CompareAndSwap(ctx, previous, res.Record); perr != nil {
+				if errors.Is(perr, store.ErrAlreadyConsumed) {
+					// Re-read and re-verify against the latest record so a
+					// finite set of concurrent wrong guesses increments the
+					// counter once per request instead of losing updates.
+					continue
+				}
+				return interaction.Step{}, fmt.Errorf("totp: persist record: %w", perr)
+			}
 		}
-	}
 
-	switch {
-	case verr == nil:
-		if perr := a.store.Accept(ctx, res.Record); perr != nil {
-			if errors.Is(perr, store.ErrAlreadyConsumed) {
-				// A concurrent request already consumed this code (a
-				// replay lost the CAS). Surface ErrRetry rather than a
-				// silent nil re-prompt so the orchestrator emits the
-				// LoginAttempt observer event and advances the counter —
-				// the sibling email-OTP factor is non-silent in the same
-				// case, and a swallowed replay is an audit blind spot.
-				return interaction.Step{}, ErrRetry
+		switch {
+		case verr == nil:
+			if perr := a.store.Accept(ctx, res.Record); perr != nil {
+				if errors.Is(perr, store.ErrAlreadyConsumed) {
+					// A concurrent request already consumed this code (a
+					// replay lost the CAS). Surface ErrRetry rather than a
+					// silent nil re-prompt so the orchestrator emits the
+					// LoginAttempt observer event and advances the counter —
+					// the sibling email-OTP factor is non-silent in the same
+					// case, and a swallowed replay is an audit blind spot.
+					return interaction.Step{}, ErrRetry
+				}
+				return interaction.Step{}, fmt.Errorf("totp: accept record: %w", perr)
 			}
-			return interaction.Step{}, fmt.Errorf("totp: accept record: %w", perr)
+			if a.lockout != nil {
+				if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
+					return interaction.Step{}, fmt.Errorf("totp: lockout reset: %w", rerr)
+				}
+			}
+			return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+		case errors.Is(verr, ErrWrongCode):
+			if a.lockout != nil {
+				out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
+				if lerr != nil {
+					return interaction.Step{}, fmt.Errorf("totp: lockout record failure: %w", lerr)
+				}
+				if out.ResetRequired {
+					return interaction.Step{}, ErrResetRequired
+				}
+				if !out.LockedUntil.IsZero() {
+					return interaction.Step{}, ErrLocked
+				}
+			}
+			// Recoverable wrong guess: surface ErrRetry so the orchestrator
+			// records the failure and re-issues the prompt via Begin (which
+			// reloads the persisted, failure-incremented record). The
+			// AttemptsRemaining the SPA sees on the retry is therefore the
+			// same value a.prompt would have shown here.
+			return interaction.Step{}, ErrRetry
+		default:
+			// ErrLocked / ErrResetRequired / store-decryption failures
+			// flow through verbatim so the orchestrator can dispatch.
+			// The cross-factor counter is intentionally NOT incremented
+			// for these branches: they represent state, not a guess
+			// against the credential.
+			return interaction.Step{}, verr
 		}
-		if a.lockout != nil {
-			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
-				return interaction.Step{}, fmt.Errorf("totp: lockout reset: %w", rerr)
-			}
-		}
-		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
-	case errors.Is(verr, ErrWrongCode):
-		if a.lockout != nil {
-			out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
-			if lerr != nil {
-				return interaction.Step{}, fmt.Errorf("totp: lockout record failure: %w", lerr)
-			}
-			if out.ResetRequired {
-				return interaction.Step{}, ErrResetRequired
-			}
-			if !out.LockedUntil.IsZero() {
-				return interaction.Step{}, ErrLocked
-			}
-		}
-		// Recoverable wrong guess: surface ErrRetry so the orchestrator
-		// records the failure and re-issues the prompt via Begin (which
-		// reloads the persisted, failure-incremented record). The
-		// AttemptsRemaining the SPA sees on the retry is therefore the
-		// same value a.prompt would have shown here.
-		return interaction.Step{}, ErrRetry
-	default:
-		// ErrLocked / ErrResetRequired / store-decryption failures
-		// flow through verbatim so the orchestrator can dispatch.
-		// The cross-factor counter is intentionally NOT incremented
-		// for these branches: they represent state, not a guess
-		// against the credential.
-		return interaction.Step{}, verr
 	}
+}
+
+func cloneRecord(r *store.TOTPRecord) *store.TOTPRecord {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	out.SecretCiphertext = slices.Clone(r.SecretCiphertext)
+	return &out
 }
 
 // prompt builds the [interaction.Prompt] the adapter emits for both Begin and

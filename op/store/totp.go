@@ -7,8 +7,8 @@ import (
 
 // TOTPRecord is the persistent representation of a user's RFC 6238 TOTP
 // enrolment. The library reads it on every verify, mutates the
-// brute-force counters in place, and writes the new state back through
-// [TOTPStore.Put]. The struct is a plain data carrier: every policy
+// brute-force counters in place, and persists the new state through
+// [TOTPStore.CompareAndSwap]. The struct is a plain data carrier: every policy
 // decision (lockout thresholds, skew window, secret encryption) lives in
 // internal/authn/totp.
 // Backends MUST treat the record as opaque. In particular,
@@ -43,7 +43,7 @@ type TOTPRecord struct {
 	// 02-product-design.md §M.6). It increments on every
 	// [internal/authn/totp.Verifier.Verify] miss and resets on success
 	// or after the 24-hour rollover. Backends MUST persist the field
-	// verbatim; the library updates it through [TOTPStore.Put].
+	// verbatim; the library updates it through [TOTPStore.CompareAndSwap].
 	FailedCount int
 
 	// FirstFailureAt is the wall-clock time of the first failed verify
@@ -67,8 +67,8 @@ type TOTPRecord struct {
 	// network-level replay of a code within the same 30-second
 	// window cannot redeem twice. A zero value means "no successful
 	// verify recorded yet"; the library stamps the field on every
-	// OutcomeSuccess and writes the record back through
-	// [TOTPStore.Put].
+	// OutcomeSuccess and persists the record through
+	// [TOTPStore.Accept].
 	LastAcceptedStep int64
 }
 
@@ -86,17 +86,25 @@ type TOTPStore interface {
 	Get(ctx context.Context, subject string) (*TOTPRecord, error)
 
 	// Put creates or replaces the enrolment for r.Subject. Backends
-	// implement upsert semantics: the library uses Put for the initial
-	// confirmation, every brute-force counter update, and the post-
-	// success counter reset.
+	// implement upsert semantics. The library uses Put for enrolment
+	// setup; verification transitions use CompareAndSwap or Accept so a
+	// stale snapshot cannot overwrite replay state or counters.
 	Put(ctx context.Context, r *TOTPRecord) error
+
+	// CompareAndSwap replaces previous with next only when the stored
+	// enrolment still exactly matches previous. It returns ErrAlreadyConsumed
+	// when another verification or failure update won the race, preventing
+	// a stale wrong-code write from rolling LastAcceptedStep or counters
+	// backward.
+	CompareAndSwap(ctx context.Context, previous, next *TOTPRecord) error
 
 	// Accept atomically persists a successful verification result. It
 	// MUST succeed for at most one caller for a given TOTP step and
 	// MUST return [ErrAlreadyConsumed] when the stored
 	// LastAcceptedStep is already greater than or equal to
 	// r.LastAcceptedStep. Failed-code counter updates continue to use
-	// Put; Accept exists solely for the single-use success transition.
+	// CompareAndSwap; Accept exists solely for the single-use success
+	// transition.
 	Accept(ctx context.Context, r *TOTPRecord) error
 
 	// Delete removes the enrolment for subject. It MUST return

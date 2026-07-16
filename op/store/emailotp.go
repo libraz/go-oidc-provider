@@ -65,7 +65,7 @@ type EmailOTPRecord struct {
 	// entered within the current 24-hour window. It increments on every
 	// verify miss and resets on success or after the rollover. Backends
 	// MUST persist the field verbatim; the library updates it through
-	// [EmailOTPStore.Put].
+	// [EmailOTPStore.CompareAndSwap].
 	FailedCount int
 
 	// FirstFailureAt is the wall-clock time of the first failed verify
@@ -83,8 +83,7 @@ type EmailOTPRecord struct {
 	// redeemed. A non-zero value means the record has already been
 	// used and any subsequent verify against the same record MUST be
 	// rejected. The library stamps the field on a successful Verify
-	// and writes the record back through [EmailOTPStore.Put] rather
-	// than relying on a Delete call that may fail silently. A zero
+	// and persists it through [EmailOTPStore.Consume]. A zero
 	// value means "not yet consumed". Backends MAY sweep records with
 	// non-zero ConsumedAt older than a deployment-defined retention
 	// window; the library never reads them after the stamp.
@@ -95,7 +94,7 @@ type EmailOTPRecord struct {
 	// anchored at SendWindowStart. It is incremented on every send
 	// (including sends that hit the unmatched-email branch and skip
 	// the mailer). Backends MUST persist the field verbatim; the
-	// library updates it through [EmailOTPStore.Put].
+	// library updates it through [EmailOTPStore.CompareAndSwap].
 	SendCount int
 
 	// SendWindowStart anchors the rolling send-rate window. A zero
@@ -136,10 +135,19 @@ type EmailOTPStore interface {
 	Get(ctx context.Context, subject string) (*EmailOTPRecord, error)
 
 	// Put creates or replaces the pending challenge for r.Subject.
-	// Backends implement upsert semantics: the library uses Put for
-	// the initial issuance, every brute-force counter update, and the
-	// post-success counter reset.
+	// Backends implement upsert semantics. The library uses Put only
+	// for explicit setup/migration paths; authentication transitions
+	// use CompareAndSwap or Consume so a stale snapshot cannot overwrite
+	// a newer challenge or a successful redemption.
 	Put(ctx context.Context, r *EmailOTPRecord) error
+
+	// CompareAndSwap replaces previous with next only when the stored
+	// challenge still exactly matches previous. It returns ErrAlreadyConsumed
+	// when another verification, failure update, or resend won the race.
+	// Authenticators use it for every failure counter update and resend
+	// reservation so stale read-modify-write snapshots can never erase a
+	// successful Consume or a newer challenge.
+	CompareAndSwap(ctx context.Context, previous, next *EmailOTPRecord) error
 
 	// Consume atomically marks the pending challenge represented by r
 	// as consumed. It MUST succeed for at most one caller observing the

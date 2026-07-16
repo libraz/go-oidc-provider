@@ -3,6 +3,7 @@ package inmem
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -74,6 +75,28 @@ func (s *emailOTPStore) Put(_ context.Context, r *store.EmailOTPRecord) error {
 	return nil
 }
 
+// CompareAndSwap implements [store.EmailOTPStore].
+func (s *emailOTPStore) CompareAndSwap(_ context.Context, previous, next *store.EmailOTPRecord) error {
+	if next == nil || next.Subject == "" {
+		return errors.New("inmem: invalid email otp compare-and-swap record")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.m[next.Subject]
+	if previous == nil {
+		if ok && !emailOTPExpired(current, s.now()) {
+			return store.ErrAlreadyConsumed
+		}
+		s.m[next.Subject] = cloneEmailOTPRecord(next)
+		return nil
+	}
+	if !ok || !reflect.DeepEqual(current, previous) {
+		return store.ErrAlreadyConsumed
+	}
+	s.m[next.Subject] = cloneEmailOTPRecord(next)
+	return nil
+}
+
 // Consume implements [store.EmailOTPStore].
 func (s *emailOTPStore) Consume(_ context.Context, r *store.EmailOTPRecord) error {
 	if r == nil {
@@ -115,6 +138,17 @@ func (s *emailOTPStore) now() time.Time {
 		return timex.SystemClock.Now()
 	}
 	return s.clock.Now()
+}
+
+func emailOTPExpired(rec *store.EmailOTPRecord, now time.Time) bool {
+	if rec == nil {
+		return true
+	}
+	horizon := rec.RetainUntil
+	if horizon.IsZero() {
+		horizon = rec.ExpiresAt
+	}
+	return !horizon.IsZero() && horizon.Before(now)
 }
 
 func cloneEmailOTPRecord(r *store.EmailOTPRecord) *store.EmailOTPRecord {

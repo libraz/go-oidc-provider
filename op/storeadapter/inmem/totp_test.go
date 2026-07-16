@@ -217,3 +217,38 @@ func TestTOTPStore_AcceptRaceSingleWinner(t *testing.T) {
 		t.Fatalf("LastAcceptedStep=%d want %d", got.LastAcceptedStep, accepted.LastAcceptedStep)
 	}
 }
+
+// TestTOTPStore_CompareAndSwapCannotRollbackAcceptedStep pins the
+// wrong-code/success race: a stale failure snapshot must not restore an older
+// LastAcceptedStep after another request accepted the current TOTP step.
+func TestTOTPStore_CompareAndSwapCannotRollbackAcceptedStep(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	ctx := context.Background()
+	rec := &store.TOTPRecord{Subject: "alice", SecretCiphertext: []byte("cipher"), ConfirmedAt: time.Now()}
+	if err := s.TOTPs().Put(ctx, rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	stale, err := s.TOTPs().Get(ctx, rec.Subject)
+	if err != nil {
+		t.Fatalf("Get stale: %v", err)
+	}
+	success := *stale
+	success.LastAcceptedStep = 123
+	if err := s.TOTPs().Accept(ctx, &success); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	failure := *stale
+	failure.FailedCount++
+	if err := s.TOTPs().CompareAndSwap(ctx, stale, &failure); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap stale failure err=%v want ErrAlreadyConsumed", err)
+	}
+	current, err := s.TOTPs().Get(ctx, rec.Subject)
+	if err != nil {
+		t.Fatalf("Get current: %v", err)
+	}
+	if current.LastAcceptedStep != 123 {
+		t.Fatalf("LastAcceptedStep=%d want 123", current.LastAcceptedStep)
+	}
+}

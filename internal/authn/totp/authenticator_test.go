@@ -3,6 +3,7 @@ package totp_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -372,6 +373,10 @@ func (s *acceptBlockedTOTPStore) Put(ctx context.Context, r *store.TOTPRecord) e
 	return s.inner.Put(ctx, r)
 }
 
+func (s *acceptBlockedTOTPStore) CompareAndSwap(ctx context.Context, previous, next *store.TOTPRecord) error {
+	return s.inner.CompareAndSwap(ctx, previous, next)
+}
+
 func (s *acceptBlockedTOTPStore) Accept(ctx context.Context, r *store.TOTPRecord) error {
 	if s.blockAccept {
 		return store.ErrAlreadyConsumed
@@ -433,5 +438,51 @@ func TestAuthenticator_ContinueAcceptCASLossRetries(t *testing.T) {
 	// than being swallowed as a silent nil re-prompt.
 	if !errors.Is(err, totp.ErrRetry) {
 		t.Fatalf("err = %v, want it to wrap totp.ErrRetry (soft retry)", err)
+	}
+}
+
+// TestAuthenticator_ConcurrentWrongCodesRetainEveryFailure proves stale
+// failure snapshots are retried against the winner, so a finite parallel
+// burst cannot reduce the per-factor brute-force counter to one increment.
+func TestAuthenticator_ConcurrentWrongCodesRetainEveryFailure(t *testing.T) {
+	t.Parallel()
+
+	f := newAdapterFixture(t)
+	valid := totp.Code(f.secret, f.clock.t)
+	wrong := "000000"
+	if wrong == valid {
+		wrong = "999999"
+	}
+
+	const contenders = 8
+	start := make(chan struct{})
+	errs := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Go(func() {
+			<-start
+			_, err := f.adapter.Continue(context.Background(), op.ContinueInput{
+				Subject:    f.subject,
+				AuthTime:   f.authTime,
+				Submission: interaction.FormSubmission{Values: map[string]string{totp.CodeFieldName: wrong}},
+			})
+			errs <- err
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if !errors.Is(err, totp.ErrRetry) {
+			t.Errorf("Continue concurrent wrong code: %v, want ErrRetry", err)
+		}
+	}
+	rec, err := f.store.Get(context.Background(), f.subject)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.FailedCount != contenders {
+		t.Fatalf("FailedCount=%d, want %d", rec.FailedCount, contenders)
 	}
 }

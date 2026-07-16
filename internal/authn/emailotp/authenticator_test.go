@@ -605,6 +605,10 @@ func (s *consumeBlockedStore) Put(ctx context.Context, r *store.EmailOTPRecord) 
 	return s.inner.Put(ctx, r)
 }
 
+func (s *consumeBlockedStore) CompareAndSwap(ctx context.Context, previous, next *store.EmailOTPRecord) error {
+	return s.inner.CompareAndSwap(ctx, previous, next)
+}
+
 func (s *consumeBlockedStore) Consume(_ context.Context, _ *store.EmailOTPRecord) error {
 	if s.blockConsume {
 		return store.ErrAlreadyConsumed
@@ -666,5 +670,98 @@ func TestContinueVerifyConsumeErrAlreadyConsumedReturnsSentinel(t *testing.T) {
 	// callers can distinguish the CAS-loss path from a pre-expired record.
 	if !errors.Is(err, emailotp.ErrConsumed) {
 		t.Errorf("err = %v, want ErrConsumed", err)
+	}
+}
+
+// TestHandleSend_ConcurrentRequestsReserveOneDelivery proves the send-slot
+// reservation occurs before the mailer side effect. Every request starts from
+// the same empty store; exactly one may create the challenge and send mail.
+func TestHandleSend_ConcurrentRequestsReserveOneDelivery(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	a, mailer, _ := newFixture(t, now)
+
+	const contenders = 12
+	start := make(chan struct{})
+	errs := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Go(func() {
+			<-start
+			_, err := a.Continue(context.Background(), authn.ContinueInput{
+				Subject: "sub-1",
+				Submission: interaction.FormSubmission{Values: map[string]string{
+					emailotp.EmailFieldName: "alice@example.com",
+				}},
+			})
+			errs <- err
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+			continue
+		}
+		if !errors.Is(err, emailotp.ErrTooManyOutstanding) {
+			t.Errorf("Continue concurrent send: %v, want ErrTooManyOutstanding", err)
+		}
+	}
+	_, deliveries := mailer.snapshot()
+	if successes != 1 || deliveries != 1 {
+		t.Fatalf("successful reservations=%d deliveries=%d, want 1 each", successes, deliveries)
+	}
+}
+
+// TestHandleVerify_ConcurrentWrongCodesRetainEveryFailure proves optimistic
+// CAS retries turn each finite concurrent wrong guess into a monotonic counter
+// increment instead of dropping all but the last writer.
+func TestHandleVerify_ConcurrentWrongCodesRetainEveryFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	a, mailer, records := newFixture(t, now)
+	code := driveSendStep(t, a, mailer, "sub-1")
+	wrong := "000000"
+	if wrong == code {
+		wrong = "999999"
+	}
+
+	const contenders = 8
+	start := make(chan struct{})
+	errs := make(chan error, contenders)
+	var wg sync.WaitGroup
+	for range contenders {
+		wg.Go(func() {
+			<-start
+			_, err := a.Continue(context.Background(), authn.ContinueInput{
+				Subject:    "sub-1",
+				AuthTime:   now,
+				Scratch:    emailotp.ScratchVerify,
+				Submission: interaction.FormSubmission{Values: map[string]string{emailotp.CodeFieldName: wrong}},
+			})
+			errs <- err
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if !errors.Is(err, emailotp.ErrRetry) {
+			t.Errorf("Continue concurrent wrong code: %v, want ErrRetry", err)
+		}
+	}
+	rec, err := records.Get(context.Background(), "sub-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.FailedCount != contenders {
+		t.Fatalf("FailedCount=%d, want %d", rec.FailedCount, contenders)
 	}
 }

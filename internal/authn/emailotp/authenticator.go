@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn"
@@ -444,6 +445,18 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 	// reset the resend cap or the lockout progress. See recordRetention.
 	rec.RetainUntil = now.Add(recordRetention)
 	if constantTimeEqualEmails(email, bound) {
+		rec.SentAt = now
+	}
+	// Reserve the new challenge before invoking the mailer. A competing
+	// resend observes the replacement and loses this CAS, so it cannot send
+	// another code using the same stale rate-limit snapshot.
+	if err := a.store.CompareAndSwap(ctx, prior, rec); err != nil {
+		if errors.Is(err, store.ErrAlreadyConsumed) {
+			return interaction.Step{}, ErrTooManyOutstanding
+		}
+		return interaction.Step{}, fmt.Errorf("emailotp: reserve send: %w", err)
+	}
+	if constantTimeEqualEmails(email, bound) {
 		if err := a.mailer.Send(ctx, Message{
 			To:        bound,
 			Code:      code,
@@ -452,12 +465,12 @@ func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueIn
 			Subject:   in.Subject,
 			ClientID:  in.ClientID,
 		}); err != nil {
+			// Keep the reservation on delivery failure. Compensating it
+			// would let a caller repeatedly trigger a failing downstream
+			// mailer without consuming the resend budget; the caller can
+			// retry after the normal rate-limit interval.
 			return interaction.Step{}, fmt.Errorf("%w: %w", ErrDeliver, err)
 		}
-		rec.SentAt = now
-	}
-	if err := a.store.Put(ctx, rec); err != nil {
-		return interaction.Step{}, fmt.Errorf("emailotp: persist record: %w", err)
 	}
 	return interaction.Step{
 		Prompt:  a.verifyPrompt(bound, expiresAt),
@@ -549,79 +562,99 @@ func (a *Authenticator) handleVerify(ctx context.Context, in authn.ContinueInput
 	if !ok || code == "" {
 		return interaction.Step{}, ErrCodeMissing
 	}
-	rec, err := a.store.Get(ctx, in.Subject)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+	for retries := 0; ; retries++ {
+		if retries == 16 {
+			return interaction.Step{}, ErrRetry
+		}
+		rec, err := a.store.Get(ctx, in.Subject)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return interaction.Step{}, ErrExpired
+			}
+			return interaction.Step{}, fmt.Errorf("emailotp: load record: %w", err)
+		}
+		previous := cloneRecord(rec)
+		res, verr := a.verifier.Verify(ctx, rec, code)
+		if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeExpired && res.Outcome != OutcomeConsumed && res.Outcome != OutcomeSuccess {
+			// Locked / expired / consumed branches leave the record
+			// unchanged (verifier short-circuits before mutating counters);
+			// wrong-code and reset-required branches still need persisting.
+			// Re-stamp RetainUntil so a failed attempt extends the record's
+			// retention rather than letting it lapse at the original expiry.
+			res.Record.RetainUntil = a.clock.Now().Add(recordRetention)
+			if perr := a.store.CompareAndSwap(ctx, previous, res.Record); perr != nil {
+				if errors.Is(perr, store.ErrAlreadyConsumed) {
+					// Re-read and re-verify against the winning state. This
+					// preserves every finite concurrent wrong-code attempt
+					// instead of merely rejecting the stale writer.
+					continue
+				}
+				return interaction.Step{}, fmt.Errorf("emailotp: persist record: %w", perr)
+			}
+		}
+		switch {
+		case verr == nil:
+			// Single-use semantics: the verifier has stamped ConsumedAt
+			// on the record and Consume persists it atomically. A replay
+			// racing this request loses the Consume CAS and is rejected
+			// rather than receiving a second successful Result.
+			if perr := a.store.Consume(ctx, res.Record); perr != nil {
+				if errors.Is(perr, store.ErrAlreadyConsumed) {
+					return interaction.Step{}, ErrConsumed
+				}
+				return interaction.Step{}, fmt.Errorf("emailotp: consume record: %w", perr)
+			}
+			if a.lockout != nil {
+				if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
+					return interaction.Step{}, fmt.Errorf("emailotp: lockout reset: %w", rerr)
+				}
+			}
+			return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
+		case errors.Is(verr, ErrWrongCode):
+			if a.lockout != nil {
+				out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
+				if lerr != nil {
+					return interaction.Step{}, fmt.Errorf("emailotp: lockout record failure: %w", lerr)
+				}
+				if out.ResetRequired {
+					return interaction.Step{}, ErrResetRequired
+				}
+				if !out.LockedUntil.IsZero() {
+					return interaction.Step{}, ErrLocked
+				}
+			}
+			// Recoverable wrong guess: surface ErrRetry so the orchestrator
+			// records the failure and advances the brute-force counter. The
+			// failure-incremented record is already persisted above. Return
+			// the verify prompt alongside ErrRetry so the orchestrator
+			// re-shows the code-entry screen with the delivered code still
+			// valid, rather than restarting the factor at the send screen —
+			// a restart would discard a usable code and burn the resend
+			// budget (a handful of typos would trip the resend cap and abort
+			// the chain, leaving the per-record verify budget unreachable).
+			return a.retryVerifyStep(ctx, in.Subject, rec.ExpiresAt), ErrRetry
+		case errors.Is(verr, ErrConsumed):
+			// Treat a replay attempt as a generic expiry from the SPA's
+			// perspective so the response shape stays constant with the
+			// "code never existed" branch. The orchestrator sees the
+			// underlying error verbatim through the wrapped chain.
 			return interaction.Step{}, ErrExpired
-		}
-		return interaction.Step{}, fmt.Errorf("emailotp: load record: %w", err)
-	}
-	res, verr := a.verifier.Verify(ctx, rec, code)
-	if res != nil && res.Record != nil && res.Outcome != OutcomeLocked && res.Outcome != OutcomeExpired && res.Outcome != OutcomeConsumed && res.Outcome != OutcomeSuccess {
-		// Locked / expired / consumed branches leave the record
-		// unchanged (verifier short-circuits before mutating
-		// counters); wrong-code and reset-required branches still need
-		// persisting. OutcomeSuccess is handled by atomic Consume below.
-		// Re-stamp RetainUntil so a failed attempt extends the record's
-		// retention (and thus the surviving brute-force counter) rather
-		// than letting it lapse at the original code's ExpiresAt.
-		res.Record.RetainUntil = a.clock.Now().Add(recordRetention)
-		if perr := a.store.Put(ctx, res.Record); perr != nil {
-			return interaction.Step{}, fmt.Errorf("emailotp: persist record: %w", perr)
+		default:
+			// Locked / expired / reset-required flow through verbatim
+			// so the orchestrator can dispatch.
+			return interaction.Step{}, verr
 		}
 	}
-	switch {
-	case verr == nil:
-		// Single-use semantics: the verifier has stamped ConsumedAt
-		// on the record and Consume persists it atomically. A replay
-		// racing this request loses the Consume CAS and is rejected
-		// rather than receiving a second successful Result.
-		if perr := a.store.Consume(ctx, res.Record); perr != nil {
-			if errors.Is(perr, store.ErrAlreadyConsumed) {
-				return interaction.Step{}, ErrConsumed
-			}
-			return interaction.Step{}, fmt.Errorf("emailotp: consume record: %w", perr)
-		}
-		if a.lockout != nil {
-			if rerr := a.lockout.Reset(ctx, in.Subject); rerr != nil {
-				return interaction.Step{}, fmt.Errorf("emailotp: lockout reset: %w", rerr)
-			}
-		}
-		return interaction.Step{Result: &interaction.Result{Subject: in.Subject, AuthTime: in.AuthTime}}, nil
-	case errors.Is(verr, ErrWrongCode):
-		if a.lockout != nil {
-			out, lerr := a.lockout.RecordFailure(ctx, in.Subject)
-			if lerr != nil {
-				return interaction.Step{}, fmt.Errorf("emailotp: lockout record failure: %w", lerr)
-			}
-			if out.ResetRequired {
-				return interaction.Step{}, ErrResetRequired
-			}
-			if !out.LockedUntil.IsZero() {
-				return interaction.Step{}, ErrLocked
-			}
-		}
-		// Recoverable wrong guess: surface ErrRetry so the orchestrator
-		// records the failure and advances the brute-force counter. The
-		// failure-incremented record is already persisted above. Return
-		// the verify prompt alongside ErrRetry so the orchestrator
-		// re-shows the code-entry screen with the delivered code still
-		// valid, rather than restarting the factor at the send screen —
-		// a restart would discard a usable code and burn the resend
-		// budget (a handful of typos would trip the resend cap and abort
-		// the chain, leaving the per-record verify budget unreachable).
-		return a.retryVerifyStep(ctx, in.Subject, rec.ExpiresAt), ErrRetry
-	case errors.Is(verr, ErrConsumed):
-		// Treat a replay attempt as a generic expiry from the SPA's
-		// perspective so the response shape stays constant with the
-		// "code never existed" branch. The orchestrator sees the
-		// underlying error verbatim through the wrapped chain.
-		return interaction.Step{}, ErrExpired
-	default:
-		// Locked / expired / reset-required flow through verbatim
-		// so the orchestrator can dispatch.
-		return interaction.Step{}, verr
+}
+
+func cloneRecord(r *store.EmailOTPRecord) *store.EmailOTPRecord {
+	if r == nil {
+		return nil
 	}
+	out := *r
+	out.CodeSalt = slices.Clone(r.CodeSalt)
+	out.CodeHash = slices.Clone(r.CodeHash)
+	return &out
 }
 
 // retryVerifyStep builds the verify-prompt re-emission the orchestrator
