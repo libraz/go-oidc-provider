@@ -82,7 +82,7 @@ func (c *config) validateRequired() error {
 	if c.issuer == "" {
 		return ErrIssuerRequired
 	}
-	if c.store == nil {
+	if isNilSubstore(c.store) {
 		return ErrStoreRequired
 	}
 	if len(c.keyset) == 0 {
@@ -969,7 +969,7 @@ func validateKeyset(ks Keyset) error {
 			}
 		}
 		seen[k.KeyID] = struct{}{}
-		if k.Signer == nil {
+		if isNilSubstore(k.Signer) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "keyset entry " + k.KeyID + " has nil Signer",

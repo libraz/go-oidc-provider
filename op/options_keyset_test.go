@@ -2,6 +2,7 @@ package op_test
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"errors"
 	"io"
@@ -65,6 +66,20 @@ func TestWithKeyset_RejectsNonES256Key(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected error for non-ES256 key, got nil")
+	}
+}
+
+func TestWithKeyset_RejectsTypedNilSigner(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *ecdsa.PrivateKey
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(stubStore{}),
+		op.WithKeyset(op.Keyset{{KeyID: "typed-nil", Signer: typedNil}}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "nil Signer") {
+		t.Fatalf("typed-nil signer error=%v, want nil Signer configuration error", err)
 	}
 }
 

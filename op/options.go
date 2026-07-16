@@ -153,11 +153,11 @@ type config struct {
 	// defined.
 	interactions []Interaction
 
-	// backchannelLogoutHTTPClient is the HTTP client the back-channel
-	// logout coordinator uses to POST Logout Tokens to RPs. Nil means
-	// "use the package default" (a fresh [*http.Client] with the
-	// timeout below and a redirect-refusing CheckRedirect, matching
-	// the spec posture).
+	// backchannelLogoutHTTPClient supplies the outbound Transport the
+	// back-channel logout coordinator uses to POST Logout Tokens to RPs.
+	// Nil means "use the package default". The builder intentionally
+	// ignores the supplied client's timeout and redirect policy so its
+	// hardened envelope remains mandatory.
 	backchannelLogoutHTTPClient *http.Client
 
 	// backchannelLogoutTimeout is the per-RP request budget. Zero
@@ -763,7 +763,7 @@ func WithIssuer(issuer string) Option {
 // Stable since v0.1.
 func WithStore(s store.Store) Option {
 	return optionFunc(func(c *config) error {
-		if s == nil {
+		if isNilSubstore(s) {
 			return ErrStoreRequired
 		}
 		c.store = s

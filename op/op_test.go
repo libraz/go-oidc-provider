@@ -10,6 +10,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // stubStore is a minimal [store.Store] used by tests that need [op.New] to
@@ -430,6 +431,16 @@ func TestWithStore_RejectsNil(t *testing.T) {
 	_, err := op.New(op.WithIssuer(validIssuer), op.WithStore(nil))
 	if !errors.Is(err, op.ErrStoreRequired) {
 		t.Fatalf("expected ErrStoreRequired for nil store, got %v", err)
+	}
+}
+
+func TestWithStore_RejectsTypedNil(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *inmem.Store
+	_, err := op.New(op.WithIssuer(validIssuer), op.WithStore(typedNil))
+	if !errors.Is(err, op.ErrStoreRequired) {
+		t.Fatalf("expected ErrStoreRequired for typed-nil store, got %v", err)
 	}
 }
 
