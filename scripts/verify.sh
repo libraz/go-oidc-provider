@@ -29,7 +29,7 @@ while IFS=$'\t' read -r mod tags; do
   args="$(go_args_for "$tags")"
   log "go vet $args ./... ($mod)"
   if [ -n "$args" ]; then
-    (cd "$mod" && go vet "$args" ./...)
+    (cd "$mod" && GOWORK=off go vet "$args" ./...)
   else
     (cd "$mod" && go vet ./...)
   fi
@@ -41,7 +41,7 @@ while IFS=$'\t' read -r mod tags; do
   args="$(go_args_for "$tags")"
   log "go build $args ./... ($mod)"
   if [ -n "$args" ]; then
-    (cd "$mod" && go build "$args" ./...)
+    (cd "$mod" && GOWORK=off go build "$args" ./...)
   else
     (cd "$mod" && go build ./...)
   fi

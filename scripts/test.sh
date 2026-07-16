@@ -24,7 +24,7 @@ while IFS=$'\t' read -r mod tags; do
   args="$(go_args_for "$tags")"
   if [ -n "$args" ]; then
     log "go test ${flags[*]} ${cover_args[*]} $args ./... ($mod)"
-    (cd "$mod" && go test "${flags[@]}" "${cover_args[@]}" "$args" ./...)
+    (cd "$mod" && GOWORK=off go test "${flags[@]}" "${cover_args[@]}" "$args" ./...)
   else
     log "go test ${flags[*]} ${cover_args[*]} ./... ($mod)"
     (cd "$mod" && go test "${flags[@]}" "${cover_args[@]}" ./...)

@@ -46,6 +46,23 @@ fi
 
 rm -f /tmp/pkce_shasum.txt /tmp/pkce_cut.txt /tmp/pkce_short.txt
 
+# Example 04 documents a concrete verifier and derives the challenge in the
+# command sequence. Execute the documented derivation and ensure both request
+# legs consume the paired variables; this catches a future edit that changes
+# one side but leaves the other stale.
+example04="examples/04-oauth2-only/main.go"
+verifier="$(sed -nE "s@.*VERIFIER='([^']+)'.*@\1@p" "$example04")"
+if [ -z "$verifier" ] || [ "${#verifier}" -lt 43 ] || [ "${#verifier}" -gt 128 ]; then
+  warn "Example 04 must document an RFC 7636 verifier of 43..128 characters"
+  bad=1
+else
+  challenge="$(printf %s "$verifier" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+  if [ "${#challenge}" -ne 43 ] || ! grep -Fq 'code_challenge=${CHALLENGE}' "$example04" || ! grep -Fq 'code_verifier=${VERIFIER}' "$example04"; then
+    warn "Example 04 PKCE verifier/challenge command sequence is not a paired S256 flow"
+    bad=1
+  fi
+fi
+
 if [ "$bad" -ne 0 ]; then
   die "fix the PKCE shell snippet — approved generators: openssl dgst -sha256 -binary | basenc --base64url -w0 | tr -d '='"
 fi

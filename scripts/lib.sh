@@ -54,6 +54,14 @@ public_modules() {
       printf '%s\t%s\n' "$(dirname "$f")" "example"
     done
   fi
+  # Shared example helpers are independent modules too. They are not shipped
+  # as tutorials, but a regression in either fans out to many examples, so the
+  # normal vet/lint/build/test inventory must exercise them with the same tag.
+  for d in "$REPO_ROOT/examples/internal/rpkit" "$REPO_ROOT/examples/internal/seedkit"; do
+    if [ -f "$d/go.mod" ]; then
+      printf '%s\t%s\n' "$d" "example"
+    fi
+  done
 }
 
 # go_args_for echoes "-tags=<csv>" when the second argument is
