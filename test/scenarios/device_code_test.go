@@ -1209,12 +1209,107 @@ func TestScenario_DEV_094_DeviceCodeIDTokenCarriesAtHash(t *testing.T) {
 	}
 }
 
-// TestScenario_DEV_095_RefreshTokenGatedByOfflineAccess is pending —
-// the refresh-token gate is implemented but the test body has not been
-// wired yet. See catalog status=pending.
-func TestScenario_DEV_095_RefreshTokenGatedByOfflineAccess(t *testing.T) {
+// TestScenario_DEV_095_RefreshTokenDefaultCompatibility pins the historical
+// default: a refresh-capable OIDC client receives a refresh token without
+// offline_access, while a client that has not registered refresh_token does
+// not. The strict-policy variant belongs to DEV-STRICT-095 below.
+func TestScenario_DEV_095_RefreshTokenDefaultCompatibility(t *testing.T) {
 	t.Parallel()
-	t.Skip("pending: DEV-095 (catalog row exists; test body deferred)")
+
+	t.Run("open id and registered refresh grant issues token without offline access", func(t *testing.T) {
+		t.Parallel()
+
+		p := newDevProvider(t, []string{"openid"})
+		deviceCode := p.issueDeviceCode(t, "openid")
+		p.approveDeviceCode(t, deviceCode, devDefaultSubject)
+
+		status, body := p.tokenForm(t, url.Values{
+			"grant_type":  {devURNDeviceCode},
+			"device_code": {deviceCode},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status=%d want 200 body=%v", status, body)
+		}
+		if refresh, _ := body["refresh_token"].(string); refresh == "" {
+			t.Fatalf("refresh_token missing under default policy: %v", body)
+		}
+	})
+
+	t.Run("missing registered refresh grant suppresses token", func(t *testing.T) {
+		t.Parallel()
+
+		p := newDevProvider(t, []string{"openid", "offline_access"})
+		p.client.GrantTypes = []string{"authorization_code", devURNDeviceCode}
+		if err := p.tk.Store.UpdateClient(context.Background(), p.client); err != nil {
+			t.Fatalf("UpdateClient: %v", err)
+		}
+		deviceCode := p.issueDeviceCode(t, "openid offline_access")
+		p.approveDeviceCode(t, deviceCode, devDefaultSubject)
+
+		status, body := p.tokenForm(t, url.Values{
+			"grant_type":  {devURNDeviceCode},
+			"device_code": {deviceCode},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status=%d want 200 body=%v", status, body)
+		}
+		if _, present := body["refresh_token"]; present {
+			t.Fatalf("refresh_token present without registered grant: %v", body)
+		}
+	})
+}
+
+// TestScenario_DEV_STRICT_095_RefreshTokenRequiresOfflineAccess pins the
+// opt-in OIDC Core §11 reading. It uses the same device-code transport as
+// DEV-095, so this matrix prevents the two policies from drifting apart.
+func TestScenario_DEV_STRICT_095_RefreshTokenRequiresOfflineAccess(t *testing.T) {
+	t.Parallel()
+
+	newStrictProvider := func(t *testing.T) *devProvider {
+		t.Helper()
+		return newDevProviderWithResources(
+			t,
+			[]string{"openid", "offline_access"},
+			nil,
+			testkit.WithOptions(op.WithStrictOfflineAccess()),
+		)
+	}
+
+	t.Run("no offline access suppresses token", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStrictProvider(t)
+		deviceCode := p.issueDeviceCode(t, "openid")
+		p.approveDeviceCode(t, deviceCode, devDefaultSubject)
+		status, body := p.tokenForm(t, url.Values{
+			"grant_type":  {devURNDeviceCode},
+			"device_code": {deviceCode},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status=%d want 200 body=%v", status, body)
+		}
+		if _, present := body["refresh_token"]; present {
+			t.Fatalf("refresh_token present without offline_access in strict mode: %v", body)
+		}
+	})
+
+	t.Run("offline access and registered grant issue token", func(t *testing.T) {
+		t.Parallel()
+
+		p := newStrictProvider(t)
+		deviceCode := p.issueDeviceCode(t, "openid offline_access")
+		p.approveDeviceCode(t, deviceCode, devDefaultSubject)
+		status, body := p.tokenForm(t, url.Values{
+			"grant_type":  {devURNDeviceCode},
+			"device_code": {deviceCode},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status=%d want 200 body=%v", status, body)
+		}
+		if refresh, _ := body["refresh_token"].(string); refresh == "" {
+			t.Fatalf("refresh_token missing with offline_access in strict mode: %v", body)
+		}
+	})
 }
 
 // TestScenario_DEV_096_TokenReplayConsumedReturnsExpired pins the

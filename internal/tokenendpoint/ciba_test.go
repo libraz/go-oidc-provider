@@ -331,6 +331,36 @@ func TestHandleCIBA_ApprovedRecord_HappyPath(t *testing.T) {
 	}
 }
 
+func TestHandleCIBA_IssuanceFaultLeavesApprovalRetryable(t *testing.T) {
+	t.Parallel()
+	f := newCIBAFixture(t)
+	const authReqID = "auth-req-issuance-retry"
+	f.seedCIBARequest(t, &store.CIBARequest{ID: authReqID, Scope: []string{"openid"}})
+	if err := f.store.CIBARequests().Approve(context.Background(), authReqID, "user-42", "", time.Time{}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	f.deps.RevocationStrategy = store.RevocationStrategyJTIRegistry
+	f.deps.AccessTokens = &failFirstAccessTokenRegistry{inner: f.store.AccessTokens(), fail: true}
+
+	form := url.Values{"grant_type": {"urn:openid:params:grant-type:ciba"}, "auth_req_id": {authReqID}}
+	if rec := f.post(t, form); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	stored, err := f.store.CIBARequests().FindByAuthReqID(context.Background(), authReqID)
+	if err != nil {
+		t.Fatalf("Find after issuance fault: %v", err)
+	}
+	if stored.Status != store.CIBARequestStatusApproved {
+		t.Fatalf("status after issuance fault = %v, want Approved", stored.Status)
+	}
+
+	f.deps.Clock = fixedClock{now: f.clock.now.Add(ciba.DefaultInterval)}
+	f.deps.AccessTokens = f.store.AccessTokens()
+	if rec := f.post(t, form); rec.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleCIBA_AuthorizeFailureAuditReasonMatchesWireError(t *testing.T) {
 	t.Parallel()
 

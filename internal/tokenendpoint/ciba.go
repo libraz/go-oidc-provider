@@ -73,11 +73,18 @@ func handleCIBA(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitCIBAReject(ctx, deps, client.ID, reason)
 		return
 	}
-	consumed, ok := consumeCIBARequest(ctx, w, deps, in.AuthReqID)
-	if !ok {
+	issued, err := prepareCIBAResponse(ctx, deps, client, rec, authorized, binding)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	issueCIBAResponse(ctx, w, deps, client, consumed, authorized, binding)
+	_, ok = consumeCIBARequest(ctx, w, deps, in.AuthReqID)
+	if !ok {
+		issued.cleanup(ctx, deps)
+		return
+	}
+	emitCIBAIssued(ctx, deps, issued.audit)
+	writeSuccess(w, issued.response)
 }
 
 // cibaInputs is the de-structured view of the form parameters the
@@ -389,20 +396,42 @@ func consumeCIBARequest(
 // only the ACR that the device actually satisfied at Approve time.
 // amr is left unset until the substore retains a real authentication-
 // method signal.
-func issueCIBAResponse(
+type preparedCIBAResponse struct {
+	response successResponse
+	audit    cibaIssuedExtras
+	opaque   bool
+}
+
+func (p preparedCIBAResponse) cleanup(ctx context.Context, deps Deps) {
+	cleanupPreparedCredentials(ctx, deps, p.response.AccessToken, p.response.RefreshToken, p.opaque)
+}
+
+// prepareCIBAResponse completes every fallible token-assembly step before
+// CIBARequestStore.Consume makes the authorization irrevocable. This keeps an
+// approved CIBA ceremony retryable after signing, JWE, or persistence faults.
+func prepareCIBAResponse(
 	ctx context.Context,
-	w http.ResponseWriter,
 	deps Deps,
 	client *store.Client,
-	consumed *store.CIBARequest,
+	record *store.CIBARequest,
 	authorized *cgrant.Authorized,
 	binding tokenBinding,
-) {
+) (out preparedCIBAResponse, err error) {
 	now := deps.now().UTC()
 	resource := ""
 	if len(authorized.Audience) > 0 {
 		resource = authorized.Audience[0]
 	}
+	format := store.AccessTokenFormatJWT
+	if deps.AccessTokenFormatFor != nil {
+		format = deps.AccessTokenFormatFor(resource)
+	}
+	var accessToken, idToken, refreshToken string
+	defer func() {
+		if err != nil {
+			cleanupPreparedCredentials(ctx, deps, accessToken, refreshToken, format == store.AccessTokenFormatOpaque)
+		}
+	}()
 	// auth_time is the wall-clock at which the end user completed the
 	// authentication-device interaction —
 	// store.CIBARequestStore.Approve stamps it onto the record. A
@@ -413,22 +442,20 @@ func issueCIBAResponse(
 	// Clients that set RequireAuthTime block id_token issuance via
 	// requireAuthTimeForIDToken below when the value is zero.
 	if err := requireAuthTimeForIDToken(client, authorized.Scope, authTimeUnix(authorized.AuthTime)); err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
-		return
+		return preparedCIBAResponse{}, err
 	}
 	authTime := authTimeUnix(authorized.AuthTime)
 	publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+		return preparedCIBAResponse{}, err
 	}
-	accessToken, err := mintAccessToken(
+	accessToken, err = mintAccessToken(
 		ctx,
 		deps,
 		authorized.Subject,
 		publicSubject,
 		client.ID,
-		consumed.ID,
+		record.ID,
 		authorized.Scope,
 		resource,
 		now,
@@ -437,10 +464,8 @@ func issueCIBAResponse(
 		nil,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+		return preparedCIBAResponse{}, err
 	}
-	var idToken string
 	if oidcscope.ContainsOpenID(authorized.Scope) {
 		idToken, err = mintCIBAIDToken(deps, cibaIDTokenInput{
 			Subject:     publicSubject,
@@ -451,21 +476,19 @@ func issueCIBAResponse(
 			ACR:         authorized.ACR,
 		})
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
+			return preparedCIBAResponse{}, err
 		}
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
+			return preparedCIBAResponse{}, err
 		}
 	}
-	refreshToken, err := maybeIssueRefreshToken(
+	refreshToken, err = maybeIssueRefreshToken(
 		ctx,
 		deps,
 		client,
 		authorized.Subject,
-		consumed.ID,
+		record.ID,
 		authorized.Scope,
 		resource,
 		"",
@@ -478,24 +501,22 @@ func issueCIBAResponse(
 		},
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+		return preparedCIBAResponse{}, err
 	}
-	emitCIBAIssued(ctx, deps, cibaIssuedExtras{
-		ClientID:         client.ID,
-		Subject:          authorized.Subject,
-		Scope:            authorized.Scope,
-		Audience:         authorized.Audience,
-		SenderConstraint: authorized.SenderConstraint,
-	})
-	writeSuccess(w, successResponse{
+	return preparedCIBAResponse{response: successResponse{
 		AccessToken:  accessToken,
 		TokenType:    binding.tokenTypeFor(),
 		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
 		RefreshToken: refreshToken,
 		IDToken:      idToken,
 		Scope:        joinScope(authorized.Scope),
-	})
+	}, audit: cibaIssuedExtras{
+		ClientID:         client.ID,
+		Subject:          authorized.Subject,
+		Scope:            authorized.Scope,
+		Audience:         authorized.Audience,
+		SenderConstraint: authorized.SenderConstraint,
+	}, opaque: format == store.AccessTokenFormatOpaque}, nil
 }
 
 // cibaIDTokenInput collects the parameters [mintCIBAIDToken]

@@ -223,10 +223,11 @@ type CIBARequest struct {
 // own, and pairing the consume with the access-token / refresh-token
 // writes inside one transaction would force every embedder to either
 // hand the substore the same backend as the rest of the transactional
-// cluster or reimplement the CAS in their composite layer. The
-// remaining failure mode — Consume succeeds and a follow-on token
-// write fails — is observable on the wire as a missing token response,
-// after which the client retries the entire flow per CIBA Core §11.
+// cluster or reimplement the CAS in their composite layer. The token endpoint
+// prepares the fallible token bundle before calling Consume, then discards
+// pre-persisted opaque / refresh credentials if another poll wins the CAS.
+// This preserves single use without losing an approved ceremony to a signing
+// or persistence fault.
 //
 // Backends that have not yet provisioned the substore MAY fail to
 // satisfy [Store.CIBARequests]; the library detects nil at op.New and

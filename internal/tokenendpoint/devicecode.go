@@ -82,11 +82,18 @@ func handleDeviceCode(w http.ResponseWriter, r *http.Request, deps Deps) {
 		emitDeviceCodeReject(ctx, deps, client.ID, reason)
 		return
 	}
-	consumed, ok := consumeDeviceCode(ctx, w, deps, in.DeviceCode)
-	if !ok {
+	issued, err := prepareDeviceCodeResponse(ctx, deps, client, rec, authorized, binding)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	issueDeviceCodeResponse(ctx, w, deps, client, consumed, authorized, binding)
+	_, ok = consumeDeviceCode(ctx, w, deps, in.DeviceCode)
+	if !ok {
+		issued.cleanup(ctx, deps)
+		return
+	}
+	emitDeviceCodeIssued(ctx, deps, issued.audit)
+	writeSuccess(w, issued.response)
 }
 
 // deviceCodeInputs is the de-structured view of the form parameters
@@ -360,20 +367,42 @@ func consumeDeviceCode(
 // holds at most one canonicalised entry. The handler reads index 0
 // (or empty when none was registered), matching the access-token
 // aud claim's single-entry encoding.
-func issueDeviceCodeResponse(
+type preparedDeviceCodeResponse struct {
+	response successResponse
+	audit    deviceCodeIssuedExtras
+	opaque   bool
+}
+
+func (p preparedDeviceCodeResponse) cleanup(ctx context.Context, deps Deps) {
+	cleanupPreparedCredentials(ctx, deps, p.response.AccessToken, p.response.RefreshToken, p.opaque)
+}
+
+// prepareDeviceCodeResponse completes every fallible token-assembly step
+// before the irreversible DeviceCodeStore.Consume CAS. A signing, JWE, opaque
+// save, or refresh save fault therefore leaves the approved ceremony retryable.
+func prepareDeviceCodeResponse(
 	ctx context.Context,
-	w http.ResponseWriter,
 	deps Deps,
 	client *store.Client,
-	consumed *store.DeviceCode,
+	record *store.DeviceCode,
 	authorized *dcgrant.Authorized,
 	binding tokenBinding,
-) {
+) (out preparedDeviceCodeResponse, err error) {
 	now := deps.now().UTC()
 	resource := ""
 	if len(authorized.Audience) > 0 {
 		resource = authorized.Audience[0]
 	}
+	format := store.AccessTokenFormatJWT
+	if deps.AccessTokenFormatFor != nil {
+		format = deps.AccessTokenFormatFor(resource)
+	}
+	var accessToken, idToken, refreshToken string
+	defer func() {
+		if err != nil {
+			cleanupPreparedCredentials(ctx, deps, accessToken, refreshToken, format == store.AccessTokenFormatOpaque)
+		}
+	}()
 	// auth_time is the wall-clock at which the end user completed the
 	// verification ceremony — store.DeviceCodeStore.Approve stamps it
 	// onto the record. A zero value means the substore did not retain
@@ -384,22 +413,20 @@ func issueDeviceCodeResponse(
 	// issuance via requireAuthTimeForIDToken below when the value is
 	// zero.
 	if err := requireAuthTimeForIDToken(client, authorized.Scope, authTimeUnix(authorized.AuthTime)); err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
-		return
+		return preparedDeviceCodeResponse{}, err
 	}
 	authTime := authTimeUnix(authorized.AuthTime)
 	publicSubject, err := projectPublicSubject(ctx, deps, authorized.Subject, client)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+		return preparedDeviceCodeResponse{}, err
 	}
-	accessToken, err := mintAccessToken(
+	accessToken, err = mintAccessToken(
 		ctx,
 		deps,
 		authorized.Subject,
 		publicSubject,
 		client.ID,
-		consumed.ID,
+		record.ID,
 		authorized.Scope,
 		resource,
 		now,
@@ -408,10 +435,8 @@ func issueDeviceCodeResponse(
 		nil,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+		return preparedDeviceCodeResponse{}, err
 	}
-	var idToken string
 	if oidcscope.ContainsOpenID(authorized.Scope) {
 		idToken, err = mintDeviceCodeIDToken(deps, deviceCodeIDTokenInput{
 			Subject:     publicSubject,
@@ -421,21 +446,19 @@ func issueDeviceCodeResponse(
 			AuthTime:    authTime,
 		})
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
+			return preparedDeviceCodeResponse{}, err
 		}
 		idToken, err = maybeEncryptIDToken(ctx, deps, client, idToken)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
+			return preparedDeviceCodeResponse{}, err
 		}
 	}
-	refreshToken, err := maybeIssueRefreshToken(
+	refreshToken, err = maybeIssueRefreshToken(
 		ctx,
 		deps,
 		client,
 		authorized.Subject,
-		consumed.ID,
+		record.ID,
 		authorized.Scope,
 		resource,
 		"",
@@ -445,25 +468,23 @@ func issueDeviceCodeResponse(
 		authContext{AuthTime: authTime},
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errServerError, "")
-		return
+		return preparedDeviceCodeResponse{}, err
 	}
-	emitDeviceCodeIssued(ctx, deps, deviceCodeIssuedExtras{
-		ClientID:         client.ID,
-		Subject:          authorized.Subject,
-		Scope:            authorized.Scope,
-		Audience:         authorized.Audience,
-		SenderConstraint: authorized.SenderConstraint,
-		Scopes:           authorized.Scope,
-	})
-	writeSuccess(w, successResponse{
+	return preparedDeviceCodeResponse{response: successResponse{
 		AccessToken:  accessToken,
 		TokenType:    binding.tokenTypeFor(),
 		ExpiresIn:    int64(deps.AccessTokenTTL.Seconds()),
 		RefreshToken: refreshToken,
 		IDToken:      idToken,
 		Scope:        joinScope(authorized.Scope),
-	})
+	}, audit: deviceCodeIssuedExtras{
+		ClientID:         client.ID,
+		Subject:          authorized.Subject,
+		Scope:            authorized.Scope,
+		Audience:         authorized.Audience,
+		SenderConstraint: authorized.SenderConstraint,
+		Scopes:           authorized.Scope,
+	}, opaque: format == store.AccessTokenFormatOpaque}, nil
 }
 
 // deviceCodeIDTokenInput collects the parameters

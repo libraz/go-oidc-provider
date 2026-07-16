@@ -655,12 +655,24 @@ rows:
     severity: P1
     spec: OIDC Core §11 / RFC 6749 §6
     behaviour: |
-      A /token response on the device_code grant MUST include
-      refresh_token only when both (a) the granted scope includes
-      offline_access, and (b) the client's registered grant_types
-      include refresh_token. Either condition missing suppresses
-      the refresh_token from the response.
-    status: pending
+      Under the default compatibility policy, a /token response on
+      the device_code grant MUST include refresh_token when the
+      granted scope includes openid and the client's registered
+      grant_types include refresh_token. offline_access is not
+      required by the default policy; a missing refresh_token grant
+      type suppresses the response field.
+    status: active
+
+  - id: DEV-STRICT-095
+    severity: P1
+    spec: OIDC Core §11 / RFC 6749 §6
+    behaviour: |
+      With WithStrictOfflineAccess enabled, a /token response on the
+      device_code grant MUST include refresh_token only when the
+      granted scope includes offline_access and the client's
+      registered grant_types include refresh_token. A missing
+      offline_access scope suppresses the response field.
+    status: active
 
   - id: DEV-096
     severity: P0

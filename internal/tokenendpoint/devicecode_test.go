@@ -145,6 +145,40 @@ type recordPollFailingDeviceCodeStore struct {
 	inner store.DeviceCodeStore
 }
 
+// failFirstAccessTokenRegistry injects the persist-after-sign fault that used
+// to occur after Device/CIBA Consume. It lets both grant tests prove that the
+// approval remains retryable now that assembly runs before the consume CAS.
+type failFirstAccessTokenRegistry struct {
+	inner store.AccessTokenRegistry
+	fail  bool
+}
+
+var errInjectedAccessTokenRegister = errors.New("injected: access token Register fault")
+
+func (s *failFirstAccessTokenRegistry) Register(ctx context.Context, rec store.AccessTokenRecord) error {
+	if s.fail {
+		s.fail = false
+		return errInjectedAccessTokenRegister
+	}
+	return s.inner.Register(ctx, rec)
+}
+
+func (s *failFirstAccessTokenRegistry) Find(ctx context.Context, jti string) (*store.AccessTokenRecord, error) {
+	return s.inner.Find(ctx, jti)
+}
+
+func (s *failFirstAccessTokenRegistry) RevokeByJTI(ctx context.Context, jti string) error {
+	return s.inner.RevokeByJTI(ctx, jti)
+}
+
+func (s *failFirstAccessTokenRegistry) RevokeByGrant(ctx context.Context, grantID string) (int, error) {
+	return s.inner.RevokeByGrant(ctx, grantID)
+}
+
+func (s *failFirstAccessTokenRegistry) GC(ctx context.Context, cutoff time.Time) (int, error) {
+	return s.inner.GC(ctx, cutoff)
+}
+
 var errInjectedDeviceCodeRecordPoll = errors.New("injected: RecordPoll fault")
 
 func (s recordPollFailingDeviceCodeStore) Save(ctx context.Context, code *store.DeviceCode) error {
@@ -271,5 +305,37 @@ func TestHandleDeviceCode_RecordPollFault_EmitsWarn(t *testing.T) {
 	gotErr, _ := found.Extras["error"].(string)
 	if gotErr == "" {
 		t.Errorf("extras.error empty; want stringified store error")
+	}
+}
+
+func TestHandleDeviceCode_IssuanceFaultLeavesApprovalRetryable(t *testing.T) {
+	t.Parallel()
+	f := newDeviceCodeFixture(t)
+	const deviceCode = "device-code-issuance-retry"
+	f.seedDeviceCode(t, &store.DeviceCode{ID: deviceCode, UserCode: "ABCD-EFGH", Scope: []string{"openid"}})
+	if err := f.store.DeviceCodes().Approve(context.Background(), deviceCode, "user-42", time.Time{}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	f.deps.RevocationStrategy = store.RevocationStrategyJTIRegistry
+	f.deps.AccessTokens = &failFirstAccessTokenRegistry{inner: f.store.AccessTokens(), fail: true}
+
+	form := url.Values{"grant_type": {devCodeGrantURN}, "device_code": {deviceCode}}
+	if rec := f.post(t, form); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("first status = %d, want 500; body=%s", rec.Code, rec.Body.String())
+	}
+	stored, err := f.store.DeviceCodes().FindByDeviceCode(context.Background(), deviceCode)
+	if err != nil {
+		t.Fatalf("Find after issuance fault: %v", err)
+	}
+	if stored.Status != store.DeviceCodeStatusApproved {
+		t.Fatalf("status after issuance fault = %v, want Approved", stored.Status)
+	}
+
+	// The first request recorded a poll observation. Advance only the handler
+	// clock past the RFC 8628 interval before retrying the same approval.
+	f.deps.Clock = fixedClock{now: f.clock.now.Add(devicecode.DefaultInterval)}
+	f.deps.AccessTokens = f.store.AccessTokens()
+	if rec := f.post(t, form); rec.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 }

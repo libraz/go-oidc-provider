@@ -194,10 +194,10 @@ type DeviceCode struct {
 // access-token / refresh-token writes inside one transaction would force
 // every embedder to either hand the device-code substore the same backend
 // as the rest of the atomic-routing cluster or reimplement the CAS in
-// their composite layer. The remaining failure mode — Consume succeeds
-// and a follow-on token write fails — is observable on the wire as a
-// missing token response, after which the device retries the entire
-// flow per RFC 8628 §3.5.
+// their composite layer. The token endpoint prepares the fallible token
+// bundle before calling Consume, then discards pre-persisted opaque / refresh
+// credentials if another poll wins the CAS. This preserves single use without
+// losing an approved ceremony to a signing or persistence fault.
 //
 // Backends that have not yet provisioned the substore MAY fail to
 // satisfy [Store.DeviceCodes]; the library detects nil at op.New and
