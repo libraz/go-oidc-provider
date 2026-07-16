@@ -312,30 +312,30 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 		return nil, err
 	}
 
-	// Mark the jti immediately after the nonce gate succeeds and
-	// before any further computation. The order closes a replay
+	// Compute the JWK thumbprint after the nonce gate succeeds, then
+	// namespace the replay key by the proof key as well as its jti.
+	// The order closes a replay
 	// vector where an attacker observes a valid (htm/htu/iat/ath)
 	// proof, races the legitimate retry whose nonce-check fails on
 	// stale input, and then resubmits the SAME jti with a fresh
-	// nonce. Marking ahead of the thumbprint compute makes the jti
-	// gate atomic relative to nonce success: every nonce-passing
-	// proof advances the consumed-jti table, so a second use of
-	// the same jti — regardless of the second submission's nonce
+	// nonce. Every nonce-passing proof advances the consumed-jti
+	// table under its JKT, so a second use of the same JTI by the
+	// same proof key — regardless of the second submission's nonce
 	// — surfaces as ErrProofReplayed. Pre-nonce failures (htm /
 	// htu / iat / ath / nonce) never reach this point, preserving
 	// the "malformed proof never advances the table" property the
 	// previous ordering relied on.
+	jkt, err := Thumbprint(parsed.jwk)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrProofMalformed, err)
+	}
+
 	expiresAt := time.Unix(parsed.claims.IssuedAt, 0).Add(v.replayLeew)
-	if err := v.jtis.Mark(ctx, "dpop:"+parsed.claims.JTI, expiresAt); err != nil {
+	if err := v.jtis.Mark(ctx, "dpop:"+jkt+":"+parsed.claims.JTI, expiresAt); err != nil {
 		if errors.Is(err, store.ErrAlreadyConsumed) {
 			return nil, ErrProofReplayed
 		}
 		return nil, fmt.Errorf("dpop: mark jti: %w", err)
-	}
-
-	jkt, err := Thumbprint(parsed.jwk)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrProofMalformed, err)
 	}
 
 	return &VerifyResult{JKT: jkt, JTI: parsed.claims.JTI}, nil

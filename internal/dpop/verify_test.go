@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -138,6 +139,37 @@ func TestVerify_Replay(t *testing.T) {
 	}
 }
 
+// TestVerify_ReplayIsNamespacedByProofKey proves an unrelated DPoP key cannot
+// poison a victim request merely by choosing the same attacker-controlled jti.
+// A replay from the original key remains rejected.
+func TestVerify_ReplayIsNamespacedByProofKey(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	firstKey := newES256Key(t)
+	secondKey := newES256Key(t)
+	claims := goodClaims(now)
+	claims["jti"] = "shared-jti"
+	v := newVerifier(t, now)
+	in := dpop.VerifyInput{
+		Method: "POST",
+		URL:    mustParseURL(t, "https://op.example/oidc/token"),
+		TLS:    true,
+	}
+
+	in.ProofHeader = signProof(t, firstKey, claims, "")
+	if _, err := v.Verify(context.Background(), in); err != nil {
+		t.Fatalf("first key: %v", err)
+	}
+	in.ProofHeader = signProof(t, secondKey, claims, "")
+	if _, err := v.Verify(context.Background(), in); err != nil {
+		t.Fatalf("different key with same jti: %v", err)
+	}
+	in.ProofHeader = signProof(t, firstKey, claims, "")
+	if _, err := v.Verify(context.Background(), in); !errors.Is(err, dpop.ErrProofReplayed) {
+		t.Fatalf("same key replay: %v, want ErrProofReplayed", err)
+	}
+}
+
 func TestVerify_JTIExpiryAnchoredToProofIAT(t *testing.T) {
 	t.Parallel()
 
@@ -162,8 +194,8 @@ func TestVerify_JTIExpiryAnchoredToProofIAT(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if jtis.jti != "dpop:jti-1" {
-		t.Fatalf("jti key=%q want dpop:jti-1", jtis.jti)
+	if !strings.HasPrefix(jtis.jti, "dpop:") || !strings.HasSuffix(jtis.jti, ":jti-1") {
+		t.Fatalf("jti key=%q want dpop:<jkt>:jti-1", jtis.jti)
 	}
 	// JTI must outlive the full iat acceptance window: a proof first
 	// marked at iat - IatWindow may legitimately face a replay attempt
