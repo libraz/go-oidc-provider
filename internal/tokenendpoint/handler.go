@@ -125,6 +125,12 @@ type Deps struct {
 	// wires it into both a [refresh.Exchanger] and a [refresh.Issuer].
 	RefreshTokens store.RefreshTokenStore
 
+	// Transactions, when supplied, lets the refresh handler stage Consume,
+	// credential persistence, and the durable retry response before emitting an
+	// HTTP success. The op router wires a Store that implements it; direct
+	// embedders may leave it nil and retain the individual-store contract.
+	Transactions store.Transactional
+
 	// Grants is the consent substore. Used for "auth_time" lookups when
 	// minting the id_token.
 	Grants store.GrantStore
@@ -201,6 +207,12 @@ type Deps struct {
 	// (currently 60s). The token endpoint forwards this verbatim to
 	// [refresh.ExchangerConfig.GraceTTL].
 	RefreshTokenGraceTTL time.Duration
+
+	// RefreshRetryEncryptionKeys contains the active and retiring 32-byte
+	// cookie-key materials used (after domain separation) to encrypt durable
+	// refresh response-loss caches. The op router wires its cookie-key ring
+	// here; direct handler embedders enabling grace recovery must do likewise.
+	RefreshRetryEncryptionKeys [][]byte
 
 	// StrictOfflineAccess flips the refresh-token issuance gate to the
 	// strict reading of OIDC Core 1.0 §11. When true, refresh tokens

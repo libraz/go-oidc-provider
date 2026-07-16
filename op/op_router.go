@@ -121,6 +121,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			Clients:                        cfg.store.Clients(),
 			Codes:                          cfg.store.AuthorizationCodes(),
 			RefreshTokens:                  cfg.store.RefreshTokens(),
+			Transactions:                   transactionalStore(cfg.store),
 			Grants:                         cfg.store.Grants(),
 			UserStore:                      cfg.store.Users(),
 			SubjectProjector:               subjectProjector,
@@ -136,6 +137,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 			RefreshTokenTTL:                cfg.refreshTokenTTL,
 			RefreshTokenOfflineTTL:         cfg.refreshTokenOfflineTTL,
 			RefreshTokenGraceTTL:           cfg.effectiveRefreshGrace(),
+			RefreshRetryEncryptionKeys:     cfg.cookieKeys,
 			StrictOfflineAccess:            cfg.strictOfflineAccess,
 			GrantManagementEnabled:         cfg.grantManagementEnabled,
 			AllowedClientAuthMethods:       cfg.allowedClientAuthMethods(),
@@ -709,6 +711,11 @@ func joinPath(mountPrefix, endpoint string) string {
 		return endpoint
 	}
 	return mountPrefix + endpoint
+}
+
+func transactionalStore(s store.Store) store.Transactional {
+	tx, _ := s.(store.Transactional)
+	return tx
 }
 
 // buildSectorResolver constructs the [sector.Resolver] the DCR

@@ -198,6 +198,7 @@ func TestRefresh_DPoP_MissingProof(t *testing.T) {
 	if got := decodeJSON(t, resp)["error"]; got != "invalid_grant" {
 		t.Errorf("error=%v want invalid_grant", got)
 	}
+	assertRefreshTokenUnconsumed(t, f, tokenID)
 }
 
 // TestRefresh_DPoP_ThumbprintMismatch rejects a refresh whose proof is
@@ -229,6 +230,18 @@ func TestRefresh_DPoP_ThumbprintMismatch(t *testing.T) {
 	}
 	if got := decodeJSON(t, resp)["error"]; got != "invalid_grant" {
 		t.Errorf("error=%v want invalid_grant", got)
+	}
+	assertRefreshTokenUnconsumed(t, f, tokenID)
+}
+
+func assertRefreshTokenUnconsumed(t testing.TB, f *fixture, tokenID string) {
+	t.Helper()
+	rec, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(%q): %v", tokenID, err)
+	}
+	if rec.ConsumedAt != nil {
+		t.Errorf("refresh token %q was consumed at %s after binding rejection", tokenID, rec.ConsumedAt)
 	}
 }
 

@@ -197,12 +197,27 @@ type IssueInput struct {
 // token value the OP places in the token response's "refresh_token"
 // parameter.
 func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
-	if err := validateIssue(in); err != nil {
+	id, rec, err := i.Prepare(in)
+	if err != nil {
 		return "", err
+	}
+	if err := i.store.Save(ctx, rec); err != nil {
+		return "", fmt.Errorf("refresh: save: %w", err)
+	}
+	return id, nil
+}
+
+// Prepare mints a refresh-token bearer value and constructs its persistent
+// record without writing it. Rotation callers use this to seal the complete
+// token response (which contains the raw successor) before atomically storing
+// both successor and retry response through store.RefreshRetryResponseStore.
+func (i *Issuer) Prepare(in IssueInput) (string, *store.RefreshToken, error) {
+	if err := validateIssue(in); err != nil {
+		return "", nil, err
 	}
 	id, err := newID()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	now := i.clock().UTC()
 	rec := &store.RefreshToken{
@@ -226,10 +241,7 @@ func (i *Issuer) Issue(ctx context.Context, in IssueInput) (string, error) {
 		MTLSCertThumbprint:   in.MTLSCertThumbprint,
 		Nonce:                in.Nonce,
 	}
-	if err := i.store.Save(ctx, rec); err != nil {
-		return "", fmt.Errorf("refresh: save: %w", err)
-	}
-	return id, nil
+	return id, rec, nil
 }
 
 func validateIssue(in IssueInput) error {
@@ -435,8 +447,9 @@ type Exchanged struct {
 	// been consumed within [ExchangerConfig.GraceTTL]. Callers MUST
 	// NOT mint a new refresh token on the grace path — the original
 	// rotation succeeded and its successor remains the canonical
-	// next-generation token. The token endpoint signals this by
-	// omitting "refresh_token" from the response body.
+	// next-generation token. When retry-response recovery is configured,
+	// the token endpoint re-emits the sealed response from that original
+	// successful rotation rather than minting another token set.
 	InGrace bool
 }
 
@@ -604,8 +617,8 @@ func (e *Exchanger) emitReplayDetected(ctx context.Context, presentedID string) 
 // graceExchange resolves a presented token whose ConsumedAt is at most
 // [Exchanger.graceTTL] in the past. The function re-validates the
 // client and scope bindings against the consumed record and returns an
-// [Exchanged] with InGrace=true so the token endpoint mints a fresh
-// access token without rotating the refresh chain.
+// [Exchanged] with InGrace=true so the token endpoint can recover the
+// response from the original rotation without rotating the refresh chain.
 //
 // The returned ConsumedID is the presented token's id rather than its
 // canonical successor's: callers use ConsumedID only as the parent for

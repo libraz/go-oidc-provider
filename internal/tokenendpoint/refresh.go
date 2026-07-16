@@ -56,9 +56,26 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 	if !ok {
 		return
 	}
-	if !preflightRefreshBeforeConsume(ctx, w, deps, client.ID, in) {
+	if !preflightRefreshBeforeConsume(ctx, w, r, deps, client.ID, in, dpopOut) {
 		return
 	}
+	if deps.Transactions != nil {
+		handleRefreshTokenTransaction(ctx, w, r, deps, client, in, dpopOut, authorizationDetails)
+		return
+	}
+	completeRefreshToken(ctx, w, r, deps, client, in, dpopOut, authorizationDetails)
+}
+
+func completeRefreshToken(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	deps Deps,
+	client *store.Client,
+	in refreshInputs,
+	dpopOut *dpopOutcome,
+	authorizationDetails []map[string]any,
+) {
 	exchanged, ok := exchangeRefresh(ctx, w, deps, client.ID, in)
 	if !ok {
 		return
@@ -83,6 +100,50 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 		return
 	}
 	issueRefreshResponse(ctx, w, deps, client, exchanged, binding, authorizationDetails)
+}
+
+// handleRefreshTokenTransaction stages every post-preflight refresh mutation
+// behind a transaction and only forwards the buffered response after Commit.
+// A signing/JWE/cache/write failure consequently rolls Consume back instead of
+// stranding the predecessor refresh token.
+func handleRefreshTokenTransaction(
+	ctx context.Context,
+	w http.ResponseWriter,
+	r *http.Request,
+	deps Deps,
+	client *store.Client,
+	in refreshInputs,
+	dpopOut *dpopOutcome,
+	authorizationDetails []map[string]any,
+) {
+	tx, err := deps.Transactions.BeginTx(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+	txDeps := deps
+	txDeps.Transactions = nil
+	txDeps.RefreshTokens = tx.RefreshTokens()
+	txDeps.Grants = tx.Grants()
+	txDeps.AccessTokens = tx.AccessTokens()
+	txDeps.OpaqueAccessTokens = tx.OpaqueAccessTokens()
+	txDeps.GrantRevocations = tx.GrantRevocations()
+	staged := newStagedResponseWriter()
+	completeRefreshToken(ctx, staged, r, txDeps, client, in, dpopOut, authorizationDetails)
+	// Preserve OAuth rejection semantics that intentionally consume a token
+	// (notably replay detection and scope-widening) while rolling back only
+	// server-side failures in token assembly/persistence. Preflight covers the
+	// sender-constraint rejection cases before a transaction is opened.
+	if staged.status >= http.StatusInternalServerError || staged.status == 0 {
+		staged.copyTo(w)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	staged.copyTo(w)
 }
 
 // checkRefreshScopeAllowlist enforces the per-scope AllowedClients
@@ -114,9 +175,11 @@ func checkRefreshScopeAllowlist(
 func preflightRefreshBeforeConsume(
 	ctx context.Context,
 	w http.ResponseWriter,
+	r *http.Request,
 	deps Deps,
 	clientID string,
 	in refreshInputs,
+	dpopOut *dpopOutcome,
 ) bool {
 	rec, err := deps.RefreshTokens.Find(ctx, in.Token)
 	if err != nil {
@@ -144,7 +207,17 @@ func preflightRefreshBeforeConsume(
 	if deps.Scopes != nil && !checkTokenScopeAllowlist(w, deps, clientID, scope) {
 		return false
 	}
-	return enforceStrictOfflineAccess(w, deps, scope, rec.Origin)
+	if !enforceStrictOfflineAccess(w, deps, scope, rec.Origin) {
+		return false
+	}
+	// Sender-constrained refresh tokens must reject a missing or mismatched
+	// proof before Exchange consumes their single-use record. The post-exchange
+	// checks remain below as defence in depth and cover the grace path, whose
+	// consumed record intentionally bypasses this preflight.
+	if !enforceDPoPRefreshBinding(w, deps, dpopOut, rec.DPoPJKT) {
+		return false
+	}
+	return requireMTLSMatch(w, r, deps, rec.MTLSCertThumbprint)
 }
 
 func preflightRefreshScope(w http.ResponseWriter, granted, requested []string) ([]string, bool) {
@@ -277,6 +350,8 @@ func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 // it is always the consumed record's thumbprint (mTLS does not
 // admit mid-chain upgrades). Both cases collapse to a single source
 // of truth on the wire and on the persisted rotated record.
+//
+//nolint:gocognit // Protocol-mandated issuance order keeps each failure boundary explicit.
 func issueRefreshResponse(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -286,6 +361,21 @@ func issueRefreshResponse(
 	binding tokenBinding,
 	requestedAuthorizationDetails []map[string]any,
 ) {
+	if exchanged.InGrace {
+		response, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
+		// A grace retry may not widen or otherwise change the effective scope
+		// of the response originally cached for this predecessor.
+		if response.Scope != joinScope(exchanged.Scope) {
+			writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token retry does not match original exchange")
+			return
+		}
+		writeSuccess(w, response)
+		return
+	}
 	now := deps.now().UTC()
 	authCtx := refreshAuthContext(ctx, deps, exchanged)
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
@@ -307,7 +397,10 @@ func issueRefreshResponse(
 	// design (ADR 0013). Revocation runs BEFORE the new mint so a
 	// colliding hash on Save (impossible-by-construction with 256-bit
 	// entropy) cannot leave the chain in a half-revoked state.
-	revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID)
+	if err := revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID); err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
 	// ADR 0025 §"Mint refusal under tombstoned grant": under the
 	// grant-tombstone strategy, refuse to mint a fresh access token
 	// when the underlying grant has already been tombstoned. Without
@@ -373,24 +466,20 @@ func issueRefreshResponse(
 			return
 		}
 	}
-	var rotated string
-	if !exchanged.InGrace {
-		rotated, err = rotateRefreshToken(ctx, deps, client, refreshExchangedWithAuthorizationDetails(exchanged, authorizationDetails), binding)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, errServerError, "")
-			return
-		}
-	}
-	writeSuccess(w, successResponse{
+	response := successResponse{
 		AccessToken:          accessToken,
 		TokenType:            binding.tokenTypeFor(),
 		ExpiresIn:            int64(deps.AccessTokenTTL.Seconds()),
-		RefreshToken:         rotated,
 		IDToken:              idToken,
 		Scope:                joinScope(exchanged.Scope),
 		AuthorizationDetails: cloneAuthorizationDetails(authorizationDetails),
 		GrantID:              grantIDForResponse(deps, exchanged.GrantID),
-	})
+	}
+	if err := rotateRefreshToken(ctx, deps, client, refreshExchangedWithAuthorizationDetails(exchanged, authorizationDetails), binding, &response); err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	writeSuccess(w, response)
 }
 
 func refreshExchangedWithAuthorizationDetails(exchanged *refresh.Exchanged, details []map[string]any) *refresh.Exchanged {
@@ -497,14 +586,15 @@ func rotateRefreshToken(
 	client *store.Client,
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
-) (string, error) {
+	response *successResponse,
+) error {
 	issuer, err := refresh.NewIssuer(refresh.IssuerConfig{
 		Store: deps.RefreshTokens,
 		Clock: deps.clockFunc(),
 		TTL:   pickRefreshTokenTTL(deps, exchanged.Scope),
 	})
 	if err != nil {
-		return "", err
+		return err
 	}
 	parent := exchanged.ConsumedID
 	rotatedJKT := binding.DPoPJKT
@@ -516,7 +606,7 @@ func rotateRefreshToken(
 		// match) and we keep that value so the chain stays bound.
 		rotatedJKT = refreshDPoPJKT(client, binding.DPoPJKT)
 	}
-	token, err := issuer.Issue(ctx, refresh.IssueInput{
+	issue := refresh.IssueInput{
 		ClientID:             client.ID,
 		Subject:              exchanged.Subject,
 		GrantID:              exchanged.GrantID,
@@ -533,9 +623,30 @@ func rotateRefreshToken(
 		AMR:                  append([]string(nil), exchanged.AMR...),
 		AuthorizationDetails: cloneAuthorizationDetails(exchanged.AuthorizationDetails),
 		AccessTokenExtra:     cloneClaimsMap(exchanged.AccessTokenExtra),
-	})
-	if err != nil {
-		return "", err
+	}
+	if len(deps.RefreshRetryEncryptionKeys) == 0 {
+		token, err := issuer.Issue(ctx, issue)
+		if err != nil {
+			return err
+		}
+		response.RefreshToken = token
+	} else {
+		retries, ok := deps.RefreshTokens.(store.RefreshRetryResponseStore)
+		if !ok {
+			return errors.New("tokenendpoint: refresh store does not support durable retry responses")
+		}
+		token, successor, err := issuer.Prepare(issue)
+		if err != nil {
+			return err
+		}
+		response.RefreshToken = token
+		sealed, err := sealRefreshRetryResponse(deps.RefreshRetryEncryptionKeys, parent, *response)
+		if err != nil {
+			return err
+		}
+		if err := retries.SaveRotationWithRetry(ctx, successor, sealed); err != nil {
+			return err
+		}
 	}
 	deps.audit().Emit(ctx, audit.Event{
 		Name:     auditTokenRefreshed,
@@ -549,7 +660,19 @@ func rotateRefreshToken(
 			"ttl_bucket":     ttlBucketFor(deps, exchanged.Scope),
 		},
 	})
-	return token, nil
+	return nil
+}
+
+func loadRefreshRetryResponse(ctx context.Context, deps Deps, predecessor string) (successResponse, error) {
+	retries, ok := deps.RefreshTokens.(store.RefreshRetryResponseStore)
+	if !ok {
+		return successResponse{}, errors.New("tokenendpoint: refresh store does not support durable retry responses")
+	}
+	sealed, err := retries.LoadRetryResponse(ctx, predecessor)
+	if err != nil {
+		return successResponse{}, err
+	}
+	return openRefreshRetryResponse(deps.RefreshRetryEncryptionKeys, predecessor, sealed)
 }
 
 // enforceGrantTombstoneMintRefusal implements the ADR 0025 mint-
@@ -628,23 +751,23 @@ func enforceGrantTombstoneMintRefusal(
 //     exchanger. Treat the cascade as a silent no-op so a future
 //     refactor that surfaces empty grants does not crash the path.
 //
-// Errors from RevokeByGrant are swallowed: the caller has not yet
-// minted the new access token, so a partial revocation does not leave
-// a credential in a contradictory state. The next token-endpoint
-// request hits the same revocation path again because the substore
-// keeps the row until GC; idempotency ensures a retry recovers.
-func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID string) {
+// RevokeByGrant errors are returned before a new access token is minted.
+// This fail-closed ordering prevents a backend fault from creating a fresh
+// bearer credential while a prior opaque credential remains active. The
+// refresh-token grace path can safely retry the same idempotent cascade.
+func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID string) error {
 	if deps.OpaqueAccessTokens == nil || grantID == "" {
-		return
+		return nil
 	}
 	format := store.AccessTokenFormatJWT
 	if deps.AccessTokenFormatFor != nil {
 		format = deps.AccessTokenFormatFor(resource)
 	}
 	if format != store.AccessTokenFormatOpaque {
-		return
+		return nil
 	}
-	_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+	_, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+	return err
 }
 
 // refreshChainRevocationStore returns the [store.GrantRevocationStore]

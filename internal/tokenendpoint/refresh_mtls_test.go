@@ -82,6 +82,7 @@ func TestRefresh_MTLS_MissingCert(t *testing.T) {
 	if got := decodeMTLSResp(t, resp)["error"]; got != "invalid_grant" {
 		t.Errorf("error=%v want invalid_grant", got)
 	}
+	assertRefreshTokenUnconsumed(t, f, tokenID)
 }
 
 // TestRefresh_MTLS_ThumbprintMismatch rejects a refresh whose cert
@@ -112,6 +113,7 @@ func TestRefresh_MTLS_ThumbprintMismatch(t *testing.T) {
 	if got := decodeMTLSResp(t, resp)["error"]; got != "invalid_grant" {
 		t.Errorf("error=%v want invalid_grant", got)
 	}
+	assertRefreshTokenUnconsumed(t, f, tokenID)
 }
 
 // TestRefresh_MTLS_BearerChainStillWorks confirms a bearer chain (no

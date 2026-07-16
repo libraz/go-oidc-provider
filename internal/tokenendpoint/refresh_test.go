@@ -2,8 +2,11 @@ package tokenendpoint_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,8 +14,27 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
+
+var errInjectedOpaqueRevoke = errors.New("injected opaque revoke failure")
+
+type revokeFailsOpaqueAccessTokenStore struct {
+	store.OpaqueAccessTokenStore
+}
+
+func (s revokeFailsOpaqueAccessTokenStore) RevokeByGrant(context.Context, string) (int, error) {
+	return 0, errInjectedOpaqueRevoke
+}
+
+type opaqueRevokeFailStore struct {
+	store.Store
+}
+
+func (s opaqueRevokeFailStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
+	return revokeFailsOpaqueAccessTokenStore{OpaqueAccessTokenStore: s.Store.OpaqueAccessTokens()}
+}
 
 // refreshForm builds the canonical refresh_token form body. scope is
 // optional; an empty string omits the parameter.
@@ -344,6 +366,22 @@ func TestRefresh_RequireAuthTime_MissingAuthTimeFails(t *testing.T) {
 	if got := body["error"]; got != "server_error" {
 		t.Fatalf("error=%v want server_error", got)
 	}
+	stored, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("Find after 500: %v", err)
+	}
+	if stored.ConsumedAt != nil {
+		t.Fatalf("refresh token consumed after assembly failure: %+v", stored)
+	}
+	client.RequireAuthTime = false
+	if err := f.prov.Store.UpdateClient(context.Background(), client); err != nil {
+		t.Fatalf("UpdateClient retry config: %v", err)
+	}
+	retry := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
+	}
 }
 
 // TestRefresh_HappyPath_NonOIDC verifies that a refresh whose original
@@ -501,9 +539,10 @@ func TestRefresh_Replay(t *testing.T) {
 
 // TestRefresh_GraceWindow exercises the RFC 9700 §2.2.2 grace path
 // end-to-end at the HTTP layer: a refresh token presented again
-// within the configured window returns 200 OK, a fresh access_token,
-// and (importantly) NO new refresh_token field — the canonical
-// successor was already issued on the first exchange.
+// within the configured window re-emits the exact first response, including
+// the canonical successor refresh token. This is the recovery guarantee for a
+// response lost after the first rotation commit: the retry neither creates a
+// second successor nor strands the client after the old token expires.
 func TestRefresh_GraceWindow(t *testing.T) {
 	t.Parallel()
 
@@ -534,7 +573,8 @@ func TestRefresh_GraceWindow(t *testing.T) {
 	if firstAccess == "" {
 		t.Fatal("first response missing access_token")
 	}
-	if rt, _ := firstBody["refresh_token"].(string); rt == "" {
+	firstRefresh, _ := firstBody["refresh_token"].(string)
+	if firstRefresh == "" {
 		t.Fatal("first response must rotate a refresh token")
 	}
 
@@ -547,13 +587,13 @@ func TestRefresh_GraceWindow(t *testing.T) {
 		t.Fatalf("grace status=%d want 200", second.StatusCode)
 	}
 	secondBody := decodeJSON(t, second)
-	if rt, ok := secondBody["refresh_token"]; ok {
-		t.Errorf("grace response must omit refresh_token; got %v", rt)
+	if got, _ := secondBody["refresh_token"].(string); got != firstRefresh {
+		t.Errorf("grace refresh_token=%q want canonical successor %q", got, firstRefresh)
 	}
 	if got, _ := secondBody["access_token"].(string); got == "" {
-		t.Error("grace response must include a fresh access_token")
-	} else if got == firstAccess {
-		t.Error("grace response must mint a NEW access_token (RFC 9700 §2.2.2)")
+		t.Error("grace response must include access_token")
+	} else if got != firstAccess {
+		t.Error("grace response must re-emit the original access_token")
 	}
 }
 
@@ -998,6 +1038,96 @@ func TestRefresh_OpaqueFormat_RotationRevokesPriorAT(t *testing.T) {
 	}
 	if fresh.GrantID != grantID {
 		t.Errorf("fresh.GrantID=%q want %q", fresh.GrantID, grantID)
+	}
+}
+
+// TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT pins the fail-closed
+// side of opaque refresh rotation. A failed prior-token cascade must surface
+// as a server error before the endpoint creates and returns a second live
+// bearer credential.
+func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	backing := inmem.New(inmem.WithClock(clock))
+	provider, err := op.New(testkit.MinimalOptions(t,
+		op.WithStore(opaqueRevokeFailStore{Store: backing}),
+		op.WithClock(clock),
+		op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	server := httptest.NewServer(provider)
+	t.Cleanup(server.Close)
+
+	const secret = "opaque-revoke-failure-secret" //nolint:gosec // fixture-only client credential.
+	hash, err := (&clientauth.Argon2id{}).Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := &store.Client{
+		ID:                      "client-opaque-revoke-failure",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid"},
+	}
+	if err := backing.RegisterClient(context.Background(), client); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	const grantID = "grant-opaque-revoke-failure"
+	const refreshID = "rt-opaque-revoke-failure"
+	const priorAT = "prior-opaque-revoke-failure-token-123456"
+	if err := backing.Grants().Save(context.Background(), &store.Grant{
+		ID: grantID, Subject: "user-opaque-revoke-failure", ClientID: client.ID,
+		Scope: []string{"openid"}, CreatedAt: clock.now, UpdatedAt: clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	if err := backing.RefreshTokens().Save(context.Background(), &store.RefreshToken{
+		ID: refreshID, ClientID: client.ID, Subject: "user-opaque-revoke-failure",
+		GrantID: grantID, Scope: []string{"openid"}, CreatedAt: clock.now,
+		ExpiresAt: clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RefreshTokens.Save: %v", err)
+	}
+	if err := backing.OpaqueAccessTokens().Save(context.Background(), &store.OpaqueAccessToken{
+		ID: priorAT, GrantID: grantID, Subject: "user-opaque-revoke-failure",
+		ClientID: client.ID, Scope: []string{"openid"}, Audience: testkit.DefaultIssuer,
+		IssuedAt: clock.now, ExpiresAt: clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("OpaqueAccessTokens.Save: %v", err)
+	}
+
+	form := refreshForm(refreshID, "")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, server.URL+"/oidc/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(client.ID, secret)
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("POST /token: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status=%d want 500 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if body["error"] != "server_error" {
+		t.Errorf("error=%v want server_error", body["error"])
+	}
+	if _, ok := body["access_token"]; ok {
+		t.Errorf("response must not contain a fresh access_token: %v", body)
+	}
+	prior, err := backing.OpaqueAccessTokens().Find(context.Background(), priorAT)
+	if err != nil {
+		t.Fatalf("OpaqueAccessTokens.Find(prior): %v", err)
+	}
+	if prior.Revoked {
+		t.Error("injected revoke failure must not claim the prior token was revoked")
 	}
 }
 
