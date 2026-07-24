@@ -10,10 +10,13 @@ import "strconv"
 // the option site with the seed's index in the description so the
 // caller can locate the offending entry.
 // Repeated calls append to the configured set so embedders MAY layer
-// builders (a base set plus a deployment-specific overlay) without
-// duplicate-rejection. The aggregate slice feeds the orchestrator
-// hookup; today the records are stored on config and consumed by the
-// orchestrator wiring that lands in a follow-up.
+// builders (a base set plus a deployment-specific overlay); duplicate IDs in
+// the aggregate set are rejected by [New]. The configured Store MUST expose
+// store.StaticClientReconciler. Provider construction applies the complete
+// set as one atomic, idempotent batch after every other fallible build step
+// has succeeded. Existing equivalent static clients are accepted unchanged;
+// metadata or secret differences return a configuration conflict rather than
+// overwriting an operator-managed record.
 // Stable since v0.1.
 func WithStaticClients(seeds ...ClientSeed) Option {
 	return optionFunc(func(c *config) error {
@@ -24,24 +27,54 @@ func WithStaticClients(seeds ...ClientSeed) Option {
 			}
 		}
 		for i, s := range seeds {
-			if s == nil {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithStaticClients[" + strconv.Itoa(i) + "]: nil ClientSeed",
-				}
+			if err := appendStaticClientSeed(c, i, s); err != nil {
+				return err
 			}
-			rec, err := s.seed()
-			if err != nil {
-				return &Error{
-					Code:        codeConfiguration,
-					Description: "WithStaticClients[" + strconv.Itoa(i) + "]: " + err.Error(),
-					Cause:       err,
-				}
-			}
-			c.staticClients = append(c.staticClients, rec)
 		}
 		return nil
 	})
+}
+
+func appendStaticClientSeed(c *config, index int, seed ClientSeed) error {
+	if isNilLike(seed) {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithStaticClients[" + strconv.Itoa(index) + "]: nil ClientSeed",
+		}
+	}
+	rec, err := seed.seed()
+	if err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithStaticClients[" + strconv.Itoa(index) + "]: " + err.Error(),
+			Cause:       err,
+		}
+	}
+	c.staticClients = append(c.staticClients, rec)
+	rememberStaticClientSecret(c, rec.ID, seed)
+	return nil
+}
+
+func rememberStaticClientSecret(c *config, id string, seed ClientSeed) {
+	secret, ok := staticClientPlaintext(seed)
+	if !ok {
+		return
+	}
+	if c.staticClientSecrets == nil {
+		c.staticClientSecrets = make(map[string]string)
+	}
+	c.staticClientSecrets[id] = secret
+}
+
+func staticClientPlaintext(seed ClientSeed) (string, bool) {
+	switch value := seed.(type) {
+	case ConfidentialClient:
+		return value.Secret, true
+	case *ConfidentialClient:
+		return value.Secret, true
+	default:
+		return "", false
+	}
 }
 
 // WithFirstPartyClients marks the listed client_id values as first-

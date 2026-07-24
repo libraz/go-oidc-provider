@@ -15,9 +15,10 @@ import (
 // op.WithStaticClients seeds clients through a composite.Store without
 // the embedder having to register them against the routed durable
 // backend first. composite.Store deliberately does NOT implement
-// store.ClientRegistry via type assertion (its godoc explains why), so
-// op.seedStaticClients must probe the optional ClientRegistry()
-// accessor the composite exposes; this test pins that probe.
+// store.StaticClientReconciler via type assertion (its godoc explains why),
+// so op.seedStaticClients must probe the optional
+// StaticClientReconciler() accessor the composite exposes; this test pins
+// that probe.
 func TestWithStaticClients_AcceptsCompositeStore(t *testing.T) {
 	t.Parallel()
 
@@ -36,6 +37,13 @@ func TestWithStaticClients_AcceptsCompositeStore(t *testing.T) {
 	if _, ok := any(storage).(store.ClientRegistry); ok {
 		t.Fatal("composite.Store must NOT satisfy store.ClientRegistry by direct " +
 			"type assertion; the test premise relies on the optional accessor probe")
+	}
+	if _, ok := any(storage).(store.StaticClientReconciler); ok {
+		t.Fatal("composite.Store must NOT satisfy store.StaticClientReconciler by direct " +
+			"type assertion; capability depends on the routed Clients backend")
+	}
+	if _, ok := storage.StaticClientReconciler(); !ok {
+		t.Fatal("composite.Store must expose the routed inmem atomic reconciler")
 	}
 
 	if _, err := op.New(
@@ -63,12 +71,12 @@ func TestWithStaticClients_AcceptsCompositeStore(t *testing.T) {
 
 // TestWithStaticClients_RejectsCompositeWithReadOnlyClients confirms
 // that the optional probe still rejects compositions whose routed
-// Clients backend cannot register new entries. The composite is
+// Clients backend cannot atomically reconcile new entries. The composite is
 // intentionally configured with a Clients backend that hides
-// store.ClientRegistry, so composite.Store.ClientRegistry() returns
-// (nil, false) and op.seedStaticClients reports the same
-// ClientRegistry-required error as a directly-supplied read-only
-// store.
+// store.StaticClientReconciler, so
+// composite.Store.StaticClientReconciler() returns (nil, false) and
+// op.seedStaticClients reports the same atomic-reconciler requirement as a
+// directly-supplied read-only store.
 func TestWithStaticClients_RejectsCompositeWithReadOnlyClients(t *testing.T) {
 	t.Parallel()
 
@@ -95,18 +103,20 @@ func TestWithStaticClients_RejectsCompositeWithReadOnlyClients(t *testing.T) {
 		}),
 	)
 	if err == nil {
-		t.Fatal("expected ClientRegistry error for read-only Clients route, got nil")
+		t.Fatal("expected StaticClientReconciler error for read-only Clients route, got nil")
 	}
-	if !strings.Contains(err.Error(), "ClientRegistry") {
-		t.Errorf("err = %v, want it to mention ClientRegistry", err)
+	if _, ok := storage.StaticClientReconciler(); ok {
+		t.Fatal("read-only Clients route must not advertise StaticClientReconciler")
+	}
+	if !strings.Contains(err.Error(), "StaticClientReconciler") {
+		t.Errorf("err = %v, want it to mention StaticClientReconciler", err)
 	}
 }
 
-// readOnlyClientsStore embeds [store.Store] via the interface so
-// store.ClientRegistry does NOT promote on the wrapper even though the
-// underlying inmem store implements it. The composite probe therefore
-// sees a non-registry Clients backend and surfaces (nil, false), which
-// is exactly the configuration we want to reject at op.New time.
+// readOnlyClientsStore embeds [store.Store] via the interface so neither
+// [store.ClientRegistry] nor [store.StaticClientReconciler] promotes from the
+// underlying in-memory store. The composite probe therefore reports that
+// atomic reconciliation is unavailable, which op.New must reject.
 type readOnlyClientsStore struct {
 	store.Store
 }

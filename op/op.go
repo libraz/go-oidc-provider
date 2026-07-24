@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -44,6 +45,10 @@ const csrfDerivationLabel = "oidc-csrf-v1"
 // derivation is namespaced from the CSRF key so a hypothetical key-
 // disclosure on one signer cannot forge tokens on the other.
 const stateRefDerivationLabel = "oidc-stateref-v1"
+
+// completionDerivationLabel namespaces stable authorization-completion IDs
+// from cookies, CSRF tokens, and orchestrator state references.
+const completionDerivationLabel = "oidc-authorization-completion-key-v1"
 
 // Provider is the assembled OpenID Connect Provider. It implements
 // [http.Handler] and is the result of a successful [New] call.
@@ -117,15 +122,16 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		clear(cfg.staticClientSecrets)
+		cfg.staticClientSecrets = nil
+	}()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	cfg.emitPartialWiringWarnings()
 	trust, err := buildProxyTrust(cfg)
 	if err != nil {
-		return nil, err
-	}
-	if err := seedStaticClients(cfg); err != nil {
 		return nil, err
 	}
 	if err := cfg.enforceSubjectModeGate(context.Background()); err != nil {
@@ -155,20 +161,25 @@ func New(opts ...Option) (*Provider, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg.interactionD = wireHTMLDriverTranslator(cfg.interactionD, locales)
 	mux, err := buildRouter(cfg, keySet, encSet, scopes, locales, trust)
 	if err != nil {
 		return nil, err
 	}
 	handler := wrapWithProfileMiddleware(mux, cfg)
 	handler = wrapWithTrustedProxy(handler, trust)
-	return &Provider{
+	provider := &Provider{
 		cfg:     cfg,
 		keys:    keySet,
 		scopes:  scopes,
 		locales: locales,
 		mux:     mux,
 		handler: handler,
-	}, nil
+	}
+	if err := seedStaticClients(cfg); err != nil {
+		return nil, err
+	}
+	return provider, nil
 }
 
 // wrapWithTrustedProxy decorates h with a middleware that resolves
@@ -418,72 +429,100 @@ func fromInternalMetadata(m registrationendpoint.ClientMetadata) ClientMetadata 
 	}
 }
 
-// seedStaticClients persists the [WithStaticClients] entries in
-// [config.staticClients] through [store.ClientRegistry.RegisterClient].
-// The function is a no-op when no static clients were configured. It
-// fails [New] when:
-//
-//   - the configured store does not satisfy [store.ClientRegistry] and
-//     does not vend one through [clientRegistryProvider] (the embedder
-//     asked for static seeding but supplied a read-only store);
-//   - any [store.ClientRegistry.RegisterClient] call fails (e.g. the
-//     same id is registered twice).
-//
-// Calling this once at construction matches the OAuth 2.0 §2 expectation
-// that the OP knows about every static client before serving requests.
+// seedStaticClients reconciles the complete [WithStaticClients] set through
+// one atomic [store.StaticClientReconciler] call. New invokes it only after
+// every other fallible construction step has succeeded, so a failed Provider
+// build never leaves client records behind.
 func seedStaticClients(cfg *config) error {
 	if len(cfg.staticClients) == 0 {
 		return nil
 	}
-	registry, err := resolveClientRegistry(cfg.store)
+	reconciler, err := resolveStaticClientReconciler(cfg.store)
 	if err != nil {
 		return err
 	}
 	ctx := context.Background()
+	desired := make([]*store.Client, 0, len(cfg.staticClients))
 	for i := range cfg.staticClients {
-		c := cfg.staticClients[i]
-		if err := registry.RegisterClient(ctx, &c); err != nil {
-			return &Error{
-				Code:        codeConfiguration,
-				Description: "WithStaticClients: registering client " + c.ID,
-				Cause:       err,
-			}
+		client, normalizeErr := normalizeStaticClientSeed(ctx, cfg, reconciler, cfg.staticClients[i])
+		if normalizeErr != nil {
+			return normalizeErr
+		}
+		desired = append(desired, client)
+	}
+	if err := reconciler.ReconcileStaticClients(ctx, desired); err != nil {
+		return &Error{
+			Code:        codeConfiguration,
+			Description: "WithStaticClients: atomic reconciliation failed",
+			Cause:       err,
 		}
 	}
 	return nil
 }
 
-// clientRegistryProvider is the optional capability stores expose when
-// they cannot satisfy [store.ClientRegistry] directly but can vend one.
-// The composite adapter (op/storeadapter/composite) is the canonical
-// implementer: its godoc explains why it deliberately does NOT implement
-// [store.ClientRegistry] via a type assertion (a read-only Clients
-// backend would otherwise be silently coerced into a registry). The
-// interface is duck-typed because composite cannot import this package.
-type clientRegistryProvider interface {
-	ClientRegistry() (store.ClientRegistry, bool)
+func normalizeStaticClientSeed(
+	ctx context.Context,
+	cfg *config,
+	reconciler store.StaticClientReconciler,
+	desired store.Client,
+) (*store.Client, error) {
+	existing, err := reconciler.GetClient(ctx, desired.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return &desired, nil
+	}
+	if err != nil {
+		return nil, &Error{
+			Code:        codeConfiguration,
+			Description: "WithStaticClients: reading existing client " + desired.ID,
+			Cause:       err,
+		}
+	}
+	if existing.Source != "" && existing.Source != store.ClientSourceStatic {
+		return nil, staticClientConflict(desired.ID)
+	}
+	if existing.Source == "" {
+		desired.Source = ""
+	}
+	if plaintext, ok := cfg.staticClientSecrets[desired.ID]; ok {
+		if err := (&clientauth.Argon2id{}).Verify(plaintext, existing.SecretHash); err != nil {
+			return nil, staticClientConflict(desired.ID)
+		}
+		desired.SecretHash = existing.SecretHash
+	}
+	if !store.StaticClientEquivalent(existing, &desired) {
+		return nil, staticClientConflict(desired.ID)
+	}
+	return &desired, nil
 }
 
-// resolveClientRegistry returns the [store.ClientRegistry] view of s.
-// It first tries a direct interface assertion (every storeadapter that
-// can register clients satisfies [store.ClientRegistry]); when that
-// fails it probes [clientRegistryProvider] so composite stores opt in
-// without re-implementing the registry surface. A store that does
-// neither is rejected with [codeConfiguration] so [WithStaticClients]
-// fails fast at [New].
-func resolveClientRegistry(s store.Store) (store.ClientRegistry, error) {
-	if registry, ok := s.(store.ClientRegistry); ok {
-		return registry, nil
+func staticClientConflict(id string) error {
+	return &Error{
+		Code:        codeConfiguration,
+		Description: "WithStaticClients: stored client " + id + " differs from the configured static seed",
+		Cause:       store.ErrConflict,
 	}
-	if provider, ok := s.(clientRegistryProvider); ok {
-		if registry, has := provider.ClientRegistry(); has {
-			return registry, nil
+}
+
+// staticClientReconcilerProvider is the conditional capability accessor used
+// by composite stores whose concrete method set cannot honestly implement
+// [store.StaticClientReconciler] for every possible Clients route.
+type staticClientReconcilerProvider interface {
+	StaticClientReconciler() (store.StaticClientReconciler, bool)
+}
+
+func resolveStaticClientReconciler(s store.Store) (store.StaticClientReconciler, error) {
+	if reconciler, ok := s.(store.StaticClientReconciler); ok {
+		return reconciler, nil
+	}
+	if provider, ok := s.(staticClientReconcilerProvider); ok {
+		if reconciler, has := provider.StaticClientReconciler(); has {
+			return reconciler, nil
 		}
 	}
 	return nil, &Error{
 		Code: codeConfiguration,
 		Description: "WithStaticClients requires a Store that implements " +
-			"store.ClientRegistry; got a read-only store",
+			"store.StaticClientReconciler for atomic startup seeding",
 	}
 }
 
@@ -794,7 +833,7 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 		Rules:   rules,
 		Risk:    flow.Risk,
 	}
-	if flow.Decider != nil {
+	if !isNilLike(flow.Decider) {
 		spec.Decider = &deciderAdapter{inner: flow.Decider}
 	}
 	return authn.CompileLoginFlow(spec)
@@ -819,7 +858,7 @@ func compileLoginFlow(flow LoginFlow, cfg *config) (*authn.CompiledLoginFlow, er
 // cfg threads the Provider-level fallbacks (e.g. MFA encryption keys)
 // through to the built-in builders.
 func projectStepToFlow(where string, s Step, cfg *config) (authn.LoginFlowStep, error) {
-	if s == nil {
+	if isNilLike(s) {
 		return authn.LoginFlowStep{}, &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + " must not be nil",
@@ -837,7 +876,7 @@ func projectStepToFlow(where string, s Step, cfg *config) (authn.LoginFlowStep, 
 // budget without conflating the ExternalStep contract (verbatim
 // forward) with the built-in builder dispatch.
 func projectExternalStep(where string, ext ExternalStep) (authn.LoginFlowStep, error) {
-	if ext.Authenticator == nil {
+	if isNilLike(ext.Authenticator) {
 		return authn.LoginFlowStep{}, &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + " ExternalStep.Authenticator must not be nil",
@@ -1138,6 +1177,12 @@ func deriveCSRFKey(cookieKey []byte) []byte {
 func deriveStateRefKey(cookieKey []byte) []byte {
 	h := hmac.New(sha256.New, cookieKey)
 	_, _ = h.Write([]byte(stateRefDerivationLabel))
+	return h.Sum(nil)
+}
+
+func deriveCompletionKey(cookieKey []byte) []byte {
+	h := hmac.New(sha256.New, cookieKey)
+	_, _ = h.Write([]byte(completionDerivationLabel))
 	return h.Sum(nil)
 }
 

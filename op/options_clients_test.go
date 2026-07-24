@@ -179,8 +179,8 @@ func TestWithStaticClients_RejectsReadOnlyStore(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for read-only store, got nil")
 	}
-	if !strings.Contains(err.Error(), "ClientRegistry") {
-		t.Errorf("err = %v, want it to mention ClientRegistry", err)
+	if !strings.Contains(err.Error(), "StaticClientReconciler") {
+		t.Errorf("err = %v, want it to mention StaticClientReconciler", err)
 	}
 }
 
@@ -450,13 +450,12 @@ func TestWithStaticClients_RejectsUnknownGrantType(t *testing.T) {
 	}
 }
 
-// TestWithStaticClients_RejectsBackchannelSessionRequiredWithoutURI
-// pins the construction-time refusal of a client that opts into
-// session-bound back-channel logout semantics without registering a
-// delivery URI. The rule is RFC 7591-adjacent (the spec leaves the
-// coupling implicit) but matches the DCR validator's posture so a
-// static seed and a /register payload share the same envelope.
-func TestWithStaticClients_RejectsBackchannelSessionRequiredWithoutURI(t *testing.T) {
+// TestWithStaticClients_RejectsBackchannelSessionRequired pins the
+// construction-time refusal of a client that requests session-bound
+// logout. Supplying a delivery URI does not make the request safe:
+// the provider cannot recover an RP-specific SID from the current
+// grant model.
+func TestWithStaticClients_RejectsBackchannelSessionRequired(t *testing.T) {
 	t.Parallel()
 
 	_, err := op.New(append(validBaseOptsWithInmem(t),
@@ -464,11 +463,12 @@ func TestWithStaticClients_RejectsBackchannelSessionRequiredWithoutURI(t *testin
 			ID:                               "demo-spa",
 			RedirectURIs:                     []string{"https://app.example.com/cb"},
 			Scopes:                           []string{"openid"},
+			BackchannelLogoutURI:             "https://app.example.com/logout",
 			BackchannelLogoutSessionRequired: true,
 		}),
 	)...)
 	if err == nil {
-		t.Fatal("expected configuration error for session_required without backchannel_logout_uri, got nil")
+		t.Fatal("expected configuration error for unsupported session_required, got nil")
 	}
 	if !strings.Contains(err.Error(), "backchannel_logout") {
 		t.Errorf("err = %v, want it to mention the offending field", err)

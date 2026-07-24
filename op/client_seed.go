@@ -99,9 +99,9 @@ type PublicClient struct {
 	BackchannelLogoutURI string
 
 	// BackchannelLogoutSessionRequired requests a "sid" claim on the
-	// Logout Token (OIDC Back-Channel Logout 1.0 §2.4). Setting true
-	// without [BackchannelLogoutURI] is a no-op; setting it is
-	// recommended for clients that key downstream sessions on sid.
+	// Logout Token (OIDC Back-Channel Logout 1.0 §2.4). The provider
+	// currently rejects true because it cannot recover an RP-specific
+	// session lineage; sub-only back-channel logout remains available.
 	BackchannelLogoutSessionRequired bool
 
 	// ApplicationType mirrors OIDC Dynamic Client Registration 1.0's
@@ -214,7 +214,8 @@ type ConfidentialClient struct {
 	BackchannelLogoutURI string
 
 	// BackchannelLogoutSessionRequired mirrors
-	// [PublicClient.BackchannelLogoutSessionRequired].
+	// [PublicClient.BackchannelLogoutSessionRequired]. The provider
+	// currently rejects true.
 	BackchannelLogoutSessionRequired bool
 
 	// ApplicationType mirrors [PublicClient.ApplicationType].
@@ -283,8 +284,9 @@ func (c ConfidentialClient) seed() (store.Client, error) {
 // authenticates with a JWT assertion signed by its own private key
 // (OIDC Core 1.0 §9 / RFC 7523). The OP never sees the private half;
 // JWKS holds the public-half JSON Web Key Set the OP uses to verify
-// assertions. [LoadPublicJWKS] strips the "d" parameter from a
-// JWKS file on disk and returns the bytes ready to embed here.
+// assertions. [LoadPublicJWKS] accepts RSA, EC, and OKP keys, rebuilds
+// each from a public-member allowlist, and returns the bytes ready to
+// embed here. Symmetric and unsupported key types are rejected.
 //
 //	pub, err := op.LoadPublicJWKS("conformance/keys/fapi-client.jwks.json")
 //	if err != nil { ... }
@@ -303,8 +305,8 @@ type PrivateKeyJWTClient struct {
 	// JWKS is the public-half JSON Web Key Set the OP uses to
 	// verify private_key_jwt assertions. The bytes are stored
 	// verbatim on [store.Client.JWKs]; pass the output of
-	// [LoadPublicJWKS] (or any equivalent that strips "d") so
-	// private material never reaches the OP.
+	// [LoadPublicJWKS] (or an equivalent key-type-specific public
+	// member normalizer) so private material never reaches the OP.
 	JWKS []byte
 
 	// RedirectURIs lists the exact-match redirect_uri values the
@@ -333,7 +335,8 @@ type PrivateKeyJWTClient struct {
 	BackchannelLogoutURI string
 
 	// BackchannelLogoutSessionRequired mirrors
-	// [PublicClient.BackchannelLogoutSessionRequired].
+	// [PublicClient.BackchannelLogoutSessionRequired]. The provider
+	// currently rejects true.
 	BackchannelLogoutSessionRequired bool
 
 	// ApplicationType mirrors [PublicClient.ApplicationType].

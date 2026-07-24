@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 )
 
 // ClientSource identifies how the client record reached the OP. The library
@@ -87,10 +88,10 @@ type Client struct {
 
 	// BackchannelLogoutSessionRequired reports whether the OP MUST
 	// include the "sid" claim in the Logout Token sent to this client
-	// (OpenID Connect Back-Channel Logout 1.0 §2.4). When false the OP
-	// is free to omit "sid" and identify the session by "sub" alone;
-	// when true the OP MUST emit "sid" (and the coordinator skips the
-	// client when no SID is available).
+	// (OpenID Connect Back-Channel Logout 1.0 §2.4). New static and
+	// dynamic registrations with true are rejected until the OP can
+	// persist RP-specific session lineage. The coordinator skips a
+	// legacy true row rather than leaking a browser-session SID.
 	BackchannelLogoutSessionRequired bool
 
 	// GrantTypes lists the grant_type values the client is permitted to use
@@ -360,4 +361,73 @@ type ClientRegistry interface {
 	// [ErrNotFound] if no such client exists so that callers can
 	// distinguish a no-op delete from a successful one.
 	DeleteClient(ctx context.Context, id string) error
+}
+
+// StaticClientReconciler is the atomic write capability required by
+// op.WithStaticClients. It is separate from [ClientRegistry] because dynamic
+// registration writes one client per request, while provider construction
+// must reconcile an entire configured set without exposing a partial seed
+// when one record conflicts or the backend fails.
+//
+// ReconcileStaticClients MUST apply the complete clients slice atomically:
+//
+//   - a missing ID is inserted;
+//   - an existing record equivalent under [StaticClientEquivalent] is a
+//     successful no-op;
+//   - an existing record with different metadata or a non-static Source MUST
+//     return [ErrConflict];
+//   - any other error MUST leave every client record exactly as it was before
+//     the call.
+//
+// The operation does not delete stored static clients absent from clients.
+// Embedders rotate metadata or secrets and remove retired clients through
+// their explicit administration path before changing the startup seed.
+// Backends normally implement this contract with a database transaction or
+// by staging a complete in-memory snapshot and publishing it under one lock.
+type StaticClientReconciler interface {
+	ClientStore
+
+	ReconcileStaticClients(ctx context.Context, clients []*Client) error
+}
+
+// StaticClientEquivalent reports whether two static-client records carry the
+// same persisted configuration. It treats nil and empty slices identically
+// because SQL adapters commonly decode an empty JSON array where an in-memory
+// seed used nil, and it treats the legacy empty Source as
+// [ClientSourceStatic]. SecretHash remains part of the comparison; op.New
+// verifies the configured plaintext against an existing hash and reuses that
+// hash before calling a reconciler.
+func StaticClientEquivalent(a, b *Client) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	left := normalizedStaticClient(*a)
+	right := normalizedStaticClient(*b)
+	return reflect.DeepEqual(left, right)
+}
+
+func normalizedStaticClient(client Client) Client {
+	client.RedirectURIs = nilIfEmpty(client.RedirectURIs)
+	client.PostLogoutRedirectURIs = nilIfEmpty(client.PostLogoutRedirectURIs)
+	client.GrantTypes = nilIfEmpty(client.GrantTypes)
+	client.ResponseTypes = nilIfEmpty(client.ResponseTypes)
+	client.Scopes = nilIfEmpty(client.Scopes)
+	client.Resources = nilIfEmpty(client.Resources)
+	client.Contacts = nilIfEmpty(client.Contacts)
+	client.DefaultACRValues = nilIfEmpty(client.DefaultACRValues)
+	client.RequestURIs = nilIfEmpty(client.RequestURIs)
+	if len(client.JWKs) == 0 {
+		client.JWKs = nil
+	}
+	if client.Source == "" {
+		client.Source = ClientSourceStatic
+	}
+	return client
+}
+
+func nilIfEmpty[T any](values []T) []T {
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }

@@ -64,6 +64,55 @@ func (s *clientStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *clientStore) ReconcileStatic(ctx context.Context, clients []*store.Client) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	next := make(map[string]*store.Client, len(s.m)+len(clients))
+	for id, client := range s.m {
+		next[id] = client
+	}
+	seen := make(map[string]struct{}, len(clients))
+	for _, desired := range clients {
+		if err := validateStaticClient(ctx, desired, seen); err != nil {
+			return err
+		}
+		if existing, ok := s.m[desired.ID]; ok {
+			if !store.StaticClientEquivalent(existing, desired) {
+				return store.ErrConflict
+			}
+			continue
+		}
+		next[desired.ID] = cloneClient(desired)
+	}
+	s.m = next
+	return nil
+}
+
+func validateStaticClient(
+	ctx context.Context,
+	desired *store.Client,
+	seen map[string]struct{},
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if desired == nil {
+		return errors.New("inmem: nil static client")
+	}
+	if desired.Source != "" && desired.Source != store.ClientSourceStatic {
+		return store.ErrConflict
+	}
+	if _, duplicate := seen[desired.ID]; duplicate {
+		return store.ErrConflict
+	}
+	seen[desired.ID] = struct{}{}
+	return nil
+}
+
 func cloneClient(c *store.Client) *store.Client {
 	if c == nil {
 		return nil
