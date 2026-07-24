@@ -2,6 +2,9 @@ package endsession
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +12,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -40,6 +44,12 @@ func (s failingSessionStore) Delete(context.Context, string) error { return s.er
 type failingGrantStore struct {
 	store.GrantStore
 	err error
+}
+
+type failingClientStore struct{ err error }
+
+func (s failingClientStore) GetClient(context.Context, string) (*store.Client, error) {
+	return nil, s.err
 }
 
 func (s failingGrantStore) ListBySubject(context.Context, string) ([]*store.Grant, error) {
@@ -125,5 +135,48 @@ func TestTerminateSession_AuditsTokenRevocationFailure(t *testing.T) {
 	}
 	if !recorder.has("logout.token_revoke_failed") {
 		t.Fatalf("logout.token_revoke_failed not emitted: %#v", recorder.events)
+	}
+}
+
+func TestTerminateSession_ClientLookupFaultReachesBackchannelAudit(t *testing.T) {
+	t.Parallel()
+
+	boom := errors.New("client registry unavailable")
+	backend := inmem.New()
+	manager, outcome := issueManagerSession(t, backend.Sessions())
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
+	if err := backend.Grants().Save(context.Background(), &store.Grant{
+		ID: "grant-rp", Subject: "subject-1", ClientID: "rp-fault",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("save grant: %v", err)
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	recorder := &recordingAudit{}
+	coordinator, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:  "https://op.example.com",
+		Signing: backchannel.SigningKey{KeyID: "sig-1", Signer: key},
+		Clients: failingClientStore{err: boom},
+		Grants:  backend.Grants(),
+		Emitter: recorder,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	terminateSession(httptest.NewRecorder(), logoutRequest(outcome.Cookie), Deps{
+		Sessions:    manager,
+		Backchannel: coordinator,
+		Audit:       recorder,
+	})
+
+	if !recorder.has("logout.back_channel.failed") {
+		t.Fatalf("per-client failure evidence not emitted: %#v", recorder.events)
+	}
+	if !recorder.has("logout.back_channel.resolve_failed") {
+		t.Fatalf("aggregate resolution failure not emitted: %#v", recorder.events)
 	}
 }

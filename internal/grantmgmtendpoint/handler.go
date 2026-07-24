@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -80,7 +81,7 @@ type Deps struct {
 	Clock Clock
 }
 
-const auditGrantManagementRevoked = "grant_management.revoked"
+const auditGrantManagementRevoked = string(auditevent.AuditGrantManagementRevoked)
 
 func (d *Deps) now() time.Time {
 	if d.Clock != nil {

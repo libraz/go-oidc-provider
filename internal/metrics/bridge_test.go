@@ -9,6 +9,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 )
 
@@ -404,7 +405,7 @@ func TestBridge_PrefixDispatch_TableDriven(t *testing.T) {
 	}
 }
 
-func TestBridge_PrefixDispatch_UnknownNamesCollapse(t *testing.T) {
+func TestBridge_UnknownNamesAreForwardOnly(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -429,11 +430,92 @@ func TestBridge_PrefixDispatch_UnknownNamesCollapse(t *testing.T) {
 			}
 			families, _ := reg.Gather()
 			got := counterValue(t, families, tc.metricName, map[string]string{tc.labelName: "unknown"})
-			if got != 100 {
-				t.Fatalf("%s{%s=unknown} = %v, want 100", tc.metricName, tc.labelName, got)
+			if got != 0 {
+				t.Fatalf("%s{%s=unknown} = %v, want 0", tc.metricName, tc.labelName, got)
 			}
 		})
 	}
+}
+
+func TestBridge_CatalogMetricProjectionIsUnique(t *testing.T) {
+	t.Parallel()
+
+	for _, definition := range auditevent.Catalog() {
+		if definition.Metric == auditevent.MetricNone {
+			continue
+		}
+		t.Run(string(definition.Name), func(t *testing.T) {
+			t.Parallel()
+			c, reg := newTestCollector(t, metrics.Options{})
+			bridge := metrics.NewBridge(c, nil)
+			bridge.Emit(context.Background(), audit.Event{
+				Name: string(definition.Name),
+				Extras: map[string]any{
+					"grant_type":    "authorization_code",
+					"authenticator": "password",
+					"method":        "client_secret_basic",
+					"reason":        "invalid_client_credentials",
+				},
+			})
+
+			families, err := reg.Gather()
+			if err != nil {
+				t.Fatalf("Gather: %v", err)
+			}
+			metricName := auditevent.MetricName(definition.Metric)
+			labels := catalogMetricLabels(definition)
+			if got := counterValue(t, families, metricName, labels); got != 1 {
+				t.Fatalf("%s%v = %v, want 1", metricName, labels, got)
+			}
+			if got := positiveCounterCount(families); got != 1 {
+				t.Fatalf("positive counters = %d, want exactly 1", got)
+			}
+		})
+	}
+}
+
+func catalogMetricLabels(definition auditevent.Definition) map[string]string {
+	switch definition.Metric {
+	case auditevent.MetricTokenIssued:
+		return map[string]string{"grant_type": "authorization_code", "client_id": ""}
+	case auditevent.MetricTokensRefreshed:
+		return map[string]string{"client_id": ""}
+	case auditevent.MetricLoginAttempts:
+		return map[string]string{"result": definition.Label, "authenticator": "password"}
+	case auditevent.MetricClientAuthnFailures:
+		return map[string]string{"auth_method": "client_secret_basic", "reason": "invalid_client_credentials"}
+	case auditevent.MetricDCR,
+		auditevent.MetricDeviceAuthorization,
+		auditevent.MetricDeviceCode,
+		auditevent.MetricCIBA,
+		auditevent.MetricTokenExchange,
+		auditevent.MetricCustomGrant:
+		return map[string]string{"event": definition.Label}
+	case auditevent.MetricBackChannelLogout:
+		return map[string]string{"result": definition.Label}
+	case auditevent.MetricLogoutFailures, auditevent.MetricTokenRevokeFailures:
+		return map[string]string{"kind": definition.Label}
+	case auditevent.MetricRefreshReplay,
+		auditevent.MetricCodeReplay,
+		auditevent.MetricIntrospectionErrors,
+		auditevent.MetricDPoPLooseMethodCase,
+		auditevent.MetricKeyRetiredKidPresented,
+		auditevent.MetricNone:
+		return map[string]string{}
+	}
+	return map[string]string{}
+}
+
+func positiveCounterCount(families []*dto.MetricFamily) int {
+	var count int
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			if metric.GetCounter().GetValue() > 0 {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func TestBridge_BackChannelLogout_NoSessions_RoutesToResultLabel(t *testing.T) {

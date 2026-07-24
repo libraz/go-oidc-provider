@@ -35,18 +35,18 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/refreshchain"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Audit event names mirrored from the public op.AuditEvent catalogue.
-// internal/grants/refresh cannot import op/, so the strings are
-// duplicated and the op/audit_test.go pin keeps the values aligned.
+// Audit event names sourced from the typed registry that backs the public
+// op.AuditEvent catalog.
 const (
-	auditRefreshReplayDetected    = "refresh.replay_detected"
-	auditRefreshChainRevokeFailed = "refresh.chain_revoke_failed"
-	auditRefreshGrantRevokeFailed = "refresh.grant_revoke_failed"
+	auditRefreshReplayDetected    = string(auditevent.AuditRefreshReplayDetected)
+	auditRefreshChainRevokeFailed = string(auditevent.AuditRefreshChainRevokeFailed)
+	auditRefreshGrantRevokeFailed = string(auditevent.AuditRefreshGrantRevokeFailed)
 )
 
 // chainRevokeReason names the cascade trigger written onto the

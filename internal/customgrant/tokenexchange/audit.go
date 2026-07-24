@@ -4,27 +4,27 @@ import (
 	"context"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 )
 
-// Audit event names emitted by the token-exchange handler. The
-// strings agree byte-for-byte with the corresponding entries in
-// op.AuditEvent and an op-side guard pins the two lists together.
+// Audit event names emitted by the token-exchange handler. Values come from
+// the same registry as the public op.AuditTokenExchange* constants.
 const (
-	auditRequested             = "token_exchange.requested"
-	auditGranted               = "token_exchange.granted"
-	auditPolicyDenied          = "token_exchange.policy_denied"
-	auditPolicyError           = "token_exchange.policy_error"
-	auditScopeInflationBlocked = "token_exchange.scope_inflation_blocked"
-	auditAudienceBlocked       = "token_exchange.audience_blocked"
-	auditTTLCapped             = "token_exchange.ttl_capped"
-	auditActChainTooDeep       = "token_exchange.act_chain_too_deep"
-	auditEmptyScopeRejected    = "token_exchange.empty_scope_rejected"
-	auditActorEqualsSubject    = "token_exchange.actor_equals_subject"
-	auditSubjectTokenExternal  = "token_exchange.subject_token_external"
-	auditActorTokenExternal    = "token_exchange.actor_token_external"
-	auditSubjectTokenInvalid   = "token_exchange.subject_token_invalid"
-	auditRefreshIssued         = "token_exchange.refresh_issued"
-	auditSelfExchange          = "token_exchange.self_exchange"
+	auditRequested             = string(auditevent.AuditTokenExchangeRequested)
+	auditGranted               = string(auditevent.AuditTokenExchangeGranted)
+	auditPolicyDenied          = string(auditevent.AuditTokenExchangePolicyDenied)
+	auditPolicyError           = string(auditevent.AuditTokenExchangePolicyError)
+	auditScopeInflationBlocked = string(auditevent.AuditTokenExchangeScopeInflationBlocked)
+	auditAudienceBlocked       = string(auditevent.AuditTokenExchangeAudienceBlocked)
+	auditTTLCapped             = string(auditevent.AuditTokenExchangeTTLCapped)
+	auditActChainTooDeep       = string(auditevent.AuditTokenExchangeActChainTooDeep)
+	auditEmptyScopeRejected    = string(auditevent.AuditTokenExchangeEmptyScopeRejected)
+	auditActorEqualsSubject    = string(auditevent.AuditTokenExchangeActorEqualsSubject)
+	auditSubjectTokenExternal  = string(auditevent.AuditTokenExchangeSubjectTokenExternal)
+	auditActorTokenExternal    = string(auditevent.AuditTokenExchangeActorTokenExternal)
+	auditSubjectTokenInvalid   = string(auditevent.AuditTokenExchangeSubjectTokenInvalid)
+	auditRefreshIssued         = string(auditevent.AuditTokenExchangeRefreshIssued)
+	auditSelfExchange          = string(auditevent.AuditTokenExchangeSelfExchange)
 
 	// auditSubjectTokenRegistryError fires when the access-token
 	// registry returned a non-ErrNotFound error during subject_token
@@ -34,7 +34,7 @@ const (
 	// (DB blip, network partition) is distinguishable from an actual
 	// revocation. The event is warn-level: a healthy deployment
 	// should never emit it.
-	auditSubjectTokenRegistryError = "token_exchange.subject_token_registry_error"
+	auditSubjectTokenRegistryError = string(auditevent.AuditTokenExchangeSubjectTokenRegistryError)
 )
 
 // emit writes an audit event through the configured emitter, using

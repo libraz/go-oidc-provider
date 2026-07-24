@@ -17,6 +17,7 @@ import (
 	"net/http"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -27,9 +28,9 @@ import (
 // constant lives here because [Authenticate] is the single emission
 // site shared by every endpoint that runs the credential pipeline; the
 // per-endpoint packages reference this name to keep the audit stream
-// uniform. The string is mirrored verbatim by [op.AuditClientAuthnFailure];
-// op/audit_test.go pins the equality so the public catalog cannot drift.
-const EventClientAuthnFailure = "client_authn.failure"
+// uniform. The value comes from the registry exposed publicly as
+// [op.AuditClientAuthnFailure].
+const EventClientAuthnFailure = string(auditevent.AuditClientAuthnFailure)
 
 // Authenticator is a per-endpoint client-auth driver. The caller
 // wires the verifier knobs at construction; a single [Authenticate]
@@ -92,7 +93,7 @@ type Authenticator struct {
 }
 
 const (
-	defaultAuditEventName = "client_authn.failure"
+	defaultAuditEventName = string(auditevent.AuditClientAuthnFailure)
 	defaultAuditMessage   = "client authentication failed"
 )
 

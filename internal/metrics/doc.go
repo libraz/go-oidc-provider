@@ -17,7 +17,9 @@
 //     wraps a downstream emitter, increments the matching counter, and
 //     forwards the event verbatim — so a single emission updates both
 //     the slog audit stream and the metric counter without the call
-//     site needing to know.
+//     site needing to know. Exact event-to-counter mappings come from
+//     internal/auditevent, the same typed registry projected by
+//     op.AuditEventCatalog; unknown extension names remain audit-only.
 //   - Cardinality safety: every label value drawn from caller-
 //     controlled input (client_id, authenticator name) is gated
 //     through a closed allowlist before being emitted. Dynamic

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -20,10 +21,9 @@ import (
 // AND a proof's "htm" claim differed from the request method only in
 // ASCII case. The wire response is unchanged — the proof was admitted
 // — but SOC tooling needs a signal so it can pin the bridge while
-// the responsible RP library is fixed. The string is duplicated by
-// [op.AuditDPoPLooseMethodCaseAdmitted] so embedders can subscribe
-// through the public catalogue.
-const AuditEventLooseMethodCaseAdmitted = "dpop.loose_method_case_admitted"
+// the responsible RP library is fixed. The value comes from the registry
+// exposed publicly as [op.AuditDPoPLooseMethodCaseAdmitted].
+const AuditEventLooseMethodCaseAdmitted = string(auditevent.AuditDPoPLooseMethodCaseAdmitted)
 
 // DefaultIatWindow is the symmetric tolerance applied to the proof
 // "iat" claim when [VerifyOptions.IatWindow] is unset. RFC 9449 §11.1

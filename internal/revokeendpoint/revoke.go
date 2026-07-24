@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
 	"github.com/libraz/go-oidc-provider/internal/refreshchain"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -14,8 +15,8 @@ import (
 )
 
 const (
-	auditTokenRevoked      = "token.revoked"
-	auditTokenRevokeFailed = "token.revoke_failed"
+	auditTokenRevoked      = string(auditevent.AuditTokenRevoked)
+	auditTokenRevokeFailed = string(auditevent.AuditTokenRevokeFailed)
 )
 
 // revokeToken dispatches to the JWT-acknowledgement or refresh-token

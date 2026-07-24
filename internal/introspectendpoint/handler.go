@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/endpointsupport"
@@ -31,12 +32,10 @@ var introspectSingleValuedParams = []string{
 	"client_assertion",
 }
 
-// Audit event names mirrored from the public op.AuditEvent catalogue.
-// internal/introspectendpoint cannot import op/, so the strings are
-// duplicated and TestAuditEvent_IntrospectionMirror in op/audit_test.go
-// pins the values together.
+// Audit event names sourced from the typed registry that backs the public
+// op.AuditEvent catalog.
 const (
-	auditIntrospectionError = "introspection.error"
+	auditIntrospectionError = string(auditevent.AuditIntrospectionError)
 )
 
 // Defaults the handler applies when [Deps] omits the corresponding field.

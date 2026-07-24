@@ -1,5 +1,7 @@
 package op
 
+import "github.com/libraz/go-oidc-provider/internal/auditevent"
+
 // AuditEvent identifies a structured audit event the OP emits. The
 // constants below are the closed catalogue handler code selects from;
 // new event names are added here once the handler that emits them
@@ -19,37 +21,63 @@ package op
 // in a major release with a deprecation notice.
 type AuditEvent string
 
+// AuditEventDefinition describes one row in the OP's closed audit-event
+// catalog. MetricName is empty for audit-only events. MetricLabel is the
+// bounded label value used by category or fixed-kind counters; it is empty for
+// scalar counters and counters whose labels come from structured event fields.
+type AuditEventDefinition struct {
+	Event       AuditEvent
+	MetricName  string
+	MetricLabel string
+}
+
+// AuditEventCatalog returns a copy of the complete audit-event catalog. The
+// same internal registry drives the Prometheus bridge, so event discovery and
+// metric routing cannot drift.
+func AuditEventCatalog() []AuditEventDefinition {
+	internalCatalog := auditevent.Catalog()
+	out := make([]AuditEventDefinition, 0, len(internalCatalog))
+	for _, definition := range internalCatalog {
+		out = append(out, AuditEventDefinition{
+			Event:       AuditEvent(definition.Name),
+			MetricName:  auditevent.MetricName(definition.Metric),
+			MetricLabel: definition.Label,
+		})
+	}
+	return out
+}
+
 // Account-management events. Most fire from out-of-band admin paths
 // the OP does not host directly; they are listed here so a single
 // catalogue exists for SOC dashboards to subscribe to.
 const (
-	AuditAccountCreated             = AuditEvent("account.created")
-	AuditAccountDeleted             = AuditEvent("account.deleted")
-	AuditAccountEmailAdded          = AuditEvent("account.email.added")
-	AuditAccountEmailVerified       = AuditEvent("account.email.verified")
-	AuditAccountEmailRemoved        = AuditEvent("account.email.removed")
-	AuditAccountEmailSetPrimary     = AuditEvent("account.email.set_primary")
-	AuditAccountPasskeyRegistered   = AuditEvent("account.passkey.registered")
-	AuditAccountPasskeyRemoved      = AuditEvent("account.passkey.removed")
-	AuditAccountTOTPEnabled         = AuditEvent("account.totp.enabled")
-	AuditAccountTOTPDisabled        = AuditEvent("account.totp.disabled")
-	AuditAccountPasswordChanged     = AuditEvent("account.password.changed")
-	AuditAccountRecoveryRegenerated = AuditEvent("account.recovery_codes.regenerated")
-	AuditRecoverySupportEscalation  = AuditEvent("recovery.support_escalation")
-	AuditAccountFederationLinked    = AuditEvent("federation.linked")
-	AuditAccountFederationUnlinked  = AuditEvent("federation.unlinked")
+	AuditAccountCreated             = AuditEvent(auditevent.AuditAccountCreated)
+	AuditAccountDeleted             = AuditEvent(auditevent.AuditAccountDeleted)
+	AuditAccountEmailAdded          = AuditEvent(auditevent.AuditAccountEmailAdded)
+	AuditAccountEmailVerified       = AuditEvent(auditevent.AuditAccountEmailVerified)
+	AuditAccountEmailRemoved        = AuditEvent(auditevent.AuditAccountEmailRemoved)
+	AuditAccountEmailSetPrimary     = AuditEvent(auditevent.AuditAccountEmailSetPrimary)
+	AuditAccountPasskeyRegistered   = AuditEvent(auditevent.AuditAccountPasskeyRegistered)
+	AuditAccountPasskeyRemoved      = AuditEvent(auditevent.AuditAccountPasskeyRemoved)
+	AuditAccountTOTPEnabled         = AuditEvent(auditevent.AuditAccountTOTPEnabled)
+	AuditAccountTOTPDisabled        = AuditEvent(auditevent.AuditAccountTOTPDisabled)
+	AuditAccountPasswordChanged     = AuditEvent(auditevent.AuditAccountPasswordChanged)
+	AuditAccountRecoveryRegenerated = AuditEvent(auditevent.AuditAccountRecoveryRegenerated)
+	AuditRecoverySupportEscalation  = AuditEvent(auditevent.AuditRecoverySupportEscalation)
+	AuditAccountFederationLinked    = AuditEvent(auditevent.AuditAccountFederationLinked)
+	AuditAccountFederationUnlinked  = AuditEvent(auditevent.AuditAccountFederationUnlinked)
 )
 
 // Login / MFA / step-up events. Fire from the authenticator chain
 // after each factor resolves.
 const (
-	AuditLoginSuccess   = AuditEvent("login.success")
-	AuditLoginFailed    = AuditEvent("login.failed")
-	AuditMFARequired    = AuditEvent("mfa.required")
-	AuditMFASuccess     = AuditEvent("mfa.success")
-	AuditMFAFailed      = AuditEvent("mfa.failed")
-	AuditStepUpRequired = AuditEvent("step_up.required")
-	AuditStepUpSuccess  = AuditEvent("step_up.success")
+	AuditLoginSuccess   = AuditEvent(auditevent.AuditLoginSuccess)
+	AuditLoginFailed    = AuditEvent(auditevent.AuditLoginFailed)
+	AuditMFARequired    = AuditEvent(auditevent.AuditMFARequired)
+	AuditMFASuccess     = AuditEvent(auditevent.AuditMFASuccess)
+	AuditMFAFailed      = AuditEvent(auditevent.AuditMFAFailed)
+	AuditStepUpRequired = AuditEvent(auditevent.AuditStepUpRequired)
+	AuditStepUpSuccess  = AuditEvent(auditevent.AuditStepUpSuccess)
 )
 
 // Consent events. AuditConsentSkippedExisting fires when the existing
@@ -58,19 +86,17 @@ const (
 // fires when delta-consent forces a re-prompt for a newly requested
 // sensitive scope.
 const (
-	AuditConsentGranted           = AuditEvent("consent.granted")
-	AuditConsentGrantedFirstParty = AuditEvent("consent.granted.first_party")
-	AuditConsentGrantedDelta      = AuditEvent("consent.granted.delta")
-	AuditConsentSkippedExisting   = AuditEvent("consent.skipped.existing")
-	AuditConsentRevoked           = AuditEvent("consent.revoked")
+	AuditConsentGranted           = AuditEvent(auditevent.AuditConsentGranted)
+	AuditConsentGrantedFirstParty = AuditEvent(auditevent.AuditConsentGrantedFirstParty)
+	AuditConsentGrantedDelta      = AuditEvent(auditevent.AuditConsentGrantedDelta)
+	AuditConsentSkippedExisting   = AuditEvent(auditevent.AuditConsentSkippedExisting)
+	AuditConsentRevoked           = AuditEvent(auditevent.AuditConsentRevoked)
 )
 
 // Grant-management events. Fire from the OAuth 2.0 Grant Management
 // endpoint after a client successfully revokes one of its own grants.
-// The internal handler cannot import op (one-way import graph), so
-// the raw string is mirrored there and pinned by TestAuditEvent_GrantManagementMirror.
 const (
-	AuditGrantManagementRevoked = AuditEvent("grant_management.revoked")
+	AuditGrantManagementRevoked = AuditEvent(auditevent.AuditGrantManagementRevoked)
 )
 
 // Code / token events. Fire from the authorize-code issuance path
@@ -89,26 +115,31 @@ const (
 // rotation chain intact even though the wire response indicated
 // rejection, which is the audit gap H-A2 closes.
 const (
-	AuditCodeIssued               = AuditEvent("code.issued")
-	AuditCodeConsumed             = AuditEvent("code.consumed")
-	AuditCodeReplayDetected       = AuditEvent("code.replay_detected")
-	AuditTokenIssued              = AuditEvent("token.issued")
-	AuditTokenRefreshed           = AuditEvent("token.refreshed")
-	AuditTokenRevoked             = AuditEvent("token.revoked")
-	AuditTokenRevokeFailed        = AuditEvent("token.revoke_failed")
-	AuditRefreshReplayDetected    = AuditEvent("refresh.replay_detected")
-	AuditRefreshChainRevokeFailed = AuditEvent("refresh.chain_revoke_failed")
-	AuditRefreshGrantRevokeFailed = AuditEvent("refresh.grant_revoke_failed")
+	AuditCodeIssued               = AuditEvent(auditevent.AuditCodeIssued)
+	AuditCodeConsumed             = AuditEvent(auditevent.AuditCodeConsumed)
+	AuditCodeReplayDetected       = AuditEvent(auditevent.AuditCodeReplayDetected)
+	AuditTokenIssued              = AuditEvent(auditevent.AuditTokenIssued)
+	AuditTokenRefreshed           = AuditEvent(auditevent.AuditTokenRefreshed)
+	AuditTokenRevoked             = AuditEvent(auditevent.AuditTokenRevoked)
+	AuditTokenRevokeFailed        = AuditEvent(auditevent.AuditTokenRevokeFailed)
+	AuditRefreshReplayDetected    = AuditEvent(auditevent.AuditRefreshReplayDetected)
+	AuditRefreshChainRevokeFailed = AuditEvent(auditevent.AuditRefreshChainRevokeFailed)
+	AuditRefreshGrantRevokeFailed = AuditEvent(auditevent.AuditRefreshGrantRevokeFailed)
 )
 
 // Session / logout events. Fire from the session manager and the
 // /end_session handler.
 const (
-	AuditSessionCreated             = AuditEvent("session.created")
-	AuditSessionDestroyed           = AuditEvent("session.destroyed")
-	AuditLogoutRPInitiated          = AuditEvent("logout.rp_initiated")
-	AuditLogoutBackChannelDelivered = AuditEvent("logout.back_channel.delivered")
-	AuditLogoutBackChannelFailed    = AuditEvent("logout.back_channel.failed")
+	AuditSessionCreated                 = AuditEvent(auditevent.AuditSessionCreated)
+	AuditSessionDestroyed               = AuditEvent(auditevent.AuditSessionDestroyed)
+	AuditSessionAlreadyAbsent           = AuditEvent(auditevent.AuditSessionAlreadyAbsent)
+	AuditSessionDestroyFailed           = AuditEvent(auditevent.AuditSessionDestroyFailed)
+	AuditLogoutRPInitiated              = AuditEvent(auditevent.AuditLogoutRPInitiated)
+	AuditLogoutTokenRevokeFailed        = AuditEvent(auditevent.AuditLogoutTokenRevokeFailed)
+	AuditLogoutBackChannelDelivered     = AuditEvent(auditevent.AuditLogoutBackChannelDelivered)
+	AuditLogoutBackChannelFailed        = AuditEvent(auditevent.AuditLogoutBackChannelFailed)
+	AuditLogoutBackChannelResolveFailed = AuditEvent(auditevent.AuditLogoutBackChannelResolveFailed)
+	AuditLogoutBackChannelOverflow      = AuditEvent(auditevent.AuditLogoutBackChannelOverflow)
 
 	// AuditBCLNoSessionsForSubject fires when /end_session or
 	// Provider.Logout names a session_id-bearing subject but the
@@ -120,7 +151,7 @@ const (
 	// best-effort delivery floor to zero. INFO-level: under volatile
 	// placement the gap is expected; SOC tooling alerts on elevated
 	// rates rather than per-event.
-	AuditBCLNoSessionsForSubject = AuditEvent("bcl.no_sessions_for_subject")
+	AuditBCLNoSessionsForSubject = AuditEvent(auditevent.AuditBCLNoSessionsForSubject)
 )
 
 // Defensive events. Fire from request-validation paths that detect
@@ -139,11 +170,11 @@ const (
 	// audit pipelines can ingest embedder-side throttle decisions
 	// under a vocabulary consistent with the rest of the OIDC
 	// audit catalog.
-	AuditRateLimitExceeded   = AuditEvent("rate_limit.exceeded")
-	AuditRateLimitBypassed   = AuditEvent("rate_limit.bypassed")
-	AuditPKCEViolation       = AuditEvent("pkce.violation")
-	AuditRedirectURIMismatch = AuditEvent("redirect_uri.mismatch")
-	AuditAlgLegacyUsed       = AuditEvent("alg.legacy_used")
+	AuditRateLimitExceeded   = AuditEvent(auditevent.AuditRateLimitExceeded)
+	AuditRateLimitBypassed   = AuditEvent(auditevent.AuditRateLimitBypassed)
+	AuditPKCEViolation       = AuditEvent(auditevent.AuditPKCEViolation)
+	AuditRedirectURIMismatch = AuditEvent(auditevent.AuditRedirectURIMismatch)
+	AuditAlgLegacyUsed       = AuditEvent(auditevent.AuditAlgLegacyUsed)
 
 	// AuditCORSPreflightAllowed fires every time the strict CORS layer
 	// admits a cross-origin OPTIONS preflight (Origin in allowlist,
@@ -156,7 +187,7 @@ const (
 	// outermost so embedder middleware (rate-limit, audit, metrics)
 	// observes the request before this short-circuit; the audit event
 	// makes the short-circuit visible regardless of wrapper order.
-	AuditCORSPreflightAllowed = AuditEvent("cors.preflight.allowed")
+	AuditCORSPreflightAllowed = AuditEvent(auditevent.AuditCORSPreflightAllowed)
 
 	// AuditDPoPLooseMethodCaseAdmitted fires when the embedder has
 	// opted into the DPoP verifier's AllowLooseMethodCase bridge AND
@@ -167,7 +198,7 @@ const (
 	// responsible RP library is fixed. The RFC 9449 §4.3 strict
 	// posture is the default; loose mode is opt-in and produces
 	// this warn-level event on every admission.
-	AuditDPoPLooseMethodCaseAdmitted = AuditEvent("dpop.loose_method_case_admitted")
+	AuditDPoPLooseMethodCaseAdmitted = AuditEvent(auditevent.AuditDPoPLooseMethodCaseAdmitted)
 
 	// AuditKeyRetiredKidPresented fires when a JWS / JWE presented
 	// for verification carries a "kid" header that matches an entry
@@ -182,7 +213,7 @@ const (
 	// the retiring kid. The event is warn-level and carries the
 	// rejected kid in [Event.Extras] so dashboards can correlate
 	// against the rotation timeline without parsing the slog message.
-	AuditKeyRetiredKidPresented = AuditEvent("key.retired_kid_presented")
+	AuditKeyRetiredKidPresented = AuditEvent(auditevent.AuditKeyRetiredKidPresented)
 )
 
 // Introspection events. Fire from the /introspect endpoint. Only the
@@ -192,7 +223,7 @@ const (
 // 7662 §2.3 mandates the wire response stays at the generic
 // "invalid_client" code.
 const (
-	AuditIntrospectionError = AuditEvent("introspection.error")
+	AuditIntrospectionError = AuditEvent(auditevent.AuditIntrospectionError)
 )
 
 // Client authentication events. Fire from every pre-issuance surface
@@ -204,59 +235,61 @@ const (
 // known), the auth method, and a short reason code for triage. This event
 // fills that gap; the wire shape is unchanged.
 const (
-	AuditClientAuthnFailure = AuditEvent("client_authn.failure")
+	AuditClientAuthnFailure = AuditEvent(auditevent.AuditClientAuthnFailure)
 )
 
 // Dynamic Client Registration events. Fire from /register and
 // /register/{client_id}.
 const (
-	AuditDCRIATConsumed           = AuditEvent("dcr.iat.consumed")
-	AuditDCRIATExpired            = AuditEvent("dcr.iat.expired")
-	AuditDCRIATInvalid            = AuditEvent("dcr.iat.invalid")
-	AuditDCROpenRegistrationUsed  = AuditEvent("dcr.open_registration_used")
-	AuditDCRClientRegistered      = AuditEvent("dcr.client.registered")
-	AuditDCRClientMetadataRead    = AuditEvent("dcr.client.metadata_read")
-	AuditDCRClientMetadataUpdated = AuditEvent("dcr.client.metadata_updated")
-	AuditDCRClientDeleted         = AuditEvent("dcr.client.deleted")
-	AuditDCRRATInvalid            = AuditEvent("dcr.rat.invalid")
-	AuditDCRMetadataValidation    = AuditEvent("dcr.metadata.validation_failed")
+	AuditDCRIATConsumed           = AuditEvent(auditevent.AuditDCRIATConsumed)
+	AuditDCRIATExpired            = AuditEvent(auditevent.AuditDCRIATExpired)
+	AuditDCRIATInvalid            = AuditEvent(auditevent.AuditDCRIATInvalid)
+	AuditDCROpenRegistrationUsed  = AuditEvent(auditevent.AuditDCROpenRegistrationUsed)
+	AuditDCRClientRegistered      = AuditEvent(auditevent.AuditDCRClientRegistered)
+	AuditDCRClientMetadataRead    = AuditEvent(auditevent.AuditDCRClientMetadataRead)
+	AuditDCRClientMetadataUpdated = AuditEvent(auditevent.AuditDCRClientMetadataUpdated)
+	AuditDCRClientDeleted         = AuditEvent(auditevent.AuditDCRClientDeleted)
+	AuditDCRRATInvalid            = AuditEvent(auditevent.AuditDCRRATInvalid)
+	AuditDCRMetadataValidation    = AuditEvent(auditevent.AuditDCRMetadataValidation)
+
+	// Cascade failures are operational signals emitted after a client record
+	// has been deleted but one credential substore could not revoke its rows.
+	AuditDCRCascadeRefreshRevokeFailed           = AuditEvent(auditevent.AuditDCRCascadeRefreshRevokeFailed)
+	AuditDCRCascadeGrantRevokeFailed             = AuditEvent(auditevent.AuditDCRCascadeGrantRevokeFailed)
+	AuditDCRCascadeAccessTokenRevokeFailed       = AuditEvent(auditevent.AuditDCRCascadeAccessTokenRevokeFailed)
+	AuditDCRCascadeOpaqueAccessTokenRevokeFailed = AuditEvent(auditevent.AuditDCRCascadeOpaqueAccessTokenRevokeFailed)
 )
 
 // Device-flow events. Fire from the /device_authorization endpoint,
 // the verification ceremony, and the token-endpoint device_code grant.
-// The internal package cannot import op (one-way import graph), so the
-// values are duplicated as raw strings inside
-// internal/devicecode/audit.go and a mirror test (TestAuditEvent_DeviceCodeMirror)
-// pins them together.
 const (
-	AuditDeviceAuthorizationIssued          = AuditEvent("device_authorization.issued")
-	AuditDeviceAuthorizationRejected        = AuditEvent("device_authorization.rejected")
-	AuditDeviceAuthorizationUnboundRejected = AuditEvent("device_authorization.unbound_rejected")
-	AuditDeviceCodeVerificationApproved     = AuditEvent("device_code.verification.approved")
-	AuditDeviceCodeVerificationDenied       = AuditEvent("device_code.verification.denied")
-	AuditDeviceCodeUserCodeBruteForce       = AuditEvent("device_code.verification.user_code_brute_force")
-	AuditDeviceCodeTokenIssued              = AuditEvent("device_code.token.issued")
-	AuditDeviceCodeTokenRejected            = AuditEvent("device_code.token.rejected")
-	AuditDeviceCodeTokenSlowDown            = AuditEvent("device_code.token.slow_down")
+	AuditDeviceAuthorizationIssued          = AuditEvent(auditevent.AuditDeviceAuthorizationIssued)
+	AuditDeviceAuthorizationRejected        = AuditEvent(auditevent.AuditDeviceAuthorizationRejected)
+	AuditDeviceAuthorizationUnboundRejected = AuditEvent(auditevent.AuditDeviceAuthorizationUnboundRejected)
+	AuditDeviceCodeVerificationApproved     = AuditEvent(auditevent.AuditDeviceCodeVerificationApproved)
+	AuditDeviceCodeVerificationDenied       = AuditEvent(auditevent.AuditDeviceCodeVerificationDenied)
+	AuditDeviceCodeUserCodeBruteForce       = AuditEvent(auditevent.AuditDeviceCodeUserCodeBruteForce)
+	AuditDeviceCodeTokenIssued              = AuditEvent(auditevent.AuditDeviceCodeTokenIssued)
+	AuditDeviceCodeTokenRejected            = AuditEvent(auditevent.AuditDeviceCodeTokenRejected)
+	AuditDeviceCodeTokenSlowDown            = AuditEvent(auditevent.AuditDeviceCodeTokenSlowDown)
 
 	// AuditDeviceCodeRevoked fires from the public revoke helper
 	// ([github.com/libraz/go-oidc-provider/op/devicecodekit.Revoke]).
-	// The helper wraps [store.DeviceCodeStore.Deny] with an audit
-	// signal so SOC tooling and embedder cascade-revoke subscribers
-	// can react in one place. Extras carry: client_id, reason (e.g.
-	// "user_denied", "user_code_lockout", or an embedder-supplied
-	// value), and revoked_access_tokens (the cascade count) when the
-	// helper was wired with an [store.AccessTokenRegistry].
+	// The helper atomically disables Pending / Approved records and
+	// cascade-revokes every configured credential store whose GrantID
+	// matches the device_code: JWT access tokens (per-JTI registry or
+	// grant tombstone), opaque access tokens, and refresh tokens.
+	// Consumed records retain their issuance-history state while the
+	// credential cascade runs; repeating the helper retries any partial
+	// cascade.
 	//
-	// When the registry is wired the helper cascade-revokes every
-	// access token whose GrantID matches the revoked device_code (the
-	// device_code.ID is stamped verbatim as the GrantID on every issued
-	// access token), so the existing RevokeByGrant primitive retires
-	// the whole grant. A nil registry skips the cascade so embedders
-	// running JWT-stateless deployments — or driving the cascade
-	// out-of-band — can subscribe to this event and call
-	// [store.AccessTokenRegistry.RevokeByGrant] themselves.
-	AuditDeviceCodeRevoked = AuditEvent("device_code.revoked")
+	// Extras carry client_id, reason, previous_status,
+	// device_code_hash, and cascade_complete. Substore-specific extras
+	// are present when that surface was attempted:
+	// revoked_access_tokens, grant_tombstone_written,
+	// revoked_opaque_access_tokens, and
+	// refresh_token_cascade_complete.
+	AuditDeviceCodeRevoked = AuditEvent(auditevent.AuditDeviceCodeRevoked)
 
 	// AuditDeviceCodePollObservationFailed fires when the
 	// token-endpoint device_code grant observed a substore fault
@@ -268,25 +301,21 @@ const (
 	// slow_down ladder is visible. Warn-level: a healthy deployment
 	// should never emit this event. Mirrors
 	// [AuditCIBAPollObservationFailed] for the device-flow surface.
-	AuditDeviceCodePollObservationFailed = AuditEvent("device_code.poll_observation.failed")
+	AuditDeviceCodePollObservationFailed = AuditEvent(auditevent.AuditDeviceCodePollObservationFailed)
 )
 
 // CIBA events. Fire from the /bc-authorize endpoint, the embedder's
-// authentication-device interaction, and the token-endpoint CIBA
-// grant. The internal package cannot import op (one-way import graph),
-// so the values are duplicated as raw strings inside
-// internal/ciba/audit.go and a mirror test (TestAuditEvent_CIBAMirror)
-// pins them together.
+// authentication-device interaction, and the token-endpoint CIBA grant.
 const (
-	AuditCIBAAuthorizationIssued          = AuditEvent("ciba.authorization.issued")
-	AuditCIBAAuthorizationRejected        = AuditEvent("ciba.authorization.rejected")
-	AuditCIBAAuthorizationUnboundRejected = AuditEvent("ciba.authorization.unbound_rejected")
-	AuditCIBAAuthDeviceApproved           = AuditEvent("ciba.auth_device.approved")
-	AuditCIBAAuthDeviceDenied             = AuditEvent("ciba.auth_device.denied")
-	AuditCIBAPollAbuseLockout             = AuditEvent("ciba.poll_abuse.lockout")
-	AuditCIBATokenIssued                  = AuditEvent("ciba.token.issued")
-	AuditCIBATokenRejected                = AuditEvent("ciba.token.rejected")
-	AuditCIBATokenSlowDown                = AuditEvent("ciba.token.slow_down")
+	AuditCIBAAuthorizationIssued          = AuditEvent(auditevent.AuditCIBAAuthorizationIssued)
+	AuditCIBAAuthorizationRejected        = AuditEvent(auditevent.AuditCIBAAuthorizationRejected)
+	AuditCIBAAuthorizationUnboundRejected = AuditEvent(auditevent.AuditCIBAAuthorizationUnboundRejected)
+	AuditCIBAAuthDeviceApproved           = AuditEvent(auditevent.AuditCIBAAuthDeviceApproved)
+	AuditCIBAAuthDeviceDenied             = AuditEvent(auditevent.AuditCIBAAuthDeviceDenied)
+	AuditCIBAPollAbuseLockout             = AuditEvent(auditevent.AuditCIBAPollAbuseLockout)
+	AuditCIBATokenIssued                  = AuditEvent(auditevent.AuditCIBATokenIssued)
+	AuditCIBATokenRejected                = AuditEvent(auditevent.AuditCIBATokenRejected)
+	AuditCIBATokenSlowDown                = AuditEvent(auditevent.AuditCIBATokenSlowDown)
 
 	// AuditCIBAPollObservationFailed fires when the token-endpoint
 	// CIBA grant observed a substore fault while persisting the
@@ -296,7 +325,16 @@ const (
 	// gate — but SOC tooling needs the signal so a transient store
 	// outage that quietly defeats the slow_down ladder is visible.
 	// Warn-level: a healthy deployment should never emit this event.
-	AuditCIBAPollObservationFailed = AuditEvent("ciba.poll_observation.failed")
+	AuditCIBAPollObservationFailed = AuditEvent(auditevent.AuditCIBAPollObservationFailed)
+)
+
+// Custom-grant dispatch events. Requested and Failed describe dispatcher
+// outcomes; RefreshDropped records a successful response whose refresh token
+// was removed because the client was not registered for that grant.
+const (
+	AuditCustomGrantRequested      = AuditEvent(auditevent.AuditCustomGrantRequested)
+	AuditCustomGrantFailed         = AuditEvent(auditevent.AuditCustomGrantFailed)
+	AuditCustomGrantRefreshDropped = AuditEvent(auditevent.AuditCustomGrantRefreshDropped)
 )
 
 // Token-exchange events. Fire from the in-tree RFC 8693 handler.
@@ -304,24 +342,22 @@ const (
 // emit Requested + one of the failure-class events depending on the
 // gate that fired. The internal package cannot import op (one-way
 // import graph), so the values are duplicated as raw strings inside
-// internal/customgrant/tokenexchange/audit.go and a mirror test
-// pins them together.
 const (
-	AuditTokenExchangeRequested             = AuditEvent("token_exchange.requested")
-	AuditTokenExchangeGranted               = AuditEvent("token_exchange.granted")
-	AuditTokenExchangePolicyDenied          = AuditEvent("token_exchange.policy_denied")
-	AuditTokenExchangePolicyError           = AuditEvent("token_exchange.policy_error")
-	AuditTokenExchangeScopeInflationBlocked = AuditEvent("token_exchange.scope_inflation_blocked")
-	AuditTokenExchangeAudienceBlocked       = AuditEvent("token_exchange.audience_blocked")
-	AuditTokenExchangeTTLCapped             = AuditEvent("token_exchange.ttl_capped")
-	AuditTokenExchangeActChainTooDeep       = AuditEvent("token_exchange.act_chain_too_deep")
-	AuditTokenExchangeEmptyScopeRejected    = AuditEvent("token_exchange.empty_scope_rejected")
-	AuditTokenExchangeActorEqualsSubject    = AuditEvent("token_exchange.actor_equals_subject")
-	AuditTokenExchangeSubjectTokenExternal  = AuditEvent("token_exchange.subject_token_external")
-	AuditTokenExchangeActorTokenExternal    = AuditEvent("token_exchange.actor_token_external")
-	AuditTokenExchangeSubjectTokenInvalid   = AuditEvent("token_exchange.subject_token_invalid")
-	AuditTokenExchangeRefreshIssued         = AuditEvent("token_exchange.refresh_issued")
-	AuditTokenExchangeSelfExchange          = AuditEvent("token_exchange.self_exchange")
+	AuditTokenExchangeRequested             = AuditEvent(auditevent.AuditTokenExchangeRequested)
+	AuditTokenExchangeGranted               = AuditEvent(auditevent.AuditTokenExchangeGranted)
+	AuditTokenExchangePolicyDenied          = AuditEvent(auditevent.AuditTokenExchangePolicyDenied)
+	AuditTokenExchangePolicyError           = AuditEvent(auditevent.AuditTokenExchangePolicyError)
+	AuditTokenExchangeScopeInflationBlocked = AuditEvent(auditevent.AuditTokenExchangeScopeInflationBlocked)
+	AuditTokenExchangeAudienceBlocked       = AuditEvent(auditevent.AuditTokenExchangeAudienceBlocked)
+	AuditTokenExchangeTTLCapped             = AuditEvent(auditevent.AuditTokenExchangeTTLCapped)
+	AuditTokenExchangeActChainTooDeep       = AuditEvent(auditevent.AuditTokenExchangeActChainTooDeep)
+	AuditTokenExchangeEmptyScopeRejected    = AuditEvent(auditevent.AuditTokenExchangeEmptyScopeRejected)
+	AuditTokenExchangeActorEqualsSubject    = AuditEvent(auditevent.AuditTokenExchangeActorEqualsSubject)
+	AuditTokenExchangeSubjectTokenExternal  = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenExternal)
+	AuditTokenExchangeActorTokenExternal    = AuditEvent(auditevent.AuditTokenExchangeActorTokenExternal)
+	AuditTokenExchangeSubjectTokenInvalid   = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenInvalid)
+	AuditTokenExchangeRefreshIssued         = AuditEvent(auditevent.AuditTokenExchangeRefreshIssued)
+	AuditTokenExchangeSelfExchange          = AuditEvent(auditevent.AuditTokenExchangeSelfExchange)
 
 	// AuditTokenExchangeSubjectTokenRegistryError fires when the in-tree
 	// RFC 8693 handler observed a non-NotFound fault from the access-
@@ -334,5 +370,5 @@ const (
 	// deployment should never emit this event. Extras carry: reason
 	// ("registry_error"), is_subject (true when the failed lookup was
 	// for subject_token, false for actor_token).
-	AuditTokenExchangeSubjectTokenRegistryError = AuditEvent("token_exchange.subject_token_registry_error")
+	AuditTokenExchangeSubjectTokenRegistryError = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenRegistryError)
 )

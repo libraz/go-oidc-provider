@@ -52,9 +52,9 @@ func (l Level) slogLevel() slog.Level {
 // layer stays stable.
 type Event struct {
 	// Name is the canonical event identifier (e.g. "login.success",
-	// "dcr.client.registered"). The catalogue lives on the public op/
-	// surface as op.AuditEvent constants; handlers MUST select from
-	// that closed list.
+	// "dcr.client.registered"). internal/auditevent owns the closed
+	// vocabulary and op.AuditEventCatalog projects it publicly;
+	// handlers MUST select from that list.
 	Name string
 
 	// Level is the severity classification. A zero value defaults to

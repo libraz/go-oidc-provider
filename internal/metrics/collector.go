@@ -34,7 +34,9 @@ type Collector struct {
 	deviceCodeEvents          *prometheus.CounterVec
 	cibaEvents                *prometheus.CounterVec
 	tokenExchangeEvents       *prometheus.CounterVec
+	customGrantEvents         *prometheus.CounterVec
 	backChannelLogout         *prometheus.CounterVec
+	logoutFailures            *prometheus.CounterVec
 	introspectionErrors       prometheus.Counter
 	tokenRevokeFailures       *prometheus.CounterVec
 	dpopLooseMethodCase       prometheus.Counter
@@ -127,12 +129,26 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 			},
 			[]string{"event"},
 		),
+		customGrantEvents: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "oidc_custom_grant_events_total",
+				Help: "Custom-grant dispatcher outcomes, partitioned by the event sub-name.",
+			},
+			[]string{"event"},
+		),
 		backChannelLogout: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "oidc_back_channel_logout_total",
-				Help: "Back-channel logout delivery outcomes, partitioned by result (delivered, failed, no_sessions_for_subject).",
+				Help: "Back-channel logout delivery and target-resolution outcomes, partitioned by result.",
 			},
 			[]string{"result"},
+		),
+		logoutFailures: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "oidc_logout_failures_total",
+				Help: "Logout persistence failures, partitioned by failed side effect.",
+			},
+			[]string{"kind"},
 		),
 		introspectionErrors: prometheus.NewCounter(
 			prometheus.CounterOpts{
@@ -172,7 +188,9 @@ func New(reg *prometheus.Registry, opts Options) (*Collector, error) {
 		c.deviceCodeEvents,
 		c.cibaEvents,
 		c.tokenExchangeEvents,
+		c.customGrantEvents,
 		c.backChannelLogout,
+		c.logoutFailures,
 		c.introspectionErrors,
 		c.tokenRevokeFailures,
 		c.dpopLooseMethodCase,

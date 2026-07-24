@@ -12,20 +12,20 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Audit event names. The strings here MUST agree with the public
-// op.AuditCustomGrant* constants in op/audit.go; the op_test package
-// owns a guard that compares both lists.
+// Audit event names. Values come from the same registry as the public
+// op.AuditCustomGrant* constants.
 const (
-	AuditEventRequested = "custom_grant.requested"
-	AuditEventFailed    = "custom_grant.failed"
+	AuditEventRequested = string(auditevent.AuditCustomGrantRequested)
+	AuditEventFailed    = string(auditevent.AuditCustomGrantFailed)
 	// AuditEventRefreshDropped fires when a response asked the OP to
 	// mint a refresh token but the client is not registered for the
 	// refresh_token grant. The rest of the response is still issued;
 	// the refresh token is silently omitted (RFC 6749 §6 gate).
-	AuditEventRefreshDropped = "custom_grant.refresh_dropped"
+	AuditEventRefreshDropped = string(auditevent.AuditCustomGrantRefreshDropped)
 )
 
 // Sentinel errors. Each value names a single dispatch failure mode

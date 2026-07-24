@@ -8,6 +8,40 @@ import (
 	"github.com/libraz/go-oidc-provider/op"
 )
 
+func TestAuditEventCatalog_ContainsOperationalAndCustomGrantEvents(t *testing.T) {
+	t.Parallel()
+
+	want := map[op.AuditEvent]bool{
+		op.AuditSessionAlreadyAbsent:                    false,
+		op.AuditSessionDestroyFailed:                    false,
+		op.AuditLogoutTokenRevokeFailed:                 false,
+		op.AuditLogoutBackChannelResolveFailed:          false,
+		op.AuditLogoutBackChannelOverflow:               false,
+		op.AuditDCRCascadeRefreshRevokeFailed:           false,
+		op.AuditDCRCascadeGrantRevokeFailed:             false,
+		op.AuditDCRCascadeAccessTokenRevokeFailed:       false,
+		op.AuditDCRCascadeOpaqueAccessTokenRevokeFailed: false,
+		op.AuditCustomGrantRequested:                    false,
+		op.AuditCustomGrantFailed:                       false,
+		op.AuditCustomGrantRefreshDropped:               false,
+	}
+	seen := make(map[op.AuditEvent]struct{}, len(op.AuditEventCatalog()))
+	for _, definition := range op.AuditEventCatalog() {
+		if _, duplicate := seen[definition.Event]; duplicate {
+			t.Fatalf("duplicate public audit event %q", definition.Event)
+		}
+		seen[definition.Event] = struct{}{}
+		if _, expected := want[definition.Event]; expected {
+			want[definition.Event] = true
+		}
+	}
+	for event, found := range want {
+		if !found {
+			t.Errorf("AuditEventCatalog missing %q", event)
+		}
+	}
+}
+
 // TestAuditEvent_BCLMirror keeps the public op.AuditBCLNoSessionsForSubject
 // constant aligned with the raw string that
 // internal/backchannel/coordinator.go emits. Same drift-guard pattern

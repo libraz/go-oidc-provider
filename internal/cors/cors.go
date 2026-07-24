@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 )
 
@@ -158,7 +159,7 @@ func (s *Strict) servePreflight(w http.ResponseWriter, r *http.Request, origin s
 	h.Set("Access-Control-Max-Age", strconv.Itoa(int(preflightMaxAge.Seconds())))
 	w.WriteHeader(http.StatusNoContent)
 	s.emitter.Emit(emitContext(r), audit.Event{
-		Name:    "cors.preflight.allowed",
+		Name:    string(auditevent.AuditCORSPreflightAllowed),
 		Level:   audit.LevelInfo,
 		Message: "strict CORS preflight admitted",
 		Extras: map[string]any{

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authorize"
 	"github.com/libraz/go-oidc-provider/internal/backchannel"
 	"github.com/libraz/go-oidc-provider/internal/cookie"
@@ -470,16 +471,16 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 		err := deps.Sessions.Logout(r.Context(), sid)
 		switch {
 		case err == nil:
-			deps.audit().Emit(r.Context(), audit.Event{Name: "session.destroyed", Level: audit.LevelInfo, Message: "session destroyed", ActorID: subject, SessionID: sid})
+			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditSessionDestroyed), Level: audit.LevelInfo, Message: "session destroyed", ActorID: subject, SessionID: sid})
 		case errors.Is(err, store.ErrNotFound):
-			deps.audit().Emit(r.Context(), audit.Event{Name: "session.already_absent", Level: audit.LevelInfo, Message: "session was already absent", ActorID: subject, SessionID: sid})
+			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditSessionAlreadyAbsent), Level: audit.LevelInfo, Message: "session was already absent", ActorID: subject, SessionID: sid})
 		default:
-			deps.audit().Emit(r.Context(), audit.Event{Name: "session.destroy_failed", Level: audit.LevelError, Message: "session logout persistence failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditSessionDestroyFailed), Level: audit.LevelError, Message: "session logout persistence failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
 		}
 	}
 	if subject != "" {
 		if err := revokeAccessTokens(r.Context(), deps, subject); err != nil {
-			deps.audit().Emit(r.Context(), audit.Event{Name: "logout.token_revoke_failed", Level: audit.LevelError, Message: "logout token revocation failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+			deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditLogoutTokenRevokeFailed), Level: audit.LevelError, Message: "logout token revocation failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
 		}
 		if deps.Backchannel != nil {
 			// Back-channel fan-out is best-effort: per-RP failures
@@ -490,7 +491,7 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 				Subject:   subject,
 				SessionID: sid,
 			}); err != nil {
-				deps.audit().Emit(r.Context(), audit.Event{Name: "logout.back_channel.resolve_failed", Level: audit.LevelError, Message: "back-channel logout target resolution failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
+				deps.audit().Emit(r.Context(), audit.Event{Name: string(auditevent.AuditLogoutBackChannelResolveFailed), Level: audit.LevelError, Message: "back-channel logout target resolution failed", ActorID: subject, SessionID: sid, Extras: map[string]any{"error": err.Error()}})
 			}
 		}
 	}

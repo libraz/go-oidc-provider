@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/clientauth/clientauthhttp"
@@ -27,18 +28,16 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// Audit event names mirrored from the public op.AuditEvent catalogue.
-// internal/tokenendpoint cannot import op/, so the strings are
-// duplicated and TestAuditEvent_TokenMirror in op/audit_test.go pins
-// the values together. auditClientAuthnFailure aliases the canonical
-// constant in [clientauthhttp] so the boundary helper and the local
-// emission sites cannot drift.
+// Audit event names sourced from the typed registry that backs the public
+// op.AuditEvent catalog. auditClientAuthnFailure aliases the canonical
+// constant in [clientauthhttp] so the boundary helper and local emission sites
+// cannot drift.
 const (
-	auditTokenIssued        = "token.issued"
-	auditTokenRefreshed     = "token.refreshed"
-	auditTokenRevokeFailed  = "token.revoke_failed"
-	auditCodeConsumed       = "code.consumed"
-	auditCodeReplayDetected = "code.replay_detected"
+	auditTokenIssued        = string(auditevent.AuditTokenIssued)
+	auditTokenRefreshed     = string(auditevent.AuditTokenRefreshed)
+	auditTokenRevokeFailed  = string(auditevent.AuditTokenRevokeFailed)
+	auditCodeConsumed       = string(auditevent.AuditCodeConsumed)
+	auditCodeReplayDetected = string(auditevent.AuditCodeReplayDetected)
 	auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
 )
 

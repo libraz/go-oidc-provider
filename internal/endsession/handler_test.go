@@ -913,7 +913,7 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 	}
 	var calls atomic.Int32
 	var capturedAud string
-	var capturedSID string
+	var capturedSID bool
 	deliver := backchannel.DelivererFunc(func(_ context.Context, target backchannel.Target, token string) error {
 		calls.Add(1)
 		capturedAud = target.ClientID
@@ -927,9 +927,7 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 			t.Errorf("decode claims: %v", err)
 			return err
 		}
-		if sid, _ := claims["sid"].(string); sid != "" {
-			capturedSID = sid
-		}
+		_, capturedSID = claims["sid"]
 		return nil
 	})
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
@@ -992,8 +990,8 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 	if capturedAud != rpClient {
 		t.Errorf("logout-token aud=%q want %q", capturedAud, rpClient)
 	}
-	if capturedSID != sessionID {
-		t.Errorf("logout-token sid=%q want %q", capturedSID, sessionID)
+	if capturedSID {
+		t.Errorf("logout-token disclosed unrelated browser sid %q", sessionID)
 	}
 }
 
