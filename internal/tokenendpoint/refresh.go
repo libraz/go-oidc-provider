@@ -452,6 +452,18 @@ func issueRefreshResponse(
 			writeError(w, http.StatusBadRequest, errInvalidGrant, "refresh token retry does not match original exchange")
 			return
 		}
+		// Bearer chains recover the cached response verbatim (RFC 9700
+		// §2.2.2). Sender-constrained chains cannot: RFC 9449 §5/§6 binds
+		// each access token to the DPoP key (or mTLS certificate) the
+		// request presents, and a confidential client may rotate that key
+		// across refreshes — replaying the originally-bound token would
+		// hand back one the client can no longer use. Re-mint the access
+		// token against the current binding while keeping the idempotent
+		// successor refresh token and id_token.
+		if binding.constrained() {
+			reissueGraceAccessToken(ctx, w, deps, client, exchanged, binding, &response)
+			return
+		}
 		writeSuccess(w, response)
 		return
 	}
@@ -555,6 +567,73 @@ func issueRefreshResponse(
 		return
 	}
 	writeSuccess(w, response)
+}
+
+// reissueGraceAccessToken re-binds the access token of an RFC 9700 §2.2.2
+// grace replay to the sender-constraint the *current* request presents,
+// then re-emits the original rotation's idempotent remainder (successor
+// refresh token, id_token, scope, authorization_details, grant_id) from
+// the cached response.
+//
+// RFC 9700 grace recovery must return the same successor refresh token so
+// a client that lost the original response is not locked out — the chain
+// is never rotated again. RFC 9449 §5/§6, however, binds every issued
+// access token to the DPoP key (or, for mTLS, the client certificate)
+// presented on the request that produced it, and a confidential client
+// is free to rotate that DPoP key across refreshes. Replaying the
+// originally-minted access token verbatim would therefore hand back a
+// token bound to a key the client may no longer hold, so every resource
+// call would fail with an invalid_token thumbprint mismatch. The refresh
+// token stays fixed; only the access token is minted afresh against the
+// current binding, and the grant-tombstone mint-refusal guard runs
+// exactly as it does on a first-issue refresh so a replay cannot slip a
+// fresh access token past a grant that has since been revoked.
+func reissueGraceAccessToken(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	client *store.Client,
+	exchanged *refresh.Exchanged,
+	binding tokenBinding,
+	response *successResponse,
+) {
+	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
+		return
+	}
+	now := deps.now().UTC()
+	authCtx := refreshAuthContext(ctx, deps, exchanged)
+	publicSubject := exchanged.Subject
+	if !exchanged.SubjectPublic {
+		projected, err := projectPublicSubject(ctx, deps, exchanged.Subject, client)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return
+		}
+		publicSubject = projected
+	}
+	accessToken, err := mintAccessToken(
+		ctx,
+		deps,
+		exchanged.Subject,
+		publicSubject,
+		client.ID,
+		exchanged.GrantID,
+		exchanged.Scope,
+		exchanged.Resource,
+		now,
+		authCtx.AuthTime,
+		binding,
+		response.AuthorizationDetails,
+		exchanged.AccessTokenExtra,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return
+	}
+	response.AccessToken = accessToken
+	response.TokenType = binding.tokenTypeFor()
+	response.ExpiresIn = int64(deps.AccessTokenTTL.Seconds())
+	writeSuccess(w, *response)
 }
 
 func refreshExchangedWithAuthorizationDetails(exchanged *refresh.Exchanged, details []map[string]any) *refresh.Exchanged {

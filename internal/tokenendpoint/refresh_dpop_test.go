@@ -16,6 +16,7 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/libraz/go-oidc-provider/internal/dpop"
+	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -167,6 +168,99 @@ func TestRefresh_DPoP_HappyPath(t *testing.T) {
 	}
 	if rec.DPoPJKT != key.jkt {
 		t.Errorf("rotated DPoPJKT=%q want %q", rec.DPoPJKT, key.jkt)
+	}
+}
+
+// TestRefresh_DPoP_GraceRebindsAccessToken exercises the RFC 9700 §2.2.2
+// grace path under DPoP key rotation: a confidential client refreshes
+// with key A, then replays the ORIGINAL refresh token within the grace
+// window presenting a different key B. The grace response must re-bind
+// the re-issued access token to key B — the key the retry actually
+// holds — rather than replay the cached token bound to key A, which the
+// client could no longer use (every resource call would fail the RFC
+// 9449 §6 cnf.jkt check). The successor refresh token stays fixed: grace
+// recovers the original rotation, it does not rotate the chain again.
+func TestRefresh_DPoP_GraceRebindsAccessToken(t *testing.T) {
+	t.Parallel()
+
+	cur := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
+	prov := testkit.NewProvider(t,
+		testkit.WithClock(movableClock{cur: &cur}),
+		testkit.WithOptions(op.WithFeature(feature.DPoP)),
+	)
+	f := &fixture{
+		prov:     prov,
+		endpoint: prov.Server.URL + "/oidc/token",
+		clock:    fixedClock{now: cur},
+	}
+	client, secret := f.confidentialClientFixture(t)
+
+	const tokenID = "rt-dpop-grace" //nolint:gosec // not a credential — opaque test fixture id.
+	f.seedGrant(t, &store.Grant{
+		ID: "grant-dpop-grace", Subject: "user-1", ClientID: client.ID,
+		Scope: []string{"openid"},
+	})
+	// Confidential chain left unbound (DPoPJKT empty) so the client may
+	// rotate its DPoP key across refreshes per RFC 9449 §5.
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:       tokenID,
+		ClientID: client.ID,
+		Subject:  "user-1",
+		GrantID:  "grant-dpop-grace",
+		Scope:    []string{"openid"},
+	})
+
+	keyA := newDPoPKey(t)
+	keyB := newDPoPKey(t)
+
+	// First refresh with key A: mints an access token bound to A, rotates
+	// the chain, and caches the response for grace recovery.
+	firstProof := makeDPoPProof(t, keyA, "POST", f.endpoint, cur, "jti-grace-A", "")
+	first := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, refreshForm(tokenID, ""), client.ID, secret, firstProof)
+	defer first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first status=%d want 200, body=%v", first.StatusCode, decodeJSON(t, first))
+	}
+	firstRefresh, _ := decodeJSON(t, first)["refresh_token"].(string)
+	if firstRefresh == "" {
+		t.Fatal("first refresh must rotate a successor refresh token")
+	}
+
+	// Step inside the grace window and replay the ORIGINAL token with a
+	// DIFFERENT DPoP key.
+	cur = cur.Add(5 * time.Second)
+	replayProof := makeDPoPProof(t, keyB, "POST", f.endpoint, cur, "jti-grace-B", "")
+	second := postWithDPoP(t, f.prov.HTTPClient(nil), f.endpoint, refreshForm(tokenID, ""), client.ID, secret, replayProof)
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		t.Fatalf("grace status=%d want 200, body=%v", second.StatusCode, decodeJSON(t, second))
+	}
+	secondBody := decodeJSON(t, second)
+
+	// Idempotency: the grace retry returns the canonical successor, not a
+	// second rotation.
+	if got, _ := secondBody["refresh_token"].(string); got != firstRefresh {
+		t.Errorf("grace refresh_token=%q want canonical successor %q", got, firstRefresh)
+	}
+	if got := secondBody["token_type"]; got != "DPoP" {
+		t.Errorf("token_type=%v want DPoP", got)
+	}
+
+	// Sender-constraint correctness: the re-issued access token MUST be
+	// bound to key B (the retry's proof), not key A (the original).
+	at, _ := secondBody["access_token"].(string)
+	if at == "" {
+		t.Fatal("grace response missing access_token")
+	}
+	verifierClock := fixedClock{now: cur}
+	keySet := mustKeySet(t, f.prov)
+	v := &tokens.AccessTokenVerifier{Keys: keySet, Issuer: f.prov.Issuer, Clock: verifierClock}
+	parsed, _, err := v.Verify(at)
+	if err != nil {
+		t.Fatalf("Verify grace access token: %v", err)
+	}
+	if got := parsed.Confirmation["jkt"]; got != keyB.jkt {
+		t.Errorf("grace access token cnf.jkt=%q want retry key %q (not original %q)", got, keyB.jkt, keyA.jkt)
 	}
 }
 
