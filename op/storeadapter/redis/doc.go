@@ -44,6 +44,10 @@
 //   - Authentication is required. [WithRedisAuth] MUST be supplied
 //     unless dev mode is enabled. The adapter does not support anonymous
 //     access against production deployments.
+//   - DSN parse failures never include the supplied value. Use
+//     [RedactedDSN] when an endpoint identifier is needed in an application
+//     log; it removes credentials and query parameters and fails closed for
+//     malformed input.
 //   - Value size is capped at 64 KiB. Save / Mark calls whose serialised
 //     payload exceeds the cap fail rather than letting an attacker pin
 //     unbounded RAM into the cache.

@@ -3,6 +3,7 @@ package oidcredis
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -45,6 +46,112 @@ func TestNew_RejectsUnknownScheme(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "unsupported DSN scheme") {
 		t.Fatalf("want unsupported-scheme error, got %v", err)
+	}
+}
+
+func TestNew_InvalidDSNDoesNotDiscloseCredentials(t *testing.T) {
+	t.Parallel()
+	const dsn = "rediss://sensitive-user:percent%ZZsecret@localhost:6379/0" //nolint:gosec // synthetic credential verifies redaction.
+	_, err := New(context.Background(),
+		WithDSN(dsn),
+		WithRedisAuth("sensitive-user", "percent%ZZsecret"),
+	)
+	if err == nil {
+		t.Fatal("want invalid-DSN error")
+	}
+	for _, secret := range []string{dsn, "sensitive-user", "percent%ZZsecret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q disclosed %q", err, secret)
+		}
+	}
+	if got := err.Error(); got != "oidcredis: invalid DSN" {
+		t.Fatalf("error=%q, want fixed invalid-DSN message", got)
+	}
+}
+
+func TestNew_UnsupportedDSNOptionDoesNotDiscloseValue(t *testing.T) {
+	t.Parallel()
+	const dsn = "rediss://sensitive-user:percent%40secret@localhost:6379/0?password=query-secret" //nolint:gosec // synthetic credential verifies redaction.
+	_, err := New(context.Background(),
+		WithDSN(dsn),
+		WithRedisAuth("sensitive-user", "percent@secret"),
+	)
+	if err == nil {
+		t.Fatal("want invalid-DSN error")
+	}
+	for _, secret := range []string{dsn, "sensitive-user", "percent%40secret", "query-secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q disclosed %q", err, secret)
+		}
+	}
+}
+
+func TestRedactedDSN(t *testing.T) {
+	t.Parallel()
+	const dsn = "rediss://sensitive-user:percent%40secret@redis.internal:6380/4?protocol=3#private" //nolint:gosec // synthetic credential verifies redaction.
+	got := RedactedDSN(dsn)
+	if want := "rediss://redis.internal:6380/4"; got != want {
+		t.Fatalf("RedactedDSN()=%q, want %q", got, want)
+	}
+	for _, secret := range []string{"sensitive-user", "percent%40secret", "percent@secret", "protocol=3", "private"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("RedactedDSN()=%q disclosed %q", got, secret)
+		}
+	}
+}
+
+func TestRedactedDSN_InvalidInputFailsClosed(t *testing.T) {
+	t.Parallel()
+	for _, dsn := range []string{
+		"rediss://sensitive-user:percent%ZZsecret@localhost:6379/0",
+		"memcached://sensitive-user:secret@localhost:11211",
+		"sensitive-user:secret",
+	} {
+		if got := RedactedDSN(dsn); got != invalidRedisDSNLabel {
+			t.Errorf("RedactedDSN(%q)=%q, want fixed placeholder", dsn, got)
+		}
+	}
+}
+
+func TestRedisConnectionErrorDoesNotForwardDriverText(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("WRONGPASS sensitive-user percent%40secret")
+	err := &redisConnectionError{
+		endpoint: "rediss://redis.internal:6380/4",
+		cause:    cause,
+	}
+	for _, secret := range []string{"sensitive-user", "percent%40secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q disclosed %q", err, secret)
+		}
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("connection error no longer unwraps to its cause")
+	}
+}
+
+func TestNew_ConnectionFailureUsesRedactedEndpoint(t *testing.T) {
+	t.Parallel()
+	const dsn = "rediss://sensitive-user:percent%40secret@redis.internal:6380/4" //nolint:gosec // synthetic credential verifies connection-error redaction.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := New(ctx,
+		WithDSN(dsn),
+		WithRedisAuth("sensitive-user", "percent@secret"),
+	)
+	if err == nil {
+		t.Fatal("want connection error")
+	}
+	for _, secret := range []string{dsn, "sensitive-user", "percent%40secret", "percent@secret"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("connection error %q disclosed %q", err, secret)
+		}
+	}
+	if want := "rediss://redis.internal:6380/4"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("connection error %q omitted redacted endpoint %q", err, want)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("connection error %v no longer unwraps to context cancellation", err)
 	}
 }
 

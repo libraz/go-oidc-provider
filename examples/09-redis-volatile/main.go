@@ -92,7 +92,7 @@
 //
 // PRODUCTION CAVEATS:
 //   - Keys: ephemeral; load from a vault / KMS in production.
-//   - Store: composite (MySQL durable + Redis volatile); MYSQL_DSN / REDIS_DSN are env-var driven, production loads credentials from a secret manager and applies SQL migrations through dedicated tooling.
+//   - Store: composite (MySQL durable + Redis volatile); MYSQL_DSN / REDIS_DSN are env-var driven, production loads credentials from a secret manager and applies SQL migrations through dedicated tooling. Startup diagnostics structurally redact both DSNs and fail closed for malformed input.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - User seed: the demo username / password are hard-coded; production embedders enrol users through their own management plane.
 //   - rpkit: the RP code in examples/internal/rpkit is a demo wrapper, not a library.
@@ -108,7 +108,7 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqldriver "github.com/go-sql-driver/mysql"
 
 	"github.com/libraz/go-oidc-provider/examples/internal/devkeys"
 	"github.com/libraz/go-oidc-provider/examples/internal/rpkit"
@@ -144,9 +144,13 @@ func run() error {
 
 	// --- Durable backend: SQL adapter against MySQL ----------------
 	dsn := mysqlDSN()
+	mysqlEndpoint, err := redactedMySQLDSN(dsn)
+	if err != nil {
+		return errors.New("parse mysql DSN: invalid DSN")
+	}
 	db, err := databasesql.Open("mysql", dsn)
 	if err != nil {
-		return fmt.Errorf("open mysql: %w", err)
+		return mysqlConnectionError("open", mysqlEndpoint, err)
 	}
 	defer func() { _ = db.Close() }()
 	db.SetMaxOpenConns(50)
@@ -157,7 +161,7 @@ func run() error {
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
-		return fmt.Errorf("ping mysql: %w (DSN host=%s)", err, mustEnv("MYSQL_HOST", "127.0.0.1:3306"))
+		return mysqlConnectionError("ping", mysqlEndpoint, err)
 	}
 
 	durable, err := oidcsql.New(db, oidcsql.MySQL())
@@ -167,15 +171,16 @@ func run() error {
 	if err := durable.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("mysql migrate: %w", err)
 	}
-	log.Printf("durable store: mysql (%s)", maskedDSN(dsn))
+	log.Printf("durable store: mysql (%s)", mysqlEndpoint)
 
 	// --- Volatile backend: Redis adapter ----------------------------
-	volatile, err := newRedis()
+	redisDSN := mustEnv("REDIS_DSN", "rediss://localhost:6379/0")
+	volatile, err := newRedis(redisDSN)
 	if err != nil {
 		return fmt.Errorf("oidcredis.New: %w", err)
 	}
 	defer func() { _ = volatile.Close() }()
-	log.Printf("volatile store: redis (%s)", os.Getenv("REDIS_DSN"))
+	log.Printf("volatile store: redis (%s)", oidcredis.RedactedDSN(redisDSN))
 
 	// --- Demo user seed (durable backend) ---------------------------
 	if err := seedUser(durable); err != nil {
@@ -293,8 +298,7 @@ func mysqlDSN() string {
 	return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true&charset=utf8mb4&loc=UTC", user, pass, host, dbName)
 }
 
-func newRedis() (*oidcredis.Store, error) {
-	dsn := mustEnv("REDIS_DSN", "rediss://localhost:6379/0")
+func newRedis(dsn string) (*oidcredis.Store, error) {
 	opts := []oidcredis.Option{
 		oidcredis.WithDSN(dsn),
 		oidcredis.WithRedisAuth(os.Getenv("REDIS_USERNAME"), os.Getenv("REDIS_PASSWORD")),
@@ -316,24 +320,56 @@ func mustEnv(key, fallback string) string {
 	return fallback
 }
 
-// maskedDSN strips the password from a MySQL DSN for safe logging.
-// The DSN format is user:pass@tcp(host:port)/db?params.
-func maskedDSN(dsn string) string {
-	at := -1
-	colon := -1
-	for i := range len(dsn) {
-		if dsn[i] == ':' && colon == -1 {
-			colon = i
-		}
-		if dsn[i] == '@' {
-			at = i
-			break
-		}
+// redactedMySQLDSN parses the driver-native format and returns only the
+// network endpoint and database name. It deliberately omits user info and
+// parameters, either of which may contain credentials.
+func redactedMySQLDSN(dsn string) (string, error) {
+	cfg, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		return "", errors.New("invalid MySQL DSN")
 	}
-	if at == -1 || colon == -1 || colon >= at {
-		return dsn
+	endpoint := cfg.Net + "(" + cfg.Addr + ")"
+	if cfg.DBName != "" {
+		endpoint += "/" + cfg.DBName
 	}
-	return dsn[:colon+1] + "***" + dsn[at:]
+	return endpoint, nil
+}
+
+// mysqlConnectionError keeps startup diagnostics useful without forwarding
+// driver text. MySQL authentication errors may quote the attempted username;
+// retaining only the numeric server code prevents that credential disclosure
+// while mysqlConnectionFailure.Unwrap preserves the cause for errors.Is/As.
+func mysqlConnectionError(action, endpoint string, err error) error {
+	failure := &mysqlConnectionFailure{
+		action:   action,
+		endpoint: endpoint,
+		cause:    err,
+	}
+	var serverErr *mysqldriver.MySQLError
+	if errors.As(err, &serverErr) {
+		failure.serverCode = serverErr.Number
+		failure.hasServerCode = true
+	}
+	return failure
+}
+
+type mysqlConnectionFailure struct {
+	action        string
+	endpoint      string
+	cause         error
+	serverCode    uint16
+	hasServerCode bool
+}
+
+func (e *mysqlConnectionFailure) Error() string {
+	if e.hasServerCode {
+		return fmt.Sprintf("%s mysql (%s): server error %d", e.action, e.endpoint, e.serverCode)
+	}
+	return fmt.Sprintf("%s mysql (%s): connection failed", e.action, e.endpoint)
+}
+
+func (e *mysqlConnectionFailure) Unwrap() error {
+	return e.cause
 }
 
 // waitForIssuer polls iss + "/.well-known/openid-configuration" until

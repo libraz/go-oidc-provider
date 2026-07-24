@@ -29,6 +29,8 @@ const MaxValueBytes = 64 * 1024
 // minimal.
 const DefaultKeyPrefix = "oidc:"
 
+const invalidRedisDSNLabel = "<invalid Redis DSN>"
+
 // Clock returns the wall-clock time the adapter uses to evaluate
 // record expiry. It mirrors the inmem and SQL adapter's Clock interface
 // so the three backends can be swapped without re-wiring construction.
@@ -66,9 +68,34 @@ type config struct {
 // WithDSN supplies the Redis connection string. The scheme MUST be
 // rediss:// (TLS) unless [WithDevModeAllowPlaintext] is also supplied.
 // The DSN MAY embed a username and password, but [WithRedisAuth] takes
-// precedence when both are present.
+// precedence when both are present. Use [RedactedDSN], never the raw value,
+// when identifying the endpoint in logs.
 func WithDSN(dsn string) Option {
 	return func(cfg *config) { cfg.dsn = dsn }
+}
+
+// RedactedDSN returns a credential-free endpoint label suitable for logs.
+// The result contains only the normalized redis/rediss scheme, host, and
+// database path; credentials, query parameters, and fragments are omitted.
+// Malformed or unsupported input returns a fixed placeholder and never
+// includes any part of the supplied value.
+func RedactedDSN(dsn string) string {
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Host == "" {
+		return invalidRedisDSNLabel
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "redis" && scheme != "rediss" {
+		return invalidRedisDSNLabel
+	}
+	if _, err := redis.ParseURL(dsn); err != nil {
+		return invalidRedisDSNLabel
+	}
+	return (&url.URL{
+		Scheme: scheme,
+		Host:   parsed.Host,
+		Path:   parsed.Path,
+	}).String()
 }
 
 // WithRedisAuth injects the username and password the adapter uses to
@@ -195,7 +222,10 @@ func New(ctx context.Context, opts ...Option) (*Store, error) {
 	defer cancel()
 	if err := client.Ping(pingCtx).Err(); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("oidcredis: ping: %w", err)
+		return nil, &redisConnectionError{
+			endpoint: RedactedDSN(cfg.dsn),
+			cause:    err,
+		}
 	}
 
 	s := &Store{
@@ -208,6 +238,23 @@ func New(ctx context.Context, opts ...Option) (*Store, error) {
 	s.jtisImpl = newJTIStore(s)
 	s.sessionsImpl = newSessionStore(s)
 	return s, nil
+}
+
+// redisConnectionError preserves the cause for errors.Is/errors.As without
+// copying driver or server text into Error. Authentication failures can be
+// controlled by the remote server, so only the structurally redacted endpoint
+// is safe to include in startup diagnostics.
+type redisConnectionError struct {
+	endpoint string
+	cause    error
+}
+
+func (e *redisConnectionError) Error() string {
+	return fmt.Sprintf("oidcredis: ping (%s): connection failed", e.endpoint)
+}
+
+func (e *redisConnectionError) Unwrap() error {
+	return e.cause
 }
 
 func buildConfig(opts []Option) *config {
@@ -233,7 +280,7 @@ func validateConfig(cfg *config) (*url.URL, error) {
 	}
 	parsed, err := url.Parse(cfg.dsn)
 	if err != nil {
-		return nil, fmt.Errorf("oidcredis: parse DSN: %w", err)
+		return nil, errors.New("oidcredis: invalid DSN")
 	}
 	if err := validateScheme(parsed.Scheme, cfg.allowPlaintext); err != nil {
 		return nil, err
@@ -269,7 +316,7 @@ func validateKeyPrefix(prefix string) error {
 func buildClientOptions(cfg *config, parsed *url.URL) (*redis.Options, error) {
 	rawOpts, err := redis.ParseURL(cfg.dsn)
 	if err != nil {
-		return nil, fmt.Errorf("oidcredis: parse DSN: %w", err)
+		return nil, errors.New("oidcredis: invalid DSN")
 	}
 	// WithRedisAuth takes precedence over credentials embedded in the
 	// DSN; supplying both is unusual and the option-supplied value is
