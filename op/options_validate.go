@@ -1081,31 +1081,41 @@ func (c *config) validateStoreCapabilities() error {
 		}
 	}
 	if grantsRequireAuthorizeEndpoint(c.grants) {
-		if tx := transactionalStore(c.store); isNilLike(tx) {
+		return c.validateAuthorizeEndpointStoreCapabilities()
+	}
+	return nil
+}
+
+// validateAuthorizeEndpointStoreCapabilities enforces the transactional and
+// compare-and-swap store contracts that a grant mounting the browser authorize
+// endpoint depends on: the store must be [store.Transactional], its interaction
+// substore must implement [store.InteractionStoreCAS], and its grant substore
+// must implement [store.GrantClientLister].
+func (c *config) validateAuthorizeEndpointStoreCapabilities() error {
+	if tx := transactionalStore(c.store); isNilLike(tx) {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "Store must implement store.Transactional because " +
+				"a grant that mounts the browser authorize endpoint is enabled",
+		}
+	}
+	if interactions := c.store.Interactions(); !isNilLike(interactions) {
+		if _, ok := interactions.(store.InteractionStoreCAS); !ok {
 			return &Error{
 				Code: codeConfiguration,
-				Description: "Store must implement store.Transactional because " +
-					"a grant that mounts the browser authorize endpoint is enabled",
+				Description: "Store.Interactions() must implement " +
+					"store.InteractionStoreCAS because a grant that mounts " +
+					"the browser authorize endpoint is enabled",
 			}
 		}
-		if interactions := c.store.Interactions(); !isNilLike(interactions) {
-			if _, ok := interactions.(store.InteractionStoreCAS); !ok {
-				return &Error{
-					Code: codeConfiguration,
-					Description: "Store.Interactions() must implement " +
-						"store.InteractionStoreCAS because a grant that mounts " +
-						"the browser authorize endpoint is enabled",
-				}
-			}
-		}
-		if grants := c.store.Grants(); !isNilLike(grants) {
-			if _, ok := grants.(store.GrantClientLister); !ok {
-				return &Error{
-					Code: codeConfiguration,
-					Description: "Store.Grants() must implement " +
-						"store.GrantClientLister because a grant that mounts " +
-						"the browser authorize endpoint is enabled",
-				}
+	}
+	if grants := c.store.Grants(); !isNilLike(grants) {
+		if _, ok := grants.(store.GrantClientLister); !ok {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "Store.Grants() must implement " +
+					"store.GrantClientLister because a grant that mounts " +
+					"the browser authorize endpoint is enabled",
 			}
 		}
 	}
