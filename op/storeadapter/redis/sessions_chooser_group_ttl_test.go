@@ -170,3 +170,90 @@ func TestSessionStore_Save_ChooserGroupTTLNeverShrinks(t *testing.T) {
 			ttlAfterLong, ttlAfterShort)
 	}
 }
+
+// TestSessionStore_Touch_ExtendsChooserGroupTTL proves Touch keeps the
+// parent record and its secondary chooser-group index on the same idle
+// lifetime. The assertion runs after the original expiry: without the
+// index extension Find still succeeds, but ListByChooserGroup loses the
+// live session.
+func TestSessionStore_Touch_ExtendsChooserGroupTTL(t *testing.T) {
+	ctx := t.Context()
+
+	const authPassword = "ofcs-test-pw" //nolint:gosec // ephemeral test container.
+	ctr, err := redismod.Run(ctx, chooserGroupTTLRedisImage,
+		testcontainers.WithCmdArgs("--requirepass", authPassword),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("Ready to accept connections").WithStartupTimeout(60*time.Second),
+		),
+	)
+	if err != nil {
+		t.Skipf("redis container unavailable (Docker not running?): %v", err)
+	}
+	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
+
+	endpoint, err := ctr.Endpoint(ctx, "")
+	if err != nil {
+		t.Fatalf("Endpoint: %v", err)
+	}
+	dsn := fmt.Sprintf("redis://:%s@%s/0", authPassword, endpoint)
+
+	s, err := New(ctx,
+		WithDSN(dsn),
+		WithRedisAuth("", authPassword),
+		WithDevModeAllowPlaintext(func(string) {}),
+		WithKeyPrefix("cg-touch-ttl-test:"),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	now := s.clock.Now()
+	const (
+		sessionID = "sess-touch"
+		groupID   = "cg-touch"
+	)
+	sess := &store.Session{
+		ID:             sessionID,
+		Subject:        "sub",
+		AuthTime:       now,
+		ChooserGroupID: groupID,
+		ExpiresAt:      now.Add(2 * time.Second),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := s.Sessions().Save(ctx, sess); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := s.Sessions().Touch(
+		ctx,
+		sessionID,
+		now.Add(time.Minute),
+		now.Add(time.Second),
+	); err != nil {
+		t.Fatalf("Touch: %v", err)
+	}
+
+	afterOriginalExpiry := time.NewTimer(2500 * time.Millisecond)
+	defer afterOriginalExpiry.Stop()
+	select {
+	case <-afterOriginalExpiry.C:
+	case <-ctx.Done():
+		t.Fatalf("wait past original expiry: %v", ctx.Err())
+	}
+
+	got, err := s.Sessions().Find(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Find after original expiry: %v", err)
+	}
+	if got.ID != sessionID {
+		t.Fatalf("Find ID=%q want %q", got.ID, sessionID)
+	}
+	group, err := s.Sessions().ListByChooserGroup(ctx, groupID)
+	if err != nil {
+		t.Fatalf("ListByChooserGroup after original expiry: %v", err)
+	}
+	if len(group) != 1 || group[0].ID != sessionID {
+		t.Fatalf("ListByChooserGroup=%+v want only %q", group, sessionID)
+	}
+}

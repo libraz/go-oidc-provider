@@ -15,6 +15,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -38,9 +39,13 @@ import (
 // authorizeendpoint package itself for white-box access.
 type stubClientStore struct {
 	clients map[string]*store.Client
+	getErr  error
 }
 
 func (s *stubClientStore) GetClient(_ context.Context, id string) (*store.Client, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	if c, ok := s.clients[id]; ok {
 		return c, nil
 	}
@@ -341,37 +346,96 @@ func TestJARMEncrypt_MetadataButWeakEncKey_SuccessFallsBackToServerError(t *test
 	}
 }
 
-func TestJARMEncrypt_MetadataButNoEncKey_ErrorFallsBackToSignedOnly(t *testing.T) {
+func TestJARMEncrypt_MetadataButNoEncKey_ErrorFailsClosed(t *testing.T) {
 	t.Parallel()
 
-	// Same misconfiguration as the success-path case, but on the
-	// error path the splice's policy is to emit the original
-	// signed-only JARM error response. The error itself is a failure
-	// path; signing without encryption preserves authenticity at the
-	// cost of confidentiality of the error code, which is a strictly
-	// better fallback than stranding the user on a second
-	// server_error.
 	f := newJARMTestFixture(t, true, false)
 	req := f.authorizeRequest("query.jwt")
 	w := dispatchError(f, req, "invalid_scope", "scope rejected")
 
-	got := extractResponseFromQuery(t, w)
-	if segs := strings.Count(got, "."); segs != 2 {
-		t.Fatalf("response param: want 3-segment JWS (signed-only fallback), got %d dots in %q", segs, got)
+	if w.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	// Confirm the signed-only error JWT carries the error claim
-	// (defence against "did we accidentally encrypt-and-strip?").
-	parts := strings.Split(got, ".")
-	payload, err := decodeBase64URLSegment(parts[1])
+	loc, err := url.Parse(w.Header().Get("Location"))
 	if err != nil {
-		t.Fatalf("decode payload: %v", err)
+		t.Fatalf("url.Parse: %v", err)
 	}
-	var claims map[string]any
-	if uErr := json.Unmarshal(payload, &claims); uErr != nil {
-		t.Fatalf("unmarshal claims: %v", uErr)
+	q := loc.Query()
+	if got := q.Get("error"); got != "server_error" {
+		t.Errorf("error=%q want server_error", got)
 	}
-	if claims["error"] != "invalid_scope" {
-		t.Errorf("claims[error]=%v want invalid_scope", claims["error"])
+	if got := q.Get("error_description"); got != "jarm_response_encryption_failed" {
+		t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
+	}
+	if got := q.Get("response"); got != "" {
+		t.Errorf("signed-only response leaked on encryption-failure path: %q", got)
+	}
+}
+
+func TestJARMEncrypt_ClientStoreFault_FailsClosedOverHTTP(t *testing.T) {
+	t.Parallel()
+
+	f := newJARMTestFixture(t, true, true)
+	f.store.getErr = errors.New("injected client store failure")
+	req := f.authorizeRequest("query.jwt")
+
+	for _, tc := range []struct {
+		name string
+		emit func(http.ResponseWriter, *http.Request)
+	}{
+		{
+			name: "success",
+			emit: func(w http.ResponseWriter, r *http.Request) {
+				emitAuthorizeSuccess(w, r, f.resolved(), req, "code-store-fault")
+			},
+		},
+		{
+			name: "error",
+			emit: func(w http.ResponseWriter, r *http.Request) {
+				emitAuthorizeError(w, r, f.resolved(), req, "invalid_scope", "scope rejected")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(tc.emit))
+			t.Cleanup(server.Close)
+			client := server.Client()
+			client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			}
+			httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
+				server.URL+"/authorize", http.NoBody)
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			resp, err := client.Do(httpReq)
+			if err != nil {
+				t.Fatalf("GET /authorize: %v", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusFound {
+				t.Fatalf("status=%d", resp.StatusCode)
+			}
+			loc, err := url.Parse(resp.Header.Get("Location"))
+			if err != nil {
+				t.Fatalf("url.Parse: %v", err)
+			}
+			q := loc.Query()
+			if got := q.Get("error"); got != "server_error" {
+				t.Errorf("error=%q want server_error", got)
+			}
+			if got := q.Get("error_description"); got != "jarm_response_encryption_failed" {
+				t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
+			}
+			if got := q.Get("response"); got != "" {
+				t.Errorf("signed-only JARM leaked after client-store fault: %q", got)
+			}
+			if got := q.Get("code"); got != "" {
+				t.Errorf("authorization code leaked after client-store fault: %q", got)
+			}
+		})
 	}
 }
 

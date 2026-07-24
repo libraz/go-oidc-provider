@@ -46,9 +46,9 @@ func openSQLite(t *testing.T) *databasesql.DB {
 // migrated SQLite-backed store per sub-test.
 func newSQLiteFactory(t *testing.T) contract.Factory {
 	t.Helper()
-	clock := fixedClock{now: contract.Reference}
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
+		clock := &fixedClock{now: contract.Reference}
 		db := openSQLite(t)
 		s, err := oidcsql.New(db, oidcsql.SQLite(), oidcsql.WithClock(clock))
 		if err != nil {
@@ -57,7 +57,13 @@ func newSQLiteFactory(t *testing.T) contract.Factory {
 		if err := s.Migrate(context.Background()); err != nil {
 			t.Fatalf("Migrate: %v", err)
 		}
-		return contract.Backend{Store: s, Now: clock.Now}
+		return contract.Backend{
+			Store: s,
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+		}
 	}
 }
 

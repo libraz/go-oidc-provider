@@ -28,11 +28,35 @@ import (
 // Embedders pair this implementation with a transactional backend
 // for the rest of the catalogue via op/storeadapter/composite.
 type sessionStore struct {
-	parent *Store
+	parent      *Store
+	touchScript *redis.Script
 }
 
+// touchSessionLua atomically verifies that the session still exists,
+// refreshes its payload/TTL, restores chooser-group membership when a
+// legacy or prematurely expired index is missing, and extends that index
+// without shortening a longer-lived sibling's TTL.
+const touchSessionLua = `
+if redis.call("EXISTS", KEYS[1]) == 0 then
+	return 0
+end
+redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2], "XX")
+if #KEYS == 2 then
+	redis.call("SADD", KEYS[2], ARGV[3])
+	local group_ttl = redis.call("PTTL", KEYS[2])
+	local requested_ttl = tonumber(ARGV[2])
+	if group_ttl < requested_ttl then
+		redis.call("PEXPIRE", KEYS[2], requested_ttl)
+	end
+end
+return 1
+`
+
 func newSessionStore(parent *Store) *sessionStore {
-	return &sessionStore{parent: parent}
+	return &sessionStore{
+		parent:      parent,
+		touchScript: redis.NewScript(touchSessionLua),
+	}
 }
 
 // sessionRecord is the on-the-wire shape Save / Find round-trip. The
@@ -155,12 +179,11 @@ func (s *sessionStore) Find(ctx context.Context, id string) (*store.Session, err
 
 // Touch extends the session's idle timer without recreating a deleted
 // record. Redis has no compare-and-update JSON primitive in the plain
-// command set, so the adapter fetches and rewrites the encoded value, then
-// commits with SET XX. If a concurrent Delete removes the key between the
-// fetch and the write, SET XX reports false and Touch returns ErrNotFound
-// instead of resurrecting the session. The chooser-group set is not
-// touched — Touch only changes the TTL and UpdatedAt fields on the parent
-// record.
+// command set, so the adapter fetches the record and uses one Lua operation
+// to rewrite its value and both TTLs. The operation restores missing
+// chooser-group membership and preserves a longer-lived sibling's index
+// expiry. If a concurrent Delete removes the key first, the script returns
+// false and Touch returns ErrNotFound instead of resurrecting the session.
 func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedAt time.Time) error {
 	rec, err := s.fetch(ctx, id)
 	if err != nil {
@@ -186,11 +209,26 @@ func (s *sessionStore) Touch(ctx context.Context, id string, expiresAt, updatedA
 		// real Delete to keep the chooser-group index honest.
 		return s.Delete(ctx, id)
 	}
-	ok, err := s.parent.client.SetXX(ctx, s.sessionKey(id), payload, ttl).Result()
+	keys := []string{s.sessionKey(id)}
+	if rec.ChooserGroupID != "" {
+		keys = append(keys, s.chooserGroupKey(rec.ChooserGroupID))
+	}
+	ttlMillis := ttl.Milliseconds()
+	if ttlMillis < 1 {
+		ttlMillis = 1
+	}
+	updated, err := s.touchScript.Run(
+		ctx,
+		s.parent.client,
+		keys,
+		payload,
+		ttlMillis,
+		id,
+	).Int()
 	if err != nil {
 		return fmt.Errorf("oidcredis: SET session (Touch): %w", err)
 	}
-	if !ok {
+	if updated == 0 {
 		return store.ErrNotFound
 	}
 	return nil

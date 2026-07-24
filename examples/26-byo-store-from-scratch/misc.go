@@ -24,6 +24,8 @@ type interactionStore struct {
 	now func() time.Time
 }
 
+var _ store.InteractionStoreCAS = (*interactionStore)(nil)
+
 const (
 	interactionUpsert = `
 INSERT INTO vault_flow_scratch
@@ -39,6 +41,18 @@ ON CONFLICT(scratch_id) DO UPDATE SET
 	interactionSelect = `
 SELECT scratch_id, relying_party, flow_step, driver_blob, expires_epoch, issued_epoch, touched_epoch
 FROM vault_flow_scratch WHERE scratch_id = ?`
+
+	interactionCompareAndSwap = `
+UPDATE vault_flow_scratch
+SET relying_party = ?, flow_step = ?, driver_blob = ?,
+    expires_epoch = ?, issued_epoch = ?, touched_epoch = ?
+WHERE scratch_id = ? AND driver_blob = ?
+  AND (expires_epoch = 0 OR expires_epoch >= ?)`
+
+	interactionDeleteIfUnchanged = `
+DELETE FROM vault_flow_scratch
+WHERE scratch_id = ? AND driver_blob = ?
+  AND (expires_epoch = 0 OR expires_epoch >= ?)`
 
 	interactionDelete = `DELETE FROM vault_flow_scratch WHERE scratch_id = ?`
 )
@@ -77,6 +91,77 @@ func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interact
 		return nil, store.ErrNotFound
 	}
 	return &i, nil
+}
+
+func (s *interactionStore) CompareAndSwap(
+	ctx context.Context,
+	previous,
+	next *store.Interaction,
+) error {
+	if previous == nil || next == nil || previous.ID == "" || previous.ID != next.ID {
+		return errors.New("interactions.CompareAndSwap: invalid snapshots")
+	}
+	res, err := s.q.ExecContext(
+		ctx,
+		interactionCompareAndSwap,
+		next.ClientID,
+		next.Step,
+		next.RawState,
+		epochOf(next.ExpiresAt),
+		epochOf(next.CreatedAt),
+		epochOf(next.UpdatedAt),
+		previous.ID,
+		previous.RawState,
+		epochOf(s.now()),
+	)
+	if err != nil {
+		return fmt.Errorf("interactions.CompareAndSwap: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("interactions.CompareAndSwap.RowsAffected: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.Find(ctx, previous.ID); errors.Is(err, store.ErrNotFound) {
+		return store.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	return store.ErrConflict
+}
+
+func (s *interactionStore) DeleteIfUnchanged(
+	ctx context.Context,
+	previous *store.Interaction,
+) error {
+	if previous == nil || previous.ID == "" {
+		return errors.New("interactions.DeleteIfUnchanged: invalid snapshot")
+	}
+	res, err := s.q.ExecContext(
+		ctx,
+		interactionDeleteIfUnchanged,
+		previous.ID,
+		previous.RawState,
+		epochOf(s.now()),
+	)
+	if err != nil {
+		return fmt.Errorf("interactions.DeleteIfUnchanged: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("interactions.DeleteIfUnchanged.RowsAffected: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.Find(ctx, previous.ID); errors.Is(err, store.ErrNotFound) {
+		return store.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	return store.ErrConflict
 }
 
 func (s *interactionStore) Delete(ctx context.Context, id string) error {

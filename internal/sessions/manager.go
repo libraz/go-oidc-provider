@@ -447,6 +447,9 @@ func (m *Manager) Switch(ctx context.Context, chooserGroupID, targetSessionID st
 // server-side assurance values the chooser UI must never render, whereas
 // [Account] is UI-facing.
 type SessionAuthContext struct {
+	// Subject is the selected session's authenticated subject.
+	Subject string
+
 	// ACR is the session's recorded Authentication Context Class
 	// Reference (empty when none was asserted).
 	ACR string
@@ -478,10 +481,11 @@ func (m *Manager) AuthContext(ctx context.Context, chooserGroupID, sessionID str
 		}
 		return SessionAuthContext{}, fmt.Errorf("sessions: find: %w", err)
 	}
-	if sess.ChooserGroupID != chooserGroupID {
+	if sess.ID != sessionID || sess.ChooserGroupID != chooserGroupID {
 		return SessionAuthContext{}, ErrCookieInvalid
 	}
 	return SessionAuthContext{
+		Subject:  sess.Subject,
 		ACR:      sess.ACR,
 		AMR:      append([]string(nil), sess.AMR...),
 		AuthTime: sess.AuthTime,

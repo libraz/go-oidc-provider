@@ -15,10 +15,10 @@ import (
 var errTxClosed = errors.New("inmem: transaction already closed")
 
 // tx is the in-memory implementation of [store.Tx]. It buffers writes against
-// staging maps and flushes them under the owning Store's substore mutexes on
-// Commit. Rollback discards the staged writes. The owning Store's txMu is
-// held for the entire lifetime of the tx so that two transactions never run
-// concurrently against the same backend.
+// staging maps while owning every atomic-cluster substore mutex. Commit applies
+// all staged writes before releasing any mutex; Rollback discards them before
+// releasing the same lock set. The owning Store's txMu is also held for the
+// lifetime of the tx so two transactions never acquire the cluster together.
 type tx struct {
 	owner *Store
 	clock Clock
@@ -73,53 +73,43 @@ func (t *tx) Commit() error {
 	if !t.closed.CompareAndSwap(false, true) {
 		return errTxClosed
 	}
-	defer t.owner.txMu.Unlock()
-	t.acStaging.flush()
-	t.rtStaging.flush()
-	t.grStaging.flush()
-	t.parStaging.flush()
-	flushAccessTokenSnapshot(t.owner.accessTokens, t.accessTokens)
-	flushOpaqueAccessTokenSnapshot(t.owner.opaqueAccessTokens, t.opaqueAccessTokens)
-	flushGrantRevocationSnapshot(t.owner.grantRevocations, t.grantRevocations)
+	defer t.releaseLocks()
+	t.acStaging.flushLocked()
+	t.rtStaging.flushLocked()
+	t.grStaging.flushLocked()
+	t.parStaging.flushLocked()
+	flushAccessTokenSnapshotLocked(t.owner.accessTokens, t.accessTokens)
+	flushOpaqueAccessTokenSnapshotLocked(t.owner.opaqueAccessTokens, t.opaqueAccessTokens)
+	flushGrantRevocationSnapshotLocked(t.owner.grantRevocations, t.grantRevocations)
 	return nil
 }
 
-func accessTokenSnapshot(parent *accessTokenStore) *accessTokenStore {
+func accessTokenSnapshotLocked(parent *accessTokenStore) *accessTokenStore {
 	out := newAccessTokenStore()
-	parent.mu.RLock()
-	defer parent.mu.RUnlock()
 	for id, rec := range parent.m {
 		out.m[id] = cloneAccessToken(rec)
 	}
 	return out
 }
 
-func flushAccessTokenSnapshot(parent, snapshot *accessTokenStore) {
-	parent.mu.Lock()
-	defer parent.mu.Unlock()
+func flushAccessTokenSnapshotLocked(parent, snapshot *accessTokenStore) {
 	parent.m = snapshot.m
 }
 
-func opaqueAccessTokenSnapshot(parent *opaqueAccessTokenStore) *opaqueAccessTokenStore {
+func opaqueAccessTokenSnapshotLocked(parent *opaqueAccessTokenStore) *opaqueAccessTokenStore {
 	out := newOpaqueAccessTokenStore()
-	parent.mu.RLock()
-	defer parent.mu.RUnlock()
 	for id, rec := range parent.m {
 		out.m[id] = cloneOpaqueAccessToken(rec)
 	}
 	return out
 }
 
-func flushOpaqueAccessTokenSnapshot(parent, snapshot *opaqueAccessTokenStore) {
-	parent.mu.Lock()
-	defer parent.mu.Unlock()
+func flushOpaqueAccessTokenSnapshotLocked(parent, snapshot *opaqueAccessTokenStore) {
 	parent.m = snapshot.m
 }
 
-func grantRevocationSnapshot(parent *grantRevocationStore) *grantRevocationStore {
+func grantRevocationSnapshotLocked(parent *grantRevocationStore) *grantRevocationStore {
 	out := newGrantRevocationStore()
-	parent.mu.RLock()
-	defer parent.mu.RUnlock()
 	for id, rec := range parent.tombstones {
 		v := *rec
 		out.tombstones[id] = &v
@@ -131,9 +121,7 @@ func grantRevocationSnapshot(parent *grantRevocationStore) *grantRevocationStore
 	return out
 }
 
-func flushGrantRevocationSnapshot(parent, snapshot *grantRevocationStore) {
-	parent.mu.Lock()
-	defer parent.mu.Unlock()
+func flushGrantRevocationSnapshotLocked(parent, snapshot *grantRevocationStore) {
 	parent.tombstones, parent.denylist = snapshot.tombstones, snapshot.denylist
 }
 
@@ -152,8 +140,13 @@ func (t *tx) Rollback() error {
 		return nil
 	}
 	t.clearStaging()
-	t.owner.txMu.Unlock()
+	t.releaseLocks()
 	return nil
+}
+
+func (t *tx) releaseLocks() {
+	t.owner.unlockTxCluster()
+	t.owner.txMu.Unlock()
 }
 
 // clearStaging drops every staged add / update / delete map entry so a
@@ -169,6 +162,8 @@ func (t *tx) clearStaging() {
 	if t.rtStaging != nil {
 		clear(t.rtStaging.added)
 		clear(t.rtStaging.updated)
+		clear(t.rtStaging.byClient)
+		clear(t.rtStaging.byGrant)
 		clear(t.rtStaging.revoked)
 		clear(t.rtStaging.retries)
 	}
@@ -298,9 +293,7 @@ type authCodeStaging struct {
 	updated map[string]*store.AuthorizationCode
 }
 
-func (s *authCodeStaging) flush() {
-	s.parent.mu.Lock()
-	defer s.parent.mu.Unlock()
+func (s *authCodeStaging) flushLocked() {
 	for id, rec := range s.added {
 		s.parent.m[id] = rec
 	}
@@ -326,9 +319,7 @@ func (a *txAuthCodes) Save(ctx context.Context, code *store.AuthorizationCode) e
 	if _, exists := st.added[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	st.parent.mu.RLock()
 	_, parentExists := st.parent.m[key]
-	st.parent.mu.RUnlock()
 	if parentExists {
 		return store.ErrAlreadyExists
 	}
@@ -395,8 +386,6 @@ func (s *authCodeStaging) lookup(key string) *store.AuthorizationCode {
 	if rec, ok := s.added[key]; ok {
 		return rec
 	}
-	s.parent.mu.RLock()
-	defer s.parent.mu.RUnlock()
 	if rec, ok := s.parent.m[key]; ok {
 		// Return a snapshot so subsequent mutations via Consume are
 		// confined to staging.
@@ -408,18 +397,19 @@ func (s *authCodeStaging) lookup(key string) *store.AuthorizationCode {
 // --- staging: refresh tokens -------------------------------------------------
 
 type refreshStaging struct {
-	parent  *refreshStore
-	added   map[string]*store.RefreshToken
-	updated map[string]*store.RefreshToken
-	revoked map[string]struct{} // chain roots whose descendants must be revoked at flush
-	retries map[string][]byte   // hashed predecessor -> sealed response
+	parent   *refreshStore
+	added    map[string]*store.RefreshToken
+	updated  map[string]*store.RefreshToken
+	byClient refreshIndex
+	byGrant  refreshIndex
+	revoked  map[string]struct{} // chain roots whose descendants must be revoked at flush
+	retries  map[string][]byte   // hashed predecessor -> sealed response
 }
 
-func (s *refreshStaging) flush() {
-	s.parent.mu.Lock()
-	defer s.parent.mu.Unlock()
+func (s *refreshStaging) flushLocked() {
 	for id, rec := range s.added {
 		s.parent.m[id] = rec
+		s.parent.indexRefreshLocked(id, rec)
 	}
 	for id, rec := range s.updated {
 		s.parent.m[id] = rec
@@ -453,13 +443,14 @@ func (r *txRefreshes) Save(ctx context.Context, token *store.RefreshToken) error
 	if _, exists := st.added[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	st.parent.mu.RLock()
 	_, parentExists := st.parent.m[key]
-	st.parent.mu.RUnlock()
 	if parentExists {
 		return store.ErrAlreadyExists
 	}
-	st.added[key] = storeRefresh(token, key)
+	stored := storeRefresh(token, key)
+	st.added[key] = stored
+	st.byClient.add(stored.ClientID, key)
+	st.byGrant.add(stored.GrantID, key)
 	return nil
 }
 
@@ -488,8 +479,6 @@ func (r *txRefreshes) LoadRetryResponse(ctx context.Context, predecessorID strin
 	if sealed, ok := r.tx.rtStaging.retries[key]; ok {
 		return append([]byte(nil), sealed...), nil
 	}
-	r.tx.rtStaging.parent.mu.RLock()
-	defer r.tx.rtStaging.parent.mu.RUnlock()
 	sealed, ok := r.tx.rtStaging.parent.retries[key]
 	if !ok {
 		return nil, store.ErrNotFound
@@ -586,9 +575,16 @@ func (r *txRefreshes) RevokeByGrant(ctx context.Context, grantID string) error {
 	}
 	st := r.tx.rtStaging
 	now := r.tx.clock.Now()
-	st.iter(func(id string, rec *store.RefreshToken) {
-		if rec.GrantID != grantID {
-			return
+	st.revokeIDs(st.parent.byGrant[grantID], now)
+	st.revokeIDs(st.byGrant[grantID], now)
+	return nil
+}
+
+func (s *refreshStaging) revokeIDs(ids map[string]struct{}, now time.Time) {
+	for id := range ids {
+		rec := s.lookup(id)
+		if rec == nil {
+			continue
 		}
 		updated := cloneRefresh(rec)
 		if updated.ConsumedAt == nil {
@@ -597,9 +593,8 @@ func (r *txRefreshes) RevokeByGrant(ctx context.Context, grantID string) error {
 		}
 		updated.Revoked = true
 		updated.ID = id // id here is the hashed key (matches the map key contract).
-		st.updated[id] = updated
-	})
-	return nil
+		s.updated[id] = updated
+	}
 }
 
 // markChainStaged walks the in-memory view (parent + staging) and stamps
@@ -659,8 +654,6 @@ func (s *refreshStaging) iter(fn func(string, *store.RefreshToken)) {
 		fn(id, rec)
 		seen[id] = struct{}{}
 	}
-	s.parent.mu.RLock()
-	defer s.parent.mu.RUnlock()
 	for id, rec := range s.parent.m {
 		if _, ok := seen[id]; ok {
 			continue
@@ -676,8 +669,6 @@ func (s *refreshStaging) lookup(id string) *store.RefreshToken {
 	if rec, ok := s.added[id]; ok {
 		return rec
 	}
-	s.parent.mu.RLock()
-	defer s.parent.mu.RUnlock()
 	if rec, ok := s.parent.m[id]; ok {
 		return cloneRefresh(rec)
 	}
@@ -692,9 +683,7 @@ type grantStaging struct {
 	deleted map[string]struct{}
 }
 
-func (s *grantStaging) flush() {
-	s.parent.mu.Lock()
-	defer s.parent.mu.Unlock()
+func (s *grantStaging) flushLocked() {
 	for id := range s.deleted {
 		delete(s.parent.m, id)
 	}
@@ -735,8 +724,6 @@ func (g *txGrants) Find(ctx context.Context, id string) (*store.Grant, error) {
 	if rec, ok := st.added[id]; ok {
 		return cloneGrant(rec), nil
 	}
-	st.parent.mu.RLock()
-	defer st.parent.mu.RUnlock()
 	if rec, ok := st.parent.m[id]; ok {
 		return cloneGrant(rec), nil
 	}
@@ -777,8 +764,6 @@ func (s *grantStaging) findLatestMatching(subject, clientID string) *store.Grant
 		}
 		consider(rec)
 	}
-	s.parent.mu.RLock()
-	defer s.parent.mu.RUnlock()
 	for id, rec := range s.parent.m {
 		if _, deleted := s.deleted[id]; deleted {
 			continue
@@ -809,9 +794,28 @@ func (g *txGrants) ListBySubject(ctx context.Context, subject string) ([]*store.
 	return out, nil
 }
 
+func (g *txGrants) ListClientIDsBySubject(
+	ctx context.Context,
+	subject, cursor string,
+	limit int,
+) (store.GrantClientPage, error) {
+	if g.tx.closed.Load() {
+		return store.GrantClientPage{}, errTxClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return store.GrantClientPage{}, err
+	}
+	if limit <= 0 {
+		return store.GrantClientPage{}, errors.New("inmem: grant client page limit must be positive")
+	}
+	builder := newGrantClientPageBuilder(cursor, limit)
+	g.tx.grStaging.addClientIDsBySubject(subject, builder)
+	return builder.page(), nil
+}
+
 // collectBySubject is the staging-aware companion to
 // [grantStore.ListBySubject]: it walks the staged-add map and the
-// parent map (under read-lock), filtering out deletes and per-tx
+// parent map (already transaction-locked), filtering out deletes and per-tx
 // overrides, and returns every active grant for the subject.
 // The helper is split out so [txGrants.ListBySubject] stays under
 // the project's gocognit cap.
@@ -829,8 +833,6 @@ func (s *grantStaging) collectBySubject(subject string) []*store.Grant {
 		}
 		consider(rec)
 	}
-	s.parent.mu.RLock()
-	defer s.parent.mu.RUnlock()
 	for id, rec := range s.parent.m {
 		if _, deleted := s.deleted[id]; deleted {
 			continue
@@ -843,6 +845,31 @@ func (s *grantStaging) collectBySubject(subject string) []*store.Grant {
 	return out
 }
 
+func (s *grantStaging) addClientIDsBySubject(
+	subject string,
+	builder *grantClientPageBuilder,
+) {
+	consider := func(rec *store.Grant) {
+		if rec.Subject == subject {
+			builder.add(rec.ClientID)
+		}
+	}
+	for id, rec := range s.added {
+		if _, deleted := s.deleted[id]; !deleted {
+			consider(rec)
+		}
+	}
+	for id, rec := range s.parent.m {
+		if _, deleted := s.deleted[id]; deleted {
+			continue
+		}
+		if _, override := s.added[id]; override {
+			continue
+		}
+		consider(rec)
+	}
+}
+
 func (g *txGrants) Delete(ctx context.Context, id string) error {
 	if g.tx.closed.Load() {
 		return errTxClosed
@@ -852,9 +879,7 @@ func (g *txGrants) Delete(ctx context.Context, id string) error {
 	}
 	st := g.tx.grStaging
 	_, inAdded := st.added[id]
-	st.parent.mu.RLock()
 	_, inParent := st.parent.m[id]
-	st.parent.mu.RUnlock()
 	if !inAdded && !inParent {
 		return store.ErrNotFound
 	}
@@ -877,8 +902,6 @@ func (g *txGrants) HasAny(ctx context.Context) (bool, error) {
 	if len(st.added) > 0 {
 		return true, nil
 	}
-	st.parent.mu.RLock()
-	defer st.parent.mu.RUnlock()
 	for id := range st.parent.m {
 		if _, deleted := st.deleted[id]; deleted {
 			continue
@@ -896,9 +919,7 @@ type parStaging struct {
 	updated map[string]*store.PushedAuthRequest
 }
 
-func (s *parStaging) flush() {
-	s.parent.mu.Lock()
-	defer s.parent.mu.Unlock()
+func (s *parStaging) flushLocked() {
 	for uri, rec := range s.added {
 		s.parent.m[uri] = rec
 	}
@@ -924,12 +945,10 @@ func (p *txPARs) Save(ctx context.Context, par *store.PushedAuthRequest) error {
 	if _, exists := st.added[key]; exists {
 		return store.ErrAlreadyExists
 	}
-	st.parent.mu.Lock()
-	now := p.tx.clock.Now()
-	st.parent.deleteExpiredKeyLocked(key, now)
-	st.parent.maybeGCLocked(now)
-	_, parentExists := st.parent.m[key]
-	st.parent.mu.Unlock()
+	parent, parentExists := st.parent.m[key]
+	if parentExists && isExpired(parent.ExpiresAt, p.tx.clock) {
+		parentExists = false
+	}
 	if parentExists {
 		return store.ErrAlreadyExists
 	}
@@ -995,8 +1014,6 @@ func (s *parStaging) lookup(key string) *store.PushedAuthRequest {
 	if rec, ok := s.added[key]; ok {
 		return rec
 	}
-	s.parent.mu.RLock()
-	defer s.parent.mu.RUnlock()
 	if rec, ok := s.parent.m[key]; ok {
 		return clonePAR(rec)
 	}

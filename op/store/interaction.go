@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"time"
 )
@@ -56,7 +57,9 @@ type Interaction struct {
 // InteractionStore is the substore for in-progress UI interactions. It is
 // explicitly NOT part of the atomic-routing cluster: backends that route
 // interactions to a different physical store (for example, persistent
-// records in MySQL but interactions in Redis) are correct by design.
+// records in MySQL but interactions in Redis) are correct by design. Stores
+// used by the browser authorization-code flow must additionally implement
+// [InteractionStoreCAS].
 type InteractionStore interface {
 	// Save persists a new interaction or replaces an existing one. Save
 	// MUST return [ErrAlreadyExists] if used in insert mode and the ID is
@@ -75,4 +78,35 @@ type InteractionStore interface {
 	// hard-delete or mark the row deleted as long as subsequent Find
 	// calls return [ErrNotFound].
 	Delete(ctx context.Context, id string) error
+}
+
+// InteractionStoreCAS is the capability required by the authorization
+// endpoint to make a terminal interaction immutable before it starts durable
+// grant, PAR, code, and session writes. CompareAndSwap replaces previous with
+// next only when the stored record still has the same ID and RawState as
+// previous.
+//
+// Implementations MUST perform the comparison and replacement atomically.
+// They MUST return [ErrNotFound] when the record is absent or expired, and
+// [ErrConflict] when the ID exists but its RawState no longer matches. The
+// successful replacement MUST preserve the normal [InteractionStore.Save]
+// expiry semantics.
+type InteractionStoreCAS interface {
+	InteractionStore
+
+	CompareAndSwap(ctx context.Context, previous, next *Interaction) error
+
+	// DeleteIfUnchanged removes previous only when its RawState is still the
+	// current optimistic-concurrency version.
+	DeleteIfUnchanged(ctx context.Context, previous *Interaction) error
+}
+
+// InteractionStateEqual reports whether two interaction snapshots identify
+// the same optimistic-concurrency version. It is exported so adapters can
+// share the exact comparison contract without duplicating it.
+func InteractionStateEqual(previous, current *Interaction) bool {
+	return previous != nil &&
+		current != nil &&
+		previous.ID == current.ID &&
+		bytes.Equal(previous.RawState, current.RawState)
 }

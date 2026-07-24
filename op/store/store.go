@@ -7,16 +7,13 @@ package store
 // to route record kinds to different physical stores. Either way, the
 // embedding application passes a single Store value to the library.
 //
-// # Transactional capability is opt-in
+// # Transactional capability
 //
-// Implementations of Store MAY additionally implement [Transactional]; the
-// extension is available to embedders and contract tests but is not required
-// by the OP runtime. Backends that participate in the atomic-routing cluster
-// (see the package-level godoc) MUST provide the atomic single-operation
-// semantics documented by their substore methods. The composite adapter
-// rejects configurations that split those cluster members across different
-// backends, but it does not require the shared backend to implement
-// Transactional.
+// Implementations used with the browser authorization-code flow MUST also
+// implement [Transactional]. The OP rejects that configuration at startup
+// otherwise. Backends used only for non-browser grant types may omit the
+// extension. The composite adapter keeps atomic-cluster members on one anchor
+// and exposes Transactional only when that anchor supports transactions.
 type Store interface {
 	// Clients returns the [ClientStore] for this backend.
 	Clients() ClientStore

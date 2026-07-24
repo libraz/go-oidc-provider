@@ -19,7 +19,6 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/cookie"
 	"github.com/libraz/go-oidc-provider/internal/csrf"
 	"github.com/libraz/go-oidc-provider/internal/i18n"
-	"github.com/libraz/go-oidc-provider/internal/sessions"
 	"github.com/libraz/go-oidc-provider/op/interaction"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -84,6 +83,10 @@ func serveInteractionGet(w http.ResponseWriter, r *http.Request, deps resolved, 
 	if !ok {
 		return
 	}
+	if state.Completion != nil {
+		resumeInteractionCompletion(w, r, deps, rec, state)
+		return
+	}
 	authnState, err := decodeAuthnState(state.Authn)
 	if err != nil {
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction state corrupted")
@@ -104,6 +107,10 @@ func serveInteractionPost(w http.ResponseWriter, r *http.Request, deps resolved,
 		return
 	}
 	if !verifyCSRFToken(w, r, deps, uid, rec.Step) {
+		return
+	}
+	if state.Completion != nil {
+		resumeInteractionCompletion(w, r, deps, rec, state)
 		return
 	}
 	authnState, err := decodeAuthnState(state.Authn)
@@ -128,7 +135,35 @@ func serveInteractionDelete(w http.ResponseWriter, r *http.Request, deps resolve
 	if !ok {
 		return
 	}
-	_ = deps.Interactions.Delete(r.Context(), rec.ID)
+	if state.Completion != nil {
+		resumeInteractionCompletion(w, r, deps, rec, state)
+		return
+	}
+	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
+	if !ok {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap")
+		return
+	}
+	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			current, currentState, loaded := loadInteraction(w, r, deps, uid)
+			if !loaded {
+				return
+			}
+			if currentState.Completion != nil {
+				resumeInteractionCompletion(w, r, deps, current, currentState)
+				return
+			}
+			renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before cancelling")
+			return
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not cancel interaction")
+		return
+	}
 	clearCookie(w, cookie.InteractionProfile)
 	clearCookie(w, cookie.CSRFProfile)
 	stampNoStore(w)
@@ -169,10 +204,33 @@ func dispatchTick(
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "orchestrator returned empty step")
 		return
 	}
-	if err := persistAuthnState(r.Context(), deps, rec, state, next, step.Prompt.Type, now); err != nil {
+	savedRec, savedState, err := persistAuthnState(
+		r.Context(),
+		deps,
+		rec,
+		state,
+		next,
+		step.Prompt.Type,
+		now,
+	)
+	if err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			if savedState.Completion != nil {
+				resumeInteractionCompletion(w, r, deps, savedRec, savedState)
+				return
+			}
+			renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing")
+			return
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist interaction")
 		return
 	}
+	rec = savedRec
+	state = savedState
 	// Scope the CSRF token by the active prompt type so a token issued
 	// for one step (e.g. "auth.password") cannot be replayed against a
 	// later step (e.g. "auth.totp" or "consent.scope") inside the same
@@ -244,23 +302,43 @@ func persistAuthnState(
 	next authn.State,
 	step string,
 	now time.Time,
-) error {
+) (*store.Interaction, authorize.RequestState, error) {
 	encoded, err := encodeAuthnState(next)
 	if err != nil {
-		return fmt.Errorf("authorizeendpoint: encode authn state: %w", err)
+		return nil, authorize.RequestState{}, fmt.Errorf(
+			"authorizeendpoint: encode authn state: %w", err)
 	}
 	state.Authn = encoded
 	raw, err := authorize.MarshalState(state)
 	if err != nil {
-		return fmt.Errorf("authorizeendpoint: marshal interaction state: %w", err)
+		return nil, authorize.RequestState{}, fmt.Errorf(
+			"authorizeendpoint: marshal interaction state: %w", err)
 	}
-	rec.RawState = raw
-	rec.Step = step
-	rec.UpdatedAt = now
-	if err := deps.Interactions.Save(ctx, rec); err != nil {
-		return fmt.Errorf("authorizeendpoint: save interaction: %w", err)
+	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
+	if !ok {
+		return nil, authorize.RequestState{}, errors.New(
+			"authorizeendpoint: interaction store lacks compare-and-swap")
 	}
-	return nil
+	nextRec := *rec
+	nextRec.RawState = raw
+	nextRec.Step = step
+	nextRec.UpdatedAt = now
+	if err := cas.CompareAndSwap(ctx, rec, &nextRec); err == nil {
+		return &nextRec, state, nil
+	} else if !errors.Is(err, store.ErrConflict) {
+		return nil, authorize.RequestState{}, fmt.Errorf(
+			"authorizeendpoint: save interaction: %w", err)
+	}
+	current, err := deps.Interactions.Find(ctx, rec.ID)
+	if err != nil {
+		return nil, authorize.RequestState{}, err
+	}
+	currentState, err := authorize.UnmarshalState(current.RawState)
+	if err != nil {
+		return nil, authorize.RequestState{}, fmt.Errorf(
+			"authorizeendpoint: decode concurrent interaction state: %w", err)
+	}
+	return current, currentState, store.ErrConflict
 }
 
 // loadInteraction fetches the persisted record and decodes its state
@@ -375,18 +453,29 @@ func resolveGrantACRAMR(
 	authnState authn.State,
 	subject string,
 	authTime time.Time,
-) (string, []string, time.Time) {
+) (string, []string, time.Time, error) {
 	acr, amr, level := authn.Aggregate(authnState.Factors)
 	chooserReentry := len(authnState.Factors) == 0 && authnState.ChooserBoundSubject &&
 		authnState.ChooserGroupID != "" && authnState.ChooserSelectedSessionID != ""
 	switch {
 	case chooserReentry:
-		if authCtx, err := deps.Sessions.AuthContext(r.Context(), authnState.ChooserGroupID, authnState.ChooserSelectedSessionID); err == nil {
-			acr = authCtx.ACR
-			amr = authCtx.AMR
-			if !authCtx.AuthTime.IsZero() {
-				authTime = authCtx.AuthTime
-			}
+		authCtx, err := deps.Sessions.AuthContext(
+			r.Context(),
+			authnState.ChooserGroupID,
+			authnState.ChooserSelectedSessionID,
+		)
+		if err != nil {
+			return "", nil, time.Time{}, fmt.Errorf(
+				"authorizeendpoint: resolve chooser authentication context: %w", err)
+		}
+		if authCtx.Subject != subject {
+			return "", nil, time.Time{}, errors.New(
+				"authorizeendpoint: chooser authentication context subject mismatch")
+		}
+		acr = authCtx.ACR
+		amr = authCtx.AMR
+		if !authCtx.AuthTime.IsZero() {
+			authTime = authCtx.AuthTime
 		}
 	case deps.ACRResolver != nil:
 		out := deps.ACRResolver(r.Context(), ACRResolveInput{
@@ -406,7 +495,7 @@ func resolveGrantACRAMR(
 			}
 		}
 	}
-	return acr, amr, authTime
+	return acr, amr, authTime, nil
 }
 
 // terminateInteraction is the happy-path branch of a Tick that
@@ -424,215 +513,83 @@ func terminateInteraction(
 	result interaction.Result,
 ) {
 	req := state.Library.ToRequest()
-	if !claimTerminalInteraction(w, r, deps, rec.ID) {
-		return
-	}
 	if result.Subject == "" {
+		if !claimTerminalInteraction(w, r, deps, rec) {
+			return
+		}
 		clearCookie(w, cookie.InteractionProfile)
 		clearCookie(w, cookie.CSRFProfile)
 		emitAuthorizeError(w, r, deps, req, errAccessDenied, "subject was not authenticated")
 		return
 	}
-	acr, amr, authTime := resolveGrantACRAMR(r, deps, rec, req, authnState, result.Subject, result.AuthTime)
+	acr, amr, authTime, err := resolveGrantACRAMR(
+		r,
+		deps,
+		rec,
+		req,
+		authnState,
+		result.Subject,
+		result.AuthTime,
+	)
+	if err != nil {
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not resolve authentication context")
+		return
+	}
 	result.AuthTime = authTime
-	if err := ensureSession(w, r, deps, ensureSessionArgs{
-		Subject:                  result.Subject,
-		AuthTime:                 result.AuthTime,
-		AMR:                      amr,
-		ACR:                      acr,
-		ChooserGroupID:           authnState.ChooserGroupID,
-		ChooserSelectedSessionID: authnState.ChooserSelectedSessionID,
-		ChooserAddAccount:        authnState.ChooserAddAccount,
-		ChooserAddAccountGroupID: authnState.ChooserAddAccountGroupID,
-		// FreshAuthn signals that an authenticator factor ran during
-		// this interaction, so ensureSession can rotate the underlying
-		// session ID even when the resulting subject equals the
-		// cookie's existing subject (session-fixation defence). The
-		// flag is true whenever the chain produced at least one
-		// [authn.Factor] entry; consent / chooser-only branches that
-		// did not run an authenticator leave Factors empty.
-		FreshAuthn: len(authnState.Factors) > 0,
-	}); err != nil {
-		clearCookie(w, cookie.InteractionProfile)
-		clearCookie(w, cookie.CSRFProfile)
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not establish session")
-		return
-	}
-	grantScope := chooseGrantScope(result.Scope, req.Scope)
-	grant, err := upsertGrant(r.Context(), deps, grantUpsert{
-		Subject:              result.Subject,
-		ClientID:             rec.ClientID,
-		Scope:                grantScope,
-		AuthTime:             result.AuthTime,
-		ACR:                  acr,
-		AMR:                  amr,
-		Claims:               req.Claims,
-		AuthorizationDetails: req.AuthorizationDetails,
-		GMAction:             req.GrantManagementAction,
-		GMGrantID:            req.GrantID,
-		Now:                  deps.now(),
-	})
-	if errors.Is(err, errGrantNotOwned) {
-		emitAuthorizeError(w, r, deps, req, errInvalidGrant, "grant_id is not valid for this client")
-		return
-	}
+	intent, err := prepareCompletionIntent(
+		r,
+		deps,
+		rec,
+		authnState,
+		result,
+		acr,
+		amr,
+		chooseGrantScope(result.Scope, req.Scope),
+	)
 	if err != nil {
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not record grant")
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not prepare authorization completion")
 		return
 	}
-	deps.auditEmitter().Emit(r.Context(), audit.Event{
-		Name:     opAuditConsentGranted,
-		Level:    audit.LevelInfo,
-		Message:  "consent grant recorded",
-		ActorID:  result.Subject,
-		ClientID: rec.ClientID,
-		Extras: map[string]any{
-			"grant_id": grant.ID,
-			"scope":    append([]string(nil), grant.Scope...),
-		},
-	})
-	codeID, err := newRandomB64(codeByteLength)
+	rec, state, err = persistCompletionIntent(r.Context(), deps, rec, state, intent)
 	if err != nil {
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not persist authorization completion")
 		return
 	}
-	if err := consumePARIfNeeded(r.Context(), deps, req); err != nil {
-		// A parallel code emission already redeemed the request_uri,
-		// or the PAR record vanished; either way RFC 9126 §2.2 forbids
-		// issuing a second code. Surface the failure on the redirect
-		// channel so the client sees access_denied rather than a
-		// silent success.
-		emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
-		return
-	}
-	now := deps.now().UTC()
-	authCode := &store.AuthorizationCode{
-		ID:                  codeID,
-		ClientID:            rec.ClientID,
-		Subject:             result.Subject,
-		GrantID:             grant.ID,
-		RedirectURI:         req.RedirectURI,
-		Scope:               append([]string(nil), grantScope...),
-		Resource:            req.Resource,
-		CodeChallenge:       req.CodeChallenge,
-		CodeChallengeMethod: req.CodeChallengeMethod,
-		Nonce:               req.Nonce,
-		State:               req.State,
-		DPoPJKT:             req.DPoPJKT,
-		ExpiresAt:           now.Add(deps.AuthCodeTTL),
-		CreatedAt:           now,
-	}
-	if err := deps.Codes.Save(r.Context(), authCode); err != nil {
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist authorization code")
-		return
-	}
-	clearCookie(w, cookie.InteractionProfile)
-	clearCookie(w, cookie.CSRFProfile)
-	emitAuthorizeSuccess(w, r, deps, req, codeID)
+	resumeInteractionCompletion(w, r, deps, rec, state)
 }
 
-func claimTerminalInteraction(w http.ResponseWriter, r *http.Request, deps resolved, id string) bool {
-	if err := deps.Interactions.Delete(r.Context(), id); err != nil {
+func claimTerminalInteraction(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	rec *store.Interaction,
+) bool {
+	cas, ok := deps.Interactions.(store.InteractionStoreCAS)
+	if !ok {
+		renderJSONError(w, http.StatusInternalServerError, errServerError, "interaction store lacks compare-and-swap")
+		return false
+	}
+	if err := cas.DeleteIfUnchanged(r.Context(), rec); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			renderJSONError(w, http.StatusGone, errInvalidRequest, "interaction already complete")
+			return false
+		}
+		if errors.Is(err, store.ErrConflict) {
+			current, state, loaded := loadInteraction(w, r, deps, rec.ID)
+			if !loaded {
+				return false
+			}
+			if state.Completion != nil {
+				resumeInteractionCompletion(w, r, deps, current, state)
+				return false
+			}
+			renderJSONError(w, http.StatusConflict, errInvalidRequest, "interaction changed; reload before continuing")
 			return false
 		}
 		renderJSONError(w, http.StatusInternalServerError, errServerError, "could not claim interaction")
 		return false
 	}
 	return true
-}
-
-// ensureSessionArgs bundles the inputs ensureSession consumes. The
-// chooser-side fields are populated only when the orchestrator ran
-// the built-in account chooser; otherwise both are empty and
-// ensureSession falls back to Issue.
-type ensureSessionArgs struct {
-	Subject                  string
-	AuthTime                 time.Time
-	AMR                      []string
-	ACR                      string
-	ChooserGroupID           string
-	ChooserSelectedSessionID string
-	ChooserAddAccount        bool
-	ChooserAddAccountGroupID string
-
-	// FreshAuthn reports whether an authenticator factor completed
-	// during this interaction. ensureSession reads it to decide
-	// whether to rotate the session ID when the cookie-bound
-	// subject equals the post-authn subject — a step-up or
-	// re-authentication flow that, without rotation, would leave
-	// the pre-fixation cookie value valid.
-	FreshAuthn bool
-}
-
-// ensureSession reuses the cookie-bound session when it represents
-// the same subject, switches within the existing chooser group when
-// the chooser picked a different account, or issues a fresh session
-// otherwise. The resulting cookie is set on the response writer.
-//
-// Session-fixation defence: when the cookie-bound subject equals the
-// post-authn subject AND a fresh authn factor ran during this
-// interaction (in.FreshAuthn), the function rotates the underlying
-// session ID via [sessions.Manager.Rotate] and writes the new cookie
-// before returning. A chain that completed without running an
-// authenticator (consent-only, chooser-only) leaves the cookie
-// untouched so a same-subject silent re-issue keeps the existing SID.
-func ensureSession(w http.ResponseWriter, r *http.Request, deps resolved, in ensureSessionArgs) error {
-	active, _ := resolveSession(r, deps)
-	if active != nil && active.Session != nil && active.Session.Subject == in.Subject {
-		if !in.FreshAuthn {
-			return nil
-		}
-		out, err := deps.Sessions.Rotate(r.Context(), active.Session.ID)
-		if err != nil {
-			return fmt.Errorf("authorizeendpoint: rotate session: %w", err)
-		}
-		emitSessionCreated(r.Context(), deps, in.Subject, out.SessionID, out.ChooserGroupID, "rotate")
-		return setSessionCookie(w, out.Cookie)
-	}
-	out, err := pickSessionOutcome(r.Context(), deps, in, active)
-	if err != nil {
-		return err
-	}
-	return setSessionCookie(w, out.Cookie)
-}
-
-// pickSessionOutcome selects between the Manager paths the terminate
-// step needs. A chooser-picked switch wins; every other different-
-// subject login starts a fresh chooser group. In particular, a
-// non-chooser fresh login MUST NOT call AddAccount just because the
-// browser presented an existing session cookie: callers of
-// sessions.Manager.AddAccount must prove the user explicitly selected
-// "add another account" in the chooser UI.
-func pickSessionOutcome(ctx context.Context, deps resolved, in ensureSessionArgs, _ *sessions.Active) (sessions.Outcome, error) {
-	if in.ChooserGroupID != "" && in.ChooserSelectedSessionID != "" {
-		out, err := deps.Sessions.Switch(ctx, in.ChooserGroupID, in.ChooserSelectedSessionID)
-		if err != nil {
-			return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: switch session: %w", err)
-		}
-		return out, nil
-	}
-	login := sessions.Login{
-		Subject:  in.Subject,
-		AuthTime: in.AuthTime,
-		AMR:      slices.Clone(in.AMR),
-		ACR:      in.ACR,
-	}
-	if in.ChooserAddAccount && in.ChooserAddAccountGroupID != "" {
-		out, err := deps.Sessions.AddAccount(ctx, in.ChooserAddAccountGroupID, login)
-		if err != nil {
-			return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: add account session: %w", err)
-		}
-		emitSessionCreated(ctx, deps, in.Subject, out.SessionID, out.ChooserGroupID, "add_account")
-		return out, nil
-	}
-	out, err := deps.Sessions.Issue(ctx, login)
-	if err != nil {
-		return sessions.Outcome{}, fmt.Errorf("authorizeendpoint: issue session: %w", err)
-	}
-	emitSessionCreated(ctx, deps, in.Subject, out.SessionID, out.ChooserGroupID, "issue")
-	return out, nil
 }
 
 func emitSessionCreated(ctx context.Context, deps resolved, subject, sessionID, chooserGroupID, reason string) {
@@ -705,8 +662,9 @@ type grantUpsert struct {
 	// GMAction is the Grant Management draft action ("create" / "replace"
 	// / "merge") or empty for the ordinary (non-GM) upsert. GMGrantID is
 	// the targeted grant for replace / merge.
-	GMAction  string
-	GMGrantID string
+	GMAction   string
+	GMGrantID  string
+	NewGrantID string
 
 	Now time.Time
 }
@@ -747,7 +705,13 @@ func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 	now := in.Now.UTC()
 	encodedClaims := authorize.EncodeClaimsToGrant(in.Claims)
 	existing, err := deps.Grants.FindBySubjectClient(ctx, in.Subject, in.ClientID)
-	if err == nil && existing != nil && scopeIsSubset(in.Scope, existing.Scope) {
+	if validationErr := validateReusableGrantLookup(existing, err, in); validationErr != nil {
+		return nil, validationErr
+	}
+	if err == nil &&
+		existing != nil &&
+		scopeIsSubset(in.Scope, existing.Scope) &&
+		authorizationDetailsCovered(in.AuthorizationDetails, existing) {
 		existing.UpdatedAt = now
 		existing.AuthTime = in.AuthTime
 		existing.ACR = in.ACR
@@ -756,14 +720,44 @@ func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 			existing.Claims = encodedClaims
 		}
 		if in.AuthorizationDetails != nil {
-			existing.AuthorizationDetails = cloneGrantAuthorizationDetails(in.AuthorizationDetails)
+			existing.AuthorizationDetails = appendAuthorizationDetails(
+				existing.AuthorizationDetails,
+				in.AuthorizationDetails,
+			)
 		}
 		if err := deps.Grants.Save(ctx, existing); err != nil {
 			return nil, fmt.Errorf("authorizeendpoint: refresh grant: %w", err)
 		}
 		return existing, nil
 	}
+	if existing != nil {
+		in.Scope = unionScopes(existing.Scope, in.Scope)
+		in.AuthorizationDetails = appendAuthorizationDetails(
+			existing.AuthorizationDetails,
+			in.AuthorizationDetails,
+		)
+	}
 	return createGrant(ctx, deps, in)
+}
+
+func validateReusableGrantLookup(
+	existing *store.Grant,
+	err error,
+	in grantUpsert,
+) error {
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("authorizeendpoint: find reusable grant: %w", err)
+	}
+	if existing == nil {
+		return errors.New("authorizeendpoint: reusable grant lookup returned nil record")
+	}
+	if existing.ID == "" || existing.Subject != in.Subject || existing.ClientID != in.ClientID {
+		return errors.New("authorizeendpoint: reusable grant lookup returned mismatched record")
+	}
+	return nil
 }
 
 // createGrant mints a brand-new grant. Grant Management's create action
@@ -772,9 +766,13 @@ func reuseOrCreateGrant(ctx context.Context, deps resolved, in grantUpsert) (*st
 // reusable grant exists.
 func createGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Grant, error) {
 	now := in.Now.UTC()
-	grantID, err := newRandomB64(uidByteLength)
-	if err != nil {
-		return nil, err
+	grantID := in.NewGrantID
+	if grantID == "" {
+		var err error
+		grantID, err = newRandomB64(uidByteLength)
+		if err != nil {
+			return nil, err
+		}
 	}
 	g := &store.Grant{
 		ID:                   grantID,
@@ -802,8 +800,17 @@ func createGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Gra
 // cannot read or rewrite another principal's grant.
 func mutateManagedGrant(ctx context.Context, deps resolved, in grantUpsert) (*store.Grant, error) {
 	g, err := deps.Grants.Find(ctx, in.GMGrantID)
-	if err != nil || g == nil {
-		return nil, errGrantNotOwned
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, errGrantNotOwned
+		}
+		return nil, fmt.Errorf("authorizeendpoint: find managed grant: %w", err)
+	}
+	if g == nil {
+		return nil, errors.New("authorizeendpoint: managed grant lookup returned nil record")
+	}
+	if g.ID == "" || g.ID != in.GMGrantID {
+		return nil, errors.New("authorizeendpoint: managed grant lookup returned mismatched record")
 	}
 	if g.ClientID != in.ClientID || g.Subject != in.Subject {
 		return nil, errGrantNotOwned

@@ -109,6 +109,12 @@ type Deps struct {
 	// freshly minted codes here for the token endpoint to consume.
 	Codes store.AuthorizationCodeStore
 
+	// Transactions commits Grant, PAR, and Authorization Code mutations
+	// atomically at authorization completion. The public op.New wiring
+	// requires this capability whenever the authorization-code grant is
+	// enabled.
+	Transactions store.Transactional
+
 	// Grants is the consent substore. The handler reads (subject, client)
 	// to decide whether a re-consent prompt is required and writes a
 	// fresh grant when consent succeeds.
@@ -170,6 +176,11 @@ type Deps struct {
 	// CookieCodec is the underlying AES-256-GCM codec used to seal the
 	// __Host-oidc_interaction cookie value (the interaction UID).
 	CookieCodec *cookie.Codec
+
+	// CompletionKey derives stable, domain-separated IDs for resumable
+	// authorization completion. The public wiring derives it from the
+	// active cookie key; it must contain at least 32 bytes.
+	CompletionKey []byte
 
 	// CSRF is the HMAC signer for double-submit tokens.
 	CSRF *csrf.Signer

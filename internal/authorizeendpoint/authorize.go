@@ -10,9 +10,11 @@ import (
 	"net/netip"
 	"net/url"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/consent"
 	"github.com/libraz/go-oidc-provider/internal/authorizationdetails"
@@ -31,12 +33,12 @@ import (
 // cannot import op (one-way import graph), so the value is duplicated
 // here and pinned by TestAuditEvent_FirstPartyMirror in
 // op/audit_test.go.
-const opAuditConsentGrantedFirstParty = "consent.granted.first_party"
+const opAuditConsentGrantedFirstParty = string(auditevent.AuditConsentGrantedFirstParty)
 
 const (
-	opAuditCodeIssued     = "code.issued"
-	opAuditConsentGranted = "consent.granted"
-	opAuditSessionCreated = "session.created"
+	opAuditCodeIssued     = string(auditevent.AuditCodeIssued)
+	opAuditConsentGranted = string(auditevent.AuditConsentGranted)
+	opAuditSessionCreated = string(auditevent.AuditSessionCreated)
 )
 
 // serveAuthorize is the request-scoped entry point for /authorize. It runs
@@ -371,13 +373,13 @@ func dispatchAuthorize(
 		// and re-fails the decode; expiring it lets the browser start clean.
 		clearCookie(w, cookie.SessionProfile)
 	}
-	hint := computeAuthorizeHint(r.Context(), deps, req, client, active, now)
+	hint, err := computeAuthorizeHint(r.Context(), deps, req, client, active, now)
+	if err != nil {
+		emitAuthorizeError(w, r, deps, req, errServerError, "grant backend unavailable")
+		return
+	}
 	if firstPartyShouldSkipConsent(r, hint, req, client, active, deps) {
-		newHint, ok := applyFirstPartySkip(w, r, deps, req, client, active, hint)
-		if !ok {
-			return
-		}
-		hint = newHint
+		hint = applyFirstPartySkip(deps, req, client, active)
 	}
 	switch hint.decision {
 	case decisionLoginRequired:
@@ -389,7 +391,7 @@ func dispatchAuthorize(
 	case decisionInteract:
 		startInteraction(w, r, deps, req, client, active, hint.grant)
 	case decisionMint:
-		mintAndRedirect(w, r, deps, req, client, active, hint.grant)
+		mintAndRedirect(w, r, deps, req, client, active, hint)
 	}
 }
 
@@ -497,12 +499,11 @@ func originFromRawURL(raw string) (string, bool) {
 	return u.Scheme + "://" + u.Host, true
 }
 
-// applyFirstPartySkip persists (or extends) the grant the dispatcher
-// would otherwise have asked the user to confirm and rewrites the hint
-// so the switch in [dispatchAuthorize] mints a code silently. The
-// returned bool reports whether processing should continue: false
-// means the helper already wrote the response (auto-grant failed and
-// surfaced an error redirect).
+// applyFirstPartySkip plans the grant the dispatcher would otherwise have
+// asked the user to confirm and rewrites the hint so the switch in
+// [dispatchAuthorize] mints a code silently. The grant is deliberately not
+// written here: mintAndRedirect commits it together with PAR consumption and
+// authorization-code persistence.
 //
 // The grant subject is the projected (post-[op.SubjectGenerator])
 // value, mirroring what [interaction.go] persists at the end of an
@@ -510,16 +511,12 @@ func originFromRawURL(raw string) (string, bool) {
 // the active session record so the grant reflects the most recent
 // authentication on this device, identical to the interactive path.
 func applyFirstPartySkip(
-	w http.ResponseWriter,
-	r *http.Request,
 	deps resolved,
 	req *authorize.Request,
 	client *store.Client,
 	active *sessions.Active,
-	hint authorizeHint,
-) (authorizeHint, bool) {
-	ctx := r.Context()
-	g, err := upsertGrant(ctx, deps, grantUpsert{
+) authorizeHint {
+	planned := &grantUpsert{
 		Subject:              active.Session.Subject,
 		ClientID:             client.ID,
 		Scope:                append([]string(nil), req.Scope...),
@@ -529,35 +526,18 @@ func applyFirstPartySkip(
 		Claims:               req.Claims,
 		AuthorizationDetails: req.AuthorizationDetails,
 		Now:                  deps.now(),
-	})
-	if err != nil {
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not record first-party grant")
-		return hint, false
 	}
-	deps.auditEmitter().Emit(ctx, audit.Event{
-		Name:      opAuditConsentGrantedFirstParty,
-		Level:     audit.LevelInfo,
-		Message:   "first-party consent auto-granted",
-		ActorID:   active.Session.Subject,
-		ClientID:  client.ID,
-		SessionID: active.Session.ID,
-		IP:        clientIPFromRequest(r, deps).String(),
-		UserAgent: truncateUserAgent(r.UserAgent()),
-		Extras: map[string]any{
-			"grant_id": g.ID,
-			"scope":    append([]string(nil), req.Scope...),
-		},
-	})
-	return authorizeHint{decision: decisionMint, grant: g}, true
+	return authorizeHint{decision: decisionMint, autoGrant: planned}
 }
 
 // authorizeHint bundles the outcome of the decision matrix together with
 // the data the chosen outcome consumes (the prompt name for an
 // interaction, the existing grant for a silent mint).
 type authorizeHint struct {
-	decision authorizeDecision
-	prompt   string
-	grant    *store.Grant
+	decision  authorizeDecision
+	prompt    string
+	grant     *store.Grant
+	autoGrant *grantUpsert
 }
 
 // resolveSession reads the __Host-oidc_session cookie and asks the manager
@@ -596,12 +576,15 @@ func computeAuthorizeHint(
 	client *store.Client,
 	active *sessions.Active,
 	now time.Time,
-) authorizeHint {
-	state := buildHintState(ctx, deps, req, client, active, now)
-	if state.promptNone {
-		return decideHintPromptNone(state)
+) (authorizeHint, error) {
+	state, err := buildHintState(ctx, deps, req, client, active, now)
+	if err != nil {
+		return authorizeHint{}, err
 	}
-	return decideHintInteractive(state)
+	if state.promptNone {
+		return decideHintPromptNone(state), nil
+	}
+	return decideHintInteractive(state), nil
 }
 
 // hintState collects the pre-computed flags that drive
@@ -629,7 +612,7 @@ func buildHintState(
 	client *store.Client,
 	active *sessions.Active,
 	now time.Time,
-) hintState {
+) (hintState, error) {
 	out := hintState{
 		hasSession: active != nil,
 		forceLogin: containsString(req.Prompt, interaction.PromptLogin),
@@ -645,7 +628,16 @@ func buildHintState(
 		out.acrUnsatisfied = acrUnsatisfiedByRequest(active.Session.ACR, req)
 	}
 	if out.hasSession {
-		if g, err := deps.Grants.FindBySubjectClient(ctx, active.Session.Subject, client.ID); err == nil {
+		g, err := findGrantForConsentDecision(
+			ctx,
+			deps.Grants,
+			active.Session.Subject,
+			client.ID,
+		)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return hintState{}, err
+		}
+		if err == nil {
 			out.existing = g
 		}
 	}
@@ -660,7 +652,29 @@ func buildHintState(
 	if req.GrantManagementAction != "" {
 		out.needConsent = true
 	}
-	return out
+	return out, nil
+}
+
+func findGrantForConsentDecision(
+	ctx context.Context,
+	grants store.GrantStore,
+	subject,
+	clientID string,
+) (*store.Grant, error) {
+	grant, err := grants.FindBySubjectClient(ctx, subject, clientID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("authorizeendpoint: find grant for consent decision: %w", err)
+	}
+	if grant == nil {
+		return nil, errors.New("authorizeendpoint: grant lookup returned nil record")
+	}
+	if grant.ID == "" || grant.Subject != subject || grant.ClientID != clientID {
+		return nil, errors.New("authorizeendpoint: grant lookup returned mismatched record")
+	}
+	return grant, nil
 }
 
 // authorizationDetailsCovered reports whether every requested RFC 9396
@@ -997,17 +1011,13 @@ func mintAndRedirect(
 	req *authorize.Request,
 	client *store.Client,
 	active *sessions.Active,
-	existing *store.Grant,
+	hint authorizeHint,
 ) {
-	if active == nil || existing == nil {
+	if active == nil || (hint.grant == nil && hint.autoGrant == nil) {
 		// Defensive: the dispatcher only reaches mintAndRedirect when
 		// both are non-nil. Surface a server_error redirect so a
 		// future regression is observable.
 		emitAuthorizeError(w, r, deps, req, errServerError, "missing session or grant for silent mint")
-		return
-	}
-	if err := consumePARIfNeeded(r.Context(), deps, req); err != nil {
-		emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
 		return
 	}
 	codeID, err := newRandomB64(codeByteLength)
@@ -1015,12 +1025,86 @@ func mintAndRedirect(
 		emitAuthorizeError(w, r, deps, req, errServerError, "could not allocate code")
 		return
 	}
+	durableGrant, parFailure, err := commitSilentAuthorization(
+		r.Context(),
+		deps,
+		req,
+		client,
+		active,
+		hint,
+		codeID,
+	)
+	if err != nil && parFailure {
+		emitAuthorizeError(w, r, deps, req, errAccessDenied, "request_uri is no longer valid")
+		return
+	}
+	if err != nil {
+		emitAuthorizeError(w, r, deps, req, errServerError, "could not commit authorization code")
+		return
+	}
+	if hint.autoGrant != nil {
+		deps.auditEmitter().Emit(r.Context(), audit.Event{
+			Name:      opAuditConsentGrantedFirstParty,
+			Level:     audit.LevelInfo,
+			Message:   "first-party consent auto-granted",
+			ActorID:   active.Session.Subject,
+			ClientID:  client.ID,
+			SessionID: active.Session.ID,
+			IP:        clientIPFromRequest(r, deps).String(),
+			UserAgent: truncateUserAgent(r.UserAgent()),
+			Extras: map[string]any{
+				"grant_id": durableGrant.ID,
+				"scope":    append([]string(nil), req.Scope...),
+			},
+		})
+	}
+	deps.auditEmitter().Emit(r.Context(), audit.Event{
+		Name:      opAuditCodeIssued,
+		Level:     audit.LevelInfo,
+		Message:   "authorization code issued",
+		ActorID:   active.Session.Subject,
+		ClientID:  client.ID,
+		SessionID: active.Session.ID,
+		Extras: map[string]any{
+			"code_id":  codeID,
+			"grant_id": durableGrant.ID,
+			"scope":    append([]string(nil), req.Scope...),
+		},
+	})
+	emitAuthorizeSuccess(w, r, deps, req, codeID)
+}
+
+func commitSilentAuthorization(
+	ctx context.Context,
+	deps resolved,
+	req *authorize.Request,
+	client *store.Client,
+	active *sessions.Active,
+	hint authorizeHint,
+	codeID string,
+) (*store.Grant, bool, error) {
+	if deps.Transactions == nil {
+		return nil, false, errors.New("authorizeendpoint: transactional store unavailable")
+	}
+	tx, err := deps.Transactions.BeginTx(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("authorizeendpoint: begin silent transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txDeps := deps
+	txDeps.PARs = tx.PushedAuthRequests()
+	txDeps.Codes = tx.AuthorizationCodes()
+	txDeps.Grants = tx.Grants()
+	durableGrant, err := resolveSilentGrant(ctx, txDeps, req, client, active, hint)
+	if err != nil {
+		return nil, false, err
+	}
 	now := deps.now().UTC()
-	rec := &store.AuthorizationCode{
+	code := &store.AuthorizationCode{
 		ID:                  codeID,
 		ClientID:            client.ID,
-		Subject:             existing.Subject,
-		GrantID:             existing.ID,
+		Subject:             durableGrant.Subject,
+		GrantID:             durableGrant.ID,
 		RedirectURI:         req.RedirectURI,
 		Scope:               append([]string(nil), req.Scope...),
 		Resource:            req.Resource,
@@ -1032,24 +1116,65 @@ func mintAndRedirect(
 		ExpiresAt:           now.Add(deps.AuthCodeTTL),
 		CreatedAt:           now,
 	}
-	if err := deps.Codes.Save(r.Context(), rec); err != nil {
-		emitAuthorizeError(w, r, deps, req, errServerError, "could not persist authorization code")
-		return
+	if err := consumePARIfNeeded(ctx, txDeps, req); err != nil {
+		return nil, true, err
 	}
-	deps.auditEmitter().Emit(r.Context(), audit.Event{
-		Name:      opAuditCodeIssued,
-		Level:     audit.LevelInfo,
-		Message:   "authorization code issued",
-		ActorID:   active.Session.Subject,
-		ClientID:  client.ID,
-		SessionID: active.Session.ID,
-		Extras: map[string]any{
-			"code_id":  codeID,
-			"grant_id": existing.ID,
-			"scope":    append([]string(nil), req.Scope...),
-		},
-	})
-	emitAuthorizeSuccess(w, r, deps, req, codeID)
+	if err := txDeps.Codes.Save(ctx, code); err != nil {
+		return nil, false, fmt.Errorf("authorizeendpoint: save silent code: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		// A database may durably commit and then lose the ACK. Release the
+		// transaction handle before probing the outer store.
+		_ = tx.Rollback()
+		committedCode, findErr := deps.Codes.Find(ctx, codeID)
+		if findErr != nil || !silentAuthorizationCodeMatches(committedCode, code) {
+			return nil, false, fmt.Errorf("authorizeendpoint: commit silent transaction: %w", err)
+		}
+	}
+	return durableGrant, false, nil
+}
+
+func resolveSilentGrant(
+	ctx context.Context,
+	deps resolved,
+	req *authorize.Request,
+	client *store.Client,
+	active *sessions.Active,
+	hint authorizeHint,
+) (*store.Grant, error) {
+	if hint.autoGrant != nil {
+		return upsertGrant(ctx, deps, *hint.autoGrant)
+	}
+	grant, err := deps.Grants.Find(ctx, hint.grant.ID)
+	if err != nil {
+		return nil, fmt.Errorf("authorizeendpoint: reload silent grant: %w", err)
+	}
+	if grant == nil ||
+		grant.ID != hint.grant.ID ||
+		grant.ClientID != client.ID ||
+		grant.Subject != active.Session.Subject ||
+		!scopeIsSubset(req.Scope, grant.Scope) {
+		return nil, errors.New("authorizeendpoint: authorization grant unavailable")
+	}
+	return grant, nil
+}
+
+func silentAuthorizationCodeMatches(actual, expected *store.AuthorizationCode) bool {
+	if actual == nil || expected == nil {
+		return false
+	}
+	return actual.ID == expected.ID &&
+		actual.ClientID == expected.ClientID &&
+		actual.Subject == expected.Subject &&
+		actual.GrantID == expected.GrantID &&
+		actual.RedirectURI == expected.RedirectURI &&
+		slices.Equal(actual.Scope, expected.Scope) &&
+		actual.Resource == expected.Resource &&
+		actual.CodeChallenge == expected.CodeChallenge &&
+		actual.CodeChallengeMethod == expected.CodeChallengeMethod &&
+		actual.Nonce == expected.Nonce &&
+		actual.State == expected.State &&
+		actual.DPoPJKT == expected.DPoPJKT
 }
 
 // buildSuccessRedirect composes the success redirect target. It is split

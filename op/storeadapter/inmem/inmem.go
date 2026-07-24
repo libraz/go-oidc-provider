@@ -7,21 +7,25 @@
 // # Scope
 //
 // The package implements a single concrete type, [Store], that satisfies
-// [store.Store], [store.ClientRegistry], and [store.Transactional]. Every
-// substore lives behind its own [sync.RWMutex] for read/write isolation;
-// transactions are serialised through a process-wide mutex held by the
-// returned [store.Tx]. The implementation is deliberately simple -- it is a
-// reference, not a production engine -- and trades throughput for clarity.
+// [store.Store], [store.ClientRegistry], [store.StaticClientReconciler], and
+// [store.Transactional]. Every substore lives behind its own [sync.RWMutex]
+// for read/write isolation;
+// transactions are serialised through a process-wide mutex and hold the seven
+// atomic-cluster locks until completion. The implementation is deliberately
+// simple -- it is a reference, not a production engine -- and trades
+// throughput for clarity.
 //
 // # Concurrency model
 //
 // Each substore guards its map with a [sync.RWMutex]. A [store.Tx] obtained
-// from [Store.BeginTx] takes a process-wide [sync.Mutex] that is released by
-// either [store.Tx.Commit] or [store.Tx.Rollback]. While a transaction is in
-// flight, non-transactional writes still proceed -- the global mutex
-// serialises BeginTx callers, not direct substore calls. Tests that mix the
-// two paths SHOULD prefer to drive every write through BeginTx so that the
-// orderings remain deterministic.
+// from [Store.BeginTx] takes the process-wide transaction mutex followed by
+// every atomic-cluster substore lock in a fixed order. Direct reads and writes
+// to those substores block until Commit or Rollback releases the locks. Commit
+// applies every staged change before releasing any lock, so readers cannot
+// observe a partially committed cluster and a concurrent direct write cannot
+// be overwritten by snapshot replacement. The refresh-token substore maintains
+// client-ID and grant-ID secondary indexes under that same lock and commit
+// boundary, keeping administrative revocation proportional to its target set.
 //
 // # Defensive copying
 //
@@ -47,6 +51,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sort"
 	"sync"
 	"time"
 
@@ -82,10 +87,10 @@ func WithClock(c Clock) Option {
 type Store struct {
 	clock Clock
 
-	// txMu serialises [Store.BeginTx] callers so that the in-flight
-	// transaction has exclusive access to the substore data while it is
-	// staging writes. The mutex is held for the lifetime of the returned
-	// [store.Tx] and released by Commit or Rollback.
+	// txMu serialises [Store.BeginTx] callers. Each transaction also owns
+	// all seven atomic-cluster substore locks for its lifetime; txMu keeps
+	// transaction acquisition itself single-file and documents that nested
+	// transactions are unsupported.
 	txMu sync.Mutex
 
 	clients            *clientStore
@@ -111,6 +116,8 @@ type Store struct {
 	deviceCodes        *deviceCodeStore
 	cibaRequests       *cibaRequestStore
 }
+
+var _ store.StaticClientReconciler = (*Store)(nil)
 
 // New constructs a fresh in-memory [Store] populated with empty substores.
 func New(opts ...Option) *Store {
@@ -301,6 +308,13 @@ func (s *Store) DeleteClient(ctx context.Context, id string) error {
 	return s.clients.Delete(ctx, id)
 }
 
+// ReconcileStaticClients implements [store.StaticClientReconciler]. The
+// client store stages the complete batch under one lock and publishes the
+// snapshot only after every record has been checked.
+func (s *Store) ReconcileStaticClients(ctx context.Context, clients []*store.Client) error {
+	return s.clients.ReconcileStatic(ctx, clients)
+}
+
 // GetClient implements [store.ClientStore].
 func (s *Store) GetClient(ctx context.Context, id string) (*store.Client, error) {
 	return s.clients.GetClient(ctx, id)
@@ -314,6 +328,12 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 		return nil, err
 	}
 	s.txMu.Lock()
+	s.lockTxCluster()
+	if err := ctx.Err(); err != nil {
+		s.unlockTxCluster()
+		s.txMu.Unlock()
+		return nil, err
+	}
 	t := &tx{
 		owner: s,
 		clock: s.clock,
@@ -323,11 +343,13 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			updated: make(map[string]*store.AuthorizationCode),
 		},
 		rtStaging: &refreshStaging{
-			parent:  s.refreshes,
-			added:   make(map[string]*store.RefreshToken),
-			updated: make(map[string]*store.RefreshToken),
-			revoked: make(map[string]struct{}),
-			retries: make(map[string][]byte),
+			parent:   s.refreshes,
+			added:    make(map[string]*store.RefreshToken),
+			updated:  make(map[string]*store.RefreshToken),
+			byClient: make(refreshIndex),
+			byGrant:  make(refreshIndex),
+			revoked:  make(map[string]struct{}),
+			retries:  make(map[string][]byte),
 		},
 		grStaging: &grantStaging{
 			parent:  s.grants,
@@ -339,24 +361,58 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 			added:   make(map[string]*store.PushedAuthRequest),
 			updated: make(map[string]*store.PushedAuthRequest),
 		},
-		accessTokens:       accessTokenSnapshot(s.accessTokens),
-		opaqueAccessTokens: opaqueAccessTokenSnapshot(s.opaqueAccessTokens),
-		grantRevocations:   grantRevocationSnapshot(s.grantRevocations),
+		accessTokens:       accessTokenSnapshotLocked(s.accessTokens),
+		opaqueAccessTokens: opaqueAccessTokenSnapshotLocked(s.opaqueAccessTokens),
+		grantRevocations:   grantRevocationSnapshotLocked(s.grantRevocations),
 	}
 	return t, nil
+}
+
+// lockTxCluster acquires every atomic-cluster substore lock in declaration
+// order. No direct operation holds more than one of these locks, and every
+// transaction uses this exact order, preventing lock-order inversion.
+func (s *Store) lockTxCluster() {
+	s.authCodes.mu.Lock()
+	s.refreshes.mu.Lock()
+	s.grants.mu.Lock()
+	s.pars.mu.Lock()
+	s.accessTokens.mu.Lock()
+	s.opaqueAccessTokens.mu.Lock()
+	s.grantRevocations.mu.Lock()
+}
+
+// unlockTxCluster releases the atomic-cluster locks in reverse acquisition
+// order. Commit calls this only after all seven parent maps have their final
+// state, preserving all-or-nothing visibility across direct readers.
+func (s *Store) unlockTxCluster() {
+	s.grantRevocations.mu.Unlock()
+	s.opaqueAccessTokens.mu.Unlock()
+	s.accessTokens.mu.Unlock()
+	s.pars.mu.Unlock()
+	s.grants.mu.Unlock()
+	s.refreshes.mu.Unlock()
+	s.authCodes.mu.Unlock()
 }
 
 // --- RefreshTokenStore -------------------------------------------------------
 
 type refreshStore struct {
-	mu      sync.RWMutex
-	clock   Clock
-	m       map[string]*store.RefreshToken
-	retries map[string][]byte
+	mu       sync.RWMutex
+	clock    Clock
+	m        map[string]*store.RefreshToken
+	byClient refreshIndex
+	byGrant  refreshIndex
+	retries  map[string][]byte
 }
 
 func newRefreshStore(c Clock) *refreshStore {
-	return &refreshStore{clock: c, m: make(map[string]*store.RefreshToken), retries: make(map[string][]byte)}
+	return &refreshStore{
+		clock:    c,
+		m:        make(map[string]*store.RefreshToken),
+		byClient: make(refreshIndex),
+		byGrant:  make(refreshIndex),
+		retries:  make(map[string][]byte),
+	}
 }
 
 func (s *refreshStore) Save(_ context.Context, token *store.RefreshToken) error {
@@ -386,6 +442,7 @@ func (s *refreshStore) Save(_ context.Context, token *store.RefreshToken) error 
 		}
 	}
 	s.m[key] = stored
+	s.indexRefreshLocked(key, stored)
 	return nil
 }
 
@@ -408,6 +465,7 @@ func (s *refreshStore) SaveRotationWithRetry(_ context.Context, token *store.Ref
 		markRevoked(stored, s.clock.Now())
 	}
 	s.m[key] = stored
+	s.indexRefreshLocked(key, stored)
 	s.retries[parentKey] = append([]byte(nil), sealed...)
 	return nil
 }
@@ -500,11 +558,7 @@ func (s *refreshStore) RevokeByGrant(_ context.Context, grantID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock.Now()
-	for _, rec := range s.m {
-		if rec.GrantID == grantID {
-			markRevoked(rec, now)
-		}
-	}
+	s.revokeByGrantLocked(grantID, now)
 	return nil
 }
 
@@ -518,12 +572,59 @@ func (s *refreshStore) RevokeByClient(_ context.Context, clientID string) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.clock.Now()
-	for _, rec := range s.m {
-		if rec.ClientID == clientID {
-			markRevoked(rec, now)
-		}
-	}
+	s.revokeByClientLocked(clientID, now)
 	return nil
+}
+
+// refreshIndex maps one stable record attribute to the hashed primary keys
+// carrying that value. Refresh-token rows are retained after revocation for
+// replay detection and audit, so their immutable ClientID and GrantID entries
+// have the same lifetime as the primary map entry.
+type refreshIndex map[string]map[string]struct{}
+
+func (i refreshIndex) add(value, id string) {
+	if value == "" {
+		return
+	}
+	ids := i[value]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		i[value] = ids
+	}
+	ids[id] = struct{}{}
+}
+
+// indexRefreshLocked adds rec to every applicable secondary index. The caller
+// must hold refreshStore.mu for writing, either directly or through a
+// transaction that owns the full atomic-cluster lock set.
+func (s *refreshStore) indexRefreshLocked(id string, rec *store.RefreshToken) {
+	s.byClient.add(rec.ClientID, id)
+	s.byGrant.add(rec.GrantID, id)
+}
+
+func (s *refreshStore) revokeByGrantLocked(grantID string, now time.Time) int {
+	return s.revokeByIndexLocked(s.byGrant, grantID, now)
+}
+
+func (s *refreshStore) revokeByClientLocked(clientID string, now time.Time) int {
+	return s.revokeByIndexLocked(s.byClient, clientID, now)
+}
+
+// revokeByIndexLocked marks exactly the primary rows named by index[value].
+// Returning the visited-row count gives deterministic complexity tests a
+// timing-independent way to prove that unrelated rows are never traversed.
+// The caller must hold refreshStore.mu for writing.
+func (s *refreshStore) revokeByIndexLocked(index refreshIndex, value string, now time.Time) int {
+	visited := 0
+	for id := range index[value] {
+		rec, ok := s.m[id]
+		if !ok {
+			continue
+		}
+		markRevoked(rec, now)
+		visited++
+	}
+	return visited
 }
 
 // revokeChainLocked walks the parent pointers in m starting at rootID and
@@ -668,6 +769,74 @@ func (s *grantStore) ListBySubject(_ context.Context, subject string) ([]*store.
 		out = append(out, cloneGrant(rec))
 	}
 	return out, nil
+}
+
+func (s *grantStore) ListClientIDsBySubject(
+	ctx context.Context,
+	subject, cursor string,
+	limit int,
+) (store.GrantClientPage, error) {
+	if err := ctx.Err(); err != nil {
+		return store.GrantClientPage{}, err
+	}
+	if limit <= 0 {
+		return store.GrantClientPage{}, errors.New("inmem: grant client page limit must be positive")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	builder := newGrantClientPageBuilder(cursor, limit)
+	for _, rec := range s.m {
+		if rec.Subject == subject {
+			builder.add(rec.ClientID)
+		}
+	}
+	return builder.page(), nil
+}
+
+// grantClientPageBuilder retains only the lexicographically-smallest limit
+// distinct IDs after cursor. Scanning an in-memory map is unavoidable, but
+// candidate storage remains O(limit) even when every grant has a unique client.
+type grantClientPageBuilder struct {
+	cursor    string
+	limit     int
+	clientIDs []string
+	more      bool
+	peak      int
+}
+
+func newGrantClientPageBuilder(cursor string, limit int) *grantClientPageBuilder {
+	return &grantClientPageBuilder{cursor: cursor, limit: limit}
+}
+
+func (b *grantClientPageBuilder) add(clientID string) {
+	if clientID == "" || clientID <= b.cursor {
+		return
+	}
+	index := sort.SearchStrings(b.clientIDs, clientID)
+	if index < len(b.clientIDs) && b.clientIDs[index] == clientID {
+		return
+	}
+	if len(b.clientIDs) < b.limit {
+		b.clientIDs = append(b.clientIDs, "")
+		copy(b.clientIDs[index+1:], b.clientIDs[index:])
+		b.clientIDs[index] = clientID
+		b.peak = max(b.peak, len(b.clientIDs))
+		return
+	}
+	b.more = true
+	if index == len(b.clientIDs) {
+		return
+	}
+	copy(b.clientIDs[index+1:], b.clientIDs[index:len(b.clientIDs)-1])
+	b.clientIDs[index] = clientID
+}
+
+func (b *grantClientPageBuilder) page() store.GrantClientPage {
+	page := store.GrantClientPage{ClientIDs: b.clientIDs}
+	if b.more {
+		page.NextCursor = b.clientIDs[len(b.clientIDs)-1]
+	}
+	return page
 }
 
 func (s *grantStore) HasAny(_ context.Context) (bool, error) {
@@ -1007,6 +1176,46 @@ func (s *interactionStore) Save(_ context.Context, i *store.Interaction) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.m[i.ID] = cloneInteraction(i)
+	return nil
+}
+
+func (s *interactionStore) CompareAndSwap(
+	_ context.Context,
+	previous, next *store.Interaction,
+) error {
+	if previous == nil || next == nil || previous.ID == "" || previous.ID != next.ID {
+		return errors.New("inmem: invalid interaction compare-and-swap")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.m[previous.ID]
+	if !ok || isExpired(current.ExpiresAt, s.clock) {
+		return store.ErrNotFound
+	}
+	if !store.InteractionStateEqual(previous, current) {
+		return store.ErrConflict
+	}
+	s.m[next.ID] = cloneInteraction(next)
+	return nil
+}
+
+func (s *interactionStore) DeleteIfUnchanged(
+	_ context.Context,
+	previous *store.Interaction,
+) error {
+	if previous == nil || previous.ID == "" {
+		return errors.New("inmem: invalid conditional interaction delete")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.m[previous.ID]
+	if !ok || isExpired(current.ExpiresAt, s.clock) {
+		return store.ErrNotFound
+	}
+	if !store.InteractionStateEqual(previous, current) {
+		return store.ErrConflict
+	}
+	delete(s.m, previous.ID)
 	return nil
 }
 

@@ -74,12 +74,15 @@ type queries struct {
 	revokedJTIGC         string
 
 	// grants
-	grantSave                string
-	grantFind                string
-	grantFindBySubjectClient string
-	grantListBySubject       string
-	grantDelete              string
-	grantHasAny              string
+	grantSave                         string
+	grantFind                         string
+	grantFindForUpdate                string
+	grantFindBySubjectClient          string
+	grantFindBySubjectClientForUpdate string
+	grantListBySubject                string
+	grantListClientIDs                string
+	grantDelete                       string
+	grantHasAny                       string
 
 	// sessions
 	sessionSave               string
@@ -94,9 +97,11 @@ type queries struct {
 	parConsume string
 
 	// interactions
-	interactionSave   string
-	interactionFind   string
-	interactionDelete string
+	interactionSave              string
+	interactionCompareAndSwap    string
+	interactionDeleteIfUnchanged string
+	interactionFind              string
+	interactionDelete            string
 
 	// consumed JTIs
 	jtiDeleteExpired string
@@ -135,6 +140,7 @@ type queries struct {
 	deviceCodeApproveByUser   string
 	deviceCodeDeny            string
 	deviceCodeDenyByUser      string
+	deviceCodeRevoke          string
 	deviceCodeRecordPoll      string
 	deviceCodeConsume         string
 	deviceCodeStrikeIncrement string
@@ -325,13 +331,23 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		grantFind: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants + " WHERE id = ?"),
+		grantFindForUpdate: d.rebind(
+			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
+				" FROM " + n.grants + " WHERE id = ?" + d.forUpdate()),
 		grantFindBySubjectClient: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants +
 				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1"),
+		grantFindBySubjectClientForUpdate: d.rebind(
+			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
+				" FROM " + n.grants +
+				" WHERE subject = ? AND client_id = ? ORDER BY updated_at DESC LIMIT 1" + d.forUpdate()),
 		grantListBySubject: d.rebind(
 			"SELECT id, subject, client_id, scope, claims, auth_time, acr, amr, authorization_details, created_at, updated_at" +
 				" FROM " + n.grants + " WHERE subject = ?"),
+		grantListClientIDs: d.rebind(
+			"SELECT DISTINCT client_id FROM " + n.grants +
+				" WHERE subject = ? AND client_id > ? ORDER BY client_id LIMIT ?"),
 		grantDelete: d.rebind(
 			"DELETE FROM " + n.grants + " WHERE id = ?"),
 		grantHasAny: "SELECT 1 FROM " + n.grants + " LIMIT 1",
@@ -385,6 +401,13 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		interactionFind: d.rebind(
 			"SELECT id, client_id, step, raw_state, expires_at, created_at, updated_at" +
 				" FROM " + n.interactions + " WHERE id = ?"),
+		interactionCompareAndSwap: d.rebind(
+			"UPDATE " + n.interactions +
+				" SET client_id = ?, step = ?, raw_state = ?, expires_at = ?, created_at = ?, updated_at = ?" +
+				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)"),
+		interactionDeleteIfUnchanged: d.rebind(
+			"DELETE FROM " + n.interactions +
+				" WHERE id = ? AND raw_state = ? AND (expires_at = 0 OR expires_at >= ?)"),
 		interactionDelete: d.rebind(
 			"DELETE FROM " + n.interactions + " WHERE id = ?"),
 
@@ -476,6 +499,9 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		deviceCodeDenyByUser: d.rebind(
 			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
 				" WHERE user_code = ? AND status = ?" + notExpiredGuard),
+		deviceCodeRevoke: d.rebind(
+			"UPDATE " + n.deviceCodes + " SET status = ?, deny_reason = ?" +
+				" WHERE id = ? AND status IN (?, ?)" + notExpiredGuard),
 		deviceCodeRecordPoll: d.rebind(
 			"UPDATE " + n.deviceCodes +
 				" SET last_polled_at = ?, poll_interval = CASE WHEN ? > poll_interval THEN ? ELSE poll_interval END" +

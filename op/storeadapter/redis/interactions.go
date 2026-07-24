@@ -2,6 +2,7 @@ package oidcredis
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,115 @@ func (s *interactionStore) Save(ctx context.Context, i *store.Interaction) error
 		return fmt.Errorf("oidcredis: SET interaction: %w", err)
 	}
 	return nil
+}
+
+func (s *interactionStore) CompareAndSwap(
+	ctx context.Context,
+	previous, next *store.Interaction,
+) error {
+	if previous == nil || next == nil || previous.ID == "" || previous.ID != next.ID {
+		return errors.New("oidcredis: invalid interaction compare-and-swap")
+	}
+	if !previous.ExpiresAt.IsZero() && previous.ExpiresAt.Before(s.parent.clock.Now()) {
+		return store.ErrNotFound
+	}
+	replacement, err := marshalInteraction(next)
+	if err != nil {
+		return err
+	}
+	if len(replacement) > s.parent.maxValueBytes {
+		return fmt.Errorf("oidcredis: interaction payload %d bytes exceeds %d-byte cap",
+			len(replacement), s.parent.maxValueBytes)
+	}
+	ttl := next.ExpiresAt.Sub(s.parent.clock.Now())
+	if ttl <= 0 {
+		return store.ErrNotFound
+	}
+	const compareAndSwapInteraction = `
+local current = redis.call("GET", KEYS[1])
+if not current then return -1 end
+local decoded = cjson.decode(current)
+local raw = decoded["raw"] or ""
+if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
+redis.call("SET", KEYS[1], ARGV[3], "PX", ARGV[4])
+return 1
+`
+	ttlMilliseconds := int64((ttl + time.Millisecond - 1) / time.Millisecond)
+	result, err := s.parent.client.Eval(
+		ctx,
+		compareAndSwapInteraction,
+		[]string{s.interactionKey(previous.ID)},
+		previous.ID,
+		base64.StdEncoding.EncodeToString(previous.RawState),
+		replacement,
+		ttlMilliseconds,
+	).Int()
+	if err != nil {
+		return fmt.Errorf("oidcredis: CAS interaction: %w", err)
+	}
+	switch result {
+	case 1:
+		return nil
+	case -1:
+		return store.ErrNotFound
+	default:
+		return store.ErrConflict
+	}
+}
+
+func (s *interactionStore) DeleteIfUnchanged(
+	ctx context.Context,
+	previous *store.Interaction,
+) error {
+	if previous == nil || previous.ID == "" {
+		return errors.New("oidcredis: invalid conditional interaction delete")
+	}
+	if !previous.ExpiresAt.IsZero() && previous.ExpiresAt.Before(s.parent.clock.Now()) {
+		return store.ErrNotFound
+	}
+	const deleteInteractionIfUnchanged = `
+local current = redis.call("GET", KEYS[1])
+if not current then return -1 end
+local decoded = cjson.decode(current)
+local raw = decoded["raw"] or ""
+if decoded["id"] ~= ARGV[1] or raw ~= ARGV[2] then return 0 end
+redis.call("DEL", KEYS[1])
+return 1
+`
+	result, err := s.parent.client.Eval(
+		ctx,
+		deleteInteractionIfUnchanged,
+		[]string{s.interactionKey(previous.ID)},
+		previous.ID,
+		base64.StdEncoding.EncodeToString(previous.RawState),
+	).Int()
+	if err != nil {
+		return fmt.Errorf("oidcredis: conditional DEL interaction: %w", err)
+	}
+	switch result {
+	case 1:
+		return nil
+	case -1:
+		return store.ErrNotFound
+	default:
+		return store.ErrConflict
+	}
+}
+
+func marshalInteraction(i *store.Interaction) ([]byte, error) {
+	payload, err := json.Marshal(interactionRecord{
+		ID:        i.ID,
+		ClientID:  i.ClientID,
+		Step:      i.Step,
+		RawState:  i.RawState,
+		ExpiresAt: i.ExpiresAt,
+		CreatedAt: i.CreatedAt,
+		UpdatedAt: i.UpdatedAt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("oidcredis: marshal interaction: %w", err)
+	}
+	return payload, nil
 }
 
 // Find returns the interaction identified by id, or

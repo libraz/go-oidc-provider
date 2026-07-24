@@ -26,7 +26,7 @@ func TestContract_HotColdSplit(t *testing.T) {
 	factory := func(t *testing.T) contract.Backend {
 		t.Helper()
 		now := contract.Reference
-		clock := fakeClock{now: now}
+		clock := &fakeClock{now: now}
 
 		persistent := inmem.New(inmem.WithClock(clock))
 		ephemeral := inmem.New(inmem.WithClock(clock))
@@ -43,7 +43,13 @@ func TestContract_HotColdSplit(t *testing.T) {
 		// type-assertion based ClientRegistry detection succeeds; the
 		// composite intentionally hides ClientRegistry behind an
 		// accessor so this thin adapter is the single bridge.
-		return contract.Backend{Store: &registryFacade{Store: s}, Now: func() time.Time { return now }}
+		return contract.Backend{
+			Store: &registryFacade{Store: s},
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+		}
 	}
 
 	contract.Run(t, factory)

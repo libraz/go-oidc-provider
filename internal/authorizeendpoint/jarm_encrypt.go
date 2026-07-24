@@ -3,6 +3,7 @@ package authorizeendpoint
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/libraz/go-oidc-provider/internal/clientencjwks"
 	"github.com/libraz/go-oidc-provider/internal/jose"
@@ -21,27 +22,29 @@ var errJARMEncryptionFailed = errors.New("authorizeendpoint: jarm response encry
 // maybeEncryptJARM wraps an already-signed JARM JWT in a JWE addressed
 // to the client when the client registered
 // authorization_encrypted_response_alg / _enc (FAPI 2.0 Message
-// Signing §5.5; "JARM"). The function is a no-op (returns signed
-// verbatim) when:
+// Signing §5.5; "JARM"). The function is a no-op only when the
+// resolved client positively declares no authorization-response
+// encryption metadata.
 //
-//   - the resolver is nil (the OP did not wire outbound encryption);
-//   - the client is nil (the lookup the caller did failed and we have
-//     no metadata to consult);
-//   - the client did not register encryption metadata (the resolver
-//     surfaces [clientencjwks.ErrNoEncryptionConfigured]).
-//
-// Any other resolver error or [jose.EncryptNestedJWT] failure is
+// A nil client or resolver is a hard error when encryption metadata
+// cannot be ruled out. Any resolver error or [jose.EncryptNestedJWT] failure is
 // returned to the caller wrapped as [errJARMEncryptionFailed]; the
 // call sites in [jarmEmitSuccess] / [jarmEmitError] decide on the
-// failure-mode policy (see those functions for the documented split).
+// fail-closed wire response.
 func maybeEncryptJARM(
 	ctx context.Context,
 	resolver *clientencjwks.Resolver,
 	client *store.Client,
 	signed string,
 ) (string, error) {
-	if resolver == nil || client == nil {
+	if client == nil {
+		return "", errors.Join(errJARMEncryptionFailed, errors.New("authorizeendpoint: JARM client metadata unavailable"))
+	}
+	if client.AuthorizationEncryptedResponseAlg == "" && client.AuthorizationEncryptedResponseEnc == "" {
 		return signed, nil
+	}
+	if resolver == nil {
+		return "", errors.Join(errJARMEncryptionFailed, errors.New("authorizeendpoint: JARM encryption resolver unavailable"))
 	}
 	recipient, err := resolver.ResolveRecipient(
 		ctx,
@@ -49,9 +52,6 @@ func maybeEncryptJARM(
 		client.AuthorizationEncryptedResponseAlg,
 		client.AuthorizationEncryptedResponseEnc,
 	)
-	if errors.Is(err, clientencjwks.ErrNoEncryptionConfigured) {
-		return signed, nil
-	}
 	if err != nil {
 		return "", errors.Join(errJARMEncryptionFailed, err)
 	}
@@ -63,18 +63,22 @@ func maybeEncryptJARM(
 }
 
 // lookupClientForJARM resolves the client metadata the JARM emit path
-// needs to decide whether to encrypt. The function tolerates a nil
-// store and a missing client by returning (nil, nil): the caller then
-// emits the signed-only JARM response, matching the no-encryption
-// policy for any client the OP cannot positively identify as
-// encryption-enrolled.
-func lookupClientForJARM(ctx context.Context, clients store.ClientStore, clientID string) *store.Client {
-	if clients == nil || clientID == "" {
-		return nil
+// needs to decide whether to encrypt. A signed-only response is safe
+// only after a successful lookup proves that the client did not request
+// encryption, so missing dependencies and lookup failures are surfaced.
+func lookupClientForJARM(ctx context.Context, clients store.ClientStore, clientID string) (*store.Client, error) {
+	if clients == nil {
+		return nil, errors.New("authorizeendpoint: JARM client store unavailable")
+	}
+	if clientID == "" {
+		return nil, errors.New("authorizeendpoint: JARM client id missing")
 	}
 	client, err := clients.GetClient(ctx, clientID)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("authorizeendpoint: lookup JARM client: %w", err)
 	}
-	return client
+	if client == nil {
+		return nil, errors.New("authorizeendpoint: JARM client lookup returned nil")
+	}
+	return client, nil
 }

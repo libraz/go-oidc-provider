@@ -109,6 +109,45 @@ func TestRequestState_RoundTripWithAuthnBlob(t *testing.T) {
 	}
 }
 
+func TestRequestState_OldRawStateWithoutCompletionRemainsCompatible(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{
+		"library":{
+			"client_id":"client-1",
+			"response_type":"code",
+			"redirect_uri":"https://rp.example.com/cb",
+			"state":"old-state",
+			"nonce":"",
+			"code_challenge":"challenge",
+			"code_challenge_method":"S256",
+			"created_unix":1777204800
+		},
+		"authn":{"phase":1}
+	}`)
+	state, err := authorize.UnmarshalState(raw)
+	if err != nil {
+		t.Fatalf("UnmarshalState old RawState: %v", err)
+	}
+	if state.Completion != nil {
+		t.Fatalf("Completion=%+v want nil for old RawState", state.Completion)
+	}
+	roundTrip, err := authorize.MarshalState(state)
+	if err != nil {
+		t.Fatalf("MarshalState: %v", err)
+	}
+	if json.Valid(roundTrip) == false {
+		t.Fatalf("round-trip RawState is invalid JSON: %s", roundTrip)
+	}
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(roundTrip, &wire); err != nil {
+		t.Fatalf("decode round-trip wire shape: %v", err)
+	}
+	if _, exists := wire["completion"]; exists {
+		t.Fatalf("old RawState round-trip unexpectedly added completion: %s", roundTrip)
+	}
+}
+
 func TestUnmarshalState_RejectsGarbage(t *testing.T) {
 	t.Parallel()
 

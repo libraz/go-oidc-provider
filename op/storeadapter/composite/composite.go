@@ -16,13 +16,12 @@
 // Authorization-code exchange, refresh-token rotation, and PAR consumption
 // each touch several substores in the same handler path. The OP core relies
 // on the compare-and-set / single-operation guarantees documented on those
-// substores rather than opening [store.Transactional] transactions itself.
-// The composite adapter still validates at construction time that every Kind
-// in the [TxClusterKinds] set resolves to the SAME backend so those CAS
-// operations share one consistency domain. If that backend also implements
-// [store.Transactional], [Store.BeginTx] delegates to it for embedders and
-// tests that want explicit transactions; otherwise [New] still succeeds and
-// [Store.BeginTx] reports [ErrTxAnchorNotTx].
+// substores and opens [store.Transactional] transactions on paths that require
+// cross-substore atomicity. The composite adapter validates at construction
+// time that every Kind in [TxClusterKinds] resolves to the SAME backend and
+// that the backend implements Transactional. [New] returns [ErrTxAnchorNotTx]
+// rather than exposing a Store whose BeginTx method cannot honour the
+// capability advertised by its method set.
 //
 // # Routing
 //
@@ -31,14 +30,14 @@
 // (per-Kind overrides win over the default). [New] returns
 // [ErrKindNotRouted] if any Kind is left unrouted.
 //
-// # Client registry capability
+// # Client write capabilities
 //
-// The composite adapter conditionally exposes [store.ClientRegistry]. When
-// the backend routed for [Clients] implements ClientRegistry, the registry is
-// available through [Store.ClientRegistry]; otherwise the same call reports
-// that the capability is unavailable. This mirrors how the library probes
-// other backends for the extension and avoids silently coercing a read-only
-// ClientStore into a ClientRegistry.
+// The composite adapter conditionally exposes [store.ClientRegistry] and
+// [store.StaticClientReconciler]. When the backend routed for [Clients]
+// implements an extension, it is available through the corresponding Store
+// accessor; otherwise the call reports that the capability is unavailable.
+// This avoids silently coercing a read-only or non-atomic ClientStore into a
+// stronger write contract.
 //
 // # Stability
 //
@@ -252,10 +251,10 @@ var (
 	// misconfiguration from logs alone.
 	ErrTxClusterSplit = errors.New("composite: atomic-routing cluster Kinds split across backends")
 
-	// ErrTxAnchorNotTx signals that [Store.BeginTx] was called but the
-	// backend chosen as the atomic-routing anchor does not implement
-	// [store.Transactional]. New no longer rejects this at construction
-	// time because OP handlers do not require live transactions.
+	// ErrTxAnchorNotTx signals that the backend chosen as the
+	// atomic-routing anchor does not implement [store.Transactional].
+	// [New] returns this error rather than constructing a Store whose
+	// method set advertises an unusable BeginTx capability.
 	ErrTxAnchorNotTx = errors.New("composite: atomic-routing cluster anchor does not implement store.Transactional")
 
 	// ErrKindNotRouted signals that a [Kind] has no backend and no
@@ -309,26 +308,28 @@ type config struct {
 }
 
 // Store is the composite [store.Store]. The zero value is unusable; callers
-// MUST construct one through [New]. Store also exposes BeginTx by delegating
-// to the atomic-routing anchor when that backend implements
-// [store.Transactional]; the optional [store.ClientRegistry] capability is
-// reachable through [Store.ClientRegistry].
+// MUST construct one through [New]. Every constructed Store exposes a usable
+// BeginTx by delegating to its validated transactional anchor; the optional
+// [store.ClientRegistry] capability is reachable through [Store.ClientRegistry].
 type Store struct {
 	// routes maps every [Kind] to the backend it resolves to. The map is
 	// fully populated by [New] -- accessor methods rely on every Kind
 	// being present and panic-free lookup.
 	routes map[Kind]store.Store
 
-	// anchor is the backend that owns the entire atomic-routing cluster.
-	anchor store.Store
-
-	// txAnchor is the transactional view of anchor when available. nil
-	// means Store.BeginTx returns ErrTxAnchorNotTx.
+	// txAnchor is the validated transactional view of the backend that owns
+	// the entire atomic-routing cluster. New rejects a nil view.
 	txAnchor store.Transactional
 
 	// registry is the [store.ClientRegistry] view of the Clients backend
 	// when that backend supports the extension. nil otherwise.
 	registry store.ClientRegistry
+
+	// staticReconciler is the atomic startup-seeding view of the Clients
+	// backend when supported. It remains separate from registry because an
+	// implementation may support one-record DCR writes without an atomic
+	// multi-record reconciliation boundary.
+	staticReconciler store.StaticClientReconciler
 }
 
 // New builds a composite [Store] from the supplied options. The validation
@@ -339,6 +340,8 @@ type Store struct {
 //  2. Every member of [TxClusterKinds] resolves to the same backend (the
 //     "routing anchor"); otherwise [ErrTxClusterSplit] is returned with the
 //     conflicting Kinds and backend types named.
+//  3. The routing anchor implements [store.Transactional]; otherwise
+//     [ErrTxAnchorNotTx] is returned.
 //
 // The order is deliberate: missing routing is the most common configuration
 // bug, so callers see that error first; cluster splits are the next-most
@@ -360,12 +363,19 @@ func New(opts ...Option) (*Store, error) {
 		return nil, err
 	}
 	registry, _ := routes[Clients].(store.ClientRegistry)
-	txAnchor, _ := anchor.(store.Transactional)
+	staticReconciler, _ := routes[Clients].(store.StaticClientReconciler)
+	txAnchor, ok := anchor.(store.Transactional)
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: anchor backend %T does not satisfy store.Transactional",
+			ErrTxAnchorNotTx, anchor,
+		)
+	}
 	return &Store{
-		routes:   routes,
-		anchor:   anchor,
-		txAnchor: txAnchor,
-		registry: registry,
+		routes:           routes,
+		txAnchor:         txAnchor,
+		registry:         registry,
+		staticReconciler: staticReconciler,
 	}, nil
 }
 
@@ -541,21 +551,15 @@ func (s *Store) CIBARequests() store.CIBARequestStore {
 	return s.routes[CIBARequests].CIBARequests()
 }
 
-// BeginTx delegates to the atomic-routing anchor when that backend implements
-// [store.Transactional]. The OP core does not call this method; it is provided
-// for embedders and contract tests that want explicit transactions over the
-// routed backend.
+// BeginTx delegates to the transactional atomic-routing anchor validated by
+// [New]. The OP core and embedders can rely on the store.Transactional type
+// assertion: every constructed Store can begin a transaction or propagate the
+// anchor's runtime error.
 //
 // If the anchor's BeginTx fails, the error is propagated verbatim; the
 // composite adapter does not wrap it because callers commonly need to match
 // transport-level sentinels (for example [context.Canceled]).
 func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
-	if s.txAnchor == nil {
-		return nil, fmt.Errorf(
-			"%w: anchor backend %T does not satisfy store.Transactional",
-			ErrTxAnchorNotTx, s.anchor,
-		)
-	}
 	inner, err := s.txAnchor.BeginTx(ctx)
 	if err != nil {
 		return nil, err
@@ -573,18 +577,23 @@ func (s *Store) BeginTx(ctx context.Context) (store.Tx, error) {
 // and only fail at the moment a write call hits an unsupported backend. The
 // explicit accessor surfaces the capability gap at wiring time instead.
 //
-// op.WithStaticClients consumes this accessor automatically: when the
-// configured Store is a *Store, op probes ClientRegistry() and uses the
-// returned registry for seeding. Embedders therefore do not need to register
-// static clients against the underlying durable backend before wrapping it
-// in a composite — op.WithStaticClients(op.PublicClient{...}) flows through
-// the composite directly. If the routed Clients backend is read-only, the
-// probe returns (nil, false) and op.New rejects the configuration with the
-// same "ClientRegistry required" error a directly-supplied read-only store
-// would produce.
+// Dynamic Client Registration consumes this accessor. Static startup seeds
+// use [Store.StaticClientReconciler] instead because sequential registry
+// writes cannot provide the required all-or-nothing batch boundary.
 func (s *Store) ClientRegistry() (store.ClientRegistry, bool) {
 	if s.registry == nil {
 		return nil, false
 	}
 	return s.registry, true
+}
+
+// StaticClientReconciler returns the atomic startup-seeding capability of the
+// backend routed for [Clients]. A false result means op.WithStaticClients must
+// reject the composition at construction time; falling back to sequential
+// ClientRegistry writes would expose partial state on failure.
+func (s *Store) StaticClientReconciler() (store.StaticClientReconciler, bool) {
+	if s.staticReconciler == nil {
+		return nil, false
+	}
+	return s.staticReconciler, true
 }

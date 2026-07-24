@@ -31,8 +31,15 @@ func (c *mutableClock) Now() time.Time { return c.now }
 func newFactory(now time.Time) contract.Factory {
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
-		s := inmem.New(inmem.WithClock(fakeClock{now: now}))
-		return contract.Backend{Store: s, Now: func() time.Time { return now }}
+		clock := &mutableClock{now: now}
+		s := inmem.New(inmem.WithClock(clock))
+		return contract.Backend{
+			Store: s,
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+		}
 	}
 }
 
@@ -503,6 +510,43 @@ func TestBeginTx_CtxCancelled(t *testing.T) {
 	}
 }
 
+func TestBeginTx_CancelledWaiterReleasesClusterLocks(t *testing.T) {
+	t.Parallel()
+
+	s := inmem.New()
+	first, err := s.BeginTx(t.Context())
+	if err != nil {
+		t.Fatalf("first BeginTx: %v", err)
+	}
+	waitCtx, cancel := context.WithCancel(t.Context())
+	waiterStarted := make(chan struct{})
+	waiterDone := make(chan error, 1)
+	go func() {
+		close(waiterStarted)
+		tx, beginErr := s.BeginTx(waitCtx)
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+		waiterDone <- beginErr
+	}()
+	<-waiterStarted
+	cancel()
+	if err := first.Rollback(); err != nil {
+		t.Fatalf("first Rollback: %v", err)
+	}
+	if beginErr := <-waiterDone; !errors.Is(beginErr, context.Canceled) {
+		t.Fatalf("cancelled waiter error=%v want context.Canceled", beginErr)
+	}
+
+	final, err := s.BeginTx(t.Context())
+	if err != nil {
+		t.Fatalf("BeginTx after cancelled waiter: %v", err)
+	}
+	if err := final.Rollback(); err != nil {
+		t.Fatalf("final Rollback: %v", err)
+	}
+}
+
 func TestTx_ClosedAfterCommit(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference
@@ -568,7 +612,7 @@ func TestTx_RollbackDiscardsRefreshChain(t *testing.T) {
 	}
 }
 
-func TestTx_AtomicAuxiliaryStores(t *testing.T) {
+func TestTx_AtomicClusterVisibility(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference
 	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
@@ -577,6 +621,30 @@ func TestTx_AtomicAuxiliaryStores(t *testing.T) {
 	tx, err := s.BeginTx(ctx)
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
+	}
+	if err := tx.AuthorizationCodes().Save(ctx, &store.AuthorizationCode{
+		ID: "tx-code", ClientID: "client", Subject: "subject",
+		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save authorization code: %v", err)
+	}
+	if err := tx.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID: "tx-refresh", ClientID: "client", Subject: "subject",
+		GrantID: "tx-grant", ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save refresh token: %v", err)
+	}
+	if err := tx.Grants().Save(ctx, &store.Grant{
+		ID: "tx-grant", ClientID: "client", Subject: "subject",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save grant: %v", err)
+	}
+	if err := tx.PushedAuthRequests().Save(ctx, &store.PushedAuthRequest{
+		URI: "tx-par", ClientID: "client",
+		ExpiresAt: now.Add(time.Hour), CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("Save PAR: %v", err)
 	}
 	if err := tx.AccessTokens().Register(ctx, store.AccessTokenRecord{
 		JTI: "tx-jti", GrantID: "tx-grant", ExpiresAt: now.Add(time.Hour),
@@ -594,27 +662,91 @@ func TestTx_AtomicAuxiliaryStores(t *testing.T) {
 		t.Fatalf("RevokeGrant: %v", err)
 	}
 
-	if rec, err := s.AccessTokens().Find(ctx, "tx-jti"); err != nil || rec != nil {
-		t.Fatalf("access token visible before commit: rec=%+v err=%v", rec, err)
+	type observation struct {
+		name    string
+		present bool
+		err     error
 	}
-	if _, err := s.OpaqueAccessTokens().Find(ctx, "tx-opaque"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("opaque token visible before commit: want ErrNotFound, got %v", err)
+	readers := []struct {
+		name string
+		read func() (bool, error)
+	}{
+		{
+			name: "authorization code",
+			read: func() (bool, error) {
+				rec, findErr := s.AuthorizationCodes().Find(ctx, "tx-code")
+				return rec != nil, findErr
+			},
+		},
+		{
+			name: "refresh token",
+			read: func() (bool, error) {
+				rec, findErr := s.RefreshTokens().Find(ctx, "tx-refresh")
+				return rec != nil, findErr
+			},
+		},
+		{
+			name: "grant",
+			read: func() (bool, error) {
+				rec, findErr := s.Grants().Find(ctx, "tx-grant")
+				return rec != nil, findErr
+			},
+		},
+		{
+			name: "PAR",
+			read: func() (bool, error) {
+				rec, findErr := s.PushedAuthRequests().Find(ctx, "tx-par")
+				return rec != nil, findErr
+			},
+		},
+		{
+			name: "access token",
+			read: func() (bool, error) {
+				rec, findErr := s.AccessTokens().Find(ctx, "tx-jti")
+				return rec != nil, findErr
+			},
+		},
+		{
+			name: "opaque access token",
+			read: func() (bool, error) {
+				rec, findErr := s.OpaqueAccessTokens().Find(ctx, "tx-opaque")
+				return rec != nil, findErr
+			},
+		},
+		{
+			name: "grant revocation",
+			read: func() (bool, error) {
+				return s.GrantRevocations().IsRevoked(ctx, "tx-revoked", "", now)
+			},
+		},
 	}
-	if revoked, err := s.GrantRevocations().IsRevoked(ctx, "tx-revoked", "", now); err != nil || revoked {
-		t.Fatalf("tombstone visible before commit: revoked=%v err=%v", revoked, err)
+	observed := make(chan observation, len(readers))
+	var readersReady sync.WaitGroup
+	readersReady.Add(len(readers))
+	for _, reader := range readers {
+		go func() {
+			readersReady.Done()
+			present, findErr := reader.read()
+			observed <- observation{name: reader.name, present: present, err: findErr}
+		}()
+	}
+	readersReady.Wait()
+	timer := time.NewTimer(50 * time.Millisecond)
+	select {
+	case got := <-observed:
+		timer.Stop()
+		t.Fatalf("%s reader returned before Commit: %+v", got.name, got)
+	case <-timer.C:
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	if rec, err := s.AccessTokens().Find(ctx, "tx-jti"); err != nil || rec == nil {
-		t.Fatalf("access token missing after commit: rec=%+v err=%v", rec, err)
-	}
-	if rec, err := s.OpaqueAccessTokens().Find(ctx, "tx-opaque"); err != nil || rec == nil {
-		t.Fatalf("opaque token missing after commit: rec=%+v err=%v", rec, err)
-	}
-	if revoked, err := s.GrantRevocations().IsRevoked(ctx, "tx-revoked", "", now); err != nil || !revoked {
-		t.Fatalf("tombstone missing after commit: revoked=%v err=%v", revoked, err)
+	for range readers {
+		got := <-observed
+		if got.err != nil || !got.present {
+			t.Errorf("%s missing after Commit: %+v", got.name, got)
+		}
 	}
 	if err := tx.AccessTokens().Register(ctx, store.AccessTokenRecord{JTI: "after-close"}); err == nil {
 		t.Fatal("access token write after commit must fail")
@@ -636,6 +768,12 @@ func TestTx_AtomicAuxiliaryStores(t *testing.T) {
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
+	if err := tx.OpaqueAccessTokens().Save(ctx, &store.OpaqueAccessToken{ID: "after-rollback"}); err == nil {
+		t.Fatal("opaque access token write after Rollback must fail")
+	}
+	if _, err := tx.Grants().Find(ctx, "after-rollback"); err == nil {
+		t.Fatal("grant read after Rollback must fail")
+	}
 	if rec, err := s.AccessTokens().Find(ctx, "rollback-jti"); err != nil || rec != nil {
 		t.Fatalf("access token survived rollback: rec=%+v err=%v", rec, err)
 	}
@@ -644,6 +782,57 @@ func TestTx_AtomicAuxiliaryStores(t *testing.T) {
 	}
 	if revoked, err := s.GrantRevocations().IsRevoked(ctx, "rollback-grant", "", now); err != nil || revoked {
 		t.Fatalf("tombstone survived rollback: revoked=%v err=%v", revoked, err)
+	}
+}
+
+func TestTx_DirectWriteBlocksWithoutLostUpdate(t *testing.T) {
+	t.Parallel()
+
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := t.Context()
+	tx, err := s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	if err := tx.AccessTokens().Register(ctx, store.AccessTokenRecord{
+		JTI:       "transaction-jti",
+		GrantID:   "transaction-grant",
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("transaction Register: %v", err)
+	}
+
+	writerReady := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		close(writerReady)
+		writerDone <- s.AccessTokens().Register(ctx, store.AccessTokenRecord{
+			JTI:       "direct-jti",
+			GrantID:   "direct-grant",
+			ExpiresAt: now.Add(time.Hour),
+		})
+	}()
+	<-writerReady
+	timer := time.NewTimer(50 * time.Millisecond)
+	select {
+	case directErr := <-writerDone:
+		timer.Stop()
+		t.Fatalf("direct write returned before Commit: %v", directErr)
+	case <-timer.C:
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if directErr := <-writerDone; directErr != nil {
+		t.Fatalf("direct Register after Commit: %v", directErr)
+	}
+	for _, jti := range []string{"transaction-jti", "direct-jti"} {
+		rec, findErr := s.AccessTokens().Find(ctx, jti)
+		if findErr != nil || rec == nil {
+			t.Errorf("Find(%q): rec=%+v err=%v", jti, rec, findErr)
+		}
 	}
 }
 

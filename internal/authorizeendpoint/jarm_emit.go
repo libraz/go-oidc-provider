@@ -82,7 +82,10 @@ func jarmEmitSuccess(
 	if err != nil {
 		return err
 	}
-	client := lookupClientForJARM(r.Context(), deps.Clients, req.ClientID)
+	client, err := lookupClientForJARM(r.Context(), deps.Clients, req.ClientID)
+	if err != nil {
+		return errors.Join(errJARMEncryptionFailed, err)
+	}
 	jwtToken, err = maybeEncryptJARM(r.Context(), deps.ClientEncJWKs, client, jwtToken)
 	if err != nil {
 		return err
@@ -97,13 +100,9 @@ func jarmEmitSuccess(
 //
 // When the client registered authorization_encrypted_response_alg /
 // _enc the signed error JWT is wrapped in a JWE before dispatch.
-// Encryption failure on the error path is NOT propagated: the
-// function emits the signed-only JARM error response instead. The
-// reasoning is that an error response carries no token material, so
-// signing without encryption preserves authenticity at the cost of
-// confidentiality of the error code — a strictly better fallback than
-// stranding the user with a server_error mid-flow when the error
-// itself was already a failure path.
+// Client lookup and encryption failures are propagated so the caller
+// can emit a generic server_error without silently downgrading the
+// client's registered confidentiality requirement.
 func jarmEmitError(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -124,10 +123,13 @@ func jarmEmitError(
 	if err != nil {
 		return err
 	}
-	wire := signed
-	client := lookupClientForJARM(r.Context(), deps.Clients, req.ClientID)
-	if encrypted, encErr := maybeEncryptJARM(r.Context(), deps.ClientEncJWKs, client, signed); encErr == nil {
-		wire = encrypted
+	client, err := lookupClientForJARM(r.Context(), deps.Clients, req.ClientID)
+	if err != nil {
+		return errors.Join(errJARMEncryptionFailed, err)
+	}
+	wire, err := maybeEncryptJARM(r.Context(), deps.ClientEncJWKs, client, signed)
+	if err != nil {
+		return err
 	}
 	return jarmDispatch(w, r, mode, req.RedirectURI, wire)
 }
@@ -236,11 +238,8 @@ func emitAuthorizeError(
 			"response_mode is not supported by this OP", req.State, deps.Issuer)
 		return
 	}
-	if mode := jarmModeForRequest(req); mode != "" && deps.JARM != nil {
-		if err := jarmEmitError(w, r, deps, req, mode, code, description); err == nil {
-			return
-		}
-		// Fall through to legacy redirect on signer / dispatch failure.
+	if tryJARMErrorResponse(w, r, deps, req, code, description) {
+		return
 	}
 	if req.ResponseMode == formPostResponseMode {
 		params := url.Values{"error": {code}}
@@ -260,4 +259,31 @@ func emitAuthorizeError(
 		// Fall through to legacy redirect on form_post emit failure.
 	}
 	redirectError(w, r, req.RedirectURI, code, description, req.State, deps.Issuer)
+}
+
+// tryJARMErrorResponse emits an error through the requested JARM
+// transport. It returns false only when signing or dispatch failed and
+// the caller should use the legacy error redirect. Encryption failures
+// are handled here as a generic fail-closed server_error.
+func tryJARMErrorResponse(
+	w http.ResponseWriter,
+	r *http.Request,
+	deps resolved,
+	req *authorize.Request,
+	code, description string,
+) bool {
+	mode := jarmModeForRequest(req)
+	if mode == "" || deps.JARM == nil {
+		return false
+	}
+	err := jarmEmitError(w, r, deps, req, mode, code, description)
+	if err == nil {
+		return true
+	}
+	if !errors.Is(err, errJARMEncryptionFailed) {
+		return false
+	}
+	redirectError(w, r, req.RedirectURI, errServerError,
+		"jarm_response_encryption_failed", req.State, deps.Issuer)
+	return true
 }

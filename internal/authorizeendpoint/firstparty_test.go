@@ -1,7 +1,9 @@
 package authorizeendpoint_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -108,6 +110,7 @@ func newFirstPartyHarness(t *testing.T, customise ...func(*authorizeendpoint.Dep
 		Clients:           st.Clients(),
 		Codes:             st.AuthorizationCodes(),
 		Grants:            st.Grants(),
+		Transactions:      st,
 		Interactions:      st.Interactions(),
 		Sessions:          mgr,
 		CookieCodec:       cookieCodec,
@@ -118,6 +121,7 @@ func newFirstPartyHarness(t *testing.T, customise ...func(*authorizeendpoint.Dep
 		AuthorizePath:     "/oidc/auth",
 		InteractionPath:   "/oidc/interaction",
 		Clock:             clock,
+		CompletionKey:     bytes.Repeat([]byte{0xE2}, 32),
 		FirstPartyClients: map[string]struct{}{"client-1": {}},
 		Audit:             emitter,
 	}
@@ -130,6 +134,7 @@ func newFirstPartyHarness(t *testing.T, customise ...func(*authorizeendpoint.Dep
 	return &firstPartyHarness{
 		testHarness: &testHarness{
 			handler:        authorizeendpoint.Handler(deps),
+			deps:           deps,
 			store:          st,
 			cookieCodec:    cookieCodec,
 			sessionMgr:     mgr,
@@ -141,6 +146,92 @@ func newFirstPartyHarness(t *testing.T, customise ...func(*authorizeendpoint.Dep
 			interactionPth: deps.InteractionPath,
 		},
 		emitter: emitter,
+	}
+}
+
+func TestAuthorize_FirstParty_GrantAndCodeRollbackTogether(t *testing.T) {
+	t.Parallel()
+
+	for _, boundary := range []string{"code_save", "commit"} {
+		t.Run(boundary, func(t *testing.T) {
+			t.Parallel()
+
+			h := newFirstPartyHarness(t)
+			session, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+				Subject:  "user-fp",
+				AuthTime: h.clock.now.Add(-time.Minute),
+				AMR:      []string{"pwd"},
+			})
+			if err != nil {
+				t.Fatalf("Issue: %v", err)
+			}
+			fault := &completionFault{boundary: boundary}
+			fault.armed.Store(true)
+			h.deps.Transactions = faultCompletionTransactional{
+				Transactional: h.store,
+				fault:         fault,
+			}
+			h.handler = authorizeendpoint.Handler(h.deps)
+
+			request := func() *httptest.ResponseRecorder {
+				req := httptest.NewRequestWithContext(
+					context.Background(),
+					http.MethodGet,
+					h.authorizePath+"?"+goodAuthorizeValues().Encode(),
+					http.NoBody,
+				)
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				req.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: session.Cookie})
+				rr := httptest.NewRecorder()
+				h.handler.ServeHTTP(rr, req)
+				return rr
+			}
+			first := request()
+			if first.Code != http.StatusFound {
+				t.Fatalf("fault status=%d body=%s", first.Code, first.Body.String())
+			}
+			if got := mustParseLocation(t, first.Result()).Query().Get("error"); got != "server_error" {
+				t.Fatalf("fault error=%q want server_error", got)
+			}
+			if _, err := h.store.Grants().FindBySubjectClient(
+				context.Background(),
+				"user-fp",
+				"client-1",
+			); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("grant partially committed after %s: %v", boundary, err)
+			}
+			if findRecordedAuditEvent(h.emitter.snapshot(), "consent.granted.first_party") != nil {
+				t.Fatalf("first-party consent audit emitted before %s rollback", boundary)
+			}
+
+			retry := request()
+			if retry.Code != http.StatusFound {
+				t.Fatalf("retry status=%d body=%s", retry.Code, retry.Body.String())
+			}
+			location := mustParseLocation(t, retry.Result())
+			codeID := location.Query().Get("code")
+			if codeID == "" {
+				t.Fatalf("retry missing code: %s", location.String())
+			}
+			code, err := h.store.AuthorizationCodes().Find(context.Background(), codeID)
+			if err != nil {
+				t.Fatalf("Find retry code: %v", err)
+			}
+			grant, err := h.store.Grants().FindBySubjectClient(
+				context.Background(),
+				"user-fp",
+				"client-1",
+			)
+			if err != nil {
+				t.Fatalf("Find retry grant: %v", err)
+			}
+			if code.GrantID != grant.ID {
+				t.Fatalf("code GrantID=%q want %q", code.GrantID, grant.ID)
+			}
+			if findRecordedAuditEvent(h.emitter.snapshot(), "consent.granted.first_party") == nil {
+				t.Fatal("retry did not emit first-party consent audit")
+			}
+		})
 	}
 }
 

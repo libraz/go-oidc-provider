@@ -29,6 +29,67 @@ func (s *interactionStore) Save(ctx context.Context, i *store.Interaction) error
 	return nil
 }
 
+func (s *interactionStore) CompareAndSwap(
+	ctx context.Context,
+	previous, next *store.Interaction,
+) error {
+	if previous == nil || next == nil || previous.ID == "" || previous.ID != next.ID {
+		return errors.New("oidcsql: invalid interaction compare-and-swap")
+	}
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.interactionCompareAndSwap,
+		next.ClientID, next.Step, next.RawState,
+		timeToInt64(next.ExpiresAt), timeToInt64(next.CreatedAt), timeToInt64(next.UpdatedAt),
+		previous.ID, previous.RawState, timeToInt64(s.parent.clock.Now()))
+	if err != nil {
+		return wrapErr("interactions.CompareAndSwap", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return wrapErr("interactions.CompareAndSwap.RowsAffected", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.Find(ctx, previous.ID); errors.Is(err, store.ErrNotFound) {
+		return store.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	return store.ErrConflict
+}
+
+func (s *interactionStore) DeleteIfUnchanged(
+	ctx context.Context,
+	previous *store.Interaction,
+) error {
+	if previous == nil || previous.ID == "" {
+		return errors.New("oidcsql: invalid conditional interaction delete")
+	}
+	res, err := s.runner().ExecContext(
+		ctx,
+		s.parent.queries.interactionDeleteIfUnchanged,
+		previous.ID,
+		previous.RawState,
+		timeToInt64(s.parent.clock.Now()),
+	)
+	if err != nil {
+		return wrapErr("interactions.DeleteIfUnchanged", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return wrapErr("interactions.DeleteIfUnchanged.RowsAffected", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := s.Find(ctx, previous.ID); errors.Is(err, store.ErrNotFound) {
+		return store.ErrNotFound
+	} else if err != nil {
+		return err
+	}
+	return store.ErrConflict
+}
+
 func (s *interactionStore) Find(ctx context.Context, id string) (*store.Interaction, error) {
 	var (
 		i        store.Interaction

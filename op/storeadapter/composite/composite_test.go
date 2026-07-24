@@ -84,12 +84,11 @@ func TestNew_TxAnchorNotTransactional(t *testing.T) {
 	}
 
 	s, err := composite.New(composite.WithDefault(nonTx))
-	if err != nil {
-		t.Fatalf("New with non-transactional anchor: %v", err)
-	}
-	_, err = s.BeginTx(context.Background())
 	if !errors.Is(err, composite.ErrTxAnchorNotTx) {
-		t.Fatalf("BeginTx with non-tx anchor: want ErrTxAnchorNotTx, got %v", err)
+		t.Fatalf("New with non-tx anchor: want ErrTxAnchorNotTx, got %v", err)
+	}
+	if s != nil {
+		t.Fatal("New with non-transactional anchor returned a usable Store")
 	}
 }
 

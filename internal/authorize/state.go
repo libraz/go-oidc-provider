@@ -220,6 +220,44 @@ type RequestState struct {
 	// round-trips it verbatim across Save / Find calls; only the
 	// authorizeendpoint package decodes it through internal/authn.
 	Authn json.RawMessage `json:"authn,omitempty"`
+
+	// Completion is the durable retry intent created after the
+	// authentication chain reaches a terminal success and before any
+	// Session, Grant, PAR, or Authorization Code mutation. Older
+	// Interaction records omit the member and continue to decode.
+	Completion *CompletionIntent `json:"completion,omitempty"`
+}
+
+// CompletionIntent is the persisted idempotency record for authorization
+// completion. IDs are deterministically derived from the Interaction ID
+// under an OP-local key, so concurrent terminal submissions converge on
+// one durable code, prospective grant, and session.
+type CompletionIntent struct {
+	Version    int                     `json:"version"`
+	CodeID     string                  `json:"code_id"`
+	NewGrantID string                  `json:"new_grant_id"`
+	Subject    string                  `json:"subject"`
+	AuthTime   time.Time               `json:"auth_time"`
+	ACR        string                  `json:"acr,omitempty"`
+	AMR        []string                `json:"amr,omitempty"`
+	GrantScope []string                `json:"grant_scope,omitempty"`
+	Session    CompletionSessionIntent `json:"session"`
+}
+
+// CompletionSessionIntent describes the idempotent Session operation that
+// follows the durable Grant/PAR/Authorization Code transaction.
+type CompletionSessionIntent struct {
+	Mode              string    `json:"mode"`
+	SessionID         string    `json:"session_id,omitempty"`
+	PreviousSessionID string    `json:"previous_session_id,omitempty"`
+	ChooserGroupID    string    `json:"chooser_group_id,omitempty"`
+	Subject           string    `json:"subject,omitempty"`
+	AuthTime          time.Time `json:"auth_time,omitempty"`
+	ACR               string    `json:"acr,omitempty"`
+	AMR               []string  `json:"amr,omitempty"`
+	ExpiresAt         time.Time `json:"expires_at,omitempty"`
+	CreatedAt         time.Time `json:"created_at,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at,omitempty"`
 }
 
 // MarshalState serialises s for storage. The function is a thin wrapper over

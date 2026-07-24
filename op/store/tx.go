@@ -2,18 +2,18 @@ package store
 
 import "context"
 
-// Transactional is the opt-in extension a backend implements when it can
-// expose explicit transaction handles for the atomic-routing cluster of
-// substores. The OP runtime does not require this extension; it relies on the
-// atomicity documented on each substore operation. Embedders and contract
-// tests may still call [Transactional.BeginTx] directly when they need to
-// coordinate manual writes across several substores.
+// Transactional is the extension a backend implements to expose explicit
+// transaction handles for the atomic-routing cluster of substores. The OP
+// runtime requires this extension when the browser authorization-code flow is
+// enabled so grant creation, PAR consumption, and authorization-code
+// persistence commit as one durable operation.
 //
-// Backends that are not transactional simply do not implement this interface.
-// The composite adapter still checks at construction time that every
-// atomic-routing-cluster Kind is routed to one backend, but it does not require
-// that backend to implement Transactional. Calling BeginTx through such a
-// composite returns the adapter's ErrTxAnchorNotTx sentinel.
+// Backends used only for grant types that do not mount the browser authorize
+// endpoint may omit this interface.
+// Adapters whose concrete method set includes BeginTx MUST reject
+// non-transactional backing stores at construction time; returning a value
+// that satisfies Transactional but cannot begin a transaction is a capability
+// contract violation. The composite adapter follows this rule.
 //
 // Note that [SessionStore] is intentionally outside the cluster: the OP
 // does not coordinate Session writes with token-endpoint transactions.

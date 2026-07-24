@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,7 @@ func canonicalChallenge() string {
 // each test row consumes.
 type testHarness struct {
 	handler        http.Handler
+	deps           authorizeendpoint.Deps
 	store          *inmem.Store
 	cookieCodec    *cookie.Codec
 	sessionMgr     *sessions.Manager
@@ -134,6 +136,7 @@ func newHarness(t *testing.T, customise ...func(*authorizeendpoint.Deps)) *testH
 		Clients:         store.Clients(),
 		Codes:           store.AuthorizationCodes(),
 		Grants:          store.Grants(),
+		Transactions:    store,
 		Interactions:    store.Interactions(),
 		Sessions:        mgr,
 		CookieCodec:     cookieCodec,
@@ -144,6 +147,7 @@ func newHarness(t *testing.T, customise ...func(*authorizeendpoint.Deps)) *testH
 		AuthorizePath:   "/oidc/auth",
 		InteractionPath: "/oidc/interaction",
 		Clock:           clock,
+		CompletionKey:   bytes.Repeat([]byte{0xE1}, 32),
 	}
 	for _, c := range customise {
 		if c != nil {
@@ -153,6 +157,7 @@ func newHarness(t *testing.T, customise ...func(*authorizeendpoint.Deps)) *testH
 
 	return &testHarness{
 		handler:        authorizeendpoint.Handler(deps),
+		deps:           deps,
 		store:          store,
 		cookieCodec:    cookieCodec,
 		sessionMgr:     mgr,
@@ -788,6 +793,130 @@ func TestAuthorize_ClientDefaultsPopulateInteractionState(t *testing.T) {
 	}
 	if len(got.ACRValues) != 1 || got.ACRValues[0] != "urn:test:acr:loa2" {
 		t.Fatalf("ACRValues=%v want [urn:test:acr:loa2]", got.ACRValues)
+	}
+}
+
+type grantLookupFaultStore struct {
+	store.GrantStore
+	err error
+}
+
+type grantLookupCorruptStore struct {
+	store.GrantStore
+	result *store.Grant
+}
+
+func (s grantLookupCorruptStore) FindBySubjectClient(
+	context.Context,
+	string,
+	string,
+) (*store.Grant, error) {
+	return s.result, nil
+}
+
+func (s grantLookupFaultStore) FindBySubjectClient(
+	context.Context,
+	string,
+	string,
+) (*store.Grant, error) {
+	return nil, s.err
+}
+
+func TestAuthorize_GrantLookupFaultIsServerErrorNotMissingConsent(t *testing.T) {
+	t.Parallel()
+
+	injected := errors.New("injected grant lookup failure")
+	h := newHarness(t, func(d *authorizeendpoint.Deps) {
+		d.Grants = grantLookupFaultStore{GrantStore: d.Grants, err: injected}
+	})
+	session, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+		Subject:  "user-1",
+		AuthTime: h.clock.now.Add(-time.Minute),
+		AMR:      []string{"pwd"},
+	})
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	values := goodAuthorizeValues()
+	values.Set("prompt", "none")
+	req := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodGet,
+		h.authorizePath+"?"+values.Encode(),
+		http.NoBody,
+	)
+	req.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: session.Cookie})
+	rr := httptest.NewRecorder()
+	h.handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	if got := loc.Query().Get("error"); got != "server_error" {
+		t.Errorf("error=%q want server_error; Location=%q", got, loc.String())
+	}
+	if strings.HasPrefix(loc.Path, h.interactionPth+"/") {
+		t.Fatalf("grant backend failure started consent interaction: %s", loc.String())
+	}
+}
+
+func TestAuthorize_CorruptGrantLookupIsServerErrorNotMissingConsent(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		result *store.Grant
+	}{
+		{name: "nil record"},
+		{
+			name: "mismatched record",
+			result: &store.Grant{
+				ID:       "grant-wrong-owner",
+				Subject:  "other-user",
+				ClientID: "client-1",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, func(d *authorizeendpoint.Deps) {
+				d.Grants = grantLookupCorruptStore{
+					GrantStore: d.Grants,
+					result:     tc.result,
+				}
+			})
+			session, err := h.sessionMgr.Issue(context.Background(), sessions.Login{
+				Subject:  "user-1",
+				AuthTime: h.clock.now.Add(-time.Minute),
+			})
+			if err != nil {
+				t.Fatalf("Issue: %v", err)
+			}
+			values := goodAuthorizeValues()
+			values.Set("prompt", "none")
+			req := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodGet,
+				h.authorizePath+"?"+values.Encode(),
+				http.NoBody,
+			)
+			req.AddCookie(&http.Cookie{Name: cookie.SessionProfile.Name, Value: session.Cookie})
+			rr := httptest.NewRecorder()
+			h.handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusFound {
+				t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			location, err := url.Parse(rr.Header().Get("Location"))
+			if err != nil {
+				t.Fatalf("parse Location: %v", err)
+			}
+			if got := location.Query().Get("error"); got != "server_error" {
+				t.Fatalf("error=%q want server_error; Location=%q", got, location.String())
+			}
+		})
 	}
 }
 

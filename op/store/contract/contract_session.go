@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -276,6 +277,7 @@ func parConsumeExpiredStillRedeems(t *testing.T, f Factory) {
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var interactionCases = []subtest{
 	{"SaveFind", interactionSaveFind},
+	{"CompareAndSwap", interactionCompareAndSwap},
 	{"Delete", interactionDelete},
 	{"Expired", interactionExpired},
 }
@@ -293,6 +295,112 @@ func interactionSaveFind(t *testing.T, f Factory) {
 	}
 	if got.ID != "i-1" {
 		t.Fatalf("unexpected interaction: %+v", got)
+	}
+}
+
+func interactionCompareAndSwap(t *testing.T, f Factory) { //nolint:gocognit,cyclop // one linear contract scenario asserts every CAS post-condition.
+	b := f(t)
+	ctx := context.Background()
+	cas, ok := b.Store.Interactions().(store.InteractionStoreCAS)
+	if !ok {
+		t.Fatal("InteractionStore must implement InteractionStoreCAS")
+	}
+	original := newInteraction(b.Now(), "i-cas")
+	original.RawState = []byte("v1")
+	if err := cas.Save(ctx, original); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	snapshot, err := cas.Find(ctx, original.ID)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	next := *snapshot
+	next.RawState = []byte("v2")
+	next.UpdatedAt = b.Now().Add(time.Second)
+	nonVersionSnapshot := *snapshot
+	nonVersionSnapshot.Step = "locally-different-step"
+	nonVersionSnapshot.UpdatedAt = b.Now().Add(30 * time.Second)
+	if err := cas.CompareAndSwap(ctx, &nonVersionSnapshot, &next); err != nil {
+		t.Fatalf("CompareAndSwap: %v", err)
+	}
+	stale := next
+	stale.RawState = []byte("v3")
+	if err := cas.CompareAndSwap(ctx, snapshot, &stale); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale CompareAndSwap: want ErrConflict, got %v", err)
+	}
+	got, err := cas.Find(ctx, original.ID)
+	if err != nil {
+		t.Fatalf("Find replacement: %v", err)
+	}
+	if string(got.RawState) != "v2" {
+		t.Fatalf("RawState=%q want v2", got.RawState)
+	}
+	contenders := []store.Interaction{*got, *got}
+	contenders[0].RawState = []byte("v3-a")
+	contenders[1].RawState = []byte("v3-b")
+	errs := make([]error, len(contenders))
+	var wg sync.WaitGroup
+	wg.Add(len(contenders))
+	for i := range contenders {
+		go func(index int) {
+			defer wg.Done()
+			errs[index] = cas.CompareAndSwap(ctx, got, &contenders[index])
+		}(i)
+	}
+	wg.Wait()
+	var successes, conflicts int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, store.ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("concurrent CompareAndSwap: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("concurrent CompareAndSwap successes=%d conflicts=%d want 1/1",
+			successes, conflicts)
+	}
+	if err := cas.DeleteIfUnchanged(ctx, snapshot); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale DeleteIfUnchanged: want ErrConflict, got %v", err)
+	}
+	got, err = cas.Find(ctx, original.ID)
+	if err != nil {
+		t.Fatalf("Find concurrent winner: %v", err)
+	}
+	if err := cas.DeleteIfUnchanged(ctx, got); err != nil {
+		t.Fatalf("DeleteIfUnchanged: %v", err)
+	}
+	if _, err := cas.Find(ctx, original.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find conditionally deleted interaction: want ErrNotFound, got %v", err)
+	}
+	missing := *snapshot
+	missing.ID = "i-cas-missing"
+	missingNext := missing
+	missingNext.RawState = []byte("new")
+	if err := cas.CompareAndSwap(ctx, &missing, &missingNext); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing CompareAndSwap: want ErrNotFound, got %v", err)
+	}
+	if err := cas.DeleteIfUnchanged(ctx, &missing); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing DeleteIfUnchanged: want ErrNotFound, got %v", err)
+	}
+	if b.Advance != nil {
+		expiring := newInteraction(b.Now(), "i-cas-expiring")
+		expiring.ExpiresAt = b.Now().Add(time.Minute)
+		if err := cas.Save(ctx, expiring); err != nil {
+			t.Fatalf("Save expiring: %v", err)
+		}
+		b.Advance(2 * time.Minute)
+		expiringNext := *expiring
+		expiringNext.RawState = []byte("after-expiry")
+		if err := cas.CompareAndSwap(ctx, expiring, &expiringNext); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("expired-current CompareAndSwap: want ErrNotFound, got %v", err)
+		}
+		if err := cas.DeleteIfUnchanged(ctx, expiring); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("expired-current DeleteIfUnchanged: want ErrNotFound, got %v", err)
+		}
 	}
 }
 

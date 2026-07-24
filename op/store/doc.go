@@ -15,14 +15,19 @@
 // client registration) live on opt-in extension interfaces such as
 // [ClientRegistry] rather than being bolted onto the core read-only contract.
 //
-// # Atomic single-operation contracts and optional transactions
+// # Atomic operations and authorization transactions
 //
-// The OP core does not open cross-substore transactions. Safety-critical
-// single-use behaviour is expressed on the individual substore methods:
+// Safety-critical single-use behaviour is expressed on individual substore
+// methods:
 // authorization codes, refresh tokens, PAR records, device codes, and CIBA
 // requests all expose compare-and-set style Consume methods, and revocation
 // substores expose idempotent cascade operations. A backend must make each
 // documented operation atomic within its own storage engine.
+//
+// In addition, when the browser authorization-code flow is enabled, the OP
+// opens [Transactional] transactions. Grant read/modify/write, PAR
+// consumption, and authorization-code persistence use one [Tx] so a failure
+// cannot leave partial consent or consume a request_uri without a code.
 //
 // The composite adapter additionally requires a closed atomic-routing cluster
 // ([AuthorizationCodeStore], [RefreshTokenStore], [GrantStore],
@@ -31,10 +36,13 @@
 // detection, refresh rotation, token registration, and revocation cascades in
 // one consistency domain even though the OP core calls the substores directly.
 //
-// Backends and embedders that want explicit transactions may implement the
-// optional [Transactional] extension. [Tx] then vends handles bound to one
-// underlying transaction for manual use and contract tests, but implementing
-// Transactional is not required merely to serve the OP runtime.
+// A backend serving the browser authorization-code flow MUST implement
+// [Transactional], and its [InteractionStore] MUST implement
+// [InteractionStoreCAS]. op.New rejects the configuration otherwise. Grant
+// reads returned by Tx must provide row-locking, serializable isolation, or an
+// equivalent conflict mechanism for read/modify/write updates; merely grouping
+// an unlocked SELECT and unconditional Save in one transaction can still lose
+// concurrent consent updates.
 //
 // # Godoc is normative
 //

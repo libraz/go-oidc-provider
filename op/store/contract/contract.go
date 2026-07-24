@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -49,6 +50,12 @@ type Backend struct {
 	// clock. The harness uses Now+1h for ExpiresAt fields it wants alive
 	// and Now-1h for fields it wants pre-expired.
 	Now func() time.Time
+
+	// Advance moves an injected backend clock forward. Backends with a
+	// mutable test clock provide it so contracts can validate transitions
+	// from live to expired without sleeping. Nil skips only those
+	// transition-specific assertions.
+	Advance func(time.Duration)
 }
 
 // Run drives every contract sub-test against the backend produced by f. Each
@@ -63,6 +70,7 @@ func Run(t *testing.T, f Factory) {
 	}{
 		{"ClientStore", clientStoreCases},
 		{"ClientRegistry", clientRegistryCases},
+		{"StaticClientReconciler", staticClientReconcilerCases},
 		{"AuthorizationCodeStore", authCodeCases},
 		{"RefreshTokenStore", refreshCases},
 		{"GrantStore", grantCases},
@@ -152,6 +160,17 @@ func requireRegistry(t *testing.T, s store.Store) store.ClientRegistry {
 		t.Skipf("backend %T does not implement store.ClientRegistry", s)
 	}
 	return registry
+}
+
+// requireStaticClientReconciler skips the current test when the backend does
+// not implement [store.StaticClientReconciler].
+func requireStaticClientReconciler(t *testing.T, s store.Store) store.StaticClientReconciler {
+	t.Helper()
+	reconciler, ok := s.(store.StaticClientReconciler)
+	if !ok {
+		t.Skipf("backend %T does not implement store.StaticClientReconciler", s)
+	}
+	return reconciler
 }
 
 // requireTransactional skips the current test when the backend does not
@@ -264,6 +283,82 @@ func clientUpdateRoundTrip(t *testing.T, f Factory) {
 	}
 }
 
+//nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
+var staticClientReconcilerCases = []subtest{
+	{"EquivalentIsIdempotent", staticClientReconcileEquivalent},
+	{"ConflictIsAtomic", staticClientReconcileConflictIsAtomic},
+}
+
+func staticClientReconcileEquivalent(t *testing.T, f Factory) {
+	b := f(t)
+	reconciler := requireStaticClientReconciler(t, b.Store)
+	ctx := context.Background()
+	initial := &store.Client{
+		ID:           "static-idempotent",
+		PublicClient: true,
+		Source:       store.ClientSourceStatic,
+	}
+	if err := reconciler.ReconcileStaticClients(ctx, []*store.Client{initial}); err != nil {
+		t.Fatalf("first ReconcileStaticClients: %v", err)
+	}
+	equivalent := &store.Client{
+		ID:           initial.ID,
+		Scopes:       []string{},
+		PublicClient: true,
+	}
+	if err := reconciler.ReconcileStaticClients(ctx, []*store.Client{equivalent}); err != nil {
+		t.Fatalf("equivalent ReconcileStaticClients: %v", err)
+	}
+	got, err := b.Store.Clients().GetClient(ctx, initial.ID)
+	if err != nil {
+		t.Fatalf("GetClient after equivalent reconcile: %v", err)
+	}
+	if !store.StaticClientEquivalent(got, initial) {
+		t.Fatalf("equivalent reconcile changed client: got %+v want %+v", got, initial)
+	}
+}
+
+func staticClientReconcileConflictIsAtomic(t *testing.T, f Factory) {
+	b := f(t)
+	reconciler := requireStaticClientReconciler(t, b.Store)
+	ctx := context.Background()
+	existing := &store.Client{
+		ID:           "static-existing",
+		Scopes:       []string{"openid"},
+		PublicClient: true,
+		Source:       store.ClientSourceStatic,
+	}
+	if err := reconciler.ReconcileStaticClients(ctx, []*store.Client{existing}); err != nil {
+		t.Fatalf("seed existing client: %v", err)
+	}
+	err := reconciler.ReconcileStaticClients(ctx, []*store.Client{
+		{
+			ID:           "static-missing",
+			PublicClient: true,
+			Source:       store.ClientSourceStatic,
+		},
+		{
+			ID:           existing.ID,
+			Scopes:       []string{"openid", "profile"},
+			PublicClient: true,
+			Source:       store.ClientSourceStatic,
+		},
+	})
+	if !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("conflicting ReconcileStaticClients: want ErrConflict, got %v", err)
+	}
+	if _, err := b.Store.Clients().GetClient(ctx, "static-missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("batch inserted preceding client despite conflict: want ErrNotFound, got %v", err)
+	}
+	got, err := b.Store.Clients().GetClient(ctx, existing.ID)
+	if err != nil {
+		t.Fatalf("GetClient existing after conflict: %v", err)
+	}
+	if !store.StaticClientEquivalent(got, existing) {
+		t.Fatalf("conflicting reconcile changed existing client: got %+v want %+v", got, existing)
+	}
+}
+
 // --- AuthorizationCodeStore --------------------------------------------------
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
@@ -372,6 +467,8 @@ var refreshCases = []subtest{
 	{"ParentIDRoundTrip", refreshParentIDRoundTrip},
 	{"RevokeChain", refreshRevokeChain},
 	{"RevokeChainMissing", refreshRevokeChainMissing},
+	{"RevokeByGrant", refreshRevokeByGrant},
+	{"RevokeByClient", refreshRevokeByClient},
 	{"Expired", refreshExpired},
 }
 
@@ -522,6 +619,62 @@ func refreshRevokeChainMissing(t *testing.T, f Factory) {
 	}
 }
 
+func refreshRevokeByGrant(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	targetA := newRefresh(b.Now(), "grant-target-a", nil)
+	targetA.GrantID = "grant-target"
+	targetB := newRefresh(b.Now(), "grant-target-b", nil)
+	targetB.GrantID = "grant-target"
+	other := newRefresh(b.Now(), "grant-other", nil)
+	other.GrantID = "grant-other"
+	for _, rt := range []*store.RefreshToken{targetA, targetB, other} {
+		if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
+			t.Fatalf("Save %s: %v", rt.ID, err)
+		}
+	}
+
+	if err := b.Store.RefreshTokens().RevokeByGrant(ctx, "grant-target"); err != nil {
+		t.Fatalf("RevokeByGrant: %v", err)
+	}
+	assertRevoked(t, b.Store, targetA.ID)
+	assertRevoked(t, b.Store, targetB.ID)
+	assertRefreshLive(t, b.Store, other.ID)
+	if err := b.Store.RefreshTokens().RevokeByGrant(ctx, "grant-absent"); err != nil {
+		t.Fatalf("RevokeByGrant absent: %v", err)
+	}
+}
+
+func refreshRevokeByClient(t *testing.T, f Factory) {
+	b := f(t)
+	revoke, ok := b.Store.RefreshTokens().(store.RevokeByClient)
+	if !ok {
+		t.Skipf("backend %T does not implement store.RevokeByClient", b.Store.RefreshTokens())
+	}
+	ctx := context.Background()
+	targetA := newRefresh(b.Now(), "client-target-a", nil)
+	targetA.ClientID = "client-target"
+	targetB := newRefresh(b.Now(), "client-target-b", nil)
+	targetB.ClientID = "client-target"
+	other := newRefresh(b.Now(), "client-other", nil)
+	other.ClientID = "client-other"
+	for _, rt := range []*store.RefreshToken{targetA, targetB, other} {
+		if err := b.Store.RefreshTokens().Save(ctx, rt); err != nil {
+			t.Fatalf("Save %s: %v", rt.ID, err)
+		}
+	}
+
+	if err := revoke.RevokeByClient(ctx, "client-target"); err != nil {
+		t.Fatalf("RevokeByClient: %v", err)
+	}
+	assertRevoked(t, b.Store, targetA.ID)
+	assertRevoked(t, b.Store, targetB.ID)
+	assertRefreshLive(t, b.Store, other.ID)
+	if err := revoke.RevokeByClient(ctx, "client-absent"); err != nil {
+		t.Fatalf("RevokeByClient absent: %v", err)
+	}
+}
+
 // refreshExpired pins the normative rule declared on
 // [store.RefreshTokenStore.Find] and [store.RefreshTokenStore.Consume]:
 // a token whose ExpiresAt has already passed MUST read as ErrNotFound,
@@ -560,6 +713,17 @@ func assertRevoked(t *testing.T, s store.Store, id string) {
 	}
 }
 
+func assertRefreshLive(t *testing.T, s store.Store, id string) {
+	t.Helper()
+	got, err := s.RefreshTokens().Find(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Find %s: %v", id, err)
+	}
+	if got.ConsumedAt != nil || got.Revoked {
+		t.Fatalf("token %s unexpectedly revoked: %+v", id, got)
+	}
+}
+
 // --- GrantStore --------------------------------------------------------------
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
@@ -570,6 +734,9 @@ var grantCases = []subtest{
 	{"FindBySubjectClientMissing", grantFindBySubjectClientMissing},
 	{"ListBySubject", grantListBySubject},
 	{"ListBySubjectEmpty", grantListBySubjectEmpty},
+	{"ListClientIDsBySubject", grantListClientIDsBySubject},
+	{"ListClientIDsBySubjectEmpty", grantListClientIDsBySubjectEmpty},
+	{"ListClientIDsBySubjectRejectsInvalidLimit", grantListClientIDsRejectsInvalidLimit},
 	{"Delete", grantDelete},
 }
 
@@ -669,6 +836,66 @@ func grantListBySubjectEmpty(t *testing.T, f Factory) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("ListBySubject empty: want 0 entries, got %d", len(got))
+	}
+}
+
+func grantListClientIDsBySubject(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	rows := []*store.Grant{
+		newGrant(b.Now(), "g-c-1", "sub", "client-c"),
+		newGrant(b.Now(), "g-a-1", "sub", "client-a"),
+		newGrant(b.Now(), "g-a-2", "sub", "client-a"),
+		newGrant(b.Now(), "g-b-1", "sub", "client-b"),
+		newGrant(b.Now(), "g-other", "other-sub", "client-z"),
+	}
+	for _, g := range rows {
+		if err := b.Store.Grants().Save(ctx, g); err != nil {
+			t.Fatalf("Save %s: %v", g.ID, err)
+		}
+	}
+	first, err := b.Store.Grants().ListClientIDsBySubject(ctx, "sub", "", 2)
+	if err != nil {
+		t.Fatalf("ListClientIDsBySubject first page: %v", err)
+	}
+	if !slices.Equal(first.ClientIDs, []string{"client-a", "client-b"}) {
+		t.Fatalf("first page client IDs = %v", first.ClientIDs)
+	}
+	if first.NextCursor != "client-b" {
+		t.Fatalf("first page next cursor = %q, want client-b", first.NextCursor)
+	}
+	second, err := b.Store.Grants().ListClientIDsBySubject(ctx, "sub", first.NextCursor, 2)
+	if err != nil {
+		t.Fatalf("ListClientIDsBySubject second page: %v", err)
+	}
+	if !slices.Equal(second.ClientIDs, []string{"client-c"}) {
+		t.Fatalf("second page client IDs = %v", second.ClientIDs)
+	}
+	if second.NextCursor != "" {
+		t.Fatalf("second page next cursor = %q, want empty", second.NextCursor)
+	}
+}
+
+func grantListClientIDsBySubjectEmpty(t *testing.T, f Factory) {
+	b := f(t)
+	got, err := b.Store.Grants().ListClientIDsBySubject(context.Background(), "absent", "", 2)
+	if err != nil {
+		t.Fatalf("ListClientIDsBySubject empty: %v", err)
+	}
+	if len(got.ClientIDs) != 0 || got.NextCursor != "" {
+		t.Fatalf("ListClientIDsBySubject empty: got %+v", got)
+	}
+}
+
+func grantListClientIDsRejectsInvalidLimit(t *testing.T, f Factory) {
+	b := f(t)
+	if _, err := b.Store.Grants().ListClientIDsBySubject(
+		context.Background(),
+		"sub",
+		"",
+		0,
+	); err == nil {
+		t.Fatal("ListClientIDsBySubject limit=0: want error")
 	}
 }
 

@@ -72,10 +72,10 @@ func WithNaming(overrides map[string]string) Option {
 }
 
 // Store is the SQL adapter. It satisfies [store.Store],
-// [store.ClientRegistry], and [store.Transactional] without any
-// runtime detection: callers can perform a direct type assertion when
-// they know they hold a *Store, but the library itself works through
-// the interfaces.
+// [store.ClientRegistry], [store.StaticClientReconciler], and
+// [store.Transactional] without any runtime detection: callers can perform a
+// direct type assertion when they know they hold a *Store, but the library
+// itself works through the interfaces.
 type Store struct {
 	db      *databasesql.DB
 	dialect Dialect

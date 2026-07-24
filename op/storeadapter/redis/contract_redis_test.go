@@ -74,13 +74,12 @@ func newRedisFactory(t *testing.T) contract.Factory {
 	}
 
 	dsn := fmt.Sprintf("redis://:%s@%s/0", authPassword, endpoint)
-	clock := fixedClock{now: contract.Reference}
-
 	var seq atomic.Uint64
 	silence := func(string) {} // suppress dev-mode warning during tests
 
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
+		clock := &fixedClock{now: contract.Reference}
 		// Per-sub-test prefix isolates keyspaces so parallel sub-tests
 		// see independent worlds without needing a fresh container.
 		prefix := fmt.Sprintf("oidc-t-%d:", seq.Add(1))
@@ -95,7 +94,13 @@ func newRedisFactory(t *testing.T) contract.Factory {
 			t.Fatalf("oidcredis.New: %v", err)
 		}
 		t.Cleanup(func() { _ = store.Close() })
-		return contract.Backend{Store: store, Now: clock.Now}
+		return contract.Backend{
+			Store: store,
+			Now:   clock.Now,
+			Advance: func(delta time.Duration) {
+				clock.now = clock.now.Add(delta)
+			},
+		}
 	}
 }
 

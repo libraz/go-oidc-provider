@@ -103,6 +103,14 @@ func (fakeGrantStore) ListBySubject(_ context.Context, _ string) ([]*store.Grant
 	return nil, nil
 }
 
+func (fakeGrantStore) ListClientIDsBySubject(
+	_ context.Context,
+	_, _ string,
+	_ int,
+) (store.GrantClientPage, error) {
+	return store.GrantClientPage{}, nil
+}
+
 func (fakeGrantStore) Delete(_ context.Context, _ string) error {
 	return store.ErrNotFound
 }
@@ -380,6 +388,10 @@ func (fakeDeviceCodeStore) ApproveByUserCode(context.Context, string, string, ti
 func (fakeDeviceCodeStore) Deny(context.Context, string, string) error { return store.ErrNotFound }
 
 func (fakeDeviceCodeStore) DenyByUserCode(context.Context, string, string) error {
+	return store.ErrNotFound
+}
+
+func (fakeDeviceCodeStore) Revoke(context.Context, string, string) error {
 	return store.ErrNotFound
 }
 

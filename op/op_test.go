@@ -19,6 +19,8 @@ import (
 // a code path that actually uses them is forced to substitute a real store.
 type stubStore struct{}
 
+func (stubStore) BeginTx(context.Context) (store.Tx, error) { return stubTx{}, nil }
+
 // Clients is invoked eagerly by buildRouter to wire the /token handler;
 // returning a no-op substore lets construction tests exercise op.New
 // without seeding a real backend. The stub returns ErrNotFound for every
@@ -98,6 +100,20 @@ type noSessionsStore struct{ stubStore }
 
 func (noSessionsStore) Sessions() store.SessionStore { return nil }
 
+type storeWithoutTransactions struct {
+	store.Store
+}
+
+type interactionStoreWithoutCAS struct {
+	store.InteractionStore
+}
+
+type storeWithoutInteractionCAS struct{ stubStore }
+
+func (storeWithoutInteractionCAS) Interactions() store.InteractionStore {
+	return interactionStoreWithoutCAS{InteractionStore: stubInteractionStore{}}
+}
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }
@@ -157,6 +173,33 @@ func (stubInteractionStore) Find(context.Context, string) (*store.Interaction, e
 }
 
 func (stubInteractionStore) Delete(context.Context, string) error { return store.ErrNotFound }
+
+func (stubInteractionStore) CompareAndSwap(
+	context.Context,
+	*store.Interaction,
+	*store.Interaction,
+) error {
+	return store.ErrNotFound
+}
+
+func (stubInteractionStore) DeleteIfUnchanged(
+	context.Context,
+	*store.Interaction,
+) error {
+	return store.ErrNotFound
+}
+
+type stubTx struct{}
+
+func (stubTx) AuthorizationCodes() store.AuthorizationCodeStore { return stubAuthCodeStore{} }
+func (stubTx) Grants() store.GrantStore                         { return stubGrantStore{} }
+func (stubTx) RefreshTokens() store.RefreshTokenStore           { return stubRefreshStore{} }
+func (stubTx) PushedAuthRequests() store.PushedAuthRequestStore { return stubPARStore{} }
+func (stubTx) AccessTokens() store.AccessTokenRegistry          { return stubAccessTokenRegistry{} }
+func (stubTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
+func (stubTx) GrantRevocations() store.GrantRevocationStore     { return stubGrantRevocationStore{} }
+func (stubTx) Commit() error                                    { return nil }
+func (stubTx) Rollback() error                                  { return nil }
 
 // Users is invoked eagerly by buildRouter to wire the /userinfo handler;
 // returning a no-op substore lets construction tests exercise op.New
@@ -255,6 +298,15 @@ func (stubGrantStore) ListBySubject(context.Context, string) ([]*store.Grant, er
 	return nil, nil
 }
 
+func (stubGrantStore) ListClientIDsBySubject(
+	context.Context,
+	string,
+	string,
+	int,
+) (store.GrantClientPage, error) {
+	return store.GrantClientPage{}, nil
+}
+
 func (stubGrantStore) Delete(context.Context, string) error {
 	return store.ErrNotFound
 }
@@ -348,6 +400,40 @@ func TestNew_RejectsMissingSessionStore(t *testing.T) {
 	}
 	if !op.IsServerError(err) {
 		t.Errorf("missing SessionStore must surface as server configuration error: %v", err)
+	}
+}
+
+func TestNew_RejectsAuthorizationCodeStoreWithoutTransactions(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutTransactions{Store: stubStore{}}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	)
+	if err == nil {
+		t.Fatal("expected configuration error for missing Transactional capability")
+	}
+	if !strings.Contains(err.Error(), "Transactional") {
+		t.Errorf("err = %v, want it to mention Transactional", err)
+	}
+}
+
+func TestNew_RejectsAuthorizationCodeStoreWithoutInteractionCAS(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutInteractionCAS{}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	)
+	if err == nil {
+		t.Fatal("expected configuration error for missing InteractionStoreCAS capability")
+	}
+	if !strings.Contains(err.Error(), "InteractionStoreCAS") {
+		t.Errorf("err = %v, want it to mention InteractionStoreCAS", err)
 	}
 }
 
