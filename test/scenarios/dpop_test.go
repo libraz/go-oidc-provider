@@ -31,6 +31,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -255,6 +256,142 @@ func (f *dpopFixture) postToken(t *testing.T, form url.Values, dpopProof string)
 		t.Fatalf("postToken: Do: %v", err)
 	}
 	return resp
+}
+
+// dpopAsyncFixture is the black-box harness shared by the device-code and
+// CIBA sender-constraint scenarios. It registers either a confidential or
+// public client, drives every protocol request through the testkit HTTP
+// server, and retains the single DPoP key that must bind initiation and
+// redemption.
+type dpopAsyncFixture struct {
+	tk     *testkit.Provider
+	client *store.Client
+	secret string
+	key    dpopKey
+}
+
+// newDPoPAsyncFixture constructs a DPoP-enabled provider for one asynchronous
+// grant family. enable installs either the device-code or CIBA endpoint;
+// grantType is registered alongside refresh_token so each successful
+// redemption exercises the refresh-token binding policy.
+func newDPoPAsyncFixture(
+	t *testing.T,
+	public bool,
+	enable op.Option,
+	grantType, clientID string,
+) *dpopAsyncFixture {
+	t.Helper()
+	clock := dpopFixedClock{t: dpopAnchor}
+	tk := testkit.NewProvider(t,
+		testkit.WithClock(clock),
+		testkit.WithOptions(
+			op.WithFeature(feature.DPoP),
+			enable,
+		),
+	)
+	secret := ""
+	secretHash := ""
+	authMethod := "none"
+	if !public {
+		secret = "dpop-async-client-secret" //nolint:gosec // deterministic test fixture, not a credential.
+		var err error
+		secretHash, err = op.HashClientSecret(secret)
+		if err != nil {
+			t.Fatalf("HashClientSecret: %v", err)
+		}
+		authMethod = "client_secret_basic"
+	}
+	client := tk.RegisterClient(t, testkit.ClientFixture{
+		ID:                      clientID,
+		SecretHash:              secretHash,
+		PublicClient:            public,
+		TokenEndpointAuthMethod: authMethod,
+		Scopes:                  []string{"openid"},
+		GrantTypes:              []string{grantType, "refresh_token"},
+	})
+	return &dpopAsyncFixture{
+		tk:     tk,
+		client: client,
+		secret: secret,
+		key:    newDPoPKey(t),
+	}
+}
+
+// post sends one DPoP-bound form request to path. Public clients authenticate
+// with client_id in the body; confidential clients use HTTP Basic. Every call
+// receives a caller-supplied unique proof JTI so initiation and redemption do
+// not trip the replay gate.
+func (f *dpopAsyncFixture) post(
+	t *testing.T,
+	path string,
+	form url.Values,
+	proofJTI string,
+) (int, map[string]any) {
+	t.Helper()
+	endpoint := f.tk.Server.URL + path
+	if f.secret == "" {
+		form.Set("client_id", f.client.ID)
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		t.Fatalf("NewRequest %s: %v", path, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("DPoP", makeDPoPProof(t, f.key, dpopProofOpts{
+		method: http.MethodPost,
+		htu:    endpoint,
+		jti:    proofJTI,
+	}))
+	if f.secret != "" {
+		req.SetBasicAuth(f.client.ID, f.secret)
+	}
+	resp, err := f.tk.HTTPClient(nil).Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, dpopJSON(t, resp)
+}
+
+// assertDPoPAsyncTokens verifies the access-token cnf claim and the
+// client-type-dependent refresh-token persistence policy. RFC 9449 permits a
+// confidential client's refresh token to remain unbound, while a public
+// client's refresh token must retain the proof-key thumbprint.
+func (f *dpopAsyncFixture) assertDPoPAsyncTokens(
+	t *testing.T,
+	body map[string]any,
+	wantRefreshBound bool,
+) {
+	t.Helper()
+	accessToken, _ := body["access_token"].(string)
+	if accessToken == "" {
+		t.Fatalf("access_token missing: %v", body)
+	}
+	if got, _ := body["token_type"].(string); got != "DPoP" {
+		t.Errorf("token_type=%q want DPoP", got)
+	}
+	claims := decodeJWTPayload(t, accessToken)
+	cnf, _ := claims["cnf"].(map[string]any)
+	if got, _ := cnf["jkt"].(string); got != f.key.jkt {
+		t.Errorf("access_token cnf.jkt=%q want %q", got, f.key.jkt)
+	}
+
+	refreshToken, _ := body["refresh_token"].(string)
+	if refreshToken == "" {
+		t.Fatalf("refresh_token missing: %v", body)
+	}
+	rec, err := f.tk.Store.RefreshTokens().Find(context.Background(), refreshToken)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find: %v", err)
+	}
+	wantJKT := ""
+	if wantRefreshBound {
+		wantJKT = f.key.jkt
+	}
+	if rec.DPoPJKT != wantJKT {
+		t.Errorf("refresh token DPoPJKT=%q want %q", rec.DPoPJKT, wantJKT)
+	}
 }
 
 // dpopJSON parses resp.Body as a JSON object map. Mirrors the helpers
@@ -913,42 +1050,148 @@ func TestScenario_DPOP_029_IntrospectionSurfacesCnfJkt(t *testing.T) {
 	t.Skip("out-of-scope: DPOP-029 (see catalog out_of_scope_reason)")
 }
 
-// TestScenario_DPOP_030_DeviceCodeBindingConfidential is out-of-scope.
-// v1.0's /token endpoint dispatches only on grant_type values
-// "authorization_code", "refresh_token", and "client_credentials"
-// (see [internal/tokenendpoint/handler.go] grant-type switch). The
-// device-code grant (urn:ietf:params:oauth:grant-type:device_code)
-// returns "unsupported_grant_type" — there is no wire path on which
-// to bind a DPoP key. Out-of-scope per scripts/scenario.sh flip.
+// TestScenario_DPOP_030_DeviceCodeBindingConfidential verifies that a
+// confidential client can commit a DPoP key at device authorization and use
+// the same key to redeem the approved device code. The access token is bound
+// by cnf.jkt, while the confidential client's refresh token remains unbound.
+//
+// Spec: RFC 9449 §5 / §6, RFC 8628 §3.4.
 func TestScenario_DPOP_030_DeviceCodeBindingConfidential(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DPOP-030 (see catalog out_of_scope_reason)")
+
+	f := newDPoPAsyncFixture(t, false, op.WithDeviceCodeGrant(),
+		devURNDeviceCode, "dpop-device-confidential")
+	status, initiated := f.post(t, "/oidc/device_authorization",
+		url.Values{"scope": {"openid"}}, "dpop-030-init")
+	if status != http.StatusOK {
+		t.Fatalf("device authorization status=%d body=%v", status, initiated)
+	}
+	deviceCode, _ := initiated["device_code"].(string)
+	if deviceCode == "" {
+		t.Fatalf("device_code missing: %v", initiated)
+	}
+	if err := f.tk.Store.DeviceCodes().Approve(
+		context.Background(), deviceCode, devDefaultSubject, dpopAnchor,
+	); err != nil {
+		t.Fatalf("DeviceCodes.Approve: %v", err)
+	}
+	status, tokens := f.post(t, "/oidc/token", url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	}, "dpop-030-token")
+	if status != http.StatusOK {
+		t.Fatalf("token status=%d body=%v", status, tokens)
+	}
+	f.assertDPoPAsyncTokens(t, tokens, false)
 }
 
-// TestScenario_DPOP_031_DeviceCodeBindingPublic is out-of-scope. Same
-// rationale as DPOP-030: device-code grant is not implemented in
-// v1.0. Out-of-scope per scripts/scenario.sh flip.
+// TestScenario_DPOP_031_DeviceCodeBindingPublic verifies the same device
+// flow for a public client. Both the access token and the persisted refresh
+// token must retain the proof-key thumbprint.
+//
+// Spec: RFC 9449 §5 / §5.4, RFC 8628 §3.4.
 func TestScenario_DPOP_031_DeviceCodeBindingPublic(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DPOP-031 (see catalog out_of_scope_reason)")
+
+	f := newDPoPAsyncFixture(t, true, op.WithDeviceCodeGrant(),
+		devURNDeviceCode, "dpop-device-public")
+	status, initiated := f.post(t, "/oidc/device_authorization",
+		url.Values{"scope": {"openid"}}, "dpop-031-init")
+	if status != http.StatusOK {
+		t.Fatalf("device authorization status=%d body=%v", status, initiated)
+	}
+	deviceCode, _ := initiated["device_code"].(string)
+	if deviceCode == "" {
+		t.Fatalf("device_code missing: %v", initiated)
+	}
+	if err := f.tk.Store.DeviceCodes().Approve(
+		context.Background(), deviceCode, devDefaultSubject, dpopAnchor,
+	); err != nil {
+		t.Fatalf("DeviceCodes.Approve: %v", err)
+	}
+	status, tokens := f.post(t, "/oidc/token", url.Values{
+		"grant_type":  {devURNDeviceCode},
+		"device_code": {deviceCode},
+	}, "dpop-031-token")
+	if status != http.StatusOK {
+		t.Fatalf("token status=%d body=%v", status, tokens)
+	}
+	f.assertDPoPAsyncTokens(t, tokens, true)
 }
 
-// TestScenario_DPOP_032_CIBABindingConfidential is out-of-scope. v1.0's
-// /token endpoint does not handle the CIBA grant
-// (urn:openid:params:grant-type:ciba); CIBA is profiled only in the
-// FAPICIBA / iGovHigh op.Profile values for downstream wiring, but no
-// wire-level CIBA token-endpoint implementation ships in v1.0.
-// Out-of-scope per scripts/scenario.sh flip.
+// TestScenario_DPOP_032_CIBABindingConfidential verifies that a
+// confidential client can commit a DPoP key at /bc-authorize and redeem the
+// approved auth_req_id with the same key. The access token is bound, while
+// the confidential client's refresh token remains unbound.
+//
+// Spec: RFC 9449 §5 / §6, OIDC CIBA Core §7.1 / §11.
 func TestScenario_DPOP_032_CIBABindingConfidential(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DPOP-032 (see catalog out_of_scope_reason)")
+
+	f := newDPoPAsyncFixture(t, false,
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		cibaURNGrant, "dpop-ciba-confidential")
+	status, initiated := f.post(t, "/oidc/bc-authorize", url.Values{
+		"scope":      {"openid"},
+		"login_hint": {cibaKnownLoginHint},
+	}, "dpop-032-init")
+	if status != http.StatusOK {
+		t.Fatalf("bc-authorize status=%d body=%v", status, initiated)
+	}
+	authReqID, _ := initiated["auth_req_id"].(string)
+	if authReqID == "" {
+		t.Fatalf("auth_req_id missing: %v", initiated)
+	}
+	if err := f.tk.Store.CIBARequests().Approve(
+		context.Background(), authReqID, cibaDefaultSubject, "", dpopAnchor,
+	); err != nil {
+		t.Fatalf("CIBARequests.Approve: %v", err)
+	}
+	status, tokens := f.post(t, "/oidc/token", url.Values{
+		"grant_type":  {cibaURNGrant},
+		"auth_req_id": {authReqID},
+	}, "dpop-032-token")
+	if status != http.StatusOK {
+		t.Fatalf("token status=%d body=%v", status, tokens)
+	}
+	f.assertDPoPAsyncTokens(t, tokens, false)
 }
 
-// TestScenario_DPOP_033_CIBABindingPublic is out-of-scope. Same
-// rationale as DPOP-032. Out-of-scope per scripts/scenario.sh flip.
+// TestScenario_DPOP_033_CIBABindingPublic verifies the same CIBA poll flow
+// for a public client. The access token and refresh token must both retain
+// the proof-key thumbprint.
+//
+// Spec: RFC 9449 §5 / §5.4, OIDC CIBA Core §7.1 / §11.
 func TestScenario_DPOP_033_CIBABindingPublic(t *testing.T) {
 	t.Parallel()
-	t.Skip("out-of-scope: DPOP-033 (see catalog out_of_scope_reason)")
+
+	f := newDPoPAsyncFixture(t, true,
+		op.WithCIBA(op.WithCIBAHintResolver(cibaHintResolver{})),
+		cibaURNGrant, "dpop-ciba-public")
+	status, initiated := f.post(t, "/oidc/bc-authorize", url.Values{
+		"scope":      {"openid"},
+		"login_hint": {cibaKnownLoginHint},
+	}, "dpop-033-init")
+	if status != http.StatusOK {
+		t.Fatalf("bc-authorize status=%d body=%v", status, initiated)
+	}
+	authReqID, _ := initiated["auth_req_id"].(string)
+	if authReqID == "" {
+		t.Fatalf("auth_req_id missing: %v", initiated)
+	}
+	if err := f.tk.Store.CIBARequests().Approve(
+		context.Background(), authReqID, cibaDefaultSubject, "", dpopAnchor,
+	); err != nil {
+		t.Fatalf("CIBARequests.Approve: %v", err)
+	}
+	status, tokens := f.post(t, "/oidc/token", url.Values{
+		"grant_type":  {cibaURNGrant},
+		"auth_req_id": {authReqID},
+	}, "dpop-033-token")
+	if status != http.StatusOK {
+		t.Fatalf("token status=%d body=%v", status, tokens)
+	}
+	f.assertDPoPAsyncTokens(t, tokens, true)
 }
 
 // TestScenario_DPOP_034_PARDpopJktMatch verifies RFC 9449 §10 / RFC

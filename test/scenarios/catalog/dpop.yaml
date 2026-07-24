@@ -313,8 +313,7 @@ rows:
       A confidential client redeeming a device_code with a valid DPoP
       proof receives an access token bound by jkt; the issued refresh
       token is NOT sender-constrained.
-    status: out-of-scope
-    out_of_scope_reason: v1.0 /token endpoint dispatches only on authorization_code/refresh_token/client_credentials (internal/tokenendpoint/handler.go). device_code grant returns unsupported_grant_type — no wire path to bind a DPoP key.
+    status: active
 
   - id: DPOP-031
     severity: P0
@@ -324,8 +323,7 @@ rows:
       a valid DPoP proof receives both an access token and a refresh
       token bound by jkt (RTs MUST be sender-constrained for public
       clients).
-    status: out-of-scope
-    out_of_scope_reason: "Same as DPOP-030: device_code grant not implemented in v1.0."
+    status: active
 
   - id: DPOP-032
     severity: P0
@@ -334,8 +332,7 @@ rows:
       A confidential client redeeming a CIBA grant with a valid DPoP
       proof receives an access token bound by jkt; the refresh token
       is NOT sender-constrained.
-    status: out-of-scope
-    out_of_scope_reason: "v1.0 /token endpoint does not handle the CIBA grant urn:openid:params:grant-type:ciba; CIBA is profiled only in op.Profile FAPICIBA/iGovHigh values for downstream wiring, but no wire-level CIBA implementation ships in v1.0."
+    status: active
 
   - id: DPOP-033
     severity: P0
@@ -343,8 +340,7 @@ rows:
     behaviour: |
       A public client redeeming a CIBA grant with a valid DPoP proof
       receives both an access token and a refresh token bound by jkt.
-    status: out-of-scope
-    out_of_scope_reason: "Same as DPOP-032: CIBA grant not implemented in v1.0."
+    status: active
 
   - id: DPOP-034
     severity: P0

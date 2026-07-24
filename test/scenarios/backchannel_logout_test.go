@@ -42,8 +42,8 @@ func TestScenario_BCL_003_DeliveryFailureSurfacedToOperators(t *testing.T) {
 // Back-Channel Logout 1.0 §3 plus the OIDC Discovery §3 metadata: a
 // BCL-capable OP advertises end_session_endpoint together with
 // backchannel_logout_supported=true and
-// backchannel_logout_session_supported=true. v1.0 always emits these
-// because the BCL coordinator is unconditionally wired.
+// backchannel_logout_session_supported=false. The coordinator is
+// unconditionally wired, but does not claim RP-specific SID support.
 //
 // Spec: OIDC BCL §3 / OIDC Discovery §3.
 func TestScenario_BCL_004_DiscoveryAdvertisesBCLSupport(t *testing.T) {
@@ -73,8 +73,8 @@ func TestScenario_BCL_004_DiscoveryAdvertisesBCLSupport(t *testing.T) {
 	if got, _ := doc["backchannel_logout_supported"].(bool); !got {
 		t.Errorf("backchannel_logout_supported=%v want true (doc=%v)", doc["backchannel_logout_supported"], doc)
 	}
-	if got, _ := doc["backchannel_logout_session_supported"].(bool); !got {
-		t.Errorf("backchannel_logout_session_supported=%v want true", doc["backchannel_logout_session_supported"])
+	if got, ok := doc["backchannel_logout_session_supported"].(bool); !ok || got {
+		t.Errorf("backchannel_logout_session_supported=%v want false", doc["backchannel_logout_session_supported"])
 	}
 }
 

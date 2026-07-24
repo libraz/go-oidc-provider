@@ -396,11 +396,11 @@ rows:
     severity: P1
     spec: FAPI 2.0 Message Signing §5.5
     behaviour: |
-      JARM error responses MUST stay deterministic when JWE wrap
-      fails: an error response (which carries no token material)
-      falls back to the signed-only JARM payload rather than
-      collapsing onto a server_error redirect. Authenticity is
-      preserved at the cost of error-code confidentiality.
+      When a client requires encrypted JARM and the OP cannot resolve
+      a compatible encryption recipient, JARM error responses MUST
+      fail closed as a generic server_error redirect. The redirect
+      MUST NOT contain a signed-only "response" JWT or authorization
+      code; state and issuer correlation parameters remain present.
     status: active
 
   - id: ENC-130

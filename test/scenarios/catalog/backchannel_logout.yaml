@@ -13,9 +13,9 @@ specs:
 
 description: |
   Back-channel logout token issuance, delivery semantics, discovery
-  metadata, and `sid` propagation across the authorization, code, and
-  refresh paths. Includes fan-out behaviour for global and targeted
-  logout.
+  metadata, and the current sub-only capability contract. Includes
+  fan-out behaviour for global and targeted logout; RP-specific `sid`
+  propagation remains out of scope until lineage is persisted.
 
 rows:
   - id: BCL-001
@@ -32,7 +32,7 @@ rows:
       `aud` equal to the client_id, `sub` matching the account, and
       `sid` matching the authorization session id.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 back-channel deliverer's SSRF deny-list (loopback / RFC 1918 / ULA) is non-bypassable from the public surface; op.WithBackchannelAllowPrivateNetwork is parsed but not yet plumbed to the deliverer. Test-target HTTPS servers bind to 127.0.0.1, so wire-level fan-out cannot be observed without a public-IP target. Behaviour is covered by internal/backchannel coordinator and deliverer tests."
+    out_of_scope_reason: "The current grant model has no RP-specific SID lineage. Static and dynamic registration reject backchannel_logout_session_required=true, discovery advertises session support as false, and the coordinator emits sub-only Logout Tokens."
 
   - id: BCL-002
     severity: P1
@@ -64,7 +64,7 @@ rows:
       When BCL is enabled, GET `/.well-known/openid-configuration`
       includes `end_session_endpoint`,
       `backchannel_logout_supported=true`, and
-      `backchannel_logout_session_supported=true`.
+      `backchannel_logout_session_supported=false`.
     status: active
 
   - id: BCL-005
@@ -76,7 +76,7 @@ rows:
       `prompt=consent`) for a BCL-enabled client, the issued ID Token
       payload MUST contain a string `sid` claim.
     status: out-of-scope
-    out_of_scope_reason: v1.0 ID-token issuance path does not stamp sid; sid claim wired only into back-channel logout tokens, not ID tokens.
+    out_of_scope_reason: v1.0 has no RP-specific SID lineage; ID Tokens and coordinator-issued Logout Tokens omit sid.
 
   - id: BCL-006
     severity: P1
@@ -86,7 +86,7 @@ rows:
       `grant_type=authorization_code` for a BCL-enabled client, the
       issued ID Token payload MUST contain a string `sid` claim.
     status: out-of-scope
-    out_of_scope_reason: v1.0 ID-token issuance path does not stamp sid; sid claim wired only into back-channel logout tokens, not ID tokens.
+    out_of_scope_reason: v1.0 has no RP-specific SID lineage; ID Tokens and coordinator-issued Logout Tokens omit sid.
 
   - id: BCL-007
     severity: P1
@@ -96,7 +96,7 @@ rows:
       `grant_type=refresh_token` for a BCL-enabled client, the issued
       ID Token payload MUST contain a string `sid` claim.
     status: out-of-scope
-    out_of_scope_reason: v1.0 ID-token issuance path does not stamp sid; sid claim wired only into back-channel logout tokens, not ID tokens.
+    out_of_scope_reason: v1.0 has no RP-specific SID lineage; ID Tokens and coordinator-issued Logout Tokens omit sid.
 
   - id: BCL-008
     severity: P0
@@ -109,7 +109,7 @@ rows:
       per-client `sid` and the same `sub`, and per-client success and
       failure outcomes are observable independently.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 back-channel deliverer's SSRF deny-list (loopback / RFC 1918 / ULA) is non-bypassable from the public surface; op.WithBackchannelAllowPrivateNetwork is parsed but not yet plumbed to the deliverer. Test-target HTTPS servers bind to 127.0.0.1, so wire-level fan-out cannot be observed without a public-IP target. Behaviour is covered by internal/backchannel coordinator and deliverer tests."
+    out_of_scope_reason: "The grant model cannot recover a per-client SID, so BCL-008's per-client sid requirement is deliberately unsupported. Two-RP sub-only fan-out is covered by internal/backchannel."
 
   - id: BCL-009
     severity: P1

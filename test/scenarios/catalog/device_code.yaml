@@ -739,15 +739,17 @@ rows:
     severity: P1
     spec: RFC 8628 §3.5 / OAuth 2.0 user-trust posture
     behaviour: |
-      The public revoke helper (op/devicecodekit.Revoke) transitions
-      a Pending device-authorization record to Denied with the
-      embedder-supplied reason and emits a device_code.revoked audit
-      event carrying client_id, device_code_id, and reason. When
-      Deps.AccessTokens is wired, the helper also cascade-revokes every
-      access token issued from that device_code — the device_code's ID
-      is the GrantID stamped on each issued token, so RevokeByGrant
-      retires them all — and reports the revoked_access_tokens count on
-      the audit event. A nil registry skips the cascade.
+      The public revoke helper (op/devicecodekit.Revoke) atomically
+      transitions Pending and Approved device authorizations to Denied.
+      Denied and Consumed records are idempotent successes; Consumed
+      remains unchanged while the helper retries the credential cascade.
+      The device_code's ID is the GrantID stamped on every derived
+      credential, so the helper revokes JWT access tokens through the
+      selected JTI-registry or grant-tombstone strategy and independently
+      revokes opaque access tokens and refresh-token chains when their
+      stores are configured. A device_code.revoked event carries only a
+      hash of the device_code plus cascade completion metadata. Missing or
+      expired records return ErrUnknownDeviceCode without an audit event.
     status: active
 
   - id: DEV-102

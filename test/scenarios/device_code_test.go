@@ -1665,8 +1665,7 @@ func TestScenario_DEV_100_UserCodeBruteForceLockout(t *testing.T) {
 // Pending record to Denied with the supplied reason, cascade-revokes
 // every access token issued from that device_code (its ID is the
 // GrantID on each token), the next /token poll returns access_denied,
-// and a second revoke call surfaces ErrAlreadyDecided so the embedder's
-// idempotency posture is preserved.
+// and a second revoke call safely retries the idempotent cascade.
 //
 // Spec: RFC 8628 §3.5, OAuth 2.0 user-trust posture.
 func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
@@ -1675,7 +1674,11 @@ func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
 
 	deviceCode := p.issueDeviceCode(t, "openid")
 	reg := p.tk.Store.AccessTokens()
-	deps := &devicecodekit.Deps{DeviceCodes: p.tk.Store.DeviceCodes(), AccessTokens: reg}
+	deps := &devicecodekit.Deps{
+		DeviceCodes:        p.tk.Store.DeviceCodes(),
+		AccessTokens:       reg,
+		RevocationStrategy: store.RevocationStrategyJTIRegistry,
+	}
 
 	// An access token whose GrantID is the device_code's ID stands in
 	// for one issued from this device authorization; the cascade must
@@ -1723,10 +1726,8 @@ func TestScenario_DEV_101_RevokeEmitsAuditAndTransitions(t *testing.T) {
 	}
 	expectError(t, body, "access_denied")
 
-	// Idempotency: a second revoke surfaces ErrAlreadyDecided so the
-	// embedder's UI can render "already revoked" without inspecting
-	// the substore's internal shape.
-	if err := devicecodekit.Revoke(context.Background(), deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); !errors.Is(err, devicecodekit.ErrAlreadyDecided) {
-		t.Errorf("second Revoke: err = %v, want ErrAlreadyDecided", err)
+	// Idempotency: a second revoke retries the cascade and succeeds.
+	if err := devicecodekit.Revoke(context.Background(), deps, deviceCode, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+		t.Errorf("second Revoke: %v", err)
 	}
 }

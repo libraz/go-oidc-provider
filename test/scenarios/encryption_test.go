@@ -1323,13 +1323,13 @@ func TestScenario_ENC_120_JARMSuccessJWE(t *testing.T) {
 	}
 }
 
-// TestScenario_ENC_121_JARMErrorFallsBackToSignedOnly pins the JARM
-// error-path policy: when a JARM-using client registered
+// TestScenario_ENC_121_JARMErrorFailsClosed pins the JARM error-path
+// policy: when a JARM-using client registered
 // authorization_encrypted_response_alg / _enc but the OP cannot
 // resolve a `use=enc` recipient (no matching key in the client JWKS),
-// the JARM ERROR response stays signed-only rather than collapsing
-// onto a server_error redirect. Authenticity wins; error-code
-// confidentiality is the documented sacrifice.
+// the OP emits a generic server_error redirect without a signed-only
+// "response" JWT. The client's registered confidentiality requirement
+// is never silently downgraded.
 //
 // The fixture publishes a JWKS containing only a `use=sig` key so the
 // clientencjwks resolver surfaces ErrNoMatchingKey at JWE-wrap time.
@@ -1337,7 +1337,7 @@ func TestScenario_ENC_120_JARMSuccessJWE(t *testing.T) {
 // `response_type` ("token" is not in the v0.9.1 ship list).
 //
 // Spec: FAPI 2.0 Message Signing §5.5.
-func TestScenario_ENC_121_JARMErrorFallsBackToSignedOnly(t *testing.T) {
+func TestScenario_ENC_121_JARMErrorFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -1392,8 +1392,8 @@ func TestScenario_ENC_121_JARMErrorFallsBackToSignedOnly(t *testing.T) {
 	// Drive a /authorize request with response_type=token (not in the
 	// client's registered set and not advertised on the OP). With
 	// response_mode=jwt the OP routes the error through the JARM
-	// emit path; the JWE wrap fails and the function falls back to
-	// signed-only.
+	// emit path; the JWE wrap fails and the function emits only a
+	// generic server_error redirect.
 	values := url.Values{
 		"client_id":     {clientID},
 		"redirect_uri":  {callback},
@@ -1421,34 +1421,33 @@ func TestScenario_ENC_121_JARMErrorFallsBackToSignedOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Location: %v", err)
 	}
-	// JARM may deliver "response" via either the query string (mode=jwt
-	// for code-flow) or the fragment (mode=jwt resolved as fragment.jwt
-	// when the response_type cannot ride the query channel). Inspect
-	// both.
-	rawResp := loc.Query().Get("response")
-	if rawResp == "" && loc.Fragment != "" {
-		if frag, ferr := url.ParseQuery(loc.Fragment); ferr == nil {
-			rawResp = frag.Get("response")
+	query := loc.Query()
+	if got := query.Get("error"); got != "server_error" {
+		t.Errorf("error=%q want server_error", got)
+	}
+	if got := query.Get("error_description"); got != "jarm_response_encryption_failed" {
+		t.Errorf("error_description=%q want jarm_response_encryption_failed", got)
+	}
+	if got := query.Get("state"); got != "enc-121-state" {
+		t.Errorf("state=%q want enc-121-state", got)
+	}
+	if got := query.Get("iss"); got != tk.Issuer {
+		t.Errorf("iss=%q want %q", got, tk.Issuer)
+	}
+	if got := query.Get("response"); got != "" {
+		t.Errorf("signed-only JARM leaked in query after JWE failure: %q", got)
+	}
+	if loc.Fragment != "" {
+		fragment, err := url.ParseQuery(loc.Fragment)
+		if err != nil {
+			t.Fatalf("parse redirect fragment: %v", err)
+		}
+		if got := fragment.Get("response"); got != "" {
+			t.Errorf("signed-only JARM leaked in fragment after JWE failure: %q", got)
 		}
 	}
-	if rawResp == "" {
-		t.Fatalf("'response' parameter missing from JARM error redirect: %s", loc.String())
-	}
-	// Critical assertion: the JARM payload is a 3-part JWS (signed-only
-	// fallback), NOT a 5-part JWE. JWE wrap failed; signed-only wins.
-	parts := strings.Split(rawResp, ".")
-	if len(parts) != 3 {
-		t.Fatalf("JARM error response has %d parts, want 3 (signed-only fallback) raw=%q", len(parts), rawResp)
-	}
-	claims := scenariokit.DecodeJWSClaims(t, rawResp)
-	if got := claims["iss"]; got != tk.Issuer {
-		t.Errorf("iss=%v want %q", got, tk.Issuer)
-	}
-	if got := claims["aud"]; got != clientID {
-		t.Errorf("aud=%v want %q", got, clientID)
-	}
-	if got, _ := claims["error"].(string); got == "" {
-		t.Errorf("error claim missing from signed-only JARM payload: %v", claims)
+	if got := query.Get("code"); got != "" {
+		t.Errorf("authorization code leaked after JWE failure: %q", got)
 	}
 }
 
