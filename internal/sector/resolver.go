@@ -12,10 +12,10 @@ import (
 	"net/url"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/netsec"
+	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 )
@@ -43,6 +43,9 @@ const (
 	// peers that emit application/octet-stream or text/html are
 	// almost always misconfigured (CDN error pages, captive portal).
 	jsonContentType = "application/json"
+
+	defaultCacheMaxEntries = remotecache.DefaultMaxEntries
+	defaultNegativeTTL     = remotecache.DefaultNegativeTTL
 )
 
 // Sentinel errors. Each error wraps [ErrSectorFetch] so callers can
@@ -94,6 +97,8 @@ type resolverConfig struct {
 	timeout            time.Duration
 	maxBody            int64
 	ttl                time.Duration
+	negativeTTL        time.Duration
+	cacheMaxEntries    int
 	allowPrivate       bool
 	resolverLookupHook func(ctx context.Context, host string) ([]net.IPAddr, error)
 }
@@ -149,6 +154,27 @@ func WithTTL(d time.Duration) Option {
 	}
 }
 
+// WithNegativeCacheTTL overrides how long an upstream fetch or parse failure
+// is cached. Zero or negative leaves the short production default in place.
+func WithNegativeCacheTTL(d time.Duration) Option {
+	return func(cfg *resolverConfig) {
+		if d > 0 {
+			cfg.negativeTTL = d
+		}
+	}
+}
+
+// WithCacheMaxEntries overrides the combined positive/negative URL entry
+// budget. Zero or negative leaves the bounded production default in place and
+// can never disable eviction.
+func WithCacheMaxEntries(n int) Option {
+	return func(cfg *resolverConfig) {
+		if n > 0 {
+			cfg.cacheMaxEntries = n
+		}
+	}
+}
+
 // AllowPrivateNetwork lifts the SSRF deny-list. Embedders fronting
 // their RPs through private DNS use the option to keep the same
 // fetcher across deployments; the matching production path leaves
@@ -168,11 +194,11 @@ func withResolverLookupHook(fn func(ctx context.Context, host string) ([]net.IPA
 }
 
 // Resolver fetches and validates sector_identifier_uri documents. The
-// type is safe for concurrent use; cache reads and writes serialise
-// through an internal RWMutex.
+// type is safe for concurrent use; cache state serialises through the shared
+// bounded cache and same-URL misses collapse through singleflight.
 type Resolver struct {
 	cfg    resolverConfig
-	cache  *cache
+	cache  *remotecache.Cache[*cacheEntry]
 	client *securefetch.Client
 }
 
@@ -182,10 +208,12 @@ type Resolver struct {
 // dynamic-registration endpoint.
 func New(opts ...Option) *Resolver {
 	cfg := resolverConfig{
-		clock:   timex.SystemClock,
-		timeout: defaultTimeout,
-		maxBody: defaultMaxBody,
-		ttl:     timex.SectorURICacheTTLDefault,
+		clock:           timex.SystemClock,
+		timeout:         defaultTimeout,
+		maxBody:         defaultMaxBody,
+		ttl:             timex.SectorURICacheTTLDefault,
+		negativeTTL:     defaultNegativeTTL,
+		cacheMaxEntries: defaultCacheMaxEntries,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -206,8 +234,16 @@ func New(opts ...Option) *Resolver {
 		policy = policy.WithHTTPClientForTest(cfg.httpClient)
 	}
 	return &Resolver{
-		cfg:    cfg,
-		cache:  newCache(cfg.clock),
+		cfg: cfg,
+		cache: remotecache.New[*cacheEntry](remotecache.Config{
+			Clock:       cfg.clock,
+			TTL:         cfg.ttl,
+			NegativeTTL: cfg.negativeTTL,
+			MaxEntries:  cfg.cacheMaxEntries,
+			ShouldCacheError: func(err error) bool {
+				return !errors.Is(err, ErrSectorContentChanged)
+			},
+		}),
 		client: securefetch.NewClient(policy),
 	}
 }
@@ -233,38 +269,25 @@ func (r *Resolver) Resolve(ctx context.Context, sectorIdentifierURI string, regi
 		return "", err
 	}
 	registered := canonicaliseURIs(registeredRedirectURIs)
-	if entry, ok := r.cache.get(sectorIdentifierURI); ok {
-		if err := verifySubset(entry.uris, registered); err != nil {
-			return "", err
+	entry, err := r.cache.Load(ctx, sectorIdentifierURI, func(ctx context.Context, stale *cacheEntry, hasStale bool) (*cacheEntry, error) {
+		uris, hash, fetchErr := r.doFetch(ctx, sectorIdentifierURI)
+		if fetchErr != nil {
+			return nil, fetchErr
 		}
-		return host, nil
-	}
-	uris, hash, err := r.doFetch(ctx, sectorIdentifierURI)
+		if hasStale && stale.hash != hash {
+			// The expired entry was already physically removed by the bounded
+			// cache. Do not negative-cache this signal: the next Resolve must
+			// be able to accept a legitimate stable rotation immediately.
+			return nil, fmt.Errorf("%w: %w", ErrSectorFetch, ErrSectorContentChanged)
+		}
+		return &cacheEntry{uris: uris, hash: hash}, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	if existing, ok := r.cache.peek(sectorIdentifierURI); ok && existing.hash != hash {
-		// Evict the stale entry before surfacing the mismatch: leaving
-		// it in place would compare every future Resolve call against
-		// the same now-obsolete hash, permanently poisoning DCR for
-		// every client sharing this sector_identifier_uri until the
-		// process restarts. The caller still observes
-		// ErrSectorContentChanged once as the change-detection signal,
-		// but the eviction means the very next Resolve call for this
-		// URI sees a clean cache miss and repopulates with the new
-		// document's hash, so a legitimate RP-side rotation recovers
-		// without operator intervention.
-		r.cache.evict(sectorIdentifierURI)
-		return "", fmt.Errorf("%w: %w", ErrSectorFetch, ErrSectorContentChanged)
-	}
-	if err := verifySubset(uris, registered); err != nil {
+	if err := verifySubset(entry.uris, registered); err != nil {
 		return "", err
 	}
-	r.cache.put(sectorIdentifierURI, &cacheEntry{
-		uris:   uris,
-		hash:   hash,
-		expiry: r.cfg.clock.Now().Add(r.cfg.ttl),
-	})
 	return host, nil
 }
 
@@ -454,70 +477,7 @@ func verifySubset(upstream, registered []string) error {
 	return nil
 }
 
-// cache is a tiny thread-safe TTL cache keyed by sector_identifier_uri.
-// The implementation mirrors internal/jar/jwks_cache.go; we do not
-// share the type because the entry shape (URI list + hash) is
-// different and pulling the JWKS-specific etag plumbing into a
-// generic abstraction would obscure both subsystems.
-type cache struct {
-	mu      sync.RWMutex
-	entries map[string]*cacheEntry
-	clock   timex.Clock
-}
-
 type cacheEntry struct {
-	uris   []string
-	hash   string
-	expiry time.Time
-}
-
-func newCache(clock timex.Clock) *cache {
-	if clock == nil {
-		clock = timex.SystemClock
-	}
-	return &cache{entries: make(map[string]*cacheEntry), clock: clock}
-}
-
-// get returns the cached entry for uri if it is still within its TTL
-// AND the caller may use it without a network round-trip.
-func (c *cache) get(uri string) (*cacheEntry, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	e, ok := c.entries[uri]
-	if !ok {
-		return nil, false
-	}
-	if c.clock.Now().Before(e.expiry) {
-		return e, true
-	}
-	return nil, false
-}
-
-// peek returns any stored entry for uri regardless of expiry. The
-// function exists so the cache-poisoning check can compare hashes
-// across the boundary where the entry has just expired but the
-// previous payload is still authoritative for the change-detection
-// rule.
-func (c *cache) peek(uri string) (*cacheEntry, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	e, ok := c.entries[uri]
-	return e, ok
-}
-
-func (c *cache) put(uri string, entry *cacheEntry) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.entries[uri] = entry
-}
-
-// evict removes any stored entry for uri. It is called after a
-// content-hash mismatch is detected so a legitimate document rotation
-// at the RP does not permanently poison future resolutions of the same
-// sector_identifier_uri (see the call site in [Resolver.Resolve]).
-// Evicting an absent key is a no-op.
-func (c *cache) evict(uri string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.entries, uri)
+	uris []string
+	hash string
 }

@@ -42,6 +42,7 @@
 // strategies; pulling the cache plumbing into a shared abstraction
 // would either lose information (the JAR ETag plumbing has no analogue
 // in the sector cache) or grow a multi-headed interface that obscures
-// each call site's intent. Caching and singleflight stay at the call
-// site.
+// each call site's intent. Protocol-specific cache policy stays in each
+// fetcher; sector and client-encryption JWKS share only the bounded TTL/LRU,
+// singleflight, and negative-cache mechanics through `internal/remotecache`.
 package securefetch

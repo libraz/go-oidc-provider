@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -419,7 +422,135 @@ func TestNew_DefaultsApplied(t *testing.T) {
 	if r.cfg.ttl != timex.SectorURICacheTTLDefault {
 		t.Fatalf("ttl = %v, want %v", r.cfg.ttl, timex.SectorURICacheTTLDefault)
 	}
+	if r.cfg.negativeTTL != defaultNegativeTTL {
+		t.Fatalf("negativeTTL = %v, want %v", r.cfg.negativeTTL, defaultNegativeTTL)
+	}
+	if r.cfg.cacheMaxEntries != defaultCacheMaxEntries {
+		t.Fatalf("cacheMaxEntries = %d, want %d", r.cfg.cacheMaxEntries, defaultCacheMaxEntries)
+	}
 	if r.cfg.clock != timex.SystemClock {
 		t.Fatalf("clock not defaulted to timex.SystemClock")
+	}
+}
+
+func TestResolve_CacheCardinalityStaysBounded(t *testing.T) {
+	t.Parallel()
+
+	body, _ := json.Marshal([]string{"https://rp.example/cb"})
+	srv := newJSONServer(t, body, jsonContentType)
+	r := resolverWithServer(t, srv, WithCacheMaxEntries(4))
+
+	for i := range 40 {
+		uri := fmt.Sprintf("%s?client=%d", srv.URL, i)
+		if _, err := r.Resolve(context.Background(), uri, []string{"https://rp.example/cb"}); err != nil {
+			t.Fatalf("Resolve(%d): %v", i, err)
+		}
+		if got := r.cache.Len(); got > 4 {
+			t.Fatalf("cache entries=%d exceeds max=4 after URL %d", got, i)
+		}
+	}
+}
+
+func TestResolve_ExpiredEntryIsEvicted(t *testing.T) {
+	t.Parallel()
+
+	body, _ := json.Marshal([]string{"https://rp.example/cb"})
+	srv := newJSONServer(t, body, jsonContentType)
+	clock := &fakeClock{now: time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)}
+	r := resolverWithServer(t, srv, WithClock(clock), WithTTL(time.Minute))
+	if _, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	clock.now = clock.now.Add(2 * time.Minute)
+	if got := r.cache.Len(); got != 0 {
+		t.Fatalf("cache entries=%d want 0 after TTL expiry", got)
+	}
+}
+
+func TestResolve_SingleflightCollapsesConcurrentFetches(t *testing.T) {
+	t.Parallel()
+
+	body, _ := json.Marshal([]string{"https://rp.example/cb"})
+	var hits atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if hits.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		w.Header().Set("Content-Type", jsonContentType)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	r := resolverWithServer(t, srv)
+
+	const concurrent = 24
+	start := make(chan struct{})
+	errs := make(chan error, concurrent)
+	var wg sync.WaitGroup
+	for range concurrent {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"})
+			errs <- err
+		}()
+	}
+	close(start)
+	<-entered
+	close(release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want 1", got)
+	}
+}
+
+func TestResolve_NegativeCacheRecoversAfterTTL(t *testing.T) {
+	t.Parallel()
+
+	body, _ := json.Marshal([]string{"https://rp.example/cb"})
+	var (
+		hits atomic.Int32
+		fail atomic.Bool
+	)
+	fail.Store(true)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		if fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", jsonContentType)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	clock := &fakeClock{now: time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)}
+	r := resolverWithServer(t, srv, WithClock(clock), WithNegativeCacheTTL(5*time.Second))
+
+	if _, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"}); !errors.Is(err, ErrSectorFetch) {
+		t.Fatalf("first Resolve err=%v want ErrSectorFetch", err)
+	}
+	if _, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"}); !errors.Is(err, ErrSectorFetch) {
+		t.Fatalf("negative-cache Resolve err=%v want ErrSectorFetch", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("upstream hits=%d want 1 inside negative TTL", got)
+	}
+
+	clock.now = clock.now.Add(6 * time.Second)
+	fail.Store(false)
+	if _, err := r.Resolve(context.Background(), srv.URL, []string{"https://rp.example/cb"}); err != nil {
+		t.Fatalf("recovery Resolve: %v", err)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("upstream hits=%d want 2 after negative TTL", got)
 	}
 }

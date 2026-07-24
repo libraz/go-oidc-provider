@@ -23,6 +23,11 @@
 // the caller can map it onto a clean wire-level error rather than a
 // 500.
 //
+// Remote entries use a combined positive/negative 256-URL LRU budget.
+// Expired entries are physically removed, concurrent misses for one URL
+// collapse to one fetch, and failures are cached for five seconds before the
+// resolver retries a recovered upstream.
+//
 // # SSRF posture
 //
 // Remote JWKS fetches go through the same SSRF deny-list the JAR

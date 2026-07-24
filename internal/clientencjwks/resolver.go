@@ -10,6 +10,7 @@ import (
 	josev4 "github.com/go-jose/go-jose/v4"
 
 	"github.com/libraz/go-oidc-provider/internal/jose"
+	"github.com/libraz/go-oidc-provider/internal/remotecache"
 	"github.com/libraz/go-oidc-provider/internal/securefetch"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -30,15 +31,24 @@ const (
 	// saving most fetches.
 	defaultJWKSCacheTTL = 5 * time.Minute
 
+	// defaultJWKSNegativeCacheTTL suppresses retry amplification during a
+	// transient upstream failure while allowing prompt recovery.
+	defaultJWKSNegativeCacheTTL = remotecache.DefaultNegativeTTL
+
+	// defaultJWKSCacheMaxEntries bounds combined positive and negative URL
+	// cardinality for the process-wide resolver.
+	defaultJWKSCacheMaxEntries = remotecache.DefaultMaxEntries
+
 	// defaultMaxBodyBytes caps the JWKS body size at 64 KiB. Real
 	// keysets are well under 4 KiB; the ceiling exists to bound
 	// memory use against a malicious or misconfigured peer.
 	defaultMaxBodyBytes = int64(64 * 1024)
 )
 
-// Config configures [New]. The zero value is a hardened production
-// posture: deny-list engaged, default timeouts, default cache TTL.
-// Tests opt into more permissive shapes by setting fields explicitly.
+// Config configures [New]. The zero value is a hardened production posture:
+// deny-list engaged, default timeouts, bounded TTL/LRU cache, and short
+// negative caching. Tests opt into more permissive shapes by setting fields
+// explicitly.
 type Config struct {
 	// Clock drives the JWKS cache TTL. A nil value falls back to
 	// [timex.SystemClock]; tests inject a fake clock so cache
@@ -52,6 +62,15 @@ type Config struct {
 	// JWKSCacheTTL is the in-memory cache lifetime applied to every
 	// fetched keyset. Zero falls back to [defaultJWKSCacheTTL].
 	JWKSCacheTTL time.Duration
+
+	// JWKSNegativeCacheTTL is the lifetime of a failed remote lookup.
+	// Zero falls back to [defaultJWKSNegativeCacheTTL].
+	JWKSNegativeCacheTTL time.Duration
+
+	// JWKSCacheMaxEntries bounds the combined positive/negative URL entries.
+	// Zero falls back to [defaultJWKSCacheMaxEntries]; non-positive values
+	// never disable eviction.
+	JWKSCacheMaxEntries int
 
 	// AllowPrivateNetwork, when true, suppresses the SSRF deny-list
 	// so deployments that legitimately host RPs on a private LAN
@@ -102,7 +121,12 @@ func New(cfg Config) *Resolver {
 		BaseTransport:       cfg.BaseTransport,
 	})
 	return &Resolver{
-		cache:   newJWKSCache(cfg.Clock, cfg.JWKSCacheTTL),
+		cache: newJWKSCache(
+			cfg.Clock,
+			cfg.JWKSCacheTTL,
+			cfg.JWKSNegativeCacheTTL,
+			cfg.JWKSCacheMaxEntries,
+		),
 		fetcher: &fetcher{client: client},
 	}
 }
@@ -180,15 +204,9 @@ func (r *Resolver) resolveJWKS(
 		return &keys, nil
 	}
 	if client.JWKsURI != "" {
-		if cached, ok := r.cache.get(client.JWKsURI); ok {
-			return cached, nil
-		}
-		keys, err := r.fetcher.fetch(ctx, client.JWKsURI)
-		if err != nil {
-			return nil, err
-		}
-		r.cache.put(client.JWKsURI, keys)
-		return keys, nil
+		return r.cache.load(ctx, client.JWKsURI, func(ctx context.Context) (*josev4.JSONWebKeySet, error) {
+			return r.fetcher.fetch(ctx, client.JWKsURI)
+		})
 	}
 	return nil, ErrJWKSConfigured
 }

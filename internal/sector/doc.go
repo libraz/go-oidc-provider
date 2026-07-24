@@ -14,7 +14,13 @@
 // the document, verifies it is a JSON array of strings, and reports
 // whether every redirect URI the client registered appears in the
 // array. A success is cached for 24 hours; failures are not cached
-// so a transient outage does not block a re-attempted registration.
+// indefinitely. Fetch and parse failures use a five-second negative cache so a
+// burst cannot amplify into one outbound request per registration, then retry
+// automatically after that short window.
+//
+// Positive and negative entries share a 256-URL LRU budget. Expired entries
+// are physically removed, and concurrent fetches for one URL collapse onto a
+// single outbound request.
 //
 // # SSRF posture
 //
@@ -26,7 +32,7 @@
 // deliverer. The package adds https-only scheme pinning, no
 // redirects, a 64 KiB body cap, and a 5 s request timeout on top of
 // that base. Embedders fronting their RPs behind private DNS opt in
-// via [Option.AllowPrivateNetwork]; cloud-metadata IPs remain
+// via [AllowPrivateNetwork]; cloud-metadata IPs remain
 // rejected even when the opt-in is set.
 //
 // # Cache poisoning protection
