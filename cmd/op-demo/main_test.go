@@ -65,7 +65,7 @@ func TestDefaultListenAddrIsLoopback(t *testing.T) {
 func baseTestConfig(addr string) runConfig {
 	return runConfig{
 		listen:       addr,
-		issuer:       "https://localhost",
+		issuer:       "http://" + addr,
 		mount:        "/oidc",
 		clientID:     "demo-client",
 		redirectURIs: []string{"https://app.example/cb"},
@@ -340,7 +340,8 @@ func TestRun_BootsAndShutsDown(t *testing.T) {
 		runErr = run(ctx, baseTestConfig(addr), logger)
 	}()
 
-	if err := waitDiscovery("http://"+addr+"/.well-known/openid-configuration", http.DefaultClient); err != nil {
+	cfg := baseTestConfig(addr)
+	if err := waitDiscovery(cfg.issuer+"/.well-known/openid-configuration", http.DefaultClient); err != nil {
 		t.Fatalf("discovery never came up: %v", err)
 	}
 
@@ -364,6 +365,7 @@ func TestRun_BootsHTTPS(t *testing.T) {
 	cfg := baseTestConfig(addr)
 	cfg.tlsCert = certPath
 	cfg.tlsKey = keyPath
+	cfg.issuer = "https://" + addr
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -388,7 +390,7 @@ func TestRun_BootsHTTPS(t *testing.T) {
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: self-signed cert under test
 		},
 	}
-	if err := waitDiscovery("https://"+addr+"/.well-known/openid-configuration", tlsClient); err != nil {
+	if err := waitDiscovery(cfg.issuer+"/.well-known/openid-configuration", tlsClient); err != nil {
 		t.Fatalf("discovery (https) never came up: %v", err)
 	}
 
@@ -428,6 +430,45 @@ func TestRun_RejectsHalfTLSConfig(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "tls-cert") || !strings.Contains(err.Error(), "tls-key") {
 				t.Errorf("err = %v, want it to mention both -tls-cert and -tls-key", err)
+			}
+		})
+	}
+}
+
+func TestRun_RejectsIssuerListenerSchemeMismatch(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cases := []struct {
+		name    string
+		issuer  string
+		tlsCert string
+		tlsKey  string
+	}{
+		{
+			name:   "https issuer on plain HTTP listener",
+			issuer: "https://127.0.0.1:9090",
+		},
+		{
+			name:    "http issuer on TLS listener",
+			issuer:  "http://127.0.0.1:9090",
+			tlsCert: "unused-cert.pem",
+			tlsKey:  "unused-key.pem",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := baseTestConfig("127.0.0.1:9090")
+			cfg.issuer = tc.issuer
+			cfg.tlsCert = tc.tlsCert
+			cfg.tlsKey = tc.tlsKey
+			err := run(context.Background(), cfg, logger)
+			if err == nil {
+				t.Fatal("run returned nil, want issuer/listener scheme error")
+			}
+			if !strings.Contains(err.Error(), "issuer") {
+				t.Errorf("err = %v, want it to identify the issuer mismatch", err)
 			}
 		})
 	}

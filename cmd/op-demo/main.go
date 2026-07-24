@@ -11,7 +11,7 @@
 //
 //	go run ./cmd/op-demo \
 //	    -listen 127.0.0.1:9090 \
-//	    -issuer https://localhost:9090 \
+//	    -issuer http://127.0.0.1:9090 \
 //	    -client-id demo-client \
 //	    -redirect-uri https://localhost.emobix.co.uk:8443/test/a/op-demo/callback
 //
@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -136,7 +137,7 @@ func main() {
 func mainErr() error {
 	var (
 		listen      = flag.String("listen", defaultListenAddr, "TCP listen address (\"host:port\" or \":port\")")
-		issuer      = flag.String("issuer", "https://localhost:9090", "issuer URL — MUST be https://, no query, no fragment")
+		issuer      = flag.String("issuer", "http://127.0.0.1:9090", "issuer URL — use http:// only for a loopback IP listener without TLS; otherwise use https://")
 		mount       = flag.String("mount", "/oidc", "URL prefix the OP handler is mounted under")
 		clientID    = flag.String("client-id", "demo-client", "client_id of the seed client")
 		redirectURI = flag.String("redirect-uri", "https://localhost.emobix.co.uk:8443/test/a/op-demo/callback", "comma-separated list of redirect_uri values seeded for the demo client. The OFCS routes each test plan's callback at /test/a/<alias>/callback, so a multi-plan conformance run needs every plan's URI seeded up front.")
@@ -211,15 +212,8 @@ func mainErr() error {
 }
 
 func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
-	// One-of TLS configuration is almost always a typo: a half-set
-	// pair would silently fall back to plain HTTP and surprise the
-	// operator at the first OFCS run. Reject it before we touch
-	// anything else.
-	if (cfg.tlsCert == "") != (cfg.tlsKey == "") {
-		return errors.New("op-demo: -tls-cert and -tls-key must be provided together")
-	}
-	if len(cfg.redirectURIs) == 0 {
-		return errors.New("op-demo: -redirect-uri must list at least one URI")
+	if err := validateRunConfig(cfg); err != nil {
+		return err
 	}
 
 	provider, err := buildProvider(ctx, cfg, logger)
@@ -296,6 +290,31 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		return fmt.Errorf("listen: %w", listenErr)
 	}
 	<-idleClosed
+	return nil
+}
+
+// validateRunConfig rejects listener and issuer combinations that would make
+// the discovery document advertise a transport the server does not provide.
+// The Provider validates the issuer's full OIDC shape later; this check owns
+// only the demo server's TLS/listener coherence.
+func validateRunConfig(cfg runConfig) error {
+	if (cfg.tlsCert == "") != (cfg.tlsKey == "") {
+		return errors.New("op-demo: -tls-cert and -tls-key must be provided together")
+	}
+	if len(cfg.redirectURIs) == 0 {
+		return errors.New("op-demo: -redirect-uri must list at least one URI")
+	}
+	issuerURL, err := url.Parse(cfg.issuer)
+	if err != nil || issuerURL.Scheme == "" {
+		return errors.New("op-demo: -issuer must be an absolute http:// or https:// URL")
+	}
+	tlsEnabled := cfg.tlsCert != ""
+	switch {
+	case tlsEnabled && issuerURL.Scheme != "https":
+		return errors.New("op-demo: an HTTPS issuer is required when -tls-cert and -tls-key are set")
+	case !tlsEnabled && issuerURL.Scheme != "http":
+		return errors.New("op-demo: an HTTP issuer is required when serving without TLS")
+	}
 	return nil
 }
 
