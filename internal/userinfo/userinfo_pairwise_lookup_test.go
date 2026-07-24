@@ -65,6 +65,15 @@ func (s singleGrantStore) ListBySubject(context.Context, string) ([]*store.Grant
 	return nil, nil
 }
 
+func (s singleGrantStore) ListClientIDsBySubject(
+	context.Context,
+	string,
+	string,
+	int,
+) (store.GrantClientPage, error) {
+	return store.GrantClientPage{}, nil
+}
+
 func (s singleGrantStore) Delete(context.Context, string) error { return nil }
 
 func (s singleGrantStore) HasAny(context.Context) (bool, error) { return true, nil }

@@ -33,7 +33,9 @@ func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDep
 // implementation; this function applies the revoked / expired /
 // cnf-mismatch checks and projects a successful record onto an
 // [*tokens.AccessTokenClaims] so the caller can reuse [assembleClaims]
-// verbatim.
+// verbatim. The projection preserves the originating grant ID because
+// pairwise subject configurations recover the OP-internal subject through
+// that lineage before looking the user up.
 //
 // Every failure path emits the appropriate WWW-Authenticate challenge
 // and returns ok=false so the caller stops without writing an
@@ -129,14 +131,15 @@ func enforceOpaqueCnf(
 // projectOpaqueAccessTokenClaims projects an opaque-access-token
 // record onto the [*tokens.AccessTokenClaims] shape the rest of the
 // /userinfo pipeline consumes. Only the fields downstream code reads
-// (Subject, ClientID, Scope) are populated; cnf / JTI are intentionally
-// omitted because the opaque path has already enforced them and the
-// revocation registry keys on JTI which has no counterpart for the
+// (Subject, ClientID, GrantID, Scope) are populated; cnf / JTI are
+// intentionally omitted because the opaque path has already enforced them
+// and the revocation registry keys on JTI which has no counterpart for the
 // opaque format.
 func projectOpaqueAccessTokenClaims(rec *store.OpaqueAccessToken) *tokens.AccessTokenClaims {
 	return &tokens.AccessTokenClaims{
 		Subject:  rec.Subject,
 		ClientID: rec.ClientID,
+		GrantID:  rec.GrantID,
 		Scope:    append([]string(nil), rec.Scope...),
 	}
 }

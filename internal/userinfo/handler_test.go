@@ -12,6 +12,7 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/subject"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
@@ -559,6 +560,73 @@ func TestHandler_OpaqueAccessToken_HappyPath(t *testing.T) {
 	}
 	if body["email"] != "alice@example.com" {
 		t.Errorf("email=%v want alice@example.com", body["email"])
+	}
+}
+
+// TestHandler_OpaqueAccessToken_PairwiseSubject confirms an opaque token
+// preserves its grant lineage when projected onto the shared UserInfo claim
+// pipeline. Pairwise projection needs that lineage to recover the raw
+// OP-internal subject before querying UserStore and deriving the client-facing
+// subject.
+func TestHandler_OpaqueAccessToken_PairwiseSubject(t *testing.T) {
+	t.Parallel()
+
+	salt := []byte("userinfo-pairwise-opaque-salt-32b")
+	f := newUserInfoFixtureWithOptions(t, op.WithPairwiseSubject(salt))
+	client := f.prov.RegisterClient(t, testkit.ClientFixture{
+		ID:           "client-opaque-pairwise",
+		RedirectURIs: []string{"https://rp.example.test/callback"},
+		SubjectType:  "pairwise",
+	})
+	const (
+		rawSubject = "user-opaque-pairwise"
+		grantID    = "grant-opaque-pairwise"
+	)
+	f.putUser(t, rawSubject, map[string]any{
+		"email":          "pairwise@example.com",
+		"email_verified": true,
+	})
+	if err := f.prov.Store.Grants().Save(context.Background(), &store.Grant{
+		ID:        grantID,
+		Subject:   rawSubject,
+		ClientID:  client.ID,
+		Scope:     []string{"openid", "email"},
+		CreatedAt: f.clock.now,
+		UpdatedAt: f.clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	rec := &store.OpaqueAccessToken{
+		ID:        "opaque-userinfo-pairwise",
+		GrantID:   grantID,
+		ClientID:  client.ID,
+		Subject:   rawSubject,
+		Scope:     []string{"openid", "email"},
+		IssuedAt:  f.clock.now,
+		ExpiresAt: f.clock.now.Add(time.Hour),
+	}
+	f.saveOpaqueAccessToken(t, rec)
+
+	resp := f.doRequest(t, f.newGet(t, rec.ID))
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		dump, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status=%d body=%s", resp.StatusCode, dump)
+	}
+
+	expected, err := subject.Pairwise(salt).Generate(context.Background(), subject.GeneratorInput{
+		InternalUserID: rawSubject,
+		Client:         client,
+	})
+	if err != nil {
+		t.Fatalf("Pairwise.Generate: %v", err)
+	}
+	body := decodeBody(t, resp)
+	if got := body["sub"]; got != string(expected) {
+		t.Errorf("sub=%v want pairwise subject %q", got, expected)
+	}
+	if got := body["email"]; got != "pairwise@example.com" {
+		t.Errorf("email=%v want pairwise@example.com", got)
 	}
 }
 

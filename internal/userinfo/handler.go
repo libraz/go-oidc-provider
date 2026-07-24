@@ -698,8 +698,8 @@ func respondGenericInvalidToken(w http.ResponseWriter) {
 // grant. UserStore lookup and the OIDC Core §5.5 claims-request resolution
 // both key on the raw value; the response "sub" is then re-projected so
 // the client observes the pairwise value end-to-end. The opaque-format
-// path leaves "gid" empty and stamps the raw subject on the claims it
-// hands here, so the pivot is a no-op on that branch.
+// path carries the same grant lineage in its persistent record and projects
+// it onto the synthetic claims handed here.
 // The returned [*store.Client] is the AT-bound client resolved by the
 // pairwise subject projection, or nil when no projector is configured (the
 // non-pairwise path resolves the client lazily in
@@ -748,10 +748,10 @@ func assembleClaims(
 // SubjectProjector carry the per-client pairwise value in "sub" and the
 // stable identifier on the originating grant; the function recovers the
 // raw value by looking the grant up through the "gid" private claim
-// (RFC 7519 §4.3) the token endpoint stamps on every JWT it issues. The
-// opaque-format path (and legacy JWT tokens minted before pairwise was
-// configured) carries the raw subject in "sub" directly and the GrantID
-// is empty; the function returns the claim verbatim on that branch.
+// (RFC 7519 §4.3) the token endpoint stamps on every JWT it issues. Opaque
+// records carry the raw subject in "sub" and the same GrantID in persistent
+// storage, allowing both token formats to follow this path. Legacy records
+// without GrantID are rejected while pairwise projection is configured.
 //
 // A missing or unrecoverable grant collapses onto invalid_token rather
 // than silently falling back to the pairwise value: the grant being
