@@ -109,6 +109,9 @@ jobs:
       - name: Initialize multi-module workspace
         run: go work init . op/storeadapter/sql op/storeadapter/redis
 
+      - name: Test conformance release verifier
+        run: python3 -m unittest discover -s tools/conformance/tests -v
+
       - name: Test root module (race + coverage)
         run: |
           go test -race \

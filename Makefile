@@ -9,7 +9,8 @@ SHELL := /usr/bin/env bash
         conformance-certs conformance-up conformance-down \
         conformance-ofcs-up conformance-ofcs-down conformance-ofcs-status \
         conformance-op-up conformance-op-down conformance-op-status \
-        conformance-seed-plans conformance-baseline conformance-baseline-diff
+        conformance-seed-plans conformance-baseline conformance-baseline-diff \
+        conformance-release-verify
 
 tools:
 	@scripts/install-tools.sh
@@ -155,3 +156,11 @@ conformance-baseline:
 # Exits non-zero on regression so CI / pre-merge hooks can wire it up.
 conformance-baseline-diff:
 	@scripts/conformance.sh baseline-diff "$(BASELINE_OLD)" "$(BASELINE_NEW)"
+
+# Strict release gate. The candidate must have exactly the reference module
+# catalog, with every result PASSED or exactly matched by the checked-in
+# exclusion manifest.
+conformance-release-verify:
+	@scripts/conformance.sh release-verify \
+		"$(BASELINE_REFERENCE)" "$(BASELINE_CANDIDATE)" \
+		--exclusions "$(or $(CONFORMANCE_EXCLUSIONS),conformance/release-exclusions.json)"
