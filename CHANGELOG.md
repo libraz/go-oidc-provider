@@ -14,7 +14,12 @@ The main module and the storage-adapter sub-modules
 tag. Embedders pull each sub-module independently:
 
 ```
-# v0.9.5 (latest)
+# v0.9.6 (latest)
+go get github.com/libraz/go-oidc-provider@v0.9.6
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.6
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.6
+
+# v0.9.5
 go get github.com/libraz/go-oidc-provider@v0.9.5
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.5
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.5
@@ -44,6 +49,101 @@ go get github.com/libraz/go-oidc-provider@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
+
+## [v0.9.6] — 2026-07-24
+
+A hardening and durability release centred on the token endpoint and the
+storage layer: the refresh, CIBA, and device-code exchanges now stage their
+fallible work before the single-use consume so an approved ceremony survives a
+signing or persistence fault, and the store interfaces grow the transactional
+and cascade capabilities that behaviour depends on. No new protocol surface.
+Several construction-time and interface changes are breaking for custom store
+implementations and typed-nil callers — see `Changed`.
+
+### Added
+
+- `store.RefreshRetryResponseStore` — persists an already-sealed refresh
+  response against its consumed predecessor so the OP can re-emit the exact
+  response on the RFC 9700 grace path instead of branching the token chain. The
+  SQL adapter stores it in a new `retry_response` column written atomically with
+  the successor.
+- `RevokeByClient` cascade on the access-token and opaque-access-token
+  substores (with the matching SQL queries), so a client-scoped revocation
+  reaches every issued token.
+- `Tx` now exposes `AccessTokens`, `OpaqueAccessTokens`, and `GrantRevocations`
+  so the token endpoint can stage a whole refresh rotation transactionally.
+- `CompareAndSwap` on the TOTP and email-OTP substores (with an in-memory
+  implementation), used by the authenticator hardening below.
+- Redis `store.SessionStore` — session state backed by the Redis adapter and
+  bound to the Redis TTL (compose it with a durable backend for grants and
+  credentials).
+- Bounded back-channel logout fan-out: deliveries dispatch through a worker pool
+  (`DefaultMaxConcurrentDeliveries`) and the deduplicated audience is capped at
+  `DefaultMaxTargets`, emitting an overflow audit event when the cap trims
+  targets.
+
+### Changed
+
+- **BREAKING** `op.New` now rejects a typed-nil `store.Store` or `crypto.Signer`
+  interface value at construction (via `WithStore`, the required-config check,
+  and keyset validation) instead of panicking on first use. Pass a real
+  implementation or omit the option.
+- **BREAKING** The storage interfaces gain new members that custom
+  implementations must provide: `Tx.AccessTokens` / `OpaqueAccessTokens` /
+  `GrantRevocations`, `RefreshRetryResponseStore`, `RevokeByClient` on the
+  access-token substores, and `CompareAndSwap` on the TOTP and email-OTP
+  substores. The bundled `inmem`, `sql`, and `redis` adapters implement them.
+- **BREAKING** An `EncryptionKey`'s `NotAfter` is now a hard retirement
+  deadline: on or after it the OP refuses to decrypt for that `kid` and drops
+  the public half from the published JWKS, so RPs are never directed to a
+  recipient the OP can no longer decrypt for.
+- The lax OIDC Core 1.0 §11 reading of `offline_access` (an `openid`-only grant
+  may refresh) is the default and is now applied consistently to the
+  authorization-code issuance path as well as the refresh exchange;
+  `offline_access` is required only under `op.WithStrictOfflineAccess`.
+- The back-channel HTTP deliverer adopts only an embedder client's `Transport`,
+  keeping redirect, timeout, and dial-time SSRF policy mandatory; the option doc
+  reflects the Transport-only contract.
+
+### Security
+
+- JAR: every URL-indexed JWKS cache is bounded with LRU-style eviction and
+  expired-entry pruning, and a document carrying more keys than the parse cap is
+  rejected, so hostile client registrations cannot grow process memory without
+  bound.
+- DPoP: the replay-protection record is namespaced by proof thumbprint
+  (`dpop:<jkt>:<jti>`) so two distinct proof keys reusing one `jti` no longer
+  collide, while a replay by the same key still surfaces as a replayed proof.
+  The thumbprint is computed before the record is marked, preserving the
+  malformed-proof-never-advances property.
+- Authenticators: TOTP and email-OTP verification uses a `CompareAndSwap` retry
+  loop so concurrent wrong-code attempts each advance the brute-force counter
+  instead of a stale writer clobbering the winning state; email-OTP resend
+  reserves its challenge before invoking the mailer so a racing resend cannot
+  reuse a stale rate-limit snapshot.
+- Sender-constraint (DPoP / mTLS) checks and revocation checks now run ahead of
+  the single-use `Consume` on the refresh exchange and are fail-closed before a
+  fresh access token is minted.
+
+### Fixed
+
+- Refresh exchange (RFC 9700 grace path): post-preflight mutations are staged
+  behind a transaction and the buffered response is forwarded only after commit,
+  so a signing, JWE, cache, or write failure rolls `Consume` back instead of
+  stranding the predecessor token. With a retry-response cache configured, a
+  grace retry re-emits the exact sealed response from the original rotation
+  rather than minting a second token set.
+- CIBA and device-code polls assemble the fallible token bundle (signing plus
+  opaque/refresh persistence) before the single-use `Consume` CAS; a poll that
+  loses the CAS discards its pre-persisted credentials, so an approved ceremony
+  is no longer lost to a signing or persistence fault while single-use is
+  preserved.
+- The end-session handler records session-destroy, token-revoke, and
+  back-channel resolution failures as distinct audit events while keeping the
+  browser response non-blocking; `RevokeJWTAccessTokensByGrant` now returns store
+  errors and the grant-management revoke path treats them fail-closed.
+- Redis adapter: `WithKeyPrefix` and `WithMaxValueBytes` now surface an option
+  error at construction instead of being silently dropped.
 
 ## [v0.9.5] — 2026-07-13
 
@@ -1060,7 +1160,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.6...HEAD
+[v0.9.6]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...v0.9.6
 [v0.9.5]: https://github.com/libraz/go-oidc-provider/compare/v0.9.4...v0.9.5
 [v0.9.4]: https://github.com/libraz/go-oidc-provider/compare/v0.9.3...v0.9.4
 [v0.9.3]: https://github.com/libraz/go-oidc-provider/compare/v0.9.2...v0.9.3

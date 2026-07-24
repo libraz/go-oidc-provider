@@ -84,8 +84,4 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 )
 
-// During development the sub-module pulls the host module from the local
-// checkout so changes to op/store interfaces can be exercised without a
-// release. Released tags pin a real version through go.sum and the replace
-// is removed by the release pipeline.
 replace github.com/libraz/go-oidc-provider => ../../..
