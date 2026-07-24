@@ -63,7 +63,17 @@ func handleRefreshToken(w http.ResponseWriter, r *http.Request, deps Deps) {
 		handleRefreshTokenTransaction(ctx, w, r, deps, client, in, dpopOut, authorizationDetails)
 		return
 	}
-	completeRefreshToken(ctx, w, r, deps, client, in, dpopOut, authorizationDetails)
+	effectiveAuthorizationDetails, ok := preflightRefreshAuthorizationDetails(
+		ctx,
+		w,
+		deps,
+		in.Token,
+		authorizationDetails,
+	)
+	if !ok {
+		return
+	}
+	completeRefreshToken(ctx, w, r, deps, client, in, dpopOut, effectiveAuthorizationDetails)
 }
 
 func completeRefreshToken(
@@ -130,11 +140,22 @@ func handleRefreshTokenTransaction(
 	txDeps.OpaqueAccessTokens = tx.OpaqueAccessTokens()
 	txDeps.GrantRevocations = tx.GrantRevocations()
 	staged := newStagedResponseWriter()
-	completeRefreshToken(ctx, staged, r, txDeps, client, in, dpopOut, authorizationDetails)
-	// Preserve OAuth rejection semantics that intentionally consume a token
-	// (notably replay detection and scope-widening) while rolling back only
-	// server-side failures in token assembly/persistence. Preflight covers the
-	// sender-constraint rejection cases before a transaction is opened.
+	effectiveAuthorizationDetails, ok := preflightRefreshAuthorizationDetails(
+		ctx,
+		staged,
+		txDeps,
+		in.Token,
+		authorizationDetails,
+	)
+	if !ok {
+		staged.copyTo(w)
+		return
+	}
+	completeRefreshToken(ctx, staged, r, txDeps, client, in, dpopOut, effectiveAuthorizationDetails)
+	// Preserve OAuth rejection semantics that intentionally finalize token
+	// state (notably replay detection and tombstoned-grant mint refusal) while
+	// rolling back server-side failures in token assembly/persistence.
+	// Request-shape and narrowing rejections are handled before Exchange.
 	if staged.status >= http.StatusInternalServerError || staged.status == 0 {
 		staged.copyTo(w)
 		return
@@ -240,6 +261,63 @@ func preflightRefreshScope(w http.ResponseWriter, granted, requested []string) (
 	return out, true
 }
 
+// preflightRefreshAuthorizationDetails resolves and narrows the RFC 9396
+// authorization_details before Exchange consumes the predecessor refresh
+// token. The live Grant is authoritative while it carries details; the
+// refresh-token snapshot remains the fallback for missing or deliberately
+// sparse grants. When called with transaction-bound deps, this selection and
+// the later Consume share the same transactional view.
+//
+// The returned effective details are passed unchanged into issuance. Repeating
+// the subset check after Consume would let a concurrent Grant Management update
+// turn a valid preflight into a protocol rejection that strands the predecessor.
+func preflightRefreshAuthorizationDetails(
+	ctx context.Context,
+	w http.ResponseWriter,
+	deps Deps,
+	token string,
+	requested []map[string]any,
+) ([]map[string]any, bool) {
+	rec, err := deps.RefreshTokens.Find(ctx, token)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			// Preserve the exchanger's invalid_grant mapping for unknown or
+			// expired handles.
+			return nil, true
+		}
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return nil, false
+	}
+	if rec == nil {
+		writeError(w, http.StatusInternalServerError, errServerError, "")
+		return nil, false
+	}
+	if rec.ConsumedAt != nil {
+		// Replay detection and grace-window response recovery remain owned by
+		// the exchanger. Neither path issues a new response from these details.
+		return nil, true
+	}
+
+	granted := cloneAuthorizationDetails(rec.AuthorizationDetails)
+	if rec.GrantID != "" && deps.Grants != nil {
+		grant, findErr := deps.Grants.Find(ctx, rec.GrantID)
+		switch {
+		case findErr == nil && grant == nil:
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return nil, false
+		case findErr == nil && len(grant.AuthorizationDetails) > 0:
+			granted = cloneAuthorizationDetails(grant.AuthorizationDetails)
+		case findErr == nil, errors.Is(findErr, store.ErrNotFound):
+			// A sparse or missing grant uses the refresh-token snapshot.
+		default:
+			writeError(w, http.StatusInternalServerError, errServerError, "")
+			return nil, false
+		}
+	}
+
+	return reduceAuthorizationDetails(w, requested, granted)
+}
+
 // refreshInputs is the de-structured view of the form parameters the
 // handler consumes for the refresh_token grant.
 type refreshInputs struct {
@@ -340,8 +418,9 @@ func writeRefreshExchangeError(w http.ResponseWriter, err error) {
 // issueRefreshResponse mints the access token, optionally an id_token
 // (only when the originating grant carried "openid"), and rotates the
 // refresh token (mints a fresh one whose ParentID is the just-consumed
-// id). Failure on any step writes a 500 because the exchange has
-// already committed; we cannot un-consume the presented token.
+// id). Failure on any step writes a 500. The provider's transactional path
+// rolls the staged Consume back; non-transactional embeddings cannot
+// coordinate that rollback and rely on their substore atomicity contract.
 //
 // binding is the sender-constraint summary the rotated tokens inherit.
 // For DPoP it is either the verified proof's thumbprint (request
@@ -359,7 +438,7 @@ func issueRefreshResponse(
 	client *store.Client,
 	exchanged *refresh.Exchanged,
 	binding tokenBinding,
-	requestedAuthorizationDetails []map[string]any,
+	authorizationDetails []map[string]any,
 ) {
 	if exchanged.InGrace {
 		response, err := loadRefreshRetryResponse(ctx, deps, exchanged.ConsumedID)
@@ -380,10 +459,6 @@ func issueRefreshResponse(
 	authCtx := refreshAuthContext(ctx, deps, exchanged)
 	if err := requireAuthTimeForIDToken(client, exchanged.Scope, authCtx.AuthTime); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
-		return
-	}
-	authorizationDetails, ok := reduceAuthorizationDetails(w, requestedAuthorizationDetails, authCtx.AuthorizationDetails)
-	if !ok {
 		return
 	}
 	// Opaque-format chains revoke the prior access token atomically

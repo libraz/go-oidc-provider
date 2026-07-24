@@ -7,18 +7,23 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/clientauth"
 	"github.com/libraz/go-oidc-provider/internal/tokens"
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 )
 
-var errInjectedOpaqueRevoke = errors.New("injected opaque revoke failure")
+var (
+	errInjectedOpaqueRevoke = errors.New("injected opaque revoke failure")
+	errInjectedGrantFind    = errors.New("injected grant lookup failure")
+)
 
 type revokeFailsOpaqueAccessTokenStore struct {
 	store.OpaqueAccessTokenStore
@@ -34,6 +39,30 @@ type opaqueRevokeFailStore struct {
 
 func (s opaqueRevokeFailStore) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return revokeFailsOpaqueAccessTokenStore{OpaqueAccessTokenStore: s.Store.OpaqueAccessTokens()}
+}
+
+// failOnceGrantStore is a deterministic fault-injection decorator over the
+// real in-memory GrantStore. It fails the first Find only; all persistence and
+// subsequent reads remain owned by the reference adapter.
+type failOnceGrantStore struct {
+	store.GrantStore
+	failed atomic.Bool
+}
+
+func (s *failOnceGrantStore) Find(ctx context.Context, id string) (*store.Grant, error) {
+	if s.failed.CompareAndSwap(false, true) {
+		return nil, errInjectedGrantFind
+	}
+	return s.GrantStore.Find(ctx, id)
+}
+
+type grantFindFailsOnceStore struct {
+	store.Store
+	grants store.GrantStore
+}
+
+func (s grantFindFailsOnceStore) Grants() store.GrantStore {
+	return s.grants
 }
 
 // refreshForm builds the canonical refresh_token form body. scope is
@@ -325,6 +354,197 @@ func TestRefresh_AuthorizationDetailsOutsideGrantRejected(t *testing.T) {
 	body := decodeJSON(t, resp)
 	if got := body["error"]; got != "invalid_authorization_details" {
 		t.Fatalf("error=%v want invalid_authorization_details", got)
+	}
+
+	rejected, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(rejected predecessor): %v", err)
+	}
+	if rejected.ConsumedAt != nil {
+		t.Fatalf("authorization_details mismatch consumed predecessor at %v", rejected.ConsumedAt)
+	}
+
+	retryForm := refreshForm(tokenID, "")
+	retryForm.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
+	retry := f.post(t, retryForm, client.ID, secret)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("conforming retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
+	}
+	retryBody := decodeJSON(t, retry)
+	retryDetails, ok := retryBody["authorization_details"].([]any)
+	if !ok || len(retryDetails) != 1 {
+		t.Fatalf("conforming retry authorization_details=%T %[1]v want one detail", retryBody["authorization_details"])
+	}
+}
+
+func TestRefresh_AuthorizationDetailsStaleSnapshotMismatchDoesNotConsume(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureWithOptions(t, paymentAuthorizationDetailsOption())
+	client, secret := f.confidentialClientFixture(t)
+	const tokenID = "rt-rar-stale-reject" //nolint:gosec // test fixture token ID, not a credential.
+	const subject = "user-rar-stale-reject"
+	const grantID = "grant-rar-stale-reject"
+	staleDetails := []map[string]any{{"type": "payment", "amount": "100000"}}
+	currentDetails := []map[string]any{{"type": "payment", "amount": "10"}}
+	f.seedGrant(t, &store.Grant{
+		ID:                   grantID,
+		Subject:              subject,
+		ClientID:             client.ID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: currentDetails,
+	})
+	f.seedRefreshToken(t, &store.RefreshToken{
+		ID:                   tokenID,
+		ClientID:             client.ID,
+		Subject:              subject,
+		GrantID:              grantID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: staleDetails,
+	})
+
+	form := refreshForm(tokenID, "")
+	form.Set("authorization_details", `[{"type":"payment","amount":"100000"}]`)
+	resp := f.post(t, form, client.ID, secret)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "invalid_authorization_details" {
+		t.Fatalf("error=%v want invalid_authorization_details", got)
+	}
+	rejected, err := f.prov.Store.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(rejected predecessor): %v", err)
+	}
+	if rejected.ConsumedAt != nil {
+		t.Fatalf("stale-snapshot mismatch consumed predecessor at %v", rejected.ConsumedAt)
+	}
+
+	retry := f.post(t, refreshForm(tokenID, ""), client.ID, secret)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
+	}
+	retryBody := decodeJSON(t, retry)
+	details, ok := retryBody["authorization_details"].([]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("retry authorization_details=%T %[1]v want live Grant detail", retryBody["authorization_details"])
+	}
+	detail, _ := details[0].(map[string]any)
+	if detail["amount"] != "10" {
+		t.Fatalf("retry authorization_details=%v want live Grant amount=10", details)
+	}
+}
+
+func TestRefresh_AuthorizationDetailsGrantLookupFaultDoesNotConsume(t *testing.T) {
+	t.Parallel()
+
+	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
+	backing := inmem.New(inmem.WithClock(clock))
+	faultingGrants := &failOnceGrantStore{GrantStore: backing.Grants()}
+	provider, err := op.New(testkit.MinimalOptions(t,
+		op.WithStore(grantFindFailsOnceStore{Store: backing, grants: faultingGrants}),
+		op.WithClock(clock),
+		// Keep this fixture on the non-transactional refresh path. The
+		// authorization-code grant correctly requires Transactional,
+		// which this fault decorator intentionally does not advertise.
+		op.WithGrants(grant.RefreshToken),
+		paymentAuthorizationDetailsOption(),
+	)...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	server := httptest.NewServer(provider)
+	t.Cleanup(server.Close)
+
+	const secret = "rar-grant-fault-secret" //nolint:gosec // fixture-only client credential.
+	hash, err := (&clientauth.Argon2id{}).Hash(secret)
+	if err != nil {
+		t.Fatalf("Argon2id.Hash: %v", err)
+	}
+	client := &store.Client{
+		ID:                      "client-rar-grant-fault",
+		SecretHash:              hash,
+		TokenEndpointAuthMethod: "client_secret_basic",
+		Scopes:                  []string{"openid", "offline_access"},
+	}
+	if err := backing.RegisterClient(context.Background(), client); err != nil {
+		t.Fatalf("RegisterClient: %v", err)
+	}
+
+	const tokenID = "rt-rar-grant-fault" //nolint:gosec // test fixture token ID, not a credential.
+	const grantID = "grant-rar-grant-fault"
+	details := []map[string]any{{"type": "payment", "amount": "100"}}
+	if err := backing.Grants().Save(context.Background(), &store.Grant{
+		ID:                   grantID,
+		Subject:              "user-rar-grant-fault",
+		ClientID:             client.ID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: details,
+		CreatedAt:            clock.now,
+		UpdatedAt:            clock.now,
+	}); err != nil {
+		t.Fatalf("Grants.Save: %v", err)
+	}
+	if err := backing.RefreshTokens().Save(context.Background(), &store.RefreshToken{
+		ID:                   tokenID,
+		ClientID:             client.ID,
+		Subject:              "user-rar-grant-fault",
+		GrantID:              grantID,
+		Scope:                []string{"openid", "offline_access"},
+		AuthorizationDetails: details,
+		CreatedAt:            clock.now,
+		ExpiresAt:            clock.now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("RefreshTokens.Save: %v", err)
+	}
+
+	post := func(form url.Values) *http.Response {
+		t.Helper()
+		req, requestErr := http.NewRequestWithContext(
+			context.Background(),
+			http.MethodPost,
+			server.URL+"/oidc/token",
+			strings.NewReader(form.Encode()),
+		)
+		if requestErr != nil {
+			t.Fatalf("NewRequest: %v", requestErr)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetBasicAuth(client.ID, secret)
+		resp, requestErr := server.Client().Do(req)
+		if requestErr != nil {
+			t.Fatalf("POST /token: %v", requestErr)
+		}
+		return resp
+	}
+
+	form := refreshForm(tokenID, "")
+	form.Set("authorization_details", `[{"type":"payment","amount":"100"}]`)
+	resp := post(form)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("fault status=%d want 500 body=%v", resp.StatusCode, decodeJSON(t, resp))
+	}
+	body := decodeJSON(t, resp)
+	if got := body["error"]; got != "server_error" {
+		t.Fatalf("fault error=%v want server_error", got)
+	}
+	rejected, err := backing.RefreshTokens().Find(context.Background(), tokenID)
+	if err != nil {
+		t.Fatalf("RefreshTokens.Find(after fault): %v", err)
+	}
+	if rejected.ConsumedAt != nil {
+		t.Fatalf("grant lookup fault consumed predecessor at %v", rejected.ConsumedAt)
+	}
+
+	retry := post(form)
+	defer retry.Body.Close()
+	if retry.StatusCode != http.StatusOK {
+		t.Fatalf("retry status=%d want 200 body=%v", retry.StatusCode, decodeJSON(t, retry))
 	}
 }
 
@@ -1053,6 +1273,10 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 	provider, err := op.New(testkit.MinimalOptions(t,
 		op.WithStore(opaqueRevokeFailStore{Store: backing}),
 		op.WithClock(clock),
+		// Exercise the non-transactional fault decorator. Enabling the
+		// browser authorization-code flow would correctly require the
+		// wrapper to advertise store.Transactional.
+		op.WithGrants(grant.RefreshToken),
 		op.WithAccessTokenFormat(op.AccessTokenFormatOpaque),
 	)...)
 	if err != nil {
