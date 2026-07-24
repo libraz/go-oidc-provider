@@ -61,11 +61,12 @@ func TestFAPITLSConfig_ReturnsFreshConfig(t *testing.T) {
 	}
 }
 
-// TestLoadPublicJWKS_StripsPrivateParams writes a JWKS with an EC
-// private key (with "d") and an RSA-shaped private key (with d, p,
-// q, dp, dq, qi) to a temp file, loads it, and asserts every
-// private parameter is stripped while public parameters survive.
-func TestLoadPublicJWKS_StripsPrivateParams(t *testing.T) {
+// TestLoadPublicJWKS_NormalizesAsymmetricKeys writes private RSA, EC,
+// and OKP JWKs, then asserts the result contains exactly the
+// key-type public members and standard public metadata. In
+// particular, RSA "oth" and unknown extensions prove normalization
+// is an allowlist rather than an incomplete private-member denylist.
+func TestLoadPublicJWKS_NormalizesAsymmetricKeys(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -76,21 +77,40 @@ func TestLoadPublicJWKS_StripsPrivateParams(t *testing.T) {
                 "kty": "EC",
                 "crv": "P-256",
                 "kid": "ec-1",
+                "use": "sig",
+                "key_ops": ["verify"],
+                "alg": "ES256",
                 "x": "tn47XpuJUkfY7CDSmu5fayO7EnPvG9u9uqVb-Ifmthc",
                 "y": "k5a3GEPNL35HRcw-Ajt5rfJ5llU7HomRBQfWWroFva8",
-                "d": "jJIxf76uD4dK01r2oxsG5fv1XjOZFdJpdWWUuSh5Dxs"
+                "d": "ec-private",
+                "private_extension": "ec-extension-private"
             },
             {
                 "kty": "RSA",
                 "kid": "rsa-1",
+                "x5u": "https://client.example/jwk.pem",
+                "x5c": ["public-certificate"],
+                "x5t": "sha1-thumbprint",
+                "x5t#S256": "sha256-thumbprint",
                 "n": "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx",
                 "e": "AQAB",
-                "d": "X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD",
-                "p": "83i-7IvMGXoMXCskv73TKr8637FiO7Z27zv8oj6pbWUQyLPQB",
-                "q": "3dfOR9cuYq-0S-mkFLzgItgMEfFzB2q3hWehMuG0oCuqnb3vobL",
-                "dp": "G4sPXkc6Ya9y8oJW9_ILj4xuppu0lzi_H7VTkS8xj5SdX3coE0o",
-                "dq": "s9lAH9fggBsoFR8Oac2R_E2gw282rT2kGOAhvIllETE1efrA6huU",
-                "qi": "GyM_p6JrXySiz1toFgKbWV-JdI3jQ4ypu9rbMWx3rQJBfmt0FoYz"
+                "d": "rsa-private",
+                "p": "rsa-private-p",
+                "q": "rsa-private-q",
+                "dp": "rsa-private-dp",
+                "dq": "rsa-private-dq",
+                "qi": "rsa-private-qi",
+                "oth": [{"r": "rsa-private-r", "d": "rsa-private-d", "t": "rsa-private-t"}],
+                "k": "not-an-rsa-public-member",
+                "private_extension": "rsa-extension-private"
+            },
+            {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "kid": "okp-1",
+                "x": "11qYAYLefBMpvp2a-MHyU-JbJwkYxH5rE9t6qYSfHAo",
+                "d": "okp-private",
+                "private_extension": "okp-extension-private"
             }
         ]
     }`
@@ -109,36 +129,108 @@ func TestLoadPublicJWKS_StripsPrivateParams(t *testing.T) {
 	if err := json.Unmarshal(out, &parsed); err != nil {
 		t.Fatalf("re-parse output: %v", err)
 	}
-	if len(parsed.Keys) != 2 {
-		t.Fatalf("Keys length = %d, want 2", len(parsed.Keys))
+	if len(parsed.Keys) != 3 {
+		t.Fatalf("Keys length = %d, want 3", len(parsed.Keys))
 	}
-	for i, k := range parsed.Keys {
-		for _, p := range []string{"d", "p", "q", "dp", "dq", "qi"} {
-			if _, ok := k[p]; ok {
-				t.Errorf("Keys[%d] still carries %q: %v", i, p, k[p])
+
+	wantMembers := [][]string{
+		{"kty", "crv", "kid", "use", "key_ops", "alg", "x", "y"},
+		{"kty", "kid", "x5u", "x5c", "x5t", "x5t#S256", "n", "e"},
+		{"kty", "crv", "kid", "x"},
+	}
+	for i, key := range parsed.Keys {
+		if len(key) != len(wantMembers[i]) {
+			t.Errorf("Keys[%d] member count = %d, want %d: %v", i, len(key), len(wantMembers[i]), key)
+		}
+		for _, member := range wantMembers[i] {
+			if _, ok := key[member]; !ok {
+				t.Errorf("Keys[%d] lost allowed public member %q: %v", i, member, key)
 			}
 		}
 	}
-	// Public parameters survive.
-	ec := parsed.Keys[0]
-	if ec["kty"] != "EC" || ec["crv"] != "P-256" || ec["kid"] != "ec-1" {
-		t.Errorf("EC public params lost: %v", ec)
+
+	for _, secret := range []string{
+		"ec-private",
+		"ec-extension-private",
+		"rsa-private",
+		"rsa-private-p",
+		"rsa-private-q",
+		"rsa-private-dp",
+		"rsa-private-dq",
+		"rsa-private-qi",
+		"rsa-private-r",
+		"rsa-private-d",
+		"rsa-private-t",
+		"not-an-rsa-public-member",
+		"rsa-extension-private",
+		"okp-private",
+		"okp-extension-private",
+	} {
+		if strings.Contains(string(out), secret) {
+			t.Errorf("normalized JWKS still contains private fixture %q: %s", secret, out)
+		}
 	}
-	if _, ok := ec["x"]; !ok {
-		t.Error("EC x lost")
+}
+
+// TestLoadPublicJWKS_RejectsSymmetricKey proves an oct JWK is not
+// transformed into an empty or metadata-only key. Its "k" member is
+// the key itself, so a public-half representation cannot exist.
+func TestLoadPublicJWKS_RejectsSymmetricKey(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "oct-private.json")
+	input := `{"keys":[{"kty":"oct","kid":"symmetric-1","alg":"HS256","k":"oct-private-material"}]}`
+	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
 	}
-	if _, ok := ec["y"]; !ok {
-		t.Error("EC y lost")
+
+	out, err := op.LoadPublicJWKS(path)
+	if err == nil {
+		t.Fatalf("expected symmetric-key rejection, got output %s", out)
 	}
-	rsa := parsed.Keys[1]
-	if rsa["kty"] != "RSA" || rsa["kid"] != "rsa-1" {
-		t.Errorf("RSA public params lost: %v", rsa)
+	if out != nil {
+		t.Errorf("output = %s, want nil after symmetric-key rejection", out)
 	}
-	if _, ok := rsa["n"]; !ok {
-		t.Error("RSA n lost")
+	var e *op.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("error is not *op.Error: %v", err)
 	}
-	if _, ok := rsa["e"]; !ok {
-		t.Error("RSA e lost")
+	if !strings.Contains(e.Description, "symmetric oct") {
+		t.Errorf("description=%q must identify the unsupported symmetric key shape", e.Description)
+	}
+	if strings.Contains(e.Description, "oct-private-material") {
+		t.Errorf("description=%q leaks symmetric key material", e.Description)
+	}
+}
+
+// TestLoadPublicJWKS_RejectsUnsupportedKeyType ensures an unknown
+// key type is rejected instead of passing members whose public or
+// private meaning LoadPublicJWKS cannot know.
+func TestLoadPublicJWKS_RejectsUnsupportedKeyType(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "unknown-kty.json")
+	input := `{"keys":[{"kty":"future-private-type","kid":"future-1","secret":"private-material"}]}`
+	if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	out, err := op.LoadPublicJWKS(path)
+	if err == nil {
+		t.Fatalf("expected unsupported-key rejection, got output %s", out)
+	}
+	if out != nil {
+		t.Errorf("output = %s, want nil after unsupported-key rejection", out)
+	}
+	var e *op.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("error is not *op.Error: %v", err)
+	}
+	if !strings.Contains(e.Description, "unsupported kty") {
+		t.Errorf("description=%q must identify the unsupported key type", e.Description)
+	}
+	if strings.Contains(e.Description, "private-material") {
+		t.Errorf("description=%q leaks unknown key material", e.Description)
 	}
 }
 
@@ -217,9 +309,8 @@ func TestLoadPublicJWKS_RejectsEmptyKeyset(t *testing.T) {
 // attacker who reads error_description / audit logs map the host's
 // directory layout, which the OP must not expose.
 //
-// The check covers all three error paths LoadPublicJWKS can take —
-// missing file, malformed JSON, empty keyset — so a future refactor
-// that adds a fourth branch must keep the pattern.
+// The check covers filesystem, syntax, empty-set, and key-shape
+// errors so a future refactor must keep the pattern across branches.
 func TestLoadPublicJWKS_DoesNotLeakAbsolutePath(t *testing.T) {
 	t.Parallel()
 
@@ -260,6 +351,18 @@ func TestLoadPublicJWKS_DoesNotLeakAbsolutePath(t *testing.T) {
 				t.Helper()
 				p := filepath.Join(dir, "blank-secret-tenant.json")
 				if err := os.WriteFile(p, []byte(`{"keys":[]}`), 0o600); err != nil {
+					t.Fatalf("write fixture: %v", err)
+				}
+				return p
+			},
+		},
+		{
+			name: "symmetric key",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				p := filepath.Join(dir, "oct-secret-tenant.json")
+				input := `{"keys":[{"kty":"oct","k":"private-material"}]}`
+				if err := os.WriteFile(p, []byte(input), 0o600); err != nil {
 					t.Fatalf("write fixture: %v", err)
 				}
 				return p

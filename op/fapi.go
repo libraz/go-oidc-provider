@@ -7,17 +7,6 @@ import (
 	"path/filepath"
 )
 
-// jwkPrivateParams enumerates the JWK members that hold private key
-// material across the alg families the library cares about: "d" is
-// the EC private scalar (RFC 7518 §6.2.2) and the RSA private
-// exponent (RFC 7518 §6.3.2.1); "p", "q", "dp", "dq", "qi" are the
-// RSA-only CRT parameters (RFC 7518 §6.3.2.2-§6.3.2.6).
-// [LoadPublicJWKS] strips every entry so a public-half JWKS never
-// carries private material by accident.
-//
-//nolint:gochecknoglobals // closed enumeration; declared once and treated as a constant lookup table.
-var jwkPrivateParams = []string{"d", "p", "q", "dp", "dq", "qi"}
-
 // FAPITLSConfig returns the [*tls.Config] FAPI 2.0 §6.1.2 mandates
 // for an authorization server endpoint: TLS 1.2 only with the
 // FAPI 1.0 Advanced §8.5 ECDHE_RSA AEAD allowlist.
@@ -46,20 +35,25 @@ func FAPITLSConfig() *tls.Config {
 	}
 }
 
-// LoadPublicJWKS reads a JSON Web Key Set from path and returns the
-// JSON bytes with every private parameter removed. The helper exists
-// so an embedder registering a `private_key_jwt` client can hand the
-// OP only the public half of the key — the private material lives in
-// the client's signing pipeline, never on the AS.
+// LoadPublicJWKS reads a JSON Web Key Set from path and returns a
+// public-only normalized JWK Set. The helper exists so an embedder
+// registering a `private_key_jwt` client can hand the OP only the
+// public half of the key — the private material lives in the
+// client's signing pipeline, never on the AS.
 //
-// The stripped parameters are:
+// RSA, EC, and OKP keys are accepted. Each output key is constructed
+// from a key-type-specific allowlist:
 //
-//   - "d" (EC and RSA private exponent / scalar; RFC 7518 §6.2.2 / §6.3.2)
-//   - "p", "q", "dp", "dq", "qi" (RSA-only CRT parameters; RFC 7518 §6.3.2)
+//   - RSA: "n" and "e"
+//   - EC: "crv", "x", and "y"
+//   - OKP: "crv" and "x"
 //
-// All other JWK members (kty, crv, x, y, n, e, kid, use, alg, …) are
-// preserved verbatim so the resulting bytes are a valid JWK Set the
-// OP can register on [store.Client.JWKs].
+// The standard public metadata members "kty", "use", "key_ops",
+// "alg", "kid", "x5u", "x5c", "x5t", and "x5t#S256" are also
+// retained. All other members are discarded rather than relying on
+// a private-parameter denylist. Symmetric "oct" keys and unsupported
+// or missing key types are rejected because they cannot have a
+// public half.
 //
 // The error path is intentionally narrow: failures identify the file
 // by its base name (via [filepath.Base]) so the operator can locate
@@ -80,28 +74,40 @@ func LoadPublicJWKS(path string) ([]byte, error) {
 			Cause:       err,
 		}
 	}
-	var set struct {
-		Keys []map[string]any `json:"keys"`
+	var input struct {
+		Keys []map[string]json.RawMessage `json:"keys"`
 	}
-	if err := json.Unmarshal(raw, &set); err != nil {
+	if err := json.Unmarshal(raw, &input); err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "LoadPublicJWKS: parse " + base,
 			Cause:       err,
 		}
 	}
-	if len(set.Keys) == 0 {
+	if len(input.Keys) == 0 {
 		return nil, &Error{
 			Code:        codeConfiguration,
 			Description: "LoadPublicJWKS: " + base + " contains no keys",
 		}
 	}
-	for _, k := range set.Keys {
-		for _, p := range jwkPrivateParams {
-			delete(k, p)
-		}
+
+	output := struct {
+		Keys []map[string]json.RawMessage `json:"keys"`
+	}{
+		Keys: make([]map[string]json.RawMessage, 0, len(input.Keys)),
 	}
-	out, err := json.Marshal(set)
+	for _, key := range input.Keys {
+		publicKey, reason := normalizePublicJWK(key)
+		if reason != "" {
+			return nil, &Error{
+				Code:        codeConfiguration,
+				Description: "LoadPublicJWKS: " + base + " " + reason,
+			}
+		}
+		output.Keys = append(output.Keys, publicKey)
+	}
+
+	out, err := json.Marshal(output)
 	if err != nil {
 		return nil, &Error{
 			Code:        codeConfiguration,
@@ -110,4 +116,49 @@ func LoadPublicJWKS(path string) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+func normalizePublicJWK(key map[string]json.RawMessage) (map[string]json.RawMessage, string) {
+	var keyType string
+	if err := json.Unmarshal(key["kty"], &keyType); err != nil || keyType == "" {
+		return nil, "contains a key with missing or invalid kty"
+	}
+
+	commonMembers := []string{
+		"kty",
+		"use",
+		"key_ops",
+		"alg",
+		"kid",
+		"x5u",
+		"x5c",
+		"x5t",
+		"x5t#S256",
+	}
+	var keyTypeMembers []string
+	switch keyType {
+	case "RSA":
+		keyTypeMembers = []string{"n", "e"}
+	case "EC":
+		keyTypeMembers = []string{"crv", "x", "y"}
+	case "OKP":
+		keyTypeMembers = []string{"crv", "x"}
+	case "oct":
+		return nil, "contains a symmetric oct key"
+	default:
+		return nil, "contains a key with unsupported kty"
+	}
+
+	publicKey := make(map[string]json.RawMessage, len(commonMembers)+len(keyTypeMembers))
+	for _, member := range commonMembers {
+		if value, ok := key[member]; ok {
+			publicKey[member] = value
+		}
+	}
+	for _, member := range keyTypeMembers {
+		if value, ok := key[member]; ok {
+			publicKey[member] = value
+		}
+	}
+	return publicKey, ""
 }
