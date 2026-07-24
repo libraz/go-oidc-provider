@@ -32,14 +32,11 @@ var (
 	// TLS/proxy chain validation can leave RootCAs unset.
 	ErrCertUntrusted = errors.New("mtls: client certificate is not trusted")
 
-	// ErrCertSourceConflict signals that a request presented BOTH a TLS
-	// handshake leaf and a trusted-proxy forwarded cert whose thumbprints
-	// disagree. This happens on a dual-mTLS / mesh hop where the internal
-	// handshake carries the proxy's own client cert while the forwarded
-	// header carries the real client cert. The package refuses to pick a
-	// source silently because binding to the handshake leaf would collapse
-	// the sender-constraint to the proxy's thumbprint; the HTTP layer maps
-	// this onto invalid_request at the token endpoint.
+	// ErrCertSourceConflict is retained for compatibility with HTTP-layer
+	// error mapping but is no longer emitted by certificate source selection.
+	// On a trusted-proxy path, a TLS handshake leaf identifies the proxy
+	// transport while the forwarded leaf identifies the OAuth client, so
+	// differing thumbprints are expected and are not a source conflict.
 	ErrCertSourceConflict = errors.New("mtls: client certificate sources disagree")
 
 	// ErrSubjectMismatch signals that the client cert's subject DN

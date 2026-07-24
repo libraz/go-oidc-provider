@@ -12,11 +12,12 @@ import (
 // ranges — the cert forwarded in the header named by headerName is
 // authoritative and takes precedence over any TLS-handshake cert. On a
 // dual-mTLS / mesh hop the internal handshake carries the proxy's OWN
-// client cert while the header carries the real client cert; if both
-// are present and their thumbprints disagree the OP refuses the request
-// rather than binding to the proxy's cert (which would degrade the
-// sender-constraint to a bearer token). Requests from any other source
-// ignore the header entirely and fall back to the TLS-handshake cert.
+// transport cert while the header carries the real OAuth client's cert.
+// These identify different principals and are never compared: transport
+// authentication of the proxy belongs to the embedder's HTTP server,
+// while the OP binds RFC 8705 credentials to the forwarded client cert.
+// Requests from any other source ignore the header entirely and fall
+// back to the direct TLS-handshake cert.
 //
 // The trusted-source requirement closes the symmetric spoofing vector:
 // an attacker who reaches the OP directly (bypassing the reverse proxy)
@@ -30,6 +31,12 @@ import (
 // Empty headerName disables the header path entirely; an empty
 // trustedCIDRs slice rejects the option at construction time so a
 // misconfiguration cannot silently widen the allow-list.
+//
+// Every trusted proxy MUST strip the named header from the inbound
+// request and replace it only after validating the external client
+// certificate. The OP accepts exactly one header field containing one
+// raw or percent-encoded CERTIFICATE PEM block; duplicate values, PEM
+// chains, and trailing non-whitespace data are rejected as malformed.
 //
 // Wiring: [New] validates the option and threads the resulting
 // allow-list into the OP's mTLS verifier so the reverse-proxy header

@@ -28,14 +28,17 @@ type Verifier struct {
 // call site.
 type VerifierConfig struct {
 	// Proxy is the reverse-proxy configuration consulted when a
-	// request did not terminate TLS at the OP. The zero value
-	// disables the header path entirely.
+	// proxy terminated the external OAuth client's TLS connection.
+	// The proxy-to-OP hop may independently use TLS and present the
+	// proxy's own transport certificate; that certificate is not an
+	// OAuth client identity. The zero value disables the header path.
 	Proxy ProxyConfig
 
 	// RootCAs, when non-nil, makes the verifier run x509 chain
-	// validation on the presented leaf certificate before returning it.
-	// Leave nil when TLS termination or a trusted proxy has already
-	// performed chain validation.
+	// validation on the selected OAuth client leaf before returning it.
+	// It never validates the proxy transport certificate. Leave nil when
+	// direct TLS or a trusted proxy has already validated the external
+	// client chain.
 	RootCAs *x509.CertPool
 }
 

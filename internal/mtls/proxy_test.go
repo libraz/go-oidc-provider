@@ -171,25 +171,77 @@ func TestCertificateFromRequest_WrongPEMType(t *testing.T) {
 	}
 }
 
-// TestCertificateFromRequest_ConflictOnTrustedProxy confirms that when a
-// forwarding header is configured, the request arrives from a trusted
-// proxy, AND both a handshake leaf and a header cert are present but
-// DISAGREE, the function refuses with [mtls.ErrCertSourceConflict]
-// instead of silently binding to one source. On a dual-mTLS / mesh hop
-// the handshake leaf is the proxy's own client cert; binding to it would
-// collapse the sender-constraint to the proxy.
-func TestCertificateFromRequest_ConflictOnTrustedProxy(t *testing.T) {
+// TestCertificateFromRequest_SeparatesProxyAndClientIdentities confirms
+// the normal TLS-termination topology: the handshake cert authenticates
+// the proxy transport while the forwarded cert identifies the OAuth
+// client. Their thumbprints are expected to differ; RFC 8705 binding
+// MUST use the forwarded client cert.
+func TestCertificateFromRequest_SeparatesProxyAndClientIdentities(t *testing.T) {
 	t.Parallel()
 
-	handshake := generateLeaf(t)
-	header := generateLeaf(t)
+	proxyCert := generateLeaf(t)
+	clientCert := generateLeaf(t)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{handshake}}
-	req.Header.Set("X-Client-Cert", pemEncode(t, header))
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{proxyCert}}
+	req.Header.Set("X-Client-Cert", pemEncode(t, clientCert))
 
-	_, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
-	if !errors.Is(err, mtls.ErrCertSourceConflict) {
-		t.Errorf("err=%v want ErrCertSourceConflict (proxy handshake cert MUST NOT silently win over the forwarded cert)", err)
+	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(clientCert) {
+		t.Errorf("bound cert is not the forwarded OAuth client cert")
+	}
+}
+
+// TestCertificateFromRequest_TrustedHeaderRejectsAmbiguity ensures a
+// trusted source still cannot smuggle multiple possible client leaves
+// through the forwarding channel. The proxy contract is one header
+// field containing one certificate PEM block.
+func TestCertificateFromRequest_TrustedHeaderRejectsAmbiguity(t *testing.T) {
+	t.Parallel()
+
+	leaf := generateLeaf(t)
+	other := generateLeaf(t)
+	leafPEM := pemEncode(t, leaf)
+	otherPEM := pemEncode(t, other)
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "192.0.2.0/24"),
+	}
+
+	tests := []struct {
+		name   string
+		values []string
+	}{
+		{
+			name:   "duplicate header fields",
+			values: []string{leafPEM, otherPEM},
+		},
+		{
+			name:   "forwarded PEM chain",
+			values: []string{leafPEM + otherPEM},
+		},
+		{
+			name:   "percent-encoded PEM chain",
+			values: []string{url.QueryEscape(leafPEM + otherPEM)},
+		},
+		{
+			name:   "trailing non-whitespace",
+			values: []string{leafPEM + "attacker-controlled-suffix"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+			req.Header[http.CanonicalHeaderKey("X-Client-Cert")] = tc.values
+			_, err := mtls.CertificateFromRequest(req, cfg)
+			if !errors.Is(err, mtls.ErrCertMalformed) {
+				t.Errorf("err=%v want ErrCertMalformed", err)
+			}
+		})
 	}
 }
 

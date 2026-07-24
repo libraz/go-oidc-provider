@@ -25,9 +25,9 @@
 //     the HTTP layer maps onto a wire response.
 //
 // The package never reads the wall clock and never touches storage.
-// Trust-anchor verification of the cert chain — the CA-side counterpart
-// of the §2.1 path — is the embedder's responsibility (the OP only
-// consumes the verified leaf), so the package stops short of building
-// an [x509.VerifyOptions]; configure your reverse proxy or
-// [tls.Config.ClientCAs] accordingly.
+// Trust-anchor verification can be performed by the direct TLS server,
+// by the trusted proxy before it rewrites the forwarding header, or by
+// [VerifierConfig.RootCAs]. A proxy-to-OP TLS certificate authenticates
+// that transport hop and is deliberately distinct from the forwarded
+// OAuth client leaf used for RFC 8705 matching and token binding.
 package mtls

@@ -80,6 +80,69 @@ func TestVerifier_CertificateFromRequest_RootCAsAcceptsTrustedLeaf(t *testing.T)
 	}
 }
 
+// TestVerifier_TrustedProxyValidatesForwardedClientNotTransport proves
+// RootCAs applies to the selected OAuth client identity, not to the
+// unrelated certificate that authenticated the proxy-to-OP transport.
+func TestVerifier_TrustedProxyValidatesForwardedClientNotTransport(t *testing.T) {
+	t.Parallel()
+
+	clientCA, clientLeaf := generateCATrustedLeaf(t)
+	proxyLeaf := generateLeaf(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(clientCA)
+	v, err := mtls.NewVerifier(mtls.VerifierConfig{
+		Proxy: mtls.ProxyConfig{
+			HeaderName:     "X-Client-Cert",
+			TrustedProxies: mustParsePrefixes(t, "192.0.2.0/24"),
+		},
+		RootCAs: roots,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/userinfo", http.NoBody)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{proxyLeaf}}
+	req.Header.Set("X-Client-Cert", pemEncode(t, clientLeaf))
+	got, err := v.CertificateFromRequest(req)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(clientLeaf) {
+		t.Fatal("verifier returned the proxy transport certificate")
+	}
+}
+
+// TestVerifier_TrustedProxyCannotSubstituteTrustedTransportForUntrustedClient
+// closes the inverse case: trusting the proxy's TLS certificate does not
+// make a tampered or otherwise untrusted forwarded client leaf acceptable.
+func TestVerifier_TrustedProxyCannotSubstituteTrustedTransportForUntrustedClient(t *testing.T) {
+	t.Parallel()
+
+	proxyCA, proxyLeaf := generateCATrustedLeaf(t)
+	untrustedClientLeaf := generateLeaf(t)
+	roots := x509.NewCertPool()
+	roots.AddCert(proxyCA)
+	v, err := mtls.NewVerifier(mtls.VerifierConfig{
+		Proxy: mtls.ProxyConfig{
+			HeaderName:     "X-Client-Cert",
+			TrustedProxies: mustParsePrefixes(t, "192.0.2.0/24"),
+		},
+		RootCAs: roots,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/userinfo", http.NoBody)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{proxyLeaf}}
+	req.Header.Set("X-Client-Cert", pemEncode(t, untrustedClientLeaf))
+	_, err = v.CertificateFromRequest(req)
+	if !errors.Is(err, mtls.ErrCertUntrusted) {
+		t.Fatalf("err=%v want ErrCertUntrusted", err)
+	}
+}
+
 // TestVerifier_ThumbprintFromRequest_NoCert returns ErrNoClientCert
 // when neither source produces a cert.
 func TestVerifier_ThumbprintFromRequest_NoCert(t *testing.T) {

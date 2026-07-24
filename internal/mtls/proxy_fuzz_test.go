@@ -37,8 +37,8 @@ import (
 //   - empty header: the not-present path; ErrNoClientCert.
 //   - canonical PEM (built once from a fresh ECDSA key): success path.
 //   - URL-encoded canonical PEM: nginx ssl_client_escaped_cert shape.
-//   - PEM with trailing garbage: the parser must accept (pem.Decode
-//     stops at the first END marker) and ignore the suffix.
+//   - PEM with trailing garbage: ErrCertMalformed; ambiguous suffixes
+//     must not be ignored on a security-sensitive identity header.
 //   - PEM with a wrong type ("PRIVATE KEY"): ErrCertMalformed.
 //   - "not a pem block": ErrCertMalformed.
 //   - 4 KiB of "A": oversize garbage; must not allocate-and-crash.
@@ -87,7 +87,10 @@ func FuzzCertificateFromHeader(f *testing.F) {
 		// permissive — the parser is what we want to exercise.
 		req.Header[http.CanonicalHeaderKey("X-Client-Cert")] = []string{header}
 
-		cert, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert"})
+		cert, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{
+			HeaderName:     "X-Client-Cert",
+			TrustedProxies: mustParsePrefixes(t, "192.0.2.0/24"),
+		})
 		if err != nil {
 			if cert != nil {
 				t.Fatalf("CertificateFromRequest returned non-nil cert alongside error %v", err)

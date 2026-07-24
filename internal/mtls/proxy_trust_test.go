@@ -132,29 +132,31 @@ func TestCertificateFromRequest_HeaderWithoutTrustedProxiesRejects(t *testing.T)
 }
 
 // TestCertificateFromRequest_HeaderPrecedenceOverProxyHandshake pins the
-// dual-mTLS / mesh fix: when the forwarding header is configured and the
-// request arrives from a trusted proxy, a handshake leaf that DISAGREES
-// with the forwarded cert MUST NOT be silently bound. The internal
-// handshake carries the proxy's OWN client cert; binding to it would
-// collapse the sender-constraint to the proxy's thumbprint. The function
-// refuses with [ErrCertSourceConflict] instead of picking a source.
+// dual-mTLS / mesh topology: the internal handshake authenticates the
+// proxy transport and the header identifies the OAuth client. Different
+// certificates are expected, and the forwarded client leaf MUST win for
+// RFC 8705 matching and token binding.
 func TestCertificateFromRequest_HeaderPrecedenceOverProxyHandshake(t *testing.T) {
 	t.Parallel()
 
 	proxyCert := generateLeaf(t)  // proxy's own client cert on the internal hop
+	proxyCA := generateLeaf(t)    // remainder of the proxy transport chain
 	clientCert := generateLeaf(t) // the real client cert forwarded in the header
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
 	req.RemoteAddr = "10.0.0.5:54321"
-	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{proxyCert}}
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{proxyCert, proxyCA}}
 	req.Header.Set("X-Client-Cert", pemEncode(t, clientCert))
 
 	cfg := mtls.ProxyConfig{
 		HeaderName:     "X-Client-Cert",
 		TrustedProxies: mustParsePrefixes(t, "10.0.0.0/8"),
 	}
-	_, err := mtls.CertificateFromRequest(req, cfg)
-	if !errors.Is(err, mtls.ErrCertSourceConflict) {
-		t.Fatalf("err=%v want ErrCertSourceConflict (proxy handshake cert MUST NOT silently win)", err)
+	got, err := mtls.CertificateFromRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("CertificateFromRequest: %v", err)
+	}
+	if mtls.Thumbprint(got) != mtls.Thumbprint(clientCert) {
+		t.Fatal("proxy transport chain replaced the forwarded OAuth client leaf")
 	}
 }
 
@@ -244,10 +246,14 @@ func TestCertificateFromRequest_UntrustedSourceHandshakeStillWins(t *testing.T) 
 
 	handshakeCert := generateLeaf(t)
 	strayCert := generateLeaf(t)
+	injectedChainCert := generateLeaf(t)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
 	req.RemoteAddr = "203.0.113.7:55555" // outside the allow-list
 	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{handshakeCert}}
-	req.Header.Set("X-Client-Cert", pemEncode(t, strayCert))
+	// Even a deliberately ambiguous header is inert outside the trusted
+	// proxy boundary; parsing it would let an untrusted caller turn its
+	// own malformed input into a client-visible error.
+	req.Header.Set("X-Client-Cert", pemEncode(t, strayCert)+pemEncode(t, injectedChainCert))
 
 	cfg := mtls.ProxyConfig{
 		HeaderName:     "X-Client-Cert",

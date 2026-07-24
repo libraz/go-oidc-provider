@@ -1,6 +1,7 @@
 package mtls
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 )
 
 // ProxyConfig describes how the OP locates the client certificate on an
@@ -36,6 +38,11 @@ type ProxyConfig struct {
 	// percent-encoded PEM with newlines preserved; the package
 	// accepts both encoded and raw PEM by trying URL-decoding first
 	// and falling back to the raw payload.
+	//
+	// The admitted proxy MUST strip any inbound value and emit exactly
+	// one field containing exactly one CERTIFICATE PEM block. Duplicate
+	// fields, certificate chains, and trailing non-whitespace data are
+	// rejected so different HTTP hops cannot select different leaves.
 	HeaderName string
 
 	// TrustedProxies is the set of [netip.Prefix] ranges the OP
@@ -111,13 +118,12 @@ func parsePrefixOrAddr(raw string) (netip.Prefix, error) {
 //   - Reverse-proxy deployment ([ProxyConfig.HeaderName] set AND
 //     [http.Request.RemoteAddr] inside one of [ProxyConfig.TrustedProxies]):
 //     the FORWARDED cert in the configured header is authoritative and
-//     takes precedence over any handshake leaf. On a dual-mTLS / mesh hop
-//     the internal handshake carries the proxy's OWN client cert while the
-//     header carries the real client cert; binding to the handshake leaf
-//     would silently collapse the sender-constraint to the proxy. When
-//     both a handshake leaf and a forwarded cert are present and their
-//     thumbprints disagree, the function returns [ErrCertSourceConflict]
-//     rather than picking a source.
+//     identifies the OAuth client. On a dual-mTLS / mesh hop the internal
+//     handshake leaf identifies the proxy transport instead. The two
+//     certificates deliberately are not compared or substituted for one
+//     another; proxy transport authentication is configured on the
+//     embedder's HTTP server, while this function returns the forwarded
+//     OAuth client leaf for RFC 8705 matching and token binding.
 //
 // A header from an untrusted source (RemoteAddr outside the allow-list)
 // is ignored even when present; the direct handshake leaf, if any, is
@@ -133,21 +139,21 @@ func parsePrefixOrAddr(raw string) (netip.Prefix, error) {
 // the payload cannot be parsed. The caller maps the sentinel onto a wire
 // status without inspecting the wrapped cause.
 //
-// Multi-cert headers (a chain rather than a leaf) are tolerated by
-// reading only the first PEM block; subsequent blocks are intermediate
-// CAs that the OP is not interested in for thumbprint binding.
+// The trusted-proxy header must contain one value and one certificate.
+// Duplicate values, a PEM chain, or trailing non-whitespace data yield
+// [ErrCertMalformed] rather than silently selecting one interpretation.
 func CertificateFromRequest(r *http.Request, cfg ProxyConfig) (*x509.Certificate, error) {
 	if r == nil {
 		return nil, fmt.Errorf("%w: nil request", ErrNoClientCert)
 	}
-	handshake := certFromTLSHandshake(r)
 	// Header-path precedence is gated strictly on (HeaderName configured
 	// AND the immediate peer is a trusted proxy). Both conditions must
 	// hold so a direct-TLS deployment (HeaderName empty) keeps the
 	// handshake-only behaviour exactly.
 	if headerPathActive(r, cfg) {
-		return certFromTrustedHeader(r, cfg, handshake)
+		return certFromTrustedHeader(r, cfg)
 	}
+	handshake := certFromTLSHandshake(r)
 	if handshake != nil {
 		return handshake, nil
 	}
@@ -176,26 +182,27 @@ func headerPathActive(r *http.Request, cfg ProxyConfig) bool {
 
 // certFromTrustedHeader resolves the client cert for a request that
 // arrived from a trusted proxy with a forwarding header configured. The
-// forwarded cert is authoritative; the handshake leaf (when present) is
-// only consulted to detect a source conflict.
+// forwarded cert is the OAuth client identity. A handshake leaf, when
+// present, identifies the proxy transport and is intentionally not read
+// here: comparing the two would reject the normal TLS-termination topology.
 //
 // An absent header yields [ErrNoClientCert]: the client presented no cert
 // to the proxy, and any handshake leaf here belongs to the proxy itself
-// (mesh / dual mTLS) and MUST NOT be bound. A handshake leaf that
-// disagrees with the forwarded cert yields [ErrCertSourceConflict].
-func certFromTrustedHeader(r *http.Request, cfg ProxyConfig, handshake *x509.Certificate) (*x509.Certificate, error) {
-	raw := r.Header.Get(cfg.HeaderName)
-	if raw == "" {
+// (mesh / dual mTLS) and MUST NOT be bound. Duplicate header values are
+// malformed because accepting the first one creates parser ambiguity
+// across proxy layers.
+func certFromTrustedHeader(r *http.Request, cfg ProxyConfig) (*x509.Certificate, error) {
+	values := r.Header.Values(cfg.HeaderName)
+	if len(values) == 0 {
 		return nil, ErrNoClientCert
 	}
-	headerCert, err := parseHeaderCert(raw)
-	if err != nil {
-		return nil, err
+	if len(values) != 1 {
+		return nil, fmt.Errorf("%w: header has %d values, want exactly one", ErrCertMalformed, len(values))
 	}
-	if handshake != nil && Thumbprint(handshake) != Thumbprint(headerCert) {
-		return nil, ErrCertSourceConflict
+	if values[0] == "" {
+		return nil, ErrNoClientCert
 	}
-	return headerCert, nil
+	return parseHeaderCert(values[0])
 }
 
 // remoteIsTrusted reports whether remoteAddr lies inside any of the
@@ -250,15 +257,15 @@ func certFromTLSHandshake(r *http.Request) *x509.Certificate {
 	return r.TLS.PeerCertificates[0]
 }
 
-// parseHeaderCert decodes the PEM payload commonly forwarded by
-// reverse proxies. The payload may be raw PEM (Apache SSLProxyVerify)
-// or URL-encoded (nginx ssl_client_escaped_cert).
+// parseHeaderCert decodes the single-certificate PEM payload commonly
+// forwarded by reverse proxies. The payload may be raw PEM (Apache
+// SSLProxyVerify) or URL-encoded (nginx ssl_client_escaped_cert).
 //
 // The function tries the raw payload first because [url.QueryUnescape]
 // silently rewrites "+" to " " — which would corrupt a base64 PEM
 // payload that happens to contain "+" characters. URL-decoding is
 // only attempted as a fallback when the raw payload does not contain
-// a recognisable PEM block.
+// a valid standalone certificate PEM block.
 func parseHeaderCert(raw string) (*x509.Certificate, error) {
 	if cert, err := decodePEMCert(raw); err == nil {
 		return cert, nil
@@ -270,16 +277,27 @@ func parseHeaderCert(raw string) (*x509.Certificate, error) {
 	return decodePEMCert(decoded)
 }
 
-// decodePEMCert is the single-shot PEM → x509 path. It is split out so
+// decodePEMCert is the strict single-shot PEM → x509 path. It is split out so
 // [parseHeaderCert] can attempt the raw and URL-decoded payloads in
-// sequence without nesting decoder state.
+// sequence without nesting decoder state. Only surrounding ASCII/Unicode
+// whitespace is tolerated; appended certificates or other data are malformed.
 func decodePEMCert(raw string) (*x509.Certificate, error) {
-	block, _ := pem.Decode([]byte(raw))
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "-----BEGIN CERTIFICATE-----") {
+		return nil, fmt.Errorf("%w: header payload must start with a CERTIFICATE PEM block", ErrCertMalformed)
+	}
+	block, rest := pem.Decode([]byte(trimmed))
 	if block == nil {
 		return nil, fmt.Errorf("%w: header payload contains no PEM block", ErrCertMalformed)
 	}
-	if block.Type != "" && block.Type != "CERTIFICATE" {
+	if block.Type != "CERTIFICATE" {
 		return nil, fmt.Errorf("%w: PEM block is %q, want CERTIFICATE", ErrCertMalformed, block.Type)
+	}
+	if len(block.Headers) != 0 {
+		return nil, fmt.Errorf("%w: CERTIFICATE PEM block contains unsupported headers", ErrCertMalformed)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("%w: header payload contains data after the client certificate", ErrCertMalformed)
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
