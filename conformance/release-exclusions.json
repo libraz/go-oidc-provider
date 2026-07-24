@@ -1,4 +1,23 @@
 {
   "schema": "go-oidc-provider/conformance-exclusions/v1",
-  "exclusions": []
+  "exclusions": [
+    {
+      "plan": "oidcc-backchannel-rp-initiated-logout-certification-test-plan",
+      "module": "oidcc-backchannel-logout-discovery-endpoint-verification",
+      "status": "FINISHED",
+      "result": "FAILED",
+      "reason": "The OP performs grant-based (subject-scoped) back-channel logout and advertises backchannel_logout_session_supported: false, which is spec-legal (the OIDC Back-Channel Logout metadata is optional). This certification module unconditionally requires session_supported: true. Session-scoped sid logout is an opt-in profile planned for a future minor; sub-only logout is the fail-secure default.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "plan": "oidcc-backchannel-rp-initiated-logout-certification-test-plan",
+      "module": "oidcc-backchannel-rp-initiated-logout",
+      "status": "INTERRUPTED",
+      "result": "FAILED",
+      "reason": "Cascades from the discovery-endpoint-verification module above: the plan aborts on the session_supported assertion before this module can run. Same rationale as that exclusion.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    }
+  ]
 }
