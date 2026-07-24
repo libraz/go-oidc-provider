@@ -14,6 +14,14 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
+type fixedClock struct {
+	now time.Time
+}
+
+func (c fixedClock) Now() time.Time {
+	return c.now
+}
+
 // makePendingRecord seeds a Pending device-authorization row and returns
 // the device_code the substore now knows it as. Tests reuse the helper
 // so the boilerplate of populating ExpiresAt / Status stays in one
@@ -367,71 +375,104 @@ func TestVerifyUserCode_ConcurrentSubmissionsHonourCeiling(t *testing.T) {
 	}
 }
 
-// TestRevoke_PendingRecordTransitionsDenied pins the happy path: a
-// Pending record transitions to Denied with the supplied reason and
-// the audit emitter receives a device_code.revoked event.
-func TestRevoke_PendingRecordTransitionsDenied(t *testing.T) {
+func TestRevoke_StateTable(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	s := inmem.New()
-	ds := s.DeviceCodes()
-	makePendingRecord(t, ds, "dev-rev-1", "ABCDEFGH")
+	tests := []struct {
+		name       string
+		status     store.DeviceCodeStatus
+		wantStatus store.DeviceCodeStatus
+		wantErr    error
+	}{
+		{"pending", store.DeviceCodeStatusPending, store.DeviceCodeStatusDenied, nil},
+		{"approved", store.DeviceCodeStatusApproved, store.DeviceCodeStatusDenied, nil},
+		{"denied", store.DeviceCodeStatusDenied, store.DeviceCodeStatusDenied, nil},
+		{"consumed", store.DeviceCodeStatusConsumed, store.DeviceCodeStatusConsumed, nil},
+		{"expired", store.DeviceCodeStatusPending, store.DeviceCodeStatusPending, devicecodekit.ErrUnknownDeviceCode},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			now := time.Date(2026, 7, 24, 11, 0, 0, 0, time.UTC)
+			s := inmem.New(inmem.WithClock(fixedClock{now: now}))
+			ds := s.DeviceCodes()
+			id := "dev-revoke-" + tt.name
+			rec := &store.DeviceCode{
+				ID:        id,
+				UserCode:  "ABCDEFGH",
+				ClientID:  "client-1",
+				Status:    store.DeviceCodeStatusPending,
+				IssuedAt:  now,
+				ExpiresAt: now.Add(10 * time.Minute),
+			}
+			if tt.name == "expired" {
+				rec.ExpiresAt = now.Add(-time.Minute)
+			}
+			if err := ds.Save(ctx, rec); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			switch tt.status {
+			case store.DeviceCodeStatusPending:
+				// No setup transition.
+			case store.DeviceCodeStatusApproved:
+				if err := ds.Approve(ctx, id, "user-1", time.Time{}); err != nil {
+					t.Fatalf("Approve: %v", err)
+				}
+			case store.DeviceCodeStatusDenied:
+				if err := ds.Deny(ctx, id, "original_denial"); err != nil {
+					t.Fatalf("Deny: %v", err)
+				}
+			case store.DeviceCodeStatusConsumed:
+				if err := ds.Approve(ctx, id, "user-1", time.Time{}); err != nil {
+					t.Fatalf("Approve: %v", err)
+				}
+				if _, err := ds.Consume(ctx, id); err != nil {
+					t.Fatalf("Consume: %v", err)
+				}
+			}
 
-	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: ds, Audit: emitter}
-	if err := devicecodekit.Revoke(ctx, deps, "dev-rev-1", devicecodekit.DenyReasonUserRevokedDevice); err != nil {
-		t.Fatalf("Revoke: %v", err)
-	}
-	rec, err := ds.FindByDeviceCode(ctx, "dev-rev-1")
-	if err != nil {
-		t.Fatalf("FindByDeviceCode after revoke: %v", err)
-	}
-	if rec.Status != store.DeviceCodeStatusDenied {
-		t.Errorf("Status = %v, want Denied", rec.Status)
-	}
-	if rec.DenyReason != devicecodekit.DenyReasonUserRevokedDevice {
-		t.Errorf("DenyReason = %q, want %q", rec.DenyReason, devicecodekit.DenyReasonUserRevokedDevice)
-	}
-	if !emitter.containsName("device_code.revoked") {
-		t.Errorf("audit stream missing device_code.revoked: %v", emitter.names())
-	}
-	for _, ev := range emitter.events {
-		if ev.Name != "device_code.revoked" {
-			continue
-		}
-		if _, ok := ev.Extras["device_code_id"]; ok {
-			t.Fatalf("audit extras leaked raw device_code_id: %v", ev.Extras)
-		}
-		if got := ev.Extras["device_code_hash"]; got == "" {
-			t.Fatalf("audit extras missing device_code_hash: %v", ev.Extras)
-		}
-	}
-}
-
-// TestRevoke_AlreadyApprovedReturnsAlreadyDecided pins the gate on
-// non-Pending records: a record that has already been Approved (or
-// Denied / Consumed) cannot be revoked through this helper. The
-// embedder MUST cascade-revoke through the AccessTokenRegistry on
-// the audit signal of the original transition; running Revoke a
-// second time is a no-op-with-error.
-func TestRevoke_AlreadyApprovedReturnsAlreadyDecided(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	s := inmem.New()
-	ds := s.DeviceCodes()
-	makePendingRecord(t, ds, "dev-rev-2", "ABCDEFGH")
-	if err := ds.Approve(ctx, "dev-rev-2", "user-1", time.Time{}); err != nil {
-		t.Fatalf("Approve: %v", err)
-	}
-
-	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: ds, Audit: emitter}
-	err := devicecodekit.Revoke(ctx, deps, "dev-rev-2", devicecodekit.DenyReasonUserRevokedDevice)
-	if !errors.Is(err, devicecodekit.ErrAlreadyDecided) {
-		t.Fatalf("err = %v, want ErrAlreadyDecided", err)
-	}
-	if emitter.containsName("device_code.revoked") {
-		t.Errorf("audit stream emitted device_code.revoked despite no-op call: %v", emitter.names())
+			emitter := &captureEmitter{}
+			deps := &devicecodekit.Deps{
+				DeviceCodes:        ds,
+				Audit:              emitter,
+				RevocationStrategy: store.RevocationStrategyNone,
+			}
+			err := devicecodekit.Revoke(ctx, deps, id, devicecodekit.DenyReasonUserRevokedDevice)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Revoke error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErr != nil {
+				if emitter.containsName("device_code.revoked") {
+					t.Fatalf("audit emitted on failed revoke: %v", emitter.names())
+				}
+				return
+			}
+			got, err := ds.FindByDeviceCode(ctx, id)
+			if err != nil {
+				t.Fatalf("FindByDeviceCode: %v", err)
+			}
+			if got.Status != tt.wantStatus {
+				t.Fatalf("Status = %v, want %v", got.Status, tt.wantStatus)
+			}
+			if tt.wantStatus == store.DeviceCodeStatusDenied && tt.status != store.DeviceCodeStatusDenied &&
+				got.DenyReason != devicecodekit.DenyReasonUserRevokedDevice {
+				t.Fatalf("DenyReason = %q, want %q", got.DenyReason, devicecodekit.DenyReasonUserRevokedDevice)
+			}
+			if !emitter.containsName("device_code.revoked") {
+				t.Fatalf("audit stream missing device_code.revoked: %v", emitter.names())
+			}
+			for _, ev := range emitter.events {
+				if ev.Name != "device_code.revoked" {
+					continue
+				}
+				if _, ok := ev.Extras["device_code_id"]; ok {
+					t.Fatalf("audit extras leaked raw device_code_id: %v", ev.Extras)
+				}
+				if got := ev.Extras["device_code_hash"]; got == "" {
+					t.Fatalf("audit extras missing device_code_hash: %v", ev.Extras)
+				}
+			}
+		})
 	}
 }
 
@@ -466,12 +507,10 @@ func TestRevoke_NilDepsReturnsInvalidArgument(t *testing.T) {
 	}
 }
 
-// TestRevoke_CascadesAccessTokenRevocation confirms that revoking a
-// device authorization revokes every access token issued from that
-// device_code — the tokens carry the device_code's ID as their GrantID,
-// so RevokeByGrant retires them — while leaving tokens from unrelated
-// grants untouched. The audit event reports the count.
-func TestRevoke_CascadesAccessTokenRevocation(t *testing.T) {
+// TestRevoke_CascadesJTIRegistryAccessTokens confirms the explicit
+// per-JTI strategy revokes every JWT shadow row issued from the
+// device_code while leaving unrelated grants untouched.
+func TestRevoke_CascadesJTIRegistryAccessTokens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := inmem.New()
@@ -502,7 +541,12 @@ func TestRevoke_CascadesAccessTokenRevocation(t *testing.T) {
 	}
 
 	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: ds, AccessTokens: reg, Audit: emitter}
+	deps := &devicecodekit.Deps{
+		DeviceCodes:        ds,
+		AccessTokens:       reg,
+		RevocationStrategy: store.RevocationStrategyJTIRegistry,
+		Audit:              emitter,
+	}
 	if err := devicecodekit.Revoke(ctx, deps, "dev-casc-1", devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -535,10 +579,203 @@ func TestRevoke_CascadesAccessTokenRevocation(t *testing.T) {
 	}
 }
 
-// TestRevoke_NilRegistrySkipsCascade confirms that when no
-// AccessTokenRegistry is wired the revoke still denies the authorization
-// and emits the audit event, without a revoked_access_tokens count.
-func TestRevoke_NilRegistrySkipsCascade(t *testing.T) {
+func TestRevoke_CascadesTombstoneOpaqueAndRefreshCredentials(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	s := inmem.New(inmem.WithClock(fixedClock{now: now}))
+	ds := s.DeviceCodes()
+	grantID := "dev-cascade-all"
+	if err := ds.Save(ctx, &store.DeviceCode{
+		ID:        grantID,
+		UserCode:  "ABCDEFGH",
+		ClientID:  "client-1",
+		Status:    store.DeviceCodeStatusPending,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(10 * time.Minute),
+	}); err != nil {
+		t.Fatalf("Save device code: %v", err)
+	}
+	if err := ds.Approve(ctx, grantID, "user-1", now); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if _, err := ds.Consume(ctx, grantID); err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+
+	if err := s.AccessTokens().Register(ctx, store.AccessTokenRecord{
+		JTI:       "jwt-shadow",
+		GrantID:   grantID,
+		ClientID:  "client-1",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Register JWT shadow: %v", err)
+	}
+	if err := s.OpaqueAccessTokens().Save(ctx, &store.OpaqueAccessToken{
+		ID:        "opaque-device-token",
+		GrantID:   grantID,
+		ClientID:  "client-1",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Save opaque access token: %v", err)
+	}
+	if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+		ID:        "refresh-device-token",
+		GrantID:   grantID,
+		ClientID:  "client-1",
+		Subject:   "user-1",
+		Origin:    store.RefreshOriginDeviceCode,
+		CreatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Save refresh token: %v", err)
+	}
+
+	deps := &devicecodekit.Deps{
+		DeviceCodes:        ds,
+		AccessTokens:       s.AccessTokens(),
+		OpaqueAccessTokens: s.OpaqueAccessTokens(),
+		RefreshTokens:      s.RefreshTokens(),
+		GrantRevocations:   s.GrantRevocations(),
+		RevocationStrategy: store.RevocationStrategyGrantTombstone,
+		AccessTokenTTL:     15 * time.Minute,
+		Clock:              fixedClock{now: now},
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := devicecodekit.Revoke(ctx, deps, grantID, devicecodekit.DenyReasonUserRevokedDevice); err != nil {
+			t.Fatalf("Revoke attempt %d: %v", attempt, err)
+		}
+	}
+
+	device, err := ds.FindByDeviceCode(ctx, grantID)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode: %v", err)
+	}
+	if device.Status != store.DeviceCodeStatusConsumed {
+		t.Fatalf("device status = %v, want Consumed", device.Status)
+	}
+	revoked, err := s.GrantRevocations().IsRevoked(ctx, grantID, "jwt-jti", now)
+	if err != nil {
+		t.Fatalf("IsRevoked: %v", err)
+	}
+	if !revoked {
+		t.Fatal("grant tombstone did not revoke the JWT access-token lineage")
+	}
+	jwtShadow, err := s.AccessTokens().Find(ctx, "jwt-shadow")
+	if err != nil {
+		t.Fatalf("Find JWT shadow: %v", err)
+	}
+	if jwtShadow == nil || jwtShadow.Revoked {
+		t.Fatalf("JTI shadow changed under tombstone strategy: %+v", jwtShadow)
+	}
+	opaque, err := s.OpaqueAccessTokens().Find(ctx, "opaque-device-token")
+	if err != nil {
+		t.Fatalf("Find opaque access token: %v", err)
+	}
+	if !opaque.Revoked {
+		t.Fatal("opaque access token was not revoked")
+	}
+	refresh, err := s.RefreshTokens().Find(ctx, "refresh-device-token")
+	if err != nil {
+		t.Fatalf("Find refresh token: %v", err)
+	}
+	if !refresh.Revoked {
+		t.Fatal("refresh token was not revoked")
+	}
+}
+
+func TestRevoke_MissingJWTBackendFailsClosed(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		strategy store.AccessTokenRevocationStrategy
+	}{
+		{"grant_tombstone", store.RevocationStrategyGrantTombstone},
+		{"jti_registry", store.RevocationStrategyJTIRegistry},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			s := inmem.New()
+			ds := s.DeviceCodes()
+			id := "dev-missing-backend-" + tt.name
+			makePendingRecord(t, ds, id, "ABCDEFGH")
+			if err := ds.Approve(ctx, id, "user-1", time.Time{}); err != nil {
+				t.Fatalf("Approve: %v", err)
+			}
+			if _, err := ds.Consume(ctx, id); err != nil {
+				t.Fatalf("Consume: %v", err)
+			}
+			now := time.Date(2026, 7, 24, 13, 0, 0, 0, time.UTC)
+			opaqueID := "opaque-" + tt.name
+			if err := s.OpaqueAccessTokens().Save(ctx, &store.OpaqueAccessToken{
+				ID:        opaqueID,
+				GrantID:   id,
+				ClientID:  "client-1",
+				IssuedAt:  now,
+				ExpiresAt: now.Add(time.Hour),
+			}); err != nil {
+				t.Fatalf("Save opaque access token: %v", err)
+			}
+			refreshID := "refresh-" + tt.name
+			if err := s.RefreshTokens().Save(ctx, &store.RefreshToken{
+				ID:        refreshID,
+				GrantID:   id,
+				ClientID:  "client-1",
+				Subject:   "user-1",
+				Origin:    store.RefreshOriginDeviceCode,
+				CreatedAt: now,
+				ExpiresAt: now.Add(time.Hour),
+			}); err != nil {
+				t.Fatalf("Save refresh token: %v", err)
+			}
+
+			emitter := &captureEmitter{}
+			err := devicecodekit.Revoke(ctx, &devicecodekit.Deps{
+				DeviceCodes:        ds,
+				Audit:              emitter,
+				OpaqueAccessTokens: s.OpaqueAccessTokens(),
+				RefreshTokens:      s.RefreshTokens(),
+				RevocationStrategy: tt.strategy,
+			}, id, devicecodekit.DenyReasonUserRevokedDevice)
+			if !errors.Is(err, devicecodekit.ErrMissingRevocationBackend) {
+				t.Fatalf("Revoke error = %v, want ErrMissingRevocationBackend", err)
+			}
+			rec, findErr := ds.FindByDeviceCode(ctx, id)
+			if findErr != nil {
+				t.Fatalf("FindByDeviceCode: %v", findErr)
+			}
+			if rec.Status != store.DeviceCodeStatusConsumed {
+				t.Fatalf("Status = %v, want Consumed", rec.Status)
+			}
+			opaque, findErr := s.OpaqueAccessTokens().Find(ctx, opaqueID)
+			if findErr != nil || !opaque.Revoked {
+				t.Fatalf("opaque cascade after JWT config error = (%+v, %v), want revoked", opaque, findErr)
+			}
+			refresh, findErr := s.RefreshTokens().Find(ctx, refreshID)
+			if findErr != nil || !refresh.Revoked {
+				t.Fatalf("refresh cascade after JWT config error = (%+v, %v), want revoked", refresh, findErr)
+			}
+			var cascadeComplete any
+			for _, ev := range emitter.events {
+				if ev.Name == "device_code.revoked" {
+					cascadeComplete = ev.Extras["cascade_complete"]
+				}
+			}
+			if cascadeComplete != false {
+				t.Fatalf("cascade_complete = %v, want false", cascadeComplete)
+			}
+		})
+	}
+}
+
+// TestRevoke_ExplicitNoneSkipsJWTCascade confirms that the explicit
+// stateless strategy still denies the authorization and emits the audit
+// event without a revoked_access_tokens count.
+func TestRevoke_ExplicitNoneSkipsJWTCascade(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := inmem.New()
@@ -546,7 +783,11 @@ func TestRevoke_NilRegistrySkipsCascade(t *testing.T) {
 	makePendingRecord(t, ds, "dev-casc-nil", "ABCDEFGH")
 
 	emitter := &captureEmitter{}
-	deps := &devicecodekit.Deps{DeviceCodes: ds, Audit: emitter}
+	deps := &devicecodekit.Deps{
+		DeviceCodes:        ds,
+		Audit:              emitter,
+		RevocationStrategy: store.RevocationStrategyNone,
+	}
 	if err := devicecodekit.Revoke(ctx, deps, "dev-casc-nil", devicecodekit.DenyReasonUserRevokedDevice); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}

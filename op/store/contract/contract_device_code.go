@@ -49,6 +49,7 @@ var deviceCodeCases = []subtest{
 	{"ApproveConsumeOnce", deviceCodeApproveConsumeOnce},
 	{"ApproveConflictAfterDeny", deviceCodeApproveConflictAfterDeny},
 	{"ConsumeConflictWhenDenied", deviceCodeConsumeConflictWhenDenied},
+	{"RevokeLifecycle", deviceCodeRevokeLifecycle},
 	{"RecordPollEscalatesInterval", deviceCodeRecordPollEscalates},
 	{"StrikesIncrement", deviceCodeStrikesIncrement},
 	{"PollViolationsIncrement", deviceCodePollViolationsIncrement},
@@ -204,6 +205,82 @@ func deviceCodeConsumeConflictWhenDenied(t *testing.T, f Factory) {
 	}
 }
 
+type deviceCodeRevokeCase struct {
+	name       string
+	id         string
+	userCode   string
+	status     store.DeviceCodeStatus
+	wantStatus store.DeviceCodeStatus
+	wantReason string
+}
+
+func deviceCodeRevokeLifecycle(t *testing.T, f Factory) {
+	tests := []deviceCodeRevokeCase{
+		{"pending", "dc-revoke-pending", "AAAA-0201", store.DeviceCodeStatusPending, store.DeviceCodeStatusDenied, "device_revoked"},
+		{"approved", "dc-revoke-approved", "AAAA-0202", store.DeviceCodeStatusApproved, store.DeviceCodeStatusDenied, "device_revoked"},
+		{"denied", "dc-revoke-denied", "AAAA-0203", store.DeviceCodeStatusDenied, store.DeviceCodeStatusDenied, "original_denial"},
+		{"consumed", "dc-revoke-consumed", "AAAA-0204", store.DeviceCodeStatusConsumed, store.DeviceCodeStatusConsumed, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runDeviceCodeRevokeCase(t, f, tt)
+		})
+	}
+}
+
+func runDeviceCodeRevokeCase(t *testing.T, f Factory, tt deviceCodeRevokeCase) {
+	t.Helper()
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	if err := dc.Save(ctx, newDeviceCode(b.Now(), tt.id, tt.userCode)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	arrangeDeviceCodeRevokeStatus(t, dc, ctx, b.Now(), tt)
+	for attempt := 1; attempt <= 2; attempt++ {
+		if err := dc.Revoke(ctx, tt.id, "device_revoked"); err != nil {
+			t.Fatalf("Revoke attempt %d: %v", attempt, err)
+		}
+	}
+	got, err := dc.FindByDeviceCode(ctx, tt.id)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode: %v", err)
+	}
+	if got.Status != tt.wantStatus || got.DenyReason != tt.wantReason {
+		t.Fatalf("record after Revoke = (status=%v, reason=%q), want (%v, %q)",
+			got.Status, got.DenyReason, tt.wantStatus, tt.wantReason)
+	}
+}
+
+func arrangeDeviceCodeRevokeStatus(
+	t *testing.T,
+	dc store.DeviceCodeStore,
+	ctx context.Context,
+	now time.Time,
+	tt deviceCodeRevokeCase,
+) {
+	t.Helper()
+	switch tt.status {
+	case store.DeviceCodeStatusPending:
+		// The record is already pending after Save.
+	case store.DeviceCodeStatusApproved:
+		if err := dc.Approve(ctx, tt.id, "sub-1", now); err != nil {
+			t.Fatalf("Approve: %v", err)
+		}
+	case store.DeviceCodeStatusDenied:
+		if err := dc.Deny(ctx, tt.id, "original_denial"); err != nil {
+			t.Fatalf("Deny: %v", err)
+		}
+	case store.DeviceCodeStatusConsumed:
+		if err := dc.Approve(ctx, tt.id, "sub-1", now); err != nil {
+			t.Fatalf("Approve: %v", err)
+		}
+		if _, err := dc.Consume(ctx, tt.id); err != nil {
+			t.Fatalf("Consume: %v", err)
+		}
+	}
+}
+
 func deviceCodeRecordPollEscalates(t *testing.T, f Factory) {
 	b := f(t)
 	dc := requireDeviceCodes(t, b.Store)
@@ -298,6 +375,9 @@ func deviceCodeExpired(t *testing.T, f Factory) {
 	if err := dc.Approve(ctx, "dc-exp", "sub-1", b.Now()); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Approve expired: want ErrNotFound, got %v", err)
 	}
+	if err := dc.Revoke(ctx, "dc-exp", "device_revoked"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Revoke expired: want ErrNotFound, got %v", err)
+	}
 	if _, err := dc.Consume(ctx, "dc-exp"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Consume expired: want ErrNotFound, got %v", err)
 	}
@@ -356,6 +436,9 @@ func deviceCodeTransitionMissing(t *testing.T, f Factory) {
 	}
 	if err := dc.Deny(ctx, "absent", "user_denied"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Deny missing: want ErrNotFound, got %v", err)
+	}
+	if err := dc.Revoke(ctx, "absent", "device_revoked"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Revoke missing: want ErrNotFound, got %v", err)
 	}
 	if _, err := dc.Consume(ctx, "absent"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Consume missing: want ErrNotFound, got %v", err)

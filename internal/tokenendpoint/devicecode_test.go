@@ -209,6 +209,10 @@ func (s recordPollFailingDeviceCodeStore) DenyByUserCode(ctx context.Context, us
 	return s.inner.DenyByUserCode(ctx, userCode, reason)
 }
 
+func (s recordPollFailingDeviceCodeStore) Revoke(ctx context.Context, deviceCode, reason string) error {
+	return s.inner.Revoke(ctx, deviceCode, reason)
+}
+
 func (s recordPollFailingDeviceCodeStore) RecordPoll(_ context.Context, _ string, _ time.Time, _ time.Duration) error {
 	return errInjectedDeviceCodeRecordPoll
 }

@@ -145,6 +145,36 @@ func (s *deviceCodeStore) DenyByUserCode(ctx context.Context, userCode, reason s
 	return s.afterTransitionByUserCode(ctx, userCode, res)
 }
 
+func (s *deviceCodeStore) Revoke(ctx context.Context, deviceCode, reason string) error {
+	idDigest := patterns.Digest(deviceCode)
+	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeRevoke,
+		int64(store.DeviceCodeStatusDenied), reason, idDigest,
+		int64(store.DeviceCodeStatusPending), int64(store.DeviceCodeStatusApproved), s.now())
+	if err != nil {
+		return wrapErr("deviceCodes.Revoke", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return wrapErr("deviceCodes.Revoke.RowsAffected", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	rec, _, findErr := s.scanOne(ctx, s.parent.queries.deviceCodeFind, idDigest)
+	if findErr != nil {
+		return findErr
+	}
+	if isExpired(rec.ExpiresAt, s.parent.clock) {
+		return store.ErrNotFound
+	}
+	switch rec.Status {
+	case store.DeviceCodeStatusDenied, store.DeviceCodeStatusConsumed:
+		return nil
+	default:
+		return store.ErrConflict
+	}
+}
+
 func (s *deviceCodeStore) RecordPoll(ctx context.Context, deviceCode string, when time.Time, nextInterval time.Duration) error {
 	idDigest := patterns.Digest(deviceCode)
 	res, err := s.runner().ExecContext(ctx, s.parent.queries.deviceCodeRecordPoll,

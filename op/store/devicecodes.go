@@ -264,6 +264,24 @@ type DeviceCodeStore interface {
 	// without exposing the polling bearer device_code to the browser.
 	DenyByUserCode(ctx context.Context, userCode, reason string) error
 
+	// Revoke makes a device authorization permanently unable to issue
+	// another token set. Pending and Approved records atomically
+	// transition to Denied and retain reason in
+	// [DeviceCode.DenyReason]. Denied and Consumed records are successful
+	// idempotent no-ops: a consumed record MUST remain Consumed so
+	// revocation cannot rewrite issuance history, while the caller may
+	// safely retry the related token cascade after a partial failure.
+	//
+	// Revoke races safely with [DeviceCodeStore.Consume]. Exactly one
+	// transition wins from Approved: when Revoke wins, Consume observes
+	// Denied and returns [ErrConflict]; when Consume wins, Revoke observes
+	// Consumed and returns nil so the caller can revoke the credentials
+	// that were just issued.
+	//
+	// Returns [ErrNotFound] when the record is absent or expired. Storage
+	// and transport faults surface unchanged.
+	Revoke(ctx context.Context, deviceCode, reason string) error
+
 	// RecordPoll updates [DeviceCode.LastPolledAt] to when and
 	// [DeviceCode.Interval] to nextInterval when nextInterval is
 	// greater than the current value. The library calls RecordPoll on

@@ -412,5 +412,69 @@ func TestDeviceCodes_Concurrent(t *testing.T) {
 	}
 }
 
+func TestDeviceCodes_RevokeConsumeRace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := inmem.New()
+	ds := s.DeviceCodes()
+	const records = 64
+	expires := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	authTime := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
+	for i := range records {
+		id := "revoke-consume-" + strconv.Itoa(i)
+		rec := makeDeviceCode(id, "RACE-"+strconv.Itoa(i), store.DeviceCodeStatusPending, expires)
+		if err := ds.Save(ctx, rec); err != nil {
+			t.Fatalf("Save[%d]: %v", i, err)
+		}
+		if err := ds.Approve(ctx, id, "user-"+strconv.Itoa(i), authTime); err != nil {
+			t.Fatalf("Approve[%d]: %v", i, err)
+		}
+	}
+
+	start := make(chan struct{})
+	consumeErrs := make([]error, records)
+	revokeErrs := make([]error, records)
+	var wg sync.WaitGroup
+	for i := range records {
+		id := "revoke-consume-" + strconv.Itoa(i)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, consumeErrs[i] = ds.Consume(ctx, id)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			revokeErrs[i] = ds.Revoke(ctx, id, "device_revoked")
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i := range records {
+		if revokeErrs[i] != nil {
+			t.Fatalf("Revoke[%d]: %v", i, revokeErrs[i])
+		}
+		id := "revoke-consume-" + strconv.Itoa(i)
+		rec, err := ds.FindByDeviceCode(ctx, id)
+		if err != nil {
+			t.Fatalf("FindByDeviceCode[%d]: %v", i, err)
+		}
+		switch rec.Status {
+		case store.DeviceCodeStatusDenied:
+			if !errors.Is(consumeErrs[i], store.ErrConflict) {
+				t.Fatalf("Consume[%d] after Revoke win = %v, want ErrConflict", i, consumeErrs[i])
+			}
+		case store.DeviceCodeStatusConsumed:
+			if consumeErrs[i] != nil {
+				t.Fatalf("Consume[%d] won but returned %v", i, consumeErrs[i])
+			}
+		default:
+			t.Fatalf("record[%d] terminal status = %v, want Denied or Consumed", i, rec.Status)
+		}
+	}
+}
+
 func concurrentDeviceID(i int) string { return "concurrent-dev-" + strconv.Itoa(i) }
 func concurrentUserCode(i int) string { return "USER-" + strconv.Itoa(i) }

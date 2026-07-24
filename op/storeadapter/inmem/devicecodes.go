@@ -159,6 +159,22 @@ func (s *deviceCodeStore) DenyByUserCode(_ context.Context, userCode, reason str
 	})
 }
 
+func (s *deviceCodeStore) Revoke(_ context.Context, deviceCode, reason string) error {
+	return s.transition(deviceCode, func(rec *store.DeviceCode) error {
+		switch rec.Status {
+		case store.DeviceCodeStatusPending, store.DeviceCodeStatusApproved:
+			rec.Status = store.DeviceCodeStatusDenied
+			rec.DenyReason = reason
+		case store.DeviceCodeStatusDenied, store.DeviceCodeStatusConsumed:
+			// Idempotent terminal-state no-op. In particular, keep
+			// Consumed so revocation does not rewrite issuance history.
+		default:
+			return store.ErrConflict
+		}
+		return nil
+	})
+}
+
 func (s *deviceCodeStore) RecordPoll(_ context.Context, deviceCode string, when time.Time, nextInterval time.Duration) error {
 	return s.transition(deviceCode, func(rec *store.DeviceCode) error {
 		t := when

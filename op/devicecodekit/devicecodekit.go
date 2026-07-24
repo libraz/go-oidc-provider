@@ -32,6 +32,7 @@ import (
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
 	"github.com/libraz/go-oidc-provider/internal/devicecode"
+	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -46,8 +47,9 @@ import (
 // behaviour of the next /token poll on the locked-out record.
 const MaxUserCodeStrikes = devicecode.MaxUserCodeStrikes
 
-// Deny reasons the helpers stamp on [store.DeviceCodeStore.Deny]. The
-// strings are stable and embedder-visible: SOC tooling subscribes to
+// Deny reasons the helpers stamp through [store.DeviceCodeStore.Deny]
+// and [store.DeviceCodeStore.Revoke]. The strings are stable and
+// embedder-visible: SOC tooling subscribes to
 // [op.AuditDeviceCodeRevoked] / [op.AuditDeviceCodeVerificationDenied]
 // and reads the "reason" extra to triage. New reasons MAY be added in
 // a minor release; existing values are part of the API surface and
@@ -92,13 +94,12 @@ var (
 	// expired_token.
 	ErrUnknownDeviceCode = errors.New("devicecodekit: device_code not found")
 
-	// ErrAlreadyDecided is returned by [VerifyUserCode] and [Revoke]
-	// when the record is no longer in the Pending state — the user
-	// already approved or denied, the brute-force gate already fired,
-	// or the token endpoint already consumed the row. The verification
-	// page typically surfaces this as "this code has already been
-	// used"; the embedder MUST NOT increment the strike counter or
-	// re-fire the deny.
+	// ErrAlreadyDecided is returned by [VerifyUserCode] when the record
+	// is no longer in the Pending state — the user already approved or
+	// denied, the brute-force gate already fired, or the token endpoint
+	// already consumed the row. The verification page typically surfaces
+	// this as "this code has already been used"; the embedder MUST NOT
+	// increment the strike counter or re-fire the deny.
 	ErrAlreadyDecided = errors.New("devicecodekit: device_code is no longer pending")
 
 	// ErrInvalidArgument is returned when a caller passes an empty
@@ -107,14 +108,24 @@ var (
 	// it past the boundary should treat it as a 500 in their HTTP
 	// layer.
 	ErrInvalidArgument = errors.New("devicecodekit: invalid argument")
+
+	// ErrMissingRevocationBackend is returned by [Revoke] when the
+	// selected JWT revocation strategy has no configured persistence
+	// backend. Revoke has already made the device authorization
+	// non-issuable (or observed it as Consumed), but the caller MUST
+	// wire the missing backend and retry before reporting that the
+	// credential cascade completed.
+	ErrMissingRevocationBackend = errors.New("devicecodekit: missing JWT revocation backend")
 )
 
 // Deps bundles the runtime dependencies the helpers need. The
 // embedder builds one [Deps] at startup (typically alongside the
 // [op.New] call) and passes it to every helper invocation. The
-// struct is intentionally small: only the substore is required;
-// [Deps.Audit] defaults to the discard sink so the helper can call
-// the emitter unconditionally.
+// DeviceCodes is always required. Revoke additionally requires the
+// backend selected by RevocationStrategy: AccessTokens for JTIRegistry,
+// GrantRevocations (or the documented AccessTokens migration fallback)
+// for GrantTombstone, and no JWT backend for None. [Deps.Audit] defaults
+// to the discard sink so the helpers can call the emitter unconditionally.
 type Deps struct {
 	// DeviceCodes is the substore the helpers mutate. Required.
 	// A nil value causes every helper to return [ErrInvalidArgument]
@@ -132,19 +143,49 @@ type Deps struct {
 	// yet.
 	Audit audit.Emitter
 
-	// AccessTokens is the access-token registry the [Revoke] helper
-	// cascades into: when a device authorization is revoked, every
-	// access token issued from that device_code is revoked alongside
-	// the record via [store.AccessTokenRegistry.RevokeByGrant]. The
-	// device_code's ID is stamped verbatim as the GrantID on every
-	// access token derived from that authorization, so the existing
-	// per-grant cascade is sufficient. Optional: a nil registry
-	// (JWT-stateless deployments with no shadow store, or embedders
-	// that drive the cascade out-of-band) skips the cascade, and
-	// [Revoke] still denies the authorization and emits the audit
-	// event. When set, [op.AuditDeviceCodeRevoked] carries the
-	// "revoked_access_tokens" count.
+	// AccessTokens is the per-JTI JWT access-token registry [Revoke]
+	// uses under [store.RevocationStrategyJTIRegistry], and the fallback
+	// cascade used when GrantRevocations is absent during migration.
+	// Optional when the selected strategy does not require it.
 	AccessTokens store.AccessTokenRegistry
+
+	// OpaqueAccessTokens stores opaque access-token records. When set,
+	// Revoke retires every row whose GrantID matches the device_code.
+	// Optional for JWT-only deployments.
+	OpaqueAccessTokens store.OpaqueAccessTokenStore
+
+	// RefreshTokens stores refresh-token rotation chains. When set,
+	// Revoke retires every chain whose GrantID matches the device_code.
+	// Optional for deployments that never issue refresh tokens from the
+	// device grant.
+	RefreshTokens store.RefreshTokenStore
+
+	// GrantRevocations stores JWT grant tombstones. Revoke writes a
+	// tombstone here under the default
+	// [store.RevocationStrategyGrantTombstone] strategy. Optional only
+	// when AccessTokens provides the documented migration fallback.
+	GrantRevocations store.GrantRevocationStore
+
+	// RevocationStrategy selects the JWT access-token cascade shape.
+	// The zero value is [store.RevocationStrategyGrantTombstone], matching
+	// the provider default.
+	RevocationStrategy store.AccessTokenRevocationStrategy
+
+	// AccessTokenTTL is the longest JWT access-token lifetime used by
+	// this provider. Revoke retains a grant tombstone for this duration
+	// plus five minutes of clock-skew grace. A non-positive value uses
+	// the provider default of five minutes.
+	AccessTokenTTL time.Duration
+
+	// Clock supplies the wall-clock instant written to grant tombstones.
+	// A nil value uses the library system clock.
+	Clock Clock
+}
+
+// Clock is the wall-clock surface [Deps] accepts for deterministic
+// grant-tombstone timestamps.
+type Clock interface {
+	Now() time.Time
 }
 
 // auditEmitter returns the configured audit sink, or a discard
@@ -154,6 +195,13 @@ func (d *Deps) auditEmitter() audit.Emitter {
 		return audit.Discard()
 	}
 	return d.Audit
+}
+
+func (d *Deps) now() time.Time {
+	if d != nil && d.Clock != nil {
+		return d.Clock.Now().UTC()
+	}
+	return timex.SystemClock.Now().UTC()
 }
 
 // VerifyUserCode runs the brute-force-protected user_code lookup
@@ -416,34 +464,40 @@ func recordStrikeByUserCode(ctx context.Context, deps *Deps, userCode, clientID 
 	return nil
 }
 
-// Revoke transitions a Pending device-authorization record to Denied
-// with the supplied reason, cascade-revokes every access token issued
-// from that device_code, and emits an [op.AuditDeviceCodeRevoked] audit
-// event.
+// Revoke permanently disables a device authorization, cascade-revokes
+// every credential issued from it, and emits an
+// [op.AuditDeviceCodeRevoked] audit event.
 //
-// The cascade enacts the user-trust posture every device-flow OP should
-// hold: "when the user revokes a device authorization, every access
-// token issued from that device_code is revoked alongside the row." The
-// device_code's ID is stamped verbatim as the GrantID on every access
-// token derived from that authorization, so the cascade is a single
-// [store.AccessTokenRegistry.RevokeByGrant] call. It runs only when
-// [Deps.AccessTokens] is set; a nil registry (JWT-stateless or
-// out-of-band deployments) skips the cascade while still denying the
-// authorization and emitting the audit event. The audit event carries
-// the "revoked_access_tokens" count when the cascade ran.
+// [store.DeviceCode.ID] is also the GrantID stamped on JWT access
+// tokens, opaque access tokens, and refresh tokens issued by the device
+// grant. Revoke uses that shared lineage to retire every configured
+// credential surface:
+//
+//   - Pending and Approved records atomically transition to Denied, so a
+//     later /token poll cannot issue credentials.
+//   - Denied records remain Denied and retry the cascade.
+//   - Consumed records remain Consumed and run the cascade, preserving
+//     issuance history while retiring the already-issued credentials.
+//
+// The cascade dispatches JWT revocation through
+// [Deps.RevocationStrategy], then independently retires opaque access
+// tokens and refresh-token chains when their substores are configured.
+// Every substore is attempted even if an earlier one fails. Repeating
+// Revoke is safe and retries a partial cascade against the retained
+// device-code record.
 //
 // Errors:
 //   - [ErrInvalidArgument] when deps or deps.DeviceCodes is nil, or
 //     when deviceCodeID is empty.
 //   - [ErrUnknownDeviceCode] when the substore reports no matching
-//     record.
-//   - [ErrAlreadyDecided] when the record is no longer in Pending
-//     (already Approved, Denied, or Consumed).
+//     live record.
+//   - [ErrMissingRevocationBackend] when the selected JWT strategy has
+//     no configured store.
 //   - Any substore transport error surfaces verbatim.
-//   - A wrapped error when the access-token cascade fails after the
-//     record was denied; the denial and audit event still stand, so a
-//     caller seeing this error knows the authorization is revoked but
-//     the token cascade did not complete.
+//   - A joined wrapped error when one or more credential cascades fail.
+//     The device authorization is already non-issuable (or was already
+//     Consumed), the audit event records cascade_complete=false, and the
+//     caller can safely retry Revoke to finish the cascade.
 //
 // The reason argument is stamped onto the record's DenyReason field
 // and the audit event's "reason" extra. Embedders SHOULD use one of
@@ -457,10 +511,9 @@ func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error 
 	if deviceCodeID == "" {
 		return ErrInvalidArgument
 	}
-	// Resolve the record so the audit event can carry client_id;
-	// the lookup also surfaces the canonical "not found" / "already
-	// decided" sentinels at the boundary so embedders can dispatch
-	// without inspecting the substore's internal shape.
+	// Resolve the record so the audit event can carry client_id and the
+	// pre-revocation lifecycle state. Revoke below is still the
+	// authoritative atomic transition: Consume may race this lookup.
 	rec, err := deps.DeviceCodes.FindByDeviceCode(ctx, deviceCodeID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -468,49 +521,181 @@ func Revoke(ctx context.Context, deps *Deps, deviceCodeID, reason string) error 
 		}
 		return err
 	}
-	if rec.Status != store.DeviceCodeStatusPending {
-		return ErrAlreadyDecided
-	}
-	if err := deps.DeviceCodes.Deny(ctx, deviceCodeID, reason); err != nil {
-		switch {
-		case errors.Is(err, store.ErrNotFound):
+	if err := deps.DeviceCodes.Revoke(ctx, deviceCodeID, reason); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
 			return ErrUnknownDeviceCode
-		case errors.Is(err, store.ErrConflict):
-			// A racing approve / deny landed between the lookup and
-			// the transition. The user-facing surface treats this as
-			// "already decided" — the cascade-revoke audit signal is
-			// suppressed because the record's terminal state was
-			// not driven by this revoke call.
-			return ErrAlreadyDecided
-		default:
-			return err
 		}
+		return err
 	}
-	// Cascade-revoke every access token issued from this device_code.
-	// The device_code's ID is the GrantID stamped on each issued token,
-	// so RevokeByGrant retires them all. The denial already stopped new
-	// tokens; this revokes the ones already minted. A nil registry
-	// skips the cascade (JWT-stateless or out-of-band deployments).
-	revoked, cascadeErr := 0, error(nil)
-	if deps.AccessTokens != nil {
-		revoked, cascadeErr = deps.AccessTokens.RevokeByGrant(ctx, deviceCodeID)
-	}
+
+	result, cascadeErr := revokeGrantCredentials(ctx, deps, deviceCodeID, reason)
 	extras := map[string]any{
+		"cascade_complete": result.complete,
 		"device_code_hash": fingerprintDeviceCode(deviceCodeID),
+		"previous_status":  rec.Status.String(),
 		"reason":           reason,
 	}
-	if deps.AccessTokens != nil {
-		extras["revoked_access_tokens"] = revoked
+	if result.jwtRegistryAttempted {
+		extras["revoked_access_tokens"] = result.jwtRegistryCount
+	}
+	if result.grantTombstoneAttempted {
+		extras["grant_tombstone_written"] = result.grantTombstoneWritten
+	}
+	if result.opaqueAttempted {
+		extras["revoked_opaque_access_tokens"] = result.opaqueCount
+	}
+	if result.refreshAttempted {
+		extras["refresh_token_cascade_complete"] = result.refreshComplete
+	}
+	level := audit.LevelInfo
+	if cascadeErr != nil {
+		level = audit.LevelWarn
 	}
 	deps.auditEmitter().Emit(ctx, audit.Event{
 		Name:     devicecode.AuditRevoked,
-		Level:    audit.LevelInfo,
+		Level:    level,
 		Message:  "device_code revoked",
 		ClientID: rec.ClientID,
 		Extras:   extras,
 	})
 	if cascadeErr != nil {
-		return fmt.Errorf("devicecodekit: cascade revoke access tokens: %w", cascadeErr)
+		return fmt.Errorf("devicecodekit: cascade revoke grant credentials: %w", cascadeErr)
+	}
+	return nil
+}
+
+type revokeResult struct {
+	complete                bool
+	jwtRegistryAttempted    bool
+	jwtRegistryCount        int
+	grantTombstoneAttempted bool
+	grantTombstoneWritten   bool
+	opaqueAttempted         bool
+	opaqueCount             int
+	refreshAttempted        bool
+	refreshComplete         bool
+}
+
+func revokeGrantCredentials(
+	ctx context.Context,
+	deps *Deps,
+	grantID, reason string,
+) (revokeResult, error) {
+	result := revokeResult{complete: true}
+	err := errors.Join(
+		revokeJWTGrantCredentials(ctx, deps, grantID, reason, &result),
+		revokeOpaqueGrantCredentials(ctx, deps, grantID, &result),
+		revokeRefreshGrantCredentials(ctx, deps, grantID, &result),
+	)
+	result.complete = err == nil
+	return result, err
+}
+
+func revokeJWTGrantCredentials(
+	ctx context.Context,
+	deps *Deps,
+	grantID, reason string,
+	result *revokeResult,
+) error {
+	switch deps.RevocationStrategy {
+	case store.RevocationStrategyNone:
+		return nil
+	case store.RevocationStrategyJTIRegistry:
+		if deps.AccessTokens == nil {
+			return fmt.Errorf("%w: JTIRegistry requires AccessTokens", ErrMissingRevocationBackend)
+		}
+		return revokeJWTRegistryCredentials(ctx, deps.AccessTokens, grantID, result)
+	case store.RevocationStrategyGrantTombstone:
+		return revokeJWTTombstoneCredentials(ctx, deps, grantID, reason, result)
+	default:
+		return fmt.Errorf("%w: invalid revocation strategy %s", ErrInvalidArgument, deps.RevocationStrategy)
+	}
+}
+
+func revokeJWTRegistryCredentials(
+	ctx context.Context,
+	reg store.AccessTokenRegistry,
+	grantID string,
+	result *revokeResult,
+) error {
+	if reg == nil {
+		return nil
+	}
+	result.jwtRegistryAttempted = true
+	n, err := reg.RevokeByGrant(ctx, grantID)
+	result.jwtRegistryCount = n
+	if err != nil {
+		return fmt.Errorf("revoke JWT access tokens: %w", err)
+	}
+	return nil
+}
+
+func revokeJWTTombstoneCredentials(
+	ctx context.Context,
+	deps *Deps,
+	grantID, reason string,
+	result *revokeResult,
+) error {
+	if deps.GrantRevocations == nil {
+		if deps.AccessTokens == nil {
+			return fmt.Errorf(
+				"%w: GrantTombstone requires GrantRevocations or the AccessTokens migration fallback",
+				ErrMissingRevocationBackend,
+			)
+		}
+		return revokeJWTRegistryCredentials(ctx, deps.AccessTokens, grantID, result)
+	}
+	result.grantTombstoneAttempted = true
+	now := deps.now()
+	ttl := deps.AccessTokenTTL
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	err := deps.GrantRevocations.RevokeGrant(ctx, store.GrantTombstone{
+		GrantID:   grantID,
+		RevokedAt: now,
+		ExpiresAt: now.Add(ttl + 5*time.Minute),
+		Reason:    reason,
+	})
+	result.grantTombstoneWritten = err == nil
+	if err != nil {
+		return fmt.Errorf("revoke JWT grant: %w", err)
+	}
+	return nil
+}
+
+func revokeOpaqueGrantCredentials(
+	ctx context.Context,
+	deps *Deps,
+	grantID string,
+	result *revokeResult,
+) error {
+	if deps.OpaqueAccessTokens == nil {
+		return nil
+	}
+	result.opaqueAttempted = true
+	n, err := deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
+	result.opaqueCount = n
+	if err != nil {
+		return fmt.Errorf("revoke opaque access tokens: %w", err)
+	}
+	return nil
+}
+
+func revokeRefreshGrantCredentials(
+	ctx context.Context,
+	deps *Deps,
+	grantID string,
+	result *revokeResult,
+) error {
+	if deps.RefreshTokens == nil {
+		return nil
+	}
+	result.refreshAttempted = true
+	err := deps.RefreshTokens.RevokeByGrant(ctx, grantID)
+	result.refreshComplete = err == nil
+	if err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
 	}
 	return nil
 }
