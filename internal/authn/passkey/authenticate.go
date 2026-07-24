@@ -127,7 +127,7 @@ func (v *Verifier) BeginLogin(_ context.Context, subject, name string, credentia
 // list. On success it returns the matching [Credential] with the sign
 // counter, BackupState, UserVerified, and UserPresent fields updated
 // from the assertion; the caller MUST persist the new value (typically
-// via [PasskeyStore.Put]).
+// via [PasskeyStore.UpdateAssertion]).
 //
 // The function returns:
 //   - [ErrChallengeExpired] when the session has expired against the
@@ -146,8 +146,6 @@ func (v *Verifier) BeginLogin(_ context.Context, subject, name string, credentia
 //
 // On any error other than [ErrCloneDetected] the returned
 // [*Credential] is nil.
-//
-//nolint:gocognit // FinishLogin enumerates assertion / clone / AAGUID branches in flat shape; refactor would obscure WebAuthn spec mapping.
 func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, name string, credentials []Credential, response []byte) (*Credential, error) {
 	if session == nil {
 		return nil, fmt.Errorf("%w: nil session", ErrInvalidResponse)
@@ -169,16 +167,17 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	// performs its own check but only against session.AllowedCredentialIDs;
 	// we want the error type to be the project's sentinel rather
 	// than a generic upstream failure.
-	matched := false
-	for _, c := range credentials {
-		if bytes.Equal(c.ID, parsed.RawID) {
-			matched = true
+	matchedIndex := -1
+	for i := range credentials {
+		if bytes.Equal(credentials[i].ID, parsed.RawID) {
+			matchedIndex = i
 			break
 		}
 	}
-	if !matched {
+	if matchedIndex < 0 {
 		return nil, ErrCredentialNotRegistered
 	}
+	stored := credentials[matchedIndex]
 
 	// AAGUID re-check at assertion time (M-AUTHN-2). When enabled,
 	// reject the assertion if the matched credential's AAGUID is no
@@ -203,6 +202,7 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	}
 
 	out := fromWebauthnCredential(*wc)
+	out.expectedSignCount = stored.Authenticator.SignCount
 	if wc.Authenticator.CloneWarning {
 		// Surface the clone signal as a structured error but still
 		// return a credential pointer so the orchestrator can stamp
@@ -213,13 +213,6 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 		// the legitimate authenticator forever. Recover the prior
 		// counter from the caller-supplied credential record so the
 		// CloneWarning bit is the only persisted change.
-		var stored Credential
-		for _, c := range credentials {
-			if bytes.Equal(c.ID, parsed.RawID) {
-				stored = c
-				break
-			}
-		}
 		out.Authenticator.SignCount = stored.Authenticator.SignCount
 		out.Authenticator.CloneWarning = true
 		return &out, ErrCloneDetected

@@ -261,7 +261,7 @@ func (a *Authenticator) parseContinueInput(in authn.ContinueInput) ([]byte, *Ses
 func (a *Authenticator) continueResult(ctx context.Context, subject string, authTime time.Time, cred *Credential, ferr error) (interaction.Step, error) {
 	switch {
 	case ferr == nil:
-		if perr := a.persistCredential(ctx, subject, cred); perr != nil {
+		if _, perr := a.persistCredential(ctx, cred); perr != nil {
 			return interaction.Step{}, perr
 		}
 		// Stamp the UV bit on the Result so the orchestrator's
@@ -280,7 +280,8 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 		}}, nil
 	case errors.Is(ferr, ErrCloneDetected):
 		if cred != nil {
-			if perr := a.persistCredential(ctx, subject, cred); perr != nil {
+			persisted, perr := a.persistCredential(ctx, cred)
+			if perr != nil {
 				return interaction.Step{}, perr
 			}
 			// Notify the embedder so it can disable the affected
@@ -290,7 +291,7 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 			// embedders that want to observe failures should log
 			// internally.
 			if a.driver != nil {
-				_ = a.driver.HandleCloneDetected(ctx, subject, cred)
+				_ = a.driver.HandleCloneDetected(ctx, subject, persisted)
 			}
 		}
 		return interaction.Step{}, ferr
@@ -320,29 +321,33 @@ func (a *Authenticator) loadCredentials(ctx context.Context, subject string) ([]
 	return out, nil
 }
 
-// persistCredential writes the rotated credential back through the
-// store. The record's mutable bits — sign counter, UV / BS flags, the
-// clone-warning bit — are updated in place so a subsequent assertion
-// observes the new counter. CreatedAt is preserved from the original
-// row; a missing row is rejected because every Continue must observe
-// at least one credential the assertion matched against.
-func (a *Authenticator) persistCredential(ctx context.Context, subject string, c *Credential) error {
+// persistCredential atomically applies the assertion fields through
+// the store. The verifier stamps expectedSignCount from the exact
+// record used for signature verification, allowing the backend to
+// preserve monotonic security state when concurrent assertions finish
+// in reverse order. A missing row is rejected because every Continue
+// must observe a credential the assertion matched against.
+func (a *Authenticator) persistCredential(ctx context.Context, c *Credential) (*Credential, error) {
 	if c == nil {
-		return nil
+		return nil, errors.New("passkey: cannot persist nil credential")
 	}
-	existing, err := a.store.Get(ctx, c.ID)
+
+	rec, err := a.store.UpdateAssertion(ctx, c.ID, store.PasskeyAssertionUpdate{
+		ExpectedSignCount: c.expectedSignCount,
+		SignCount:         c.Authenticator.SignCount,
+		UserPresent:       c.Flags.UserPresent,
+		UserVerified:      c.Flags.UserVerified,
+		BackupState:       c.Flags.BackupState,
+		CloneWarning:      c.Authenticator.CloneWarning,
+	})
 	if err != nil {
-		return fmt.Errorf("passkey: load record for persist: %w", err)
+		return nil, fmt.Errorf("passkey: persist assertion: %w", err)
 	}
-	rec := recordFromCredential(*c)
-	rec.Subject = subject
-	if existing != nil {
-		rec.CreatedAt = existing.CreatedAt
+	if rec == nil {
+		return nil, errors.New("passkey: persist assertion returned nil record")
 	}
-	if err := a.store.Put(ctx, &rec); err != nil {
-		return fmt.Errorf("passkey: persist record: %w", err)
-	}
-	return nil
+	persisted := credentialFromRecord(*rec)
+	return &persisted, nil
 }
 
 // prompt builds the [interaction.PasskeyPromptData] payload exposed to
@@ -405,29 +410,8 @@ func credentialFromRecord(r store.PasskeyRecord) Credential {
 			CloneWarning: r.CloneWarning,
 			Attachment:   r.Attachment,
 		},
-		CreatedAt: r.CreatedAt,
-	}
-}
-
-// recordFromCredential is the inverse of [credentialFromRecord]. The
-// returned record's Subject field is left unset; the caller stamps it
-// from the chain state because [Credential] does not carry a subject
-// (it is keyed by credential ID).
-func recordFromCredential(c Credential) store.PasskeyRecord {
-	return store.PasskeyRecord{
-		CredentialID:    slices.Clone(c.ID),
-		PublicKey:       slices.Clone(c.PublicKey),
-		AAGUID:          slices.Clone(c.Authenticator.AAGUID),
-		SignCount:       c.Authenticator.SignCount,
-		AttestationType: c.AttestationType,
-		Transports:      append([]string(nil), c.Transports...),
-		UserPresent:     c.Flags.UserPresent,
-		UserVerified:    c.Flags.UserVerified,
-		BackupEligible:  c.Flags.BackupEligible,
-		BackupState:     c.Flags.BackupState,
-		CloneWarning:    c.Authenticator.CloneWarning,
-		Attachment:      c.Authenticator.Attachment,
-		CreatedAt:       c.CreatedAt,
+		CreatedAt:         r.CreatedAt,
+		expectedSignCount: r.SignCount,
 	}
 }
 

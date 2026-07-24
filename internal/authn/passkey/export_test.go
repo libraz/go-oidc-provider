@@ -53,6 +53,15 @@ func (a *Authenticator) ContinueResultForTest(ctx context.Context, subject strin
 	return step
 }
 
+// SetExpectedSignCountForTest stamps the persistence snapshot normally
+// carried from FinishLogin to persistCredential. It lets concurrency
+// tests build verifier results without minting a WebAuthn signature.
+func SetExpectedSignCountForTest(cred *Credential, signCount uint32) {
+	if cred != nil {
+		cred.expectedSignCount = signCount
+	}
+}
+
 // ToWebauthnCredentialForTest exposes the package-private translation
 // helper so tests in the _test package can drive the round-trip without
 // reaching into unexported APIs.

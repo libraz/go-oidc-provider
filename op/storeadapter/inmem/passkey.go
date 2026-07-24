@@ -12,9 +12,9 @@ import (
 
 // passkeyStore is the in-memory reference implementation of
 // [store.PasskeyStore]. It mirrors the read/write contract used by the
-// other inmem substores: every Get / List clones the record so callers
-// may mutate it freely, and every Put clones the supplied pointer so a
-// later mutation by the caller does not leak into the map.
+// other inmem substores: every returned record is cloned so callers may
+// mutate it freely, and every Put clones the supplied pointer so a later
+// mutation by the caller does not leak into the map.
 //
 // The map is keyed on the hex encoding of the credential ID — a stable
 // string we can use as a Go map key without copying the byte slice.
@@ -71,6 +71,43 @@ func (s *passkeyStore) Put(_ context.Context, r *store.PasskeyRecord) error {
 	defer s.mu.Unlock()
 	s.m[passkeyKey(r.CredentialID)] = clonePasskeyRecord(r)
 	return nil
+}
+
+// UpdateAssertion implements [store.PasskeyStore]. Holding the write
+// lock across lookup, freshness comparison, and mutation is the
+// reference implementation of the contract's atomicity requirement.
+func (s *passkeyStore) UpdateAssertion(
+	_ context.Context,
+	credentialID []byte,
+	update store.PasskeyAssertionUpdate,
+) (*store.PasskeyRecord, error) {
+	if len(credentialID) == 0 {
+		return nil, errors.New("inmem: passkey assertion missing CredentialID")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec, ok := s.m[passkeyKey(credentialID)]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+
+	// CloneWarning is independent of counter freshness. A clone signal
+	// observed by a stale concurrent assertion must remain sticky.
+	rec.CloneWarning = rec.CloneWarning || update.CloneWarning
+
+	counterless := rec.SignCount == 0 &&
+		update.ExpectedSignCount == 0 &&
+		update.SignCount == 0
+	if update.SignCount > rec.SignCount || counterless {
+		rec.SignCount = update.SignCount
+		rec.UserPresent = update.UserPresent
+		rec.UserVerified = update.UserVerified
+		rec.BackupState = update.BackupState
+	}
+
+	return clonePasskeyRecord(rec), nil
 }
 
 // Delete implements [store.PasskeyStore].

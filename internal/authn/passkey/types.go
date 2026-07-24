@@ -16,10 +16,12 @@ import (
 // field [webauthn.CredentialFlags] keeps for protocol round-tripping.
 //
 // The struct is the value [Verifier.FinishRegistration] returns and the
-// shape callers feed back into BeginLogin / FinishLogin. It is the unit
-// of persistence: callers translate it to a
-// [github.com/libraz/go-oidc-provider/op/store.PasskeyRecord] and store
-// the result through [github.com/libraz/go-oidc-provider/op/store.PasskeyStore.Put].
+// shape callers feed back into BeginLogin / FinishLogin. Registration
+// callers translate it to a
+// [github.com/libraz/go-oidc-provider/op/store.PasskeyRecord] and use
+// [github.com/libraz/go-oidc-provider/op/store.PasskeyStore.Put];
+// assertion callers persist only its mutable fields through
+// [github.com/libraz/go-oidc-provider/op/store.PasskeyStore.UpdateAssertion].
 type Credential struct {
 	// ID is the credential ID emitted by the authenticator at
 	// registration time. It is the primary key of the stored record
@@ -63,6 +65,12 @@ type Credential struct {
 	// bookkeeping; the upstream [webauthn.Credential] does not carry
 	// it.
 	CreatedAt time.Time
+
+	// expectedSignCount is the persisted counter against which this
+	// assertion was verified. It is intentionally package-private:
+	// only the verifier-to-store path consumes it, while public
+	// callers continue to treat Credential as the ceremony result.
+	expectedSignCount uint32
 }
 
 // CredentialFlags mirrors the four authenticator-data flag bits that

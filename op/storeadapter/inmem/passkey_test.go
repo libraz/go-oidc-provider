@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
+	"github.com/libraz/go-oidc-provider/op/store/contract"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -28,6 +29,13 @@ func newPasskeyRecord(credentialID []byte, subject string) *store.PasskeyRecord 
 		Attachment:      "platform",
 		CreatedAt:       time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
 	}
+}
+
+func TestPasskeyStoreContract(t *testing.T) {
+	t.Parallel()
+	contract.RunPasskeys(t, func(*testing.T) store.PasskeyStore {
+		return inmem.New().Passkeys()
+	})
 }
 
 func TestPasskeyStore_PutGetRoundTrip(t *testing.T) {

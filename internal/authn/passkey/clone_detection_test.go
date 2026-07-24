@@ -1,6 +1,7 @@
 package passkey_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"sync"
@@ -13,10 +14,10 @@ import (
 
 // fakePasskeyStore is a minimal stub the clone-detection tests use as
 // the [store.PasskeyStore] argument to NewAuthenticator. The
-// ForceCloneDetectedForTest helper bypasses the store, so none of the
-// methods need real bookkeeping; ListBySubject returns an empty slice
-// and the rest return ErrNotFound to surface a misuse if the
-// production code path ever reaches them in a future test refactor.
+// ForceCloneDetectedForTest helper bypasses the store, so it needs no
+// real bookkeeping; ListBySubject returns an empty slice while
+// assertion persistence projects its update for the UV-result seam.
+// Missing-record reads and deletes return ErrNotFound.
 type fakePasskeyStore struct{}
 
 func (*fakePasskeyStore) Get(_ context.Context, _ []byte) (*store.PasskeyRecord, error) {
@@ -29,6 +30,21 @@ func (*fakePasskeyStore) ListBySubject(_ context.Context, _ string) ([]*store.Pa
 
 func (*fakePasskeyStore) Put(_ context.Context, _ *store.PasskeyRecord) error {
 	return nil
+}
+
+func (*fakePasskeyStore) UpdateAssertion(
+	_ context.Context,
+	credentialID []byte,
+	update store.PasskeyAssertionUpdate,
+) (*store.PasskeyRecord, error) {
+	return &store.PasskeyRecord{
+		CredentialID: bytes.Clone(credentialID),
+		SignCount:    update.SignCount,
+		UserPresent:  update.UserPresent,
+		UserVerified: update.UserVerified,
+		BackupState:  update.BackupState,
+		CloneWarning: update.CloneWarning,
+	}, nil
 }
 
 func (*fakePasskeyStore) Delete(_ context.Context, _ []byte) error {

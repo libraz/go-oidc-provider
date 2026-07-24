@@ -8,7 +8,8 @@ import (
 // PasskeyRecord is the persistent representation of a single registered
 // passkey (W3C WebAuthn Level 3 §4 "Credential Record"). The library
 // reads it on every assertion, mutates the sign-counter / flag fields
-// on success, and writes the new state back through [PasskeyStore.Put].
+// on success, and writes the new state through
+// [PasskeyStore.UpdateAssertion].
 //
 // The struct is a flat carrier so backends do not have to model nested
 // objects: every field maps to a single column / document attribute.
@@ -52,8 +53,8 @@ type PasskeyRecord struct {
 	// observed at the most recent ceremony. The library compares
 	// every assertion's counter against this value (W3C WebAuthn L3
 	// §7.2 step 17) and stamps [CloneWarning] when the new value is
-	// not strictly greater. Backends MUST persist the field
-	// verbatim; the library updates it through [PasskeyStore.Put].
+	// not strictly greater. Backends MUST preserve the field
+	// monotonically through [PasskeyStore.UpdateAssertion].
 	SignCount uint32
 
 	// AttestationType is the attestation format string returned at
@@ -112,12 +113,28 @@ type PasskeyRecord struct {
 	CreatedAt time.Time
 }
 
+// PasskeyAssertionUpdate contains the mutable credential state produced
+// by one verified WebAuthn assertion. ExpectedSignCount is the value
+// against which the assertion was verified; SignCount is the value
+// returned by the authenticator.
+//
+// A [PasskeyStore] applies this update atomically so concurrent
+// assertions cannot rewind security state. Only the fields in this
+// struct may change during assertion persistence. Registration-time
+// fields such as Subject, PublicKey, AAGUID, BackupEligible, and
+// CreatedAt remain untouched.
+type PasskeyAssertionUpdate struct {
+	ExpectedSignCount uint32
+	SignCount         uint32
+	UserPresent       bool
+	UserVerified      bool
+	BackupState       bool
+	CloneWarning      bool
+}
+
 // PasskeyStore is the substore for registered passkeys. It is a
-// transactional substore in spirit — every successful assertion
-// rewrites the record's sign-counter and flag fields — but the library
-// accesses it through a non-transactional handle today because the
-// writes are localised to a single row and do not need to be atomic
-// with token issuance.
+// transactional substore in spirit. Assertion updates are atomic within
+// one credential row but do not need to be atomic with token issuance.
 //
 // Backends MUST NOT log or audit PublicKey: it is a credential
 // identifier in the same threat-model class as a session token, and a
@@ -140,10 +157,32 @@ type PasskeyStore interface {
 	ListBySubject(ctx context.Context, subject string) ([]*PasskeyRecord, error)
 
 	// Put creates or replaces the record identified by
-	// r.CredentialID. Backends implement upsert semantics: the
-	// library uses Put for the initial registration and for every
-	// post-assertion sign-counter / flag update.
+	// r.CredentialID. Backends implement upsert semantics. The
+	// library uses Put for registration and account-management
+	// writes, never for post-assertion security-state updates.
 	Put(ctx context.Context, r *PasskeyRecord) error
+
+	// UpdateAssertion atomically applies a verified assertion's
+	// mutable fields and returns the resulting record.
+	//
+	// Backends MUST preserve these monotonicity rules even when two
+	// assertions verified against the same ExpectedSignCount arrive
+	// in reverse order:
+	//   - SignCount never decreases. An update whose SignCount is
+	//     greater than the stored value replaces SignCount and the
+	//     UserPresent, UserVerified, and BackupState flags. An older
+	//     or equal non-zero update leaves those fields unchanged.
+	//   - CloneWarning is sticky: the stored value is ORed with the
+	//     update value regardless of counter freshness.
+	//   - Counterless authenticators are the exception to the equal
+	//     rule: when stored, expected, and updated counters are all
+	//     zero, the assertion flags are updated.
+	//
+	// The read, comparison, and write MUST be one atomic backend
+	// operation. It MUST return [ErrNotFound] when credentialID does
+	// not exist. The returned record MUST be safe for the caller to
+	// mutate without changing stored state.
+	UpdateAssertion(ctx context.Context, credentialID []byte, update PasskeyAssertionUpdate) (*PasskeyRecord, error)
 
 	// Delete removes the record identified by credentialID. It MUST
 	// return [ErrNotFound] if no such record exists so callers can
