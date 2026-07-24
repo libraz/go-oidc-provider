@@ -3,12 +3,15 @@ package op
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"net/url"
+	"path"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/protectedresource"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
 	"github.com/libraz/go-oidc-provider/op/feature"
@@ -47,6 +50,7 @@ func (c *config) validate() error {
 		c.validateStaticClients,
 		c.validateStoreCapabilities,
 		c.validateProtectedResources,
+		c.validateEndpointRouting,
 	} {
 		if err := fn(); err != nil {
 			return err
@@ -82,7 +86,7 @@ func (c *config) validateRequired() error {
 	if c.issuer == "" {
 		return ErrIssuerRequired
 	}
-	if isNilSubstore(c.store) {
+	if isNilLike(c.store) {
 		return ErrStoreRequired
 	}
 	if len(c.keyset) == 0 {
@@ -117,6 +121,175 @@ func (c *config) validateNetwork() error {
 		}
 	}
 	return nil
+}
+
+type configuredEndpoint struct {
+	name  string
+	value string
+}
+
+type routeReservation struct {
+	name   string
+	path   string
+	prefix bool
+}
+
+// validateEndpointRouting rejects paths that net/http cannot route
+// predictably and detects conflicts in the route set that this exact
+// configuration enables. The check runs before buildRouter so an embedder
+// always receives a configuration error instead of an http.ServeMux panic.
+func (c *config) validateEndpointRouting() error {
+	if err := c.validateConfiguredRoutePaths(); err != nil {
+		return err
+	}
+	return validateRouteCollisions(c.activeRouteReservations())
+}
+
+func (c *config) validateConfiguredRoutePaths() error {
+	if err := validateConfiguredRoutePath("WithMountPrefix", c.mountPrefix, true); err != nil {
+		return err
+	}
+	if p := issuerPath(c.issuer); p != "" {
+		if err := validateConfiguredRoutePath("WithIssuer path", p, false); err != nil {
+			return err
+		}
+	}
+	for _, endpoint := range c.configuredEndpoints() {
+		if err := validateConfiguredRoutePath("WithEndpoints."+endpoint.name, endpoint.value, false); err != nil {
+			return err
+		}
+	}
+	if c.spaUISet {
+		if err := validateConfiguredRoutePath("WithSPAUI.LoginMount", c.spaUI.LoginMount, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateRouteCollisions(routes []routeReservation) error {
+	for i := range routes {
+		for j := i + 1; j < len(routes); j++ {
+			if routesConflict(routes[i], routes[j]) {
+				return &Error{
+					Code: codeConfiguration,
+					Description: "route collision between " + routes[i].name + " (" + routes[i].path +
+						") and " + routes[j].name + " (" + routes[j].path + ")",
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (c *config) configuredEndpoints() []configuredEndpoint {
+	return []configuredEndpoint{
+		{name: "Discovery", value: c.endpoints.Discovery},
+		{name: "JWKS", value: c.endpoints.JWKS},
+		{name: "Authorize", value: c.endpoints.Authorize},
+		{name: "Token", value: c.endpoints.Token},
+		{name: "UserInfo", value: c.endpoints.UserInfo},
+		{name: "EndSession", value: c.endpoints.EndSession},
+		{name: "Introspect", value: c.endpoints.Introspect},
+		{name: "Revoke", value: c.endpoints.Revoke},
+		{name: "PAR", value: c.endpoints.PAR},
+		{name: "Interaction", value: c.endpoints.Interaction},
+		{name: "Session", value: c.endpoints.Session},
+		{name: "Register", value: c.endpoints.Register},
+		{name: "DeviceAuthorization", value: c.endpoints.DeviceAuthorization},
+		{name: "Backchannel", value: c.endpoints.Backchannel},
+		{name: "GrantManagement", value: c.endpoints.GrantManagement},
+	}
+}
+
+func validateConfiguredRoutePath(name, value string, allowRoot bool) error {
+	description := name + " must be a clean absolute path without query, fragment, wildcard, or percent-encoding"
+	if value == "" || !strings.HasPrefix(value, "/") {
+		return &Error{Code: codeConfiguration, Description: description}
+	}
+	if (!allowRoot && value == "/") ||
+		strings.ContainsAny(value, "?#{}%\\") ||
+		path.Clean(value) != value {
+		return &Error{Code: codeConfiguration, Description: description}
+	}
+	for _, r := range value {
+		if r < ' ' || r == 0x7f {
+			return &Error{Code: codeConfiguration, Description: description}
+		}
+	}
+	u, err := url.ParseRequestURI(value)
+	if err != nil || u.IsAbs() || u.Host != "" || u.RawQuery != "" || u.Fragment != "" {
+		return &Error{Code: codeConfiguration, Description: description, Cause: err}
+	}
+	return nil
+}
+
+func (c *config) activeRouteReservations() []routeReservation {
+	routes := []routeReservation{
+		{name: "WithEndpoints.Discovery", path: discoveryEndpointPath(c)},
+		{name: "WithEndpoints.JWKS", path: protocolEndpointPath(c, c.endpoints.JWKS)},
+		{name: "WithEndpoints.Token", path: protocolEndpointPath(c, c.endpoints.Token)},
+		{name: "WithEndpoints.UserInfo", path: protocolEndpointPath(c, c.endpoints.UserInfo)},
+	}
+	authorizeEnabled := grantsRequireAuthorizeEndpoint(c.grants)
+	if authorizeEnabled {
+		routes = append(routes,
+			routeReservation{name: "WithEndpoints.Authorize", path: protocolEndpointPath(c, c.endpoints.Authorize)},
+			routeReservation{name: "WithEndpoints.EndSession", path: protocolEndpointPath(c, c.endpoints.EndSession)},
+			// Session is a public endpoint namespace reserved for the
+			// interaction API. Reserve it even while its individual
+			// operations remain owned by the interaction handler so an
+			// override cannot be shadowed by another endpoint.
+			routeReservation{name: "WithEndpoints.Session", path: protocolEndpointPath(c, c.endpoints.Session), prefix: true},
+		)
+		if c.spaUISet {
+			routes = append(routes, routeReservation{
+				name: "WithSPAUI.LoginMount", path: c.spaUI.LoginMount, prefix: true,
+			})
+		} else {
+			routes = append(routes, routeReservation{
+				name: "WithEndpoints.Interaction",
+				path: protocolEndpointPath(c, c.endpoints.Interaction), prefix: true,
+			})
+		}
+	}
+	if featureEnabled(c.features, feature.PAR) {
+		routes = append(routes, routeReservation{name: "WithEndpoints.PAR", path: protocolEndpointPath(c, c.endpoints.PAR)})
+	}
+	if featureEnabled(c.features, feature.Introspect) {
+		routes = append(routes, routeReservation{name: "WithEndpoints.Introspect", path: protocolEndpointPath(c, c.endpoints.Introspect)})
+	}
+	if featureEnabled(c.features, feature.Revoke) {
+		routes = append(routes, routeReservation{name: "WithEndpoints.Revoke", path: protocolEndpointPath(c, c.endpoints.Revoke)})
+	}
+	if c.dcr != nil {
+		routes = append(routes, routeReservation{name: "WithEndpoints.Register", path: protocolEndpointPath(c, c.endpoints.Register), prefix: true})
+	}
+	if c.deviceCodeGrantConfigured() {
+		routes = append(routes, routeReservation{name: "WithEndpoints.DeviceAuthorization", path: protocolEndpointPath(c, c.endpoints.DeviceAuthorization)})
+	}
+	if c.cibaGrantConfigured() {
+		routes = append(routes, routeReservation{name: "WithEndpoints.Backchannel", path: protocolEndpointPath(c, c.endpoints.Backchannel)})
+	}
+	if c.grantManagementEnabled {
+		routes = append(routes, routeReservation{name: "WithEndpoints.GrantManagement", path: protocolEndpointPath(c, c.endpoints.GrantManagement), prefix: true})
+	}
+	for i := range c.protectedResources {
+		routes = append(routes, routeReservation{
+			name: "WithProtectedResources[" + strconv.Itoa(i) + "]",
+			path: protectedresource.WellKnownPath(c.protectedResources[i].Resource),
+		})
+	}
+	return routes
+}
+
+func routesConflict(a, b routeReservation) bool {
+	if a.path == b.path {
+		return true
+	}
+	return a.prefix && strings.HasPrefix(b.path, a.path+"/") ||
+		b.prefix && strings.HasPrefix(a.path, b.path+"/")
 }
 
 // validateFirstPartyClients enforces the cross-cutting invariants
@@ -175,6 +348,7 @@ func (c *config) validateStaticClients() error {
 	if len(c.staticClients) == 0 {
 		return nil
 	}
+	seen := make(map[string]struct{}, len(c.staticClients))
 	opts := registrationendpoint.StaticClientValidationOptions{
 		AllowedGrantTypes:                    c.staticClientAllowedGrantTypes(),
 		AllowedResponseTypes:                 c.staticClientAllowedResponseTypes(),
@@ -185,6 +359,14 @@ func (c *config) validateStaticClients() error {
 	}
 	for i := range c.staticClients {
 		seed := c.staticClients[i]
+		if _, duplicate := seen[seed.ID]; duplicate {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "WithStaticClients[" + strconv.Itoa(i) +
+					"]: duplicate client_id " + seed.ID,
+			}
+		}
+		seen[seed.ID] = struct{}{}
 		if err := registrationendpoint.ValidateStaticClient(seed, opts); err != nil {
 			return &Error{
 				Code: codeConfiguration,
@@ -405,6 +587,9 @@ func (c *config) validateLoginFlow() error {
 			Description: "WithLoginFlow is mutually exclusive with WithAuthenticators",
 		}
 	}
+	if err := validateLoginFlowDependencies(c.loginFlow); err != nil {
+		return err
+	}
 	if err := validateLoginFlowKinds(c.loginFlow); err != nil {
 		return err
 	}
@@ -439,7 +624,7 @@ func validateLoginFlowKinds(flow LoginFlow) error {
 // inlined into the error message so the embedder can locate the
 // offending entry.
 func checkExternalStepKind(where string, ext ExternalStep) error {
-	if ext.Authenticator == nil {
+	if isNilLike(ext.Authenticator) {
 		return &Error{
 			Code:        codeConfiguration,
 			Description: "WithLoginFlow: " + where + ".Authenticator must not be nil",
@@ -653,7 +838,13 @@ func (c *config) validateAuthenticators() error {
 		return nil
 	}
 	seen := make(map[FactorType]struct{}, len(c.authenticators))
-	for _, a := range c.authenticators {
+	for i, a := range c.authenticators {
+		if isNilLike(a) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithAuthenticators received nil Authenticator at position " + strconv.Itoa(i),
+			}
+		}
 		t := a.Type()
 		if _, dup := seen[t]; dup {
 			return &Error{
@@ -675,7 +866,13 @@ func (c *config) validateInteractions() error {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(c.interactions))
-	for _, ix := range c.interactions {
+	for i, ix := range c.interactions {
+		if isNilLike(ix) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithInteractions received nil Interaction at position " + strconv.Itoa(i),
+			}
+		}
 		name := ix.Name()
 		if name == "" {
 			return &Error{
@@ -848,6 +1045,12 @@ func (c *config) validateStoreCapabilities() error {
 			because: "a grant that mounts the browser authorize endpoint is enabled",
 		},
 		{
+			need:    grantsRequireAuthorizeEndpoint(c.grants),
+			got:     c.store.Interactions(),
+			desc:    "InteractionStore",
+			because: "a grant that mounts the browser authorize endpoint is enabled",
+		},
+		{
 			need:    slices.Contains(c.grants, grant.DeviceCode),
 			got:     c.store.DeviceCodes(),
 			desc:    "DeviceCodeStore",
@@ -869,11 +1072,30 @@ func (c *config) validateStoreCapabilities() error {
 		if !check.need {
 			continue
 		}
-		if isNilSubstore(check.got) {
+		if isNilLike(check.got) {
 			return &Error{
 				Code: codeConfiguration,
 				Description: "Store." + check.desc + "() returned nil but " +
 					check.because,
+			}
+		}
+	}
+	if grantsRequireAuthorizeEndpoint(c.grants) {
+		if tx := transactionalStore(c.store); isNilLike(tx) {
+			return &Error{
+				Code: codeConfiguration,
+				Description: "Store must implement store.Transactional because " +
+					"a grant that mounts the browser authorize endpoint is enabled",
+			}
+		}
+		if interactions := c.store.Interactions(); !isNilLike(interactions) {
+			if _, ok := interactions.(store.InteractionStoreCAS); !ok {
+				return &Error{
+					Code: codeConfiguration,
+					Description: "Store.Interactions() must implement " +
+						"store.InteractionStoreCAS because a grant that mounts " +
+						"the browser authorize endpoint is enabled",
+				}
 			}
 		}
 	}
@@ -894,12 +1116,12 @@ func needsGrantStore(grants []grant.Type) bool {
 	return false
 }
 
-// isNilSubstore reports whether the supplied accessor return value is
-// the typed-nil shape Go interfaces produce when a *T receiver
-// returns nil from an interface-typed method. A direct `== nil`
-// comparison fails on typed nils because the interface still carries
-// the concrete type pointer.
-func isNilSubstore(v any) bool {
+// isNilLike reports whether v is nil or an interface carrying a nil-able
+// concrete value whose value is nil. Public dependencies cross interface
+// boundaries throughout the option surface; a direct `== nil` comparison
+// misses typed-nil pointers and functions and can defer a configuration
+// mistake until the first method call.
+func isNilLike(v any) bool {
 	if v == nil {
 		return true
 	}
@@ -969,7 +1191,7 @@ func validateKeyset(ks Keyset) error {
 			}
 		}
 		seen[k.KeyID] = struct{}{}
-		if isNilSubstore(k.Signer) {
+		if isNilLike(k.Signer) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "keyset entry " + k.KeyID + " has nil Signer",

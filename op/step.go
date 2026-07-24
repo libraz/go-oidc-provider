@@ -482,7 +482,7 @@ type ExternalStep struct {
 // [Authenticator.Begin]. The wrapper performs no transformation: the
 // returned [interaction.Step] is the embedder's value unchanged.
 func (e ExternalStep) Begin(ctx context.Context, in BeginInput) (interaction.Step, error) {
-	if e.Authenticator == nil {
+	if isNilLike(e.Authenticator) {
 		return interaction.Step{}, errors.New("op: ExternalStep.Authenticator is nil")
 	}
 	return e.Authenticator.Begin(ctx, in)
@@ -492,7 +492,7 @@ func (e ExternalStep) Begin(ctx context.Context, in BeginInput) (interaction.Ste
 // [Authenticator.Continue]. The wrapper performs no transformation:
 // the returned [interaction.Step] is the embedder's value unchanged.
 func (e ExternalStep) Continue(ctx context.Context, in ContinueInput) (interaction.Step, error) {
-	if e.Authenticator == nil {
+	if isNilLike(e.Authenticator) {
 		return interaction.Step{}, errors.New("op: ExternalStep.Authenticator is nil")
 	}
 	return e.Authenticator.Continue(ctx, in)

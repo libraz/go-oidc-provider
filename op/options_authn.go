@@ -19,7 +19,7 @@ import (
 // Stable since v0.1.
 func WithInteractionDriver(d interaction.Driver) Option {
 	return optionFunc(func(c *config) error {
-		if d == nil {
+		if isNilLike(d) {
 			return newConfigurationError("WithInteractionDriver received nil Driver", nil)
 		}
 		c.interactionD = d
@@ -102,7 +102,7 @@ const mfaEncryptionKeyLen = 32
 // second-factor [Step] (StepTOTP, StepEmailOTP, StepRecoveryCode)
 // consults the same per-subject counter so an attacker pivoting between
 // factors cannot double their guess budget. The store backs the rolling
-// 24-hour window described in 02-product-design.md §M.6: a 1-hour lockout
+// 24-hour window described in 002-product-design.md §M.6: a 1-hour lockout
 // at 30 cumulative failures, 24-hour at 90.
 //
 // Scope — the counter attaches ONLY to the built-in possession/recovery
@@ -116,11 +116,11 @@ const mfaEncryptionKeyLen = 32
 // cross-factor counter wraps its authenticator with the factor package's
 // own WithLockout helper before registering it.
 //
-// Backends MUST guarantee atomic increment on
-// [store.AuthnLockoutStore.Increment] (in-memory backends hold a
-// mutex around the read-modify-write). The library serialises every
-// other access through the lockout helper so the atomicity
-// requirement is the only invariant backends need to honour.
+// Backends MUST implement the versioned atomic-transition contract on
+// [store.AuthnLockoutStore.CompareAndSwap]. The library uses that one
+// primitive for increments, rolling-window rollover, lock stamping, and
+// success reset so none of those paths can overwrite a concurrently
+// recorded failure.
 //
 // Persistence is the embedder's responsibility: the shipped SQL
 // adapter does not implement [store.AuthnLockoutStore] (there is no
@@ -143,7 +143,7 @@ const mfaEncryptionKeyLen = 32
 // Stable since v0.x.
 func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
 	return optionFunc(func(c *config) error {
-		if s == nil {
+		if isNilLike(s) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithAuthnLockoutStore received nil AuthnLockoutStore",
@@ -208,7 +208,7 @@ func WithAuthenticators(a ...Authenticator) Option {
 			}
 		}
 		for i, item := range a {
-			if item == nil {
+			if isNilLike(item) {
 				return &Error{
 					Code:        codeConfiguration,
 					Description: "WithAuthenticators received nil Authenticator at position " + strconv.Itoa(i),
@@ -230,7 +230,7 @@ func WithAuthenticators(a ...Authenticator) Option {
 // trigger points around it may still evolve before v1.0.
 func WithCaptchaVerifier(v CaptchaVerifier) Option {
 	return optionFunc(func(c *config) error {
-		if v == nil {
+		if isNilLike(v) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithCaptchaVerifier received nil CaptchaVerifier",
@@ -255,7 +255,7 @@ func WithCaptchaVerifier(v CaptchaVerifier) Option {
 // trigger points around it may still evolve before v1.0.
 func WithRiskAssessor(a RiskAssessor) Option {
 	return optionFunc(func(c *config) error {
-		if a == nil {
+		if isNilLike(a) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithRiskAssessor received nil RiskAssessor",
@@ -281,7 +281,7 @@ func WithRiskAssessor(a RiskAssessor) Option {
 // emission points around it may still evolve before v1.0.
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 	return optionFunc(func(c *config) error {
-		if o == nil {
+		if isNilLike(o) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithLoginAttemptObserver received nil LoginAttemptObserver",
@@ -311,7 +311,7 @@ func WithInteractions(i ...Interaction) Option {
 			}
 		}
 		for idx, item := range i {
-			if item == nil {
+			if isNilLike(item) {
 				return &Error{
 					Code:        codeConfiguration,
 					Description: "WithInteractions received nil Interaction at position " + strconv.Itoa(idx),
@@ -438,7 +438,7 @@ func WithLoginFlow(flow LoginFlow) Option {
 				Description: "WithLoginFlow may be called at most once",
 			}
 		}
-		if flow.Primary == nil {
+		if isNilLike(flow.Primary) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithLoginFlow: LoginFlow.Primary must not be nil",
@@ -446,7 +446,7 @@ func WithLoginFlow(flow LoginFlow) Option {
 		}
 		seen := make(map[StepKind]struct{}, len(flow.Rules))
 		for i, r := range flow.Rules {
-			if r.Then == nil {
+			if isNilLike(r.Then) {
 				return &Error{
 					Code:        codeConfiguration,
 					Description: "WithLoginFlow: Rules[" + strconv.Itoa(i) + "].Then must not be nil",

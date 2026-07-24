@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	josev4 "github.com/go-jose/go-jose/v4"
@@ -94,7 +95,7 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 			return nil, fmt.Errorf("%w: duplicate KeyID %q", ErrInvalidEncryptionKey, e.KeyID)
 		}
 		seen[e.KeyID] = struct{}{}
-		if e.PrivateKey == nil {
+		if isNilPrivateKey(e.PrivateKey) {
 			return nil, fmt.Errorf("%w: entry %q has nil PrivateKey", ErrInvalidEncryptionKey, e.KeyID)
 		}
 		pub, alg, err := encPublicAndAlg(e.PrivateKey, e.Algorithm)
@@ -115,6 +116,22 @@ func NewEncryptionSet(entries []EncryptionEntry, opts ...SetOption) (*Encryption
 		now:      cfg.now,
 		observer: cfg.observer,
 	}, nil
+}
+
+// isNilPrivateKey detects both a nil interface and a crypto.PrivateKey
+// interface carrying a typed-nil value. The latter otherwise enters the RSA or
+// ECDSA type-switch arm and panics when public-key fields are inspected.
+func isNilPrivateKey(key crypto.PrivateKey) bool {
+	if key == nil {
+		return true
+	}
+	value := reflect.ValueOf(key)
+	switch value.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // encPublicAndAlg extracts the public half of priv and selects the

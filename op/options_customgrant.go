@@ -70,7 +70,7 @@ func WithCustomGrant(g CustomGrantHandler) Option {
 // non-empty Name, and does not collide with a built-in grant_type
 // wire. The returned name is the one the dispatcher will index by.
 func validateCustomGrantIdentity(g CustomGrantHandler) (string, error) {
-	if g == nil {
+	if isNilLike(g) {
 		return "", ErrCustomGrantNil
 	}
 	name := g.Name()
@@ -137,7 +137,7 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 // Stable since v0.9.1.
 func RegisterTokenExchange(policy TokenExchangePolicy) Option {
 	return optionFunc(func(c *config) error {
-		if policy == nil {
+		if isNilLike(policy) {
 			return ErrTokenExchangePolicyNil
 		}
 		if c.tokenExchangePolicy != nil {

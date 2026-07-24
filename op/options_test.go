@@ -44,6 +44,10 @@ func TestWithMountPrefix_Validates(t *testing.T) {
 		{"empty", "", true},
 		{"no leading slash", "oidc", true},
 		{"trailing slash", "/oidc/", true},
+		{"query", "/oidc?debug=1", true},
+		{"duplicate slash", "/oidc//tenant", true},
+		{"serve mux wildcard", "/oidc/{tenant}", true},
+		{"percent encoded alias", "/%6fidc", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,6 +72,105 @@ func TestWithEndpoints_OverrideAndDefaults(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatal("expected non-nil provider")
+	}
+}
+
+func TestWithEndpoints_RejectsMalformedPaths(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		endpoints op.Endpoints
+		wantField string
+	}{
+		{name: "relative", endpoints: op.Endpoints{Token: "token"}, wantField: "Token"},
+		{name: "host pattern", endpoints: op.Endpoints{Token: "//example.com/token"}, wantField: "Token"},
+		{name: "query", endpoints: op.Endpoints{Token: "/token?debug=1"}, wantField: "Token"},  //nolint:gosec // URL path test input, not a credential.
+		{name: "fragment", endpoints: op.Endpoints{Token: "/token#debug"}, wantField: "Token"}, //nolint:gosec // URL path test input, not a credential.
+		{name: "trailing slash", endpoints: op.Endpoints{Token: "/token/"}, wantField: "Token"},
+		{name: "unclean", endpoints: op.Endpoints{Token: "/token//nested"}, wantField: "Token"}, //nolint:gosec // URL path test input, not a credential.
+		{name: "serve mux wildcard", endpoints: op.Endpoints{Token: "/token/{id}"}, wantField: "Token"},
+		{name: "percent encoded alias", endpoints: op.Endpoints{Token: "/%74oken"}, wantField: "Token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := op.New(append(validBaseOpts(t), op.WithEndpoints(tc.endpoints))...)
+			if err == nil {
+				t.Fatal("expected malformed endpoint path to fail construction")
+			}
+			if !strings.Contains(err.Error(), "WithEndpoints."+tc.wantField) {
+				t.Errorf("err=%v want field WithEndpoints.%s", err, tc.wantField)
+			}
+		})
+	}
+}
+
+func TestWithEndpoints_RejectsActiveRouteCollisions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		endpoints op.Endpoints
+		wantLeft  string
+		wantRight string
+	}{
+		{
+			name:      "exact core endpoints",
+			endpoints: op.Endpoints{JWKS: "/shared", Token: "/shared"},
+			wantLeft:  "JWKS",
+			wantRight: "Token",
+		},
+		{
+			name:      "interaction session prefix",
+			endpoints: op.Endpoints{Interaction: "/flow", Session: "/flow/session"},
+			wantLeft:  "Interaction",
+			wantRight: "Session",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := op.New(append(validBaseOpts(t), op.WithEndpoints(tc.endpoints))...)
+			if err == nil {
+				t.Fatal("expected colliding endpoint routes to fail construction")
+			}
+			if !strings.Contains(err.Error(), tc.wantLeft) || !strings.Contains(err.Error(), tc.wantRight) {
+				t.Errorf("err=%v want both %s and %s", err, tc.wantLeft, tc.wantRight)
+			}
+		})
+	}
+}
+
+func TestWithEndpoints_CollisionCheckUsesEnabledRouteSet(t *testing.T) {
+	t.Parallel()
+
+	endpoints := op.WithEndpoints(op.Endpoints{
+		Introspect: "/optional",
+		Revoke:     "/optional",
+	})
+	if _, err := op.New(append(validBaseOpts(t), endpoints)...); err != nil {
+		t.Fatalf("disabled optional endpoints must not collide: %v", err)
+	}
+	if _, err := op.New(append(validBaseOpts(t),
+		endpoints,
+		op.WithFeature(feature.Introspect),
+	)...); err != nil {
+		t.Fatalf("one enabled optional endpoint must construct: %v", err)
+	}
+
+	_, err := op.New(append(validBaseOpts(t),
+		endpoints,
+		op.WithFeature(feature.Introspect),
+		op.WithFeature(feature.Revoke),
+	)...)
+	if err == nil {
+		t.Fatal("expected two enabled optional endpoints at the same path to fail")
+	}
+	if !strings.Contains(err.Error(), "Introspect") || !strings.Contains(err.Error(), "Revoke") {
+		t.Errorf("err=%v want Introspect and Revoke", err)
 	}
 }
 

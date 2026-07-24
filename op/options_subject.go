@@ -27,7 +27,7 @@ package op
 // Stable since v0.9.1.
 func WithSubjectGenerator(g SubjectGenerator) Option {
 	return optionFunc(func(c *config) error {
-		if g == nil {
+		if isNilLike(g) {
 			return ErrSubjectGeneratorRequired
 		}
 		if c.subjectGenerator != nil {

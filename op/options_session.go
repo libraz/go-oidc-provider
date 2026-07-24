@@ -222,7 +222,7 @@ func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 // Stable since v0.1.
 func WithDPoPNonceSource(source DPoPNonceSource) Option {
 	return optionFunc(func(c *config) error {
-		if source == nil {
+		if isNilLike(source) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithDPoPNonceSource received nil DPoPNonceSource",
@@ -420,7 +420,7 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 // Stable since v0.x.
 func WithJWKSHTTPTransport(rt http.RoundTripper) Option {
 	return optionFunc(func(c *config) error {
-		if rt == nil {
+		if isNilLike(rt) {
 			return &Error{
 				Code:        codeConfiguration,
 				Description: "WithJWKSHTTPTransport received nil http.RoundTripper",

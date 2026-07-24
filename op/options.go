@@ -345,6 +345,13 @@ type config struct {
 	// input; the option layer only validates seeds and aggregates.
 	staticClients []store.Client
 
+	// staticClientSecrets temporarily retains the plaintext supplied by
+	// ConfidentialClient seeds so startup reconciliation can compare a
+	// freshly salted desired hash with an existing hash semantically. New
+	// clears the map before returning; plaintext never reaches a store or the
+	// constructed Provider.
+	staticClientSecrets map[string]string
+
 	// firstPartyClients carries the client_id values supplied
 	// through [WithFirstPartyClients]. Validated against
 	// [config.staticClients] in [config.validate] so unknown ids
@@ -763,7 +770,7 @@ func WithIssuer(issuer string) Option {
 // Stable since v0.1.
 func WithStore(s store.Store) Option {
 	return optionFunc(func(c *config) error {
-		if isNilSubstore(s) {
+		if isNilLike(s) {
 			return ErrStoreRequired
 		}
 		c.store = s
@@ -795,6 +802,12 @@ func WithKeyset(ks Keyset) Option {
 // Stable since v0.1.
 func WithClock(clock Clock) Option {
 	return optionFunc(func(c *config) error {
+		if isNilLike(clock) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithClock received nil Clock",
+			}
+		}
 		c.clock = clock
 		return nil
 	})
@@ -928,9 +941,10 @@ func WithAuditLogger(logger *slog.Logger) Option {
 // HTTP endpoints. The default is "/oidc". The discovery document is always
 // served under /.well-known regardless of this value (per OpenID Connect
 // Discovery 1.0 §4); every other endpoint is routed under prefix.
-// The supplied prefix MUST start with "/" and MUST NOT end with "/". Empty
-// values reject; the empty-prefix case (mounting at root) is supported by
-// passing "/" explicitly.
+// The supplied prefix MUST be a clean absolute request path beginning with
+// "/" and MUST NOT contain a query, fragment, wildcard, percent-encoding, or
+// trailing slash. Empty values reject; the empty-prefix case (mounting at
+// root) is supported by passing "/" explicitly.
 // Stable since v0.1.
 func WithMountPrefix(prefix string) Option {
 	return optionFunc(func(c *config) error {

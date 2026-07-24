@@ -25,6 +25,31 @@ func TestNewEncryptionSet_RejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestNewEncryptionSet_RejectsTypedNilPrivateKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		key  any
+	}{
+		{name: "rsa", key: (*rsa.PrivateKey)(nil)},
+		{name: "ecdsa", key: (*ecdsa.PrivateKey)(nil)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := keys.NewEncryptionSet([]keys.EncryptionEntry{{
+				KeyID:      "typed-nil-" + tc.name,
+				PrivateKey: tc.key,
+			}})
+			if !errors.Is(err, keys.ErrInvalidEncryptionKey) {
+				t.Fatalf("error = %v, want ErrInvalidEncryptionKey", err)
+			}
+		})
+	}
+}
+
 // TestNewEncryptionSet_RejectsDuplicateKID guards JWKS shape: every
 // kid MUST be unique within the set so RPs can route an inbound JWE
 // to a single private key.

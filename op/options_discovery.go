@@ -422,6 +422,9 @@ func WithOpenIDScopeOptional() Option {
 // Stable since v0.x.
 func WithACRPolicy(p ACRPolicy) Option {
 	return optionFunc(func(c *config) error {
+		if isNilLike(p) {
+			p = nil
+		}
 		c.acrPolicy = p
 		return nil
 	})

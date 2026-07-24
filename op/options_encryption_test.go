@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/libraz/go-oidc-provider/op"
 )
 
@@ -70,6 +72,47 @@ func TestWithEncryptionKeyset_RejectsNilPrivateKey(t *testing.T) {
 	)...)
 	if err == nil {
 		t.Fatalf("expected error for nil PrivateKey, got nil")
+	}
+}
+
+func TestWithEncryptionKeyset_RejectsTypedNilPrivateKeyBeforeMetricsRegistration(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		key  any
+	}{
+		{name: "rsa", key: (*rsa.PrivateKey)(nil)},
+		{name: "ecdsa", key: (*ecdsa.PrivateKey)(nil)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			registry := prometheus.NewRegistry()
+			_, err := op.New(append(validBaseOpts(t),
+				op.WithPrometheus(registry),
+				op.WithEncryptionKeyset(op.EncryptionKeyset{{
+					KeyID:      "typed-nil-" + tc.name,
+					PrivateKey: tc.key,
+				}}),
+			)...)
+			if err == nil {
+				t.Fatal("op.New accepted a typed-nil encryption PrivateKey")
+			}
+			if !op.IsServerError(err) {
+				t.Fatalf("typed-nil PrivateKey error is not a configuration error: %v", err)
+			}
+			if !strings.Contains(err.Error(), "entry 0 PrivateKey") {
+				t.Fatalf("error %q does not identify the typed-nil field", err)
+			}
+
+			// A second construction using the same registry succeeds only if
+			// validation rejected the typed nil before registering collectors.
+			if _, err := op.New(append(validBaseOpts(t), op.WithPrometheus(registry))...); err != nil {
+				t.Fatalf("typed-nil validation left a metrics side effect: %v", err)
+			}
+		})
 	}
 }
 

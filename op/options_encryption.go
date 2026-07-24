@@ -1,6 +1,8 @@
 package op
 
 import (
+	"strconv"
+
 	"github.com/libraz/go-oidc-provider/internal/jose"
 )
 
@@ -199,7 +201,13 @@ func (c *config) validateEncryptionKeyset() error {
 	for _, k := range c.keyset {
 		signingKids[k.KeyID] = struct{}{}
 	}
-	for _, k := range c.encryptionKeyset {
+	for i, k := range c.encryptionKeyset {
+		if isNilLike(k.PrivateKey) {
+			return &Error{
+				Code:        codeConfiguration,
+				Description: "WithEncryptionKeyset: entry " + strconv.Itoa(i) + " PrivateKey is nil",
+			}
+		}
 		if _, dup := signingKids[k.KeyID]; dup {
 			return &Error{
 				Code: codeConfiguration,
