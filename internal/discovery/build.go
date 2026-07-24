@@ -493,7 +493,7 @@ func newBaseDocument(in Input) Document {
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: defaultAuthMethods(in.AuthMethodsSupported),
 		BackchannelLogoutSupported:        true,
-		BackchannelLogoutSessionSupported: true,
+		BackchannelLogoutSessionSupported: false,
 	}
 }
 

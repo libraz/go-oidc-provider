@@ -3,10 +3,12 @@ package backchannel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/timex"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -29,10 +31,10 @@ const DefaultMaxTargets = 256
 // (op depends on internal, not the reverse). The op package guards
 // the values with a mirror test (op/audit_test.go).
 const (
-	eventDelivered         = "logout.back_channel.delivered"
-	eventFailed            = "logout.back_channel.failed"
-	eventOverflow          = "logout.back_channel.overflow"
-	eventNoSessionsForSubj = "bcl.no_sessions_for_subject"
+	eventDelivered         = string(auditevent.AuditLogoutBackChannelDelivered)
+	eventFailed            = string(auditevent.AuditLogoutBackChannelFailed)
+	eventOverflow          = string(auditevent.AuditLogoutBackChannelOverflow)
+	eventNoSessionsForSubj = string(auditevent.AuditBCLNoSessionsForSubject)
 )
 
 // SessionDurabilityPosture is the embedder's declaration of how
@@ -83,9 +85,9 @@ func (p SessionDurabilityPosture) String() string {
 // [internal/endsession.Deps]) and reuses it across logout events;
 // the struct is safe for concurrent use.
 //
-// The coordinator pulls audience clients from the [op/store.GrantStore]
-// (every active grant for the terminating subject becomes a candidate)
-// and looks each up in the [op/store.ClientStore]. Clients without a
+// The coordinator pulls a bounded, distinct audience page from the
+// [op/store.GrantStore] and looks each client up in the
+// [op/store.ClientStore]. Clients without a
 // registered backchannel_logout_uri are skipped silently — they have
 // opted out by configuration, not by error. Deliveries run through a bounded
 // worker pool; the coordinator blocks until all admitted deliveries complete
@@ -237,13 +239,13 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 type Notice struct {
 	// Subject is the OP-internal subject identifier of the
 	// terminating session. Required: the coordinator uses it as the
-	// query key against [op/store.GrantStore.ListBySubject].
+	// query key against [op/store.GrantStore.ListClientIDsBySubject].
 	Subject string
 
-	// SessionID is the OP session identifier. Optional but strongly
-	// recommended: every client that registered
-	// backchannel_logout_session_required is skipped when this field
-	// is empty.
+	// SessionID is the OP browser-session identifier used only for
+	// audit correlation. It is never copied into a Logout Token:
+	// the current grant model cannot prove that an OP-side SID belongs
+	// to a particular RP.
 	SessionID string
 
 	// RequestID is the per-request correlation identifier propagated
@@ -260,29 +262,28 @@ type Notice struct {
 // return error so a single broken RP does not defeat the entire
 // fan-out.
 //
-// The function returns an error only when the precondition fails:
-// empty Subject, or a store fault on the initial ListBySubject. A
-// per-RP delivery failure is logged via [audit.Event] of name
-// [eventFailed]; a successful delivery emits [eventDelivered].
+// The function returns an error when a precondition fails, the grant audience
+// page cannot be read, or one or more ClientStore lookups fail. Lookup faults
+// are aggregated after all resolvable targets have been delivered; missing
+// clients are stale grants and are skipped. Each backend fault also emits a
+// retryable [eventFailed] evidence record.
 func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 	if notice.Subject == "" {
 		return 0, errors.New("backchannel: Notice.Subject is empty")
 	}
-	grants, err := c.grants.ListBySubject(ctx, notice.Subject)
+	page, err := c.grants.ListClientIDsBySubject(ctx, notice.Subject, "", c.maxTargets)
 	if err != nil {
 		return 0, err
 	}
-	targets, err := c.resolveTargets(ctx, grants, notice.Subject, notice.SessionID)
-	if err != nil {
-		return 0, err
+	if page.NextCursor != "" {
+		c.emitOverflow(ctx, notice, page.NextCursor)
 	}
+	targets, resolutionErr := c.resolveTargets(ctx, page.ClientIDs, notice)
 	if len(targets) == 0 {
-		c.emitNoSessionsForSubject(ctx, notice)
-		return 0, nil
-	}
-	if len(targets) > c.maxTargets {
-		c.emitOverflow(ctx, notice, len(targets)-c.maxTargets)
-		targets = targets[:c.maxTargets]
+		if resolutionErr == nil {
+			c.emitNoSessionsForSubject(ctx, notice)
+		}
+		return 0, resolutionErr
 	}
 	now := c.clock.Now().UTC()
 	iat := now.Unix()
@@ -305,10 +306,10 @@ func (c *Coordinator) Notify(ctx context.Context, notice Notice) (int, error) {
 	}
 	close(jobs)
 	wg.Wait()
-	return len(targets), nil
+	return len(targets), resolutionErr
 }
 
-func (c *Coordinator) emitOverflow(ctx context.Context, notice Notice, dropped int) {
+func (c *Coordinator) emitOverflow(ctx context.Context, notice Notice, nextCursor string) {
 	c.emitter.Emit(ctx, audit.Event{
 		Name:      eventOverflow,
 		Level:     audit.LevelWarn,
@@ -317,61 +318,103 @@ func (c *Coordinator) emitOverflow(ctx context.Context, notice Notice, dropped i
 		SessionID: notice.SessionID,
 		RequestID: notice.RequestID,
 		Extras: map[string]any{
-			"dropped_targets": dropped,
-			"max_targets":     c.maxTargets,
+			"max_targets":  c.maxTargets,
+			"more_targets": true,
+			"next_cursor":  nextCursor,
 		},
 	})
 }
 
-// resolveTargets walks the grants returned by the store, looks each
-// candidate client up in the registry, and projects the eligible
+// resolveTargets walks a bounded page of distinct client IDs, looks each
+// candidate up in the registry, and projects the eligible
 // ones into [Target] values. A client is eligible when:
 //
-//   - the registry returns the record without error (a missing client
-//     is skipped silently — the grant likely outlived the
-//     registration);
+//   - the registry returns the record without error. A missing client is
+//     skipped silently because the grant likely outlived the registration;
+//     backend faults are audited, aggregated, and returned after the other
+//     candidates have been resolved;
 //   - BackchannelLogoutURI is non-empty;
-//   - if BackchannelLogoutSessionRequired is true the notice carries
-//     a SessionID — otherwise the spec contract cannot be honoured.
-func (c *Coordinator) resolveTargets(ctx context.Context, grants []*store.Grant, rawSubject, sid string) ([]Target, error) { //nolint:gocognit // Target resolution is intentionally linear to keep skip reasons local.
-	out := make([]Target, 0, len(grants))
-	seen := make(map[string]struct{}, len(grants))
-	for _, g := range grants {
-		if g == nil {
+//   - BackchannelLogoutSessionRequired is false. New registrations with
+//     true are rejected; skipping legacy rows avoids issuing a sub-only
+//     token to a client that explicitly requires sid.
+//
+//nolint:gocognit // Target resolution is intentionally linear to keep skip reasons local.
+func (c *Coordinator) resolveTargets(
+	ctx context.Context,
+	clientIDs []string,
+	notice Notice,
+) ([]Target, error) {
+	out := make([]Target, 0, len(clientIDs))
+	var faults []error
+	for _, clientID := range clientIDs {
+		client, err := c.clients.GetClient(ctx, clientID)
+		if errors.Is(err, store.ErrNotFound) {
 			continue
 		}
-		if _, dup := seen[g.ClientID]; dup {
+		if err != nil {
+			fault := fmt.Errorf("resolve client %q: %w", clientID, err)
+			faults = append(faults, fault)
+			c.emitResolutionFailure(ctx, notice, clientID, "client_lookup", fault)
 			continue
 		}
-		client, err := c.clients.GetClient(ctx, g.ClientID)
-		if err != nil || client == nil {
+		if client == nil {
+			fault := fmt.Errorf("resolve client %q: ClientStore returned nil client without error", clientID)
+			faults = append(faults, fault)
+			c.emitResolutionFailure(ctx, notice, clientID, "client_lookup", fault)
 			continue
 		}
 		if client.BackchannelLogoutURI == "" {
 			continue
 		}
-		if client.BackchannelLogoutSessionRequired && sid == "" {
+		if client.BackchannelLogoutSessionRequired {
 			continue
 		}
-		subject := rawSubject
+		subject := notice.Subject
 		if c.subjectProjector != nil {
-			projected, err := c.subjectProjector(ctx, rawSubject, client)
+			projected, err := c.subjectProjector(ctx, notice.Subject, client)
 			if err != nil {
-				return nil, err
+				fault := fmt.Errorf("project subject for client %q: %w", clientID, err)
+				faults = append(faults, fault)
+				c.emitResolutionFailure(ctx, notice, clientID, "subject_projection", fault)
+				continue
 			}
 			if projected == "" {
-				return nil, errors.New("backchannel: SubjectProjector returned empty subject")
+				fault := fmt.Errorf("project subject for client %q: empty subject", clientID)
+				faults = append(faults, fault)
+				c.emitResolutionFailure(ctx, notice, clientID, "subject_projection", fault)
+				continue
 			}
 			subject = projected
 		}
-		seen[g.ClientID] = struct{}{}
 		out = append(out, Target{
-			ClientID: client.ID,
+			ClientID: clientID,
 			Subject:  subject,
 			URL:      client.BackchannelLogoutURI,
 		})
 	}
-	return out, nil
+	return out, errors.Join(faults...)
+}
+
+func (c *Coordinator) emitResolutionFailure(
+	ctx context.Context,
+	notice Notice,
+	clientID, stage string,
+	cause error,
+) {
+	c.emitter.Emit(ctx, audit.Event{
+		Name:      eventFailed,
+		Level:     audit.LevelError,
+		Message:   "back-channel logout target resolution failed",
+		ActorID:   notice.Subject,
+		ClientID:  clientID,
+		SessionID: notice.SessionID,
+		RequestID: notice.RequestID,
+		Extras: map[string]any{
+			"error":         cause.Error(),
+			"failure_stage": stage,
+			"retryable":     true,
+		},
+	})
 }
 
 // dispatchOne mints, signs, and ships a Logout Token for one
@@ -390,7 +433,6 @@ func (c *Coordinator) dispatchOne(
 		IssuedAt:  iat,
 		ExpiresAt: exp,
 		Subject:   target.Subject,
-		SessionID: notice.SessionID,
 	}
 	token, err := SignLogoutToken(c.signing, claims)
 	if err != nil {

@@ -4,9 +4,10 @@
 // The OP sends a signed Logout Token to every relying party that
 // registered a backchannel_logout_uri when the end-user's session
 // terminates. The token is a JWS-signed JWT (typ "logout+jwt") that
-// names the audience client and identifies the session by `sub` and /
-// or `sid`; the RP is expected to terminate any local session matching
-// the claim.
+// names the audience client and identifies the session by `sub`; the
+// RP is expected to terminate any local session matching the claim.
+// The coordinator does not emit `sid` until the grant model can retain
+// and recover an RP-specific session lineage.
 //
 // Package layout:
 //

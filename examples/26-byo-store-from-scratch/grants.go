@@ -48,6 +48,7 @@ FROM vault_consent_ledger`
 	grantByID            = grantSelectBase + ` WHERE ledger_id = ? AND is_revoked = 0`
 	grantBySubjectClient = grantSelectBase + ` WHERE principal = ? AND relying_party = ? AND is_revoked = 0 ORDER BY touched_epoch DESC LIMIT 1`
 	grantBySubject       = grantSelectBase + ` WHERE principal = ? AND is_revoked = 0`
+	grantClientIDs       = `SELECT DISTINCT relying_party FROM vault_consent_ledger WHERE principal = ? AND relying_party > ? AND is_revoked = 0 ORDER BY relying_party LIMIT ?`
 	grantRevoke          = `UPDATE vault_consent_ledger SET is_revoked = 1 WHERE ledger_id = ? AND is_revoked = 0`
 	grantHasAny          = `SELECT 1 FROM vault_consent_ledger LIMIT 1`
 )
@@ -103,6 +104,38 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 		return nil, fmt.Errorf("grants.ListBySubject.iter: %w", err)
 	}
 	return out, nil
+}
+
+func (s *grantStore) ListClientIDsBySubject(
+	ctx context.Context,
+	subject, cursor string,
+	limit int,
+) (store.GrantClientPage, error) {
+	if limit <= 0 {
+		return store.GrantClientPage{}, errors.New("grants.ListClientIDsBySubject: limit must be positive")
+	}
+	rows, err := s.q.QueryContext(ctx, grantClientIDs, subject, cursor, limit+1)
+	if err != nil {
+		return store.GrantClientPage{}, fmt.Errorf("grants.ListClientIDsBySubject: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	clientIDs := make([]string, 0, limit+1)
+	for rows.Next() {
+		var clientID string
+		if err := rows.Scan(&clientID); err != nil {
+			return store.GrantClientPage{}, fmt.Errorf("grants.ListClientIDsBySubject.scan: %w", err)
+		}
+		clientIDs = append(clientIDs, clientID)
+	}
+	if err := rows.Err(); err != nil {
+		return store.GrantClientPage{}, fmt.Errorf("grants.ListClientIDsBySubject.iter: %w", err)
+	}
+	page := store.GrantClientPage{ClientIDs: clientIDs}
+	if len(page.ClientIDs) > limit {
+		page.ClientIDs = page.ClientIDs[:limit]
+		page.NextCursor = page.ClientIDs[len(page.ClientIDs)-1]
+	}
+	return page, nil
 }
 
 func (s *grantStore) Delete(ctx context.Context, id string) error {

@@ -98,6 +98,12 @@ func TestBuild_FormsAbsoluteURLs(t *testing.T) {
 			t.Errorf("got %q want %q", got, want)
 		}
 	}
+	if !doc.BackchannelLogoutSupported {
+		t.Error("backchannel_logout_supported must be true")
+	}
+	if doc.BackchannelLogoutSessionSupported {
+		t.Error("backchannel_logout_session_supported must be false without RP-specific SID lineage")
+	}
 }
 
 func TestBuild_RootMountPrefix(t *testing.T) {

@@ -74,11 +74,10 @@ type LogoutClaims struct {
 	// signer rejects an empty pair.
 	Subject string
 
-	// SessionID is the OP's session identifier. The OP emits it
-	// whenever the client registered backchannel_logout_session_required
-	// or whenever the active session has a stable id (always the case
-	// in this library). RPs identify their local session by sub, sid,
-	// or both.
+	// SessionID is an optional client-specific session identifier. The
+	// provider's coordinator currently leaves it empty because grants do
+	// not retain RP-specific session lineage. It remains available to this
+	// low-level signer for a future lineage-aware coordinator.
 	SessionID string
 
 	// JTI is the unique JWT identifier. The signer fills it in when

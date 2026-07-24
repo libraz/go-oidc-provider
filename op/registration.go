@@ -339,8 +339,9 @@ type ClientMetadata struct {
 
 	// BackchannelLogoutSessionRequired requests a "sid" claim on the
 	// logout_token (OIDC Back-Channel Logout 1.0 §2.5). The library
-	// honours the request only when the client has a session at the
-	// OP; back-channel delivery itself is independent of this flag.
+	// currently rejects true because it cannot recover an RP-specific
+	// session lineage. Back-channel delivery remains available through
+	// [ClientMetadata.BackchannelLogoutURI] with sub-only tokens.
 	//
 	// Stable since v0.9.1.
 	BackchannelLogoutSessionRequired bool

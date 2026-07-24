@@ -164,6 +164,53 @@ func TestTxGrants_ListBySubject_NoDedup(t *testing.T) {
 	}
 }
 
+func TestTxGrants_ListClientIDsBySubject_UsesStagedView(t *testing.T) {
+	t.Parallel()
+	now := contract.Reference
+	s := inmem.New(inmem.WithClock(fakeClock{now: now}))
+	ctx := context.Background()
+	if err := s.Grants().Save(ctx, &store.Grant{
+		ID: "parent-c", Subject: "subject", ClientID: "client-c",
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("pre-seed Save: %v", err)
+	}
+	tx, err := s.BeginTx(ctx)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, grant := range []*store.Grant{
+		{ID: "staged-a-1", Subject: "subject", ClientID: "client-a", CreatedAt: now, UpdatedAt: now},
+		{ID: "staged-a-2", Subject: "subject", ClientID: "client-a", CreatedAt: now, UpdatedAt: now},
+		{ID: "staged-b", Subject: "subject", ClientID: "client-b", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := tx.Grants().Save(ctx, grant); err != nil {
+			t.Fatalf("tx Save %s: %v", grant.ID, err)
+		}
+	}
+
+	first, err := tx.Grants().ListClientIDsBySubject(ctx, "subject", "", 2)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first.ClientIDs) != 2 ||
+		first.ClientIDs[0] != "client-a" ||
+		first.ClientIDs[1] != "client-b" ||
+		first.NextCursor != "client-b" {
+		t.Fatalf("first page = %+v", first)
+	}
+	second, err := tx.Grants().ListClientIDsBySubject(ctx, "subject", first.NextCursor, 2)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second.ClientIDs) != 1 ||
+		second.ClientIDs[0] != "client-c" ||
+		second.NextCursor != "" {
+		t.Fatalf("second page = %+v", second)
+	}
+}
+
 // TestTxGrants_ListBySubject_NoDedup_AfterCommit confirms that both rows
 // remain visible after the transaction commits and a direct Grants() call
 // lists them.

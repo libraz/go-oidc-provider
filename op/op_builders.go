@@ -596,10 +596,10 @@ func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error
 
 // buildBackchannelCoordinator constructs the [backchannel.Coordinator]
 // the /end_session handler dispatches to after the session is
-// terminated. The coordinator is always wired: its store traversal
-// short-circuits when no RP has registered a backchannel_logout_uri,
-// so the cost on a deployment that does not use back-channel logout
-// is one map walk per logout.
+// terminated. The coordinator is always wired. It reads at most one
+// keyset-paginated page of distinct grant client IDs and short-circuits when
+// no RP has registered a backchannel_logout_uri, bounding registry lookups
+// even when the subject has many grant rows.
 //
 // The OP signs Logout Tokens with the active OP signing key, sharing
 // the rotation lifecycle with id_tokens. The HTTP transport defaults

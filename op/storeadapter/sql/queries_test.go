@@ -58,6 +58,57 @@ func TestBuildQueries_AcrossDialects(t *testing.T) {
 	}
 }
 
+func TestGrantClientPageQueryIsDistinctKeysetBounded(t *testing.T) {
+	t.Parallel()
+	for _, d := range []Dialect{SQLite(), MySQL(), Postgres()} {
+		t.Run(d.Name(), func(t *testing.T) {
+			t.Parallel()
+			q, err := buildQueries(d, defaultNames())
+			if err != nil {
+				t.Fatalf("buildQueries(%s): %v", d.Name(), err)
+			}
+			query := q.grantListClientIDs
+			for _, required := range []string{
+				"SELECT DISTINCT client_id",
+				"client_id > ",
+				"ORDER BY client_id",
+				"LIMIT ",
+			} {
+				if !strings.Contains(query, required) {
+					t.Errorf("grantListClientIDs missing %q: %s", required, query)
+				}
+			}
+		})
+	}
+}
+
+func TestGrantTransactionQueriesLockReadModifyWriteRows(t *testing.T) {
+	t.Parallel()
+
+	for _, dialect := range []Dialect{SQLite(), MySQL(), Postgres()} {
+		t.Run(dialect.Name(), func(t *testing.T) {
+			t.Parallel()
+			queries, err := buildQueries(dialect, defaultNames())
+			if err != nil {
+				t.Fatalf("buildQueries(%s): %v", dialect.Name(), err)
+			}
+			for name, query := range map[string]string{
+				"Find":                queries.grantFindForUpdate,
+				"FindBySubjectClient": queries.grantFindBySubjectClientForUpdate,
+			} {
+				hasLock := strings.Contains(query, "FOR UPDATE")
+				if dialect.Name() == "sqlite" && hasLock {
+					t.Errorf("%s %s unexpectedly uses unsupported FOR UPDATE: %s",
+						dialect.Name(), name, query)
+				}
+				if dialect.Name() != "sqlite" && !hasLock {
+					t.Errorf("%s %s lacks row lock: %s", dialect.Name(), name, query)
+				}
+			}
+		})
+	}
+}
+
 // TestBuildQueries_RejectsHostileNames asserts Layer 4: even if a
 // caller manages to forge a nameMap with a hostile value (bypassing
 // applyOverrides), buildQueries refuses to operate. The hostile values

@@ -24,13 +24,12 @@
 //
 // Wiring details:
 //
-//   - ConfidentialClient surfaces BackchannelLogoutURI and
-//     BackchannelLogoutSessionRequired alongside the rest of the
-//     spec-standard metadata, so the client lands through the typed
-//     WithStaticClients seam without an embedder reaching into
-//     store.ClientRegistry. PostLogoutRedirectURIs would join the
-//     same shape if the example exercised RP-Initiated Logout
-//     redirects.
+//   - ConfidentialClient surfaces BackchannelLogoutURI alongside the
+//     rest of the spec-standard metadata, so the client lands through
+//     the typed WithStaticClients seam without an embedder reaching
+//     into store.ClientRegistry. The OP advertises session support as
+//     false and sends sub-only Logout Tokens until it can persist an
+//     RP-specific SID lineage.
 //   - WithBackchannelLogoutHTTPClient is OPTIONAL — the package
 //     default applies WithBackchannelLogoutTimeout to a fresh client
 //     and refuses 3xx redirects on the POST. Override only when the
@@ -79,13 +78,12 @@ func main() {
 		// https for backchannel_logout_uri on the public Internet.
 		op.WithAllowInsecureBackchannelLogoutForDev(),
 		op.WithStaticClients(op.ConfidentialClient{
-			ID:                               clientID,
-			Secret:                           "bcl-demo-secret-rotate-me",
-			RedirectURIs:                     []string{"http://127.0.0.1:5173/callback"},
-			Scopes:                           []string{"openid", "profile"},
-			BackchannelLogoutURI:             "http://127.0.0.1" + rpAddr + "/backchannel-logout",
-			BackchannelLogoutSessionRequired: true,
-			ApplicationType:                  "web",
+			ID:                   clientID,
+			Secret:               "bcl-demo-secret-rotate-me",
+			RedirectURIs:         []string{"http://127.0.0.1:5173/callback"},
+			Scopes:               []string{"openid", "profile"},
+			BackchannelLogoutURI: "http://127.0.0.1" + rpAddr + "/backchannel-logout",
+			ApplicationType:      "web",
 		}),
 		// Override the default 5-second per-RP timeout. A short
 		// budget is the right posture for back-channel logout — the

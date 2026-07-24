@@ -39,10 +39,12 @@ type Document struct {
 
 	// BackchannelLogoutSessionSupported reports whether the Logout
 	// Tokens the OP issues carry the "sid" claim (OpenID Connect
-	// Back-Channel Logout 1.0 §2.4). v1.0 emits "sid" whenever the
-	// terminating session has a stable identifier, which is always the
-	// case in this library, so the field is true.
-	BackchannelLogoutSessionSupported bool `json:"backchannel_logout_session_supported,omitempty"`
+	// Back-Channel Logout 1.0 §2.4). The current grant model does not
+	// retain a client-specific session lineage, so the OP explicitly
+	// advertises false and emits sub-only Logout Tokens. The field is
+	// not omitted: RPs should not have to infer the capability from a
+	// missing member.
+	BackchannelLogoutSessionSupported bool `json:"backchannel_logout_session_supported"`
 
 	// IntrospectionEndpoint is the absolute URL of the RFC 7662 token
 	// introspection endpoint. Only emitted when the feature is enabled.

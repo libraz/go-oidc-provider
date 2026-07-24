@@ -42,7 +42,11 @@ func (s *grantStore) Save(ctx context.Context, g *store.Grant) error {
 }
 
 func (s *grantStore) Find(ctx context.Context, id string) (*store.Grant, error) {
-	rec, err := s.scan(s.runner().QueryRowContext(ctx, s.parent.queries.grantFind, id))
+	query := s.parent.queries.grantFind
+	if s.tx != nil {
+		query = s.parent.queries.grantFindForUpdate
+	}
+	rec, err := s.scan(s.runner().QueryRowContext(ctx, query, id))
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -53,8 +57,11 @@ func (s *grantStore) Find(ctx context.Context, id string) (*store.Grant, error) 
 }
 
 func (s *grantStore) FindBySubjectClient(ctx context.Context, subject, clientID string) (*store.Grant, error) {
-	rec, err := s.scan(s.runner().QueryRowContext(ctx,
-		s.parent.queries.grantFindBySubjectClient, subject, clientID))
+	query := s.parent.queries.grantFindBySubjectClient
+	if s.tx != nil {
+		query = s.parent.queries.grantFindBySubjectClientForUpdate
+	}
+	rec, err := s.scan(s.runner().QueryRowContext(ctx, query, subject, clientID))
 	if errors.Is(err, databasesql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -82,6 +89,44 @@ func (s *grantStore) ListBySubject(ctx context.Context, subject string) ([]*stor
 		return nil, wrapErr("grants.ListBySubject.iter", err)
 	}
 	return out, nil
+}
+
+func (s *grantStore) ListClientIDsBySubject(
+	ctx context.Context,
+	subject, cursor string,
+	limit int,
+) (store.GrantClientPage, error) {
+	if limit <= 0 {
+		return store.GrantClientPage{}, errors.New("oidcsql: grant client page limit must be positive")
+	}
+	rows, err := s.runner().QueryContext(
+		ctx,
+		s.parent.queries.grantListClientIDs,
+		subject,
+		cursor,
+		limit+1,
+	)
+	if err != nil {
+		return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject", err)
+	}
+	defer rows.Close() //nolint:errcheck // rows.Err below reports iteration failures.
+	clientIDs := make([]string, 0, limit+1)
+	for rows.Next() {
+		var clientID string
+		if err := rows.Scan(&clientID); err != nil {
+			return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject.scan", err)
+		}
+		clientIDs = append(clientIDs, clientID)
+	}
+	if err := rows.Err(); err != nil {
+		return store.GrantClientPage{}, wrapErr("grants.ListClientIDsBySubject.iter", err)
+	}
+	page := store.GrantClientPage{ClientIDs: clientIDs}
+	if len(page.ClientIDs) > limit {
+		page.ClientIDs = page.ClientIDs[:limit]
+		page.NextCursor = page.ClientIDs[len(page.ClientIDs)-1]
+	}
+	return page, nil
 }
 
 func (s *grantStore) HasAny(ctx context.Context) (bool, error) {

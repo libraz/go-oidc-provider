@@ -111,7 +111,7 @@ func TestSignLogoutToken_EmitsRequiredClaims(t *testing.T) {
 func TestSignLogoutToken_RejectsMissingSubAndSid(t *testing.T) {
 	t.Parallel()
 	_, sk := mustKey(t)
-	now := time.Now().Unix()
+	const now int64 = 1_700_000_000
 	_, err := backchannel.SignLogoutToken(sk, backchannel.LogoutClaims{
 		Issuer:    "https://op.example.com",
 		Audience:  "client-1",
@@ -126,7 +126,7 @@ func TestSignLogoutToken_RejectsMissingSubAndSid(t *testing.T) {
 func TestSignLogoutToken_RejectsExpBeforeIat(t *testing.T) {
 	t.Parallel()
 	_, sk := mustKey(t)
-	now := time.Now().Unix()
+	const now int64 = 1_700_000_000
 	_, err := backchannel.SignLogoutToken(sk, backchannel.LogoutClaims{
 		Issuer:    "https://op.example.com",
 		Audience:  "client-1",
@@ -309,6 +309,46 @@ func saveGrant(t *testing.T, st *inmem.Store, g *store.Grant) {
 	}
 }
 
+type faultClientStore struct {
+	store.ClientStore
+	faultID string
+	err     error
+	calls   atomic.Int32
+}
+
+func (s *faultClientStore) GetClient(ctx context.Context, id string) (*store.Client, error) {
+	s.calls.Add(1)
+	if id == s.faultID {
+		return nil, s.err
+	}
+	return s.ClientStore.GetClient(ctx, id)
+}
+
+type countingGrantStore struct {
+	store.GrantStore
+	pageCalls atomic.Int32
+	listCalls atomic.Int32
+	lastLimit atomic.Int64
+}
+
+func (s *countingGrantStore) ListBySubject(
+	ctx context.Context,
+	subject string,
+) ([]*store.Grant, error) {
+	s.listCalls.Add(1)
+	return s.GrantStore.ListBySubject(ctx, subject)
+}
+
+func (s *countingGrantStore) ListClientIDsBySubject(
+	ctx context.Context,
+	subject, cursor string,
+	limit int,
+) (store.GrantClientPage, error) {
+	s.pageCalls.Add(1)
+	s.lastLimit.Store(int64(limit))
+	return s.GrantStore.ListClientIDsBySubject(ctx, subject, cursor, limit)
+}
+
 func TestCoordinator_FansOutToRegisteredClients(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
@@ -321,7 +361,7 @@ func TestCoordinator_FansOutToRegisteredClients(t *testing.T) {
 	})
 	coord, st, rec := newCoordinatorFixture(t, deliver)
 
-	now := time.Now()
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
 	saveClient(t, st, &store.Client{ID: "rp-a", BackchannelLogoutURI: "https://rp-a.example/logout"})
 	saveClient(t, st, &store.Client{ID: "rp-b", BackchannelLogoutURI: "https://rp-b.example/logout"})
 	saveClient(t, st, &store.Client{ID: "rp-c"}) // no backchannel URL → skipped
@@ -347,6 +387,100 @@ func TestCoordinator_FansOutToRegisteredClients(t *testing.T) {
 		if ev.Name != "logout.back_channel.delivered" {
 			t.Errorf("audit event = %q, want delivered", ev.Name)
 		}
+	}
+}
+
+// TestCoordinator_TwoRPsReceiveSubOnlyTokens exercises the production HTTP
+// deliverer against two real RP endpoints. A browser-session SID supplied
+// for audit correlation must not be disclosed to either RP because the
+// grant records do not establish client-specific SID lineage.
+func TestCoordinator_TwoRPsReceiveSubOnlyTokens(t *testing.T) {
+	t.Parallel()
+
+	priv, signing := mustKey(t)
+	rpATokens := make(chan string, 1)
+	rpBTokens := make(chan string, 1)
+	rpA := newLogoutReceiver(t, rpATokens)
+	rpB := newLogoutReceiver(t, rpBTokens)
+
+	st := inmem.New()
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	saveClient(t, st, &store.Client{ID: "rp-a", BackchannelLogoutURI: rpA.URL})
+	saveClient(t, st, &store.Client{ID: "rp-b", BackchannelLogoutURI: rpB.URL})
+	saveGrant(t, st, &store.Grant{ID: "g-a", Subject: "user", ClientID: "rp-a", CreatedAt: now, UpdatedAt: now})
+	saveGrant(t, st, &store.Grant{ID: "g-b", Subject: "user", ClientID: "rp-b", CreatedAt: now, UpdatedAt: now})
+
+	deliverer := backchannel.NewHTTPDeliverer(time.Second)
+	deliverer.AllowPrivateNetwork = true
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:    "https://op.example.com",
+		Signing:   signing,
+		Clients:   st.Clients(),
+		Grants:    st.Grants(),
+		Deliverer: deliverer,
+		Clock:     fixedClock(now),
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	n, err := coord.Notify(context.Background(), backchannel.Notice{
+		Subject:   "user",
+		SessionID: "browser-session-from-rp-a",
+	})
+	if err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Notify deliveries=%d want 2", n)
+	}
+	assertSubOnlyLogoutToken(t, <-rpATokens, &priv.PublicKey, "rp-a", "user")
+	assertSubOnlyLogoutToken(t, <-rpBTokens, &priv.PublicKey, "rp-b", "user")
+}
+
+func newLogoutReceiver(tb testing.TB, tokens chan<- string) *httptest.Server {
+	tb.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "malformed form", http.StatusBadRequest)
+			return
+		}
+		token := r.Form.Get("logout_token")
+		if token == "" {
+			http.Error(w, "missing logout_token", http.StatusBadRequest)
+			return
+		}
+		tokens <- token
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	tb.Cleanup(server.Close)
+	return server
+}
+
+func assertSubOnlyLogoutToken(
+	tb testing.TB,
+	token string,
+	publicKey *ecdsa.PublicKey,
+	wantAudience, wantSubject string,
+) {
+	tb.Helper()
+	parsed, err := jwt.ParseSigned(token, allowedAlgs())
+	if err != nil {
+		tb.Fatalf("parse logout token: %v", err)
+	}
+	claims := map[string]any{}
+	if err := parsed.Claims(publicKey, &claims); err != nil {
+		tb.Fatalf("verify logout token: %v", err)
+	}
+	if got := claims["aud"]; got != wantAudience {
+		tb.Errorf("aud=%v want %q", got, wantAudience)
+	}
+	if got := claims["sub"]; got != wantSubject {
+		tb.Errorf("sub=%v want %q", got, wantSubject)
+	}
+	if sid, ok := claims["sid"]; ok {
+		tb.Errorf("unexpected sid=%v in sub-only logout token", sid)
 	}
 }
 
@@ -383,7 +517,7 @@ func TestCoordinator_BoundsFanout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	now := time.Now()
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
 	for i := range 5 {
 		id := fmt.Sprintf("rp-%d", i)
 		saveClient(t, st, &store.Client{ID: id, BackchannelLogoutURI: "https://" + id + ".example/logout"})
@@ -415,11 +549,12 @@ func TestCoordinator_BoundsFanout(t *testing.T) {
 	foundOverflow := false
 	for _, event := range rec.snapshot() {
 		if event.Name == "logout.back_channel.overflow" {
-			foundOverflow = event.Extras["dropped_targets"] == 2
+			foundOverflow = event.Extras["more_targets"] == true &&
+				event.Extras["next_cursor"] == "rp-2"
 		}
 	}
 	if !foundOverflow {
-		t.Fatal("missing overflow audit event with dropped target count")
+		t.Fatal("missing overflow audit event with continuation cursor")
 	}
 }
 
@@ -451,7 +586,7 @@ func TestCoordinator_ProjectsSubjectPerTargetClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
 	}
-	now := time.Now()
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
 	saveClient(t, st, &store.Client{
 		ID: "pairwise-rp", BackchannelLogoutURI: "https://rp.example/logout", SubjectType: "pairwise",
 	})
@@ -480,7 +615,7 @@ func TestCoordinator_ProjectsSubjectPerTargetClient(t *testing.T) {
 	}
 }
 
-func TestCoordinator_SkipsSessionRequiredWhenSidEmpty(t *testing.T) {
+func TestCoordinator_SkipsLegacySessionRequiredClient(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32
 	deliver := backchannel.DelivererFunc(func(_ context.Context, _ backchannel.Target, _ string) error {
@@ -488,7 +623,7 @@ func TestCoordinator_SkipsSessionRequiredWhenSidEmpty(t *testing.T) {
 		return nil
 	})
 	coord, st, _ := newCoordinatorFixture(t, deliver)
-	now := time.Now()
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
 	saveClient(t, st, &store.Client{
 		ID: "strict", BackchannelLogoutURI: "https://strict.example/logout",
 		BackchannelLogoutSessionRequired: true,
@@ -499,7 +634,7 @@ func TestCoordinator_SkipsSessionRequiredWhenSidEmpty(t *testing.T) {
 	saveGrant(t, st, &store.Grant{ID: "g-strict", Subject: "u", ClientID: "strict", CreatedAt: now, UpdatedAt: now})
 	saveGrant(t, st, &store.Grant{ID: "g-lax", Subject: "u", ClientID: "lax", CreatedAt: now, UpdatedAt: now})
 
-	n, err := coord.Notify(context.Background(), backchannel.Notice{Subject: "u"})
+	n, err := coord.Notify(context.Background(), backchannel.Notice{Subject: "u", SessionID: "browser-sid"})
 	if err != nil {
 		t.Fatalf("Notify: %v", err)
 	}
@@ -514,7 +649,7 @@ func TestCoordinator_RecordsFailureWhenDelivererErrors(t *testing.T) {
 		return errors.New("rp unavailable")
 	})
 	coord, st, rec := newCoordinatorFixture(t, deliver)
-	now := time.Now()
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
 	saveClient(t, st, &store.Client{ID: "rp", BackchannelLogoutURI: "https://rp.example/logout"})
 	saveGrant(t, st, &store.Grant{ID: "g", Subject: "u", ClientID: "rp", CreatedAt: now, UpdatedAt: now})
 
@@ -533,6 +668,150 @@ func TestCoordinator_RecordsFailureWhenDelivererErrors(t *testing.T) {
 	}
 	if msg, _ := events[0].Extras["error"].(string); !strings.Contains(msg, "rp unavailable") {
 		t.Fatalf("extras.error = %q, want to contain underlying cause", msg)
+	}
+}
+
+func TestCoordinator_ClientStoreFaultIsAuditedAndAggregated(t *testing.T) {
+	t.Parallel()
+	_, signing := mustKey(t)
+	st := inmem.New()
+	rec := &recordingEmitter{}
+	backendErr := errors.New("registry connection refused")
+	clients := &faultClientStore{
+		ClientStore: st.Clients(),
+		faultID:     "rp-fault",
+		err:         backendErr,
+	}
+	var delivered atomic.Int32
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer:  "https://op.example.com",
+		Signing: signing,
+		Clients: clients,
+		Grants:  st.Grants(),
+		Deliverer: backchannel.DelivererFunc(func(
+			context.Context,
+			backchannel.Target,
+			string,
+		) error {
+			delivered.Add(1)
+			return nil
+		}),
+		Emitter: rec,
+		Clock:   fixedClock(time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)),
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
+	saveClient(t, st, &store.Client{ID: "rp-good", BackchannelLogoutURI: "https://good.example/logout"})
+	saveClient(t, st, &store.Client{ID: "rp-fault", BackchannelLogoutURI: "https://fault.example/logout"})
+	for _, clientID := range []string{"rp-good", "rp-fault", "rp-stale"} {
+		saveGrant(t, st, &store.Grant{
+			ID: "grant-" + clientID, Subject: "user", ClientID: clientID,
+			CreatedAt: now, UpdatedAt: now,
+		})
+	}
+
+	n, notifyErr := coord.Notify(context.Background(), backchannel.Notice{
+		Subject: "user", SessionID: "sid-1", RequestID: "req-1",
+	})
+	if n != 1 || delivered.Load() != 1 {
+		t.Fatalf("Notify delivered n=%d calls=%d, want 1/1", n, delivered.Load())
+	}
+	if !errors.Is(notifyErr, backendErr) {
+		t.Fatalf("Notify error = %v, want wrapped backend fault", notifyErr)
+	}
+	if clients.calls.Load() != 3 {
+		t.Fatalf("ClientStore lookups = %d, want 3", clients.calls.Load())
+	}
+
+	var resolutionFailures []audit.Event
+	for _, event := range rec.snapshot() {
+		if event.Name == "logout.back_channel.failed" &&
+			event.Extras["failure_stage"] == "client_lookup" {
+			resolutionFailures = append(resolutionFailures, event)
+		}
+	}
+	if len(resolutionFailures) != 1 {
+		t.Fatalf("client lookup failure events = %d, want 1", len(resolutionFailures))
+	}
+	event := resolutionFailures[0]
+	if event.ClientID != "rp-fault" || event.Extras["retryable"] != true {
+		t.Fatalf("failure evidence = %+v", event)
+	}
+	if event.Extras["error"] == "" {
+		t.Fatal("failure evidence omitted backend reason")
+	}
+}
+
+func TestCoordinator_GrantAudienceAndClientLookupsAreBounded(t *testing.T) {
+	t.Parallel()
+
+	_, signing := mustKey(t)
+	st := inmem.New()
+	const (
+		grantCount = 100_000
+		maxTargets = 8
+	)
+	now := time.Date(2026, 7, 24, 8, 0, 0, 0, time.UTC)
+	for i := range maxTargets {
+		clientID := fmt.Sprintf("client-%06d", i)
+		saveClient(t, st, &store.Client{
+			ID: clientID, BackchannelLogoutURI: "https://" + clientID + ".example/logout",
+		})
+	}
+	for i := range grantCount {
+		clientID := fmt.Sprintf("client-%06d", i)
+		saveGrant(t, st, &store.Grant{
+			ID: fmt.Sprintf("grant-%06d", i), Subject: "large-user", ClientID: clientID,
+			CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	grants := &countingGrantStore{GrantStore: st.Grants()}
+	clients := &faultClientStore{ClientStore: st.Clients()}
+	rec := &recordingEmitter{}
+	var delivered atomic.Int32
+	coord, err := backchannel.NewCoordinator(backchannel.Config{
+		Issuer: "https://op.example.com", Signing: signing,
+		Clients: clients, Grants: grants, Emitter: rec, MaxTargets: maxTargets,
+		Deliverer: backchannel.DelivererFunc(func(
+			context.Context,
+			backchannel.Target,
+			string,
+		) error {
+			delivered.Add(1)
+			return nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	n, err := coord.Notify(context.Background(), backchannel.Notice{Subject: "large-user"})
+	if err != nil {
+		t.Fatalf("Notify: %v", err)
+	}
+	if n != maxTargets || delivered.Load() != maxTargets {
+		t.Fatalf("delivered n=%d calls=%d, want %d", n, delivered.Load(), maxTargets)
+	}
+	if grants.pageCalls.Load() != 1 || grants.listCalls.Load() != 0 {
+		t.Fatalf("grant queries page=%d unbounded=%d, want 1/0", grants.pageCalls.Load(), grants.listCalls.Load())
+	}
+	if grants.lastLimit.Load() != maxTargets {
+		t.Fatalf("grant page limit=%d, want %d", grants.lastLimit.Load(), maxTargets)
+	}
+	if clients.calls.Load() != maxTargets {
+		t.Fatalf("client lookups=%d, want %d", clients.calls.Load(), maxTargets)
+	}
+	var overflow *audit.Event
+	for _, event := range rec.snapshot() {
+		if event.Name == "logout.back_channel.overflow" {
+			ev := event
+			overflow = &ev
+		}
+	}
+	if overflow == nil || overflow.Extras["next_cursor"] != "client-000007" {
+		t.Fatalf("overflow evidence = %+v", overflow)
 	}
 }
 
