@@ -344,6 +344,9 @@ func (h *Handler) buildResponse(ctx context.Context, req customgrant.Request, su
 			})
 		return customgrant.Response{}, invalidTarget("granted audience exceeds the requested audience")
 	}
+	if subjectView.ExpiresAt.IsZero() || !h.now().Before(subjectView.ExpiresAt) {
+		return customgrant.Response{}, invalidGrant("subject_token has no positive remaining lifetime")
+	}
 	ttl, ttlReason := h.computeTTL(grantedTTL, subjectView.ExpiresAt)
 	if ttlReason != "" {
 		h.emit(ctx, auditTTLCapped, audit.LevelInfo,

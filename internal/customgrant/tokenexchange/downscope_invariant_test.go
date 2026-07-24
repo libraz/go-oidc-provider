@@ -10,6 +10,7 @@ package tokenexchange
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/customgrant"
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -78,7 +79,10 @@ func TestBuildResponse_DownscopeInvariant(t *testing.T) {
 			t.Parallel()
 			h := newAssembleHandler(t)
 			req := customgrant.Request{Client: &store.Client{ID: "caller"}}
-			subjectView := TokenView{Subject: "user-1"}
+			subjectView := TokenView{
+				Subject:   "user-1",
+				ExpiresAt: time.Unix(1_700_000_000, 0).UTC().Add(time.Hour),
+			}
 
 			resp, err := h.buildResponse(
 				context.Background(), req, subjectView, nil,

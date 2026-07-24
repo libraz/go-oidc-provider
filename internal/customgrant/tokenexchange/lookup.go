@@ -37,6 +37,8 @@ var errExternalIssuer = errors.New("tokenexchange: token issued by an external i
 // invalid_grant.
 var errTokenInvalid = errors.New("tokenexchange: token failed verification")
 
+var errIDTokenExpired = errors.New("tokenexchange: id_token expired")
+
 // lookupToken resolves a subject_token or actor_token presented as
 // raw bytes plus the URN naming its type.
 func (h *Handler) lookupToken(ctx context.Context, raw, urn string) (lookupResult, error) {
@@ -118,6 +120,10 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 	if len(jws.Signatures) == 0 {
 		return lookupResult{reason: "malformed"}, fmt.Errorf("%w: no signature", errTokenInvalid)
 	}
+	typ, typOK := jws.Signatures[0].Protected.ExtraHeaders["typ"].(string)
+	if !typOK || typ != "JWT" {
+		return lookupResult{reason: "typ_mismatch"}, fmt.Errorf("%w: id_token typ header is not JWT", errTokenInvalid)
+	}
 	kid := jws.Signatures[0].Header.KeyID
 	if kid == "" {
 		return lookupResult{reason: "no_kid"}, fmt.Errorf("%w: kid missing", errTokenInvalid)
@@ -130,19 +136,15 @@ func (h *Handler) lookupIDToken(raw string) (lookupResult, error) {
 	if err != nil {
 		return lookupResult{reason: "signature"}, fmt.Errorf("%w: verify: %w", errTokenInvalid, err)
 	}
-	var idClaims idTokenClaims
-	if err := json.Unmarshal(payload, &idClaims); err != nil {
-		return lookupResult{reason: "malformed"}, fmt.Errorf("%w: decode: %w", errTokenInvalid, err)
+	idClaims, aud, reason, err := decodeAndValidateIDTokenClaims(payload, h.now())
+	if err != nil {
+		return lookupResult{reason: reason}, fmt.Errorf("%w: %w", errTokenInvalid, err)
 	}
 	if h.issuer != "" && idClaims.Issuer != h.issuer {
 		return lookupResult{reason: "issuer_mismatch"}, errExternalIssuer
 	}
-	now := h.now()
-	if idClaims.ExpiresAt > 0 && now.Unix() > idClaims.ExpiresAt {
-		return lookupResult{reason: "expired"}, errTokenInvalid
-	}
 	scope := oidcscope.Parse(idClaims.Scope)
-	aud := normaliseAudience(decodeAudience(idClaims.AudienceRaw))
+	aud = normaliseAudience(aud)
 	clientID := idClaims.AuthorizedParty
 	if clientID == "" {
 		clientID = idClaims.ClientID
@@ -187,7 +189,10 @@ func (h *Handler) lookupOpaqueAccessToken(ctx context.Context, raw string) (look
 		return lookupResult{reason: "revoked"}, errTokenInvalid
 	}
 	now := h.now()
-	if !rec.ExpiresAt.IsZero() && now.After(rec.ExpiresAt) {
+	if rec.ExpiresAt.IsZero() {
+		return lookupResult{reason: "missing_claim"}, fmt.Errorf("%w: opaque access token expiry missing", errTokenInvalid)
+	}
+	if !now.Before(rec.ExpiresAt) {
 		return lookupResult{reason: "expired"}, errTokenInvalid
 	}
 	var cnf *Confirmation
@@ -316,23 +321,86 @@ func normaliseAudience(aud []string) []string {
 	return out
 }
 
-// decodeAudience handles the dual aud shape RFC 7519 §4.1.3 mandates.
-func decodeAudience(raw json.RawMessage) []string {
+// decodeRequiredAudience handles the dual aud shape RFC 7519 §4.1.3
+// mandates and rejects missing, empty, or malformed values.
+func decodeRequiredAudience(raw json.RawMessage) ([]string, error) {
 	if len(raw) == 0 {
-		return nil
+		return nil, errors.New("aud claim missing")
 	}
 	var single string
 	if err := json.Unmarshal(raw, &single); err == nil {
 		if single == "" {
-			return nil
+			return nil, errors.New("aud claim empty")
 		}
-		return []string{single}
+		return []string{single}, nil
 	}
 	var multi []string
 	if err := json.Unmarshal(raw, &multi); err != nil {
-		return nil
+		return nil, fmt.Errorf("aud claim malformed: %w", err)
 	}
-	return multi
+	if len(multi) == 0 {
+		return nil, errors.New("aud claim empty")
+	}
+	for _, audience := range multi {
+		if audience == "" {
+			return nil, errors.New("aud claim contains an empty audience")
+		}
+	}
+	return multi, nil
+}
+
+func decodeAndValidateIDTokenClaims(payload []byte, now time.Time) (idTokenClaims, []string, string, error) {
+	var claims idTokenClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return idTokenClaims{}, nil, "malformed", fmt.Errorf("decode id_token claims: %w", err)
+	}
+	audience, err := decodeRequiredAudience(claims.AudienceRaw)
+	if err != nil {
+		return idTokenClaims{}, nil, "missing_claim", err
+	}
+	if err := validateIDTokenClaims(claims, audience, now); err != nil {
+		return idTokenClaims{}, nil, classifyIDTokenClaimsErr(err), err
+	}
+	return claims, audience, "", nil
+}
+
+// validateIDTokenClaims enforces the OIDC Core 1.0 §2 required claim
+// set and its time bounds. Token exchange cannot apply its mandatory
+// source-token TTL cap unless exp is present and still in the future.
+func validateIDTokenClaims(claims idTokenClaims, audience []string, now time.Time) error {
+	switch {
+	case claims.Issuer == "":
+		return errors.New("iss claim missing")
+	case claims.Subject == "":
+		return errors.New("sub claim missing")
+	case len(audience) == 0:
+		return errors.New("aud claim missing")
+	case claims.ExpiresAt <= 0:
+		return errors.New("exp claim missing")
+	case claims.IssuedAt <= 0:
+		return errors.New("iat claim missing")
+	case len(audience) > 1 && claims.AuthorizedParty == "":
+		return errors.New("azp claim missing for multiple audiences")
+	}
+	expiresAt := time.Unix(claims.ExpiresAt, 0).UTC()
+	if !now.Before(expiresAt) {
+		return errIDTokenExpired
+	}
+	issuedAt := time.Unix(claims.IssuedAt, 0).UTC()
+	if issuedAt.After(now) {
+		return errors.New("iat claim is in the future")
+	}
+	if !issuedAt.Before(expiresAt) {
+		return errors.New("exp claim does not follow iat")
+	}
+	return nil
+}
+
+func classifyIDTokenClaimsErr(err error) string {
+	if errors.Is(err, errIDTokenExpired) {
+		return "expired"
+	}
+	return "missing_claim"
 }
 
 // idTokenClaims is the minimal projection of the OIDC Core 1.0 §2
