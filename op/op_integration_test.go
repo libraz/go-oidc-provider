@@ -146,6 +146,95 @@ func TestIntegration_Discovery_RespectsMountPrefix(t *testing.T) {
 	}
 }
 
+func TestIntegration_PathIssuerRoutesAdvertisedEndpoints(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		issuer        string
+		mountPrefix   string
+		discoveryPath string
+		endpointBase  string
+	}{
+		{
+			name:          "root issuer default mount",
+			issuer:        validIssuer,
+			mountPrefix:   "/oidc",
+			discoveryPath: "/.well-known/openid-configuration",
+			endpointBase:  "/oidc",
+		},
+		{
+			name:          "root issuer custom mount",
+			issuer:        validIssuer,
+			mountPrefix:   "/authz",
+			discoveryPath: "/.well-known/openid-configuration",
+			endpointBase:  "/authz",
+		},
+		{
+			name:          "path issuer default mount",
+			issuer:        validIssuer + "/tenant",
+			mountPrefix:   "/oidc",
+			discoveryPath: "/.well-known/openid-configuration/tenant",
+			endpointBase:  "/tenant/oidc",
+		},
+		{
+			name:          "path issuer custom mount",
+			issuer:        validIssuer + "/tenant",
+			mountPrefix:   "/authz",
+			discoveryPath: "/.well-known/openid-configuration/tenant",
+			endpointBase:  "/tenant/authz",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, base := startProvider(t,
+				op.WithIssuer(tc.issuer),
+				op.WithMountPrefix(tc.mountPrefix),
+			)
+			resp := httpGet(t, base+tc.discoveryPath)
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				t.Fatalf("discovery status=%d want 200", resp.StatusCode)
+			}
+			var doc map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+				resp.Body.Close()
+				t.Fatalf("decode discovery: %v", err)
+			}
+			resp.Body.Close()
+
+			wantPaths := map[string]string{
+				"authorization_endpoint": tc.endpointBase + "/auth",
+				"token_endpoint":         tc.endpointBase + "/token",
+				"userinfo_endpoint":      tc.endpointBase + "/userinfo",
+				"jwks_uri":               tc.endpointBase + "/jwks",
+				"end_session_endpoint":   tc.endpointBase + "/end_session",
+			}
+			for field, wantPath := range wantPaths {
+				advertised, ok := doc[field].(string)
+				if !ok {
+					t.Errorf("discovery field %s missing", field)
+					continue
+				}
+				endpointSuffix := strings.TrimPrefix(wantPath, tc.endpointBase)
+				wantAdvertised := tc.issuer + tc.mountPrefix + endpointSuffix
+				if advertised != wantAdvertised {
+					t.Errorf("%s=%q want %q", field, advertised, wantAdvertised)
+				}
+				endpointResp := httpGet(t, base+wantPath)
+				if endpointResp.StatusCode == http.StatusNotFound {
+					endpointResp.Body.Close()
+					t.Errorf("%s advertised at %s returned 404", field, wantPath)
+					continue
+				}
+				endpointResp.Body.Close()
+			}
+		})
+	}
+}
+
 func TestIntegration_JWKS_ServedAtConfiguredPath(t *testing.T) {
 	t.Parallel()
 

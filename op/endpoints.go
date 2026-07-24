@@ -1,12 +1,16 @@
 package op
 
+import "net/url"
+
 // Endpoints overrides the default URL paths the [Provider] mounts inside its
 // router. Empty strings retain the library default; the [Provider] always
 // substitutes a value, so callers MAY pass a partially-populated struct to
 // override only the paths they care about.
-// Paths MUST start with "/". The [Provider] strips the configured mount
-// prefix from incoming requests before consulting these values, so the
-// stored value is always relative to the mount point.
+// Paths MUST be clean absolute request paths beginning with "/". Query
+// strings, fragments, trailing or duplicate slashes, percent-encoding, and
+// net/http wildcard syntax are rejected at [New] construction time. Values
+// are relative to the configured mount point and to any path carried by the
+// issuer URL.
 // The default values are listed in the matching field comments. They mirror
 // OpenID Connect Core 1.0 / OpenID Connect Discovery 1.0 conventions.
 type Endpoints struct {
@@ -134,4 +138,59 @@ func pickEndpoint(override, base string) string {
 		return override
 	}
 	return base
+}
+
+// protocolEndpointPath returns the request path for an endpoint advertised as
+// issuer + mount prefix + endpoint. Issuer paths are part of the public
+// endpoint namespace, not merely metadata: an issuer such as
+// https://idp.example.com/tenant therefore serves the default token endpoint
+// at /tenant/oidc/token.
+func protocolEndpointPath(c *config, endpoint string) string {
+	return joinPath(routingMountPrefix(c.issuer, c.mountPrefix), endpoint)
+}
+
+// discoveryEndpointPath returns the request path for the discovery document.
+// OpenID Connect Discovery 1.0 §4 inserts the well-known suffix before an
+// issuer path, so issuer https://idp.example.com/tenant is discovered at
+// /.well-known/openid-configuration/tenant.
+func discoveryEndpointPath(c *config) string {
+	return joinPath(c.endpoints.Discovery, issuerPath(c.issuer))
+}
+
+// routingMountPrefix combines the issuer path and the embedder-selected mount
+// prefix into the base path used by protocol handlers.
+func routingMountPrefix(issuer, mountPrefix string) string {
+	base := issuerPath(issuer)
+	if base == "" {
+		return mountPrefix
+	}
+	if mountPrefix == "/" {
+		return base
+	}
+	return base + mountPrefix
+}
+
+// issuerPath extracts the decoded URL path used by net/http for routing.
+// WithIssuer validates the URL before any caller reaches this helper.
+func issuerPath(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return ""
+	}
+	return u.Path
+}
+
+// joinPath concatenates two validated absolute request paths without
+// introducing a duplicate slash.
+func joinPath(base, endpoint string) string {
+	if endpoint == "" {
+		return base
+	}
+	if base == "" || base == "/" {
+		return endpoint
+	}
+	if endpoint == "/" {
+		return base
+	}
+	return base + endpoint
 }

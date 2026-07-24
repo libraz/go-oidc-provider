@@ -81,19 +81,19 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	if cfg.subjectGeneratorSource != "" {
 		subjectProjector = buildSubjectProjector(cfg)
 	}
-	mux.Handle(cfg.endpoints.Discovery, publicCORS.Handler(discHandler))
+	mux.Handle(discoveryEndpointPath(cfg), publicCORS.Handler(discHandler))
 	if err := mountProtectedResourceMetadata(mux, cfg, publicCORS); err != nil {
 		return nil, err
 	}
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.JWKS),
+		protocolEndpointPath(cfg, cfg.endpoints.JWKS),
 		publicCORS.Handler(jwks.HandlerWithOptions(keySet, jwks.HandlerOptions{
 			RotationActive: cfg.jwksRotationActive,
 			EncryptionSet:  encSet,
 		})),
 	)
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.UserInfo),
+		protocolEndpointPath(cfg, cfg.endpoints.UserInfo),
 		strictCORS.Handler(userinfo.Handler(userinfo.HandlerDeps{
 			Keys:               keySet,
 			Issuer:             cfg.issuer,
@@ -115,7 +115,7 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 		})),
 	)
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.Token),
+		protocolEndpointPath(cfg, cfg.endpoints.Token),
 		strictCORS.Handler(tokenendpoint.Handler(tokenendpoint.Deps{
 			Issuer:                         cfg.issuer,
 			Clients:                        cfg.store.Clients(),
@@ -233,7 +233,7 @@ func mountGrantManagementEndpoint(mux *http.ServeMux, cfg *config, assertionVeri
 		RevokeEnabled:            cfg.grantManagementActionEnabled(GrantActionRevoke),
 		Clock:                    cfg.clock,
 	}))
-	base := joinPath(cfg.mountPrefix, cfg.endpoints.GrantManagement)
+	base := protocolEndpointPath(cfg, cfg.endpoints.GrantManagement)
 	mux.Handle(base+"/{grant_id}", handler)
 }
 
@@ -287,7 +287,7 @@ func mountRegistrationEndpoint(mux *http.ServeMux, cfg *config, scopes *scopereg
 		OpaqueAccessTokens:                   cfg.store.OpaqueAccessTokens(),
 	}
 	handler := strictCORS.Handler(registrationendpoint.Handler(deps))
-	registerPath := joinPath(cfg.mountPrefix, cfg.endpoints.Register)
+	registerPath := protocolEndpointPath(cfg, cfg.endpoints.Register)
 	mux.Handle(registerPath, handler)
 	mux.Handle(registerPath+"/{client_id}", handler)
 }
@@ -316,7 +316,7 @@ func mountPAREndpoint(
 		return nil
 	}
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.PAR),
+		protocolEndpointPath(cfg, cfg.endpoints.PAR),
 		strictCORS.Handler(parendpoint.Handler(parendpoint.Deps{
 			Issuer:                        cfg.issuer,
 			Clients:                       cfg.store.Clients(),
@@ -361,7 +361,7 @@ func mountIntrospectionEndpoint(
 		return
 	}
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.Introspect),
+		protocolEndpointPath(cfg, cfg.endpoints.Introspect),
 		strictCORS.Handler(introspectendpoint.Handler(introspectendpoint.Deps{
 			Issuer:                     cfg.issuer,
 			Clients:                    cfg.store.Clients(),
@@ -398,7 +398,7 @@ func mountRevocationEndpoint(
 		return
 	}
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.Revoke),
+		protocolEndpointPath(cfg, cfg.endpoints.Revoke),
 		strictCORS.Handler(revokeendpoint.Handler(revokeendpoint.Deps{
 			Issuer:                   cfg.issuer,
 			Clients:                  cfg.store.Clients(),
@@ -461,13 +461,14 @@ func mountAuthorizeHandlers(
 	if err != nil {
 		return nil, err
 	}
-	authorizePath := joinPath(cfg.mountPrefix, cfg.endpoints.Authorize)
-	interactionPath := joinPath(cfg.mountPrefix, cfg.endpoints.Interaction)
+	authorizePath := protocolEndpointPath(cfg, cfg.endpoints.Authorize)
+	interactionPath := protocolEndpointPath(cfg, cfg.endpoints.Interaction)
 	spaLoginMount, spaStaticDir := spaWiringFor(cfg)
 	handler := authorizeendpoint.Handler(authorizeendpoint.Deps{
 		Clients:                       cfg.store.Clients(),
 		Codes:                         cfg.store.AuthorizationCodes(),
 		Grants:                        cfg.store.Grants(),
+		Transactions:                  transactionalStore(cfg.store),
 		AuthorizationDetailTypes:      authorizationDetailRegistry(cfg),
 		GrantManagementEnabled:        cfg.grantManagementEnabled,
 		GrantManagementActions:        grantManagementActionSet(cfg),
@@ -488,6 +489,7 @@ func mountAuthorizeHandlers(
 		SPALoginMount:                 spaLoginMount,
 		SPAStaticDir:                  spaStaticDir,
 		Clock:                         cfg.clock,
+		CompletionKey:                 deriveCompletionKey(cfg.cookieKeys[0]),
 		RequireJARMResponseMode:       cfg.requireJARMResponseMode(),
 		RequirePKCE:                   cfg.requirePKCE(),
 		RequireNonce:                  cfg.requireNonce(),
@@ -530,7 +532,7 @@ func mountEndSessionEndpoint(
 		return
 	}
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.EndSession),
+		protocolEndpointPath(cfg, cfg.endpoints.EndSession),
 		strictCORS.Handler(endsession.Handler(endsession.Deps{
 			Issuer:             cfg.issuer,
 			Clients:            cfg.store.Clients(),
@@ -577,7 +579,7 @@ func mountDeviceAuthorizationEndpoint(
 		return
 	}
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.DeviceAuthorization),
+		protocolEndpointPath(cfg, cfg.endpoints.DeviceAuthorization),
 		strictCORS.Handler(devicecodeendpoint.Handler(devicecodeendpoint.Deps{
 			Issuer:                   cfg.issuer,
 			VerificationURI:          cfg.effectiveDeviceVerificationURI(),
@@ -678,7 +680,7 @@ func mountBackchannelAuthenticationEndpoint(
 		resolver = cibaHintResolverAdapter{r: cfg.cibaHintResolver}
 	}
 	mux.Handle(
-		joinPath(cfg.mountPrefix, cfg.endpoints.Backchannel),
+		protocolEndpointPath(cfg, cfg.endpoints.Backchannel),
 		strictCORS.Handler(cibaendpoint.Handler(cibaendpoint.Deps{
 			Issuer:                   cfg.issuer,
 			Clients:                  cfg.store.Clients(),
@@ -702,15 +704,6 @@ func mountBackchannelAuthenticationEndpoint(
 			Audit:                    cfg.effectiveAuditEmitter(),
 		})),
 	)
-}
-
-// joinPath concatenates mountPrefix and endpoint into a full path, handling
-// the slash-collapsing edge cases that http.ServeMux is strict about.
-func joinPath(mountPrefix, endpoint string) string {
-	if mountPrefix == "/" {
-		return endpoint
-	}
-	return mountPrefix + endpoint
 }
 
 func transactionalStore(s store.Store) store.Transactional {
