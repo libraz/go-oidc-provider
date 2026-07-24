@@ -9,7 +9,7 @@ import (
 // brute-force counter the library uses to defend against an attacker
 // pivoting between authentication factors (TOTP, email-OTP, ...) on the
 // same subject. The struct is the storage projection of the rolling
-// 24-hour window described in 02-product-design.md §M.6: a single counter
+// 24-hour window described in 002-product-design.md §M.6: a single counter
 // that aggregates failures across every factor so the attacker's budget
 // cannot be doubled by trying TOTP after exhausting email-OTP attempts.
 //
@@ -18,12 +18,11 @@ import (
 // is that this row is keyed only by Subject, so every factor backed by a
 // per-subject counter contributes to and reads from the same row.
 //
-// Backends MUST persist all four fields verbatim. The library increments
-// FailedCount through [AuthnLockoutStore.Increment] (which is required
-// to be an atomic compare-and-set / "UPDATE ... SET counter = counter + 1"
-// to defeat the lost-update race documented in M-AUTHN-4); other fields
-// are written via [AuthnLockoutStore.Put] in the slow path (window
-// rollover, success reset, lockout stamping).
+// Backends MUST persist the state fields verbatim and manage Version as
+// described by [AuthnLockoutStore.CompareAndSwap]. Every mutation is a
+// versioned transition so a window rollover, successful-authentication
+// reset, or lock stamp cannot overwrite a concurrently recorded failure
+// (M-AUTHN-4).
 type AuthnLockoutRecord struct {
 	// Subject is the OP-internal stable user identifier this counter
 	// belongs to. It is the primary key of the record.
@@ -45,26 +44,34 @@ type AuthnLockoutRecord struct {
 	// is rejected with a lockout error regardless of which factor is
 	// being driven. The library stamps a 1-hour lock at the short
 	// threshold and a 24-hour lock at the long threshold (the values
-	// match the per-factor thresholds documented at 02-product-design.md
+	// match the per-factor thresholds documented at 002-product-design.md
 	// §M.6 so an embedder reading either record sees the same numbers).
 	// A zero value means "not locked".
 	LockedUntil time.Time
+
+	// Version is an opaque, monotonically increasing value managed by the
+	// backend. Version zero denotes a record that has not been persisted.
+	// Callers MUST NOT assign semantic meaning to a nonzero value beyond
+	// passing it back to CompareAndSwap as the expected version.
+	Version uint64
 }
 
 // AuthnLockoutStore is the substore for the cross-factor brute-force
-// counter. The interface is intentionally minimal — Get / Put / Increment
-// — because the library serialises all access through the lockout helper
-// in internal/authn/lockout.
+// counter. Get and CompareAndSwap form a versioned state machine shared by
+// failure increments, window rollover, lock stamping, and success reset.
 //
 // # Concurrency contract
 //
-// Increment MUST be atomic with respect to concurrent calls for the same
-// subject: a "lost update" where two concurrent Increments both observe
-// FailedCount=N and write FailedCount=N+1 (instead of N+2) would let an
-// attacker exceed the configured threshold by issuing parallel verify
-// requests. SQL backends typically implement this with
-// "UPDATE ... SET failed_count = failed_count + 1"; in-memory backends
-// hold a mutex around the read-modify-write.
+// CompareAndSwap MUST atomically compare the persisted Version and replace
+// the complete record. A stale transition MUST NOT modify any field. This
+// includes races between two failures and between a failure and a success
+// reset: losing a failure would let an attacker exceed the configured
+// threshold by issuing parallel requests.
+//
+// SQL backends typically implement this with
+// "UPDATE ... WHERE subject = ? AND version = ?"; Redis backends need a
+// transaction or Lua script covering the compare and replacement. A plain
+// Get followed by an unconditional write does not satisfy this contract.
 //
 // Backends MUST NOT log AuthnLockoutRecord values: the field set is
 // privacy-sensitive (the row reveals authentication failure counts per
@@ -77,54 +84,20 @@ type AuthnLockoutStore interface {
 	// record, which is the normal "no failures yet" state.
 	Get(ctx context.Context, subject string) (*AuthnLockoutRecord, error)
 
-	// Put creates or replaces the lockout record for r.Subject with
-	// upsert semantics. The library uses Put for the slow paths:
-	// window rollover (FirstFailureAt re-stamped) and success reset
-	// (FailedCount=0, LockedUntil=zero). It is also the fallback for
-	// lockout stamping (LockedUntil set to a future time) when the store
-	// does not implement [AuthnLockoutStamper]; because Put replaces the
-	// whole row, that fallback can lose a concurrent Increment (see
-	// AuthnLockoutStamper), so stores backing a real brute-force gate
-	// SHOULD implement the extension.
-	Put(ctx context.Context, r *AuthnLockoutRecord) error
-
-	// Increment atomically increments the FailedCount for subject and
-	// returns the post-increment count. Implementations MUST guarantee
-	// the read-modify-write is atomic with respect to concurrent calls
-	// for the same subject (see the concurrency contract above).
+	// CompareAndSwap replaces the complete record only when its current
+	// Version equals expectedVersion and reports whether the replacement
+	// was committed.
 	//
-	// The now parameter is the wall-clock reading the caller wants
-	// stamped on FirstFailureAt when the record is being created
-	// (FailedCount transitions 0 → 1). For subsequent increments the
-	// existing FirstFailureAt MUST NOT be modified by Increment; the
-	// caller drives window rollover separately through [Put].
+	// expectedVersion zero is an insert-only transition: it succeeds only
+	// when no record exists for next.Subject. A nonzero expectedVersion
+	// succeeds only when the existing row has exactly that version.
+	// Version mismatch or insert contention returns (false, nil) and MUST
+	// leave the persisted record unchanged.
 	//
-	// Implementations MUST NOT consult LockedUntil — Increment counts
-	// every failed attempt the orchestrator surfaced, including ones
-	// that happened during a soft retry against a still-locked record;
-	// the lockout gate runs in the lockout helper before the call to
-	// the underlying verifier.
-	Increment(ctx context.Context, subject string, now time.Time) (int, error)
-}
-
-// AuthnLockoutStamper is an optional extension of [AuthnLockoutStore]. A
-// store that implements it lets the lockout helper stamp LockedUntil with a
-// targeted atomic write instead of the read-modify-write
-// [AuthnLockoutStore.Put] over the whole row.
-//
-// The Put-based stamp is correct in isolation but races a concurrent
-// [AuthnLockoutStore.Increment]: Put writes back a row snapshot taken before
-// the concurrent increment landed, silently dropping it. That is the same
-// lost-update class the Increment contract defends against (M-AUTHN-4), and
-// it deflates the brute-force counter so the long-threshold lock is harder
-// to reach than designed. Stores backing a real brute-force gate SHOULD
-// implement StampLock; the reference in-memory store does.
-type AuthnLockoutStamper interface {
-	// StampLock atomically sets LockedUntil for subject without modifying
-	// FailedCount or FirstFailureAt. It MUST return [ErrNotFound] when no
-	// record exists for subject. Implementations MUST perform the write as
-	// a targeted update — SQL "UPDATE ... SET locked_until = ? WHERE
-	// subject = ?"; in-memory under the same lock Increment holds — so a
-	// concurrent Increment is never overwritten.
-	StampLock(ctx context.Context, subject string, lockedUntil time.Time) error
+	// On success the backend MUST persist Version=expectedVersion+1,
+	// ignoring next.Version, and MUST NOT mutate next. This backend-owned
+	// increment prevents ABA when a record is reset to field values seen
+	// earlier. Implementations MUST reject nil records, empty subjects,
+	// and version overflow.
+	CompareAndSwap(ctx context.Context, expectedVersion uint64, next *AuthnLockoutRecord) (bool, error)
 }

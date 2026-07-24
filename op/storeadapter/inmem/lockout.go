@@ -3,8 +3,8 @@ package inmem
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
-	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
 )
@@ -12,14 +12,13 @@ import (
 // authnLockoutStore is the in-memory reference implementation of
 // [store.AuthnLockoutStore]. It mirrors the contract used by the other
 // inmem substores: every Get clones the record so callers may mutate it
-// freely, and every Put clones the supplied pointer so a later mutation
-// by the caller does not leak into the map.
+// freely, and every successful CompareAndSwap clones the supplied pointer
+// so a later mutation by the caller does not leak into the map.
 //
-// The implementation guards the entire read-modify-write on Increment
-// with the same mutex Get / Put hold, so a concurrent Increment cannot
-// observe a stale FailedCount and lose an update (M-AUTHN-4). Production
-// SQL backends solve the same race with
-// "UPDATE ... SET failed_count = failed_count + 1".
+// The version comparison and replacement happen while holding the same
+// mutex. This makes every lockout transition atomic, including races
+// between failure increments, window rollover, and success reset
+// (M-AUTHN-4).
 type authnLockoutStore struct {
 	mu sync.Mutex
 	m  map[string]*store.AuthnLockoutRecord
@@ -30,7 +29,10 @@ func newAuthnLockoutStore() *authnLockoutStore {
 }
 
 // Get implements [store.AuthnLockoutStore].
-func (s *authnLockoutStore) Get(_ context.Context, subject string) (*store.AuthnLockoutRecord, error) {
+func (s *authnLockoutStore) Get(ctx context.Context, subject string) (*store.AuthnLockoutRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.m[subject]
@@ -40,60 +42,37 @@ func (s *authnLockoutStore) Get(_ context.Context, subject string) (*store.Authn
 	return cloneAuthnLockoutRecord(rec), nil
 }
 
-// Put implements [store.AuthnLockoutStore].
-func (s *authnLockoutStore) Put(_ context.Context, r *store.AuthnLockoutRecord) error {
-	if r == nil {
-		return errors.New("inmem: nil authn lockout record")
+// CompareAndSwap implements [store.AuthnLockoutStore].
+func (s *authnLockoutStore) CompareAndSwap(ctx context.Context, expectedVersion uint64, next *store.AuthnLockoutRecord) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	if r.Subject == "" {
-		return errors.New("inmem: authn lockout record missing Subject")
+	if next == nil {
+		return false, errors.New("inmem: nil authn lockout record")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[r.Subject] = cloneAuthnLockoutRecord(r)
-	return nil
-}
+	if next.Subject == "" {
+		return false, errors.New("inmem: authn lockout record missing Subject")
+	}
+	if expectedVersion == math.MaxUint64 {
+		return false, errors.New("inmem: authn lockout version overflow")
+	}
 
-// Increment implements [store.AuthnLockoutStore]. The mutex around the
-// read-modify-write is the inmem analogue of the SQL atomic increment.
-func (s *authnLockoutStore) Increment(_ context.Context, subject string, now time.Time) (int, error) {
-	if subject == "" {
-		return 0, errors.New("inmem: authn lockout increment requires non-empty subject")
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rec, ok := s.m[subject]
+
+	current, ok := s.m[next.Subject]
 	if !ok {
-		rec = &store.AuthnLockoutRecord{
-			Subject:        subject,
-			FailedCount:    0,
-			FirstFailureAt: now,
+		if expectedVersion != 0 {
+			return false, nil
 		}
+	} else if expectedVersion == 0 || current.Version != expectedVersion {
+		return false, nil
 	}
-	rec.FailedCount++
-	if rec.FirstFailureAt.IsZero() {
-		rec.FirstFailureAt = now
-	}
-	s.m[subject] = rec
-	return rec.FailedCount, nil
-}
 
-// StampLock implements [store.AuthnLockoutStamper]. The mutex makes the
-// LockedUntil write atomic with respect to a concurrent Increment, so the
-// lockout stamp cannot overwrite (and thereby lose) an increment that lands
-// between the helper's threshold check and this call (M-AUTHN-4).
-func (s *authnLockoutStore) StampLock(_ context.Context, subject string, lockedUntil time.Time) error {
-	if subject == "" {
-		return errors.New("inmem: authn lockout stamp requires non-empty subject")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	rec, ok := s.m[subject]
-	if !ok {
-		return store.ErrNotFound
-	}
-	rec.LockedUntil = lockedUntil
-	return nil
+	persisted := cloneAuthnLockoutRecord(next)
+	persisted.Version = expectedVersion + 1
+	s.m[next.Subject] = persisted
+	return true, nil
 }
 
 func cloneAuthnLockoutRecord(r *store.AuthnLockoutRecord) *store.AuthnLockoutRecord {

@@ -17,6 +17,7 @@ package lockout
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -26,7 +27,7 @@ import (
 // Threshold values. The constants are package-private so embedders
 // cannot tune them per-deployment; the defence is tuned once for the
 // entire library. The values match the per-factor TOTP / email-OTP
-// thresholds (02-product-design.md §M.6).
+// thresholds (002-product-design.md §M.6).
 const (
 	// thresholdShort triggers a 1-hour LockedUntil stamp.
 	thresholdShort = 30
@@ -153,92 +154,81 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 	return false, time.Time{}, nil
 }
 
-// RecordFailure atomically increments the cross-factor failure counter
-// for subject and returns the [Outcome] reflecting the post-increment
-// state. The function performs the window rollover (FirstFailureAt
-// older than counterWindow → reset to 1) and stamps LockedUntil when
-// the count crosses a threshold; both effects are persisted before
-// the function returns so a concurrent verify cannot observe a stale
-// counter.
-//
-// The atomic-increment contract on [store.AuthnLockoutStore.Increment]
-// (M-AUTHN-4) closes the lost-update race the verifier-local counter
-// otherwise had: two concurrent verify calls each see the result of
-// their own increment, not a snapshot of the count before either ran.
+// RecordFailure advances the complete cross-factor lockout state with a
+// versioned compare-and-swap. Increment, window rollover, and lock stamping
+// are one transition, so none can overwrite a concurrently committed
+// failure. A stale transition is recomputed from the latest record until it
+// commits (M-AUTHN-4).
 func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, error) {
 	if subject == "" {
 		return Outcome{}, errors.New("lockout: subject required")
 	}
 	now := c.clock.Now()
 
-	// Window rollover: if the existing FirstFailureAt is older than
-	// the configured window, the counter is treated as expired and
-	// the next failure starts a fresh window. The rollover write goes
-	// through Put (not Increment) so the row reads "FailedCount=0,
-	// FirstFailureAt=now" right before the atomic increment lands the
-	// post-rollover counter at 1.
-	prior, err := c.store.Get(ctx, subject)
-	switch {
-	case err == nil && prior != nil:
-		if !prior.FirstFailureAt.IsZero() && now.Sub(prior.FirstFailureAt) > counterWindow {
-			reset := &store.AuthnLockoutRecord{
-				Subject:        subject,
-				FailedCount:    0,
-				FirstFailureAt: time.Time{},
-				// Keep the prior LockedUntil if it has not yet expired
-				// — the rollover affects only the failure counter, not
-				// an outstanding lock.
-				LockedUntil: prior.LockedUntil,
-			}
-			if perr := c.store.Put(ctx, reset); perr != nil {
-				return Outcome{}, perr
-			}
+	for {
+		expectedVersion, next, err := c.failureBase(ctx, subject)
+		if err != nil {
+			return Outcome{}, err
 		}
-	case errors.Is(err, store.ErrNotFound):
-		// First failure ever; Increment will create the row.
-	default:
-		return Outcome{}, err
-	}
-
-	count, err := c.store.Increment(ctx, subject, now)
-	if err != nil {
-		return Outcome{}, err
-	}
-
-	out := Outcome{FailedCount: count}
-	switch {
-	case count >= thresholdLong:
-		out.LockedUntil = now.Add(durationLong)
-		out.ResetRequired = true
-	case count >= thresholdShort:
-		out.LockedUntil = now.Add(durationShort)
-	}
-	if !out.LockedUntil.IsZero() {
-		if err := c.stampLock(ctx, subject, out.LockedUntil); err != nil {
-			return out, err
+		out := applyFailure(next, now)
+		swapped, err := c.store.CompareAndSwap(ctx, expectedVersion, next)
+		if err != nil {
+			return Outcome{}, err
+		}
+		if swapped {
+			return out, nil
 		}
 	}
-	return out, nil
 }
 
-// stampLock persists the LockedUntil stamp computed by RecordFailure. When
-// the store implements [store.AuthnLockoutStamper] the stamp is a targeted
-// atomic write that cannot lose a concurrent Increment (M-AUTHN-4). A store
-// without the extension falls back to a read-modify-write Get+Put: the Get
-// recovers the FirstFailureAt the Increment wrote so the row stays
-// internally consistent, but the Put replaces the whole row and may drop an
-// increment that lands between the Get and the Put under concurrency — which
-// is why the extension exists and the reference store implements it.
-func (c *Counter) stampLock(ctx context.Context, subject string, lockedUntil time.Time) error {
-	if stamper, ok := c.store.(store.AuthnLockoutStamper); ok {
-		return stamper.StampLock(ctx, subject, lockedUntil)
+func (c *Counter) failureBase(ctx context.Context, subject string) (uint64, *store.AuthnLockoutRecord, error) {
+	prior, err := c.store.Get(ctx, subject)
+	if errors.Is(err, store.ErrNotFound) {
+		return 0, &store.AuthnLockoutRecord{Subject: subject}, nil
 	}
-	current, err := c.store.Get(ctx, subject)
 	if err != nil {
-		return err
+		return 0, nil, err
 	}
-	current.LockedUntil = lockedUntil
-	return c.store.Put(ctx, current)
+	if prior == nil {
+		return 0, nil, errors.New("lockout: store returned nil record without error")
+	}
+	if prior.Subject != subject {
+		return 0, nil, errors.New("lockout: store returned record for a different subject")
+	}
+	if prior.Version == 0 {
+		return 0, nil, errors.New("lockout: persisted record has zero version")
+	}
+	return prior.Version, prior, nil
+}
+
+func applyFailure(next *store.AuthnLockoutRecord, now time.Time) Outcome {
+	windowExpired := !next.FirstFailureAt.IsZero() &&
+		now.Sub(next.FirstFailureAt) > counterWindow
+	if windowExpired {
+		next.FailedCount = 1
+		next.FirstFailureAt = now
+	} else {
+		if next.FailedCount < math.MaxInt {
+			next.FailedCount++
+		}
+		if next.FirstFailureAt.IsZero() {
+			next.FirstFailureAt = now
+		}
+	}
+
+	out := Outcome{FailedCount: next.FailedCount}
+	switch {
+	case next.FailedCount >= thresholdLong:
+		out.LockedUntil = now.Add(durationLong)
+		out.ResetRequired = true
+	case next.FailedCount >= thresholdShort:
+		out.LockedUntil = now.Add(durationShort)
+	}
+	if next.LockedUntil.After(out.LockedUntil) {
+		out.LockedUntil = next.LockedUntil
+	}
+	next.LockedUntil = out.LockedUntil
+	return out
 }
 
 // Reset clears the cross-factor counter for subject. The per-factor
@@ -246,7 +236,11 @@ func (c *Counter) stampLock(ctx context.Context, subject string, lockedUntil tim
 // is not punished by accumulated attempts when their authentication
 // finally succeeds.
 //
-// A missing record is treated as "nothing to clear" and returns nil.
+// A missing record is treated as "nothing to clear" and returns nil. Reset
+// deliberately attempts its compare-and-swap only once: if a failure commits
+// after Reset's read, the stale reset is discarded instead of retrying and
+// erasing that failure. Conversely, if Reset commits first, RecordFailure
+// retries against the cleared state.
 func (c *Counter) Reset(ctx context.Context, subject string) error {
 	if subject == "" {
 		return nil
@@ -258,8 +252,21 @@ func (c *Counter) Reset(ctx context.Context, subject string) error {
 		}
 		return err
 	}
+	if rec == nil {
+		return errors.New("lockout: store returned nil record without error")
+	}
+	if rec.Subject != subject {
+		return errors.New("lockout: store returned record for a different subject")
+	}
+	if rec.Version == 0 {
+		return errors.New("lockout: persisted record has zero version")
+	}
+	if rec.FailedCount == 0 && rec.FirstFailureAt.IsZero() && rec.LockedUntil.IsZero() {
+		return nil
+	}
 	rec.FailedCount = 0
 	rec.FirstFailureAt = time.Time{}
 	rec.LockedUntil = time.Time{}
-	return c.store.Put(ctx, rec)
+	_, err = c.store.CompareAndSwap(ctx, rec.Version, rec)
+	return err
 }

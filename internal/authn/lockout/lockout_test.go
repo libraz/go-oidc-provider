@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
 	"github.com/libraz/go-oidc-provider/internal/timex"
+	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
@@ -168,6 +170,158 @@ func TestCounter_WindowRollover(t *testing.T) {
 	if out.FailedCount != 1 {
 		t.Fatalf("FailedCount after rollover=%d want 1", out.FailedCount)
 	}
+}
+
+// casBarrierStore makes the first two transitions observe the same
+// pre-transition state before either may commit. Later retries pass through
+// immediately so Counter can resolve the forced conflict.
+type casBarrierStore struct {
+	store   store.AuthnLockoutStore
+	calls   atomic.Int32
+	ready   chan struct{}
+	release chan struct{}
+}
+
+func newCASBarrierStore(s store.AuthnLockoutStore) *casBarrierStore {
+	return &casBarrierStore{
+		store:   s,
+		ready:   make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+}
+
+func (s *casBarrierStore) Get(ctx context.Context, subject string) (*store.AuthnLockoutRecord, error) {
+	return s.store.Get(ctx, subject)
+}
+
+func (s *casBarrierStore) CompareAndSwap(ctx context.Context, expectedVersion uint64, next *store.AuthnLockoutRecord) (bool, error) {
+	if s.calls.Add(1) <= 2 {
+		s.ready <- struct{}{}
+		<-s.release
+	}
+	return s.store.CompareAndSwap(ctx, expectedVersion, next)
+}
+
+func (s *casBarrierStore) releaseBoth(t *testing.T) {
+	t.Helper()
+	<-s.ready
+	<-s.ready
+	close(s.release)
+}
+
+func TestCounter_ConcurrentResetAndFailurePreservesFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)}
+	base := inmem.New().AuthnLockouts()
+	seed, err := lockout.New(base, clock)
+	if err != nil {
+		t.Fatalf("lockout.New seed: %v", err)
+	}
+	for i := range 29 {
+		if _, err := seed.RecordFailure(ctx, "alice"); err != nil {
+			t.Fatalf("seed RecordFailure %d: %v", i+1, err)
+		}
+	}
+
+	barrier := newCASBarrierStore(base)
+	counter, err := lockout.New(barrier, clock)
+	if err != nil {
+		t.Fatalf("lockout.New barrier: %v", err)
+	}
+	resetErr := make(chan error, 1)
+	failureErr := make(chan error, 1)
+	go func() {
+		resetErr <- counter.Reset(ctx, "alice")
+	}()
+	go func() {
+		_, err := counter.RecordFailure(ctx, "alice")
+		failureErr <- err
+	}()
+
+	barrier.releaseBoth(t)
+	if err := <-resetErr; err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if err := <-failureErr; err != nil {
+		t.Fatalf("RecordFailure: %v", err)
+	}
+
+	got, err := base.Get(ctx, "alice")
+	if err != nil {
+		t.Fatalf("Get final: %v", err)
+	}
+	if got.FailedCount == 0 {
+		t.Fatalf("concurrent success erased failure: %+v", got)
+	}
+	if got.FailedCount != 1 && got.FailedCount != 30 {
+		t.Fatalf("FailedCount = %d, want 1 or 30 according to CAS winner", got.FailedCount)
+	}
+	if got.FailedCount == 30 && got.LockedUntil.IsZero() {
+		t.Fatal("threshold-crossing failure won CAS but its lock stamp was erased")
+	}
+}
+
+func TestCounter_ConcurrentRolloverFailuresPreserveBoth(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)}
+	base := inmem.New().AuthnLockouts()
+	seed, err := lockout.New(base, clock)
+	if err != nil {
+		t.Fatalf("lockout.New seed: %v", err)
+	}
+	for i := range 5 {
+		if _, err := seed.RecordFailure(ctx, "alice"); err != nil {
+			t.Fatalf("seed RecordFailure %d: %v", i+1, err)
+		}
+	}
+	clock.advance(25 * time.Hour)
+	now := clock.Now()
+
+	barrier := newCASBarrierStore(base)
+	counter, err := lockout.New(barrier, clock)
+	if err != nil {
+		t.Fatalf("lockout.New barrier: %v", err)
+	}
+	results := make(chan outcomeResult, 2)
+	for range 2 {
+		go func() {
+			out, err := counter.RecordFailure(ctx, "alice")
+			results <- outcomeResult{count: out.FailedCount, err: err}
+		}()
+	}
+
+	barrier.releaseBoth(t)
+	seen := map[int]bool{}
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("RecordFailure: %v", result.err)
+		}
+		seen[result.count] = true
+	}
+	if !seen[1] || !seen[2] {
+		t.Fatalf("post-rollover counts = %v, want both 1 and 2", seen)
+	}
+
+	got, err := base.Get(ctx, "alice")
+	if err != nil {
+		t.Fatalf("Get final: %v", err)
+	}
+	if got.FailedCount != 2 {
+		t.Fatalf("FailedCount = %d, want 2", got.FailedCount)
+	}
+	if !got.FirstFailureAt.Equal(now) {
+		t.Fatalf("FirstFailureAt = %v, want %v", got.FirstFailureAt, now)
+	}
+}
+
+type outcomeResult struct {
+	count int
+	err   error
 }
 
 // TestCounter_AtomicIncrementUnderConcurrency exercises M-AUTHN-4. Two
