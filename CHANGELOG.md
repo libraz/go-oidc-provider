@@ -52,107 +52,15 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 
 ## [v0.9.6] — 2026-07-24
 
-A hardening and durability release centred on the token endpoint and the
-storage layer: the refresh, CIBA, and device-code exchanges now stage their
-fallible work before the single-use consume so an approved ceremony survives a
-signing or persistence fault, and the store interfaces grow the transactional
-and cascade capabilities that behaviour depends on. No new protocol surface.
-Several construction-time and interface changes are breaking for custom store
-implementations and typed-nil callers — see `Changed`.
-
-### Added
-
-- `store.RefreshRetryResponseStore` — persists an already-sealed refresh
-  response against its consumed predecessor so the OP can re-emit the exact
-  response on the RFC 9700 grace path instead of branching the token chain. The
-  SQL adapter stores it in a new `retry_response` column written atomically with
-  the successor.
-- `RevokeByClient` cascade on the access-token and opaque-access-token
-  substores (with the matching SQL queries), so a client-scoped revocation
-  reaches every issued token.
-- `Tx` now exposes `AccessTokens`, `OpaqueAccessTokens`, and `GrantRevocations`
-  so the token endpoint can stage a whole refresh rotation transactionally.
-- `CompareAndSwap` on the TOTP and email-OTP substores (with an in-memory
-  implementation), used by the authenticator hardening below.
-- Redis `store.SessionStore` — session state backed by the Redis adapter and
-  bound to the Redis TTL (compose it with a durable backend for grants and
-  credentials).
-- Bounded back-channel logout fan-out: deliveries dispatch through a worker pool
-  (`DefaultMaxConcurrentDeliveries`) and the deduplicated audience is capped at
-  `DefaultMaxTargets`, emitting an overflow audit event when the cap trims
-  targets.
-
-### Changed
-
-- **BREAKING** `op.New` now rejects a typed-nil `store.Store` or `crypto.Signer`
-  interface value at construction (via `WithStore`, the required-config check,
-  and keyset validation) instead of panicking on first use. Pass a real
-  implementation or omit the option.
-- **BREAKING** The storage interfaces gain new members that custom
-  implementations must provide: `Tx.AccessTokens` / `OpaqueAccessTokens` /
-  `GrantRevocations`, `RefreshRetryResponseStore`, `RevokeByClient` on the
-  access-token substores, and `CompareAndSwap` on the TOTP and email-OTP
-  substores. The bundled `inmem`, `sql`, and `redis` adapters implement them.
-- **BREAKING** An `EncryptionKey`'s `NotAfter` is now a hard retirement
-  deadline: on or after it the OP refuses to decrypt for that `kid` and drops
-  the public half from the published JWKS, so RPs are never directed to a
-  recipient the OP can no longer decrypt for.
-- The lax OIDC Core 1.0 §11 reading of `offline_access` (an `openid`-only grant
-  may refresh) is the default and is now applied consistently to the
-  authorization-code issuance path as well as the refresh exchange;
-  `offline_access` is required only under `op.WithStrictOfflineAccess`.
-- The back-channel HTTP deliverer adopts only an embedder client's `Transport`,
-  keeping redirect, timeout, and dial-time SSRF policy mandatory; the option doc
-  reflects the Transport-only contract.
-
-### Security
-
-- JAR: every URL-indexed JWKS cache is bounded with LRU-style eviction and
-  expired-entry pruning, and a document carrying more keys than the parse cap is
-  rejected, so hostile client registrations cannot grow process memory without
-  bound.
-- DPoP: the replay-protection record is namespaced by proof thumbprint
-  (`dpop:<jkt>:<jti>`) so two distinct proof keys reusing one `jti` no longer
-  collide, while a replay by the same key still surfaces as a replayed proof.
-  The thumbprint is computed before the record is marked, preserving the
-  malformed-proof-never-advances property.
-- Authenticators: TOTP and email-OTP verification uses a `CompareAndSwap` retry
-  loop so concurrent wrong-code attempts each advance the brute-force counter
-  instead of a stale writer clobbering the winning state; email-OTP resend
-  reserves its challenge before invoking the mailer so a racing resend cannot
-  reuse a stale rate-limit snapshot.
-- Sender-constraint (DPoP / mTLS) checks and revocation checks now run ahead of
-  the single-use `Consume` on the refresh exchange and are fail-closed before a
-  fresh access token is minted.
-
-### Fixed
-
-- Refresh exchange (RFC 9700 grace path): post-preflight mutations are staged
-  behind a transaction and the buffered response is forwarded only after commit,
-  so a signing, JWE, cache, or write failure rolls `Consume` back instead of
-  stranding the predecessor token. With a retry-response cache configured, a
-  grace retry re-emits the exact sealed response from the original rotation
-  rather than minting a second token set.
-- CIBA and device-code polls assemble the fallible token bundle (signing plus
-  opaque/refresh persistence) before the single-use `Consume` CAS; a poll that
-  loses the CAS discards its pre-persisted credentials, so an approved ceremony
-  is no longer lost to a signing or persistence fault while single-use is
-  preserved.
-- The end-session handler records session-destroy, token-revoke, and
-  back-channel resolution failures as distinct audit events while keeping the
-  browser response non-blocking; `RevokeJWTAccessTokensByGrant` now returns store
-  errors and the grant-management revoke path treats them fail-closed.
-- Redis adapter: `WithKeyPrefix` and `WithMaxValueBytes` now surface an option
-  error at construction instead of being silently dropped.
-
-## [v0.9.5] — 2026-07-13
-
-A security-hardening release: no new protocol surface, but a broad sweep of
-abuse-resistance and correctness fixes across PKCE enforcement,
-`private_key_jwt` key selection, DPoP token binding, the authenticator chain,
-PAR consume semantics, and session-cookie handling, plus a round of dependency
-updates. One new option (`WithPARLifetime`) is added and one behaviour change is
-breaking (PKCE is now mandatory for public and native clients).
+A hardening and durability release across the token endpoint, the storage
+layer, and construction-time validation. The authorization-code, refresh,
+CIBA, and device-code flows now stage their fallible work behind transactions
+and single-use compare-and-swaps, so an approved ceremony survives a signing
+or persistence fault; back-channel logout fans out through keyset-paginated
+grant lookups; and `op.New` rejects a far wider class of misconfiguration up
+front. No new protocol surface. Several store-interface and construction
+changes are breaking for custom store implementations — see `Changed` for the
+migration notes.
 
 ### Added
 
@@ -166,10 +74,229 @@ breaking (PKCE is now mandatory for public and native clients).
   back-channel resolution/overflow, DCR cascade failures, device poll
   observation faults, and custom-grant outcomes are included in the catalog
   and counters.
+- `store.StaticClientReconciler`; `WithStaticClients` now applies the entire
+  configured set as one atomic, idempotent batch (insert missing, no-op on
+  equivalent records, `ErrConflict` on divergent or non-static rows). The
+  reconciliation runs only after every other fallible build step, so a failed
+  `op.New` never leaves partial client records behind. Implemented in the SQL
+  and in-memory adapters.
+- `store.DeviceCodeStore.Revoke` and the public `devicecodekit.Revoke` helper.
+  `Revoke` atomically transitions pending and approved device-code records to
+  denied so a later `/token` poll cannot issue credentials, while the helper
+  cascade-revokes every credential surface sharing the device grant lineage
+  per the configured `RevocationStrategy` and emits an `AuditDeviceCodeRevoked`
+  event. Implemented in the in-memory and SQL adapters.
+- `store.RefreshRetryResponseStore` persists an already-sealed refresh response
+  against its consumed predecessor so the OP can re-emit the exact response on
+  the RFC 9700 grace path instead of branching the token chain; the SQL adapter
+  stores it in a new `retry_response` column written atomically with the
+  successor.
+- `RevokeByClient` cascade on the access-token and opaque-access-token
+  substores (with the matching SQL queries), so a client-scoped revocation
+  reaches every issued token.
+- Redis `store.SessionStore` — session state backed by the Redis adapter and
+  bound to the Redis TTL (compose it with a durable backend for grants and
+  credentials).
 - A strict OFCS release verifier, separate from the historical regression
   diff. It rejects persistent non-PASS results, empty results, module-catalog
   drift, and stale or expired exceptions; the only accepted exceptions are
   exact entries in a clean, checked-in owner/reason/expiry manifest.
+
+### Changed
+
+- **BREAKING — authorization-code stores must now implement
+  `store.Transactional`, and their interaction substore must implement
+  `store.InteractionStoreCAS` (`CompareAndSwap` and `DeleteIfUnchanged`).**
+  Authorization completion persists an immutable retry intent, commits
+  Grant / PAR / authorization-code mutations together, establishes the Session
+  idempotently, and deletes the interaction last; silent and first-party
+  auto-consent mints use the same transaction boundary. *Migration:* BYO stores
+  that enable `grant.AuthorizationCode` must add a real `BeginTx`
+  implementation and atomic expected-`RawState` interaction transitions; the
+  SQL, in-memory, and `examples/26-byo-store-from-scratch` implementations are
+  references. Transaction-bound Grant reads must lock rows, use serializable
+  isolation, or surface an equivalent optimistic conflict before Save so
+  concurrent scope/RAR merges cannot lose updates.
+- **BREAKING — `store.GrantStore` now requires
+  `ListClientIDsBySubject(ctx, subject, cursor, limit)`.** Back-channel logout
+  uses this distinct, keyset-paginated view to bound both grant query results
+  and client-registry lookups before target resolution, pulling one bounded
+  page per notice and emitting an overflow event with the next cursor instead
+  of scanning every grant row; it advertises
+  `backchannel_logout_session_supported: false` since grant-based fan-out
+  retains no RP-specific session lineage. `ListClientIDsBySubject` lives on a
+  new optional `store.GrantClientLister` extension, so machine-to-machine
+  backends that never mount the browser `authorize` / `end_session` endpoints
+  need not implement it; `op.New` rejects an interactive configuration whose
+  `GrantStore` lacks it. *Migration:* implement a stable ascending client-ID
+  query returning at most `limit` IDs plus `NextCursor` when another page
+  exists — do not delegate to `ListBySubject` and slice its full result. The
+  in-memory, SQL, and `examples/26-byo-store-from-scratch` adapters show the
+  required semantics.
+- **BREAKING — trusted-proxy mTLS certificate headers now accept exactly one
+  field containing one raw or percent-encoded `CERTIFICATE` PEM block.**
+  Duplicate fields, PEM chains, and trailing non-whitespace data are rejected
+  as `ErrCertMalformed` instead of silently selecting the first certificate.
+  The forwarded certificate is no longer compared with the handshake leaf: on
+  dual-mTLS / mesh hops the handshake leaf identifies the proxy transport, so a
+  mismatch is the normal topology, not an attack. *Migration:* configure the
+  TLS terminator to strip the inbound header and forward only the verified
+  OAuth client leaf.
+- **BREAKING — account-lockout state moves to a versioned
+  `AuthnLockoutStore.CompareAndSwap` contract keyed on an opaque
+  backend-managed `Version`,** replacing the earlier `StampLock` extension.
+  Failure increment, window rollover, lock stamping, and success reset apply as
+  one transition recomputed from the latest record until it commits, so
+  parallel failures across factors cannot lose updates and a concurrently
+  committed failure is never erased by a stale reset. *Migration:* BYO lockout
+  stores must implement `CompareAndSwap`; the in-memory reference and the
+  reusable adapter contract show the semantics.
+- **BREAKING — passkey stores must now implement
+  `store.PasskeyStore.UpdateAssertion` (`PasskeyAssertionUpdate`),** which
+  commits sign-count, clone-flag, and last-used fields as one atomic write
+  instead of a whole-record `Put` that could rewind security state. *Migration:*
+  BYO passkey stores add `UpdateAssertion`; the in-memory reference implements
+  it.
+- **BREAKING** — an `EncryptionKey`'s `NotAfter` is now a hard retirement
+  deadline: on or after it the OP refuses to decrypt for that `kid` and drops
+  the public half from the published JWKS, so RPs are never directed to a
+  recipient the OP can no longer decrypt for.
+- The zero-configuration `interaction.HTMLDriver` now consumes the same locale
+  resolver as `/authorize`: `WithLocale` additions and overlays are reflected
+  in password-page titles, labels, and submit buttons; untranslated keys retain
+  the built-in English fallback, and all translated output is HTML-escaped at
+  emission.
+- **BREAKING** — the token-endpoint transaction view (`Tx`) gains
+  `AccessTokens`, `OpaqueAccessTokens`, and `GrantRevocations`, and the TOTP
+  and email-OTP substores gain `CompareAndSwap` (with an in-memory
+  implementation); BYO stores backing these surfaces must implement the new
+  members.
+- The lax OIDC Core 1.0 §11 reading of `offline_access` (an `openid`-only grant
+  may refresh) is the default and is now applied consistently to the
+  authorization-code issuance path as well as the refresh exchange;
+  `offline_access` is required only under `op.WithStrictOfflineAccess`.
+- Endpoints now mount under the issuer URL path: an issuer like
+  `https://idp.example.com/tenant` serves the token endpoint at
+  `/tenant/oidc/token` and matching paths for every protocol handler, with the
+  `.well-known` suffix placed before the issuer path per OpenID Connect
+  Discovery 1.0 so advertised and mounted URLs agree. `Endpoints` overrides are
+  validated as clean absolute paths at construction (query strings, fragments,
+  duplicate slashes, percent-encoding, and wildcard syntax are rejected).
+- Back-channel logout deliveries dispatch through a bounded worker pool
+  (`DefaultMaxConcurrentDeliveries`) with the deduplicated audience capped at
+  `DefaultMaxTargets`; the HTTP deliverer adopts only an embedder client's
+  `Transport`, keeping redirect, timeout, and dial-time SSRF policy mandatory.
+
+### Security
+
+- JAR: every URL-indexed JWKS cache is bounded with LRU-style eviction and
+  expired-entry pruning, and a document carrying more keys than the parse cap is
+  rejected, so hostile client registrations cannot grow process memory without
+  bound.
+- The remote client-resolver caches (client encryption JWKS and the
+  sector-identifier resolver) share one size-bounded TTL/LRU primitive with
+  per-key singleflight and negative caching, giving URLs controlled by clients a
+  bounded entry count and a negative TTL.
+- DPoP: the replay-protection record is namespaced by proof thumbprint
+  (`dpop:<jkt>:<jti>`) so two distinct proof keys reusing one `jti` no longer
+  collide, while a replay by the same key still surfaces as a replayed proof.
+  The thumbprint is computed before the record is marked, preserving the
+  malformed-proof-never-advances property.
+- Authenticators: TOTP and email-OTP verification uses a `CompareAndSwap` retry
+  loop so concurrent wrong-code attempts each advance the brute-force counter
+  instead of a stale writer clobbering the winning state; email-OTP resend
+  reserves its challenge before invoking the mailer so a racing resend cannot
+  reuse a stale rate-limit snapshot.
+- Sender-constraint (DPoP / mTLS) checks and revocation checks now run ahead of
+  the single-use `Consume` on the refresh exchange and are fail-closed before a
+  fresh access token is minted.
+- Token exchange enforces the OIDC Core required claim set (`iss`, `sub`, `aud`,
+  `exp`, `iat`) with time bounds when a `subject_token` is an ID token — so the
+  mandatory source-token TTL cap always has a live `exp` — and decodes `aud` in
+  both RFC 7519 shapes, rejecting missing, empty, or malformed values as an
+  invalid token.
+- Redact MySQL and Redis connection credentials from the storage examples'
+  startup diagnostics. The Redis adapter now also returns a generic parse error
+  for malformed DSNs, so an invalid percent-encoded credential cannot be copied
+  into an error message; `oidcredis.RedactedDSN` provides the same structural,
+  fail-closed representation for embedder logs.
+- Harden `op.LoadPublicJWKS` into a public-member allowlist normalizer:
+  symmetric `oct` and unsupported key types are rejected, while RSA, EC, and
+  OKP inputs retain only their key-type public parameters and standard public
+  JWK metadata. Private and unknown extension members can no longer survive by
+  falling outside a private-parameter denylist.
+
+### Fixed
+
+- Refresh exchange (RFC 9700 grace path): post-preflight mutations are staged
+  behind a transaction and the buffered response is forwarded only after commit,
+  so a signing, JWE, cache, or write failure rolls `Consume` back instead of
+  stranding the predecessor token. With a retry-response cache configured, a
+  bearer grace retry re-emits the exact sealed response from the original
+  rotation. A sender-constrained (DPoP / mTLS) grace retry re-mints the access
+  token bound to the key the retry presents — a confidential client may rotate
+  its DPoP key across refreshes (RFC 9449 §5), and replaying the originally
+  bound token would hand back one the client can no longer use, failing every
+  resource call with a `cnf` thumbprint mismatch — while re-emitting the
+  original successor refresh token, so the chain is never rotated twice.
+- CIBA and device-code polls assemble the fallible token bundle (signing plus
+  opaque/refresh persistence) before the single-use `Consume` CAS; a poll that
+  loses the CAS discards its pre-persisted credentials, so an approved ceremony
+  is no longer lost to a signing or persistence fault while single-use is
+  preserved.
+- Preflight RFC 9396 `authorization_details` against the live Grant before the
+  refresh `Exchange` consumes the predecessor token (the token snapshot stays
+  the fallback for missing or sparse grants), sharing one transactional view
+  with the later `Consume` so a concurrent grant-management update cannot turn a
+  valid request into a rejection that strands the predecessor.
+- Project the originating `GrantID` from opaque access-token records into the
+  synthetic `/userinfo` claims so pairwise subject configurations recover the
+  OP-internal subject; a legacy opaque record without a `GrantID` is rejected
+  under pairwise projection instead of serving a wrong subject.
+- Dynamic client registration: map an explicit JSON `null` in optional metadata
+  to the same empty value as an omitted property (RFC 7592 deletion) so
+  `jwks: null` never reaches the JWK parser as a malformed set, reject
+  `backchannel_logout_session_required` since the grant model retains no
+  client-specific session lineage, and emit typed audit events when a
+  delete-cascade revocation probe fails instead of dropping the fault.
+- Passkey assertion state (sign-count, clone-flag, last-used) commits as one
+  atomic write stamped from the exact record the signature was verified
+  against, so concurrent assertions keep counters monotonic instead of a
+  whole-record `Put` rewinding security state.
+- Reject typed-nil login-flow, authentication, interaction, clock, and JWE
+  private-key dependencies during `op.New` validation, distinguishing an absent
+  nil interface (documented default) from an explicitly supplied typed nil, and
+  validate configured endpoint paths for route collisions — configuration
+  errors now surface before metrics registration, route construction, store
+  writes, or an `http.ServeMux` panic.
+- Bound in-memory refresh-token revocation by client or grant to the matching
+  token set via client-ID and grant-ID secondary indexes under the refresh
+  store's existing lock and transaction boundary, avoiding full token-map scans
+  during DCR deletion and grant revocation without changing retained-record or
+  replay semantics.
+- The end-session handler records session-destroy, token-revoke, and
+  back-channel resolution failures as distinct audit events while keeping the
+  browser response non-blocking; `RevokeJWTAccessTokensByGrant` now returns
+  store errors and the grant-management revoke path treats them fail-closed.
+- Redis adapter: `WithKeyPrefix` and `WithMaxValueBytes` now surface an option
+  error at construction instead of being silently dropped.
+- Corrected the public `grant.RefreshToken` and `ScopeNameOfflineAccess`
+  documentation to match the historical issuance default: `openid` plus the
+  client's `refresh_token` grant is sufficient, while requiring `offline_access`
+  is an explicit `op.WithStrictOfflineAccess` opt-in. Runtime behaviour is
+  unchanged.
+
+## [v0.9.5] — 2026-07-13
+
+A security-hardening release: no new protocol surface, but a broad sweep of
+abuse-resistance and correctness fixes across PKCE enforcement,
+`private_key_jwt` key selection, DPoP token binding, the authenticator chain,
+PAR consume semantics, and session-cookie handling, plus a round of dependency
+updates. One new option (`WithPARLifetime`) is added and one behaviour change is
+breaking (PKCE is now mandatory for public and native clients).
+
+### Added
+
 - `op.WithPARLifetime` — override the lifetime of a `request_uri` issued by the
   PAR endpoint (RFC 9126 §2.2; default 60 seconds). Zero selects the default; a
   negative value is rejected at construction. The lifetime bounds only the
@@ -185,38 +312,6 @@ breaking (PKCE is now mandatory for public and native clients).
 
 ### Changed
 
-- The zero-configuration `interaction.HTMLDriver` now consumes the same
-  locale resolver as `/authorize`. `WithLocale` additions and overlays are
-  reflected in password-page titles, labels, and submit buttons; untranslated
-  keys retain the built-in English fallback, and all translated output is
-  HTML-escaped at emission.
-- **BREAKING — authorization-code stores must now implement
-  `store.Transactional`, and their interaction substore must implement
-  `store.InteractionStoreCAS` (`CompareAndSwap` and
-  `DeleteIfUnchanged`).** Authorization completion persists an immutable retry
-  intent, commits Grant/PAR/Authorization Code mutations together, establishes
-  the Session idempotently, and deletes the interaction last. Silent and
-  first-party auto-consent mints use the same transaction boundary. *Migration:*
-  BYO stores that enable `grant.AuthorizationCode` must add a real `BeginTx`
-  implementation and atomic expected-`RawState` interaction transitions; the
-  SQL, in-memory, and `examples/26-byo-store-from-scratch` implementations are
-  reference implementations. Transaction-bound Grant reads must lock rows,
-  use serializable isolation, or surface an equivalent optimistic conflict
-  before Save so concurrent scope/RAR merges cannot lose updates.
-- **BREAKING — trusted-proxy mTLS certificate headers now accept exactly one
-  field containing one raw or percent-encoded `CERTIFICATE` PEM block.**
-  Duplicate fields, PEM chains, and trailing non-whitespace data are rejected
-  as malformed instead of silently selecting the first certificate.
-  *Migration:* configure the TLS terminator to strip the inbound header and
-  forward only the verified OAuth client leaf.
-- **BREAKING — `store.GrantStore` now requires
-  `ListClientIDsBySubject(ctx, subject, cursor, limit)`.** Back-channel logout
-  uses this distinct, keyset-paginated view to bound both grant query results
-  and client-registry lookups before target resolution. *Migration:* BYO
-  adapters must implement a stable ascending client-ID query that returns at
-  most `limit` IDs plus `NextCursor` when another page exists. Do not delegate
-  to `ListBySubject` and slice its full result. The in-memory, SQL, and
-  `examples/26-byo-store-from-scratch` adapters show the required semantics.
 - **BREAKING — PKCE (`code_challenge`) is now mandatory for public and native
   clients at `/authorize`, independent of the active profile.** A public or
   native client that omits `code_challenge` receives `invalid_request` at the
@@ -237,25 +332,6 @@ breaking (PKCE is now mandatory for public and native clients).
 
 ### Fixed
 
-- Reject typed-nil login-flow, authentication, interaction, clock, and JWE
-  private-key dependencies during `op.New` validation. Configuration errors
-  now identify the offending option or field before metrics registration,
-  route construction, store writes, or key dereferences can occur.
-- Bound in-memory refresh-token revocation by client or grant to the matching
-  token set. The reference adapter now maintains client-ID and grant-ID
-  secondary indexes under the refresh store's existing lock and transaction
-  boundary, avoiding full token-map scans during DCR deletion and grant
-  revocation without changing retained-record or replay semantics.
-- Treat a TLS-terminating trusted proxy's handshake certificate as transport
-  identity and the forwarded certificate as the OAuth client identity. The
-  normal `proxy certificate != client certificate` topology is now accepted,
-  while untrusted sources still cannot make a forwarding header authoritative.
-- Corrected the public `grant.RefreshToken` and `ScopeNameOfflineAccess`
-  documentation to match the historical issuance default: `openid` plus the
-  client's `refresh_token` grant is sufficient, while requiring
-  `offline_access` is an explicit `op.WithStrictOfflineAccess` opt-in. The
-  documented policy matrix is now pinned to implementation and end-to-end
-  tests; runtime behaviour is unchanged.
 - Re-show the email-OTP verify prompt on a wrong code — preserving the delivered
   code — instead of restarting at the send screen, while still yielding to a
   pending captcha challenge.
@@ -275,16 +351,6 @@ breaking (PKCE is now mandatory for public and native clients).
 
 ### Security
 
-- Redact MySQL and Redis connection credentials from the storage examples'
-  startup diagnostics. The Redis adapter now also returns a generic parse
-  error for malformed DSNs, so an invalid percent-encoded credential cannot
-  be copied into an error message. `oidcredis.RedactedDSN` provides the same
-  structural, fail-closed representation for embedder logs.
-- Harden `op.LoadPublicJWKS` into a public-member allowlist normalizer:
-  symmetric `oct` and unsupported key types are rejected, while RSA, EC, and
-  OKP inputs retain only their key-type public parameters and standard public
-  JWK metadata. Private and unknown extension members can no longer survive by
-  falling outside a private-parameter denylist.
 - Reject DPoP-bound access tokens presented under the `Bearer` scheme at
   `/userinfo`; RFC 9449 §7.1 requires the `DPoP` scheme for sender-constrained
   tokens.
@@ -448,10 +514,10 @@ from the access-token TTL (see Changed).
 - `op/storeadapter/sql` device-code and CIBA substores, with new
   `oidc_device_codes` / `oidc_ciba_requests` tables across the three dialects,
   table-name overrides, and contract-harness coverage.
-- Versioned `AuthnLockoutStore.CompareAndSwap` transitions — failure
-  increments, window rollover, lock stamping, and success reset now share one
-  atomic state machine. The inmem reference and reusable adapter contract
-  implement the new API.
+- `AuthnLockoutStamper` optional store extension (`StampLock`) — stamps
+  `LockedUntil` atomically without a whole-row `Put`, closing the cross-factor
+  lockout lost-update race. Stores that omit it fall back to `Get`+`Put`; the
+  inmem reference implements it.
 - `RefreshChainResolver` optional store extension — resolves hashed
   refresh-token pointers for the internal replay-cascade chain walk while the
   public `Find` / `Consume` lookups stay hash-only and constant-time.
@@ -533,10 +599,9 @@ from the access-token TTL (see Changed).
 - One-time auth factors (email-OTP, TOTP, recovery codes) can no longer be
   accepted twice under concurrency: single-use is enforced by an atomic store
   compare-and-set returning `ErrAlreadyConsumed` on replay (race tests added).
-- Closed cross-factor account-lockout lost-update races across failure,
-  success reset, window rollover, and lock stamping. Concurrent failures
-  remain monotonic, and a successful factor cannot erase a failure that wins
-  the same-version race.
+- Closed a cross-factor account-lockout lost-update race via the atomic
+  `StampLock` path, so concurrent failed factors cannot overwrite each other's
+  `LockedUntil`.
 - Refresh-token `id` / `parent_id` are hashed at rest and looked up in constant
   time, hardening against store-disclosure and timing side channels.
 - Hardened the account-chooser add-account path with PAR-aware URL stamping and
