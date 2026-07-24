@@ -1,6 +1,7 @@
 package registrationendpoint
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -186,7 +187,7 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		PolicyURI:                         w.PolicyURI,
 		TosURI:                            w.TosURI,
 		JWKsURI:                           w.JWKsURI,
-		JWKs:                              append(json.RawMessage(nil), w.JWKs...),
+		JWKs:                              normalizeOptionalJSON(w.JWKs),
 		Contacts:                          cloneStrings(w.Contacts),
 		DefaultMaxAge:                     clone.Int64Ptr(w.DefaultMaxAge),
 		RequireAuthTime:                   w.RequireAuthTime,
@@ -218,6 +219,19 @@ func parseClientMetadataWithExtras(r io.Reader) (ClientMetadata, metadataExtras,
 		RegClientURI:      append(json.RawMessage(nil), w.RegistrationClientURI...),
 	}
 	return m, extras, nil
+}
+
+// normalizeOptionalJSON maps an explicit JSON null to the same empty
+// metadata value as an omitted property. RFC 7592 §2.2 defines both forms
+// as a request to delete optional client metadata. Keeping the normalisation
+// at the wire boundary prevents `jwks: null` from reaching the JWK parser as
+// a malformed set while preserving every non-null byte for persistence and
+// response round-trips.
+func normalizeOptionalJSON(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
 }
 
 // cloneStrings returns a fresh copy of in so a later mutation of the

@@ -383,21 +383,16 @@ func isLoopbackHost(host string) bool {
 	return false
 }
 
-// validateBackchannelLogoutCoupling enforces the rule that a client
-// opting into back-channel logout's session-bound semantics
-// (`backchannel_logout_session_required=true`) MUST register a
-// non-empty `backchannel_logout_uri`. The session-bound flag is
-// meaningful only as a directive to the OP about the contents of the
-// logout token; without a delivery URL the directive is a dangling
-// promise the OP cannot honour at logout time. RFC 7591 says nothing
-// about the coupling, so we treat it as a structural-validation
-// error (invalid_client_metadata) rather than a runtime delivery
-// failure — it is the kind of misconfiguration that should surface
-// at registration time, not at the next session expiry.
+// validateBackchannelLogoutCoupling rejects session-bound back-channel
+// logout registration. The current grant model does not retain a
+// client-specific session lineage, so accepting the flag would either
+// break the client's contract or leak an unrelated browser-session SID.
+// Sub-only back-channel logout remains available through
+// backchannel_logout_uri.
 func validateBackchannelLogoutCoupling(m ClientMetadata) error {
-	if m.BackchannelLogoutSessionRequired && m.BackchannelLogoutURI == "" {
+	if m.BackchannelLogoutSessionRequired {
 		return errInvalidClientMetadata(
-			"backchannel_logout_session_required requires backchannel_logout_uri")
+			"backchannel_logout_session_required is not supported")
 	}
 	return nil
 }

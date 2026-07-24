@@ -650,11 +650,10 @@ func TestValidateMetadataURIs_RejectsUserinfo(t *testing.T) {
 // same [validateHTTPSAbsoluteURI] helper with client_uri / jwks_uri
 // / sector_identifier_uri so the URL-safety policy is uniform.
 //
-// The matrix also pins the `backchannel_logout_session_required`
-// coupling: the session-bound flag is meaningless without a delivery
-// URL, so a true flag with an empty URI MUST surface as
-// invalid_client_metadata at registration time rather than failing
-// silently at logout time.
+// The matrix also pins that `backchannel_logout_session_required=true`
+// is rejected even with a delivery URL. The current grant model cannot
+// recover an RP-specific SID, so accepting the flag would create a
+// capability lie or leak an unrelated browser-session identifier.
 func TestValidateBackchannelLogoutURI(t *testing.T) {
 	t.Parallel()
 
@@ -695,14 +694,15 @@ func TestValidateBackchannelLogoutURI(t *testing.T) {
 			mut: func(m *ClientMetadata) {
 				m.BackchannelLogoutSessionRequired = true
 			},
-			wantErr: "backchannel_logout_uri",
+			wantErr: "not supported",
 		},
 		{
-			name: "session-required-with-uri-accepted",
+			name: "session-required-with-uri-rejected",
 			mut: func(m *ClientMetadata) {
 				m.BackchannelLogoutURI = "https://rp.example.com/logout"
 				m.BackchannelLogoutSessionRequired = true
 			},
+			wantErr: "not supported",
 		},
 	}
 	for _, tc := range cases {

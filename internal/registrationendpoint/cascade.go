@@ -3,6 +3,8 @@ package registrationendpoint
 import (
 	"context"
 
+	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
@@ -33,10 +35,10 @@ import (
 // JTI-registry strategy are unaffected; the gap is tracked for a
 // v1.x grant enumeration extension.
 func cascadeRevokeByClient(ctx context.Context, deps Deps, clientID string) {
-	probeRevokeByClient(ctx, deps, clientID, deps.RefreshTokens, "dcr.cascade.refresh_revoke_failed")
-	probeRevokeByClient(ctx, deps, clientID, deps.Grants, "dcr.cascade.grant_revoke_failed")
-	probeRevokeByClient(ctx, deps, clientID, deps.AccessTokens, "dcr.cascade.access_token_revoke_failed")
-	probeRevokeByClient(ctx, deps, clientID, deps.OpaqueAccessTokens, "dcr.cascade.opaque_access_token_revoke_failed")
+	probeRevokeByClient(ctx, deps, clientID, deps.RefreshTokens, auditevent.AuditDCRCascadeRefreshRevokeFailed)
+	probeRevokeByClient(ctx, deps, clientID, deps.Grants, auditevent.AuditDCRCascadeGrantRevokeFailed)
+	probeRevokeByClient(ctx, deps, clientID, deps.AccessTokens, auditevent.AuditDCRCascadeAccessTokenRevokeFailed)
+	probeRevokeByClient(ctx, deps, clientID, deps.OpaqueAccessTokens, auditevent.AuditDCRCascadeOpaqueAccessTokenRevokeFailed)
 }
 
 // probeRevokeByClient runs the [store.RevokeByClient] type-assertion
@@ -47,7 +49,7 @@ func cascadeRevokeByClient(ctx context.Context, deps Deps, clientID string) {
 // substore is the typed substore handle (a [store.RefreshTokenStore],
 // [store.GrantStore], etc). A nil substore short-circuits — the
 // caller's [Deps] field is allowed to be unset.
-func probeRevokeByClient(ctx context.Context, deps Deps, clientID string, substore any, errLogKey string) {
+func probeRevokeByClient(ctx context.Context, deps Deps, clientID string, substore any, eventName auditevent.Name) {
 	if substore == nil {
 		return
 	}
@@ -56,6 +58,13 @@ func probeRevokeByClient(ctx context.Context, deps Deps, clientID string, substo
 		return
 	}
 	if err := rb.RevokeByClient(ctx, clientID); err != nil {
-		deps.logger().Error(errLogKey, "err", err, "client_id", clientID)
+		deps.logger().Error(string(eventName), "err", err, "client_id", clientID)
+		deps.audit().Emit(ctx, audit.Event{
+			Name:     string(eventName),
+			Level:    audit.LevelError,
+			Message:  "dynamic client deletion credential cascade failed",
+			ClientID: clientID,
+			Extras:   map[string]any{"error": err.Error()},
+		})
 	}
 }

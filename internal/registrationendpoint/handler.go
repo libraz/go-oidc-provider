@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
+	"github.com/libraz/go-oidc-provider/internal/auditevent"
 	"github.com/libraz/go-oidc-provider/internal/scoperegistry"
 	"github.com/libraz/go-oidc-provider/internal/sector"
 	"github.com/libraz/go-oidc-provider/internal/timex"
@@ -26,16 +27,16 @@ type Clock interface {
 // op.AuditEvent constants in op/audit.go; the registrationendpoint_test
 // package contains a guard that compares both lists.
 const (
-	auditDCRIATConsumed           = "dcr.iat.consumed"
-	auditDCRIATExpired            = "dcr.iat.expired"
-	auditDCRIATInvalid            = "dcr.iat.invalid"
-	auditDCROpenRegistrationUsed  = "dcr.open_registration_used"
-	auditDCRClientRegistered      = "dcr.client.registered"
-	auditDCRClientMetadataRead    = "dcr.client.metadata_read"
-	auditDCRClientMetadataUpdated = "dcr.client.metadata_updated"
-	auditDCRClientDeleted         = "dcr.client.deleted"
-	auditDCRRATInvalid            = "dcr.rat.invalid"
-	auditDCRMetadataValidation    = "dcr.metadata.validation_failed"
+	auditDCRIATConsumed           = string(auditevent.AuditDCRIATConsumed)
+	auditDCRIATExpired            = string(auditevent.AuditDCRIATExpired)
+	auditDCRIATInvalid            = string(auditevent.AuditDCRIATInvalid)
+	auditDCROpenRegistrationUsed  = string(auditevent.AuditDCROpenRegistrationUsed)
+	auditDCRClientRegistered      = string(auditevent.AuditDCRClientRegistered)
+	auditDCRClientMetadataRead    = string(auditevent.AuditDCRClientMetadataRead)
+	auditDCRClientMetadataUpdated = string(auditevent.AuditDCRClientMetadataUpdated)
+	auditDCRClientDeleted         = string(auditevent.AuditDCRClientDeleted)
+	auditDCRRATInvalid            = string(auditevent.AuditDCRRATInvalid)
+	auditDCRMetadataValidation    = string(auditevent.AuditDCRMetadataValidation)
 )
 
 // Deps bundles the runtime dependencies the registration endpoint

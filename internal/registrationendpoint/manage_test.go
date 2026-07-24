@@ -846,9 +846,9 @@ func equalJSON(a, b any) bool {
 }
 
 // TestManage_RoundTrip_PreservesBackchannelLogout pins the rule
-// that `backchannel_logout_uri` and
-// `backchannel_logout_session_required` MUST survive a POST →
-// GET → PUT → GET round-trip. The check is wired through the
+// that `backchannel_logout_uri` survives a POST → GET → PUT → GET
+// round-trip while the unsupported session-required flag remains
+// absent. The check is wired through the
 // existing [checkProfileFields] helper so a regression that drops
 // the fields from `clientToResponse` or the response struct fails
 // the same way other RFC 7592 round-trip rows do.
@@ -859,9 +859,8 @@ func TestManage_RoundTrip_PreservesBackchannelLogout(t *testing.T) {
 	_, iat := f.issueIAT(t, op.InitialAccessTokenSpec{})
 
 	original := map[string]any{
-		"redirect_uris":                       []string{"https://rp.test.invalid/cb"},
-		"backchannel_logout_uri":              "https://rp.test.invalid/logout",
-		"backchannel_logout_session_required": true,
+		"redirect_uris":          []string{"https://rp.test.invalid/cb"},
+		"backchannel_logout_uri": "https://rp.test.invalid/logout",
 	}
 	resp := f.post(t, original, iat)
 	defer resp.Body.Close()
@@ -887,9 +886,8 @@ func TestManage_RoundTrip_PreservesBackchannelLogout(t *testing.T) {
 	// PUT a different logout endpoint and confirm the new value
 	// (not the old one, and not an empty value) round-trips.
 	updated := map[string]any{
-		"redirect_uris":                       []string{"https://rp.test.invalid/cb"},
-		"backchannel_logout_uri":              "https://rp.test.invalid/logout-v2",
-		"backchannel_logout_session_required": true,
+		"redirect_uris":          []string{"https://rp.test.invalid/cb"},
+		"backchannel_logout_uri": "https://rp.test.invalid/logout-v2",
 	}
 	putResp := f.manage(t, http.MethodPut, f.endpoint+"/"+clientID, rat, updated)
 	defer putResp.Body.Close()

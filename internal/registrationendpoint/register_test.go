@@ -868,6 +868,14 @@ func TestRegister_MetadataValidation_4xx(t *testing.T) {
 			wantError: "invalid_client_metadata",
 		},
 		{
+			name: "backchannel logout session required unsupported",
+			mutate: func(b map[string]any) {
+				b["backchannel_logout_uri"] = "https://rp.test.invalid/logout"
+				b["backchannel_logout_session_required"] = true
+			},
+			wantError: "invalid_client_metadata",
+		},
+		{
 			name: "client_uri must use https",
 			mutate: func(b map[string]any) {
 				b["client_uri"] = "http://rp.test.invalid"
