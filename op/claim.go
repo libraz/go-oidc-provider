@@ -44,17 +44,16 @@ const (
 
 	// ScopeNameOfflineAccess is the OpenID Connect Core 1.0 §11
 	// scope value. The library advertises it in the discovery
-	// document's `scopes_supported` for OIDC compatibility but does
-	// NOT use it as a control flag: refresh tokens are issued whenever
-	// the granted scope contains "openid" AND the client's GrantTypes
-	// includes "refresh_token". A request that adds "offline_access"
-	// to the granted scope is rejected as scope widening at the
-	// refresh-time exchange (see internal/grants/refresh).
+	// document's `scopes_supported`. Under the historical default
+	// policy it controls consent and the optional offline-token TTL
+	// bucket but does not gate refresh-token issuance. When
+	// [WithStrictOfflineAccess] is configured, it is also required for
+	// issuance and subsequent rotation of OIDC refresh tokens.
 	//
 	// To disable refresh tokens for a client, omit "refresh_token"
 	// from the client's GrantTypes; to disable them globally, override
-	// [WithGrants]. Refresh-token lifetime is controlled by
-	// [WithRefreshTokenTTL].
+	// [WithGrants]. Refresh-token lifetimes are controlled by
+	// [WithRefreshTokenTTL] and [WithRefreshTokenOfflineTTL].
 	ScopeNameOfflineAccess ScopeName = "offline_access"
 )
 

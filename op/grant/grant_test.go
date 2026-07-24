@@ -3,8 +3,22 @@ package grant_test
 import (
 	"testing"
 
+	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/grant"
 )
+
+// ExampleRefreshToken shows the explicit configuration for the strict
+// offline-access policy. Without op.WithStrictOfflineAccess, the historical
+// default requires "openid" and the client's "refresh_token" grant but does
+// not require the "offline_access" scope.
+func ExampleRefreshToken() {
+	strictOfflinePolicy := []op.Option{
+		op.WithGrants(grant.AuthorizationCode, grant.RefreshToken),
+		op.WithStrictOfflineAccess(),
+	}
+
+	_ = strictOfflinePolicy
+}
 
 func TestType_String(t *testing.T) {
 	t.Parallel()

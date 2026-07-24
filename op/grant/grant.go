@@ -17,12 +17,17 @@ const (
 	AuthorizationCode
 
 	// RefreshToken selects the refresh_token grant from RFC 6749 §6.
-	// The library issues refresh tokens only when the granted scope
-	// includes both "openid" AND "offline_access" AND the client
-	// lists "refresh_token" in [op.store.Client.GrantTypes],
-	// matching OIDC Core 1.0 §11; non-OIDC clients and requests that
-	// omit "offline_access" therefore do not silently accumulate
-	// long-lived credentials.
+	//
+	// Under the historical default policy, the library issues refresh
+	// tokens when the granted scope contains "openid" and the client
+	// lists "refresh_token" in [store.Client.GrantTypes].
+	// "offline_access" is not an issuance requirement in that mode; it
+	// controls consent and the optional offline-token TTL bucket.
+	//
+	// Embedders that require "offline_access" for issuance must also
+	// configure [op.WithStrictOfflineAccess]. Removing RefreshToken from
+	// [op.WithGrants], or "refresh_token" from a client's GrantTypes,
+	// disables issuance regardless of the selected offline-access policy.
 	RefreshToken
 
 	// ClientCredentials selects the client_credentials grant from
@@ -30,8 +35,8 @@ const (
 	ClientCredentials
 
 	// DeviceCode selects the urn:ietf:params:oauth:grant-type:device_code
-	// grant from RFC 8628. Implemented in v1.x; the constant exists so
-	// option signatures are stable across releases.
+	// grant from RFC 8628. Enable its device-authorization endpoint and
+	// token-endpoint redemption path with [op.WithDeviceCodeGrant].
 	DeviceCode
 
 	// CIBA selects the urn:openid:params:grant-type:ciba grant from
