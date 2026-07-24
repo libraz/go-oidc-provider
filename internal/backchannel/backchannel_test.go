@@ -284,7 +284,7 @@ func newCoordinatorFixture(t *testing.T, deliver backchannel.DelivererFunc) (*ba
 		Issuer:    "https://op.example.com",
 		Signing:   sk,
 		Clients:   st.Clients(),
-		Grants:    st.Grants(),
+		Grants:    st.Grants().(store.GrantClientLister),
 		Deliverer: deliver,
 		Emitter:   rec,
 		Clock:     fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
@@ -325,7 +325,7 @@ func (s *faultClientStore) GetClient(ctx context.Context, id string) (*store.Cli
 }
 
 type countingGrantStore struct {
-	store.GrantStore
+	store.GrantClientLister
 	pageCalls atomic.Int32
 	listCalls atomic.Int32
 	lastLimit atomic.Int64
@@ -336,7 +336,7 @@ func (s *countingGrantStore) ListBySubject(
 	subject string,
 ) ([]*store.Grant, error) {
 	s.listCalls.Add(1)
-	return s.GrantStore.ListBySubject(ctx, subject)
+	return s.GrantClientLister.ListBySubject(ctx, subject)
 }
 
 func (s *countingGrantStore) ListClientIDsBySubject(
@@ -346,7 +346,7 @@ func (s *countingGrantStore) ListClientIDsBySubject(
 ) (store.GrantClientPage, error) {
 	s.pageCalls.Add(1)
 	s.lastLimit.Store(int64(limit))
-	return s.GrantStore.ListClientIDsBySubject(ctx, subject, cursor, limit)
+	return s.GrantClientLister.ListClientIDsBySubject(ctx, subject, cursor, limit)
 }
 
 func TestCoordinator_FansOutToRegisteredClients(t *testing.T) {
@@ -416,7 +416,7 @@ func TestCoordinator_TwoRPsReceiveSubOnlyTokens(t *testing.T) {
 		Issuer:    "https://op.example.com",
 		Signing:   signing,
 		Clients:   st.Clients(),
-		Grants:    st.Grants(),
+		Grants:    st.Grants().(store.GrantClientLister),
 		Deliverer: deliverer,
 		Clock:     fixedClock(now),
 	})
@@ -510,7 +510,7 @@ func TestCoordinator_BoundsFanout(t *testing.T) {
 		return nil
 	})
 	coord, err := backchannel.NewCoordinator(backchannel.Config{
-		Issuer: "https://op.example.com", Signing: signing, Clients: st.Clients(), Grants: st.Grants(),
+		Issuer: "https://op.example.com", Signing: signing, Clients: st.Clients(), Grants: st.Grants().(store.GrantClientLister),
 		Deliverer: deliver, Emitter: rec, Clock: fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
 		MaxConcurrentDeliveries: 2, MaxTargets: 3,
 	})
@@ -567,7 +567,7 @@ func TestCoordinator_ProjectsSubjectPerTargetClient(t *testing.T) {
 		Issuer:  "https://op.example.com",
 		Signing: sk,
 		Clients: st.Clients(),
-		Grants:  st.Grants(),
+		Grants:  st.Grants().(store.GrantClientLister),
 		SubjectProjector: func(_ context.Context, raw string, client *store.Client) (string, error) {
 			if raw != "internal-user" {
 				t.Fatalf("raw subject=%q want internal-user", raw)
@@ -687,7 +687,7 @@ func TestCoordinator_ClientStoreFaultIsAuditedAndAggregated(t *testing.T) {
 		Issuer:  "https://op.example.com",
 		Signing: signing,
 		Clients: clients,
-		Grants:  st.Grants(),
+		Grants:  st.Grants().(store.GrantClientLister),
 		Deliverer: backchannel.DelivererFunc(func(
 			context.Context,
 			backchannel.Target,
@@ -767,7 +767,7 @@ func TestCoordinator_GrantAudienceAndClientLookupsAreBounded(t *testing.T) {
 			CreatedAt: now, UpdatedAt: now,
 		})
 	}
-	grants := &countingGrantStore{GrantStore: st.Grants()}
+	grants := &countingGrantStore{GrantClientLister: st.Grants().(store.GrantClientLister)}
 	clients := &faultClientStore{ClientStore: st.Clients()}
 	rec := &recordingEmitter{}
 	var delivered atomic.Int32
@@ -849,7 +849,7 @@ func TestCoordinator_EmitsNoSessionsForSubjectWhenSidProvided(t *testing.T) {
 		Issuer:                   "https://op.example.com",
 		Signing:                  sk,
 		Clients:                  st.Clients(),
-		Grants:                   st.Grants(),
+		Grants:                   st.Grants().(store.GrantClientLister),
 		Deliverer:                backchannel.DelivererFunc(func(context.Context, backchannel.Target, string) error { return nil }),
 		Emitter:                  rec,
 		Clock:                    fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
@@ -919,7 +919,7 @@ func TestCoordinator_NoSessionsEventCarriesDurablePosture(t *testing.T) {
 		Issuer:                   "https://op.example.com",
 		Signing:                  sk,
 		Clients:                  st.Clients(),
-		Grants:                   st.Grants(),
+		Grants:                   st.Grants().(store.GrantClientLister),
 		Deliverer:                backchannel.DelivererFunc(func(context.Context, backchannel.Target, string) error { return nil }),
 		Emitter:                  rec,
 		Clock:                    fixedClock(time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)),
@@ -957,9 +957,9 @@ func TestNewCoordinator_RejectsMissingDeps(t *testing.T) {
 	_, sk := mustKey(t)
 	st := inmem.New()
 	cases := map[string]backchannel.Config{
-		"empty issuer":    {Signing: sk, Clients: st.Clients(), Grants: st.Grants()},
-		"nil signer":      {Issuer: "x", Clients: st.Clients(), Grants: st.Grants()},
-		"nil clients":     {Issuer: "x", Signing: sk, Grants: st.Grants()},
+		"empty issuer":    {Signing: sk, Clients: st.Clients(), Grants: st.Grants().(store.GrantClientLister)},
+		"nil signer":      {Issuer: "x", Clients: st.Clients(), Grants: st.Grants().(store.GrantClientLister)},
+		"nil clients":     {Issuer: "x", Signing: sk, Grants: st.Grants().(store.GrantClientLister)},
 		"nil grant store": {Issuer: "x", Signing: sk, Clients: st.Clients()},
 	}
 	for name, cfg := range cases {

@@ -934,7 +934,7 @@ func TestHandler_BackchannelFanOut(t *testing.T) {
 		Issuer:    "https://op.example.com",
 		Signing:   backchannel.SigningKey{KeyID: keyEntry.KeyID, Signer: keyEntry.Signer},
 		Clients:   h.store.Clients(),
-		Grants:    h.store.Grants(),
+		Grants:    h.store.Grants().(store.GrantClientLister),
 		Deliverer: deliver,
 	})
 	if err != nil {

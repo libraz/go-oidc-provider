@@ -114,6 +114,20 @@ func (storeWithoutInteractionCAS) Interactions() store.InteractionStore {
 	return interactionStoreWithoutCAS{InteractionStore: stubInteractionStore{}}
 }
 
+// grantStoreWithoutClientLister embeds the store.GrantStore interface so the
+// optional ListClientIDsBySubject method stays out of the concrete method set,
+// mirroring interactionStoreWithoutCAS. A value of this type satisfies
+// store.GrantStore but not store.GrantClientLister.
+type grantStoreWithoutClientLister struct {
+	store.GrantStore
+}
+
+type storeWithoutGrantClientLister struct{ stubStore }
+
+func (storeWithoutGrantClientLister) Grants() store.GrantStore {
+	return grantStoreWithoutClientLister{GrantStore: stubGrantStore{}}
+}
+
 type stubAccessTokenRegistry struct{}
 
 func (stubAccessTokenRegistry) Register(context.Context, store.AccessTokenRecord) error { return nil }
@@ -434,6 +448,23 @@ func TestNew_RejectsAuthorizationCodeStoreWithoutInteractionCAS(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "InteractionStoreCAS") {
 		t.Errorf("err = %v, want it to mention InteractionStoreCAS", err)
+	}
+}
+
+func TestNew_RejectsAuthorizationCodeStoreWithoutGrantClientLister(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutGrantClientLister{}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	)
+	if err == nil {
+		t.Fatal("expected configuration error for missing GrantClientLister capability")
+	}
+	if !strings.Contains(err.Error(), "GrantClientLister") {
+		t.Errorf("err = %v, want it to mention GrantClientLister", err)
 	}
 }
 

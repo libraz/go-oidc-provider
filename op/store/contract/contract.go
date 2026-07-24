@@ -839,9 +839,21 @@ func grantListBySubjectEmpty(t *testing.T, f Factory) {
 	}
 }
 
+// requireGrantClientLister skips the current test when the backend's GrantStore
+// does not implement the optional [store.GrantClientLister] extension.
+func requireGrantClientLister(t *testing.T, s store.Store) store.GrantClientLister {
+	t.Helper()
+	lister, ok := s.Grants().(store.GrantClientLister)
+	if !ok {
+		t.Skipf("backend %T does not implement store.GrantClientLister", s.Grants())
+	}
+	return lister
+}
+
 func grantListClientIDsBySubject(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
+	lister := requireGrantClientLister(t, b.Store)
 	rows := []*store.Grant{
 		newGrant(b.Now(), "g-c-1", "sub", "client-c"),
 		newGrant(b.Now(), "g-a-1", "sub", "client-a"),
@@ -854,7 +866,7 @@ func grantListClientIDsBySubject(t *testing.T, f Factory) {
 			t.Fatalf("Save %s: %v", g.ID, err)
 		}
 	}
-	first, err := b.Store.Grants().ListClientIDsBySubject(ctx, "sub", "", 2)
+	first, err := lister.ListClientIDsBySubject(ctx, "sub", "", 2)
 	if err != nil {
 		t.Fatalf("ListClientIDsBySubject first page: %v", err)
 	}
@@ -864,7 +876,7 @@ func grantListClientIDsBySubject(t *testing.T, f Factory) {
 	if first.NextCursor != "client-b" {
 		t.Fatalf("first page next cursor = %q, want client-b", first.NextCursor)
 	}
-	second, err := b.Store.Grants().ListClientIDsBySubject(ctx, "sub", first.NextCursor, 2)
+	second, err := lister.ListClientIDsBySubject(ctx, "sub", first.NextCursor, 2)
 	if err != nil {
 		t.Fatalf("ListClientIDsBySubject second page: %v", err)
 	}
@@ -878,7 +890,8 @@ func grantListClientIDsBySubject(t *testing.T, f Factory) {
 
 func grantListClientIDsBySubjectEmpty(t *testing.T, f Factory) {
 	b := f(t)
-	got, err := b.Store.Grants().ListClientIDsBySubject(context.Background(), "absent", "", 2)
+	lister := requireGrantClientLister(t, b.Store)
+	got, err := lister.ListClientIDsBySubject(context.Background(), "absent", "", 2)
 	if err != nil {
 		t.Fatalf("ListClientIDsBySubject empty: %v", err)
 	}
@@ -889,7 +902,8 @@ func grantListClientIDsBySubjectEmpty(t *testing.T, f Factory) {
 
 func grantListClientIDsRejectsInvalidLimit(t *testing.T, f Factory) {
 	b := f(t)
-	if _, err := b.Store.Grants().ListClientIDsBySubject(
+	lister := requireGrantClientLister(t, b.Store)
+	if _, err := lister.ListClientIDsBySubject(
 		context.Background(),
 		"sub",
 		"",

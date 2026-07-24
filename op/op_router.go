@@ -168,9 +168,17 @@ func buildRouter(cfg *config, keySet *keys.Set, encSet *keys.EncryptionSet, scop
 	mountRevocationEndpoint(mux, cfg, keySet, assertionVerifiers.Revoke, strictCORS)
 	mountGrantManagementEndpoint(mux, cfg, assertionVerifiers.Revoke, strictCORS)
 	mountRegistrationEndpoint(mux, cfg, scopes, strictCORS)
-	bcc, err := buildBackchannelCoordinator(cfg, keySet)
-	if err != nil {
-		return nil, err
+	// The back-channel coordinator is only reachable through /end_session,
+	// which mountEndSessionEndpoint skips when the session manager is nil.
+	// Building it only for interactive OPs keeps the GrantClientLister
+	// requirement aligned with the authorize-endpoint predicate: a
+	// machine-to-machine backend need not implement the extension.
+	var bcc *backchannel.Coordinator
+	if sessMgr != nil {
+		bcc, err = buildBackchannelCoordinator(cfg, keySet)
+		if err != nil {
+			return nil, err
+		}
 	}
 	mountEndSessionEndpoint(mux, cfg, keySet, sessMgr, bcc, strictCORS)
 	return mux, nil

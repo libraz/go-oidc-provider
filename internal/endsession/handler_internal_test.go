@@ -160,7 +160,7 @@ func TestTerminateSession_ClientLookupFaultReachesBackchannelAudit(t *testing.T)
 		Issuer:  "https://op.example.com",
 		Signing: backchannel.SigningKey{KeyID: "sig-1", Signer: key},
 		Clients: failingClientStore{err: boom},
-		Grants:  backend.Grants(),
+		Grants:  backend.Grants().(store.GrantClientLister),
 		Emitter: recorder,
 	})
 	if err != nil {

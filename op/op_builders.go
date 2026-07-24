@@ -607,6 +607,14 @@ func buildSessionMachinery(cfg *config) (*cookie.Codec, *sessions.Manager, error
 // embedders that need shared instrumentation override it through
 // [WithBackchannelLogoutHTTPClient].
 func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Coordinator, error) {
+	grants, ok := cfg.store.Grants().(store.GrantClientLister)
+	if !ok {
+		return nil, &Error{
+			Code: codeConfiguration,
+			Description: "Store.Grants() must implement store.GrantClientLister " +
+				"because a grant that mounts the browser authorize endpoint is enabled",
+		}
+	}
 	active := keySet.Active()
 	deliverer := backchannel.NewHTTPDeliverer(cfg.backchannelLogoutTimeout)
 	if cfg.backchannelLogoutHTTPClient != nil {
@@ -626,7 +634,7 @@ func buildBackchannelCoordinator(cfg *config, keySet *keys.Set) (*backchannel.Co
 		Issuer:                   cfg.issuer,
 		Signing:                  backchannel.SigningKey{KeyID: active.KeyID, Signer: active.Signer},
 		Clients:                  cfg.store.Clients(),
-		Grants:                   cfg.store.Grants(),
+		Grants:                   grants,
 		SubjectProjector:         backchannelSubjectProjector(cfg),
 		Deliverer:                deliverer,
 		Emitter:                  cfg.effectiveAuditEmitter(),

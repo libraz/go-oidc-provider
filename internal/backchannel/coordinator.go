@@ -86,7 +86,7 @@ func (p SessionDurabilityPosture) String() string {
 // the struct is safe for concurrent use.
 //
 // The coordinator pulls a bounded, distinct audience page from the
-// [op/store.GrantStore] and looks each client up in the
+// [op/store.GrantClientLister] and looks each client up in the
 // [op/store.ClientStore]. Clients without a
 // registered backchannel_logout_uri are skipped silently — they have
 // opted out by configuration, not by error. Deliveries run through a bounded
@@ -96,7 +96,7 @@ type Coordinator struct {
 	issuer           string
 	signing          SigningKey
 	clients          store.ClientStore
-	grants           store.GrantStore
+	grants           store.GrantClientLister
 	subjectProjector func(ctx context.Context, raw string, client *store.Client) (string, error)
 	deliverer        Deliverer
 	emitter          audit.Emitter
@@ -123,8 +123,11 @@ type Config struct {
 	Clients store.ClientStore
 
 	// Grants is the store the coordinator queries to enumerate the
-	// audience clients for a terminating subject. Required.
-	Grants store.GrantStore
+	// audience clients for a terminating subject. Required. The concrete
+	// value must implement [store.GrantClientLister]; the OP guarantees
+	// this by rejecting an interactive configuration whose GrantStore lacks
+	// the extension at op.New.
+	Grants store.GrantClientLister
 
 	// SubjectProjector converts the OP-internal subject into the
 	// per-client subject value used in the Logout Token's sub claim.

@@ -92,11 +92,9 @@ type GrantClientPage struct {
 // atomic-routing cluster because grant updates accompany authorization-code
 // exchanges, refresh-token rotations, and revocation cascades.
 //
-// Migration note: ListClientIDsBySubject is required as of the release that
-// introduced bounded back-channel logout fan-out. BYO GrantStore
-// implementations must add a distinct, keyset-paginated client-ID query; do
-// not implement it by calling ListBySubject and slicing the materialised
-// result, because that defeats the method's resource bound.
+// Back-channel logout fan-out needs one more, bounded enumeration method that
+// only interactive OPs exercise; it lives on the [GrantClientLister] extension
+// rather than here so machine-to-machine backends need not implement it.
 type GrantStore interface {
 	// Save persists a new grant or replaces an existing one. Save MUST
 	// return [ErrAlreadyExists] if used in insert mode and the ID is
@@ -126,19 +124,6 @@ type GrantStore interface {
 	// NOT appear in the result. Order is unspecified.
 	ListBySubject(ctx context.Context, subject string) ([]*Grant, error)
 
-	// ListClientIDsBySubject returns at most limit distinct client IDs for
-	// the subject, strictly after cursor in the backend's stable ascending
-	// client-ID order. limit MUST be positive. Implementations MUST bound the
-	// backend result set to limit+1 rows (or an equivalent native cursor
-	// operation) so callers can detect another page without materialising
-	// every grant.
-	//
-	// This audience-oriented view is separate from ListBySubject because a
-	// subject can have many historical grant rows for one client. Back-channel
-	// logout uses it to cap both database work and ClientStore lookups before
-	// resolving delivery targets.
-	ListClientIDsBySubject(ctx context.Context, subject, cursor string, limit int) (GrantClientPage, error)
-
 	// Delete revokes the grant identified by id. It MUST return
 	// [ErrNotFound] if no such grant exists. Backends MAY soft-delete or
 	// hard-delete; the library only requires that subsequent Find and
@@ -159,4 +144,32 @@ type GrantStore interface {
 	// the OP has ever issued a sub, not whether the grant is still
 	// valid.
 	HasAny(ctx context.Context) (bool, error)
+}
+
+// GrantClientLister extends [GrantStore] with the bounded, keyset-paginated
+// audience enumeration that OpenID Connect Back-Channel Logout 1.0 fan-out
+// needs. The OP requires it only when a grant mounts the browser authorize
+// endpoint — the same condition that mounts /end_session and requires
+// [Transactional] and [InteractionStoreCAS]. Backends serving only
+// non-interactive grants (client_credentials, device_code, CIBA) never mount
+// /end_session and need not implement it; the library detects support via a
+// runtime type assertion and rejects the interactive configuration at op.New
+// when it is absent.
+type GrantClientLister interface {
+	GrantStore
+
+	// ListClientIDsBySubject returns at most limit distinct client IDs for
+	// the subject, strictly after cursor in the backend's stable ascending
+	// client-ID order. limit MUST be positive. Implementations MUST bound the
+	// backend result set to limit+1 rows (or an equivalent native cursor
+	// operation) so callers can detect another page without materialising
+	// every grant.
+	//
+	// This audience-oriented view is separate from [GrantStore.ListBySubject]
+	// because a subject can have many historical grant rows for one client.
+	// Back-channel logout uses it to cap both database work and ClientStore
+	// lookups before resolving delivery targets. Do not implement it by
+	// calling ListBySubject and slicing the materialised result, because that
+	// defeats the method's resource bound.
+	ListClientIDsBySubject(ctx context.Context, subject, cursor string, limit int) (GrantClientPage, error)
 }

@@ -190,7 +190,8 @@ func TestTxGrants_ListClientIDsBySubject_UsesStagedView(t *testing.T) {
 		}
 	}
 
-	first, err := tx.Grants().ListClientIDsBySubject(ctx, "subject", "", 2)
+	lister := tx.Grants().(store.GrantClientLister)
+	first, err := lister.ListClientIDsBySubject(ctx, "subject", "", 2)
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestTxGrants_ListClientIDsBySubject_UsesStagedView(t *testing.T) {
 		first.NextCursor != "client-b" {
 		t.Fatalf("first page = %+v", first)
 	}
-	second, err := tx.Grants().ListClientIDsBySubject(ctx, "subject", first.NextCursor, 2)
+	second, err := lister.ListClientIDsBySubject(ctx, "subject", first.NextCursor, 2)
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}

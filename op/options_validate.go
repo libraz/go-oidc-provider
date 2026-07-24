@@ -1098,6 +1098,16 @@ func (c *config) validateStoreCapabilities() error {
 				}
 			}
 		}
+		if grants := c.store.Grants(); !isNilLike(grants) {
+			if _, ok := grants.(store.GrantClientLister); !ok {
+				return &Error{
+					Code: codeConfiguration,
+					Description: "Store.Grants() must implement " +
+						"store.GrantClientLister because a grant that mounts " +
+						"the browser authorize endpoint is enabled",
+				}
+			}
+		}
 	}
 	return nil
 }
