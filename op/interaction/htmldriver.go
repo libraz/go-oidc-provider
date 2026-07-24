@@ -43,8 +43,29 @@ const htmlSubmissionContentType = "application/x-www-form-urlencoded"
 // [op.WithInteractionDriver]; the canonical examples for that path live
 // under examples/16-custom-interaction/ and 10-react-login/.
 //
-// HTMLDriver carries no state and is safe for concurrent use.
-type HTMLDriver struct{}
+// HTMLDriver is safe for concurrent use. When Translator is non-nil, the
+// function it references MUST also be safe for concurrent use.
+type HTMLDriver struct {
+	// Translator resolves a plain-text message for locale and key. Returning
+	// false asks HTMLDriver to use its built-in English fallback. Translator
+	// output and placeholder data are always escaped by HTMLDriver at the
+	// final HTML emission site; Translator implementations MUST return text,
+	// not trusted markup.
+	//
+	// op.New injects the Provider's locale resolver when this field is nil,
+	// including for an explicitly supplied HTMLDriver. A non-nil embedder
+	// translator is preserved.
+	Translator MessageTranslator
+}
+
+// MessageTranslator resolves a plain-text localized message. locale is the
+// registered BCP 47 tag already selected for [Prompt.Locale]. data supplies
+// deterministic "{name}" placeholder values. Returning ("", false) selects
+// HTMLDriver's built-in English fallback.
+//
+// Implementations MUST be safe for concurrent use and MUST NOT return trusted
+// HTML: HTMLDriver contextually escapes every returned string before writing.
+type MessageTranslator func(locale, key string, data map[string]string) (string, bool)
 
 // Compile-time confirmation that HTMLDriver satisfies Driver.
 var _ Driver = HTMLDriver{}
@@ -66,11 +87,14 @@ var ErrMissingStateRef = errors.New("interaction: missing state_ref")
 // Render writes prompt as a complete HTML document. The function sets
 // Content-Type, Cache-Control, and X-Frame-Options before any byte is
 // written, so callers MUST NOT have stamped headers themselves.
-func (HTMLDriver) Render(w http.ResponseWriter, _ *http.Request, prompt Prompt) error {
-	body := buildHTMLDocument(prompt)
+func (d HTMLDriver) Render(w http.ResponseWriter, _ *http.Request, prompt Prompt) error {
+	body := d.buildHTMLDocument(prompt)
 	stampHTMLHeaders(w)
 	w.WriteHeader(http.StatusOK)
-	if _, err := io.WriteString(w, body); err != nil {
+	// body is assembled exclusively by buildHTMLDocument, which applies
+	// html.EscapeString at every prompt- and translator-controlled emission
+	// site. Keeping the final write whole preserves deterministic output.
+	if _, err := io.WriteString(w, body); err != nil { //nolint:gosec // G705: all dynamic HTML values are contextually escaped during construction.
 		return fmt.Errorf("interaction: render html prompt: %w", err)
 	}
 	return nil
@@ -148,10 +172,16 @@ func isFormURLEncoded(ct string) bool {
 // affordances (e.g., the consent scope list); when the type is
 // unrecognised it falls through to a generic FieldSpec form so user-
 // extension factors render without code changes.
-func buildHTMLDocument(prompt Prompt) string {
+func (d HTMLDriver) buildHTMLDocument(prompt Prompt) string {
 	var b strings.Builder
-	title := htmlTitleFor(prompt.Type)
-	b.WriteString(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>`)
+	title := d.titleFor(prompt)
+	locale := prompt.Locale
+	if locale == "" {
+		locale = "en"
+	}
+	b.WriteString(`<!doctype html><html lang="`)
+	b.WriteString(html.EscapeString(locale))
+	b.WriteString(`"><head><meta charset="utf-8"><title>`)
 	b.WriteString(html.EscapeString(title))
 	b.WriteString(`</title></head><body>`)
 	b.WriteString(`<h1>`)
@@ -163,8 +193,10 @@ func buildHTMLDocument(prompt Prompt) string {
 	if prompt.CSRFToken != "" {
 		writeHiddenInput(&b, "csrf_token", prompt.CSRFToken)
 	}
-	writePromptBody(&b, prompt)
-	b.WriteString(`<button type="submit">Continue</button></form></body></html>`)
+	d.writePromptBody(&b, prompt)
+	b.WriteString(`<button type="submit">`)
+	b.WriteString(html.EscapeString(d.buttonFor(prompt)))
+	b.WriteString(`</button></form></body></html>`)
 	return b.String()
 }
 
@@ -211,12 +243,12 @@ func writePromptIntro(b *strings.Builder, prompt Prompt) {
 // approved_scopes field instead, matching the consent interaction
 // contract documented at internal/authn/consent/interaction.go
 // (ApprovedScopesField).
-func writePromptBody(b *strings.Builder, prompt Prompt) {
+func (d HTMLDriver) writePromptBody(b *strings.Builder, prompt Prompt) {
 	if scopes, ok := prompt.Data.(ConsentScopePromptData); ok {
 		writeConsentApprovedField(b, scopes)
 		return
 	}
-	writeFieldInputs(b, prompt.Inputs)
+	d.writeFieldInputs(b, prompt.Locale, prompt.Inputs)
 }
 
 // writeAttemptsRemaining emits an "attempts remaining" line when the
@@ -285,7 +317,7 @@ func writeConsentApprovedField(b *strings.Builder, data ConsentScopePromptData) 
 // fields are emitted in [FieldSpec.Name] sort order so the output is
 // deterministic for golden testing; the orchestrator does not rely on
 // input ordering at the wire level.
-func writeFieldInputs(b *strings.Builder, inputs []FieldSpec) {
+func (d HTMLDriver) writeFieldInputs(b *strings.Builder, locale string, inputs []FieldSpec) {
 	if len(inputs) == 0 {
 		return
 	}
@@ -295,7 +327,7 @@ func writeFieldInputs(b *strings.Builder, inputs []FieldSpec) {
 		return sorted[i].Name < sorted[j].Name
 	})
 	for _, in := range sorted {
-		writeFieldInput(b, in)
+		d.writeFieldInput(b, locale, in)
 	}
 }
 
@@ -305,13 +337,13 @@ func writeFieldInputs(b *strings.Builder, inputs []FieldSpec) {
 // translate from [FieldSpec.MinLen] / [FieldSpec.MaxLen] to HTML
 // minlength / maxlength so the browser surfaces a client-side hint
 // before the server-side validator rejects the submission.
-func writeFieldInput(b *strings.Builder, in FieldSpec) {
+func (d HTMLDriver) writeFieldInput(b *strings.Builder, locale string, in FieldSpec) {
 	if in.Kind == FieldHidden {
 		writeHiddenInput(b, in.Name, "")
 		return
 	}
 	b.WriteString(`<p><label>`)
-	b.WriteString(html.EscapeString(htmlLabelFor(in.Label)))
+	b.WriteString(html.EscapeString(d.labelFor(locale, in.Label)))
 	b.WriteString(`<br><input name="`)
 	b.WriteString(html.EscapeString(in.Name))
 	b.WriteString(`" type="`)
@@ -399,6 +431,67 @@ func htmlLabelFor(labelKey string) string {
 	default:
 		return labelKey
 	}
+}
+
+func messageLabelKey(labelKey string) string {
+	switch labelKey {
+	case "auth.password.username":
+		return "login.identifier.label"
+	case "auth.password.password":
+		return "login.password.label"
+	default:
+		return labelKey
+	}
+}
+
+func (d HTMLDriver) labelFor(locale, labelKey string) string {
+	if message, ok := d.message(locale, messageLabelKey(labelKey), nil); ok {
+		return message
+	}
+	return htmlLabelFor(labelKey)
+}
+
+func (d HTMLDriver) titleFor(prompt Prompt) string {
+	key := prompt.Type
+	data := map[string]string(nil)
+	switch prompt.Type {
+	case "auth.password":
+		key = "login.title"
+	case "consent.scope":
+		key = "consent.title"
+		if consent, ok := prompt.Data.(ConsentScopePromptData); ok {
+			clientName := consent.Client.Name
+			if clientName == "" {
+				clientName = consent.Client.ClientID
+			}
+			data = map[string]string{"client_name": clientName}
+		}
+	}
+	if message, ok := d.message(prompt.Locale, key, data); ok {
+		return message
+	}
+	return htmlTitleFor(prompt.Type)
+}
+
+func (d HTMLDriver) buttonFor(prompt Prompt) string {
+	key := ""
+	switch prompt.Type {
+	case "auth.password":
+		key = "login.button.submit"
+	case "consent.scope":
+		key = "consent.button.allow"
+	}
+	if message, ok := d.message(prompt.Locale, key, nil); ok {
+		return message
+	}
+	return "Continue"
+}
+
+func (d HTMLDriver) message(locale, key string, data map[string]string) (string, bool) {
+	if d.Translator == nil || key == "" {
+		return "", false
+	}
+	return d.Translator(locale, key, data)
 }
 
 // htmlTitleFor returns the page title shown in <title> and <h1>. The

@@ -388,6 +388,38 @@ func TestResolver_BundleFallbackReportsMatch(t *testing.T) {
 	}
 }
 
+func TestResolver_MessageFallsBackToDefaultAndKeepsPlaceholderRules(t *testing.T) {
+	t.Parallel()
+
+	en, err := i18n.NewBundle(i18n.English, map[string]string{
+		"greeting": "Hello {name}; unresolved={missing}",
+	})
+	if err != nil {
+		t.Fatalf("NewBundle(en): %v", err)
+	}
+	fr, err := i18n.NewBundle("fr", map[string]string{
+		"local": "Bonjour {name}",
+	})
+	if err != nil {
+		t.Fatalf("NewBundle(fr): %v", err)
+	}
+	r, err := i18n.NewResolver(i18n.English, en, fr)
+	if err != nil {
+		t.Fatalf("NewResolver: %v", err)
+	}
+
+	if got, ok := r.Message("fr", "local", map[string]string{"name": "Alice"}); !ok || got != "Bonjour Alice" {
+		t.Errorf("Message(fr, local) = (%q, %v), want (%q, true)", got, ok, "Bonjour Alice")
+	}
+	if got, ok := r.Message("fr", "greeting", map[string]string{"name": "{missing}"}); !ok ||
+		got != "Hello {missing}; unresolved={missing}" {
+		t.Errorf("Message(fr, greeting) = (%q, %v), want default message with single-pass substitution", got, ok)
+	}
+	if got, ok := r.Message("fr", "unknown", nil); ok || got != "" {
+		t.Errorf("Message(fr, unknown) = (%q, %v), want (empty, false)", got, ok)
+	}
+}
+
 func TestResolver_DefaultAndAvailableAreStable(t *testing.T) {
 	t.Parallel()
 

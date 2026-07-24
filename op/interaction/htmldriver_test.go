@@ -483,6 +483,83 @@ func TestHTMLDriver_PreservesUnknownLabels(t *testing.T) {
 	}
 }
 
+func TestHTMLDriver_TranslatorLocalizesAndEscapesPasswordSurface(t *testing.T) {
+	t.Parallel()
+
+	messages := map[string]string{ //nolint:gosec // G101: UI translation keys and labels, not authentication credentials.
+		"login.title":            "Connexion <Acme>",
+		"login.identifier.label": "Identifiant & compte",
+		"login.password.label":   "Passphrase & personnalisée",
+		"login.button.submit":    "Entrer & continuer",
+	}
+	driver := interaction.HTMLDriver{
+		Translator: func(locale, key string, _ map[string]string) (string, bool) {
+			if locale != "fr" {
+				return "", false
+			}
+			message, ok := messages[key]
+			return message, ok
+		},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/interaction/u-1", nil)
+	err := driver.Render(rec, req, interaction.Prompt{
+		Type:   "auth.password",
+		Locale: "fr",
+		Inputs: []interaction.FieldSpec{
+			{Name: "username", Kind: interaction.FieldText, Label: "auth.password.username", Required: true},
+			{Name: "password", Kind: interaction.FieldPassword, Label: "auth.password.password", Required: true},
+		},
+		StateRef: "ref",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	out := rec.Body.String()
+	for _, escaped := range []string{
+		`<html lang="fr">`,
+		`<title>Connexion &lt;Acme&gt;</title>`,
+		`<label>Identifiant &amp; compte<br>`,
+		`<label>Passphrase &amp; personnalisée<br>`,
+		`<button type="submit">Entrer &amp; continuer</button>`,
+	} {
+		if !strings.Contains(out, escaped) {
+			t.Errorf("rendered HTML missing %q; got:\n%s", escaped, out)
+		}
+	}
+	if strings.Contains(out, "<Acme>") {
+		t.Errorf("translator output reached HTML without escaping:\n%s", out)
+	}
+}
+
+func TestHTMLDriver_TranslatorMissingKeyRetainsEnglishFallback(t *testing.T) {
+	t.Parallel()
+
+	driver := interaction.HTMLDriver{
+		Translator: func(_, _ string, _ map[string]string) (string, bool) {
+			return "", false
+		},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), "GET", "/interaction/u-1", nil)
+	err := driver.Render(rec, req, interaction.Prompt{
+		Type: "auth.password",
+		Inputs: []interaction.FieldSpec{{
+			Name: "password", Kind: interaction.FieldPassword, Label: "auth.password.password",
+		}},
+		StateRef: "ref",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	out := rec.Body.String()
+	for _, fallback := range []string{"<title>Sign in</title>", "<label>Password<br>", ">Continue</button>"} {
+		if !strings.Contains(out, fallback) {
+			t.Errorf("rendered HTML missing fallback %q; got:\n%s", fallback, out)
+		}
+	}
+}
+
 func renderToString(t *testing.T, prompt interaction.Prompt) string {
 	t.Helper()
 	rec := httptest.NewRecorder()

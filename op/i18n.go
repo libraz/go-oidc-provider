@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/libraz/go-oidc-provider/internal/i18n"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 // Locale is the OP's BCP 47 language tag. The type is a thin alias
@@ -115,7 +116,7 @@ type PreferredLocaleStore interface {
 // Stable since v0.1.
 func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 	return optionFunc(func(c *config) error {
-		if store == nil {
+		if isNilLike(store) {
 			return errors.New("op: WithPreferredLocaleStore requires a non-nil store")
 		}
 		c.preferredLocaleStore = store
@@ -200,6 +201,73 @@ func (r *Resolver) Available() []Locale {
 		out[i] = Locale(t)
 	}
 	return out
+}
+
+// Message looks up key in locale's merged message catalogue. An exact
+// registered locale wins, followed by its registered language subtag (for
+// example, "ja-JP" uses "ja"). If that bundle does not contain key, the
+// configured default locale is consulted. The boolean is false when neither
+// bundle defines key; callers can then apply a surface-specific fallback
+// without displaying an internal message key.
+//
+// Values in data replace matching "{name}" placeholders. Unknown
+// placeholders remain visible verbatim, and substituted values are treated as
+// plain text rather than recursively interpreted as templates. The returned
+// string is raw, unescaped text: HTML templates and other structured-output
+// callers MUST apply the appropriate contextual escaping. The default
+// interaction.HTMLDriver does so automatically.
+//
+// Message is safe for concurrent use as long as the caller does not mutate
+// data concurrently with the call. The Resolver and registered bundles are
+// immutable after [New] returns.
+func (r *Resolver) Message(locale Locale, key string, data map[string]string) (string, bool) {
+	if r == nil || r.inner == nil {
+		return "", false
+	}
+	return r.inner.Message(i18n.ParseTag(string(locale)), key, data)
+}
+
+// wireHTMLDriverTranslator returns a value-copy of driver with the Provider's
+// immutable message catalogue connected to every bundled HTMLDriver in the
+// default composition. Embedder-supplied translators are authoritative and
+// therefore never overwritten.
+func wireHTMLDriverTranslator(driver interaction.Driver, resolver *i18n.Resolver) interaction.Driver {
+	if driver == nil || resolver == nil {
+		return driver
+	}
+	translator := interaction.MessageTranslator(func(locale, key string, data map[string]string) (string, bool) {
+		return resolver.Message(i18n.ParseTag(locale), key, data)
+	})
+	return injectHTMLTranslator(driver, translator)
+}
+
+func injectHTMLTranslator(driver interaction.Driver, translator interaction.MessageTranslator) interaction.Driver {
+	switch d := driver.(type) {
+	case interaction.HTMLDriver:
+		if d.Translator == nil {
+			d.Translator = translator
+		}
+		return d
+	case *interaction.HTMLDriver:
+		if d == nil || d.Translator != nil {
+			return d
+		}
+		clone := *d
+		clone.Translator = translator
+		return &clone
+	case interaction.TemplateOverlayDriver:
+		d.Inner = injectHTMLTranslator(d.Inner, translator)
+		return d
+	case *interaction.TemplateOverlayDriver:
+		if d == nil {
+			return d
+		}
+		clone := *d
+		clone.Inner = injectHTMLTranslator(d.Inner, translator)
+		return &clone
+	default:
+		return driver
+	}
 }
 
 // WithLocale registers a [LocaleBundle] for the given locale. The

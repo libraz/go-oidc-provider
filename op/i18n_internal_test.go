@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/i18n"
+	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
 // TestBuildLocaleResolver_OverlayMergesIntoSeed confirms the H4
@@ -158,6 +159,12 @@ func (f fakePreferredLocaleStore) PreferredLocale(_ context.Context, _ string) (
 	return f.tag, f.err
 }
 
+type typedNilPreferredLocaleStore struct{}
+
+func (*typedNilPreferredLocaleStore) PreferredLocale(_ context.Context, _ string) (Locale, error) {
+	return LocaleEnglish, nil
+}
+
 // TestWithPreferredLocaleStore_RejectsNil pins that callers cannot
 // silently disable the resolver chain by passing nil. Returning the
 // next-layer fall-through on a misconfigured option would make the
@@ -169,6 +176,16 @@ func TestWithPreferredLocaleStore_RejectsNil(t *testing.T) {
 	c := &config{}
 	if err := WithPreferredLocaleStore(nil).apply(c); err == nil {
 		t.Fatalf("WithPreferredLocaleStore(nil) returned nil, want error")
+	}
+}
+
+func TestWithPreferredLocaleStore_RejectsTypedNil(t *testing.T) {
+	t.Parallel()
+
+	var store *typedNilPreferredLocaleStore
+	c := &config{}
+	if err := WithPreferredLocaleStore(store).apply(c); err == nil {
+		t.Fatal("WithPreferredLocaleStore(typed nil) returned nil, want error")
 	}
 }
 
@@ -217,5 +234,60 @@ func TestBuildLocaleResolver_PreferredStoreErrorTreatedAsNoPreference(t *testing
 	})
 	if got != i18n.Tag(LocaleJapanese) {
 		t.Errorf("resolver picked %q despite ui_locales=ja, want %q", got, LocaleJapanese)
+	}
+}
+
+func TestWireHTMLDriverTranslatorInjectsByCopyAndPreservesEmbedderTranslator(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := buildLocaleResolver(&config{defaultLocale: LocaleEnglish})
+	if err != nil {
+		t.Fatalf("buildLocaleResolver: %v", err)
+	}
+
+	original := &interaction.HTMLDriver{}
+	wired, ok := wireHTMLDriverTranslator(original, resolver).(*interaction.HTMLDriver)
+	if !ok {
+		t.Fatalf("wireHTMLDriverTranslator type = %T, want *interaction.HTMLDriver", wired)
+	}
+	if wired == original {
+		t.Fatal("wireHTMLDriverTranslator mutated pointer in place, want value-copy")
+	}
+	if original.Translator != nil {
+		t.Fatal("wireHTMLDriverTranslator mutated original Translator")
+	}
+	if got, found := wired.Translator("en", "login.title", nil); !found || got != "Sign in" {
+		t.Errorf("injected translator = (%q, %v), want (%q, true)", got, found, "Sign in")
+	}
+
+	custom := interaction.MessageTranslator(func(_, _ string, _ map[string]string) (string, bool) {
+		return "embedder", true
+	})
+	explicit := interaction.HTMLDriver{Translator: custom}
+	preserved, ok := wireHTMLDriverTranslator(explicit, resolver).(interaction.HTMLDriver)
+	if !ok {
+		t.Fatalf("wireHTMLDriverTranslator explicit type = %T, want interaction.HTMLDriver", preserved)
+	}
+	if got, found := preserved.Translator("fr", "missing", nil); !found || got != "embedder" {
+		t.Errorf("explicit translator overwritten: (%q, %v)", got, found)
+	}
+}
+
+func TestWireHTMLDriverTranslatorReachesTemplateOverlayInner(t *testing.T) {
+	t.Parallel()
+
+	resolver, err := buildLocaleResolver(&config{defaultLocale: LocaleEnglish})
+	if err != nil {
+		t.Fatalf("buildLocaleResolver: %v", err)
+	}
+	wired, ok := wireHTMLDriverTranslator(interaction.TemplateOverlayDriver{
+		Inner: interaction.HTMLDriver{},
+	}, resolver).(interaction.TemplateOverlayDriver)
+	if !ok {
+		t.Fatalf("wireHTMLDriverTranslator type = %T, want interaction.TemplateOverlayDriver", wired)
+	}
+	inner, ok := wired.Inner.(interaction.HTMLDriver)
+	if !ok || inner.Translator == nil {
+		t.Fatalf("overlay inner = %T with translator %v, want wired HTMLDriver", wired.Inner, inner.Translator != nil)
 	}
 }

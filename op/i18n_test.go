@@ -125,6 +125,36 @@ func TestProviderLocaleResolver_ResolvesUILocales(t *testing.T) {
 	}
 }
 
+func TestProviderLocaleResolver_MessageFallbackAndRawText(t *testing.T) {
+	t.Parallel()
+
+	french, err := op.LocaleBundleFromMap("fr", map[string]string{
+		"login.title": "Connexion {brand}",
+	})
+	if err != nil {
+		t.Fatalf("LocaleBundleFromMap(fr): %v", err)
+	}
+	provider, err := op.New(append(validBaseOpts(t), op.WithLocale(french))...)
+	if err != nil {
+		t.Fatalf("op.New: %v", err)
+	}
+	resolver := provider.LocaleResolver()
+	if got, ok := resolver.Message("fr", "login.title", map[string]string{"brand": "<Acme>"}); !ok ||
+		got != "Connexion <Acme>" {
+		t.Errorf("Message(fr, login.title) = (%q, %v), want raw substituted text", got, ok)
+	}
+	if got, ok := resolver.Message("FR-FR", "login.title", map[string]string{"brand": "Acme"}); !ok ||
+		got != "Connexion Acme" {
+		t.Errorf("Message(FR-FR, login.title) = (%q, %v), want canonicalized language-subtag match", got, ok)
+	}
+	if got, ok := resolver.Message("fr", "login.password.label", nil); !ok || got != "Password" {
+		t.Errorf("Message(fr, login.password.label) = (%q, %v), want English default fallback", got, ok)
+	}
+	if got, ok := resolver.Message("fr", "missing.key", nil); ok || got != "" {
+		t.Errorf("Message(fr, missing.key) = (%q, %v), want (empty, false)", got, ok)
+	}
+}
+
 func TestWithPreferredLocaleStore_ChainHead(t *testing.T) {
 	t.Parallel()
 

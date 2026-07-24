@@ -88,6 +88,38 @@ func (r *Resolver) Bundle(tag Tag) (*Bundle, bool) {
 	return r.bundles[r.defTag], false
 }
 
+// Message returns key from the bundle selected by tag. An exact locale
+// match wins, followed by its registered language subtag (for example,
+// "ja-JP" → "ja"). When the selected locale does not define key, the
+// configured default bundle is consulted. The boolean is false only when
+// neither bundle defines key.
+//
+// Placeholder substitution follows [Bundle.Get]: values from data replace
+// matching "{name}" tokens, unknown placeholders remain visible verbatim,
+// and data values are never interpreted as templates. The returned string is
+// plain text; callers rendering HTML or another structured format own the
+// corresponding output escaping.
+func (r *Resolver) Message(tag Tag, key string, data map[string]string) (string, bool) {
+	if r == nil || key == "" {
+		return "", false
+	}
+	selected := r.defTag
+	if matched, ok := r.match(tag); ok {
+		selected = matched
+	}
+	if b := r.bundles[selected]; b != nil {
+		if message, ok := b.Get(key, data); ok {
+			return message, true
+		}
+	}
+	if selected != r.defTag {
+		if b := r.bundles[r.defTag]; b != nil {
+			return b.Get(key, data)
+		}
+	}
+	return "", false
+}
+
 // Available returns the tags registered with the resolver in
 // registration order. The slice is a fresh copy; callers may mutate
 // it without affecting the resolver.
