@@ -1,0 +1,14 @@
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v1",
+  "exclusions": [
+    {
+      "plan": "plan-a",
+      "module": "module-persistent",
+      "status": "FINISHED",
+      "result": "FAILED",
+      "reason": "Fixture for an explicitly approved out-of-scope result.",
+      "owner": "conformance-maintainers",
+      "expires": "2999-01-01"
+    }
+  ]
+}

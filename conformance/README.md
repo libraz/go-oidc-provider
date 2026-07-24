@@ -120,12 +120,17 @@ moment in time and would churn between machines / OFCS bumps. If you
 want to commit a single canonical "released" snapshot, copy the
 desired file out from under `baselines/` to a path of your choice.
 
-The diff output classifies modules as:
+`conformance-baseline-diff` is a regression-reporting command, not a release
+gate. Its output classifies modules as:
 
 - **regressions** — were `PASSED`, now anything else (exit non-zero)
 - **fixes** — were not `PASSED`, now `PASSED`
 - **non-pass churn** — both states are non-`PASSED` but differ
 - **catalog drift** — module appears in only one snapshot
+
+In particular, a module that is `FAILED` in both snapshots is not a new
+regression and does not make this command fail. Use the strict release verifier
+described below for release sign-off.
 
 ## Lifecycle commands
 
@@ -139,6 +144,7 @@ The diff output classifies modules as:
 | `make conformance-seed-plans`               | Re-create the OFCS plans            |
 | `make conformance-baseline LABEL=...`        | Snapshot every module's pass/fail   |
 | `make conformance-baseline-diff BASELINE_OLD=... BASELINE_NEW=...` | Compare two snapshots |
+| `make conformance-release-verify BASELINE_REFERENCE=... BASELINE_CANDIDATE=...` | Strict release gate |
 
 ## File map
 
@@ -152,6 +158,7 @@ conformance/
 ├── op-demo.pid           ← op-demo PID file (gitignored)
 ├── .plan-ids.json        ← seed-plans output: {plan_name → plan_id} (gitignored)
 ├── baselines/            ← `baseline` snapshots (gitignored)
+├── release-exclusions.json ← reviewed, time-bounded non-PASS exceptions
 └── plans/                ← OFCS plan templates (committed)
     ├── oidcc-basic.json
     ├── oidcc-config.json
@@ -181,13 +188,23 @@ strictness changes, new variants); rerun the batch spot-check after
 any bump and update `scripts/conformance.sh` if a module needs a
 different driver hint.
 
-## Release sign-off (v0.9.1)
+## Strict release sign-off
 
-The v0.9.1 release blocker is "every plan lands green at least once,
-flake is ruled out for any plan that didn't, and a final pass runs
-op-demo under the race detector with zero `WARNING: DATA RACE` hits".
-The ceremony is manual; CI does not gate on it because OFCS runtime
-exceeds the budget of a hobby-OSS pipeline.
+Release sign-off uses `conformance-release-verify`; a successful
+`conformance-baseline-diff` is not sufficient. The strict verifier requires:
+
+- the candidate and approved reference to contain exactly the same plan/module
+  catalog;
+- every candidate module to be `FINISHED/PASSED`, unless its exact
+  plan/module/status/result tuple is present in the exclusion manifest;
+- no empty status or result;
+- no stale, missing, duplicate, or expired exclusion; and
+- the exclusion manifest to be tracked and byte-for-byte unchanged from
+  `HEAD`.
+
+Any violation exits non-zero. An OFCS catalog addition or removal therefore
+requires explicit review and a new approved reference; it cannot disappear
+inside an otherwise green comparison.
 
 The OP_ENABLE_DCR=1 flag is required for `oidcc-dynamic` and
 `oidcc-back-channel-logout` (both use OFCS's dynamic_client variant
@@ -215,26 +232,63 @@ the op-demo wires `op.WithCIBA` and the auto-approving substore:
 OP_PROFILE=fapi-ciba make conformance-op-up
 ```
 
-### Single-pass green ceremony
+### Capture and verify
 
-Run each of the 9 plans through `make conformance-baseline` once.
-Use `LABEL=v0.9.1-rc<N>-<plan>` so the file names sort
-chronologically.
+Run all nine seeded plans in one baseline capture. The driver restarts op-demo
+with the required profile between plans. Keep the previously approved snapshot
+as the reference and capture the release candidate separately.
 
 ```sh
-# Capture
-make conformance-baseline LABEL=v0.9.1-rc1-fapi2-baseline
+# Capture the release candidate.
+make conformance-baseline LABEL=v0.10.0-rc1
 
-# Compare against the previous release point
+# Optional diagnostics: report new regressions and fixes.
 make conformance-baseline-diff \
-    BASELINE_OLD=conformance/baselines/2026-05-01T16-42-42Z-pre-v0.9.0-fixed-3.json \
-    BASELINE_NEW=conformance/baselines/<latest>.json
+    BASELINE_OLD=conformance/baselines/<approved-reference>.json \
+    BASELINE_NEW=conformance/baselines/<v0.10.0-rc1>.json
+
+# Required release gate.
+make conformance-release-verify \
+    BASELINE_REFERENCE=conformance/baselines/<approved-reference>.json \
+    BASELINE_CANDIDATE=conformance/baselines/<v0.10.0-rc1>.json
 ```
 
-If a plan regresses on the first try, rerun **only that plan** a
-handful of times to distinguish flake from real regression. A flake
-is acceptable as long as a subsequent run is green; a deterministic
-regression blocks the release.
+The default policy is
+[`conformance/release-exclusions.json`](release-exclusions.json). Override it
+only when verifying a historical release:
+
+```sh
+make conformance-release-verify \
+    BASELINE_REFERENCE=conformance/baselines/<approved-reference>.json \
+    BASELINE_CANDIDATE=conformance/baselines/<candidate>.json \
+    CONFORMANCE_EXCLUSIONS=conformance/<historical-exclusions>.json
+```
+
+An exclusion is an exact, temporary release-policy decision. Each entry must
+name the observed terminal state and include a non-empty reason, owner, and
+exclusive ISO expiry date:
+
+```json
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v1",
+  "exclusions": [
+    {
+      "plan": "oidcc-dynamic-certification-test-plan",
+      "module": "exact-ofcs-module-name",
+      "status": "FINISHED",
+      "result": "SKIPPED",
+      "reason": "Implicit flow is outside the documented product profile.",
+      "owner": "conformance-maintainers",
+      "expires": "2026-10-01"
+    }
+  ]
+}
+```
+
+On and after `expires`, the verifier blocks the release. A changed outcome also
+blocks until the module passes or reviewers update and commit the policy.
+Broad prose exceptions, a local uncommitted manifest, and rerunning until one
+module happens to pass do not satisfy the gate.
 
 ### Final race-detector pass
 
@@ -246,7 +300,7 @@ stays fast:
 make conformance-down
 OPDEMO_RACE=1 make conformance-up
 # … run baseline as above …
-make conformance-baseline LABEL=v0.9.1-rc-final-race-<plan>
+make conformance-baseline LABEL=v0.10.0-rc-final-race
 
 # After every plan finishes, scan the log for races. A clean run
 # prints zero hits.
@@ -254,36 +308,5 @@ grep -c "WARNING: DATA RACE" conformance/op-demo.log
 ```
 
 A non-zero count is a release blocker — investigate before tagging.
-
-### What "green" means here
-
-The diff command exits non-zero on any module that *was* `PASSED` in
-the reference and *is no longer* `PASSED` in the new capture. Modules
-that were never green (skipped, awaiting review, OFCS-side bug) do
-not block the run; they are tracked in
-[`docs/plans/013-v0.9.1-plan.md`](../docs/plans/013-v0.9.1-plan.md) §7.
-
-### Plan-level scope exclusions
-
-Some modules are out of scope for this OP by design and cannot pass
-without a deliberate spec deviation. They are listed here so a reviewer
-does not chase them as regressions:
-
-- **`oidcc-dynamic`** — covers Discovery + Dynamic Client Registration
-  with both `code` and `implicit` flow variants. The OP intentionally
-  does not implement the implicit flow (per `docs/plans/002-product-design.md`
-  §J.1: "implicit / hybrid を持たない"). The plan still exercises DCR
-  end-to-end against the `code` variant, which is the practical value
-  of running it; the implicit-flow modules are expected non-PASS and
-  do not block release sign-off.
-- **`oidcc-basic` / `oidcc-config` / `oidcc-formpost` / `*-rp-initiated-logout`
-  modules that mandate `id_token_signed_response_alg=RS256`** — the OP
-  signs ID tokens with `ES256` only (per §J.5: "発行は ES256 のみ").
-  RS256 is in the verification allow-list (for client assertions), but
-  is not an issuance-side alg. OFCS modules that require RS256 issuance
-  remain non-PASS and are not in scope for the green ceremony.
-  `WithLegacySignatureAlgorithm(RS256)` is reserved as the documented
-  escape hatch for migration deployments, not for satisfying the
-  ceremony — see `docs/plans/002-product-design.md` §J.5.
 
 [ofcs]: https://gitlab.com/openid/conformance-suite

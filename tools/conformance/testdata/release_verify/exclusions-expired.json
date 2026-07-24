@@ -1,0 +1,14 @@
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v1",
+  "exclusions": [
+    {
+      "plan": "plan-a",
+      "module": "module-persistent",
+      "status": "FINISHED",
+      "result": "FAILED",
+      "reason": "Fixture for an exclusion that must be renewed or removed.",
+      "owner": "conformance-maintainers",
+      "expires": "2026-01-01"
+    }
+  ]
+}

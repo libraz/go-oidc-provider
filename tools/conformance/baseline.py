@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,9 @@ _PLAN_PROFILE: dict[str, str] = {
 }
 
 _DISCOVERY_URL = "https://127.0.0.1:9443/.well-known/openid-configuration"
+_BASELINE_SCHEMA = "go-oidc-provider/baseline/v1"
+_EXCLUSIONS_SCHEMA = "go-oidc-provider/conformance-exclusions/v1"
+_DEFAULT_EXCLUSIONS_FILE = ROOT / "conformance" / "release-exclusions.json"
 
 
 def _git(*args: str) -> str:
@@ -210,3 +214,233 @@ def cmd_baseline_diff(old_path: str, new_path: str) -> int:
             f"catalog drift: added={len(new_only)} removed={len(dropped)}\n"
         )
     return 1 if regressions else 0
+
+
+class _ReleaseInputError(ValueError):
+    """A release-verifier input is malformed or not an approved artifact."""
+
+
+def _read_json(path: Path, kind: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text())
+    except OSError as exc:
+        raise _ReleaseInputError(f"cannot read {kind} {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise _ReleaseInputError(f"invalid JSON in {kind} {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise _ReleaseInputError(f"{kind} {path} must contain a JSON object")
+    return value
+
+
+def _release_index(
+    snapshot: dict[str, Any], source: str
+) -> dict[tuple[str, str], tuple[str, str]]:
+    if snapshot.get("schema") != _BASELINE_SCHEMA:
+        raise _ReleaseInputError(f"{source} schema must be {_BASELINE_SCHEMA!r}")
+    plans = snapshot.get("plans")
+    if not isinstance(plans, dict) or not plans:
+        raise _ReleaseInputError(f"{source} has no plans")
+    indexed: dict[tuple[str, str], tuple[str, str]] = {}
+    for plan_name, plan in plans.items():
+        if not isinstance(plan_name, str) or not plan_name:
+            raise _ReleaseInputError(f"{source} contains an empty plan name")
+        if not isinstance(plan, dict):
+            raise _ReleaseInputError(f"{source} plan {plan_name!r} must be an object")
+        modules = plan.get("modules")
+        if not isinstance(modules, dict) or not modules:
+            raise _ReleaseInputError(f"{source} plan {plan_name!r} has no modules")
+        for module_name, result in modules.items():
+            if not isinstance(module_name, str) or not module_name:
+                raise _ReleaseInputError(
+                    f"{source} plan {plan_name!r} contains an empty module name"
+                )
+            if not isinstance(result, dict):
+                raise _ReleaseInputError(
+                    f"{source} module {plan_name}/{module_name} must be an object"
+                )
+            status = result.get("status")
+            outcome = result.get("result")
+            if status is None:
+                status = ""
+            if outcome is None:
+                outcome = ""
+            if not isinstance(status, str) or not isinstance(outcome, str):
+                raise _ReleaseInputError(
+                    f"{source} module {plan_name}/{module_name} has a "
+                    "non-string status or result"
+                )
+            indexed[(plan_name, module_name)] = (status, outcome)
+    if not indexed:
+        raise _ReleaseInputError(f"{source} has no modules")
+    return indexed
+
+
+def _load_exclusions(
+    manifest: dict[str, Any], source: str, as_of: date
+) -> tuple[dict[tuple[str, str], tuple[str, str]], list[str]]:
+    if manifest.get("schema") != _EXCLUSIONS_SCHEMA:
+        raise _ReleaseInputError(
+            f"{source} schema must be {_EXCLUSIONS_SCHEMA!r}"
+        )
+    raw_exclusions = manifest.get("exclusions")
+    if not isinstance(raw_exclusions, list):
+        raise _ReleaseInputError(f"{source} exclusions must be an array")
+
+    exclusions: dict[tuple[str, str], tuple[str, str]] = {}
+    issues: list[str] = []
+    required = ("plan", "module", "status", "result", "reason", "owner", "expires")
+    for index, exclusion in enumerate(raw_exclusions):
+        label = f"{source} exclusions[{index}]"
+        if not isinstance(exclusion, dict):
+            raise _ReleaseInputError(f"{label} must be an object")
+        missing = [field for field in required if field not in exclusion]
+        if missing:
+            raise _ReleaseInputError(f"{label} is missing {', '.join(missing)}")
+        for field in required:
+            if not isinstance(exclusion[field], str) or not exclusion[field].strip():
+                raise _ReleaseInputError(f"{label}.{field} must be a non-empty string")
+
+        key = (exclusion["plan"], exclusion["module"])
+        if key in exclusions:
+            raise _ReleaseInputError(
+                f"{source} has duplicate exclusion {key[0]}/{key[1]}"
+            )
+        if exclusion["result"] == "PASSED":
+            raise _ReleaseInputError(
+                f"{label} cannot exclude a PASSED module"
+            )
+        try:
+            expires = date.fromisoformat(exclusion["expires"])
+        except ValueError as exc:
+            raise _ReleaseInputError(
+                f"{label}.expires must use YYYY-MM-DD"
+            ) from exc
+        if as_of >= expires:
+            issues.append(
+                f"expired exclusion [{key[0]}] {key[1]} "
+                f"(expired {expires.isoformat()}, owner={exclusion['owner']})"
+            )
+        exclusions[key] = (exclusion["status"], exclusion["result"])
+    return exclusions, issues
+
+
+def _ensure_checked_in(path: Path) -> None:
+    try:
+        resolved = path.resolve()
+        relative = resolved.relative_to(ROOT.resolve())
+    except ValueError as exc:
+        raise _ReleaseInputError(
+            f"exclusion manifest must be inside the repository: {path}"
+        ) from exc
+
+    try:
+        checked_in = subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", f"HEAD:{relative.as_posix()}"],
+            stderr=subprocess.DEVNULL,
+        )
+        current = resolved.read_bytes()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        raise _ReleaseInputError(
+            f"exclusion manifest is not checked in: {path}"
+        ) from None
+    except OSError as exc:
+        raise _ReleaseInputError(
+            f"cannot read exclusion manifest {path}: {exc}"
+        ) from exc
+    if current != checked_in:
+        raise _ReleaseInputError(
+            f"exclusion manifest differs from the checked-in HEAD version: {path}"
+        )
+
+
+def _strict_release_issues(
+    reference: dict[tuple[str, str], tuple[str, str]],
+    candidate: dict[tuple[str, str], tuple[str, str]],
+    exclusions: dict[tuple[str, str], tuple[str, str]],
+) -> list[str]:
+    issues: list[str] = []
+    reference_keys = set(reference)
+    candidate_keys = set(candidate)
+    for plan, module in sorted(candidate_keys - reference_keys):
+        issues.append(f"added module [{plan}] {module}")
+    for plan, module in sorted(reference_keys - candidate_keys):
+        issues.append(f"dropped module [{plan}] {module}")
+
+    matched_exclusions: set[tuple[str, str]] = set()
+    for key in sorted(candidate_keys):
+        status, result = candidate[key]
+        plan, module = key
+        if not status or not result:
+            issues.append(
+                f"empty status/result [{plan}] {module}: "
+                f"status={status or '(empty)'} result={result or '(empty)'}"
+            )
+            continue
+        if status == "FINISHED" and result == "PASSED":
+            if key in exclusions:
+                issues.append(f"stale exclusion for passing module [{plan}] {module}")
+            continue
+        expected = exclusions.get(key)
+        if expected is None:
+            issues.append(
+                f"unexcluded non-pass [{plan}] {module}: {status}/{result}"
+            )
+            continue
+        matched_exclusions.add(key)
+        if expected != (status, result):
+            issues.append(
+                f"exclusion mismatch [{plan}] {module}: "
+                f"expected {expected[0]}/{expected[1]}, got {status}/{result}"
+            )
+
+    for plan, module in sorted(set(exclusions) - matched_exclusions):
+        if (plan, module) not in candidate_keys:
+            issues.append(f"exclusion names absent module [{plan}] {module}")
+    return issues
+
+
+def cmd_release_verify(
+    reference_path: str,
+    candidate_path: str,
+    exclusions_path: str | None = None,
+    *,
+    as_of: date | None = None,
+) -> int:
+    reference_file = Path(reference_path)
+    candidate_file = Path(candidate_path)
+    exclusions_file = (
+        Path(exclusions_path) if exclusions_path else _DEFAULT_EXCLUSIONS_FILE
+    )
+    try:
+        _ensure_checked_in(exclusions_file)
+        reference = _release_index(
+            _read_json(reference_file, "reference snapshot"),
+            str(reference_file),
+        )
+        candidate = _release_index(
+            _read_json(candidate_file, "candidate snapshot"),
+            str(candidate_file),
+        )
+        exclusions, issues = _load_exclusions(
+            _read_json(exclusions_file, "exclusion manifest"),
+            str(exclusions_file),
+            as_of or date.today(),
+        )
+    except _ReleaseInputError as exc:
+        sys.stderr.write(f"[release-verify] input error: {exc}\n")
+        return 2
+
+    issues.extend(_strict_release_issues(reference, candidate, exclusions))
+    sys.stdout.write(
+        f"reference: {reference_file} ({len(reference)} modules)\n"
+        f"candidate: {candidate_file} ({len(candidate)} modules)\n"
+        f"exclusions: {exclusions_file} ({len(exclusions)} entries)\n"
+    )
+    if issues:
+        sys.stdout.write(f"release blockers: {len(issues)}\n")
+        for issue in issues:
+            sys.stdout.write(f"  {issue}\n")
+        return 1
+    sys.stdout.write("release blockers: 0\n")
+    sys.stdout.write("[release-verify] strict conformance gate passed\n")
+    return 0

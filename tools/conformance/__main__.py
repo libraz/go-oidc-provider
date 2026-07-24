@@ -28,6 +28,20 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("old")
     sp.add_argument("new")
 
+    sp = sub.add_parser(
+        "release-verify",
+        help="Strictly verify a release snapshot against an approved catalog",
+    )
+    sp.add_argument("reference")
+    sp.add_argument("candidate")
+    sp.add_argument(
+        "--exclusions",
+        help=(
+            "checked-in exclusion manifest "
+            "(default: conformance/release-exclusions.json)"
+        ),
+    )
+
     args = parser.parse_args(argv)
     if args.cmd == "seed-plans":
         return seed.cmd_seed_plans()
@@ -39,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
         return baseline.cmd_baseline(args.label)
     if args.cmd == "baseline-diff":
         return baseline.cmd_baseline_diff(args.old, args.new)
+    if args.cmd == "release-verify":
+        return baseline.cmd_release_verify(
+            args.reference,
+            args.candidate,
+            args.exclusions,
+        )
     parser.error(f"unknown cmd: {args.cmd}")
     return 2  # unreachable
 

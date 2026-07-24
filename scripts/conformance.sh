@@ -44,6 +44,10 @@
 #   baseline-diff <old.json> <new.json>
 #               Compare two snapshots produced by `baseline`. Exits
 #               non-zero on regressions. (delegates to Python)
+#   release-verify <reference.json> <candidate.json> [--exclusions <file>]
+#               Strict release gate: require an unchanged module catalog
+#               and PASSED results except for exact, unexpired entries in
+#               a checked-in exclusion manifest. (delegates to Python)
 #   help        Show this help text.
 #
 # OFCS runs from conformance/docker-compose.yml against pinned image
@@ -484,7 +488,7 @@ case "${1:-help}" in
   op-up)        cmd_op_up ;;
   op-down)      cmd_op_down ;;
   op-status)    cmd_op_status ;;
-  seed-plans|drive|batch|baseline|baseline-diff)
+  seed-plans|drive|batch|baseline|baseline-diff|release-verify)
                 py "$@" ;;
   help|-h|--help) usage ;;
   *)

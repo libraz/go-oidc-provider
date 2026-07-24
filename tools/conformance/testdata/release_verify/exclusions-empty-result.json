@@ -1,0 +1,14 @@
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v1",
+  "exclusions": [
+    {
+      "plan": "plan-a",
+      "module": "module-persistent",
+      "status": "FINISHED",
+      "result": "REVIEW",
+      "reason": "An exclusion cannot make an empty result valid.",
+      "owner": "conformance-maintainers",
+      "expires": "2999-01-01"
+    }
+  ]
+}
