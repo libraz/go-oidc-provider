@@ -759,6 +759,17 @@ func TestPrivateKeyJWTVerifier_JTIDoesNotCollideWithDPoP(t *testing.T) {
 // Tracks: M-CLIENTAUTH (security audit) — the original runDummyVerify
 // only padded the secret-based methods, leaking client_id existence
 // for OPs that accept private_key_jwt at the token endpoint.
+//
+// Tracks: CVE-2026-22746 (Spring Security) — DaoAuthenticationProvider
+// skipped the password hash entirely when the principal did not exist,
+// so "no such account" answered measurably faster than "wrong
+// password" and the difference enumerated accounts. The same shape
+// applies to a client_id at the token endpoint: an unknown client and a
+// registered client presenting the wrong credential must cost the same,
+// which means the rejection path has to perform the work rather than
+// skip to the answer. The branches padded here are the structural ones
+// — unknown client and client-id mismatch — because those are the two
+// that would otherwise return before any cryptography ran.
 func TestVerifyClient_PrivateKeyJWT_UnknownClient_DummyVerifyShim(t *testing.T) {
 	t.Parallel()
 

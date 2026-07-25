@@ -111,11 +111,14 @@ advisories:
     severity: P0
     source: https://access.redhat.com/security/cve/CVE-2026-4282
     threat: T-03
-    status: tracking
+    status: covered
     notes: |
       Keycloak authorization-code forgery via SingleUseObjectProvider
-      isolation flaw. Needs a store-namespace / code-consumption review
-      before flipping to covered.
+      isolation flaw. The OP has no generic single-use provider: every
+      artefact kind is its own substore interface, and the store contract
+      harness (namespaceDisjoint / namespaceConsumeIsScoped) pins that
+      one identifier planted in one substore is invisible and
+      non-consumable through every other, across each reference adapter.
 
   # --- T-04 Audience confusion --------------------------------------
   - id: CVE-2025-27370
@@ -142,20 +145,48 @@ advisories:
     threat: T-04
     status: covered
     notes: Keycloak OIDC token introspection audience bypass.
+  - id: CVE-2024-53861
+    severity: P2
+    source: https://github.com/advisories/GHSA-75c5-xw7c-p5pm
+    threat: T-04
+    status: covered
+    notes: |
+      PyJWT accepted an issuer that merely shared a prefix with the
+      expected value, so a token minted by "https://issuer.example.com"
+      satisfied an expectation of "https://issuer.example.com.evil" (and
+      vice versa). The comparison shape matters here because client
+      identifiers are chosen at registration time, so a non-equality
+      test is one registration away from an impersonation.
+      Structural property: an "iss" claim is compared as a whole string.
+      TestPrivateKeyJWTVerifier_IssuerMustMatchWholly drives the
+      near-miss table — prefix extension, path extension, the registered
+      value embedded in a longer one, host prefix, trailing slash,
+      surrounding whitespace, case folding, truncation, empty — against
+      the client-assertion surface, moving iss and sub together and then
+      each alone so a verifier that checks one and trusts the other is
+      caught. A control asserts the exact identifier still
+      authenticates. The OP-issuer surfaces (JAR audience,
+      token-exchange external-issuer pin) resolve through the same
+      whole-string comparison in tokens.AccessTokenVerifier.
 
   - id: CVE-2026-32235
     severity: P1
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-32235
     threat: T-01
-    status: tracking
+    status: covered
     notes: |
       Backstage auth-backend redirect-URI allowlist bypass under
       Dynamic Client Registration: a crafted redirect_uri passes the
       configured allowlist pattern yet resolves to an attacker host,
-      delivering the code to the attacker. Touches both redirect-URI
-      matching and the DCR surface. New test needed — pin that the
-      registered-URI match is exact / normalised and cannot be defeated
-      by a pattern that over-matches the host authority.
+      delivering the code to the attacker. Registration records a literal
+      URI rather than a pattern, and
+      TestDCR_RegisteredRedirectURIIsMatchedByteExactly drives a
+      dynamically registered client through the authority, path, port and
+      scheme variants to pin that /authorize refuses to redirect anywhere
+      but the registered string.
+      TestDCR_RejectsRedirectURIShapesThatBlurTheMatch covers the
+      registration half — the shapes that would have no single
+      unambiguous reading are refused at registration time.
 
   # --- T-05 Algorithm downgrade -------------------------------------
   - id: CVE-2015-2951
@@ -200,6 +231,68 @@ advisories:
     threat: T-05
     status: covered
     notes: Hono JWT alg=none bypass (2026 cluster).
+  - id: CVE-2026-11800
+    severity: P0
+    source: https://github.com/advisories/GHSA-gqj5-2xp5-3qmp
+    threat: T-05
+    status: covered
+    notes: |
+      Keycloak JWT authorization-grant algorithm confusion (CWE-347,
+      CVSS 8.1): an attacker holding any valid client credential in the
+      realm forged an assertion by manipulating the "alg" header, and
+      signature verification was satisfied without the registered key.
+      Structural property: key selection is driven by the client being
+      authenticated, resolved from storage, and the algorithm by the
+      OP's closed allow-list intersected with the client's registered
+      pin — no JOSE header member participates in either choice.
+      TestPrivateKeyJWTVerifier_KeySelectionIgnoresTheAssertionsOwnHeader
+      pins it from the position the CVE describes: a second registered
+      client whose key the OP legitimately accepts tries to authenticate
+      as the victim while steering selection through kid (its own and
+      the victim's), an absent kid, and inline / remote key references
+      (jwk, jku, x5u). A control asserts the victim's own key still
+      authenticates, so the refusals are not vacuous.
+      TestPrivateKeyJWTVerifier_RejectsAlgOutsideClientPin covers the
+      registered-alg half.
+  - id: CVE-2026-48523
+    severity: P2
+    source: https://github.com/advisories/GHSA-jq35-7prp-9v3f
+    threat: T-05
+    status: covered
+    notes: |
+      PyJWT: when the verification key was supplied as a key object
+      carrying its own "alg" metadata, that value took precedence over
+      the caller's algorithm allow-list, so a key registered for one
+      algorithm verified a token signed with another. Reading a JWK's
+      "alg" as policy inverts the trust relationship — the client writes
+      the JWKS, so the client would be choosing how strong its own
+      authentication has to be.
+      Structural property: the allow-list is a closed compile-time set
+      that no key member can widen; the key's declared algorithm only
+      ever narrows, via the shape check and the client's registered pin.
+      TestPrivateKeyJWTVerifier_RegisteredKeyCannotWidenTheAlgorithmPolicy
+      registers a symmetric "oct" key declaring HS256 / HS384 / HS512
+      and signs an assertion with the very bytes the JWKS publishes —
+      the case that matters, since a symmetric key in a published keyset
+      is a credential anyone who fetched it holds — and requires each to
+      be refused.
+  - id: CVE-2026-48526
+    severity: P2
+    source: https://github.com/advisories/GHSA-xgmm-8j9v-c9wx
+    threat: T-05
+    status: covered
+    notes: |
+      PyJWT accepted an asymmetric public JWK as the shared secret for
+      an HMAC verification, letting an attacker who knows the published
+      public key forge an HS256 token — the canonical algorithm
+      confusion, reached through the key-resolution API rather than the
+      alg header. Structural property: the algorithm is pinned to the
+      resolved key, and the signing-algorithm allow-list is closed
+      before any key is touched, so no symmetric branch is reachable.
+      TestVerify_AlgConfusion_HSUsingECPublicKeyBytesAsSecret pins it by
+      taking a published EC key's x||y bytes as an HS256 secret and
+      requiring the token to fail as malformed rather than as a
+      signature mismatch — the rejection happens before verification.
 
   # --- T-06 JOSE structural anomalies -------------------------------
   - id: CVE-2017-11424
@@ -339,6 +432,93 @@ advisories:
       TestVerify_RejectsJWEWrappedUnsignedJWT pins it by encrypting an
       alg=none inner JWT into a JWE and asserting the JAR verifier
       rejects it (ErrParse).
+  - id: CVE-2026-27962
+    severity: P0
+    source: https://github.com/advisories/GHSA-wvwj-cvrp-7pv5
+    threat: T-06
+    status: covered
+    notes: |
+      Authlib JWS JWK header injection (CVSS 9.1): with no key supplied
+      by the application, deserialization fell back to the key embedded
+      in the token's own "jwk" header, so an attacker signed with their
+      own private key, published the matching public half in the header,
+      and was accepted. RFC 7515 requires the verification key to come
+      from application context. The 2026 restatement of CVE-2018-0114.
+      Two layers pin it. TestParseSigned_HeaderInjection_NeverFetches
+      covers the generic parse path (no key reference in a header is
+      ever resolved or fetched).
+      TestPrivateKeyJWTVerifier_KeySelectionIgnoresTheAssertionsOwnHeader
+      covers the surface where an embedded key would be most tempting to
+      honour: a client assertion carrying a jwk header is still verified
+      against the keyset registered to the client being authenticated.
+      DPoP is the one place an embedded jwk is honoured at all, by
+      RFC 9449 §4.3 design, and it is constrained separately — the proof
+      key must be public (CVE-2026-54431) and the token's cnf must match
+      its thumbprint, so the embedded key authenticates nothing on its
+      own.
+  - id: CVE-2026-48524
+    severity: P2
+    source: https://github.com/advisories/GHSA-fhv5-28vv-h8m8
+    threat: T-06
+    status: covered
+    notes: |
+      PyJWKClient re-fetched the JWKS endpoint whenever a token named a
+      "kid" it had not cached, so an attacker minting tokens with random
+      kid values drove unbounded outbound requests at the client's JWKS
+      host. Structural property: the forced-refresh path is throttled per
+      URL and never consults the kid, so however many distinct unknown
+      kids arrive inside one interval they cost a single round-trip.
+      TestFetchFresh_BypassesFreshCacheThenThrottles pins the three
+      transitions — a forced refetch does bypass a still-fresh cache
+      (the rotation case the path exists for), a second one inside the
+      window does not reach the network, and one past the window does
+      again. TestJWKSCache_SingleflightCollapsesConcurrentFetches covers
+      the concurrent shape of the same amplification.
+  - id: CVE-2026-48525
+    severity: P2
+    source: https://github.com/advisories/GHSA-w7vc-732c-9m39
+    threat: T-06
+    status: covered
+    notes: |
+      PyJWT base64url-decoded the payload segment before deciding
+      whether it was needed, so an unauthenticated caller could spend
+      the server's memory on a segment that verification would have
+      discarded. Alias class: CVE-2025-61920 (Authlib, oversized JOSE
+      segments). Structural property: the body cap is installed at read
+      time by the OP itself, from one project-wide constant, so the
+      refusal happens before any segment is decoded and does not depend
+      on a proxy being in front.
+      TestEndpoints_OversizedJWSIsRefusedBeforeItIsDecoded drives the
+      two surfaces that take a JWS from an unauthenticated caller — the
+      token endpoint's client_assertion and PAR's request object — with
+      a well-shaped compact JWS whose middle segment alone exceeds the
+      cap, and requires a 4xx rather than a 5xx (a 5xx would mean the OP
+      tried and fell over, which is the outcome the bound exists to
+      prevent). TestDecodeForm_RejectsOversizeBody pins the shared
+      primitive.
+  - id: CVE-2025-61920
+    severity: P2
+    source: https://github.com/advisories/GHSA-pq5p-34cr-23v9
+    threat: T-06
+    status: covered
+    notes: |
+      Authlib — denial of service via oversized JOSE segments. Same
+      defect and same mitigation as CVE-2026-48525; pinned by
+      TestEndpoints_OversizedJWSIsRefusedBeforeItIsDecoded.
+  - id: CVE-2025-62706
+    severity: P2
+    source: https://github.com/advisories/GHSA-g7f3-828f-7h7m
+    threat: T-06
+    status: out-of-scope
+    out_of_scope_reason: |
+      Authlib JWE "zip":"DEF" decompression bomb — a small ciphertext
+      inflated to an arbitrarily large plaintext during decryption. The
+      OP never decrypts JWE: it has no encryption keyset, publishes no
+      *_encryption_alg_values_supported, and refuses an encrypted
+      request object rather than unwrapping it (the one JWE-shaped input
+      it recognises is rejected at parse, pinned by
+      TestVerify_RejectsJWEWrappedUnsignedJWT). There is no
+      decompression path to bound.
 
   # --- T-07 Replay --------------------------------------------------
   - id: CVE-2020-15222
@@ -385,6 +565,26 @@ advisories:
       once and asserts a second submission of the same code is rejected
       (ErrExpired). Recovery codes carry the same property
       (TestVerify_RejectsConsumedCode).
+  - id: CVE-2026-9802
+    severity: P1
+    source: https://github.com/keycloak/keycloak/issues/49426
+    threat: T-07
+    status: covered
+    notes: |
+      Keycloak decided whether a rotated refresh token was stale by
+      comparing it against the cluster's startup timestamp, an
+      in-process value. A restart reset that timestamp, so every
+      previously rotated token stopped looking stale and became
+      replayable — the failure direction that matters, since the tokens
+      did not become unverifiable but valid again. Structural property:
+      the verdict comes from the Store's own consume record, so an
+      instance that never observed the rotation reaches the same one.
+      TestExchange_RotationVerdictSurvivesAProcessThatNeverSawTheRotation
+      models the restart as a second Exchanger over the same store —
+      which is what a restart is from this code's point of view — and
+      requires the superseded token to be refused as replayed past the
+      grace window, with a control proving the restarted instance still
+      exchanges an unspent token.
 
   # --- T-08 Outbound fetch / SSRF ----------------------------------
   - id: CVE-2026-1180
@@ -393,6 +593,28 @@ advisories:
     threat: T-08
     status: covered
     notes: Keycloak OIDC DCR jwks_uri SSRF during private_key_jwt key resolution.
+  - id: CVE-2026-48522
+    severity: P1
+    source: https://github.com/advisories/GHSA-993g-76c3-p5m4
+    threat: T-08
+    status: covered
+    notes: |
+      PyJWKClient handed the JWKS URI straight to the URL opener with no
+      scheme restriction, so "file://", "ftp://" and "data:" values were
+      fetched. Beyond the read primitive this is a forgery primitive: an
+      attacker who can place a JWK Set at a path the URI names has the
+      verifier adopt their signing key. Two independent gates, pinned
+      separately because either alone would leave the other path open.
+      At registration, jwks_uri must name an https resource —
+      TestDCR_ClientMetadataIsTreatedAsAttackerInput drives it (with the
+      other URI-valued members) against javascript / data / file / ftp /
+      http / relative / userinfo shapes.
+      At fetch, the transport carries its own scheme allow-list, so a
+      value that reached storage by any other route still cannot be
+      dereferenced: TestFetcher_JWKSURISchemeIsConstrainedToTheNetwork
+      covers both the ordinary and the forced-refresh entry points, with
+      the private-network opt-in granted so the refusal is attributable
+      to the scheme rather than the SSRF deny-list.
 
   # --- T-09 Token / sensitive-info leak paths ----------------------
   - id: GHSA-7mqr-2v3q-v2wm
@@ -411,14 +633,41 @@ advisories:
     severity: P2
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-8922
     threat: T-09
-    status: tracking
+    status: covered
     notes: |
       Keycloak introspection ignored the realm-level notBefore when a
       client-level notBefore was set, so a token inside the revoked
-      window still introspected as active. Structural property: the
-      introspection active=true decision must honour every configured
-      not-before / revocation input, not just the narrowest one. New
-      test needed against the introspection endpoint.
+      window still introspected as active.
+      TestEndToEnd_ActiveHonoursEveryRevocationInput drives the endpoint
+      with each withdrawal input applied on its own — the per-token
+      denylist and the grant tombstone — plus an unwithdrawn control, so
+      an implementation that answers from whichever input it consults
+      first fails on the row the other input owns.
+
+  # --- T-10 Timing ---------------------------------------------------
+  - id: CVE-2026-22746
+    severity: P2
+    source: https://spring.io/security/cve-2026-22746/
+    threat: T-10
+    status: covered
+    notes: |
+      Spring Security's DaoAuthenticationProvider took a measurably
+      different amount of time when the presented principal did not
+      exist than when it existed with a wrong password, because the
+      expensive password hash was only computed on the second path. The
+      difference enumerates accounts and, with a slow hash, is remotely
+      observable. Structural property: the rejection paths that would
+      otherwise return before any cryptography ran — unknown client,
+      client-id mismatch, confidential client with no stored hash — run
+      a fixed-cost decoy first, sized to the method (a dummy hash for
+      the secret methods, a synthetic ECDSA P-256 verify for
+      private_key_jwt), so an unknown client_id costs what a wrong
+      credential costs. MethodNone is deliberately unpadded, since
+      padding a branch with no cryptographic check would create the
+      channel in the other direction.
+      TestVerifyClient_PrivateKeyJWT_UnknownClient_DummyVerifyShim pins
+      both structural branches; TestPrivateKeyJWTVerifier_NoKeysRunsTimingShim
+      pins the resolver-side equivalent.
 
   # --- T-11 Open redirect on error ---------------------------------
   - id: CVE-2023-6927
@@ -463,6 +712,10 @@ advisories:
       leg (a validated redirect_uri does carry the error back). Implicit
       / hybrid response types are additionally rejected outright
       (CVE-2024-10318, T-02), so the specific Authlib vector cannot arise.
+      CVE-2026-41479 is the same defect reached through a second door —
+      an unsupported response_type raised its error with the raw
+      redirect_uri before the client and its registration were resolved
+      — and the same two tests pin it, so it carries no row of its own.
 
   # --- T-12 Session fixation ---------------------------------------
   - id: GHSA-xhpr-465j-7p9q
@@ -494,21 +747,65 @@ advisories:
       fresh session ID and deletes the old record whenever a fresh authn
       factor ran. ensureSession rotates on same-subject re-auth; a
       consent-only / chooser-only chain intentionally does not.
+  - id: CVE-2025-68158
+    severity: P2
+    source: https://github.com/advisories/GHSA-fg6f-75jq-6523
+    threat: T-12
+    status: covered
+    notes: |
+      Authlib stored the in-flight authorization state in a shared cache
+      keyed only by the state value, so the callback handler resolved it
+      without checking that the browser presenting it was the one that
+      started the flow. An attacker who began a flow and got the victim
+      to open the callback had the victim's account linked to the
+      attacker's identity in one click — no credential theft, just a
+      link. The upstream defect is relying-party side; the OP owns the
+      identical shape, because its interaction identifier also travels
+      in the URL and is therefore linkable and forwardable.
+      Structural property: the identifier is half of a pair, and the
+      other half is the cookie the OP issued to one user agent.
+      TestInteraction_ResolvesOnlyForTheBrowserThatStartedIt starts two
+      independent flows, confirms each browser reaches its own (so the
+      refusals are not a handler that resolves nothing), then crosses
+      the cookie against the other flow's identifier in both directions
+      and drops the cookie entirely, requiring 404 each time.
 
   # --- T-13 Confused deputy ----------------------------------------
   - id: CVE-2026-1486
     severity: P2
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-1486
     threat: T-13
-    status: tracking
+    status: covered
     notes: |
       Keycloak jwt-authorization-grant issued tokens without checking
       that the backing identity provider was enabled — a token-issuance
-      authorisation gate skipped. Maps onto our custom-grant dispatch:
-      the structural property is "verify the grant's preconditions
-      before emitting any token". New test needed; confirm the custom-
-      grant path cannot mint tokens when the backing authority is
-      disabled.
+      authorisation gate skipped.
+      TestCustomGrant_NoTokenEscapesAFailedPrecondition pins the gate on
+      both sides of the handler: a client not registered for the grant
+      type never reaches the handler at all, and a handler response that
+      exceeds a registered limit is discarded whole. Neither rejection
+      leaves an access, refresh, or ID token on the wire.
+  - id: CVE-2026-9704
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2026-9704
+    threat: T-13
+    status: covered
+    notes: |
+      Keycloak's token-exchange endpoint dropped the subject_token
+      parameter under some request shapes instead of rejecting the
+      request, and the exchange then proceeded on the caller's own
+      authority — so a client with no delegation at all obtained a token
+      for an identity it could not name. The downstream gates do not
+      catch this: scope and audience are checked as subsets of the
+      subject token, and a request with no subject is trivially within
+      its own limits.
+      TestTokenExchange_DelegationParametersAreNeverSilentlyDropped
+      drives the shapes where a parser's convenience would manufacture a
+      well-formed request — absent, empty, repeated, and repeated with
+      one empty occurrence — for both subject_token and
+      subject_token_type, and asserts each is refused with no token of
+      any kind on the wire. A control exchange succeeds first, so the
+      refusals are not the fixture failing.
 
   # --- T-15 TOTP / RFC 6238 ----------------------------------------
   - id: GHSA-9r3w-4j8q-pw98
@@ -533,22 +830,111 @@ advisories:
       Keycloak two-factor authentication bypass. Same structural
       property as 9r3w — covered by the same two-layer mitigation
       (orchestrator step ordering + adapter subject-required gate).
+  - id: CVE-2026-33473
+    severity: P1
+    source: https://github.com/go-vikunja/vikunja/security/advisories/GHSA-p747-qc5p-773r
+    threat: T-15
+    status: covered
+    notes: |
+      Vikunja verified a TOTP code against the current time step and
+      stopped there, so the same code authenticated repeatedly for the
+      rest of its 30-second window — anyone who observed one code (over
+      a shoulder, in a phished form, in a log) could reuse it. Same
+      class as CVE-2025-43798 (Liferay) and CVE-2021-43177
+      (devise-two-factor). Structural property: acceptance records the
+      step on the TOTP record, and any later submission resolving to
+      that step or earlier is refused.
+      TestVerify_ReplaysSameStepRejected pins all three legs — the code
+      is accepted once, the immediate replay at the same instant fails
+      as a wrong code, and a code computed at a strictly later step
+      still succeeds. The replay must also leave the brute-force counter
+      untouched, since otherwise a captured code becomes a lockout
+      primitive against the account it was captured from.
+  - id: CVE-2025-43798
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2025-43798
+    threat: T-15
+    status: covered
+    notes: |
+      Liferay DXP — a TOTP was usable multiple times during its validity
+      period. Same defect and same mitigation as CVE-2026-33473; pinned
+      by TestVerify_ReplaysSameStepRejected.
+  - id: CVE-2021-43177
+    severity: P1
+    source: https://nvd.nist.gov/vuln/detail/CVE-2021-43177
+    threat: T-15
+    status: covered
+    notes: |
+      devise-two-factor — an incomplete fix for CVE-2015-7225 left a
+      code redeemable for one trailing interval. The step guard is a
+      floor rather than an equality test, so a code resolving to the
+      last accepted step or any earlier one is refused; pinned by
+      TestVerify_ReplaysSameStepRejected.
 
   # --- T-16 passkey / WebAuthn -------------------------------------
   - id: CVE-2026-28787
     severity: P1
     source: https://nvd.nist.gov/vuln/detail/CVE-2026-28787
     threat: T-16
-    status: tracking
+    status: covered
     notes: |
       OneUptime WebAuthn: the ceremony challenge was returned to the
       client and accepted back at verification instead of being stored
       server-side, so a captured assertion replayed indefinitely (W3C
-      WebAuthn L2 §13.4.3). Structural property: the challenge must be
-      minted and held server-side, bound to the session, and consumed
-      single-use; a returned-by-client challenge is never trusted. Flip
-      candidate: confirm the passkey authenticator's challenge store
-      pins server-side single-use; add a replay test if a gap exists.
+      WebAuthn L2 §13.4.3). The ceremony rides server-side interaction
+      state, never a client-held value.
+      TestAuthenticator_ChallengeComesOnlyFromServerHeldState pins that
+      the client has no field through which to supply a challenge, that
+      an absent ceremony is a hard failure rather than a fallback, and
+      that every ceremony mints a fresh challenge;
+      TestTickFactorScratchRoundtrip pins the single-use half — the
+      ceremony slot is cleared as soon as the factor produces a result.
+  - id: CVE-2026-6856
+    severity: P1
+    source: https://github.com/keycloak/keycloak/issues/48388
+    threat: T-16
+    status: covered
+    notes: |
+      Keycloak requested direct attestation but accepted a registration
+      whose response carried packed self-attestation — no x5c chain, so
+      nothing vouched for the AAGUID the authenticator claimed. The
+      acceptable-AAGUID allowlist was then applied to an unauthenticated
+      value, letting any software authenticator assert the AAGUID of a
+      certified hardware key. Similar to CVE-2025-12150.
+      The OP exhibited both halves of the class and both were fixed: the
+      public PrimaryPasskey surface never requested attestation at all,
+      so its allowlist matched a self-asserted AAGUID, and the verifier
+      compared the AAGUID without regard to whether the attestation
+      identified the model.
+      TestAAGUIDAllowlistOnlyDecidesOnAVouchedAAGUID pins the repaired
+      property in three parts: an allowlist is unconfigurable without
+      direct conveyance, direct conveyance makes it configurable (the
+      control), and only attestation types signed by a key outside the
+      credential — basic_full, attca, anonca, ecdaa — may reach the
+      comparison, with unrecognised types refused rather than admitted.
+
+  # --- T-17 email-OTP -----------------------------------------------
+  - id: CVE-2026-22751
+    severity: P2
+    source: https://spring.io/security/cve-2026-22751/
+    threat: T-17
+    status: covered
+    notes: |
+      Spring Security's JDBC one-time-token service read the token,
+      decided it was unused, and deleted it in separate statements, so
+      two requests arriving together both passed the check and both
+      authenticated. Where CVE-2026-1035 is the same race on refresh
+      tokens, this is the race on the single-use codes the OP delivers
+      out of band — and mailed codes race in practice, because inboxes
+      are shared and prefetched and users double-submit.
+      Structural property: the check and the consume are one operation
+      the store arbitrates, so the outcome of that operation is the
+      verdict.
+      TestContinueVerify_ConcurrentSubmissionsOfOneCodeYieldOneSuccess
+      launches concurrent submissions of a single delivered code from a
+      common start gate and requires exactly one to authenticate. The
+      sequential half is pinned separately by
+      TestContinueVerifyReplayRejected and TestVerify_RejectsConsumedCode.
 
   # --- T-19 DPoP (RFC 9449) ----------------------------------------
   - id: CVE-2026-54431
@@ -565,6 +951,42 @@ advisories:
       parseProof gates on !jwk.IsPublic(); TestVerify_RejectsPrivateKey-
       InJWKHeader pins it by minting a proof whose jwk header carries the
       private EC "d" component and asserting ErrProofMalformed.
+
+  # --- T-21 mTLS bound token / x5t#S256 ----------------------------
+  - id: CVE-2026-22747
+    severity: P1
+    source: https://spring.io/security/cve-2026-22747/
+    threat: T-21
+    status: covered
+    notes: |
+      Spring Security derived the username from an X.509 client
+      certificate by pattern-matching the subject DN's string form, and
+      certain malformed CN values — escapes and separators that survive
+      the round trip to text — made the extractor read the wrong field,
+      so a certificate the truststore accepts impersonates another
+      subject. CVE-2026-47838 is the continuation covering the second,
+      deprecated extractor. Structural property: a client is identified
+      by the DER the issuer signed (RawSubject), not by the RFC 4514
+      rendering, so an attribute value chosen to look like additional
+      structure once printed does not become that structure.
+      TestVerifyTLSClientAuth_SubjectDN_CraftedNameDoesNotCollideOnceRendered
+      drives certificates whose CN or O literally contains the DN
+      separators (plain, double-escaped, and whitespace-padded) against
+      a matcher for the identity they render as, with a control proving
+      the genuine DN still authenticates.
+      TestVerifyTLSClientAuth_SubjectDN_MultiValuedMatcherDoesNotFlatten
+      covers the multi-valued-RDN spelling of the same idea.
+  - id: CVE-2026-47838
+    severity: P1
+    source: https://spring.io/security/cve-2026-47838/
+    threat: T-21
+    status: covered
+    notes: |
+      The continuation of CVE-2026-22747, covering the same DN-parsing
+      defect in the second (deprecated) extractor that the original fix
+      missed. The OP has one DN comparison rather than two, so the same
+      test covers it:
+      TestVerifyTLSClientAuth_SubjectDN_CraftedNameDoesNotCollideOnceRendered.
 
   # --- T-22 CIBA / device_code -------------------------------------
   - id: CVE-2026-9798
@@ -585,6 +1007,35 @@ advisories:
       on the authentication device, so it adds no separate OP-side
       credential-verification path to bypass; CIBA's own abuse surface is
       polling, gated separately by ciba.poll_abuse.lockout.
+
+  # --- T-23 Dynamic Client Registration / RAT ----------------------
+  - id: CVE-2026-22752
+    severity: P0
+    source: https://spring.io/security/cve-2026-22752/
+    threat: T-23
+    status: covered
+    notes: |
+      Spring Authorization Server's DCR endpoints accepted client
+      metadata fields without validating them (CVSS 9.6), reachable by
+      anyone holding a valid initial access token — no administrative
+      privilege. Depending on the field, the outcome was stored XSS,
+      privilege escalation, or SSRF, because the registration request
+      was treated as configuration rather than as attacker-controlled
+      input. Structural property: registration is the one surface where
+      the allowlist entry itself is supplied by an untrusted party, so
+      each member earns its way into storage on its own contract.
+      TestDCR_ClientMetadataIsTreatedAsAttackerInput covers the members
+      the OP later dereferences (every URI-valued field against
+      javascript / data / file / ftp / http / relative / userinfo
+      shapes), the members that would widen the client's own authority
+      (grant and response types, scope beyond the initial access token,
+      auth method, signing alg), and the response contract — undefined
+      members do not survive, and the registrant cannot choose its own
+      registration access token.
+      Display strings are free text by design, so their containment is
+      at the render rather than the write:
+      TestHTMLDriver_ClientDisplayNameCannotBecomeMarkup pins that a
+      registered client_name cannot become markup on the consent screen.
 
   # --- Out-of-scope (not OP responsibility) ------------------------
   - id: GHSA-gr79-9v6v-gc9r

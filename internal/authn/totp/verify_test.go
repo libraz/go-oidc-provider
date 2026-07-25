@@ -302,6 +302,17 @@ func TestVerify_NilRecord(t *testing.T) {
 // window is rejected as ErrWrongCode without incrementing the
 // brute-force counter, while a code computed at a strictly later
 // step is accepted normally.
+//
+// Tracks: CVE-2026-33473 (Vikunja), and the same class in
+// CVE-2025-43798 (Liferay) and CVE-2021-43177 (devise-two-factor) — a
+// TOTP code was checked against the current time step and nothing
+// consumed it, so it kept authenticating for the rest of its window.
+// Anyone who saw a code once (over a shoulder, in a phished form, in a
+// log) could reuse it, which reduces the factor to a shared secret with
+// a 30-second lifetime. Consuming the step on acceptance is what makes
+// the code single-use; the counter assertion matters too, since a
+// replay that advanced the brute-force counter would let a captured
+// code be used to lock the account out instead.
 func TestVerify_ReplaysSameStepRejected(t *testing.T) {
 	t.Parallel()
 

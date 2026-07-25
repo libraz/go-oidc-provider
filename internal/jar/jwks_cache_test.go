@@ -122,6 +122,15 @@ func TestParseJWKS_RejectsExcessiveKeyCount(t *testing.T) {
 	}
 }
 
+// Tracks: CVE-2026-48524 (PyJWT) — PyJWKClient refetched the JWKS
+// endpoint whenever a token named a "kid" it had not cached, so an
+// attacker minting tokens with random kid values turned each one into
+// an outbound request at the client's JWKS host. The forced-refresh
+// path exists here for the same legitimate reason (a rotated key the
+// cache has not seen yet), and the throttle below is what keeps it from
+// being an amplifier: the interval is per URL and does not consult the
+// kid at all, so N distinct unknown kids inside one window still cost
+// exactly one round-trip.
 func TestFetchFresh_BypassesFreshCacheThenThrottles(t *testing.T) {
 	t.Parallel()
 

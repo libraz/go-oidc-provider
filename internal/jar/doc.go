@@ -19,10 +19,12 @@
 //   - The internal JWKS cache used by the default JWKSResolver, which
 //     hardens the fetch with a hard timeout, a max-body cap, a strict
 //     content-type check, an SSRF deny-list (loopback / link-local /
-//     RFC 1918), and ETag-driven revalidation. Embedders that need to
-//     reach a private network for JWKS URLs MUST opt in explicitly via
-//     a future provider option (currently a TODO; the deny is hard-
-//     coded).
+//     RFC 1918), and ETag-driven revalidation. The deny-list is not
+//     configurable: a client-supplied JWKS URL is attacker-controlled
+//     input, so private-network reachability is refused rather than
+//     offered as a setting that a deployment could relax by accident.
+//     A client whose keyset lives on an internal host must be
+//     registered with an inline "jwks" instead of a "jwks_uri".
 //
 // The package is consumed from the /authorize handler (request /
 // request_uri) and the /par handler (request only). Callers obtain a

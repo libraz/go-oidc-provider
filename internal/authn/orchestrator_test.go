@@ -868,6 +868,14 @@ func TestTickObserverFanout(t *testing.T) {
 // through ContinueInput.Scratch on the matching submission. The
 // fixture also asserts that a successful Result clears State.FactorScratch
 // so a subsequent factor cannot accidentally inherit the stale slot.
+//
+// Tracks: CVE-2026-28787 (OneUptime) — a WebAuthn ceremony challenge was
+// handed to the client and accepted back at verification, so a captured
+// assertion replayed for as long as the attacker cared to retry. This
+// test pins the half of the defence that makes a ceremony single-use:
+// the per-ceremony blob lives only in server-side state, and the slot is
+// cleared the moment the factor produces a Result, so the same challenge
+// is never presented to a second verification.
 func TestTickFactorScratchRoundtrip(t *testing.T) {
 	t.Parallel()
 

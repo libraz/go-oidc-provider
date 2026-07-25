@@ -462,7 +462,10 @@ func TestVerify_RejectsHS256AsMalformed(t *testing.T) {
 // Tracks: CVE-2015-9235 (jsonwebtoken; root case),
 // CVE-2016-10555 (jwt-simple Node library), CVE-2024-54150 (cjwt),
 // CVE-2026-22817 / CVE-2026-27804 / CVE-2026-23552 (Hono cluster, 2026),
-// CVE-2026-33322 (MinIO OIDC). All share the same root cause: the
+// CVE-2026-33322 (MinIO OIDC), CVE-2026-48526 (PyJWT — an asymmetric
+// public JWK was accepted as the shared secret for HMAC verification,
+// this exact attack reached through the key-resolution API rather than
+// the alg header). All share the same root cause: the
 // verifier consults the token's alg header instead of pinning the
 // algorithm to the resolved key. RFC 8725 §2.1 prescribes the fix.
 //
