@@ -83,6 +83,10 @@ conformance/render/
 /tools/scenariotool/scenariotool
 /tools/stabilitytool/stabilitytool
 
+# The reference application builds its binary next to its source when run
+# with `go build` from sample/ rather than through docker compose.
+/sample/sample
+
 # Internal-only artefacts (kept locally, never committed). The OSS-facing
 # documentation lives in README.md, CHANGELOG.md, SECURITY.md, NOTICE,
 # and CONTRIBUTING.md. The entire backup/ tree is internal working

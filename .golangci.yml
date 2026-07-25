@@ -212,6 +212,17 @@ linters:
           - depguard
           - gochecknoglobals
           - gosec
+      # The reference application is an embedder, not library code. Two
+      # rules exist to keep the library routing through internal packages
+      # it cannot reach from outside the module: randomness through
+      # internal/keys (depguard) and wall-clock reads through
+      # internal/timex (forbidigo). An application calls crypto/rand and
+      # time.Now directly, which is what its readers should copy.
+      - path: sample/
+        linters:
+          - depguard
+          - forbidigo
+          - gochecknoglobals
       - path: cmd/op-demo/
         linters:
           - gochecknoinits

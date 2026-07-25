@@ -62,6 +62,12 @@ public_modules() {
       printf '%s\t%s\n' "$d" "example"
     fi
   done
+  # The reference application is its own module and carries the same build
+  # tag as the examples. It builds against the working tree, so a change
+  # that breaks an embedder-facing seam breaks it in the same commit.
+  if [ -f "$REPO_ROOT/sample/go.mod" ]; then
+    printf '%s\t%s\n' "$REPO_ROOT/sample" "example"
+  fi
 }
 
 # go_args_for echoes "-tags=<csv>" when the second argument is

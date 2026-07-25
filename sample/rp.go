@@ -1,0 +1,212 @@
+//go:build example
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"html"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
+)
+
+// relyingParty is the other half of the round-trip: a small OIDC client
+// that starts an authorization code flow with PKCE, exchanges the code,
+// verifies the ID token against the OP's JWKS, and shows the claims.
+//
+// It is written out rather than pulled from a helper because what an
+// embedder has to get right on this side — state, nonce, PKCE, and
+// verifying the token instead of decoding it — is part of what the sample
+// is meant to show.
+type relyingParty struct {
+	oauth    oauth2.Config
+	verifier *oidc.IDTokenVerifier
+	pending  *pendingFlows
+}
+
+// pendingFlow holds the per-attempt values that must survive the redirect
+// to the OP and be checked when the browser comes back.
+type pendingFlow struct {
+	Nonce    string
+	Verifier string
+	Expires  time.Time
+}
+
+type pendingFlows struct {
+	mu sync.Mutex
+	m  map[string]pendingFlow
+}
+
+func newPendingFlows() *pendingFlows {
+	return &pendingFlows{m: make(map[string]pendingFlow)}
+}
+
+// take returns the flow for state and removes it, so a state value cannot
+// be replayed against a second callback.
+func (p *pendingFlows) take(state string) (pendingFlow, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	f, ok := p.m[state]
+	delete(p.m, state)
+	if !ok || time.Now().After(f.Expires) {
+		return pendingFlow{}, false
+	}
+	return f, true
+}
+
+func (p *pendingFlows) put(state string, f pendingFlow) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.m[state] = f
+}
+
+func newRelyingParty(ctx context.Context, cfg config) (*relyingParty, error) {
+	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
+	if err != nil {
+		return nil, fmt.Errorf("discovery: %w", err)
+	}
+	return &relyingParty{
+		oauth: oauth2.Config{
+			ClientID:    cfg.ClientID,
+			Endpoint:    provider.Endpoint(),
+			RedirectURL: cfg.RedirectURI,
+			Scopes:      []string{oidc.ScopeOpenID, "profile", "email"},
+		},
+		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		pending:  newPendingFlows(),
+	}, nil
+}
+
+func (rp *relyingParty) routes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /{$}", rp.index)
+	mux.HandleFunc("GET /login", rp.login)
+	mux.HandleFunc("GET /callback", rp.callback)
+	mux.HandleFunc("GET /assets/app.css", rp.stylesheet)
+}
+
+func (rp *relyingParty) index(w http.ResponseWriter, _ *http.Request) {
+	rp.page(w, http.StatusOK, "Relying party",
+		`<p class="lead">This is a separate application that trusts the provider.
+Signing in here sends you to the provider and back.</p>
+<nav class="links"><a href="/login">Sign in with the provider</a></nav>`)
+}
+
+// login starts the flow. state, nonce, and the PKCE verifier are all
+// freshly random per attempt: state defends the callback against forgery,
+// nonce binds the ID token to this attempt, and PKCE binds the code to
+// this client.
+func (rp *relyingParty) login(w http.ResponseWriter, r *http.Request) {
+	state, err := newOpaqueID()
+	if err != nil {
+		http.Error(w, "cannot start login", http.StatusInternalServerError)
+		return
+	}
+	nonce, err := newOpaqueID()
+	if err != nil {
+		http.Error(w, "cannot start login", http.StatusInternalServerError)
+		return
+	}
+	verifier := oauth2.GenerateVerifier()
+	rp.pending.put(state, pendingFlow{
+		Nonce:    nonce,
+		Verifier: verifier,
+		Expires:  time.Now().Add(10 * time.Minute),
+	})
+	url := rp.oauth.AuthCodeURL(state,
+		oidc.Nonce(nonce),
+		oauth2.S256ChallengeOption(verifier),
+	)
+	http.Redirect(w, r, url, http.StatusFound)
+}
+
+// callback completes the flow. Every check below is one an embedder has to
+// perform: the state must match a flow this client started, the code
+// exchange must carry the PKCE verifier, the ID token must verify against
+// the OP's JWKS, and the nonce inside it must be the one sent.
+func (rp *relyingParty) callback(w http.ResponseWriter, r *http.Request) {
+	if errParam := r.URL.Query().Get("error"); errParam != "" {
+		rp.fail(w, http.StatusBadRequest, "The provider returned an error: "+errParam)
+		return
+	}
+	flow, ok := rp.pending.take(r.URL.Query().Get("state"))
+	if !ok {
+		rp.fail(w, http.StatusBadRequest, "That sign-in attempt is unknown or has expired.")
+		return
+	}
+	token, err := rp.oauth.Exchange(r.Context(), r.URL.Query().Get("code"),
+		oauth2.VerifierOption(flow.Verifier))
+	if err != nil {
+		rp.fail(w, http.StatusBadGateway, "Could not exchange the authorization code.")
+		return
+	}
+	rawID, ok := token.Extra("id_token").(string)
+	if !ok {
+		rp.fail(w, http.StatusBadGateway, "The token response carried no ID token.")
+		return
+	}
+	idToken, err := rp.verifier.Verify(r.Context(), rawID)
+	if err != nil {
+		rp.fail(w, http.StatusBadGateway, "The ID token did not verify.")
+		return
+	}
+	if idToken.Nonce != flow.Nonce {
+		rp.fail(w, http.StatusBadGateway, "The ID token was issued for a different attempt.")
+		return
+	}
+
+	var claims map[string]any
+	if err := idToken.Claims(&claims); err != nil {
+		rp.fail(w, http.StatusBadGateway, "The ID token claims could not be read.")
+		return
+	}
+	pretty, err := json.MarshalIndent(claims, "", "  ")
+	if err != nil {
+		rp.fail(w, http.StatusInternalServerError, "Could not render the claims.")
+		return
+	}
+	rp.page(w, http.StatusOK, "Signed in", fmt.Sprintf(
+		`<dl class="spec"><dt>subject</dt><dd class="mono-wrap">%s</dd></dl>
+<h2 class="subtitle">ID token claims</h2>
+<pre class="blob">%s</pre>
+<nav class="links"><a href="/">Start over</a></nav>`,
+		html.EscapeString(idToken.Subject), html.EscapeString(string(pretty))))
+}
+
+func (rp *relyingParty) fail(w http.ResponseWriter, status int, message string) {
+	rp.page(w, status, "Sign-in failed", fmt.Sprintf(
+		`<p class="flag flag-bad">%s</p><nav class="links"><a href="/">Try again</a></nav>`,
+		html.EscapeString(message)))
+}
+
+// page wraps a fragment in the same chrome the provider's pages use, so
+// the round-trip does not visibly change design language halfway through.
+// The fragment is composed here rather than templated because the relying
+// party has three screens and no user-supplied markup.
+func (rp *relyingParty) page(w http.ResponseWriter, status int, title, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "same-origin")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%s</title><link rel="stylesheet" href="/assets/app.css"></head>
+<body><header class="bar"><span class="mark">relying party</span><span class="rule"></span></header>
+<main class="sheet"><h1 class="title">%s</h1>%s</main></body></html>`,
+		html.EscapeString(title), html.EscapeString(title), body)
+}
+
+// stylesheet serves the shared styles on the relying party's origin too.
+// The two halves run on different ports, so the provider's copy is
+// cross-origin and style-src 'self' would refuse it.
+func (rp *relyingParty) stylesheet(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	_, _ = w.Write([]byte(appCSS))
+}

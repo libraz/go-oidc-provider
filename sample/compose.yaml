@@ -1,0 +1,69 @@
+# Local stack for the reference application.
+#
+# Three services on a private network:
+#
+#   * mysql  — the OP's durable substores and the application's own tables
+#   * redis  — the volatile substores (sessions, interactions, consumed JTIs)
+#   * app    — the application, serving the OP on 8080 and the relying party
+#              on 9090
+#
+# Neither datastore is published to the host; only the application container
+# exposes ports so a browser can drive the round-trip.
+#
+#   docker compose -f sample/compose.yaml up -d --build
+#   open http://127.0.0.1:8080/
+#   docker compose -f sample/compose.yaml down -v
+#
+# The engine versions match the ones the storage adapters are tested against,
+# so the application-level and adapter-level integration share one matrix.
+#
+# This stack is for local use. The application holds credentials and is not
+# built to be exposed to the internet.
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: sample
+      MYSQL_USER: sample
+      MYSQL_PASSWORD: sample
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-prootpw"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ..
+      dockerfile: sample/Dockerfile
+    environment:
+      ISSUER: http://127.0.0.1:8080
+      RP_BASE: http://127.0.0.1:9090
+      MYSQL_HOST: mysql:3306
+      MYSQL_USER: sample
+      MYSQL_PASS: sample
+      MYSQL_DB: sample
+      REDIS_DSN: redis://redis:6379/0
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
