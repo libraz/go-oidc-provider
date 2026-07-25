@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 
 // FuzzCertificateFromHeader exercises the proxy-header decode path of
 // [mtls.CertificateFromRequest] with arbitrary header payloads. The
-// harness asserts four structural invariants:
+// harness asserts five structural invariants:
 //
 //  1. CertificateFromRequest never panics, regardless of input.
 //  2. The result is exactly one of (cert, nil) or (nil, error) — never
@@ -32,6 +33,12 @@ import (
 //     mean the HTTP layer's wire-code mapping silently degrades.
 //  4. On success the returned cert MUST have a non-empty Raw byte slice
 //     so downstream thumbprint computation is well-defined.
+//  5. A payload carrying more than one PEM block MUST NOT succeed. The
+//     forwarding contract is one field, one certificate; anything else
+//     leaves the choice of leaf to whoever composed the header. The
+//     invariant is stated over the payload as received because none of
+//     the accepted decodings can erase a literal block marker — they
+//     only shorten the bytes around it.
 //
 // Seed rationale:
 //   - empty header: the not-present path; ErrNoClientCert.
@@ -39,6 +46,8 @@ import (
 //   - URL-encoded canonical PEM: nginx ssl_client_escaped_cert shape.
 //   - PEM with trailing garbage: ErrCertMalformed; ambiguous suffixes
 //     must not be ignored on a security-sensitive identity header.
+//   - two concatenated PEM blocks, raw and URL-encoded: the chain
+//     shape, from which no leaf may be selected.
 //   - PEM with a wrong type ("PRIVATE KEY"): ErrCertMalformed.
 //   - "not a pem block": ErrCertMalformed.
 //   - 4 KiB of "A": oversize garbage; must not allocate-and-crash.
@@ -70,6 +79,8 @@ func FuzzCertificateFromHeader(f *testing.F) {
 	f.Add(goodPEM)
 	f.Add(url.QueryEscape(goodPEM))
 	f.Add(goodPEM + "\ntrailing garbage\n")
+	f.Add(goodPEM + goodPEM)
+	f.Add(url.QueryEscape(goodPEM + goodPEM))
 	f.Add(wrongType)
 	f.Add("not a pem block")
 	f.Add(string(bigBlob))
@@ -111,6 +122,9 @@ func FuzzCertificateFromHeader(f *testing.F) {
 		}
 		if len(cert.Raw) == 0 {
 			t.Fatalf("CertificateFromRequest returned cert with empty Raw bytes")
+		}
+		if n := strings.Count(header, "-----BEGIN "); n > 1 {
+			t.Fatalf("CertificateFromRequest accepted a payload carrying %d PEM blocks", n)
 		}
 	})
 }

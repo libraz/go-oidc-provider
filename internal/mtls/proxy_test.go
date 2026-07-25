@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/internal/mtls"
@@ -21,6 +22,23 @@ func pemEncode(tb testing.TB, cert *x509.Certificate) string {
 	tb.Helper()
 	block := &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}
 	return string(pem.EncodeToMemory(block))
+}
+
+// parsePEMCert is the inverse of [pemEncode], used by the tests that
+// pin behaviour against certificates embedded verbatim in the source
+// rather than generated per run.
+func parsePEMCert(tb testing.TB, body string) *x509.Certificate {
+	tb.Helper()
+	block, _ := pem.Decode([]byte(body))
+	if block == nil {
+		tb.Fatalf("embedded PEM does not decode")
+		return nil // Fatalf stops the goroutine; the return is for static analysis.
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		tb.Fatalf("ParseCertificate: %v", err)
+	}
+	return cert
 }
 
 // mustParsePrefixes is the test-side wrapper around
@@ -96,21 +114,39 @@ func TestCertificateFromRequest_HeaderPath(t *testing.T) {
 	}
 }
 
-// TestCertificateFromRequest_HeaderURLEncoded accepts a percent-
-// encoded payload (the shape nginx ssl_client_escaped_cert emits).
+// TestCertificateFromRequest_HeaderURLEncoded accepts an encoded
+// payload under both conventions a proxy may use. nginx
+// ssl_client_escaped_cert percent-escapes everything including the
+// delimiter-line spaces, while a form-encoding hop writes those spaces
+// as "+" and the base64 body's own "+" as "%2B". The two differ only
+// in how "+" is read, and the certificate MUST come back unchanged
+// either way — a decoder that resolved "+" the wrong way would hand
+// back different bytes than the proxy verified.
 func TestCertificateFromRequest_HeaderURLEncoded(t *testing.T) {
 	t.Parallel()
 
-	cert := generateLeaf(t)
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
-	req.Header.Set("X-Client-Cert", url.QueryEscape(pemEncode(t, cert)))
-
-	got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
-	if err != nil {
-		t.Fatalf("CertificateFromRequest: %v", err)
+	// The embedded leaf carries "+" inside its base64 body, which is
+	// what makes the two conventions distinguishable at all.
+	cert := parsePEMCert(t, smugglingLeadPEM)
+	encodings := map[string]string{
+		"percent encoded": url.PathEscape(smugglingLeadPEM),
+		"form encoded":    url.QueryEscape(smugglingLeadPEM),
 	}
-	if mtls.Thumbprint(got) != mtls.Thumbprint(cert) {
-		t.Errorf("returned cert thumbprint differs from input")
+	for name, payload := range encodings {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+			req.Header.Set("X-Client-Cert", payload)
+
+			got, err := mtls.CertificateFromRequest(req, mtls.ProxyConfig{HeaderName: "X-Client-Cert", TrustedProxies: mustParsePrefixes(t, "0.0.0.0/0", "::/0")})
+			if err != nil {
+				t.Fatalf("CertificateFromRequest: %v", err)
+			}
+			if mtls.Thumbprint(got) != mtls.Thumbprint(cert) {
+				t.Errorf("returned cert thumbprint differs from input")
+			}
+		})
 	}
 }
 
@@ -240,6 +276,93 @@ func TestCertificateFromRequest_TrustedHeaderRejectsAmbiguity(t *testing.T) {
 			_, err := mtls.CertificateFromRequest(req, cfg)
 			if !errors.Is(err, mtls.ErrCertMalformed) {
 				t.Errorf("err=%v want ErrCertMalformed", err)
+			}
+		})
+	}
+}
+
+// smugglingLeadPEM and smugglingTrailPEM are a fixed pair of
+// self-signed leaves that reproduce a chain-selection defect the
+// randomly generated pair in
+// [TestCertificateFromRequest_TrustedHeaderRejectsAmbiguity] only hits
+// by chance. The pair is embedded verbatim because the property depends
+// on the exact base64 bodies:
+//
+//   - the lead certificate's body contains "+" characters in a count
+//     that is not a multiple of four, so rewriting them to spaces (what
+//     form-decoding does) leaves a base64 body whose length is no
+//     longer a multiple of four and therefore fails to decode;
+//   - the trailing certificate's body contains no "+" at all, so the
+//     same rewrite leaves it byte-identical and perfectly decodable.
+//
+// Concatenated, the two put the decoder in the state that matters: the
+// leading block is unparseable and the trailing one is not. A decoder
+// that skips undecodable blocks resolves that payload to the SECOND
+// certificate and reports no remaining data, which would let whoever
+// composed the header choose which leaf the OP binds — the exact
+// ambiguity the forwarding contract exists to deny.
+const (
+	smugglingLeadPEM = `-----BEGIN CERTIFICATE-----
+MIIBOTCB4aADAgECAgEBMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMTEnJwLnRlc3Rr
+aXQuaW52YWxpZDAeFw0yNDAxMDEwMDAwMDBaFw0zMDAxMDEwMDAwMDBaMB0xGzAZ
+BgNVBAMTEnJwLnRlc3RraXQuaW52YWxpZDBZMBMGByqGSM49AgEGCCqGSM49AwEH
+A0IABJ+8af9Zc/5a4Vrnu4zHv5p2kuZVCcXaWepXruN2tjXHVrOVFFWTrLphnMAF
+GHMduldCfNAE5aSmXCt/dIYJYwqjEjAQMA4GA1UdDwEB/wQEAwIHgDAKBggqhkjO
+PQQDAgNHADBEAiBSaU+J5RljnMbLj/Cr7IbrCOjQOZtU2YTuVYazSWtaXAIgSLoe
+PfS7I8W0dZUN8szxK4iSiTTTuCW2CMZU26cQmrc=
+-----END CERTIFICATE-----
+`
+	smugglingTrailPEM = `-----BEGIN CERTIFICATE-----
+MIIBOjCB4aADAgECAgEBMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMTEnJwLnRlc3Rr
+aXQuaW52YWxpZDAeFw0yNDAxMDEwMDAwMDBaFw0zMDAxMDEwMDAwMDBaMB0xGzAZ
+BgNVBAMTEnJwLnRlc3RraXQuaW52YWxpZDBZMBMGByqGSM49AgEGCCqGSM49AwEH
+A0IABKk2ZJufYyMEUrOLQ8V0qf8cD/lAn3ooIHeL81NOOUw4aPcEe5Q0GXqn6Bnf
+Apenbeoat9W68ZKtpxqjCe9b0wyjEjAQMA4GA1UdDwEB/wQEAwIHgDAKBggqhkjO
+PQQDAgNIADBFAiBBOWNXd4IwJMwBAc63tlFogfv9DXfXAecvh/rFeUaAYgIhANGh
+7XfO6H/iI/wA16uiskOQnCLlL0va22Ju4KsNjPq5
+-----END CERTIFICATE-----
+`
+)
+
+// TestCertificateFromRequest_ChainNeverSelectsTrailingCert pins the
+// property against the fixed pair described above: a two-certificate
+// payload is malformed, and in particular the trailing certificate is
+// never what comes back. Both assertions are made because they fail
+// differently — a returned error says the payload was rejected, while
+// the thumbprint check says WHICH leaf a regression would have handed
+// to RFC 8705 binding.
+func TestCertificateFromRequest_ChainNeverSelectsTrailingCert(t *testing.T) {
+	t.Parallel()
+
+	trail := parsePEMCert(t, smugglingTrailPEM)
+	cfg := mtls.ProxyConfig{
+		HeaderName:     "X-Client-Cert",
+		TrustedProxies: mustParsePrefixes(t, "192.0.2.0/24"),
+	}
+
+	// Every encoding a proxy might have applied to the same chain. The
+	// payload is malformed under all of them; none may resolve to the
+	// trailing leaf.
+	chain := smugglingLeadPEM + smugglingTrailPEM
+	payloads := map[string]string{
+		"raw":              chain,
+		"percent encoded":  url.PathEscape(chain),
+		"form encoded":     url.QueryEscape(chain),
+		"plus as space":    strings.ReplaceAll(chain, "+", " "),
+		"trailing newline": chain + "\n",
+	}
+	for name, payload := range payloads {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://op.example/token", http.NoBody)
+			req.Header[http.CanonicalHeaderKey("X-Client-Cert")] = []string{payload}
+			got, err := mtls.CertificateFromRequest(req, cfg)
+			if !errors.Is(err, mtls.ErrCertMalformed) {
+				t.Errorf("err=%v want ErrCertMalformed", err)
+			}
+			if got != nil && mtls.Thumbprint(got) == mtls.Thumbprint(trail) {
+				t.Errorf("returned the trailing certificate of a forwarded chain")
 			}
 		})
 	}

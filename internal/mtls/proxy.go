@@ -35,9 +35,9 @@ type ProxyConfig struct {
 	//
 	// Whether the header value is URL-encoded depends on the proxy.
 	// Common deployments (nginx ssl_client_escaped_cert) emit
-	// percent-encoded PEM with newlines preserved; the package
-	// accepts both encoded and raw PEM by trying URL-decoding first
-	// and falling back to the raw payload.
+	// percent-encoded PEM with newlines preserved; the package accepts
+	// raw PEM as forwarded and falls back to percent-decoding only
+	// when the raw payload does not already hold one certificate.
 	//
 	// The admitted proxy MUST strip any inbound value and emit exactly
 	// one field containing exactly one CERTIFICATE PEM block. Duplicate
@@ -259,16 +259,33 @@ func certFromTLSHandshake(r *http.Request) *x509.Certificate {
 
 // parseHeaderCert decodes the single-certificate PEM payload commonly
 // forwarded by reverse proxies. The payload may be raw PEM (Apache
-// SSLProxyVerify) or URL-encoded (nginx ssl_client_escaped_cert).
+// SSLProxyVerify), percent-encoded PEM (nginx ssl_client_escaped_cert),
+// or form-encoded PEM, where the delimiter-line spaces arrive as "+".
 //
-// The function tries the raw payload first because [url.QueryUnescape]
-// silently rewrites "+" to " " — which would corrupt a base64 PEM
-// payload that happens to contain "+" characters. URL-decoding is
-// only attempted as a fallback when the raw payload does not contain
-// a valid standalone certificate PEM block.
+// The decoders are attempted in order of how much they rewrite the
+// payload, and each attempt is validated in full by [decodePEMCert]:
+//
+//  1. the raw payload, so a proxy that forwards PEM verbatim is never
+//     reinterpreted;
+//  2. [url.PathUnescape], which resolves percent-escapes and leaves
+//     "+" alone;
+//  3. [url.QueryUnescape], which additionally rewrites "+" to a space.
+//
+// Step 3 is last because "+" is a base64 alphabet character, so the
+// rewrite changes the certificate bytes of any payload that was not
+// form-encoded. That rewrite is not merely lossy: [pem.Decode] strips
+// spaces out of the base64 body, so a corrupted block fails to decode
+// and the decoder silently advances to the next block in the payload.
+// [decodePEMCert] rejects multi-block payloads outright, which closes
+// that path independently of the decoder that produced them.
 func parseHeaderCert(raw string) (*x509.Certificate, error) {
 	if cert, err := decodePEMCert(raw); err == nil {
 		return cert, nil
+	}
+	if decoded, err := url.PathUnescape(raw); err == nil {
+		if cert, cerr := decodePEMCert(decoded); cerr == nil {
+			return cert, nil
+		}
 	}
 	decoded, err := url.QueryUnescape(raw)
 	if err != nil {
@@ -277,14 +294,30 @@ func parseHeaderCert(raw string) (*x509.Certificate, error) {
 	return decodePEMCert(decoded)
 }
 
+// pemBlockBegin opens every PEM block regardless of its type. The
+// marker cannot occur inside a base64 body, so counting it is an exact
+// block census of the payload.
+const pemBlockBegin = "-----BEGIN "
+
 // decodePEMCert is the strict single-shot PEM → x509 path. It is split out so
-// [parseHeaderCert] can attempt the raw and URL-decoded payloads in
+// [parseHeaderCert] can attempt the raw and decoded payloads in
 // sequence without nesting decoder state. Only surrounding ASCII/Unicode
 // whitespace is tolerated; appended certificates or other data are malformed.
+//
+// The block census runs before decoding rather than relying on the
+// remainder [pem.Decode] reports. A block whose base64 body does not
+// decode is skipped by the decoder, which then returns the FOLLOWING
+// block with an empty remainder — so a payload carrying an undecodable
+// leaf ahead of a well-formed certificate would otherwise resolve to
+// the trailing one, letting the forwarding channel choose which leaf
+// the OP binds.
 func decodePEMCert(raw string) (*x509.Certificate, error) {
 	trimmed := strings.TrimSpace(raw)
 	if !strings.HasPrefix(trimmed, "-----BEGIN CERTIFICATE-----") {
 		return nil, fmt.Errorf("%w: header payload must start with a CERTIFICATE PEM block", ErrCertMalformed)
+	}
+	if n := strings.Count(trimmed, pemBlockBegin); n != 1 {
+		return nil, fmt.Errorf("%w: header payload carries %d PEM blocks, want exactly one", ErrCertMalformed, n)
 	}
 	block, rest := pem.Decode([]byte(trimmed))
 	if block == nil {
