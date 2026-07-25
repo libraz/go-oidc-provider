@@ -30,6 +30,18 @@ project-specific scopes:
 - DB and external IdP mocks are forbidden. Use the in-memory reference
   store (`op/storeadapter/inmem`) or testcontainers-based integration
   tests.
+- A test that stores records stamped with a fixed date MUST give the store
+  the same clock (`inmem.WithClock`). Left on the system clock, those records
+  expire once real time passes the pinned date and the test starts failing on
+  a day nobody changed anything.
+- A storage backend — in this repository or your own — is validated with the
+  contract harness in `op/store/contract`, which also skips the optional
+  extensions a backend chooses not to implement. New substore behaviour is
+  added to the harness so every backend inherits the check.
+- A new store capability follows the placement rule in the `op/store` package
+  documentation: core interface only if every OP needs it, otherwise an opt-in
+  extension verified at `op.New`. Extend the requirement matrix in the same
+  place when you add one.
 
 ## RFC references
 

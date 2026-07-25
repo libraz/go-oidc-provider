@@ -142,6 +142,16 @@ Bring your own backend by implementing the substore interfaces in
 | `redis` | `op/storeadapter/redis` | Volatile substores (`InteractionStore`, `ConsumedJTIStore`, `SessionStore`). **Sub-module.** Redis TTL governs sessions; compose with a durable backend for grants and credentials. Refuses to start without TLS (`rediss://`) and AUTH unless `WithDevModeAllowPlaintext` is set explicitly. |
 | `composite` | `op/storeadapter/composite` | Hot/cold splitter — durable substores to one backend, volatile to another, while enforcing the transactional-cluster invariant. |
 
+**Verify your backend against the contract suite.**
+[`op/store/contract`](op/store/contract) is a reusable conformance harness, not
+an internal test: point it at your backend and it exercises the semantics the
+godoc declares — sentinel errors, single-use consumption, hash-on-store for
+bearer secrets — and skips each optional extension you have not implemented.
+The bundled adapters are validated by the same suite. Which extensions the OP
+requires, and what turns each requirement on, is tabulated in the
+[`op/store` package documentation](https://pkg.go.dev/github.com/libraz/go-oidc-provider/op/store);
+a missing required extension is rejected by `op.New` rather than at request time.
+
 **Authentication-factor stores are embedder-owned.** The adapters above persist
 the OIDC/OAuth substores. The factors a login flow can require — TOTP, passkey,
 recovery codes, email OTP, and the brute-force lockout counter — are separate

@@ -10,10 +10,60 @@
 // Each substore interface owns a single record kind and exposes between one
 // and five methods (typically Save / Find / Consume or Save / Find / Delete).
 // This makes the obligations on a backend implementor explicit and keeps each
-// interface small enough to satisfy without a code generator. Write-side
-// capabilities that are not needed by every backend (for example, dynamic
-// client registration) live on opt-in extension interfaces such as
-// [ClientRegistry] rather than being bolted onto the core read-only contract.
+// interface small enough to satisfy without a code generator.
+//
+// # Capability placement
+//
+// Where a capability lives decides whether adding a feature to the OP breaks
+// every existing backend, so the placement rule is normative:
+//
+//   - A capability belongs on a core substore interface if and only if every
+//     OP the library can construct requires it. [RefreshTokenStore.RevokeByGrant]
+//     qualifies: replay-detection cascades and grant-management revocation run
+//     regardless of which grants or features are enabled.
+//   - Every other capability belongs on an opt-in extension interface that
+//     embeds its substore and is detected by runtime type assertion. Dynamic
+//     client registration ([ClientRegistry]) and the back-channel logout
+//     audience view ([GrantClientLister]) are extensions for this reason.
+//
+// An extension whose absence would break a configured flow MUST be verified at
+// op.New, not discovered at request time. The condition that makes an extension
+// mandatory is derived from the grant set, the feature set, and the options
+// already present; no extension gets an option of its own, so there is one
+// predicate per capability rather than two that can disagree.
+//
+// # Capability requirement matrix
+//
+// Extensions that op.New requires, and what turns the requirement on:
+//
+//	Extension                  Asserted on            Required when
+//	-------------------------  ---------------------  --------------------------------
+//	Transactional              Store                  a grant mounts /authorize
+//	InteractionStoreCAS        Store.Interactions()   a grant mounts /authorize
+//	GrantClientLister          Store.Grants()         a grant mounts /authorize
+//	RefreshRetryResponseStore  Store.RefreshTokens()  grant.RefreshToken is enabled
+//	                                                  and cookie keys are configured
+//	ClientRegistry             Store                  op.WithDynamicRegistration
+//
+// Only grant.AuthorizationCode currently mounts /authorize. When one of these
+// is missing, op.New returns a configuration error naming both the interface
+// and the condition, so a backend author can act on the message alone.
+//
+// Extensions that stay optional, and what the OP does without them:
+//
+//	Extension                Asserted on            Fallback when absent
+//	-----------------------  ---------------------  ------------------------------------
+//	StaticClientReconciler   Store                  seeded static clients are not
+//	                                                reconciled against the backend
+//	RevokeByClient           Store.RefreshTokens()  deleting a dynamically registered
+//	                                                client skips the bulk credential
+//	                                                cascade for that substore
+//	RefreshChainResolver     Store.RefreshTokens()  chain nodes resolve through Find
+//	                                                instead of the stored-handle lookup
+//
+// A backend can verify its own placement decisions against
+// [github.com/libraz/go-oidc-provider/op/store/contract], which exercises the
+// core contract and skips each extension the backend does not implement.
 //
 // # Atomic operations and authorization transactions
 //

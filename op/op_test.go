@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/store"
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
@@ -126,6 +127,20 @@ type storeWithoutGrantClientLister struct{ stubStore }
 
 func (storeWithoutGrantClientLister) Grants() store.GrantStore {
 	return grantStoreWithoutClientLister{GrantStore: stubGrantStore{}}
+}
+
+// refreshStoreWithoutRetry embeds the store.RefreshTokenStore interface so the
+// optional retry-response methods stay out of the concrete method set. A value
+// of this type satisfies store.RefreshTokenStore but not
+// store.RefreshRetryResponseStore.
+type refreshStoreWithoutRetry struct {
+	store.RefreshTokenStore
+}
+
+type storeWithoutRefreshRetry struct{ stubStore }
+
+func (storeWithoutRefreshRetry) RefreshTokens() store.RefreshTokenStore {
+	return refreshStoreWithoutRetry{RefreshTokenStore: stubRefreshStore{}}
 }
 
 type stubAccessTokenRegistry struct{}
@@ -280,6 +295,18 @@ func (stubRefreshStore) RevokeChain(context.Context, string) error {
 
 func (stubRefreshStore) RevokeByGrant(context.Context, string) error {
 	return nil
+}
+
+// SaveRotationWithRetry and LoadRetryResponse make stubRefreshStore satisfy
+// store.RefreshRetryResponseStore. op.New requires the extension once the
+// refresh_token grant and cookie keys are both configured, which is the shape
+// most tests in this package build.
+func (stubRefreshStore) SaveRotationWithRetry(context.Context, *store.RefreshToken, []byte) error {
+	return store.ErrNotFound
+}
+
+func (stubRefreshStore) LoadRetryResponse(context.Context, string) ([]byte, error) {
+	return nil, store.ErrNotFound
 }
 
 type stubGrantStore struct{}
@@ -465,6 +492,44 @@ func TestNew_RejectsAuthorizationCodeStoreWithoutGrantClientLister(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "GrantClientLister") {
 		t.Errorf("err = %v, want it to mention GrantClientLister", err)
+	}
+}
+
+// The refresh rotation path seals a retry response whenever it holds
+// encryption keys, and those keys are the cookie keys. A backend missing the
+// extension used to construct cleanly and then fail every rotation at request
+// time, so the rejection has to happen here.
+func TestNew_RejectsRefreshGrantStoreWithoutRetryResponses(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutRefreshRetry{}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+	)
+	if err == nil {
+		t.Fatal("expected configuration error for missing RefreshRetryResponseStore capability")
+	}
+	if !strings.Contains(err.Error(), "RefreshRetryResponseStore") {
+		t.Errorf("err = %v, want it to mention RefreshRetryResponseStore", err)
+	}
+}
+
+// Dropping the refresh_token grant removes the rotation path entirely, so the
+// same backend must construct without complaint.
+func TestNew_AllowsMissingRetryResponsesWithoutRefreshGrant(t *testing.T) {
+	t.Parallel()
+
+	_, err := op.New(
+		op.WithIssuer(validIssuer),
+		op.WithStore(storeWithoutRefreshRetry{}),
+		op.WithKeyset(validKeyset(t)),
+		op.WithCookieKeys(newRandomCookieKey(t)),
+		op.WithGrants(grant.AuthorizationCode),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error without the refresh_token grant: %v", err)
 	}
 }
 

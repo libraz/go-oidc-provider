@@ -154,6 +154,16 @@ OpenID Connect Core §15.1 は RS256 の実装を必須としているため、�
 | `redis` | `op/storeadapter/redis` | 揮発性のサブストア（`InteractionStore` / `ConsumedJTIStore` / `SessionStore`）向け。**別モジュール。** Session は Redis TTL に従うため、grant / credential は durable backend と合成する。TLS（`rediss://`）と AUTH が無いと起動を拒否する（明示的な `WithDevModeAllowPlaintext` のみ例外）。 |
 | `composite` | `op/storeadapter/composite` | ホット/コールドの振り分け役。永続サブストアを一方のバックエンド、揮発性を他方へ振り分けつつ、トランザクショナルクラスタの不変条件を強制する。 |
 
+**自作バックエンドはコントラクトスイートで検証できます。**
+[`op/store/contract`](op/store/contract) は内部テストではなく再利用可能な適合
+ハーネスです。自作バックエンドを渡すと、godoc が規定するセマンティクス
+（sentinel エラー、単回消費、bearer secret のハッシュ保存）を検証し、実装して
+いない任意拡張はスキップします。同梱アダプタもこのスイートで検証しています。
+OP がどの拡張を要求し、その要求が何によって有効になるかは
+[`op/store` のパッケージドキュメント](https://pkg.go.dev/github.com/libraz/go-oidc-provider/op/store)
+に表としてまとめてあります。必須拡張が欠けている場合はリクエスト時ではなく
+`op.New` が構築時に拒否します。
+
 **認証ファクタのストアは組み込み側が所有します。** 上記のアダプタが永続化
 するのは OIDC/OAuth のサブストアです。ログインフローが要求しうるファクタ
 （TOTP・パスキー・リカバリコード・メール OTP・ブルートフォース対策の

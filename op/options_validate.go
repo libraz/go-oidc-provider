@@ -1080,8 +1080,38 @@ func (c *config) validateStoreCapabilities() error {
 			}
 		}
 	}
+	if err := c.validateRefreshRetryStoreCapability(); err != nil {
+		return err
+	}
 	if grantsRequireAuthorizeEndpoint(c.grants) {
 		return c.validateAuthorizeEndpointStoreCapabilities()
+	}
+	return nil
+}
+
+// validateRefreshRetryStoreCapability enforces [store.RefreshRetryResponseStore]
+// on the refresh substore whenever the token endpoint will actually reach for
+// it. The refresh rotation path persists a sealed retry response when it holds
+// encryption keys, and those keys are the cookie keys, so the capability is
+// mandatory exactly when the refresh_token grant is enabled and cookie keys are
+// configured. Without this check the shortfall surfaces as a request-time
+// failure on every rotation rather than at construction.
+func (c *config) validateRefreshRetryStoreCapability() error {
+	if !slices.Contains(c.grants, grant.RefreshToken) || len(c.cookieKeys) == 0 {
+		return nil
+	}
+	refreshTokens := c.store.RefreshTokens()
+	if isNilLike(refreshTokens) {
+		return nil
+	}
+	if _, ok := refreshTokens.(store.RefreshRetryResponseStore); !ok {
+		return &Error{
+			Code: codeConfiguration,
+			Description: "Store.RefreshTokens() must implement " +
+				"store.RefreshRetryResponseStore because grant.RefreshToken is " +
+				"enabled and cookie keys are configured, which makes the token " +
+				"endpoint persist durable refresh retry responses",
+		}
 	}
 	return nil
 }
