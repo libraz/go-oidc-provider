@@ -217,8 +217,15 @@ func startExample(t *testing.T, dir string) (func(), string) {
 // discovery succeeds, so a ready RP implies a ready OP.
 func waitForReady(t *testing.T, url string) {
 	t.Helper()
+	waitForReadyWithin(t, url, 20*time.Second)
+}
+
+// waitForReadyWithin is waitForReady with an explicit budget, for callers
+// whose subject boots behind containers rather than a single go build.
+func waitForReadyWithin(t *testing.T, url string, timeout time.Duration) {
+	t.Helper()
 	client := &http.Client{Timeout: time.Second}
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url) //nolint:noctx // short-lived readiness poll
 		if err == nil {
@@ -235,6 +242,15 @@ func waitForReady(t *testing.T, url string) {
 // newBrowserCtx launches a headless Chrome and returns a context bounded
 // by a 60s deadline plus a single cancel that tears the whole stack down.
 func newBrowserCtx(chrome string) (context.Context, context.CancelFunc) {
+	return newBrowserCtxWithin(chrome, 60*time.Second)
+}
+
+// newBrowserCtxWithin is newBrowserCtx with an explicit budget. The deadline
+// has to be set here rather than layered on by the caller: wrapping the
+// returned context in a longer WithTimeout does not extend the shorter
+// parent, so a walkthrough that needs more than a minute has to say so
+// before Chrome starts.
+func newBrowserCtxWithin(chrome string, timeout time.Duration) (context.Context, context.CancelFunc) {
 	allocOpts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath(chrome),
 		chromedp.Flag("no-sandbox", true),
@@ -242,7 +258,7 @@ func newBrowserCtx(chrome string) (context.Context, context.CancelFunc) {
 	)
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), allocOpts...)
 	ctx, cancelCtx := chromedp.NewContext(allocCtx)
-	ctx, cancelTimeout := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(ctx, timeout)
 	return ctx, func() {
 		cancelTimeout()
 		cancelCtx()
