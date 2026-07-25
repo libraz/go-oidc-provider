@@ -129,6 +129,18 @@ func TestRedis_Sessions(t *testing.T) {
 	contract.RunSessions(t, newRedisFactory(t))
 }
 
+// TestRedis_SubstoreNamespace runs the substore-namespace contract
+// subgroup against a real Redis 7 instance. Redis is the backend where
+// a shared keyspace is easiest to introduce by accident — every substore
+// writes into one flat key namespace under a common prefix — so the
+// disjointness of the interaction, session and consumed-JTI key shapes
+// is asserted against the live engine rather than inferred from the key
+// builders.
+func TestRedis_SubstoreNamespace(t *testing.T) {
+	t.Parallel()
+	contract.RunSubstoreNamespace(t, newRedisFactory(t))
+}
+
 // TestRedis_SessionStore_ConcurrentRotate pins the rotation
 // post-condition declared on [store.SessionStore] directly against the
 // Redis adapter. The helper is also exercised via [contract.RunSessions]

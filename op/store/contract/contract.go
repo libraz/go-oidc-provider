@@ -87,6 +87,7 @@ func Run(t *testing.T, f Factory) {
 		{"MetadataStore", metadataStoreCases},
 		{"UserStore", userStoreCases},
 		{"Transactional", transactionalCases},
+		{"SubstoreNamespace", namespaceCases},
 	}
 
 	for _, g := range groups {
@@ -132,6 +133,19 @@ func RunSessions(t *testing.T, f Factory) {
 	t.Run("SessionStore", func(t *testing.T) {
 		t.Parallel()
 		runGroup(t, f, sessionCases)
+	})
+}
+
+// RunSubstoreNamespace runs only the substore-namespace subgroup against
+// the supplied factory. Partial-coverage backends call it in lieu of
+// [Run]: the cases skip the substores the backend returns nil for, so a
+// volatile cache hosting sessions, interactions and consumed JTIs still
+// gets its keyspace disjointness checked across the three it does host.
+func RunSubstoreNamespace(t *testing.T, f Factory) {
+	t.Helper()
+	t.Run("SubstoreNamespace", func(t *testing.T) {
+		t.Parallel()
+		runGroup(t, f, namespaceCases)
 	})
 }
 
