@@ -231,6 +231,14 @@ type PrimaryPasskey struct {
 	// the registration-time check; a non-empty slice rejects any
 	// registration whose authenticator is not in the set. The
 	// allowlist also drives the [AAGUIDReCheckOnAssertion] gate.
+	//
+	// Setting this switches the ceremony to "direct" attestation
+	// conveyance, because an AAGUID reported without attestation is
+	// self-asserted and could name any model. Registrations whose
+	// attestation does not vouch for the model — self-attested or
+	// unattested — are refused rather than matched against the list.
+	// Expect a user-agent attestation prompt on registration, and
+	// leave the field empty if that disclosure is not wanted.
 	AAGUIDAllowlist []string
 
 	// AAGUIDReCheckOnAssertion enables M-AUTHN-2: the verifier

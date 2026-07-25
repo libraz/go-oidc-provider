@@ -224,6 +224,7 @@ func TestAAGUIDAllowed_ConfiguredAllowlistGates(t *testing.T) {
 
 	cfg := validConfig()
 	cfg.AAGUIDAllowlist = []string{"FBFC3007-154E-4ECC-8C0B-6E020557D7BD"}
+	cfg.AttestationPreference = protocol.PreferDirectAttestation
 	v, err := passkey.New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

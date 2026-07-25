@@ -79,10 +79,14 @@ type Config struct {
 	// registration ceremony will accept. An empty / nil slice
 	// disables the check (every AAGUID is allowed); a non-empty
 	// slice rejects any registration whose authenticator is not in
-	// the set. The allowlist is consulted by
-	// [Verifier.FinishRegistration] after the upstream library
-	// validates the attestation statement so a forged AAGUID
-	// (with a real attestation key) cannot bypass the check.
+	// the set.
+	//
+	// A non-empty allowlist requires [AttestationPreference] to be
+	// [protocol.PreferDirectAttestation]; [New] refuses any other
+	// pairing. [Verifier.FinishRegistration] additionally refuses a
+	// registration whose attestation does not vouch for the model
+	// (self attestation or none), because the allowlist would
+	// otherwise be comparing an identifier the caller chose.
 	//
 	// AAGUID strings are case-insensitive and tolerate canonical
 	// UUID formatting only ("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx").
@@ -171,6 +175,19 @@ func New(cfg Config) (*Verifier, error) {
 	allow, err := normaliseAAGUIDAllowlist(cfg.AAGUIDAllowlist)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	// An AAGUID allowlist only means anything when the attestation
+	// statement vouches for the AAGUID. Under "none" conveyance the
+	// value is self-asserted by whatever produced the response, so the
+	// allowlist would decide policy on an attacker-chosen string. The
+	// pairing is enforced here rather than documented as a caller
+	// obligation: a deployment that gets it wrong reads as "only
+	// approved authenticator models may register" while accepting any.
+	if len(allow) > 0 && pref != protocol.PreferDirectAttestation {
+		return nil, fmt.Errorf(
+			"%w: AAGUIDAllowlist requires AttestationPreference %q (got %q); "+
+				"under any other conveyance the AAGUID is self-asserted and the allowlist cannot be enforced",
+			ErrInvalidConfig, protocol.PreferDirectAttestation, pref)
 	}
 	ttl := cfg.SessionTTL
 	if ttl <= 0 {

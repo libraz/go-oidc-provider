@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/go-webauthn/webauthn/metadata"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 )
@@ -158,12 +159,25 @@ func (v *Verifier) FinishRegistration(_ context.Context, session *Session, subje
 		}
 	}
 
-	// Enforce the AAGUID allowlist (M-AUTHN-2). The check runs
-	// after CreateCredential so the upstream library's attestation
-	// validation has already decided the AAGUID is authentic; an
-	// empty allowlist on the Verifier short-circuits to "any AAGUID
-	// allowed" so embedders that did not configure
-	// [Config.AAGUIDAllowlist] are unaffected.
+	// Enforce the AAGUID allowlist (M-AUTHN-2). An empty allowlist on
+	// the Verifier short-circuits to "any AAGUID allowed" so embedders
+	// that did not configure [Config.AAGUIDAllowlist] are unaffected.
+	//
+	// When an allowlist IS configured the AAGUID must first be shown to
+	// be authentic. Requesting "direct" conveyance only asks for an
+	// attestation statement; it does not guarantee one that vouches for
+	// the authenticator model. A response carrying self attestation
+	// ("basic_surrogate") or no attestation at all is signed by the
+	// credential's own key, which says nothing about which model
+	// produced it — so the AAGUID is a value the caller chose. Checking
+	// such a value against the allowlist would let any software
+	// authenticator claim the identifier of a certified hardware key,
+	// which is the whole thing the allowlist exists to prevent.
+	if len(v.aaguidAllowlist) > 0 {
+		if err := requireVouchedAttestation(wc.AttestationType); err != nil {
+			return nil, err
+		}
+	}
 	if !v.AAGUIDAllowed(wc.Authenticator.AAGUID) {
 		return nil, fmt.Errorf("%w: AAGUID %x not in allowlist", ErrAttestationInvalid, wc.Authenticator.AAGUID)
 	}
@@ -171,6 +185,38 @@ func (v *Verifier) FinishRegistration(_ context.Context, session *Session, subje
 	out := fromWebauthnCredential(*wc)
 	out.CreatedAt = v.clock().Now().UTC()
 	return &out, nil
+}
+
+// requireVouchedAttestation reports whether an attestation of the given
+// FIDO attestation type establishes the authenticator model, and so
+// whether the AAGUID it carried may be compared against an allowlist.
+//
+// The vocabulary is the one the upstream library reports in
+// [webauthn.Credential.AttestationType], per the FIDO Metadata
+// Statement ATTESTATION_ constants. The distinction that matters is
+// whether some party other than the credential itself signed for the
+// model:
+//
+//   - "basic_full", "attca", "anonca", "ecdaa" — an attestation key or
+//     CA outside the credential vouches for the authenticator, so the
+//     AAGUID in the authenticator data is authenticated.
+//   - "basic_surrogate" — self attestation: the attestation statement
+//     is signed by the newly created credential key itself, so it
+//     proves possession of that key and nothing about the hardware.
+//   - "none" — no attestation statement at all.
+//
+// Anything unrecognised is refused rather than admitted, so a future
+// library release that introduces another weak type does not silently
+// widen the policy.
+func requireVouchedAttestation(attestationType string) error {
+	switch metadata.AuthenticatorAttestationType(attestationType) {
+	case metadata.BasicFull, metadata.AttCA, metadata.AnonCA, metadata.Ecdaa:
+		return nil
+	default:
+		return fmt.Errorf(
+			"%w: attestation type %q does not authenticate the AAGUID, so it cannot satisfy the allowlist",
+			ErrAttestationInvalid, attestationType)
+	}
 }
 
 // buildExclusions projects the caller-supplied credentials onto the

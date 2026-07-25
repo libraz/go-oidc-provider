@@ -91,6 +91,17 @@ func DecodeSessionForTest(s Session) webauthn.SessionData {
 // assert the default without duplicating the constant.
 const DefaultSessionTTLForTest = defaultSessionTTL
 
+// RequireVouchedAttestationForTest exposes the gate
+// [Verifier.FinishRegistration] applies before an AAGUID is compared
+// against the allowlist. The seam exists because the alternative —
+// minting a self-attested CBOR attestation object — would exercise the
+// upstream library's parser rather than this package's policy, and the
+// policy is a single decision over the attestation type the library
+// reports.
+func RequireVouchedAttestationForTest(attestationType string) error {
+	return requireVouchedAttestation(attestationType)
+}
+
 // CheckAAGUIDOnAssertionForTest exposes the M-AUTHN-2 helper so
 // tests can drive the AAGUID re-check without standing up a soft
 // authenticator. The seam invokes the same helper [Verifier.FinishLogin]

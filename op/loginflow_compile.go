@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
+
 	"github.com/libraz/go-oidc-provider/internal/authn"
 	"github.com/libraz/go-oidc-provider/internal/authn/emailotp"
 	"github.com/libraz/go-oidc-provider/internal/authn/lockout"
@@ -271,11 +273,23 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 			Description: "PrimaryPasskey.Store is nil",
 		}
 	}
+	// Asking for an authenticator-model allowlist is asking for
+	// attestation: without it the AAGUID the allowlist compares is
+	// self-asserted by whatever produced the registration response, so
+	// any software authenticator could claim a certified model's
+	// identifier. The conveyance preference is therefore derived from
+	// the allowlist rather than exposed as a second knob an embedder
+	// could set inconsistently.
+	attestation := protocol.PreferNoAttestation
+	if len(s.AAGUIDAllowlist) > 0 {
+		attestation = protocol.PreferDirectAttestation
+	}
 	v, err := passkey.New(passkey.Config{
 		RPID:                     s.RPID,
 		RPDisplayName:            s.RPDisplayName,
 		RPOrigins:                s.RPOrigins,
 		SessionTTL:               s.SessionTTL,
+		AttestationPreference:    attestation,
 		AAGUIDAllowlist:          s.AAGUIDAllowlist,
 		AAGUIDReCheckOnAssertion: s.AAGUIDReCheckOnAssertion,
 	})

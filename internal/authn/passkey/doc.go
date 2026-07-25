@@ -16,22 +16,33 @@
 // [github.com/libraz/go-oidc-provider/internal/authn] package handles
 // **client** authentication at the token endpoint and is unrelated.
 // # Attestation policy
-// v1.0 hard-codes attestation conveyance to "none"
-// ([protocol.PreferNoAttestation]). That choice avoids shipping a FIDO
-// metadata service (MDS) with the library: verifying "direct" or
-// "enterprise" attestation requires either a maintained AAGUID
-// allow-list or the FIDO MDS3 blob, both of which carry their own
-// rotation and license-of-data concerns we are not prepared to take on
-// for a v1.0 release. Embedders that need attestation enforcement today
-// MUST stand it up out-of-band and reject the registration before
-// calling [Verifier.FinishRegistration]; v1.x will introduce a
-// constructor option that takes an explicit AAGUID allow-list (see
-// 02-product-design.md §M.5).
-// As a consequence the [Config] struct deliberately does NOT expose an
-// AttestationPreference field: a wrong setting would silently weaken
-// the registration ceremony. The only path to "direct" attestation in
-// v1.0 is to fork the package, which surfaces the deviation in code
-// review.
+// The default conveyance is "none" ([protocol.PreferNoAttestation]),
+// which is the right posture for a deployment that accepts any
+// authenticator: attestation is a privacy-relevant disclosure about the
+// user's hardware, and without a policy to apply to it there is nothing
+// to gain by collecting it. Under "none" no [Config.AAGUIDAllowlist]
+// may be configured, because the AAGUID reported in that mode is
+// self-asserted.
+//
+// A deployment that must restrict registration to approved
+// authenticator models sets [Config.AttestationPreference] to
+// [protocol.PreferDirectAttestation] together with a non-empty
+// [Config.AAGUIDAllowlist]; [New] refuses either one without the other.
+// "indirect" and "enterprise" are not supported.
+//
+// Requesting direct conveyance only asks for an attestation statement —
+// it does not guarantee one that identifies the model. A response may
+// still arrive self-attested or unattested, in which case the AAGUID is
+// a value the caller chose rather than one the hardware proved.
+// [Verifier.FinishRegistration] therefore refuses such a registration
+// whenever an allowlist is configured, instead of comparing an
+// unauthenticated identifier against it.
+//
+// The package deliberately ships no FIDO Metadata Service (MDS3)
+// client: the allowlist is the operator's own list of AAGUIDs, so the
+// library takes on no blob rotation or data-licensing obligation. An
+// embedder that wants MDS-driven policy resolves the metadata
+// out-of-band and supplies the resulting AAGUIDs.
 // # Authenticator selection
 // v1.0 also uses the library defaults for [protocol.AuthenticatorSelection]:
 // no AuthenticatorAttachment filter (platform and cross-platform are

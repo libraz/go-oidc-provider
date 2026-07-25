@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-webauthn/webauthn/protocol"
+
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
 )
 
@@ -31,6 +33,10 @@ func newVerifierWithRecheck(t *testing.T, allowlist []string, recheck bool) *pas
 		RPOrigins:                []string{"https://id.example.com"},
 		AAGUIDAllowlist:          allowlist,
 		AAGUIDReCheckOnAssertion: recheck,
+		// An allowlist is only configurable alongside direct
+		// attestation, since otherwise the AAGUID it compares is
+		// self-asserted.
+		AttestationPreference: protocol.PreferDirectAttestation,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
