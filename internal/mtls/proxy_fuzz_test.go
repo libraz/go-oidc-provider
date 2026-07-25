@@ -61,7 +61,7 @@ func FuzzCertificateFromHeader(f *testing.F) {
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "fuzz.invalid"},
 		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:     time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2125, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)

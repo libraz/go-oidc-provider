@@ -295,6 +295,10 @@ func TestCertificateFromRequest_TrustedHeaderRejectsAmbiguity(t *testing.T) {
 //   - the trailing certificate's body contains no "+" at all, so the
 //     same rewrite leaves it byte-identical and perfectly decodable.
 //
+// Both carry a validity window that ends far beyond any maintenance
+// horizon, so the fixture cannot become a scheduled failure the way a
+// conventionally dated test certificate would.
+//
 // Concatenated, the two put the decoder in the state that matters: the
 // leading block is unparseable and the trailing one is not. A decoder
 // that skips undecodable blocks resolves that payload to the SECOND
@@ -303,23 +307,23 @@ func TestCertificateFromRequest_TrustedHeaderRejectsAmbiguity(t *testing.T) {
 // ambiguity the forwarding contract exists to deny.
 const (
 	smugglingLeadPEM = `-----BEGIN CERTIFICATE-----
-MIIBOTCB4aADAgECAgEBMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMTEnJwLnRlc3Rr
-aXQuaW52YWxpZDAeFw0yNDAxMDEwMDAwMDBaFw0zMDAxMDEwMDAwMDBaMB0xGzAZ
-BgNVBAMTEnJwLnRlc3RraXQuaW52YWxpZDBZMBMGByqGSM49AgEGCCqGSM49AwEH
-A0IABJ+8af9Zc/5a4Vrnu4zHv5p2kuZVCcXaWepXruN2tjXHVrOVFFWTrLphnMAF
-GHMduldCfNAE5aSmXCt/dIYJYwqjEjAQMA4GA1UdDwEB/wQEAwIHgDAKBggqhkjO
-PQQDAgNHADBEAiBSaU+J5RljnMbLj/Cr7IbrCOjQOZtU2YTuVYazSWtaXAIgSLoe
-PfS7I8W0dZUN8szxK4iSiTTTuCW2CMZU26cQmrc=
+MIIBPDCB46ADAgECAgEBMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMTEnJwLnRlc3Rr
+aXQuaW52YWxpZDAgFw0yNDAxMDEwMDAwMDBaGA8yMTI1MDEwMTAwMDAwMFowHTEb
+MBkGA1UEAxMScnAudGVzdGtpdC5pbnZhbGlkMFkwEwYHKoZIzj0CAQYIKoZIzj0D
+AQcDQgAEC5cZw6h6Gvch6qZXUwauCqGQfj4pPS6tnRI4nMW16w/Mm+uI6wbmllde
+K3aLokph82d0apCDEN3cbmbCQqt2TqMSMBAwDgYDVR0PAQH/BAQDAgeAMAoGCCqG
+SM49BAMCA0gAMEUCIEfW2fpiMYXIn/EDO6AfyB3pmmLwhVyOfklu5AQPDsjkAiEA
+04oFVEtqrwt9Tn6RT55iO7zSZaIu0RyJevpkbRjPoDo=
 -----END CERTIFICATE-----
 `
 	smugglingTrailPEM = `-----BEGIN CERTIFICATE-----
-MIIBOjCB4aADAgECAgEBMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMTEnJwLnRlc3Rr
-aXQuaW52YWxpZDAeFw0yNDAxMDEwMDAwMDBaFw0zMDAxMDEwMDAwMDBaMB0xGzAZ
-BgNVBAMTEnJwLnRlc3RraXQuaW52YWxpZDBZMBMGByqGSM49AgEGCCqGSM49AwEH
-A0IABKk2ZJufYyMEUrOLQ8V0qf8cD/lAn3ooIHeL81NOOUw4aPcEe5Q0GXqn6Bnf
-Apenbeoat9W68ZKtpxqjCe9b0wyjEjAQMA4GA1UdDwEB/wQEAwIHgDAKBggqhkjO
-PQQDAgNIADBFAiBBOWNXd4IwJMwBAc63tlFogfv9DXfXAecvh/rFeUaAYgIhANGh
-7XfO6H/iI/wA16uiskOQnCLlL0va22Ju4KsNjPq5
+MIIBPDCB46ADAgECAgEBMAoGCCqGSM49BAMCMB0xGzAZBgNVBAMTEnJwLnRlc3Rr
+aXQuaW52YWxpZDAgFw0yNDAxMDEwMDAwMDBaGA8yMTI1MDEwMTAwMDAwMFowHTEb
+MBkGA1UEAxMScnAudGVzdGtpdC5pbnZhbGlkMFkwEwYHKoZIzj0CAQYIKoZIzj0D
+AQcDQgAE8Q8V26Zx7FwJZ//nd/pQ0qD8iDrwve7ne20WNhUxeE2FMKAqFQCyXxV9
+bVqLvSFRgw8p530QeAoIsB1OHVU4PKMSMBAwDgYDVR0PAQH/BAQDAgeAMAoGCCqG
+SM49BAMCA0gAMEUCICCah34frH1kJFsroUp9MdWJ2XFcqhuQvHtcrX4IV2tTAiEA
+g9BkZoORTrwN3lYrnxTVfO6FNlypLEO71Zrht03c1QI=
 -----END CERTIFICATE-----
 `
 )

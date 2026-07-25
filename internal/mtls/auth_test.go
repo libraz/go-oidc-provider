@@ -34,7 +34,7 @@ func generateLeafWith(tb testing.TB, fn func(*x509.Certificate)) *x509.Certifica
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "rp.testkit.invalid"},
 		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:     time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2125, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
 	if fn != nil {
@@ -269,7 +269,7 @@ func TestVerifySelfSigned_HappyPath(t *testing.T) {
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "self-signed"},
 		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:     time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2125, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 	if err != nil {
@@ -317,7 +317,7 @@ func TestVerifySelfSigned_RSAKey(t *testing.T) {
 		SerialNumber: big.NewInt(3),
 		Subject:      pkix.Name{CommonName: "rsa-self-signed"},
 		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:     time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2125, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 	if err != nil {
@@ -459,7 +459,7 @@ func TestVerifyClientAuth_DispatchByMethod(t *testing.T) {
 		SerialNumber: big.NewInt(42),
 		Subject:      pkix.Name{CommonName: "dispatch.example"},
 		NotBefore:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:     time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:     time.Date(2125, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 	if err != nil {
