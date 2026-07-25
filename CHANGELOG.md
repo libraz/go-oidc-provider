@@ -14,10 +14,10 @@ The main module and the storage-adapter sub-modules
 tag. Embedders pull each sub-module independently:
 
 ```
-# v0.9.6 (latest)
-go get github.com/libraz/go-oidc-provider@v0.9.6
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.6
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.6
+# v1.0.0 (latest)
+go get github.com/libraz/go-oidc-provider@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
 
 # v0.9.5
 go get github.com/libraz/go-oidc-provider@v0.9.5
@@ -50,17 +50,28 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
-## [v0.9.6] — 2026-07-24
+## [v1.0.0] — 2026-07-25
 
-A hardening and durability release across the token endpoint, the storage
-layer, and construction-time validation. The authorization-code, refresh,
-CIBA, and device-code flows now stage their fallible work behind transactions
-and single-use compare-and-swaps, so an approved ceremony survives a signing
-or persistence fault; back-channel logout fans out through keyset-paginated
-grant lookups; and `op.New` rejects a far wider class of misconfiguration up
-front. No new protocol surface. Several store-interface and construction
-changes are breaking for custom store implementations — see `Changed` for the
-migration notes.
+The first release under strict Semantic Versioning. From here the public `op`
+surface changes only on a major version, with one stated exception: symbols
+carrying an experimental stability marker, which are listed in the API surface
+manifest and gated mechanically so the exemption cannot grow silently.
+
+The release itself is a hardening and durability pass across the token
+endpoint, the storage layer, and construction-time validation. The
+authorization-code, refresh, CIBA, and device-code flows stage their fallible
+work behind transactions and single-use compare-and-swaps, so an approved
+ceremony survives a signing or persistence fault; back-channel logout fans out
+through keyset-paginated grant lookups; and `op.New` rejects a far wider class
+of misconfiguration up front. No new protocol surface.
+
+Several store-interface and construction changes are breaking for custom store
+implementations — see `Changed` for the migration notes. They are the last such
+changes that can land outside a major version.
+
+Signing is ES256 only, permanently for the 1.x line, and the reasoning is
+documented rather than left as a gap. Deployments needing RS256 or PS256 should
+not adopt this release.
 
 ### Added
 
@@ -101,9 +112,47 @@ migration notes.
   diff. It rejects persistent non-PASS results, empty results, module-catalog
   drift, and stale or expired exceptions; the only accepted exceptions are
   exact entries in a clean, checked-in owner/reason/expiry manifest.
+- `api/experimental.txt`, the machine-generated inventory of every symbol
+  carrying an `Experimental:` marker. The marked set is the SemVer exemption
+  list and everything else is stable by default, so the report is regenerated
+  and diffed by `make verify`: a change to the exempt surface now arrives as a
+  reviewable diff next to the code that caused it. A marker without a
+  rationale, or a symbol claiming both `Experimental:` and `Stable since`, is
+  rejected rather than resolved silently toward exempt.
+- `sample/`, a reference application covering the arc the single-concept
+  examples skip: registration owned by the application, Argon2id password
+  storage, login and consent through a `interaction.Driver` the application
+  implements itself, TOTP enrolment from account settings, and a relying party
+  completing the round-trip — on MySQL plus Redis joined by
+  `op/storeadapter/composite`, under one `docker compose up`. Its consent page
+  is a worked example of granular per-scope consent, which the bundled HTML
+  driver declines to offer. It is a demonstration, not a deployment: the schema
+  is one embedder's model rather than a recommendation, and the application is
+  not meant to be hosted.
+- `cmd/op-demo` accepts `-store=composite` with MySQL and Redis DSNs, so an
+  OFCS baseline can be captured against the storage shape a deployment runs
+  rather than against memory. It became its own Go module in the process, which
+  keeps both drivers out of every library consumer's dependency graph.
 
 ### Changed
 
+- **BREAKING — `op.New` now rejects a configuration where the `refresh_token`
+  grant is enabled and cookie keys are set but `Store.RefreshTokens()` does not
+  implement `store.RefreshRetryResponseStore`.** The rotation path seals a
+  durable retry response whenever it holds encryption keys, and those keys are
+  the cookie keys the `authorization_code` grant already makes mandatory, so a
+  bring-your-own refresh store without the extension compiled, passed `op.New`,
+  served authorization requests, and then failed every rotation at request
+  time. *Migration:* implement `RefreshRetryResponseStore`; the bundled
+  adapters already do, so only external backends are affected — and those were
+  already failing rotation. The store package now states the capability
+  placement rule normatively and publishes the requirement matrix it implies,
+  covering both the extensions `op.New` demands and the ones that degrade
+  silently.
+- ES256 is the only supported token-signing algorithm, and that is now a stated
+  permanent policy for the 1.x line rather than an unfilled gap. The discovery
+  document, the conformance exclusion manifest, and the documentation all say
+  so; RS256 and PS256 are not planned.
 - **BREAKING — authorization-code stores must now implement
   `store.Transactional`, and their interaction substore must implement
   `store.InteractionStoreCAS` (`CompareAndSwap` and `DeleteIfUnchanged`).**
@@ -189,6 +238,28 @@ migration notes.
 
 ### Security
 
+- Passkey `AAGUIDAllowlist` is enforced against an authenticated AAGUID.
+  Previously `PrimaryPasskey` requested no attestation at all, so the AAGUID the
+  allowlist compared was a plain field of the registration response rather than
+  something the hardware proved — a software authenticator could register by
+  naming an approved model. Configuring an allowlist now switches the ceremony
+  to `direct` conveyance, and a registration whose attestation does not identify
+  the model (self-attested or unattested) is refused instead of being matched
+  against the list. **BREAKING** at the `passkey.Config` level: pairing
+  `AAGUIDAllowlist` with any conveyance other than `direct` is now a
+  construction error. Embedders using `op.PrimaryPasskey` need no change beyond
+  expecting a user-agent attestation prompt during registration; leave
+  `AAGUIDAllowlist` empty to keep the previous prompt-free ceremony.
+- mTLS proxy header: a payload carrying more than one PEM block is rejected by
+  counting block markers before decoding, rather than by checking what the PEM
+  decoder reports as remaining input. The decoder skips a block whose base64
+  body does not decode and returns the following block with an empty remainder,
+  so a chain whose leading certificate was unparseable resolved to the trailing
+  one — and a decoding step could produce that state on its own, because form
+  decoding rewrites `+`, a base64 alphabet character, to a space and the PEM
+  decoder strips spaces out of the body. Whoever composed the header could
+  therefore choose which leaf the OP bound. Percent-decoding is now attempted
+  before form-decoding so an unescaped payload is not rewritten at all.
 - JAR: every URL-indexed JWKS cache is bounded with LRU-style eviction and
   expired-entry pruning, and a document carrying more keys than the parse cap is
   rejected, so hostile client registrations cannot grow process memory without
@@ -253,6 +324,13 @@ migration notes.
   synthetic `/userinfo` claims so pairwise subject configurations recover the
   OP-internal subject; a legacy opaque record without a `GrantID` is rejected
   under pairwise projection instead of serving a wrong subject.
+- Client registration rejects a `redirect_uris` or `post_logout_redirect_uris`
+  entry carrying a bare trailing `#`. RFC 6749 §3.1.2 forbids a fragment
+  component and an empty one is still a fragment; testing the parsed fragment
+  admitted it, leaving a registered value a user agent truncates before the OP
+  ever sees it, so the stored URI could never equal the one presented at
+  `/authorize`. Registrations using that shape now fail with
+  `invalid_redirect_uri` instead of succeeding into an unusable state.
 - Dynamic client registration: map an explicit JSON `null` in optional metadata
   to the same empty value as an omitted property (RFC 7592 deletion) so
   `jwks: null` never reaches the JWK parser as a malformed set, reject
@@ -278,6 +356,11 @@ migration notes.
   back-channel resolution failures as distinct audit events while keeping the
   browser response non-blocking; `RevokeJWTAccessTokensByGrant` now returns
   store errors and the grant-management revoke path treats them fail-closed.
+- Origin canonicalisation re-brackets a literal IPv6 host. `url.URL.Hostname`
+  strips the brackets, so an issuer or configured origin using an IPv6 literal
+  canonicalised to `http://::1:8080` — a form no browser sends — and never
+  matched the incoming `Origin` header, rejecting every state-changing
+  same-origin request and the CORS allowlist derived from the same value.
 - Redis adapter: `WithKeyPrefix` and `WithMaxValueBytes` now surface an option
   error at construction instead of being silently dropped.
 - Corrected the public `grant.RefreshToken` and `ScopeNameOfflineAccess`
@@ -1225,8 +1308,8 @@ from the access-token TTL (see Changed).
 
 ## [v0.9.0] — initial public release
 
-[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v0.9.6...HEAD
-[v0.9.6]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...v0.9.6
+[Unreleased]: https://github.com/libraz/go-oidc-provider/compare/v1.0.0...HEAD
+[v1.0.0]: https://github.com/libraz/go-oidc-provider/compare/v0.9.5...v1.0.0
 [v0.9.5]: https://github.com/libraz/go-oidc-provider/compare/v0.9.4...v0.9.5
 [v0.9.4]: https://github.com/libraz/go-oidc-provider/compare/v0.9.3...v0.9.4
 [v0.9.3]: https://github.com/libraz/go-oidc-provider/compare/v0.9.2...v0.9.3

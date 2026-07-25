@@ -19,15 +19,23 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 > オプションリファレンスはすべてドキュメントサイトに集約しています。本 README
 > は、ソースツリーの案内とサンプル一覧に絞っています。
 
-> **ステータス: pre-v1.0。** `v0.9.0` が初の公開リリースです。`v1.0.0` までは
-> マイナーリリースで公開 API が変わることがあります。
-> [`CHANGELOG.md`](CHANGELOG.md) は `v0.9.0` の次のリリース以降の
-> 変更点を記録します。
+> **ステータス: `v1.0.0`。** 本リリース以降、公開 `op` API は
+> [Semantic Versioning](https://semver.org/spec/v2.0.0.html) に厳密に従います。
+> 唯一の例外は godoc に `Experimental:` マーカーを持つシンボルで、その一覧は
+> [`api/experimental.txt`](api/experimental.txt) に機械生成されます。
+> `make verify` が再生成して差分を検査するため、例外の範囲がレビューを
+> 経ずに広がることはありません。[`CHANGELOG.md`](CHANGELOG.md) は
+> `v0.9.0` の次のリリース以降の変更点を記録します。
+>
+> 本プロジェクトは個人が余暇で開発しているものであり、ベンダー製品では
+> ありません。リリースごとに OpenID Foundation の適合試験スイートで
+> 回帰検証していますが、正式な認定は受けておらず、サポートは
+> ベストエフォートです。
 
 ## インストール
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.6
+go get github.com/libraz/go-oidc-provider/op@v1.0.0
 ```
 
 Go 1.25 以上が必要です。DB / Redis ドライバを引き込むストアアダプタは
@@ -35,8 +43,8 @@ Go 1.25 以上が必要です。DB / Redis ドライバを引き込むストア�
 `go.sum` に余計な依存は入りません。
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.6
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.6
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
 ```
 
 ## クイックスタート

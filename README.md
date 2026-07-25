@@ -18,23 +18,30 @@ Message Signing.
 > reference live there. This README is the source-tree map and example
 > inventory.
 
-> **Status: pre-v1.0.** `v0.9.0` is the initial public release; the public API
-> may change in any minor release until `v1.0.0`.
-> [`CHANGELOG.md`](CHANGELOG.md) starts tracking notable changes from the
-> release that follows `v0.9.0`.
+> **Status: `v1.0.0`.** The public `op` surface is under strict
+> [Semantic Versioning](https://semver.org/spec/v2.0.0.html) from this release
+> on. The one exemption is symbols documented with an `Experimental:` marker;
+> they are inventoried in [`api/experimental.txt`](api/experimental.txt), which
+> is regenerated and diffed by `make verify` so the exempt set cannot grow
+> without review. [`CHANGELOG.md`](CHANGELOG.md) tracks notable changes from
+> the release that follows `v0.9.0`.
+>
+> This is a spare-time project, not a vendor product. It is regressed against
+> the OpenID Foundation conformance suite on every release, but it carries no
+> formal certification, and support is best-effort.
 
 ## Install
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.6
+go get github.com/libraz/go-oidc-provider/op@v1.0.0
 ```
 
 Go 1.25+. Storage adapters are published as sub-modules so their
 dependencies stay out of your `go.sum` until you opt in:
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.6
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.6
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
 ```
 
 ## Quickstart

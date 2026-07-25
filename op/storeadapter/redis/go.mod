@@ -10,7 +10,7 @@ go 1.25.0
 toolchain go1.26.5
 
 require (
-	github.com/libraz/go-oidc-provider v0.0.0-00010101000000-000000000000
+	github.com/libraz/go-oidc-provider v1.0.0
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/redis v0.42.0
@@ -70,5 +70,3 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/libraz/go-oidc-provider => ../../..

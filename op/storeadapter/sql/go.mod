@@ -11,7 +11,7 @@ toolchain go1.26.5
 require (
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/libraz/go-oidc-provider v0.0.0-00010101000000-000000000000
+	github.com/libraz/go-oidc-provider v1.0.0
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/mysql v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
@@ -83,5 +83,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/libraz/go-oidc-provider => ../../..

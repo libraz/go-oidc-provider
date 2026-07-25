@@ -11,7 +11,7 @@ toolchain go1.26.5
 
 require (
 	github.com/go-sql-driver/mysql v1.10.0
-	github.com/libraz/go-oidc-provider v0.0.0-00010101000000-000000000000
+	github.com/libraz/go-oidc-provider v1.0.0
 	github.com/libraz/go-oidc-provider/examples/internal/rpkit v0.0.0-00010101000000-000000000000
 	github.com/libraz/go-oidc-provider/op/storeadapter/redis v0.0.0-00010101000000-000000000000
 	github.com/libraz/go-oidc-provider/op/storeadapter/sql v0.0.0-00010101000000-000000000000
