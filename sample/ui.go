@@ -16,6 +16,17 @@ import (
 // enforces per-field limits afterwards; this is the transport-level bound.
 const maxSubmissionBytes = 64 << 10
 
+const (
+	// scopeCheckboxField is what the consent page names its per-scope
+	// checkboxes. It is private to this application's form.
+	scopeCheckboxField = "scope"
+
+	// approvedScopesField is the field the consent step reads: one
+	// space-separated list of the scopes the member approved. The name is
+	// part of the orchestrator's submission contract, not of the page.
+	approvedScopesField = "approved_scopes"
+)
+
 // appDriver renders the OP's prompts as this application's own pages.
 //
 // Replacing the bundled driver is the reason it exists. The library decides
@@ -70,6 +81,10 @@ type fieldView struct {
 type scopeView struct {
 	Name        string
 	Description string
+	// Required marks a scope the member cannot decline. Its checkbox is
+	// disabled, which also stops the browser from submitting it, so the
+	// template pairs it with a hidden field carrying the same value.
+	Required bool
 }
 
 // Render implements [interaction.Driver].
@@ -111,8 +126,17 @@ func (d *appDriver) page(prompt interaction.Prompt) (pageData, string, error) {
 		page.Title = "Authorise"
 		page.Heading = "Authorise " + clientLabel(data.Client)
 		page.Client = clientLabel(data.Client)
+		// The consent prompt declares a single approved_scopes input. This
+		// page renders a checkbox per scope instead and folds them back into
+		// that field on submission, so the declared input is dropped here
+		// rather than rendered alongside its own replacement.
+		page.Fields = nil
 		for _, s := range data.Scopes {
-			page.Scopes = append(page.Scopes, scopeView{Name: s.Name, Description: s.Description})
+			page.Scopes = append(page.Scopes, scopeView{
+				Name:        s.Name,
+				Description: s.Description,
+				Required:    s.Required,
+			})
 		}
 		return page, "consent", nil
 	}
@@ -126,16 +150,40 @@ func clientLabel(c interaction.ClientView) string {
 	return c.ClientID
 }
 
+// fieldLabels maps the i18n keys the library's factors put on
+// FieldSpec.Label onto the words this application shows.
+//
+// FieldSpec.Label is a key, not display text: the library states which
+// field is being asked for and leaves the wording — and the language — to
+// whoever owns the UI. Rendering the key straight into the page is the
+// obvious mistake, and it is a silent one, because the key is a readable
+// string that looks plausible until someone reads the form.
+var fieldLabels = map[string]string{
+	"auth.password.username": "Email address",
+	"auth.password.password": "Password",
+	"auth.totp.code":         "Six-digit code",
+}
+
+// fieldLabel resolves one key. An unmapped key falls back to the field
+// name rather than the key, so a factor this application has not been
+// taught about renders something a person can still act on.
+func fieldLabel(spec interaction.FieldSpec) string {
+	if label, ok := fieldLabels[spec.Label]; ok {
+		return label
+	}
+	return spec.Name
+}
+
 // fieldViews translates the orchestrator's field specs into what the
 // template needs. The library states the validation profile; the mapping to
-// an HTML input type and autocomplete hint is the application's call.
+// an HTML input type, autocomplete hint, and wording is the application's.
 func fieldViews(specs []interaction.FieldSpec) []fieldView {
 	views := make([]fieldView, 0, len(specs))
 	for _, spec := range specs {
 		if spec.Kind == interaction.FieldHidden {
 			continue
 		}
-		v := fieldView{Name: spec.Name, Label: spec.Label, Required: spec.Required, InputType: "text"}
+		v := fieldView{Name: spec.Name, Label: fieldLabel(spec), Required: spec.Required, InputType: "text"}
 		switch spec.Kind {
 		case interaction.FieldPassword:
 			v.InputType = "password"
@@ -150,15 +198,19 @@ func fieldViews(specs []interaction.FieldSpec) []fieldView {
 			v.AutoComplete = "username"
 		case interaction.FieldHidden:
 		}
-		if v.Label == "" {
-			v.Label = spec.Name
-		}
 		views = append(views, v)
 	}
 	return views
 }
 
 // ParseSubmission implements [interaction.Driver].
+//
+// This is where the application's form shape is translated into the fields
+// the orchestrator reads, and the consent page is the case that needs it.
+// The library asks for one space-separated approved_scopes value; the page
+// asks the member scope by scope. Folding the repeated checkbox field into
+// the single value here is what lets the page offer partial consent without
+// the orchestrator knowing anything about checkboxes.
 func (d *appDriver) ParseSubmission(r *http.Request) (interaction.FormSubmission, error) {
 	if !isFormURLEncoded(r.Header.Get("Content-Type")) {
 		return interaction.FormSubmission{}, errors.New("sample: expected application/x-www-form-urlencoded")
@@ -175,10 +227,13 @@ func (d *appDriver) ParseSubmission(r *http.Request) (interaction.FormSubmission
 	// endpoint reads it from the form to complete the double-submit check.
 	values := make(map[string]string, len(r.PostForm))
 	for k, vs := range r.PostForm {
-		if k == "state_ref" || len(vs) == 0 {
+		if k == "state_ref" || k == scopeCheckboxField || len(vs) == 0 {
 			continue
 		}
 		values[k] = vs[0]
+	}
+	if approved, ok := r.PostForm[scopeCheckboxField]; ok {
+		values[approvedScopesField] = strings.Join(approved, " ")
 	}
 	return interaction.FormSubmission{StateRef: stateRef, Values: values}, nil
 }

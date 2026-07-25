@@ -23,6 +23,13 @@ package main
 // the consent screen: the client name and scope descriptions arrive from
 // client registration and are attacker-influenced under dynamic
 // registration.
+//
+// The consent screen offers approval per scope rather than the all-or-
+// nothing hidden field the bundled driver emits — granular consent is one
+// of the reasons to own the UI at all. It has no Deny button: cancelling an
+// interaction is a DELETE on the interaction URL, which a page under
+// default-src 'none' cannot issue without script. A member who does not
+// want to approve leaves the page, and the interaction expires.
 const promptTemplates = `
 {{define "head"}}<!DOCTYPE html>
 <html lang="en">
@@ -63,16 +70,25 @@ const promptTemplates = `
 
 {{define "consent"}}{{template "head" .}}
 <p class="lead"><span class="party">{{.Client}}</span> is requesting access to your account.</p>
-<ul class="grants">
-{{range .Scopes}}<li><span class="grant">{{.Name}}</span>{{if .Description}}<span class="grant-note">{{.Description}}</span>{{end}}</li>{{end}}
-</ul>
 <form method="post" class="stack">
 <input type="hidden" name="state_ref" value="{{.StateRef}}">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<div class="row split">
-  <button type="submit" name="decision" value="deny" class="ghost">Deny</button>
-  <button type="submit" name="decision" value="allow">Allow</button>
-</div>
+<ul class="grants">
+{{range .Scopes}}
+<li>
+  <label class="grant-row">
+    <input type="checkbox" name="scope" value="{{.Name}}" checked{{if .Required}} disabled{{end}}>
+    <span class="grant-text">
+      <span class="grant">{{.Name}}</span>
+      {{if .Description}}<span class="grant-note">{{.Description}}</span>{{end}}
+      {{if .Required}}<span class="grant-note">Required by this application.</span>{{end}}
+    </span>
+  </label>
+  {{if .Required}}<input type="hidden" name="scope" value="{{.Name}}">{{end}}
+</li>
+{{end}}
+</ul>
+<div class="row"><button type="submit">Allow</button></div>
 </form>
 {{template "foot" .}}{{end}}
 `
@@ -320,8 +336,6 @@ input:focus-visible {
 .hint { margin: 0.5rem 0 0; font-size: 0.8rem; color: var(--text-dim); }
 
 .row { display: flex; margin-top: 2rem; }
-.row.split { gap: 0.75rem; }
-.row.split button { flex: 1 1 0; }
 
 button {
   padding: 0.7rem 1.4rem;
@@ -355,6 +369,27 @@ button.ghost:hover { color: var(--text); border-color: var(--text-dim); }
   border-left: 2px solid var(--signal);
 }
 .grants li:last-child { border-bottom: 1px solid var(--line); }
+
+/* The scope row is a label wrapping its own checkbox, so the whole row is
+   the hit target. It overrides the uppercase-caption label rule, which is
+   for field captions rather than for a line of readable text. */
+.grant-row {
+  display: flex;
+  gap: 0.75rem;
+  margin: 0;
+  font-size: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.grant-row input[type=checkbox] {
+  flex: none;
+  margin: 0.4rem 0 0;
+  accent-color: var(--signal);
+}
+.grant-row:has(input:disabled) { cursor: default; color: var(--text-dim); }
+.grant-text { display: block; }
 .grant { display: block; }
 .grant-note { display: block; margin-top: 0.15rem; font-size: 0.85rem; color: var(--text-dim); }
 
