@@ -38,13 +38,14 @@ jobs:
             tools/scenariotool/go.sum
             op/storeadapter/sql/go.sum
             op/storeadapter/redis/go.sum
+            cmd/op-demo/go.sum
 
       # A release commit pins adapter go.mod files to the new root tag, which
       # does not exist until after this CI run. The workspace makes pre-tag CI
       # test the identical checked-out root without shipping a replace to
       # external adapter consumers.
       - name: Initialize multi-module workspace
-        run: go work init . op/storeadapter/sql op/storeadapter/redis
+        run: go work init . op/storeadapter/sql op/storeadapter/redis cmd/op-demo
 
       - name: Cache pinned tool binaries
         uses: actions/cache@v6
@@ -103,11 +104,12 @@ jobs:
             go.sum
             op/storeadapter/sql/go.sum
             op/storeadapter/redis/go.sum
+            cmd/op-demo/go.sum
 
       # See the matching lint-job note: release commits need a local root only
       # until the root tag is published after CI is green.
       - name: Initialize multi-module workspace
-        run: go work init . op/storeadapter/sql op/storeadapter/redis
+        run: go work init . op/storeadapter/sql op/storeadapter/redis cmd/op-demo
 
       - name: Test conformance release verifier
         run: python3 -m unittest discover -s tools/conformance/tests -v
@@ -137,6 +139,13 @@ jobs:
             -covermode=atomic \
             -count=1 -timeout=5m \
             ./...
+
+      # op-demo is its own module so the storage drivers it links for
+      # -store=composite stay out of the library's dependency list. The root
+      # module's test step no longer reaches it.
+      - name: Test cmd/op-demo (race only)
+        working-directory: cmd/op-demo
+        run: go test -race -count=1 -timeout=5m ./...
 
       - name: Test real SQL and Redis contract backends
         run: scripts/test_contracts.sh

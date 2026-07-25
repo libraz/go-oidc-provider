@@ -3,9 +3,16 @@
 // Conformance Suite.
 //
 // The binary is dev-only — it generates ephemeral signing and cookie
-// keys at startup, persists every record in process memory, and
-// terminates the OP cleanly on SIGINT / SIGTERM. It is not intended
-// for production deployments.
+// keys at startup and terminates the OP cleanly on SIGINT / SIGTERM.
+// It is not intended for production deployments.
+//
+// Storage is selected with -store. The default keeps every record in
+// process memory, which needs nothing running alongside the binary and
+// is what the automated conformance gate uses. -store=composite routes
+// the durable substores to MySQL and the volatile ones to Redis, so a
+// conformance run can also be captured against the storage shape a
+// deployment actually runs rather than only against the in-memory
+// reference implementation. See storage.go.
 //
 // Quick start (HTTP):
 //
@@ -36,9 +43,8 @@
 // op-demo flags) lives at
 // https://go-oidc-provider.libraz.net/compliance/ofcs-reproduce.
 //
-// In production embedders read keys from a vault / KMS and persist
-// records in a real backend; this binary deliberately wires neither
-// so the moving parts stay visible.
+// In production embedders read keys from a vault / KMS; this binary
+// generates them at startup so the moving parts stay visible.
 package main
 
 import (
@@ -64,7 +70,6 @@ import (
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
-	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // shutdownGrace is the deadline for in-flight requests to drain after
@@ -115,6 +120,16 @@ type runConfig struct {
 	// lands authorization_pending under the 1 s default poll
 	// interval — the shape the OFCS fapi-ciba plan asserts on.
 	cibaAutoApproveDelay time.Duration
+	// storeBackend selects the storage the OP runs on: "inmem" (the
+	// default) or "composite" (durable substores on MySQL, volatile ones
+	// on Redis). The flag exists so a conformance run can be captured
+	// against the storage shape a deployment runs rather than only
+	// against the in-memory reference implementation. See storage.go.
+	storeBackend string
+	// mysqlDSN / redisDSN are consulted only when storeBackend is
+	// "composite".
+	mysqlDSN string
+	redisDSN string
 	// extraCAs is the trust pool the JWKS fetcher uses for outbound
 	// HTTPS to RP-controlled jwks_uri endpoints. Nil means "use the
 	// Go default system trust store"; embedders running against the
@@ -173,6 +188,14 @@ func mainErr() error {
 		// into the JWKS fetcher's trust pool. Empty leaves Go's system
 		// trust store untouched.
 		extraCABundle = flag.String("extra-ca-bundle", "", "colon-separated PEM file paths merged into the JWKS fetcher's TLS trust pool. Empty leaves Go's system trust store untouched. Used to reach RP JWKS endpoints behind an internal CA, or — under the OFCS conformance harness — to admit the runner's self-signed cert without disabling chain validation.")
+
+		// -store selects the storage the OP runs on. The in-memory
+		// default needs nothing running alongside the binary; the
+		// composite backend exists so a conformance run can be captured
+		// against the MySQL + Redis split a deployment actually runs.
+		storeBackend = flag.String("store", storeInmem, "storage backend: \"inmem\" (in-process, nothing to run alongside) or \"composite\" (durable substores on MySQL, volatile ones on Redis). The composite backend exists so a conformance run can be captured against deployment-shaped storage; it consults -mysql-dsn and -redis-dsn.")
+		mysqlDSN     = flag.String("mysql-dsn", "opdemo:opdemo@tcp(127.0.0.1:3306)/opdemo?parseTime=true&charset=utf8mb4&loc=UTC", "MySQL DSN for -store=composite. Only consulted when -store=composite.")
+		redisDSN     = flag.String("redis-dsn", "redis://127.0.0.1:6379/0", "Redis DSN for -store=composite. Only consulted when -store=composite; plaintext is admitted because this is a development binary.")
 	)
 	flag.Parse()
 
@@ -202,6 +225,9 @@ func mainErr() error {
 		fapiClient2JWKS:      *fapiClient2JWKS,
 		enableDCR:            *enableDCR,
 		cibaAutoApproveDelay: *cibaAutoApproveDelay,
+		storeBackend:         *storeBackend,
+		mysqlDSN:             *mysqlDSN,
+		redisDSN:             *redisDSN,
 		extraCAs:             pool,
 	}
 	if err := run(ctx, cfg, logger); err != nil {
@@ -216,10 +242,11 @@ func run(ctx context.Context, cfg runConfig, logger *slog.Logger) error {
 		return err
 	}
 
-	provider, err := buildProvider(ctx, cfg, logger)
+	provider, closeBackend, err := buildProvider(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
+	defer closeBackend()
 
 	// Non-CIBA profiles serve the bare provider so the listener layout
 	// is the minimal shape an embedder would copy. Under -profile=fapi-ciba
@@ -320,26 +347,53 @@ func validateRunConfig(cfg runConfig) error {
 
 // buildProvider performs every construction step run() needs before
 // it can hand the resulting handler to net/http: ephemeral key
-// generation, in-memory store seeding, optional CIBA store wrapping,
-// op.New invocation, and the optional Initial Access Token mint when
-// -enable-dcr is set. Split out of run() so the parent stays under
-// the gocognit budget.
-func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op.Provider, error) {
+// generation, store connection and seeding, optional CIBA store
+// wrapping, op.New invocation, and the optional Initial Access Token
+// mint when -enable-dcr is set. Split out of run() so the parent stays
+// under the gocognit budget.
+//
+// The returned close function releases whatever the backend holds. It
+// is a no-op for the in-memory default and closes the MySQL and Redis
+// connections under -store=composite, so the caller defers it without
+// having to know which backend it got.
+func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op.Provider, func(), error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generate signing key: %w", err)
+		return nil, nil, fmt.Errorf("generate signing key: %w", err)
 	}
 	cookieKey := make([]byte, 32)
 	if _, err := rand.Read(cookieKey); err != nil {
-		return nil, fmt.Errorf("generate cookie key: %w", err)
+		return nil, nil, fmt.Errorf("generate cookie key: %w", err)
 	}
 
-	st := inmem.New()
-	if err := seedDemoUser(st); err != nil {
+	backend, err := openBackend(ctx, cfg, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	provider, err := buildProviderOn(ctx, cfg, backend, priv, cookieKey, logger)
+	if err != nil {
+		backend.close()
+		return nil, nil, err
+	}
+	return provider, backend.close, nil
+}
+
+// buildProviderOn is the part of construction that runs once storage is
+// live. It is separate so buildProvider owns the backend's lifetime and
+// this half can return an error without repeating the teardown.
+func buildProviderOn(
+	ctx context.Context,
+	cfg runConfig,
+	backend demoBackend,
+	priv *ecdsa.PrivateKey,
+	cookieKey []byte,
+	logger *slog.Logger,
+) (*op.Provider, error) {
+	if err := seedDemoUser(ctx, backend.seed); err != nil {
 		return nil, fmt.Errorf("seed demo user: %w", err)
 	}
-	opStore := buildOPStore(ctx, cfg, st, logger)
-	opts, err := buildOptions(ctx, cfg, st, opStore, priv, cookieKey, logger)
+	opStore := buildOPStore(ctx, cfg, backend.store, logger)
+	opts, err := buildOptions(ctx, cfg, backend.users, opStore, priv, cookieKey, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -363,19 +417,18 @@ func buildProvider(ctx context.Context, cfg runConfig, logger *slog.Logger) (*op
 //   - fapi2-baseline / fapi2-message-signing → profile_fapi2.go
 //   - fapi-ciba → profile_fapi_ciba.go
 //
-// opStore is the [store.Store] passed to [op.WithStore] — typically
-// the in-memory store, optionally wrapped by [cibaAutoApproveStore]
-// when -profile=fapi-ciba is active. st is the underlying
-// [*inmem.Store], retained because [op.PrimaryPassword] needs the
-// concrete UserPasswords accessor (UserPasswords is not on the
-// store.Store interface).
-func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore store.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger) ([]op.Option, error) {
+// opStore is the [store.Store] passed to [op.WithStore] — the backend's
+// store, optionally wrapped by [cibaAutoApproveStore] when
+// -profile=fapi-ciba is active. users is carried alongside it because
+// [op.PrimaryPassword] needs a [store.UserPasswordStore] and that
+// accessor is deliberately absent from the store.Store interface.
+func buildOptions(ctx context.Context, cfg runConfig, users store.UserPasswordStore, opStore store.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger) ([]op.Option, error) {
 	seeds, err := buildClientSeeds(cfg)
 	if err != nil {
 		return nil, err
 	}
-	opts := commonOptions(cfg, opStore, st, priv, cookieKey, logger, seeds)
-	profileOpts, err := profileOptions(ctx, cfg, st, logger)
+	opts := commonOptions(cfg, opStore, users, priv, cookieKey, logger, seeds)
+	profileOpts, err := profileOptions(ctx, cfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +470,7 @@ func buildOptions(ctx context.Context, cfg runConfig, st *inmem.Store, opStore s
 // client seeds, the LoginFlow with PrimaryPassword, JAR, and the
 // claims_supported list. Profile-specific options are appended on top
 // in [buildOptions].
-func commonOptions(cfg runConfig, opStore store.Store, st *inmem.Store, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger, seeds []op.ClientSeed) []op.Option {
+func commonOptions(cfg runConfig, opStore store.Store, users store.UserPasswordStore, priv *ecdsa.PrivateKey, cookieKey []byte, logger *slog.Logger, seeds []op.ClientSeed) []op.Option {
 	opts := []op.Option{
 		op.WithIssuer(cfg.issuer),
 		op.WithStore(opStore),
@@ -431,7 +484,7 @@ func commonOptions(cfg runConfig, opStore store.Store, st *inmem.Store, priv *ec
 		// prompt; demo seeds username "demo" / password "demo" so the
 		// OFCS scripts (which default to OFCS_DEMO_USER=demo /
 		// OFCS_DEMO_PASS=demo) complete the chain end-to-end.
-		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: st.UserPasswords()}}),
+		op.WithLoginFlow(op.LoginFlow{Primary: op.PrimaryPassword{Store: users}}),
 		// JAR (RFC 9101) is opt-in for non-FAPI profiles. Enabling
 		// it makes discovery advertise
 		// request_object_signing_alg_values_supported (without
@@ -530,7 +583,7 @@ func chainOnlyTLSConfig(pool *x509.CertPool) *tls.Config {
 // profileOptions dispatches to the per-profile helper that returns the
 // options that profile activates. Returns nil for the empty / "basic"
 // profile (the common base IS the basic configuration).
-func profileOptions(ctx context.Context, cfg runConfig, st *inmem.Store, logger *slog.Logger) ([]op.Option, error) {
+func profileOptions(ctx context.Context, cfg runConfig, logger *slog.Logger) ([]op.Option, error) {
 	switch cfg.profile {
 	case "", "basic":
 		return nil, nil
@@ -539,7 +592,7 @@ func profileOptions(ctx context.Context, cfg runConfig, st *inmem.Store, logger 
 	case "fapi2-message-signing":
 		return fapi2MessageSigningOptions(ctx, logger)
 	case "fapi-ciba":
-		return fapiCIBAOptions(st), nil
+		return fapiCIBAOptions(), nil
 	default:
 		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, fapi2-baseline, fapi2-message-signing, fapi-ciba)", cfg.profile)
 	}
@@ -549,11 +602,11 @@ func profileOptions(ctx context.Context, cfg runConfig, st *inmem.Store, logger 
 // For non-CIBA profiles this is the bare [*inmem.Store]; for the
 // fapi-ciba profile it is wrapped so Save schedules an out-of-band
 // approval — see [wrapStoreForCIBA] in profile_fapi_ciba.go.
-func buildOPStore(ctx context.Context, cfg runConfig, st *inmem.Store, logger *slog.Logger) store.Store {
+func buildOPStore(ctx context.Context, cfg runConfig, base store.Store, logger *slog.Logger) store.Store {
 	if !isCIBAProfile(cfg.profile) {
-		return st
+		return base
 	}
-	return wrapStoreForCIBA(ctx, cfg, st, logger)
+	return wrapStoreForCIBA(ctx, cfg, base, logger)
 }
 
 // mintInitialAccessToken issues a single Initial Access Token and
@@ -751,13 +804,16 @@ const (
 // code and a dev-only seed has no need to participate in that
 // machinery — the value just feeds the "updated_at" claim, which OFCS
 // only checks for shape, not freshness.
-func seedDemoUser(st *inmem.Store) error {
+// put writes the seed through whichever backend is live. A durable
+// backend re-seeds the same subject on every start, which is why the
+// closure is an upsert on both sides rather than an insert.
+func seedDemoUser(ctx context.Context, put func(context.Context, *store.User, string, []byte) error) error {
 	hash, err := op.HashPassword(demoPassword)
 	if err != nil {
 		return fmt.Errorf("hash demo password: %w", err)
 	}
 	updatedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	st.PutUserWithPassword(context.Background(), &store.User{
+	return put(ctx, &store.User{
 		Subject: demoSubject,
 		Claims: map[string]any{
 			// profile (OIDC Core 1.0 §5.4)
@@ -793,7 +849,6 @@ func seedDemoUser(st *inmem.Store) error {
 		},
 		UpdatedAt: updatedAt,
 	}, demoUsername, hash)
-	return nil
 }
 
 // loadCABundles merges the system trust store with every PEM file in

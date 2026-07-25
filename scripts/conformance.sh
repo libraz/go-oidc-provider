@@ -262,7 +262,10 @@ cmd_op_up() {
     echo "[op-up] OPDEMO_RACE=1; building with -race"
   fi
   echo "[op-up] building ${BINFILE}"
-  ( cd "${ROOT}" && go build "${build_args[@]}" -o "${BINFILE}" ./cmd/op-demo )
+  # op-demo is its own module: it links storage drivers (MySQL, Redis)
+  # that must not appear in the library's dependency list, so the build
+  # runs from its directory rather than from the repository root.
+  ( cd "${ROOT}/cmd/op-demo" && GOWORK=off go build "${build_args[@]}" -o "${BINFILE}" . )
 
   # OP_ENABLE_DCR controls Dynamic Client Registration. Required by
   # the oidcc-dynamic plan and by oidcc-back-channel-rp-initiated-
@@ -298,7 +301,28 @@ cmd_op_up() {
   # WithProfile + the features the profile demands (PAR / DPoP).
   # OP_PROFILE=fapi-ciba activates the FAPI-CIBA profile and the
   # auto-approving CIBA substore wrapper.
-  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic}, dcr=${OP_ENABLE_DCR:-1})"
+  # OP_STORE selects the storage op-demo runs on. The default (inmem)
+  # is what the automated gate uses: nothing to run alongside the
+  # binary, so a conformance run has no external state to reset
+  # between modules. OP_STORE=composite points the durable substores
+  # at MySQL and the volatile ones at Redis, which is how a
+  # deployment-shaped baseline is captured:
+  #
+  #   OP_STORE=composite OP_MYSQL_DSN=... OP_REDIS_DSN=... \
+  #     scripts/conformance.sh op-up
+  #
+  # The engines must be reachable before op-up and their state reset
+  # between baseline captures — records surviving from a previous run
+  # change what replay and reuse modules observe.
+  store_flags=(-store "${OP_STORE:-inmem}")
+  if [[ -n "${OP_MYSQL_DSN:-}" ]]; then
+    store_flags+=(-mysql-dsn "${OP_MYSQL_DSN}")
+  fi
+  if [[ -n "${OP_REDIS_DSN:-}" ]]; then
+    store_flags+=(-redis-dsn "${OP_REDIS_DSN}")
+  fi
+
+  echo "[op-up] starting op-demo on ${LISTEN} (issuer=${ISSUER}, profile=${OP_PROFILE:-basic}, dcr=${OP_ENABLE_DCR:-1}, store=${OP_STORE:-inmem})"
   "${BINFILE}" \
     -listen "${LISTEN}" \
     -issuer "${ISSUER}" \
@@ -310,6 +334,7 @@ cmd_op_up() {
     -profile "${OP_PROFILE:-}" \
     -fapi-client-jwks "${ROOT}/conformance/keys/fapi-client.jwks.json" \
     -fapi-client-2-jwks "${ROOT}/conformance/keys/fapi-client-2.jwks.json" \
+    "${store_flags[@]}" \
     "${dcr_flag[@]}" \
     "${ca_flag[@]}" \
     > "${LOGFILE}" 2>&1 &

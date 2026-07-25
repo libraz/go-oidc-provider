@@ -72,10 +72,13 @@ conformance/.plan-ids.json
 conformance/baselines/*.json
 conformance/render/
 
-# Stray op-demo binary if `go build ./cmd/op-demo` is run from the repo
-# root. The supported flow goes through scripts/conformance.sh, which
+# Stray op-demo binaries. op-demo is its own module, so `go build .` from
+# cmd/op-demo writes next to the source; the older root-relative path is
+# kept because `go build ./cmd/op-demo` still lands there under a
+# workspace. The supported flow goes through scripts/conformance.sh, which
 # writes to conformance/op-demo.bin (already ignored above).
 /op-demo
+/cmd/op-demo/op-demo
 
 # scenariotool and stabilitytool are separate Go submodules whose binaries
 # are built next to their source by `go build ./tools/<name>` (or by the

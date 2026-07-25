@@ -42,7 +42,6 @@ import (
 	opgrant "github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/store"
-	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
 // fapiCIBAOptions returns the [op.Option] additions activated when
@@ -65,13 +64,13 @@ import (
 //     multiple-call-to-token-endpoint module exercises the slow_down
 //     ladder more times than the default cap (5) permits, locking the
 //     record to access_denied mid-test under the production default.
-func fapiCIBAOptions(st *inmem.Store) []op.Option {
+func fapiCIBAOptions() []op.Option {
 	return []op.Option{
 		op.WithProfile(profile.FAPICIBA),
 		op.WithFeature(feature.MTLS),
 		op.WithGrants(opgrant.CIBA, opgrant.RefreshToken),
 		op.WithCIBA(
-			op.WithCIBAHintResolver(demoHintResolver(st)),
+			op.WithCIBAHintResolver(demoHintResolver()),
 			op.WithCIBAPollInterval(time.Second),
 			op.WithCIBAMaxPollViolations(50),
 		),
@@ -123,11 +122,11 @@ func fapiCIBAClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
 // device-side outcomes per module via /_test/ciba-mode. With no
 // override posted the behaviour matches [scheduleApprove] — the
 // production-shaped reference an embedder would copy.
-func wrapStoreForCIBA(ctx context.Context, cfg runConfig, st *inmem.Store, logger *slog.Logger) store.Store {
+func wrapStoreForCIBA(ctx context.Context, cfg runConfig, base store.Store, logger *slog.Logger) store.Store {
 	return &cibaAutoApproveStore{
-		Store: st,
+		Store: base,
 		auto: &autoApprovingCIBA{
-			inner:    st.CIBARequests(),
+			inner:    base.CIBARequests(),
 			delay:    cfg.cibaAutoApproveDelay,
 			ctx:      ctx,
 			log:      logger,
@@ -148,7 +147,7 @@ func isCIBAProfile(name string) bool {
 // well-known login_hint "demo" (and the seed user's username) to the
 // seed subject. Any other hint resolves to op.ErrUnknownCIBAUser so
 // the OP returns the unknown_user_id wire code.
-func demoHintResolver(_ *inmem.Store) op.HintResolver {
+func demoHintResolver() op.HintResolver {
 	return op.HintResolverFunc(func(_ context.Context, _ op.HintKind, value string) (string, error) {
 		switch value {
 		case demoUsername, demoSubject, "demo-user@example.com":
@@ -158,9 +157,9 @@ func demoHintResolver(_ *inmem.Store) op.HintResolver {
 	})
 }
 
-// cibaAutoApproveStore embeds *inmem.Store and overrides CIBARequests
-// so the OP receives the auto-approving wrapper while every other
-// substore is promoted unchanged. The wrapper exists so op-demo can
+// cibaAutoApproveStore embeds the backend's store.Store and overrides
+// CIBARequests so the OP receives the auto-approving wrapper while every
+// other substore is promoted unchanged. The wrapper exists so op-demo can
 // simulate an authentication-device approval out-of-band, which is the
 // shape the OFCS fapi-ciba plan expects: poll mode, first poll lands
 // authorization_pending, a follow-up poll observes Approved.
@@ -169,12 +168,12 @@ func demoHintResolver(_ *inmem.Store) op.HintResolver {
 // callback (push-notification handler, IVR endpoint, etc.) — never
 // from inside the OP process.
 type cibaAutoApproveStore struct {
-	*inmem.Store
+	store.Store
 	auto *autoApprovingCIBA
 }
 
-// CIBARequests overrides the embedded inmem.Store method so the
-// op.Store interface receives the wrapped substore.
+// CIBARequests overrides the embedded store's method so the op.Store
+// interface receives the wrapped substore.
 func (s *cibaAutoApproveStore) CIBARequests() store.CIBARequestStore {
 	return s.auto
 }

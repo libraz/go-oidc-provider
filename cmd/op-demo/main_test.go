@@ -35,7 +35,10 @@ import (
 func newSeededInmem(t *testing.T) *inmem.Store {
 	t.Helper()
 	st := inmem.New()
-	if err := seedDemoUser(st); err != nil {
+	if err := seedDemoUser(t.Context(), func(ctx context.Context, u *store.User, username string, hash []byte) error {
+		st.PutUserWithPassword(ctx, u, username, hash)
+		return nil
+	}); err != nil {
 		t.Fatalf("seedDemoUser: %v", err)
 	}
 	return st

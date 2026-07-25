@@ -49,6 +49,12 @@ public_modules() {
   if [ -f "$REPO_ROOT/op/storeadapter/redis/go.mod" ]; then
     printf '%s\t\n' "$REPO_ROOT/op/storeadapter/redis"
   fi
+  # op-demo is its own module so the storage drivers it links for
+  # -store=composite stay out of the library's dependency list. It carries
+  # no build tag: the conformance harness builds it unconditionally.
+  if [ -f "$REPO_ROOT/cmd/op-demo/go.mod" ]; then
+    printf '%s\t\n' "$REPO_ROOT/cmd/op-demo"
+  fi
   if compgen -G "$REPO_ROOT/examples/*/go.mod" >/dev/null; then
     for f in "$REPO_ROOT"/examples/*/go.mod; do
       printf '%s\t%s\n' "$(dirname "$f")" "example"

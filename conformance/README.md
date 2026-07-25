@@ -132,6 +132,36 @@ In particular, a module that is `FAILED` in both snapshots is not a new
 regression and does not make this command fail. Use the strict release verifier
 described below for release sign-off.
 
+## Capturing a deployment-shaped baseline
+
+The automated gate runs the OP on its in-memory store, which keeps a
+conformance run free of external state. `op-demo` can also run on the
+storage split a deployment uses — durable substores on MySQL, volatile
+ones on Redis — so the same module set can be captured against that
+shape. The store adapters are already validated against real engines by
+the contract suite (`scripts/test_contracts.sh`); this covers what that
+cannot, which is the composite router under protocol load.
+
+Bring the engines up yourself, then:
+
+```sh
+export OP_STORE=composite
+export OP_MYSQL_DSN='opdemo:opdemo@tcp(127.0.0.1:3306)/opdemo?parseTime=true&charset=utf8mb4&loc=UTC'
+export OP_REDIS_DSN='redis://127.0.0.1:6379/0'
+
+make conformance-op-down && make conformance-op-up
+make conformance-baseline LABEL=composite
+```
+
+The schema migrates on startup and the demo user is upserted, so a fresh
+database needs no preparation. Reset both engines between captures:
+records surviving a previous run change what the replay and reuse
+modules observe.
+
+This capture is manual and is not part of the release gate. Running it
+twice — once per backend — would double the gate's wall-clock for
+evidence that only changes when the adapters or the router change.
+
 ## Lifecycle commands
 
 | Command                   | What it does                                           |
