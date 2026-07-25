@@ -699,7 +699,12 @@ func TestRevoke_MissingJWTBackendFailsClosed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			s := inmem.New()
+			now := time.Date(2026, 7, 24, 13, 0, 0, 0, time.UTC)
+			// The store shares the pinned instant the records are stamped
+			// with. On the system clock every record below expires as soon
+			// as real time passes that date, and the cascade assertions then
+			// fail on ErrNotFound rather than on the behaviour under test.
+			s := inmem.New(inmem.WithClock(fixedClock{now: now}))
 			ds := s.DeviceCodes()
 			id := "dev-missing-backend-" + tt.name
 			makePendingRecord(t, ds, id, "ABCDEFGH")
@@ -709,7 +714,6 @@ func TestRevoke_MissingJWTBackendFailsClosed(t *testing.T) {
 			if _, err := ds.Consume(ctx, id); err != nil {
 				t.Fatalf("Consume: %v", err)
 			}
-			now := time.Date(2026, 7, 24, 13, 0, 0, 0, time.UTC)
 			opaqueID := "opaque-" + tt.name
 			if err := s.OpaqueAccessTokens().Save(ctx, &store.OpaqueAccessToken{
 				ID:        opaqueID,

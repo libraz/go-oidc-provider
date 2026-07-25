@@ -16,7 +16,10 @@ func TestPersistAuthnState_CannotOverwriteCompletionOrRecreateDeletedRow(t *test
 	t.Parallel()
 
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
-	backing := inmem.New()
+	// The store has to share the test's clock. Left on the system clock it
+	// treats every record minted at the pinned instant as expired the moment
+	// real time passes that date, and the expiry branch reports ErrNotFound.
+	backing := inmem.New(inmem.WithClock(fixedAuthorizeClock(now)))
 	interactions := backing.Interactions()
 	initialState := authorize.RequestState{
 		Library: authorize.RequestSnapshot{
