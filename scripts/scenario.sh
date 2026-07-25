@@ -15,6 +15,11 @@ source "$SCRIPT_DIR/lib.sh"
 CATALOG_DIR="$REPO_ROOT/test/scenarios/catalog"
 TESTS_PATTERN="$REPO_ROOT/test/scenarios/..."
 
+# The tool module is deliberately outside the shipping inventory, so it is
+# also outside any workspace a release or CI run creates. Workspace mode
+# would refuse to build a directory the workspace does not use.
+export GOWORK=off
+
 cd "$REPO_ROOT/tools/scenariotool"
 
 if [ "$#" -eq 0 ] || [[ "$1" == "-h" || "$1" == "--help" || "$1" == "help" ]]; then

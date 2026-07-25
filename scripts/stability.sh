@@ -17,6 +17,11 @@ SCAN_ROOT="$REPO_ROOT/op"
 MODULE_PATH="github.com/libraz/go-oidc-provider/op"
 REPORT="$REPO_ROOT/api/experimental.txt"
 
+# The tool module is deliberately outside the shipping inventory, so it is
+# also outside any workspace a release or CI run creates. Workspace mode
+# would refuse to build a directory the workspace does not use.
+export GOWORK=off
+
 cd "$REPO_ROOT/tools/stabilitytool"
 
 mode="${1:-}"

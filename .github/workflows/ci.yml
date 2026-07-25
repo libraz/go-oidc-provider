@@ -43,9 +43,11 @@ jobs:
       # A release commit pins adapter go.mod files to the new root tag, which
       # does not exist until after this CI run. The workspace makes pre-tag CI
       # test the identical checked-out root without shipping a replace to
-      # external adapter consumers.
+      # external adapter consumers. The member list is derived from the shared
+      # module inventory so CI, `make verify`, and the release script cannot
+      # cover different sets.
       - name: Initialize multi-module workspace
-        run: go work init . op/storeadapter/sql op/storeadapter/redis cmd/op-demo
+        run: scripts/workspace.sh
 
       - name: Cache pinned tool binaries
         uses: actions/cache@v6
@@ -109,7 +111,7 @@ jobs:
       # See the matching lint-job note: release commits need a local root only
       # until the root tag is published after CI is green.
       - name: Initialize multi-module workspace
-        run: go work init . op/storeadapter/sql op/storeadapter/redis cmd/op-demo
+        run: scripts/workspace.sh
 
       - name: Test conformance release verifier
         run: python3 -m unittest discover -s tools/conformance/tests -v
