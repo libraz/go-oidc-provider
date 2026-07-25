@@ -56,6 +56,25 @@ load-bearing rather than stylistic, and both fail only in a real browser:
 `form-action` (consent redirects cross-origin to the relying party, and
 browsers enforce `form-action` across redirects).
 
+Owning the driver is also what makes granular consent possible. The consent
+page asks scope by scope; `ParseSubmission` folds the repeated checkbox
+field into the single `approved_scopes` value the orchestrator reads.
+Translating the application's form into the library's submission contract is
+what that method is for. Note also that `FieldSpec.Label` is an i18n key
+rather than display text — the library says which field is being asked for
+and leaves the wording, and the language, to whoever owns the page.
+
+## Verifying it
+
+```sh
+(cd examples/internal/browserverify && \
+  go test -tags browserverify -run TestSampleReferenceApp -v .)
+```
+
+The case brings the compose stack up itself and drives signup, authenticator
+enrolment, sign-in, and consent through a headless Chrome to the relying
+party's callback. It skips when Docker or Chrome is missing.
+
 **Authentication factors belong to the application.** The bundled SQL
 adapter persists the OIDC substores but not the factors, because their
 schema and key management are deployment decisions. `totpstore.go` is a
