@@ -119,6 +119,13 @@ func CheckOrigin(r *http.Request, allow *Allowlist) error {
 // components are rejected because each has been used in past parser-confusion
 // attacks (e.g. "https://evil.example/?@trusted.example" where attackers rely
 // on a downstream parser misreading the userinfo segment).
+//
+// A literal IPv6 host is re-bracketed on the way out. [url.URL.Hostname]
+// strips the brackets, and an origin reassembled without them is not a URL
+// any parser or browser would produce: the colons of the address run
+// together with the port separator. It would never equal the Origin header
+// a browser sends for the same host, so the comparison this function exists
+// to make would silently fail.
 func CanonicalOrigin(raw string) (string, error) {
 	if raw == "" {
 		return "", errors.New("csrf: origin must not be empty")
@@ -140,9 +147,9 @@ func CanonicalOrigin(raw string) (string, error) {
 	if u.User != nil {
 		return "", errors.New("csrf: userinfo is not allowed in an origin")
 	}
-	host := strings.ToLower(u.Hostname())
-	if host == "" {
-		return "", errors.New("csrf: origin must include a host")
+	host, err := canonicalHost(u)
+	if err != nil {
+		return "", err
 	}
 	port := u.Port()
 	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
@@ -152,4 +159,19 @@ func CanonicalOrigin(raw string) (string, error) {
 		return scheme + "://" + host + ":" + port, nil
 	}
 	return scheme + "://" + host, nil
+}
+
+// canonicalHost lower-cases the host component and restores the brackets
+// around a literal IPv6 address that [url.URL.Hostname] removes. A host
+// containing a colon can only be an IPv6 literal at this point: the port
+// has already been split off, and a registered name cannot contain one.
+func canonicalHost(u *url.URL) (string, error) {
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", errors.New("csrf: origin must include a host")
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]", nil
+	}
+	return host, nil
 }

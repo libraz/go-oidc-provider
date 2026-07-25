@@ -26,6 +26,13 @@ func TestCanonicalOrigin(t *testing.T) {
 		"http://localhost:8080":                      "http://localhost:8080",
 		"http://localhost:80":                        "http://localhost",
 		"HTTPS://APP.EXAMPLE.COM/some/path?q=1#frag": "https://app.example.com",
+		// A literal IPv6 host keeps its brackets: without them the
+		// address colons and the port separator run together, producing
+		// a string no browser would ever send as an Origin.
+		"http://[::1]:8080": "http://[::1]:8080",
+		"http://[::1]:80":   "http://[::1]",
+		"https://[::1]":     "https://[::1]",
+		"https://[FE80::1]": "https://[fe80::1]",
 	}
 	for in, want := range cases {
 		t.Run(in, func(t *testing.T) {
