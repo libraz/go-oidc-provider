@@ -44,7 +44,15 @@ func validateRedirectURI(raw, applicationType string, hasImplicit, allowLocalhos
 	if !u.IsAbs() {
 		return errInvalidRedirectURI("redirect_uri must be absolute")
 	}
-	if u.Fragment != "" {
+	// The delimiter is what the check is about, not the fragment's
+	// content: RFC 6749 §3.1.2 forbids a fragment component, and a bare
+	// trailing "#" is an empty one. Testing the parsed fragment alone
+	// would admit it, leaving a registered value that a user agent
+	// truncates before the OP ever sees it — so the stored URI and the
+	// URI presented at /authorize could never be the same string. A
+	// literal "#" inside a path or query must arrive percent-encoded, so
+	// an unescaped one is always the delimiter.
+	if strings.Contains(raw, "#") {
 		return errInvalidRedirectURI("redirect_uri must not contain a fragment")
 	}
 	if applicationType == applicationTypeNative {
@@ -158,7 +166,9 @@ func validatePostLogoutRedirectURI(raw, applicationType string, allowLocalhostLo
 	if !u.IsAbs() {
 		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " must be an absolute URL (loopback http requires the explicit scheme://host form)")
 	}
-	if u.Fragment != "" {
+	// See the matching note in [validateRedirectURI]: the delimiter is
+	// the check, so a bare trailing "#" is rejected too.
+	if strings.Contains(raw, "#") {
 		return errInvalidPostLogoutRedirectURI("post_logout_redirect_uris entry " + raw + " must not contain a fragment (loopback http URIs are compared byte-for-byte at /end_session)")
 	}
 	if applicationType == applicationTypeNative {
