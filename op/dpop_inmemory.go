@@ -103,6 +103,20 @@ func withInMemoryDPoPNonceRand(r io.Reader) InMemoryDPoPNonceOption {
 	}
 }
 
+// withInMemoryDPoPNonceTicks replaces the rotation ticker with a channel
+// the caller drives. The seam exists exclusively for tests that need to
+// observe the state around one rotation: with a real ticker they have to
+// sleep for it, and a runner stalled past a second tick retires the value
+// they were about to assert on, so the test reports a defect that is
+// really a scheduling delay. Driving the ticks makes the count exact.
+func withInMemoryDPoPNonceTicks(ticks <-chan time.Time) InMemoryDPoPNonceOption {
+	return func(s *InMemoryDPoPNonceSource) {
+		if ticks != nil {
+			s.ticks = ticks
+		}
+	}
+}
+
 // InMemoryDPoPNonceSource is the concrete reference implementation of
 // [DPoPNonceSource] returned by [NewInMemoryDPoPNonceSource]. The
 // struct satisfies the interface; the constructor returns the concrete
@@ -119,6 +133,11 @@ type InMemoryDPoPNonceSource struct {
 	// the unexported withInMemoryDPoPNonceRand option to exercise the
 	// rotation-failure path without globally swapping rand.Reader.
 	rand io.Reader
+
+	// ticks, when non-nil, replaces the internal rotation ticker. Only
+	// tests populate it, through the unexported withInMemoryDPoPNonceTicks
+	// option, so a rotation happens exactly when the test says it does.
+	ticks <-chan time.Time
 
 	// logger receives WARN lines when the rotation goroutine cannot
 	// mint a fresh value. Nil means "no logging"; the field is
@@ -229,13 +248,17 @@ func constantTimeStringEqual(a, b string) int {
 // whereas critical mints (session / chooser-group IDs) fail closed
 // instead.
 func (s *InMemoryDPoPNonceSource) run(ctx context.Context, rotate time.Duration) {
-	t := time.NewTicker(rotate)
-	defer t.Stop()
+	ticks := s.ticks
+	if ticks == nil {
+		t := time.NewTicker(rotate)
+		defer t.Stop()
+		ticks = t.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-ticks:
 			fresh, err := s.randomNonceValue()
 			if err != nil {
 				// Emit the log BEFORE bumping the counter so a test

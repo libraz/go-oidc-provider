@@ -3,6 +3,7 @@ package op
 import (
 	"io"
 	"testing"
+	"time"
 
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/profile"
@@ -17,6 +18,14 @@ import (
 // while still letting external tests inject a deterministic source.
 func WithInMemoryDPoPNonceRandForTest(r io.Reader) InMemoryDPoPNonceOption {
 	return withInMemoryDPoPNonceRand(r)
+}
+
+// WithInMemoryDPoPNonceTicksForTest re-exports the unexported test seam
+// that drives rotation from a caller-supplied channel instead of a real
+// ticker, so a test that asserts on the state around one rotation gets
+// exactly one and never races a second.
+func WithInMemoryDPoPNonceTicksForTest(ticks <-chan time.Time) InMemoryDPoPNonceOption {
+	return withInMemoryDPoPNonceTicks(ticks)
 }
 
 // ValidateProfileFeatureSetForTest exercises [config.validateProfile]

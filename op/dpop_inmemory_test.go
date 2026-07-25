@@ -81,35 +81,44 @@ func TestNewInMemoryDPoPNonceSource_ValidatesCurrent(t *testing.T) {
 func TestNewInMemoryDPoPNonceSource_AcceptsPreviousAcrossRotation(t *testing.T) {
 	t.Parallel()
 
-	// 200ms rotation gives ~20x headroom over the 10ms polling cadence
-	// so a CPU-contended test runner cannot slip past TWO rotations
-	// (which would retire `first` from the previous slot) between the
-	// IssueNonce that mints `first` and the IssueNonce that observes
-	// the rotation.
-	src, err := op.NewInMemoryDPoPNonceSource(context.Background(), 200*time.Millisecond)
+	// The rotation is driven from the test rather than by a real ticker.
+	// Exactly one rotation happens, so nothing can retire `first` from
+	// the previous slot while the assertions below run — with a real
+	// interval, a stalled runner slipping past a second rotation would
+	// report a defect that is only a scheduling delay.
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	src, err := op.NewInMemoryDPoPNonceSource(ctx, time.Hour, op.WithInMemoryDPoPNonceTicksForTest(ticks))
 	if err != nil {
 		t.Fatalf("NewInMemoryDPoPNonceSource: %v", err)
 	}
 	first := src.IssueNonce()
 
-	// Wait for at least one rotation to occur.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if next := src.IssueNonce(); next != first {
-			// Rotation happened. The previous value MUST still
-			// validate so an in-flight client retry that straddles
-			// the boundary does not get rejected.
-			if !src.Validate(first) {
-				t.Errorf("Validate(previous=%q) = false after rotation, want true", first)
-			}
-			if !src.Validate(next) {
-				t.Errorf("Validate(current=%q) = false, want true", next)
-			}
-			return
+	ticks <- time.Time{}
+
+	// The rotation goroutine received the tick; give it the moment it
+	// needs to publish the fresh value. No further tick is sent, so the
+	// loop converges on the one rotation under test.
+	next := first
+	for range 1000 {
+		if next = src.IssueNonce(); next != first {
+			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("nonce did not rotate within deadline (first=%q)", first)
+	if next == first {
+		t.Fatalf("nonce did not rotate after a tick (first=%q)", first)
+	}
+
+	// The previous value MUST still validate so an in-flight client
+	// retry that straddles the boundary is not rejected.
+	if !src.Validate(first) {
+		t.Errorf("Validate(previous=%q) = false after rotation, want true", first)
+	}
+	if !src.Validate(next) {
+		t.Errorf("Validate(current=%q) = false, want true", next)
+	}
 }
 
 func TestNewInMemoryDPoPNonceSource_StopsRotatingOnCancel(t *testing.T) {
