@@ -266,8 +266,7 @@ func validateSubjectType(t string, pairwiseEnabled bool) error {
 	}
 }
 
-// validateIDTokenAlg enforces the v1.0 ES256-only policy
-// .
+// validateIDTokenAlg enforces the permanent ES256-only signing policy.
 func validateIDTokenAlg(alg string) error {
 	if alg != "ES256" {
 		return errInvalidClientMetadata("id_token_signed_response_alg " + alg + " is not supported (ES256 only)")

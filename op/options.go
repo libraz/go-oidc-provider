@@ -781,9 +781,9 @@ func WithStore(s store.Store) Option {
 // WithKeyset registers the OP signing keys. The first entry is the active
 // signer; subsequent entries are kept in JWKS so RPs can verify tokens
 // issued under previous keys during a rotation window.
-// Every entry MUST be ECDSA on curve P-256 (the v1.0 ES256 policy).
-// Supplying any other key shape causes [New] to fail at construction
-// time.
+// Every entry MUST be ECDSA on curve P-256: the OP signs with ES256 and
+// only ES256, permanently. Supplying any other key shape causes [New] to
+// fail at construction time. See [SigningKey] for the rationale.
 // Stable since v0.1.
 func WithKeyset(ks Keyset) Option {
 	return optionFunc(func(c *config) error {

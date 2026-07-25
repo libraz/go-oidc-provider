@@ -130,6 +130,18 @@ RFC 別のマトリックスは
 [Compliance — RFC matrix](https://go-oidc-provider.libraz.net/ja/compliance/rfc-matrix)
 にあります。
 
+**意図的な仕様からの逸脱がひとつあります。署名は ES256 のみです。**
+ID トークン、JWT アクセストークン、署名付き UserInfo、JARM レスポンスは
+すべて ES256 で署名します。これは段階的な移行の途中ではなく恒久的な方針です。
+OpenID Connect Core §15.1 は RS256 の実装を必須としているため、これは仕様の
+文言からの意図的な逸脱にあたります。RS256 でしか検証できないリライング
+パーティはサポートしません。引き換えに得られるのは、検証済みの曲線ひとつだけを
+扱い、アルゴリズムのネゴシエーションを持たず、したがって防ぐべきダウングレード
+経路も存在しないという性質です。ES256 は本ライブラリが対象とする FAPI 2.0
+プロファイルの第一級アルゴリズムであり、そのプロファイルは RS256 自体を
+禁じています。なお RS256 と PS256 は、クライアント認証アサーションや
+リクエストオブジェクトの**検証**では引き続き受け付けます。
+
 ## ストレージ
 
 [`op/store`](op/store) のサブストアインターフェースを実装すれば、任意の
@@ -174,11 +186,11 @@ docker スタック手順は、そちらの索引（英語）にまとめてい�
 
 ## コミュニティ
 
-- [SECURITY.md](SECURITY.md) — 脆弱性報告ポリシーとサポート対象
+- [SECURITY.md](.github/SECURITY.md) — 脆弱性報告ポリシーとサポート対象
   バージョン。
-- [CONTRIBUTING.md](CONTRIBUTING.md) — コントリビューション手順、
+- [CONTRIBUTING.md](.github/CONTRIBUTING.md) — コントリビューション手順、
   Conventional Commits のスコープ、テスト階層の期待値。
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Contributor Covenant 2.1 と
+- [CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md) — Contributor Covenant 2.1 と
   本プロジェクトの通報窓口。
 
 ## ライセンス

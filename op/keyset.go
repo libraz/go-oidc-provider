@@ -19,8 +19,13 @@ type SigningKey struct {
 	KeyID string
 
 	// Signer is the private key implementing [crypto.Signer]. The
-	// library only signs with ES256 in v1.0; supplying a non-P-256 key
-	// causes [op.New] to fail at construction time.
+	// library signs with ES256 and only ES256, so the key MUST be
+	// ECDSA on curve P-256; any other shape causes [op.New] to fail at
+	// construction time. The restriction is a permanent design choice
+	// rather than a staged rollout: it removes algorithm negotiation
+	// and the downgrade guard negotiation would require. RS256 and
+	// PS256 remain accepted for verification of client assertions and
+	// request objects.
 	Signer crypto.Signer
 
 	// NotAfter is the optional retirement deadline for the entry.

@@ -171,8 +171,10 @@ type ClientMetadata struct {
 	// "pairwise" when WithPairwiseSubject is configured.
 	SubjectType string
 
-	// IDTokenSignedResponseAlg is the requested ID token alg. v1.0
-	// accepts ES256 only.
+	// IDTokenSignedResponseAlg is the requested ID token alg. ES256 is
+	// the only accepted value; any other algorithm is rejected with
+	// invalid_client_metadata. See [SigningKey] for why the OP signs
+	// with a single algorithm.
 	IDTokenSignedResponseAlg string
 
 	// SectorIdentifierURI is the OIDC Dynamic Client Registration 1.0

@@ -18,6 +18,42 @@
       "reason": "Cascades from the discovery-endpoint-verification module above: the plan aborts on the session_supported assertion before this module can run. Same rationale as that exclusion.",
       "owner": "@libraz",
       "expires": "2027-01-31"
+    },
+    {
+      "plan": "oidcc-config-certification-test-plan",
+      "module": "oidcc-discovery-endpoint-verification",
+      "status": "FINISHED",
+      "result": "FAILED",
+      "reason": "The OP signs id_token, JWT access tokens, signed userinfo and JARM with ES256 only, so id_token_signing_alg_values_supported does not list RS256. OIDC Core 1.0 section 15.1 makes RS256 mandatory to implement and this module asserts it. Single-algorithm signing is a permanent design decision, not a staged rollout: it removes algorithm negotiation and the downgrade guard that negotiation requires, and ES256 satisfies the FAPI 2.0 profiles this OP targets, which forbid RS256 outright. Relying parties that can only verify RS256 are knowingly unsupported.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "plan": "oidcc-dynamic-certification-test-plan",
+      "module": "oidcc-discovery-endpoint-verification",
+      "status": "FINISHED",
+      "result": "FAILED",
+      "reason": "Same cause as the oidcc-config exclusion above: the advertised id_token signing algorithms are ES256 only, and this module asserts the OIDC Core 1.0 section 15.1 RS256 requirement.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "plan": "oidcc-dynamic-certification-test-plan",
+      "module": "oidcc-idtoken-rs256",
+      "status": "INTERRUPTED",
+      "result": "FAILED",
+      "reason": "The module registers a client requesting id_token_signed_response_alg RS256, which dynamic client registration rejects with invalid_client_metadata because ES256 is the only supported signing algorithm. The module cannot reach its assertions. Same permanent single-algorithm rationale as the oidcc-config exclusion above.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "plan": "oidcc-dynamic-certification-test-plan",
+      "module": "oidcc-userinfo-rs256",
+      "status": "INTERRUPTED",
+      "result": "FAILED",
+      "reason": "The module registers a client requesting userinfo_signed_response_alg RS256, which dynamic client registration rejects for the same reason as oidcc-idtoken-rs256 above.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
     }
   ]
 }

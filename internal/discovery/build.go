@@ -641,8 +641,8 @@ func applyJARMFeature(in Input, doc *Document) {
 	}
 	doc.ResponseModesSupported = append(doc.ResponseModesSupported,
 		"query.jwt", "fragment.jwt", "form_post.jwt", "jwt")
-	// v1.0 signs with ES256 only; keep the field single-valued so
-	// embedders that grow the algorithm list see a stable shape.
+	// The OP signs with ES256 only; the field stays single-valued
+	// because the signing algorithm is fixed by design.
 	doc.AuthorizationSigningAlgValuesSupported = []string{"ES256"}
 }
 

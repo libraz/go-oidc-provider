@@ -13,7 +13,7 @@
 //
 // # Algorithm policy
 //
-// v1.0 signs with ES256 (RFC 7518 §3.4). The package routes through
+// The OP signs with ES256 and only ES256 (RFC 7518 §3.4). The package routes through
 // [internal/jose] / [internal/keys] so the algorithm allow-list and key
 // shape are enforced in one place; supplying a non-ECDSA key fails fast.
 //
@@ -53,7 +53,7 @@ type SigningKey struct {
 
 	// Alg is the JWS signing algorithm advertised on every emitted JWS and
 	// used to select the matching SHA digest for [HashForAlg]. Empty
-	// defaults to "ES256" (the v0.x single-alg policy), so older callers
+	// defaults to "ES256" (the single-alg policy), so callers
 	// that build a SigningKey directly stay correct.
 	Alg string
 }
@@ -207,7 +207,7 @@ func SignAccessToken(key SigningKey, claims AccessTokenClaims) (string, error) {
 	return serializeJWT(signer, merged)
 }
 
-// Hash is a convenience for tests and fixtures pinned to the v0.x ES256
+// Hash is a convenience for tests and fixtures pinned to the ES256
 // signing policy; production callers MUST go through [HashForAlg] with the
 // active SigningKey.Alg so the digest follows the signing algorithm if
 // future versions admit anything beyond ES256 (OIDC Core 1.0 §3.1.3.6).

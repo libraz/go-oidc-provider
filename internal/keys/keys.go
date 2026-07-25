@@ -25,8 +25,8 @@ type Entry struct {
 	// every JWS the OP signs with this key.
 	KeyID string
 
-	// Signer is the private key. The library only signs with ES256 in
-	// v1.0; non-P-256 keys are rejected at construction time.
+	// Signer is the private key. The library signs with ES256 and only
+	// ES256; non-P-256 keys are rejected at construction time.
 	Signer crypto.Signer
 
 	// NotAfter is the wall-clock instant after which this entry MUST NOT
@@ -139,7 +139,7 @@ func NewSet(entries []Entry, opts ...SetOption) (*Set, error) {
 			return nil, fmt.Errorf("%w: entry %q has nil Signer", ErrInvalidKey, e.KeyID)
 		}
 		// Delegate the alg/kty/crv triple to the canonical
-		// [jose.KeyShape] matrix, then enforce the v0.x ES256-only
+		// [jose.KeyShape] matrix, then enforce the ES256-only
 		// constraint on top. The narrower constraint is intentional:
 		// every downstream package (jarm / dpop / tokens) hard-codes
 		// ES256 today, so admitting another shape here would cause a

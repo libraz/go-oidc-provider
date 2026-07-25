@@ -34,10 +34,10 @@
 //
 // # Algorithm policy
 //
-// v0.x signs with ES256 using the OP's existing access-token / id-token
-// signing key. No new keyset is introduced. Encrypted JARM (the JWE
-// variants) is intentionally out of scope; the *.jwt response modes
-// here are signed-only.
+// JARM responses are signed with ES256, using the OP's existing
+// access-token / id-token signing key. No new keyset is introduced.
+// Encrypted JARM (the JWE variants) is intentionally out of scope; the
+// *.jwt response modes here are signed-only.
 //
 // # Feature gating
 //

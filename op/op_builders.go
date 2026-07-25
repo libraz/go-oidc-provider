@@ -532,7 +532,7 @@ func absoluteEndpointURL(cfg *config, endpoint string) string {
 // path on purpose.
 //
 // The signer reuses the OP's active id_token / access_token signing
-// key. v0.x ships with ES256 only; the JARM spec accepts the same
+// key. The OP signs with ES256 only and the JARM spec accepts that
 // algorithm without negotiation, so a separate keyset would only
 // duplicate state without adding security.
 //

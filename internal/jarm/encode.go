@@ -148,7 +148,7 @@ func deriveJWSAlgorithm(key tokens.SigningKey) (josev4.SignatureAlgorithm, error
 		return "", fmt.Errorf("%w: %w: key type %T (v0.x supports ECDSA P-256 only; see internal/keys.NewSet)", ErrEncode, jose.ErrUnsupportedKeyShape, pub)
 	}
 	if alg != string(josev4.ES256) {
-		return "", fmt.Errorf("%w: %w: alg %q is not ES256 (v0.x supports ECDSA P-256 only)", ErrEncode, jose.ErrUnsupportedKeyShape, alg)
+		return "", fmt.Errorf("%w: %w: alg %q is not ES256 (the OP signs with ECDSA P-256 only)", ErrEncode, jose.ErrUnsupportedKeyShape, alg)
 	}
 	return josev4.ES256, nil
 }

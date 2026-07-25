@@ -119,6 +119,17 @@ the live scoreboard is on the
 A per-RFC matrix is at
 [Compliance — RFC matrix](https://go-oidc-provider.libraz.net/compliance/rfc-matrix).
 
+**One deliberate departure: signing is ES256 only.** ID tokens, JWT access
+tokens, signed UserInfo and JARM responses are all signed with ES256, and
+that is permanent rather than a staged rollout. OpenID Connect Core §15.1
+makes RS256 mandatory to implement, so this is a knowing departure from the
+letter of the specification: a relying party that can only verify RS256 is
+not supported. The trade is one vetted curve with no algorithm negotiation
+and therefore no downgrade path to defend, and ES256 is a first-class
+algorithm in the FAPI 2.0 profiles this library targets — which exclude
+RS256 outright. RS256 and PS256 remain accepted for *verification* of
+client assertions and request objects.
+
 ## Storage
 
 Bring your own backend by implementing the substore interfaces in
@@ -160,11 +171,11 @@ maps to a use-case page on the docs site under
 
 ## Community
 
-- [SECURITY.md](SECURITY.md) — vulnerability reporting policy and supported
+- [SECURITY.md](.github/SECURITY.md) — vulnerability reporting policy and supported
   versions.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — contribution mechanics, Conventional
+- [CONTRIBUTING.md](.github/CONTRIBUTING.md) — contribution mechanics, Conventional
   Commits scopes, test layering expectations.
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — Contributor Covenant 2.1 and the
+- [CODE_OF_CONDUCT.md](.github/CODE_OF_CONDUCT.md) — Contributor Covenant 2.1 and the
   project's reporting channel.
 
 ## License
