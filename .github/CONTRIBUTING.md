@@ -42,6 +42,12 @@ project-specific scopes:
   documentation: core interface only if every OP needs it, otherwise an opt-in
   extension verified at `op.New`. Extend the requirement matrix in the same
   place when you add one.
+- Adding or removing an `Experimental:` godoc marker changes the API exempt
+  from the SemVer promise. Run `make stability` to regenerate
+  `api/experimental.txt` and commit the result; `make verify` fails on an
+  unregenerated report. The marker needs a rationale saying what is expected
+  to change, and a symbol cannot claim both `Experimental:` and
+  `Stable since`.
 
 ## RFC references
 

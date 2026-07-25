@@ -49,8 +49,21 @@ done < <(public_modules)
 
 "$SCRIPT_DIR/test.sh" --race
 
+# The gates below are only worth as much as the tools behind them, and the
+# tools live in modules the shipping inventory deliberately excludes, so
+# their own tests would otherwise never run here.
+for tool_mod in scenariotool stabilitytool; do
+  if [ -f "$REPO_ROOT/tools/$tool_mod/go.mod" ]; then
+    log "go test ./... (tools/$tool_mod)"
+    (cd "$REPO_ROOT/tools/$tool_mod" && GOWORK=off go test ./...)
+  fi
+done
+
 log "scenariotool advisories --check"
 "$SCRIPT_DIR/scenario.sh" advisories --check >/dev/null
+
+log "stabilitytool --check"
+"$SCRIPT_DIR/stability.sh" --check
 
 "$SCRIPT_DIR/verify_examples.sh"
 

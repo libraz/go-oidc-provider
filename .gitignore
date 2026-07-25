@@ -77,10 +77,11 @@ conformance/render/
 # writes to conformance/op-demo.bin (already ignored above).
 /op-demo
 
-# scenariotool is a separate Go submodule whose binary is built next
-# to its source by `go build ./tools/scenariotool` (or by the
-# scenario-* Makefile targets that exec it).
+# scenariotool and stabilitytool are separate Go submodules whose binaries
+# are built next to their source by `go build ./tools/<name>` (or by the
+# scenario-* / stability* Makefile targets that exec them).
 /tools/scenariotool/scenariotool
+/tools/stabilitytool/stabilitytool
 
 # Internal-only artefacts (kept locally, never committed). The OSS-facing
 # documentation lives in README.md, CHANGELOG.md, SECURITY.md, NOTICE,

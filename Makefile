@@ -3,6 +3,7 @@ SHELL := /usr/bin/env bash
 .DEFAULT_GOAL := verify
 
 .PHONY: tools format lint vet test test-race cover fuzz fuzz-long govulncheck licenses verify verify-examples clean \
+        stability stability-check \
         scenario-validate scenario-validate-lenient scenario-coverage scenario-coverage-strict \
         scenario-coverage-yaml-only scenario-stats scenario-advisories scenario-advisories-strict \
         example-01 example-03 example-17 example-41 example-51 \
@@ -72,6 +73,16 @@ example-51:
 	cd examples/51-dpop-nonce && go run -tags example .
 
 # Spec Scenario Suite — catalog validation and coverage.
+# api/experimental.txt records the public API exempt from the SemVer
+# promise. It is generated from the "Experimental:" godoc markers, so a
+# marker added or removed shows up as a diff on the report rather than
+# only in the source.
+stability:
+	@scripts/stability.sh --write
+
+stability-check:
+	@scripts/stability.sh --check
+
 # Catalog source of truth: test/scenarios/catalog/<feature>.yaml.
 # See test/scenarios/catalog/README.md for the schema.
 scenario-validate:
