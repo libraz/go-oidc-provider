@@ -39,6 +39,10 @@ func newFactory(now time.Time) contract.Factory {
 			Advance: func(delta time.Duration) {
 				clock.now = clock.now.Add(delta)
 			},
+			SeedUser: func(t *testing.T, u *store.User, username string, passwordHash []byte) {
+				t.Helper()
+				s.PutUserWithPassword(t.Context(), u, username, passwordHash)
+			},
 		}
 	}
 }

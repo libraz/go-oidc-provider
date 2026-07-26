@@ -57,6 +57,18 @@ type Backend struct {
 	// from live to expired without sleeping. Nil skips only those
 	// transition-specific assertions.
 	Advance func(time.Duration)
+
+	// SeedUser installs a directory entry the password ceremony can
+	// resolve against, together with the username it authenticates under
+	// and its encoded password hash.
+	//
+	// It exists because [store.UserStore] is read-only by design — the
+	// library never enrols a user — so the harness has no in-contract way
+	// to arrange one. Backends that can populate their directory supply
+	// this; a nil SeedUser skips the [store.UserPasswordStore] sub-tests
+	// rather than failing them, so a passkey-only backend that
+	// implements no password lookup at all stays green.
+	SeedUser func(t *testing.T, u *store.User, username string, passwordHash []byte)
 }
 
 // Run drives every contract sub-test against the backend produced by f. Each
@@ -81,6 +93,7 @@ func Run(t *testing.T, f Factory) {
 		{"ConsumedJTIStore", jtiCases},
 		{"InitialAccessTokenStore", iatCases},
 		{"RegistrationAccessTokenStore", ratCases},
+		{"AccessTokenRegistry", accessTokenRegistryCases},
 		{"OpaqueAccessTokenStore", opaqueAccessTokenCases},
 		{"GrantRevocationStore", grantRevocationCases},
 		{"DeviceCodeStore", deviceCodeCases},
@@ -1059,15 +1072,20 @@ func metadataGetMissing(t *testing.T, f Factory) {
 
 // --- UserStore -------------------------------------------------------------
 
-// UserStore is read-only from the library's perspective (embedders own
-// the write path through their own admin plane), so the harness has no
-// generic seed hook to exercise a round trip. The absent-subject
-// contract is the one guarantee every backend can be asserted against
-// without a backend-specific seeding mechanism.
+// UserStore is read-only from the library's perspective — embedders own
+// the write path through their own admin plane — so everything past the
+// absent-subject case needs a directory entry the harness cannot create
+// on its own. [Backend.SeedUser] is that hook; the sub-tests that need
+// it skip when a backend does not supply one.
 
 //nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
 var userStoreCases = []subtest{
 	{"FindMissing", userStoreFindMissing},
+	{"FindBySubjectRoundTrip", userStoreFindBySubject},
+	{"FindByUsernameResolvesSameSubject", userPasswordFindByUsername},
+	{"FindByUsernameMissing", userPasswordFindByUsernameMissing},
+	{"ReadPasswordHashRoundTrip", userPasswordReadHash},
+	{"ReadPasswordHashMissingSubject", userPasswordReadHashMissing},
 }
 
 func userStoreFindMissing(t *testing.T, f Factory) {
@@ -1075,5 +1093,105 @@ func userStoreFindMissing(t *testing.T, f Factory) {
 	_, err := b.Store.Users().FindBySubject(context.Background(), "contract-absent-subject")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("FindBySubject missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// seededUserBackend arranges one directory entry and returns the
+// backend alongside it, skipping when the backend cannot seed.
+func seededUserBackend(t *testing.T, f Factory) (Backend, *store.User, string, []byte) {
+	t.Helper()
+	b := f(t)
+	if b.SeedUser == nil {
+		t.Skip("backend supplies no SeedUser hook")
+	}
+	user := &store.User{
+		Subject:   "contract-user",
+		Claims:    map[string]any{"name": "Contract User", "email": "user@example.com"},
+		UpdatedAt: Reference,
+	}
+	const username = "contract-user@example.com"
+	hash := []byte("$argon2id$v=19$m=65536,t=3,p=4$c29tZXNhbHQ$Y29udHJhY3RoYXNo")
+	b.SeedUser(t, user, username, hash)
+	return b, user, username, hash
+}
+
+func userStoreFindBySubject(t *testing.T, f Factory) {
+	b, want, _, _ := seededUserBackend(t, f)
+	got, err := b.Store.Users().FindBySubject(context.Background(), want.Subject)
+	if err != nil {
+		t.Fatalf("FindBySubject: %v", err)
+	}
+	if got.Subject != want.Subject {
+		t.Fatalf("Subject = %q, want %q", got.Subject, want.Subject)
+	}
+	if got.Claims["name"] != want.Claims["name"] {
+		t.Fatalf("Claims[name] = %v, want %v", got.Claims["name"], want.Claims["name"])
+	}
+	if !got.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Fatalf("UpdatedAt = %v, want %v", got.UpdatedAt, want.UpdatedAt)
+	}
+}
+
+func requireUserPasswords(t *testing.T, s store.Store) store.UserPasswordStore {
+	t.Helper()
+	passwords, ok := s.Users().(store.UserPasswordStore)
+	if !ok {
+		t.Skipf("backend %T does not implement store.UserPasswordStore", s.Users())
+	}
+	return passwords
+}
+
+// userPasswordFindByUsername pins the invariant that matters most in
+// this pair: both lookups must land on the same subject. A backend that
+// normalises one path and not the other would enrol a login under one
+// identifier and issue tokens under another.
+func userPasswordFindByUsername(t *testing.T, f Factory) {
+	b, want, username, _ := seededUserBackend(t, f)
+	passwords := requireUserPasswords(t, b.Store)
+
+	got, err := passwords.FindByUsername(context.Background(), username)
+	if err != nil {
+		t.Fatalf("FindByUsername(%q): %v", username, err)
+	}
+	if got.Subject != want.Subject {
+		t.Fatalf("FindByUsername subject = %q, want %q", got.Subject, want.Subject)
+	}
+}
+
+func userPasswordFindByUsernameMissing(t *testing.T, f Factory) {
+	b, _, _, _ := seededUserBackend(t, f)
+	passwords := requireUserPasswords(t, b.Store)
+
+	// An unknown username must not resolve to a placeholder: the
+	// orchestrator distinguishes "unknown user" from "wrong password"
+	// internally and renders one invalid-credentials prompt either way.
+	_, err := passwords.FindByUsername(context.Background(), "contract-absent@example.com")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("FindByUsername(absent): want ErrNotFound, got %v", err)
+	}
+}
+
+func userPasswordReadHash(t *testing.T, f Factory) {
+	b, user, _, want := seededUserBackend(t, f)
+	passwords := requireUserPasswords(t, b.Store)
+
+	got, err := passwords.ReadPasswordHash(context.Background(), user.Subject)
+	if err != nil {
+		t.Fatalf("ReadPasswordHash: %v", err)
+	}
+	// The encoded hash round-trips verbatim: the library reads it as a
+	// PHC string and any re-encoding would break verification.
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadPasswordHash = %q, want %q", got, want)
+	}
+}
+
+func userPasswordReadHashMissing(t *testing.T, f Factory) {
+	b, _, _, _ := seededUserBackend(t, f)
+	passwords := requireUserPasswords(t, b.Store)
+
+	_, err := passwords.ReadPasswordHash(context.Background(), "contract-absent-subject")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("ReadPasswordHash(absent): want ErrNotFound, got %v", err)
 	}
 }
