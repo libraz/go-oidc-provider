@@ -103,6 +103,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("oidcsql.New: %w", err)
 	}
+	// Migrate applies the embedded DDL with the renames above already
+	// substituted; storage.Schema() returns that same rewritten SQL for
+	// embedders who drive migrations from their own tooling.
 	if err := storage.Migrate(context.Background()); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}

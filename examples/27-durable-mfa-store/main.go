@@ -151,7 +151,9 @@ func run() error {
 	defer func() { _ = db.Close() }()
 
 	// The core adapter and the factor store share this one *sql.DB, so
-	// both persist to the same file and are migrated together.
+	// both persist to the same file and are migrated together. Migrate
+	// is a development shortcut; production deployments run
+	// storage.Schema() through their own migration tooling instead.
 	storage, err := oidcsql.New(db, oidcsql.SQLite())
 	if err != nil {
 		return fmt.Errorf("oidcsql.New: %w", err)
