@@ -204,8 +204,11 @@ op.StepTOTP{Store: st.TOTPs(), EncryptionKey: mfaKey}
 Their contracts are pinned by the same harness as everything else
 (`contract.RunTOTPs`, `RunPasskeys`, `RunRecoveryCodes`, `RunEmailOTPs`,
 `RunAuthnLockouts`), so a bring-your-own implementation can be verified the
-same way. [`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go)
-remains the copy-and-adapt template for a backend the repository does not ship.
+same way — [`examples/26-byo-store-from-scratch`](examples/26-byo-store-from-scratch/main.go)
+is the worked example of doing that for a backend the repository does not ship.
+[`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go) shows
+the shipped path: factor tables and core tables on one database, one migration,
+one connection pool.
 
 **Provisioning the schema.** The `sql` adapter embeds reference DDL for each
 engine under
@@ -226,7 +229,8 @@ factor needs no separate migration. DynamoDB mirrors the split:
 
 Runnable demos live under [`examples/`](examples/README.md) — see that index
 for the full goal-oriented table, the numeric topic bands, and the docker
-stacks shipped with `07-mysql-store` and `09-redis-volatile`. Each row also
+stacks shipped with `07-mysql-store`, `09-redis-volatile`,
+`17-spa-composite-store`, and `18-dynamodb-store`. Each row also
 maps to a use-case page on the docs site under
 [Use cases](https://go-oidc-provider.libraz.net/use-cases/).
 

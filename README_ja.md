@@ -217,10 +217,12 @@ op.StepTOTP{Store: st.TOTPs(), EncryptionKey: mfaKey}
 
 これらの契約も他と同じハーネス（`contract.RunTOTPs` / `RunPasskeys` /
 `RunRecoveryCodes` / `RunEmailOTPs` / `RunAuthnLockouts`）で固定してあるため、
-自作実装も同じ手順で検証できます。同梱していないバックエンドを使う場合の
-テンプレートとして
+自作実装も同じ手順で検証できます。同梱していないバックエンドを一から書く例は
+[`examples/26-byo-store-from-scratch`](examples/26-byo-store-from-scratch/main.go)
+に、同梱アダプタを使う場合（ファクタ用テーブルとコアテーブルを 1 つの DB に置き、
+マイグレーションもコネクションプールも 1 つで済ませる形）は
 [`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go)
-が引き続き利用できます。
+にあります。
 
 **スキーマの適用。** `sql` アダプタはエンジンごとのリファレンス DDL を
 [`op/storeadapter/sql/schema/{sqlite,mysql,postgres}/v1.sql`](op/storeadapter/sql/schema)
@@ -239,8 +241,9 @@ Terraform に渡すキースキーマを返し、`CreateTables(ctx)` が開発�
 ## サンプル
 
 動作デモは [`examples/`](examples/README.md) 配下にあります。目的別の対応表、
-番号レンジの割り振り、`07-mysql-store` / `09-redis-volatile` 用の
-docker スタック手順は、そちらの索引（英語）にまとめています。各行は
+番号レンジの割り振り、`07-mysql-store` / `09-redis-volatile` /
+`17-spa-composite-store` / `18-dynamodb-store` 用の docker スタック手順は、
+そちらの索引（英語）にまとめています。各行は
 ドキュメントサイトの
 [ユースケース一覧](https://go-oidc-provider.libraz.net/ja/use-cases/)
 配下のページに対応します。

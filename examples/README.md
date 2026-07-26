@@ -13,8 +13,9 @@ Embedder-side install (the same versions every example pins):
 
 ```sh
 go get github.com/libraz/go-oidc-provider/op@v1.0.0
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0    # examples 06 / 07 / 08 / 09 / 17 / 27
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0  # examples 09 / 17
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0       # examples 06 / 07 / 08 / 09 / 17 / 27
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0     # examples 09 / 17
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.0.0  # example 18
 ```
 
 Each row in the table below also maps to a use-case page on the docs site under
@@ -23,10 +24,11 @@ production-shaped narrative around the example file.
 
 ## Docker stacks
 
-`07-mysql-store`, `09-redis-volatile`, and `17-spa-composite-store` ship a
-`compose.yaml` + `Dockerfile` that boot the engine(s) and the OP+RP binary on a
-private docker network. All three build from the repo root
-(`build.context: ../..`), so the commands below work from anywhere in the repo:
+`07-mysql-store`, `09-redis-volatile`, `17-spa-composite-store`, and
+`18-dynamodb-store` ship a `compose.yaml` + `Dockerfile` that boot the
+engine(s) and the OP+RP binary on a private docker network. All four build from
+the repo root (`build.context: ../..`), so the commands below work from
+anywhere in the repo:
 
 ```sh
 # 07: OP + MySQL on a private network
@@ -40,6 +42,10 @@ docker compose -f examples/09-redis-volatile/compose.yaml down -v
 # 17: the same storage split with the SPA seam on top
 docker compose -f examples/17-spa-composite-store/compose.yaml up -d --build
 docker compose -f examples/17-spa-composite-store/compose.yaml down -v
+
+# 18: OP + a DynamoDB emulator (the whole OP on one non-relational backend)
+docker compose -f examples/18-dynamodb-store/compose.yaml up -d --build
+docker compose -f examples/18-dynamodb-store/compose.yaml down -v
 ```
 
 `08-composite-hot-cold` is the no-docker counterpart of `09`: the same
@@ -57,6 +63,7 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | issue tokens to backend services (no end user) | [`05-client-credentials`](05-client-credentials/main.go) |
 | serve plain OAuth 2.0 alongside OIDC | [`04-oauth2-only`](04-oauth2-only/main.go) |
 | persist on a real database (SQLite / MySQL) | [`06-sql-store`](06-sql-store/main.go), [`07-mysql-store`](07-mysql-store/main.go) |
+| run the whole OP on DynamoDB, transactions included | [`18-dynamodb-store`](18-dynamodb-store/main.go) |
 | customise SQL table names | [`25-byo-table-names`](25-byo-table-names/main.go) |
 | implement a store from scratch | [`26-byo-store-from-scratch`](26-byo-store-from-scratch/main.go) |
 | split hot volatile state from durable state | [`08-composite-hot-cold`](08-composite-hot-cold/main.go), [`09-redis-volatile`](09-redis-volatile/main.go) |
@@ -75,7 +82,7 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | require password + TOTP at every login (always-on 2FA) | [`20-mfa-totp`](20-mfa-totp/main.go) |
 | require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
 | step a logged-in session up to a higher ACR (RFC 9470) | [`23-step-up`](23-step-up/main.go) |
-| persist MFA factors (TOTP) on a real database | [`27-durable-mfa-store`](27-durable-mfa-store/main.go) |
+| persist MFA factors on the same database as the core tables | [`27-durable-mfa-store`](27-durable-mfa-store/main.go) |
 | use a mailed one-time code, with recovery codes as the fallback | [`28-email-otp-recovery`](28-email-otp-recovery/main.go) |
 | register a passkey and then sign in with it (WebAuthn) | [`29-passkey`](29-passkey/main.go) |
 | drive a TV / IoT / CLI tool via RFC 8628 device authorization | [`31-device-code-cli`](31-device-code-cli/main.go) |
@@ -97,7 +104,7 @@ in-flight or v1.x work:
 | Band  | Topic                                                          |
 |-------|----------------------------------------------------------------|
 | 00–09 | bootstrap, core flows, profiles, storage adapters              |
-| 10–19 | UI and browser integration (SPA, consent, chooser, CORS, i18n) |
+| 10–19 | UI and browser integration (SPA, consent, chooser, CORS, i18n); 18–19 hold the storage-adapter overflow, 00–09 being full |
 | 20–29 | MFA, authentication rules, and user-store projection           |
 | 30–39 | advanced grants, subject modes, encrypted tokens, federation   |
 | 40–49 | governance: first-party, DCR, back-channel logout              |
