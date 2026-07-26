@@ -59,6 +59,9 @@ func TestIsSensitive(t *testing.T) {
 		{"secret_type", false},
 		{"token_endpoint", false},
 		{"id_token_signed_response_alg", false},
+		{"access_token_ttl_seconds", false},
+		{"refresh_token_ttl_seconds", false},
+		{"access_token_format", false},
 		// Benign keys are still benign.
 		{"client_id", false},
 		{"sub", false},

@@ -7,7 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/op"
 	"github.com/libraz/go-oidc-provider/op/feature"
 	"github.com/libraz/go-oidc-provider/op/grant"
@@ -156,6 +158,43 @@ func TestAuditStartupProfile_UnprofiledDeployment(t *testing.T) {
 	assertBool(t, rec, "par_required", false)
 	if got := rec.Extras["sender_constrained"]; got != "" {
 		t.Errorf("sender_constrained=%v want empty (bearer tokens are legal)", got)
+	}
+}
+
+// TestAuditStartupProfile_PolicyValuesSurviveRedaction guards the
+// record against the audit redactor, which masks any key containing
+// "token" on the assumption it carries one. Three of the payload's
+// fields name a token without carrying one — two lifetimes and a wire
+// format — and a record that reports them as [REDACTED] cannot answer
+// the question it exists for.
+func TestAuditStartupProfile_PolicyValuesSurviveRedaction(t *testing.T) {
+	t.Parallel()
+
+	rec := captureStartupProfile(t,
+		op.WithAccessTokenTTL(90*time.Second),
+		op.WithRefreshTokenTTL(2*time.Hour),
+	)
+	cases := []struct {
+		key  string
+		want any
+	}{
+		{"access_token_ttl_seconds", float64(90)},
+		{"refresh_token_ttl_seconds", float64(7200)},
+		{"access_token_format", "jwt"},
+	}
+	for _, tc := range cases {
+		got, ok := rec.Extras[tc.key]
+		if !ok {
+			t.Errorf("%s missing from the startup record", tc.key)
+			continue
+		}
+		if got == redact.Sentinel {
+			t.Errorf("%s = %v; the redactor masked a configuration value", tc.key, got)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("%s = %v (%T), want %v", tc.key, got, got, tc.want)
+		}
 	}
 }
 

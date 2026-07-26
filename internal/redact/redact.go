@@ -96,6 +96,14 @@ var substringAllowlist = []string{
 	"request_object_signing_alg",
 	"introspection_endpoint",
 	"revocation_endpoint",
+	// Configuration values carried by the startup.profile record.
+	// They describe the issuance policy — a lifetime in seconds, a
+	// wire-format name — and never a token. Redacting them would
+	// leave an operator unable to read the OP's posture out of the
+	// one record written for that purpose.
+	"access_token_ttl_seconds",
+	"refresh_token_ttl_seconds",
+	"access_token_format",
 }
 
 // IsSensitive reports whether key (after canonicalisation) names a
