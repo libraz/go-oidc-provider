@@ -95,14 +95,23 @@ RP は TLS の背後に置いてください。ループバックのアドレス
 [`examples/`](examples) 配下の例はすべてこの 2 つを使っているので、デモを
 本番スタックへ移植するときはこの行を外します。
 
-### FAPI 2.0 Baseline をワンスイッチで
+### セキュリティプロファイルをワンスイッチで
 
 ```go
+op.WithProfile(profile.Baseline)      // OAuth 2.1: code 要求すべてに PKCE 必須
 op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg ロック
 ```
 
+プロファイルを宣言しないこと自体もひとつの構成です。それは OpenID Connect
+Core 1.0 の形であり、RFC 7636 より古い仕様なので confidential client の PKCE
+は任意のままになります。`profile.Baseline` は、その緩い姿勢を黙って引き継ぐ
+のではなく、厳しい姿勢を選んだと明示するための宣言です。
+
 宣言したプロファイルと他のオプションが食い違う場合、コンストラクタは起動を
-拒否します。詳しくは
+拒否します。OP が処理できるよう配線されていないフローをプロファイルが名指し
+している場合も同様です。構築に成功した Provider は `startup.profile` 監査
+レコードを 1 件発行し、宣言したプロファイル・フィーチャ・grant と、それらが
+解決したポリシー値を記録します。詳しくは
 [ユースケース: FAPI 2.0 Baseline](https://go-oidc-provider.libraz.net/ja/use-cases/fapi2-baseline)
 を参照してください。
 

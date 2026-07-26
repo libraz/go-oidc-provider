@@ -14,6 +14,7 @@ func TestProfile_String(t *testing.T) {
 		in   profile.Profile
 		want string
 	}{
+		{"baseline", profile.Baseline, "baseline"},
 		{"fapi2-baseline", profile.FAPI2Baseline, "fapi2-baseline"},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, "fapi2-message-signing"},
 		{"fapi-ciba", profile.FAPICIBA, "fapi-ciba"},
@@ -35,6 +36,7 @@ func TestProfile_IsValid(t *testing.T) {
 	t.Parallel()
 
 	all := []profile.Profile{
+		profile.Baseline,
 		profile.FAPI2Baseline,
 		profile.FAPI2MessageSigning,
 		profile.FAPICIBA,
@@ -63,6 +65,7 @@ func TestRequiresAccessTokenRevocation(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, true},
+		{"baseline", profile.Baseline, false},
 		{"zero", profile.Profile(0), false},
 		{"unknown", profile.Profile(99), false},
 	}

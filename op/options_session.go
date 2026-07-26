@@ -247,7 +247,7 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 // default (60 seconds) absorbs typical SPA / mobile retry storms; a
 // stricter posture passes a smaller positive duration. Pass zero to
 // disable the window entirely so any replay revokes immediately —
-// FAPI 2.0 §J.7.2 §3.1.7 mandates this for FAPI2Baseline /
+// FAPI 2.0 §3.1.7 mandates this for FAPI2Baseline /
 // FAPI2MessageSigning, and the option layer enforces the bound at
 // construction time when those profiles are active (a non-zero value
 // supplied alongside the profile produces a configuration error).

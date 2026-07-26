@@ -199,3 +199,15 @@ rows:
       error_description.
     status: out-of-scope
     out_of_scope_reason: "Subsumed by per-error rows. PKCE-002..006 each redirect-error row asserts state preservation explicitly (the OP echoes the request's state on every redirect-safe authorize error). A standalone scenario row would duplicate that coverage without adding spec ground."
+
+  - id: PKCE-018
+    severity: P0
+    spec: OAuth 2.1 §4.1.1
+    behaviour: |
+      Under the OAuth 2.1 baseline security profile, an authorization
+      request from a confidential client that omits code_challenge
+      redirects with error=invalid_request and an error_description
+      naming the missing code_challenge. The same request succeeds
+      when no security profile is declared, because plain OpenID
+      Connect Core 1.0 leaves PKCE optional for confidential clients.
+    status: active

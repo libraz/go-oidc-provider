@@ -34,6 +34,30 @@ const (
 	//   - server-side access-token revocation
 	//     (FAPI 2.0 §5.3.2.2).
 	FAPICIBA
+
+	// Baseline selects the OAuth 2.1 / RFC 9700 posture on top of
+	// OpenID Connect Core 1.0. Its single MUST beyond the library
+	// default is PKCE on every authorization-code request
+	// (see [RequiresPKCE]).
+	//
+	// Baseline deliberately imposes nothing else: no access-token TTL
+	// cap, no client-authentication restriction, no PAR mandate, no
+	// sender-constrained tokens. Those are FAPI requirements, and
+	// folding them in here would leave a profile no deployment could
+	// adopt without also being financial-grade.
+	//
+	// The distinction Baseline draws is against the *unspecified*
+	// configuration, not against FAPI. With no profile configured the
+	// OP accepts an authorization-code request without a
+	// code_challenge — the spec-compliant OIDC Core 1.0 shape the
+	// OpenID Connect Basic certification suite drives. That default
+	// cannot tell "we admit legacy relying parties on purpose" apart
+	// from "we never considered it"; Baseline is how a deployment
+	// says the former in the type system.
+	//
+	// Declared last so the numeric values of the FAPI constants stay
+	// put; the wire form is [Profile.String], never the ordinal.
+	Baseline
 )
 
 // String returns the canonical lower-case identifier used in discovery
@@ -41,6 +65,8 @@ const (
 // plan slugs.
 func (p Profile) String() string {
 	switch p {
+	case Baseline:
+		return "baseline"
 	case FAPI2Baseline:
 		return "fapi2-baseline"
 	case FAPI2MessageSigning:
@@ -57,7 +83,7 @@ func (p Profile) String() string {
 // IsValid reports whether p is one of the recognised exported constants.
 func (p Profile) IsValid() bool {
 	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
+	case Baseline, FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
 	case profileUnspecified:
 		return false
@@ -68,11 +94,12 @@ func (p Profile) IsValid() bool {
 
 // RequiresAccessTokenRevocation reports whether p mandates
 // server-side JWT access-token revocation. FAPI 2.0 Security Profile
-// §5.3.2.2 imposes the requirement on the FAPI 2.0 family (Baseline,
-// Message Signing); FAPI-CIBA inherits the same posture by reference
-// (FAPI-CIBA-ID1 §5). Non-FAPI profiles return false so embedders
-// deploying plain OAuth 2.0 / OIDC can opt into
-// [op.RevocationStrategyNone] without tripping the gate.
+// §5.3.2.2 imposes the requirement on the FAPI 2.0 family
+// ([FAPI2Baseline], [FAPI2MessageSigning]); FAPI-CIBA inherits the
+// same posture by reference (FAPI-CIBA-ID1 §5). Non-FAPI profiles —
+// including [Baseline] — return false so embedders deploying plain
+// OAuth 2.0 / OIDC can opt into [op.RevocationStrategyNone] without
+// tripping the gate.
 //
 // The op.New validator consults this predicate to reject the
 // combination of a FAPI profile with [op.RevocationStrategyNone]: the
@@ -82,7 +109,7 @@ func RequiresAccessTokenRevocation(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
-	case profileUnspecified:
+	case Baseline, profileUnspecified:
 		return false
 	}
 	return false

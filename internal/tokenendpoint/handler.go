@@ -301,7 +301,7 @@ type Deps struct {
 	// carried either a verifiable DPoP proof or a verifiable client
 	// certificate (so the issued cnf claim is non-empty). Empty
 	// bindings collapse onto an "invalid_request" wire response so
-	// FAPI 2.0 §3.1.4 / product-design §J.7.2 are uniformly enforced
+	// FAPI 2.0 §3.1.4 is uniformly enforced
 	// across all three grant types. The flag is plumbed by the OP
 	// wiring layer when any FAPI2 [profile.Profile] is active; the
 	// build-time profile validator already gates DPoP|MTLS feature

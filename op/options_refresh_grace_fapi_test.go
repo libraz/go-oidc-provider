@@ -11,7 +11,7 @@ import (
 )
 
 // TestWithRefreshGracePeriod_FAPI2RejectsNonZero pins the FAPI 2.0
-// §J.7.2 §3.1.7 enforcement [op.WithRefreshGracePeriod]'s godoc
+// §3.1.7 enforcement [op.WithRefreshGracePeriod]'s godoc
 // promises: a FAPI2Baseline / FAPI2MessageSigning deployment MUST NOT
 // tolerate a replay window on a stolen/replayed refresh token, so a
 // non-zero grace period paired with either profile fails [op.New]

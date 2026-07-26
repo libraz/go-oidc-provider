@@ -166,7 +166,7 @@ func mainErr() error {
 		// design. Override either flag to reseed at startup.
 		confClientID  = flag.String("confidential-client-id", "demo-confidential", "client_id of the confidential seed client (client_secret_basic auth). Empty disables the confidential seed.")
 		confClientSec = flag.String("confidential-client-secret", "demo-confidential-secret-32-bytes-min", "client_secret for the confidential seed client. Empty disables the confidential seed. The default is sized at 36 bytes (>= 32) so OFCS modules that derive an HS256-signed JWT from the secret (e.g. oidcc-rp-initiated-logout-bad-id-token-hint, which signs an id_token_hint with HS256) can satisfy RFC 7518 §3.2's 256-bit key requirement.")
-		profileFlag   = flag.String("profile", "", "security profile to activate. One of: \"\" (no profile, vanilla OIDC Core), \"fapi2-baseline\", \"fapi2-message-signing\", \"fapi-ciba\". Profiles auto-enable the features they require (PAR, DPoP, JAR).")
+		profileFlag   = flag.String("profile", "", "security profile to activate. One of: \"\" (no profile, vanilla OIDC Core), \"baseline\" (OAuth 2.1, PKCE required), \"fapi2-baseline\", \"fapi2-message-signing\", \"fapi-ciba\". Profiles auto-enable the features they require (PAR, DPoP, JAR).")
 		// FAPI test client JWKS paths. Each file holds the PUBLIC
 		// half (kty/crv/x/y/kid only — "d" is stripped if present)
 		// of one OFCS test client. The matching private halves live
@@ -590,6 +590,11 @@ func profileOptions(ctx context.Context, cfg runConfig, logger *slog.Logger) ([]
 	switch cfg.profile {
 	case "", "basic":
 		return nil, nil
+	case "baseline":
+		// The OAuth 2.1 posture needs no supporting wiring: its only
+		// mandate is PKCE on every authorization-code request, which
+		// the common base already satisfies for the demo clients.
+		return []op.Option{op.WithProfile(profile.Baseline)}, nil
 	case "fapi2-baseline":
 		return fapi2BaselineOptions(), nil
 	case "fapi2-message-signing":
@@ -597,7 +602,7 @@ func profileOptions(ctx context.Context, cfg runConfig, logger *slog.Logger) ([]
 	case "fapi-ciba":
 		return fapiCIBAOptions(), nil
 	default:
-		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, fapi2-baseline, fapi2-message-signing, fapi-ciba)", cfg.profile)
+		return nil, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, baseline, fapi2-baseline, fapi2-message-signing, fapi-ciba)", cfg.profile)
 	}
 }
 
@@ -649,6 +654,8 @@ func profileFor(name string) (profile.Profile, error) {
 	switch name {
 	case "", "basic":
 		return 0, nil
+	case "baseline":
+		return profile.Baseline, nil
 	case "fapi2-baseline":
 		return profile.FAPI2Baseline, nil
 	case "fapi2-message-signing":
@@ -656,7 +663,7 @@ func profileFor(name string) (profile.Profile, error) {
 	case "fapi-ciba":
 		return profile.FAPICIBA, nil
 	default:
-		return 0, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, fapi2-baseline, fapi2-message-signing, fapi-ciba)", name)
+		return 0, fmt.Errorf("op-demo: unknown -profile %q (expected one of: basic, baseline, fapi2-baseline, fapi2-message-signing, fapi-ciba)", name)
 	}
 }
 

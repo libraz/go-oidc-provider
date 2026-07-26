@@ -172,6 +172,14 @@ const (
 	AuditTokenExchangeRefreshIssued             Name = "token_exchange.refresh_issued"
 	AuditTokenExchangeSelfExchange              Name = "token_exchange.self_exchange"
 	AuditTokenExchangeSubjectTokenRegistryError Name = "token_exchange.subject_token_registry_error"
+
+	// AuditStartupProfile records the security posture a Provider was
+	// constructed with: the declared profiles, features, and grants,
+	// plus the policy values they resolved to. It fires once per
+	// successful op.New, before the Provider serves a request, so
+	// every later per-request record can be read against a known
+	// configuration.
+	AuditStartupProfile Name = "startup.profile"
 )
 
 //nolint:gochecknoglobals // immutable closed registry; callers receive copies.
@@ -289,6 +297,7 @@ var definitions = []Definition{
 	{Name: AuditTokenExchangeRefreshIssued, Metric: MetricTokenExchange, Label: "refresh_issued"},
 	{Name: AuditTokenExchangeSelfExchange, Metric: MetricTokenExchange, Label: "self_exchange"},
 	{Name: AuditTokenExchangeSubjectTokenRegistryError, Metric: MetricTokenExchange, Label: "subject_token_registry_error"},
+	{Name: AuditStartupProfile},
 }
 
 //nolint:gochecknoglobals // immutable index derived exclusively from definitions.

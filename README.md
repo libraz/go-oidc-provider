@@ -89,14 +89,23 @@ their RPs over TLS. Every example under [`examples/`](examples) that binds a
 loopback listener uses these options; an embedder porting one of the demos
 into a production stack drops the lines.
 
-### FAPI 2.0 Baseline in one switch
+### Security profiles in one switch
 
 ```go
+op.WithProfile(profile.Baseline)      // OAuth 2.1: PKCE on every code request
 op.WithProfile(profile.FAPI2Baseline) // PAR + JAR + DPoP, ES256, alg lock
 ```
 
-The constructor refuses to start if the declared profile and the rest of the
-options conflict. See
+Declaring no profile is a configuration too: it is the OpenID Connect Core 1.0
+shape, which predates RFC 7636 and leaves PKCE optional for confidential
+clients. `profile.Baseline` is how a deployment states the stricter posture on
+purpose instead of inheriting the permissive one by omission.
+
+The constructor refuses to start when the declared profile and the rest of the
+options conflict, including a profile that names a flow the OP has not been
+wired to serve. Every constructed provider emits one `startup.profile` audit
+record carrying the declared profiles, features and grants alongside the policy
+they resolved to. See
 [Use case: FAPI 2.0 Baseline](https://go-oidc-provider.libraz.net/use-cases/fapi2-baseline).
 
 ## What this library is — and is not

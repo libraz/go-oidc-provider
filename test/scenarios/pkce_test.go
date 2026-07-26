@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/libraz/go-oidc-provider/op"
+	"github.com/libraz/go-oidc-provider/op/profile"
 	"github.com/libraz/go-oidc-provider/op/testkit"
 	"github.com/libraz/go-oidc-provider/test/scenarios/internal/scenariokit"
 )
@@ -593,3 +594,78 @@ func TestScenario_PKCE_016_VerifierInvalidCharsetRejected(t *testing.T) {
 // PKCE-017 (state preservation generic) is out-of-scope: subsumed
 // by PKCE-002..006, each of which asserts state round-trip
 // explicitly on the redirect-error path.
+
+// TestScenario_PKCE_018_BaselineProfileRequiresPKCE checks the
+// PKCE mandate the OAuth 2.1 baseline profile carries: with
+// profile.Baseline declared, a confidential client that omits
+// code_challenge is refused at /authorize with a redirect-safe
+// invalid_request, and the identical request succeeds when no
+// profile is declared. The pair is what makes the profile worth
+// declaring — plain OIDC Core 1.0 predates RFC 7636 and leaves PKCE
+// optional for confidential clients, so the permissive answer is
+// also spec-correct and cannot be told apart from a deliberate one
+// without the declaration.
+//
+// Spec: OAuth 2.1 §4.1.1.
+func TestScenario_PKCE_018_BaselineProfileRequiresPKCE(t *testing.T) {
+	t.Parallel()
+
+	const (
+		clientID = "rp-pkce-018"
+		//nolint:gosec // G101: test fixture, not a real credential.
+		clientSecret = "rp-pkce-018-secret"
+		callback     = "https://rp.testkit.invalid/callback"
+	)
+	newProvider := func(t *testing.T, opts ...testkit.Option) *testkit.Provider {
+		t.Helper()
+		hash, err := op.HashClientSecret(clientSecret)
+		if err != nil {
+			t.Fatalf("HashClientSecret: %v", err)
+		}
+		tk := testkit.NewProvider(t, opts...)
+		tk.RegisterClient(t, testkit.ClientFixture{
+			ID:                      clientID,
+			SecretHash:              hash,
+			RedirectURIs:            []string{callback},
+			Scopes:                  []string{"openid", "profile", "email"},
+			TokenEndpointAuthMethod: "client_secret_basic",
+		})
+		return tk
+	}
+
+	t.Run("baseline-profile-rejects-missing-challenge", func(t *testing.T) {
+		t.Parallel()
+		tk := newProvider(t, testkit.WithOptions(op.WithProfile(profile.Baseline)))
+		errCode, errDesc, gotState, _ := runAuthorizeRedirectError(
+			t, tk, clientID, callback, "state-pkce-018", url.Values{},
+		)
+		if errCode != "invalid_request" {
+			t.Fatalf("error=%q want invalid_request (desc=%q)", errCode, errDesc)
+		}
+		if !strings.Contains(strings.ToLower(errDesc), "code_challenge") {
+			t.Errorf("error_description=%q want it to mention code_challenge", errDesc)
+		}
+		if gotState != "state-pkce-018" {
+			t.Errorf("state=%q want it preserved on the redirect error", gotState)
+		}
+	})
+
+	t.Run("no-profile-admits-missing-challenge", func(t *testing.T) {
+		t.Parallel()
+		tk := newProvider(t)
+		flow := scenariokit.RunCodeFlow(t, tk, scenariokit.DefaultSubject, scenariokit.AuthorizeParams{
+			ClientID:    clientID,
+			RedirectURI: callback,
+			Extra: url.Values{
+				"code_challenge":        {""},
+				"code_challenge_method": {""},
+			},
+		})
+		if flow.Error != "" {
+			t.Fatalf("unprofiled OP must admit a confidential non-PKCE request: error=%q desc=%q", flow.Error, flow.ErrorDesc)
+		}
+		if flow.Code == "" {
+			t.Fatalf("unprofiled OP must issue an authorization code: %+v", flow)
+		}
+	})
+}

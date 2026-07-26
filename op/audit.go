@@ -372,3 +372,34 @@ const (
 	// for subject_token, false for actor_token).
 	AuditTokenExchangeSubjectTokenRegistryError = AuditEvent(auditevent.AuditTokenExchangeSubjectTokenRegistryError)
 )
+
+// Provider lifecycle events.
+const (
+	// AuditStartupProfile fires once from [New], after validation
+	// succeeds and before the [Provider] is returned. It records the
+	// security posture the deployment declared and what that
+	// declaration resolved to, so an operator can answer "which
+	// profile is this OP running" from the audit stream and every
+	// later per-request record has a configuration to be read
+	// against.
+	//
+	// Extras carry the declared axes — profiles, features, grants
+	// (each a sorted string slice of the canonical identifiers) —
+	// followed by the resolved policy: pkce_required, par_required,
+	// state_or_nonce_required, nonce_required, sender_constrained
+	// ("dpop", "mtls", "dpop+mtls", or "" when bearer tokens are
+	// permitted), client_auth_methods (the set the runtime actually
+	// enforces, which may be narrower than the profile permits; empty
+	// means no profile narrowed it), access_token_ttl_seconds,
+	// access_token_format, refresh_token_ttl_seconds,
+	// refresh_grace_period_seconds, dpop_nonce_required,
+	// signed_request_object_required, signed_backchannel_request_required,
+	// jarm_required, signed_introspection_required.
+	//
+	// The event rides the audit emitter rather than the operational
+	// logger: the two are structurally separate so audit records
+	// never leak into the operational stream, and this record is the
+	// anchor of the audit stream. A Provider built with neither
+	// [WithAuditLogger] nor [WithLogger] emits nothing.
+	AuditStartupProfile = AuditEvent(auditevent.AuditStartupProfile)
+)

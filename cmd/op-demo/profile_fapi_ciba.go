@@ -50,8 +50,11 @@ import (
 // Wiring (everything fapi2 does in the binding-mechanism dimension,
 // plus the CIBA grant):
 //
-//   - op.WithProfile(profile.FAPICIBA) — auto-enables the CIBA grant
-//     and the FAPI alg lockdown.
+//   - op.WithProfile(profile.FAPICIBA) — applies the FAPI alg
+//     lockdown and the FAPI-CIBA MUST set. The profile requires the
+//     CIBA grant but does not activate it: the grant arrives through
+//     op.WithGrants / op.WithCIBA below, and op.New rejects the
+//     profile if it is missing.
 //   - op.WithFeature(feature.MTLS) — sender constraint; required by
 //     fapi-ciba-id1's hardcoded cert-bound check.
 //   - op.WithGrants(grant.CIBA, grant.RefreshToken) — advertises both

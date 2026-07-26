@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/feature"
+	"github.com/libraz/go-oidc-provider/op/grant"
 	"github.com/libraz/go-oidc-provider/op/profile"
 )
 
@@ -32,6 +33,7 @@ func TestRequiredFeatures(t *testing.T) {
 			profile.FAPICIBA,
 			[]feature.Flag{feature.JAR},
 		},
+		{"baseline", profile.Baseline, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
 	}
@@ -54,6 +56,7 @@ func TestRequiresPKCE(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
+		{"baseline", profile.Baseline, true},
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},
@@ -70,10 +73,46 @@ func TestRequiresPKCE(t *testing.T) {
 	}
 }
 
+func TestRequiredGrants(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   profile.Profile
+		want []grant.Type
+	}{
+		{"fapi-ciba", profile.FAPICIBA, []grant.Type{grant.CIBA}},
+		{"baseline", profile.Baseline, nil},
+		{"fapi2-baseline", profile.FAPI2Baseline, nil},
+		{"fapi2-message-signing", profile.FAPI2MessageSigning, nil},
+		{"zero", profile.Profile(0), nil},
+		{"unknown", profile.Profile(99), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := profile.RequiredGrants(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("RequiredGrants(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("returns-fresh-slice", func(t *testing.T) {
+		t.Parallel()
+		first := profile.RequiredGrants(profile.FAPICIBA)
+		second := profile.RequiredGrants(profile.FAPICIBA)
+		first[0] = grant.Type(0)
+		if second[0] == grant.Type(0) {
+			t.Error("RequiredGrants returned aliased slice; mutation leaked across calls")
+		}
+	})
+}
+
 func TestRequiredAnyOf(t *testing.T) {
 	t.Parallel()
 
-	t.Run("baseline-requires-dpop-or-mtls", func(t *testing.T) {
+	t.Run("fapi2-baseline-requires-dpop-or-mtls", func(t *testing.T) {
 		t.Parallel()
 		got := profile.RequiredAnyOf(profile.FAPI2Baseline)
 		if len(got) != 1 {
@@ -100,9 +139,9 @@ func TestRequiredAnyOf(t *testing.T) {
 		}
 	})
 
-	t.Run("unrecognised-profiles-have-no-anyof", func(t *testing.T) {
+	t.Run("profiles-without-anyof", func(t *testing.T) {
 		t.Parallel()
-		for _, p := range []profile.Profile{profile.Profile(0), profile.Profile(99)} {
+		for _, p := range []profile.Profile{profile.Baseline, profile.Profile(0), profile.Profile(99)} {
 			if got := profile.RequiredAnyOf(p); got != nil {
 				t.Errorf("RequiredAnyOf(%v) = %v, want nil", p, got)
 			}
@@ -131,6 +170,7 @@ func TestMaxAccessTokenTTL(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, 10 * time.Minute},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, 10 * time.Minute},
 		{"fapi-ciba", profile.FAPICIBA, 10 * time.Minute},
+		{"baseline", profile.Baseline, 0},
 		{"zero", profile.Profile(0), 0},
 		{"unknown", profile.Profile(99), 0},
 	}
@@ -158,6 +198,7 @@ func TestAllowedClientAuthMethods(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, fapi2Allowed},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, fapi2Allowed},
 		{"fapi-ciba", profile.FAPICIBA, fapi2Allowed},
+		{"baseline", profile.Baseline, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
 	}
@@ -190,6 +231,7 @@ func TestRequiresNonce(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
+		{"baseline", profile.Baseline, false},
 		{"fapi2-baseline", profile.FAPI2Baseline, false},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, false},
 		{"fapi-ciba", profile.FAPICIBA, false},
@@ -214,6 +256,7 @@ func TestRequiresStateOrNonce(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
+		{"baseline", profile.Baseline, false},
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},
@@ -238,6 +281,7 @@ func TestRequiresPAR(t *testing.T) {
 		in   profile.Profile
 		want bool
 	}{
+		{"baseline", profile.Baseline, false},
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},

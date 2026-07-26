@@ -179,6 +179,11 @@ func New(opts ...Option) (*Provider, error) {
 	if err := seedStaticClients(cfg); err != nil {
 		return nil, err
 	}
+	// Emitted last so the record only describes a Provider the caller
+	// actually receives: an audit stream that announced a security
+	// posture for a construction that then failed would be worse than
+	// no record at all.
+	cfg.emitStartupProfile(context.Background())
 	return provider, nil
 }
 
@@ -236,6 +241,11 @@ func wrapWithProfileMiddleware(mux http.Handler, cfg *config) http.Handler {
 			// UUID. Other profiles will add their own middlewares
 			// here as the constraint set grows.
 			return handler
+		case profile.Baseline:
+			// The OAuth 2.1 posture adds no cross-cutting response
+			// header; x-fapi-interaction-id is a FAPI construct and
+			// stamping it on a non-FAPI deployment would advertise a
+			// profile the OP is not running.
 		}
 	}
 	return handler
@@ -548,18 +558,22 @@ func featureEnabled(flags []feature.Flag, flag feature.Flag) bool {
 // those methods lives in internal/mtls.
 // requireSenderConstrainedTokens reports whether the active
 // [profile.Profile] set forbids the issuance of bearer access
-// tokens. The library's product design (§J.7.2) ties this to the
-// FAPI 2.0 family and FAPI-CIBA (which inherits the FAPI 2.0
-// §3.1.4 mandate verbatim per FAPI-CIBA-ID1 §5); the build-time
-// profile validator already requires either DPoP or mTLS feature
-// to be enabled when one of those profiles is active, so the
-// runtime path returning true here means "an /token (or
+// tokens. FAPI 2.0 §3.1.4 imposes the mandate on the FAPI 2.0
+// family, and FAPI-CIBA inherits it verbatim (FAPI-CIBA-ID1 §5);
+// the build-time profile validator already requires either DPoP or
+// mTLS feature to be enabled when one of those profiles is active,
+// so the runtime path returning true here means "an /token (or
 // /bc-authorize) request must present a proof or a cert".
 func (c *config) requireSenderConstrainedTokens() bool {
 	for _, p := range c.profiles {
 		switch p {
 		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:
 			return true
+		case profile.Baseline:
+			// OAuth 2.1 keeps bearer tokens legal; sender
+			// constraining is a FAPI requirement, and imposing it
+			// here would make the profile unadoptable without DPoP
+			// or mTLS infrastructure.
 		}
 	}
 	return false
@@ -645,8 +659,8 @@ func (c *config) requireSignedRequestObject() bool {
 		switch p {
 		case profile.FAPI2MessageSigning:
 			return true
-		case profile.FAPI2Baseline, profile.FAPICIBA:
-			// Baseline does not mandate signed_non_repudiation;
+		case profile.Baseline, profile.FAPI2Baseline, profile.FAPICIBA:
+			// FAPI 2.0 Baseline does not mandate signed_non_repudiation;
 			// FAPI-CIBA mandates signed authentication requests
 			// at /bc-authorize but not at /authorize / /par
 			// (CIBA does not exercise either endpoint), so its
@@ -672,10 +686,10 @@ func (c *config) requireSignedBackchannelRequest() bool {
 		switch p {
 		case profile.FAPICIBA:
 			return true
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
-			// FAPI 2.0 Baseline / Message Signing do not mount a
-			// backchannel-authentication endpoint; the signed-
-			// request mandate is specific to FAPI-CIBA.
+		case profile.Baseline, profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+			// No other profile mounts a backchannel-authentication
+			// endpoint; the signed-request mandate is specific to
+			// FAPI-CIBA.
 		}
 	}
 	return false
@@ -695,9 +709,9 @@ func (c *config) fapiCIBAProfileActive() bool {
 		switch p {
 		case profile.FAPICIBA:
 			return true
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
-			// FAPI 2.0 Baseline / Message Signing do not mount the
-			// backchannel-authentication endpoint.
+		case profile.Baseline, profile.FAPI2Baseline, profile.FAPI2MessageSigning:
+			// No other profile mounts the backchannel-
+			// authentication endpoint.
 		}
 	}
 	return false
@@ -707,7 +721,7 @@ func (c *config) fapiCIBAProfileActive() bool {
 // [profile.Profile] set mandates that every /authorize response be
 // JARM-wrapped. FAPI 2.0 Message Signing §5.5 is the only profile
 // today that imposes this; FAPI 2.0 Baseline leaves response_mode
-// to the client (Baseline does not require response signing). The
+// to the client and does not require response signing. The
 // build-time profile validator already requires [feature.JARM] to
 // be enabled when [profile.FAPI2MessageSigning] is active, so the
 // runtime path returning true here means "the JARM signer is
@@ -717,10 +731,10 @@ func (c *config) requireJARMResponseMode() bool {
 		switch p {
 		case profile.FAPI2MessageSigning:
 			return true
-		case profile.FAPI2Baseline, profile.FAPICIBA:
-			// Baseline does not require response signing;
-			// FAPI-CIBA does not exercise /authorize so JARM does
-			// not apply.
+		case profile.Baseline, profile.FAPI2Baseline, profile.FAPICIBA:
+			// Neither the OAuth 2.1 posture nor FAPI 2.0 Baseline
+			// requires response signing; FAPI-CIBA does not
+			// exercise /authorize so JARM does not apply.
 		}
 	}
 	return false
@@ -739,11 +753,12 @@ func (c *config) requireSignedIntrospection() bool {
 		switch p {
 		case profile.FAPI2MessageSigning:
 			return true
-		case profile.FAPI2Baseline, profile.FAPICIBA:
-			// Baseline does not require introspection signing;
-			// FAPI-CIBA inherits the FAPI 2.0 Baseline posture for
-			// /introspect (the profile only adds backchannel-
-			// authentication mandates).
+		case profile.Baseline, profile.FAPI2Baseline, profile.FAPICIBA:
+			// Neither the OAuth 2.1 posture nor FAPI 2.0 Baseline
+			// requires introspection signing; FAPI-CIBA inherits
+			// the FAPI 2.0 Baseline posture for /introspect (the
+			// profile only adds backchannel-authentication
+			// mandates).
 		}
 	}
 	return false

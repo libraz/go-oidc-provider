@@ -645,7 +645,7 @@ func isFAPI2Profile(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
 		return true
-	case profile.FAPICIBA:
+	case profile.Baseline, profile.FAPICIBA:
 		return false
 	}
 	return false
@@ -734,6 +734,9 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 				strings.Join(featureFlagNames(anyOf), ") or WithFeature(") + ")",
 		}
 	}
+	if err := c.validateProfileGrants(p); err != nil {
+		return err
+	}
 	if maxTTL := profile.MaxAccessTokenTTL(p); maxTTL > 0 && c.accessTokenTTL > maxTTL {
 		return &Error{
 			Code: codeConfiguration,
@@ -753,12 +756,57 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 		return &Error{
 			Code: codeConfiguration,
 			Description: "WithProfile " + p.String() +
-				" requires WithRefreshGracePeriod(0); FAPI 2.0 §J.7.2 §3.1.7 " +
+				" requires WithRefreshGracePeriod(0); FAPI 2.0 §3.1.7 " +
 				"forbids a replay-tolerant grace window for a replayed " +
 				"refresh token under this profile",
 		}
 	}
 	return nil
+}
+
+// validateProfileGrants rejects a profile whose [profile.RequiredGrants]
+// set is not covered by the resolved grant set. The check runs after
+// [config.applyDefaults], so the implicit authorization_code +
+// refresh_token pair is visible here.
+//
+// Unlike the feature constraints above, a missing grant is never
+// filled in for the embedder. Activating a grant pulls in
+// collaborators only the deployment can provide — the CIBA grant
+// needs a [store.CIBARequestStore] substore and a [HintResolver] —
+// so auto-enabling would swap a precise "the profile you declared
+// needs this grant" message for a substore complaint about a grant
+// nobody requested. The error therefore names the option that
+// activates the grant rather than silently activating it.
+func (c *config) validateProfileGrants(p profile.Profile) error {
+	for _, want := range profile.RequiredGrants(p) {
+		if slices.Contains(c.grants, want) {
+			continue
+		}
+		return &Error{
+			Code: codeConfiguration,
+			Description: "WithProfile " + p.String() +
+				" requires the " + want.String() + " grant; enable it with " +
+				grantActivationOption(want),
+		}
+	}
+	return nil
+}
+
+// grantActivationOption names the [Option] an embedder calls to
+// activate g. Grants that own a dedicated option report only that
+// option, never [WithGrants]: listing the grant type alone leaves the
+// grant's collaborators unwired and lands the embedder on a second
+// construction error instead of a working OP.
+func grantActivationOption(g grant.Type) string {
+	switch g {
+	case grant.CIBA:
+		return "WithCIBA(WithCIBAHintResolver(...))"
+	case grant.DeviceCode:
+		return "WithDeviceCodeGrant()"
+	case grant.AuthorizationCode, grant.ClientCredentials, grant.RefreshToken:
+		return "WithGrants(..., grant." + g.String() + ")"
+	}
+	return "WithGrants"
 }
 
 // profileForcesDPoPNonce reports whether p mandates the RFC 9449 §8/§9
@@ -769,7 +817,7 @@ func profileForcesDPoPNonce(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2MessageSigning, profile.FAPICIBA:
 		return true
-	case profile.FAPI2Baseline:
+	case profile.Baseline, profile.FAPI2Baseline:
 		return false
 	}
 	return false
