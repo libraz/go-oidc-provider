@@ -111,6 +111,11 @@ linters:
             - "!**/internal/clientauth/**"
             - "!**/internal/httpx/**"
             - "!**/op/testkit/**"
+            # internal/testutil holds test-only support packages that are
+            # imported from _test.go files in other packages, so they
+            # cannot themselves be _test.go and are not covered by the
+            # blanket test-file exemption below.
+            - "!**/internal/testutil/**"
             - "!**/test/scenarios/internal/scenariokit/**"
             - "!**/op/registration.go"
             - "!**/op/dpop_inmemory.go"

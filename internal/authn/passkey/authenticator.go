@@ -64,7 +64,7 @@ var ErrSessionMissing = errors.New("passkey: session scratch is missing")
 // value is not usable.
 //
 // The UV bit observed on a successful assertion rides
-// [interaction.Result.UserVerified] back to the orchestrator (H-E4):
+// [interaction.Result.UserVerified] back to the orchestrator:
 // the adapter does NOT keep an in-process cache, so a multi-replica
 // deployment without sticky sessions stays consistent — the bit
 // travels with the request that produced it.
@@ -76,7 +76,7 @@ type Authenticator struct {
 
 // CloneDetectionHandler is the optional embedder hook the adapter
 // invokes when the WebAuthn library reports a credential clone
-// (H-E5). Implementations decide the policy: disable the credential,
+// Implementations decide the policy: disable the credential,
 // page the SOC, force a re-enrolment. The adapter calls the handler
 // with the rotated [Credential] (CloneWarning bit set, original sign
 // counter preserved) so the embedder can correlate the credential
@@ -125,7 +125,7 @@ func NewAuthenticator(verifier *Verifier, passkeyStore store.PasskeyStore) (*Aut
 }
 
 // WithCloneDetectionHandler returns a copy of the adapter that calls
-// h every time the WebAuthn library raises [ErrCloneDetected] (H-E5).
+// h every time the WebAuthn library raises [ErrCloneDetected].
 // The hook is invoked with the persisted Credential (CloneWarning bit
 // set, sign counter preserved from the prior record) so the embedder
 // can disable the affected credential in its account-management UI.
@@ -267,7 +267,7 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 		// Stamp the UV bit on the Result so the orchestrator's
 		// appendFactor can pick the RFC 8176 "hwk" vs "swk" token
 		// from the assertion's real flag rather than a process-local
-		// cache (H-E4). The bit is request-scoped: it travels with
+		// cache. The bit is request-scoped: it travels with
 		// the Step and is dropped once the Factor has been recorded.
 		uv := false
 		if cred != nil {
@@ -285,7 +285,7 @@ func (a *Authenticator) continueResult(ctx context.Context, subject string, auth
 				return interaction.Step{}, perr
 			}
 			// Notify the embedder so it can disable the affected
-			// credential (H-E5). The hook is best-effort: a hook
+			// credential. The hook is best-effort: a hook
 			// error does not change the response the SPA sees, but
 			// it MUST NOT stop the [ErrCloneDetected] surfacing —
 			// embedders that want to observe failures should log
@@ -316,7 +316,7 @@ func (a *Authenticator) loadCredentials(ctx context.Context, subject string) ([]
 		if r == nil {
 			continue
 		}
-		out = append(out, credentialFromRecord(*r))
+		out = append(out, CredentialFromRecord(*r))
 	}
 	return out, nil
 }
@@ -346,7 +346,7 @@ func (a *Authenticator) persistCredential(ctx context.Context, c *Credential) (*
 	if rec == nil {
 		return nil, errors.New("passkey: persist assertion returned nil record")
 	}
-	persisted := credentialFromRecord(*rec)
+	persisted := CredentialFromRecord(*rec)
 	return &persisted, nil
 }
 
@@ -388,11 +388,15 @@ func (*Authenticator) prompt(session Session, creds []Credential) *interaction.P
 // unnecessary copy at every interface dispatch.
 var _ authn.Authenticator = (*Authenticator)(nil)
 
-// credentialFromRecord projects a [store.PasskeyRecord] onto the
+// CredentialFromRecord projects a [store.PasskeyRecord] onto the
 // package's [Credential] shape so the verifier can consume it. The
 // mapping is field-for-field; byte fields are defensively cloned so a
 // later mutation by the caller cannot reach the verifier-side state.
-func credentialFromRecord(r store.PasskeyRecord) Credential {
+//
+// It is exported so the enrolment facade in op/passkeykit can build the
+// already-registered list the registration ceremony needs without
+// duplicating the projection.
+func CredentialFromRecord(r store.PasskeyRecord) Credential {
 	return Credential{
 		ID:              slices.Clone(r.CredentialID),
 		PublicKey:       slices.Clone(r.PublicKey),
@@ -412,6 +416,36 @@ func credentialFromRecord(r store.PasskeyRecord) Credential {
 		},
 		CreatedAt:         r.CreatedAt,
 		expectedSignCount: r.SignCount,
+	}
+}
+
+// RecordFromCredential is the inverse of [CredentialFromRecord]: it
+// projects a freshly registered [Credential] onto the persistent
+// [store.PasskeyRecord] shape. The subject is supplied separately
+// because a Credential carries no owner — the ceremony result says what
+// the authenticator produced, not who it belongs to, and binding the
+// two is a decision the caller makes from its own authenticated
+// context.
+//
+// expectedSignCount is deliberately not carried across: it is the
+// assertion-time comparison snapshot, and a record being created for
+// the first time has no prior counter to compare against.
+func RecordFromCredential(subject string, c Credential) store.PasskeyRecord {
+	return store.PasskeyRecord{
+		CredentialID:    slices.Clone(c.ID),
+		Subject:         subject,
+		PublicKey:       slices.Clone(c.PublicKey),
+		AAGUID:          slices.Clone(c.Authenticator.AAGUID),
+		SignCount:       c.Authenticator.SignCount,
+		AttestationType: c.AttestationType,
+		Transports:      append([]string(nil), c.Transports...),
+		UserPresent:     c.Flags.UserPresent,
+		UserVerified:    c.Flags.UserVerified,
+		BackupEligible:  c.Flags.BackupEligible,
+		BackupState:     c.Flags.BackupState,
+		CloneWarning:    c.Authenticator.CloneWarning,
+		Attachment:      c.Authenticator.Attachment,
+		CreatedAt:       c.CreatedAt,
 	}
 }
 

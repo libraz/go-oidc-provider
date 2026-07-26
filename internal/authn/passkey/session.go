@@ -106,11 +106,11 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 }
 
 // encodeSession projects a [webauthn.SessionData] onto the package's
-// [Session] shape. It drops fields the library populates but the OP
-// does not need to ferry through cookies (Extensions, CredParams,
-// Mediation, RelyingPartyID — the verifier reconstructs the latter from
-// [Config] on the way back). Any future fields the library adds will be
-// preserved across the round-trip only if they appear in [Session].
+// [Session] shape. It drops fields the OP does not need to ferry
+// through cookies: Extensions and Mediation, which the ceremony never
+// varies, plus RelyingPartyID and CredParams, which [decodeSession]
+// reconstructs. Any future fields the library adds will be preserved
+// across the round-trip only if they appear in [Session].
 func encodeSession(sd webauthn.SessionData) Session {
 	return Session{
 		Challenge:            sd.Challenge,
@@ -133,6 +133,15 @@ func decodeSession(s Session) webauthn.SessionData {
 		AllowedCredentialIDs: cloneByteSlices(s.AllowedCredentialIDs),
 		Expires:              s.Expires.UTC(),
 		UserVerification:     protocol.UserVerificationRequirement(s.UserVerification),
+		// CredParams is re-derived rather than ferried. Registration
+		// checks the new credential's algorithm against this list, so an
+		// absent list matches nothing and every registration is refused;
+		// it cannot be left empty. Re-deriving is exact because
+		// BeginRegistration always announces the library's default
+		// algorithm set — the package exposes no way to narrow it — and
+		// it keeps the cookie payload from carrying a dozen algorithm
+		// identifiers that are the same on every ceremony.
+		CredParams: webauthn.CredentialParametersDefault(),
 	}
 }
 
