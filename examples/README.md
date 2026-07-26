@@ -12,9 +12,9 @@ All examples build behind the `example` build tag, so they are excluded from
 Embedder-side install (the same versions every example pins):
 
 ```sh
-go get github.com/libraz/go-oidc-provider/op@v0.9.5
-go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.5    # examples 06 / 07 / 08 / 09 / 27
-go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.5  # example 09
+go get github.com/libraz/go-oidc-provider/op@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0    # examples 06 / 07 / 08 / 09 / 17 / 27
+go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0  # examples 09 / 17
 ```
 
 Each row in the table below also maps to a use-case page on the docs site under
@@ -23,10 +23,10 @@ production-shaped narrative around the example file.
 
 ## Docker stacks
 
-`07-mysql-store` and `09-redis-volatile` ship a `compose.yaml` + `Dockerfile`
-that boot the engine(s) and the OP+RP binary on a private docker network. Both
-stacks build from the repo root (`build.context: ../..`), so the commands below
-work from anywhere in the repo:
+`07-mysql-store`, `09-redis-volatile`, and `17-spa-composite-store` ship a
+`compose.yaml` + `Dockerfile` that boot the engine(s) and the OP+RP binary on a
+private docker network. All three build from the repo root
+(`build.context: ../..`), so the commands below work from anywhere in the repo:
 
 ```sh
 # 07: OP + MySQL on a private network
@@ -36,6 +36,10 @@ docker compose -f examples/07-mysql-store/compose.yaml down -v
 # 09: OP + MySQL + Redis (durable + volatile split)
 docker compose -f examples/09-redis-volatile/compose.yaml up -d --build
 docker compose -f examples/09-redis-volatile/compose.yaml down -v
+
+# 17: the same storage split with the SPA seam on top
+docker compose -f examples/17-spa-composite-store/compose.yaml up -d --build
+docker compose -f examples/17-spa-composite-store/compose.yaml down -v
 ```
 
 `08-composite-hot-cold` is the no-docker counterpart of `09`: the same
@@ -57,6 +61,7 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | split hot volatile state from durable state | [`08-composite-hot-cold`](08-composite-hot-cold/main.go), [`09-redis-volatile`](09-redis-volatile/main.go) |
 | swap the default HTML driver for JSON | [`16-custom-interaction`](16-custom-interaction/main.go) |
 | drive login / consent / logout from a SPA | [`10-react-login`](10-react-login/main.go) |
+| run a SPA against MySQL + Redis (the usual deployment shape) | [`17-spa-composite-store`](17-spa-composite-store/main.go) |
 | customise the consent screen | [`11-custom-consent-ui`](11-custom-consent-ui/main.go) |
 | support `prompt=select_account` (multi-account) | [`13-multi-account`](13-multi-account/main.go) |
 | customise the account chooser (HTML template) | [`12-custom-chooser-ui`](12-custom-chooser-ui/main.go) |
@@ -70,6 +75,8 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | require risk-based MFA / captcha | [`21-risk-based-mfa`](21-risk-based-mfa/main.go), [`22-login-captcha`](22-login-captcha/main.go) |
 | step a logged-in session up to a higher ACR (RFC 9470) | [`23-step-up`](23-step-up/main.go) |
 | persist MFA factors (TOTP) on a real database | [`27-durable-mfa-store`](27-durable-mfa-store/main.go) |
+| use a mailed one-time code, with recovery codes as the fallback | [`28-email-otp-recovery`](28-email-otp-recovery/main.go) |
+| register a passkey and then sign in with it (WebAuthn) | [`29-passkey`](29-passkey/main.go) |
 | drive a TV / IoT / CLI tool via RFC 8628 device authorization | [`31-device-code-cli`](31-device-code-cli/main.go) |
 | issue tokens via Client-Initiated Backchannel Authentication (CIBA) | [`32-ciba-pos`](32-ciba-pos/main.go) |
 | exchange a service token for an audience-narrowed token (RFC 8693) | [`33-token-exchange-delegation`](33-token-exchange-delegation/main.go) |
