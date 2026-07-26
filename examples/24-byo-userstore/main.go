@@ -19,10 +19,10 @@
 //   - All OIDC-specific records (clients, codes, refresh tokens,
 //     grants, sessions, PAR, access tokens, IATs, RATs) live in the
 //     bundled op/storeadapter/sql schema.
-//   - hybridStore embeds *oidcsql.Store and overrides Users() so the
-//     OP's /userinfo and ID Token assembly reach MemberUserStore via
-//     Go method shadowing. composite is not required for this case
-//     because only one substore is being replaced.
+//   - op.WithUserStore points the OP's /userinfo and ID Token
+//     assembly at MemberUserStore. Nothing wraps the bundled store,
+//     so it keeps every capability it declares. Replacing more than
+//     one substore is what op/storeadapter/composite is for.
 //
 // Run with the example build tag:
 //
@@ -40,12 +40,11 @@
 //
 //   - main.go  — entrypoint, package godoc, listener orchestration,
 //     SQLite open + DDL apply, RP wiring through rpkit.
-//   - op.go    — OP-side wiring: buildProvider composes oidcsql.Store
-//   - MemberUserStore + hybridStore and passes them to op.New.
-//   - store.go — embedder-owned types: hybridStore (Users() override)
-//     and MemberUserStore (FindBySubject / FindByUsername /
-//     ReadPasswordHash) plus the members DDL the run() bootstrap
-//     applies.
+//   - op.go    — OP-side wiring: buildProvider passes oidcsql.Store to
+//     op.WithStore and MemberUserStore to op.WithUserStore.
+//   - store.go — the embedder-owned MemberUserStore (FindBySubject /
+//     FindByUsername / ReadPasswordHash) plus the members DDL the
+//     run() bootstrap applies.
 //   - seed.go  — seedMember helper that upserts the demo row.
 //
 // Manual verification:

@@ -191,9 +191,13 @@ func WithCIBAMaxPollViolations(n uint8) CIBAOption {
 // WithCIBA enables the CIBA Core 1.0 grant
 // (urn:openid:params:grant-type:ciba). The option:
 //
-//   - appends [grant.CIBA] to the configured grant set when it is
-//     not already present (idempotent so the embedder may also
-//     include it via [WithGrants]);
+//   - adds [grant.CIBA] to the resolved grant set. The addition
+//     composes rather than replaces: a deployment that calls only
+//     this option keeps the default authorization_code +
+//     refresh_token pair, and one that also calls [WithGrants] gets
+//     the CIBA grant on top of the listed set regardless of which
+//     option runs first. Naming [grant.CIBA] in [WithGrants] as well
+//     is a no-op, not a duplicate;
 //   - records the explicit opt-in so [op.New] can require a non-nil
 //     [store.CIBARequestStore] substore at construction time —
 //     starting the OP with the option but without the substore wired
@@ -222,10 +226,11 @@ func WithCIBAMaxPollViolations(n uint8) CIBAOption {
 // Stable since v1.0.
 func WithCIBA(opts ...CIBAOption) Option {
 	return optionFunc(func(c *config) error {
+		// Only the opt-in bit is recorded here; the grant set is
+		// assembled in [config.applyDefaults] once every option has
+		// run, so the result cannot depend on whether this option or
+		// [WithGrants] was applied first.
 		c.cibaGrantEnabled = true
-		if !slices.Contains(c.grants, grant.CIBA) {
-			c.grants = append(c.grants, grant.CIBA)
-		}
 		for i, sub := range opts {
 			if isNilLike(sub) {
 				return &Error{

@@ -75,6 +75,25 @@ not adopt this release.
 
 ### Added
 
+- `op.WithUserStore`, which points claim reads at an embedder-owned user store
+  while leaving every other substore of the `WithStore` backend untouched.
+  Projecting an application's existing users table onto OIDC is the ordinary
+  way to adopt the library, and until now it required hand-writing a wrapper
+  type that shadows `Users()` on the backend store. That wrapper has a trap in
+  it: built out of the `store.Store` interface rather than the concrete
+  backend, it compiles and silently drops every optional capability the backend
+  implements, so features that depend on those capabilities disable themselves.
+  The option resolves between two values instead of wrapping anything, so
+  nothing can be lost. `examples/24-byo-userstore` now uses it and no longer
+  carries a wrapper type at all.
+- A construction-time warning when the login flow authenticates against
+  different user records than the ones claims are read from. The two wirings
+  are separate by design — a `Step` owns its store so a deployment can
+  authenticate against something that is not the claim source — but when they
+  diverge by accident nothing fails: the login succeeds, a subject is resolved,
+  and the ID Token is then assembled from a row in another table. The bundled
+  adapters return one value for both `Users()` and `UserPasswords()`, so an
+  ordinary single-store setup stays silent.
 - `op/recoverykit`, the enrolment half of recovery codes. `StepRecoveryCode`
   could spend a code but nothing public could mint one: the code alphabet, the
   batch size, and the argon2id parameters are fixed by the verifier and live

@@ -192,6 +192,15 @@ var ErrStoreRequired = &Error{
 	Description: "WithStore is required",
 }
 
+// ErrUserStoreRequired is returned by [New] when [WithUserStore] receives a
+// nil store. The option exists to redirect claim reads somewhere specific;
+// passing nothing would silently leave them on the [WithStore] backend, which
+// is what omitting the option already does.
+var ErrUserStoreRequired = &Error{
+	Code:        codeConfiguration,
+	Description: "WithUserStore requires a non-nil store.UserStore",
+}
+
 // ErrIssuerInvalid is returned by [New] when [WithIssuer] receives a value
 // that is not a syntactically valid absolute issuer URL: the scheme MUST be
 // https (or http when the host is a loopback IP literal in 127.0.0.0/8 or

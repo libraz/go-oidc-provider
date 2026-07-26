@@ -13,9 +13,13 @@ import (
 // WithDeviceCodeGrant enables the RFC 8628 device-authorization grant.
 // The option:
 //
-//   - appends [grant.DeviceCode] to the configured grant set when it
-//     is not already present (idempotent so the embedder may also
-//     include it via [WithGrants]);
+//   - adds [grant.DeviceCode] to the resolved grant set. The addition
+//     composes rather than replaces: a deployment that calls only this
+//     option keeps the default authorization_code + refresh_token
+//     pair, and one that also calls [WithGrants] gets the device-code
+//     grant on top of the listed set regardless of which option runs
+//     first. Naming [grant.DeviceCode] in [WithGrants] as well is a
+//     no-op, not a duplicate;
 //   - records the explicit opt-in so [op.New] can require a non-nil
 //     [store.Store.DeviceCodes] substore at construction time —
 //     starting the OP with the option but without the substore wired
@@ -36,10 +40,11 @@ import (
 // Stable since v1.0.
 func WithDeviceCodeGrant() Option {
 	return optionFunc(func(c *config) error {
+		// Only the opt-in bit is recorded here; the grant set is
+		// assembled in [config.applyDefaults] once every option has
+		// run, so the result cannot depend on whether this option or
+		// [WithGrants] was applied first.
 		c.deviceCodeGrantEnabled = true
-		if !slices.Contains(c.grants, grant.DeviceCode) {
-			c.grants = append(c.grants, grant.DeviceCode)
-		}
 		return nil
 	})
 }

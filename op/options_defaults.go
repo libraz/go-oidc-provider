@@ -2,6 +2,7 @@ package op
 
 import (
 	"log/slog"
+	"slices"
 	"time"
 
 	internallog "github.com/libraz/go-oidc-provider/internal/log"
@@ -83,9 +84,7 @@ func (c *config) applyDefaults() {
 			"option", "WithChooserUI",
 		)
 	}
-	if len(c.grants) == 0 {
-		c.grants = []grant.Type{grant.AuthorizationCode, grant.RefreshToken}
-	}
+	c.resolveGrants()
 	c.fillStandardScopes()
 	c.applyRegistrationDefaults()
 	if c.defaultLocale == "" {
@@ -219,6 +218,46 @@ func isStandardScope(name string) bool {
 	return false
 }
 
+// resolveGrants assembles the final grant set from the two ways an
+// embedder can reach it: the wholesale [WithGrants] list and the
+// per-grant opt-in options ([WithCIBA], [WithDeviceCodeGrant]) that
+// also wire the grant's collaborators.
+//
+// The base is the [WithGrants] list when it was supplied, and the
+// authorization_code + refresh_token default otherwise. Per-grant
+// opt-ins are then layered on top. Both halves matter:
+//
+//   - Layering rather than replacing means adding CIBA or the device
+//     grant to an existing OP cannot silently withdraw the
+//     authorization-code flow. Before this resolution ran here, the
+//     opt-in options appended to an empty slice during option
+//     application, which made the default fill-in below see a
+//     non-empty set and skip — so an OP configured with nothing but
+//     WithCIBA served the CIBA grant and nothing else.
+//   - Resolving after every option has been applied makes the result
+//     order-independent, matching the contract [WithProfile]'s
+//     auto-enable already documents. [WithGrants] overwrites the
+//     slice, so an opt-in applied before it used to be discarded and
+//     the same pair of options produced different providers depending
+//     on the order they were written in.
+func (c *config) resolveGrants() {
+	if !c.grantsSet {
+		c.grants = []grant.Type{grant.AuthorizationCode, grant.RefreshToken}
+	}
+	for _, opt := range []struct {
+		enabled bool
+		grant   grant.Type
+	}{
+		{c.deviceCodeGrantEnabled, grant.DeviceCode},
+		{c.cibaGrantEnabled, grant.CIBA},
+	} {
+		if !opt.enabled || slices.Contains(c.grants, opt.grant) {
+			continue
+		}
+		c.grants = append(c.grants, opt.grant)
+	}
+}
+
 // emitPartialWiringWarnings logs one warning per registered option whose
 // runtime wiring is intentionally partial but still accepted at
 // construction time. Options that would mislead embedders into believing
@@ -237,4 +276,5 @@ func (c *config) emitPartialWiringWarnings() {
 			"option", "WithAllowInsecureBackchannelLogoutForDev",
 		)
 	}
+	c.warnUserStoreMismatch()
 }

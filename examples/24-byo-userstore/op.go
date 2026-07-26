@@ -7,12 +7,16 @@
 // codes, refresh tokens, grants, sessions, PAR, IATs, RATs, access
 // tokens, JTIs, revocations) while MemberUserStore (in store.go)
 // projects the embedder-owned members table onto store.UserStore.
-// hybridStore stitches them together by embedding *oidcsql.Store and
-// shadowing Users() with the MemberUserStore reference, so every
-// OP call site that reads end-user claims reaches the embedder's
-// schema while the transactional cluster (authorization-code
-// exchange, refresh-token rotation, PAR consumption) keeps committing
-// against the same SQLite database.
+//
+// op.WithUserStore is what joins them. Nothing wraps the bundled store,
+// so the transactional cluster (authorization-code exchange,
+// refresh-token rotation, PAR consumption) keeps committing against the
+// same SQLite database and every optional capability the adapter
+// implements stays visible to op.New.
+//
+// The same MemberUserStore value is handed to PrimaryPassword, so the
+// records a login authenticates against are the records the ID Token is
+// built from. op.New warns when those two differ.
 
 package main
 
@@ -40,20 +44,16 @@ func buildProvider(ctx context.Context, db *databasesql.DB) (*op.Provider, error
 
 	members := &MemberUserStore{db: db}
 
-	// hybridStore is the value op.WithStore receives. The embedded
-	// *oidcsql.Store provides every store.Store method except
-	// Users(): that one is shadowed by the wrapper's own method, so
-	// the OP's /userinfo and ID Token assembly reach MemberUserStore
-	// at every call site that reads end-user claims.
-	storage := &hybridStore{Store: durable, users: members}
-
 	flow := op.LoginFlow{
 		Primary: op.PrimaryPassword{Store: members},
 	}
 
 	provider, err := op.New(
 		op.WithIssuer(issuer),
-		op.WithStore(storage),
+		op.WithStore(durable),
+		// Every OIDC record stays in the bundled schema; only the
+		// end-user claims come from the members table.
+		op.WithUserStore(members),
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),

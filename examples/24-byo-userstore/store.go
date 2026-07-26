@@ -3,14 +3,19 @@
 // store.go — embedder-owned Storage projection for example
 // 24-byo-userstore.
 //
-// This file holds the two types that make BYO-userstore concrete:
-// hybridStore (the wrapper that swaps Users() onto the bundled
-// oidcsql.Store) and MemberUserStore (the projection from the
-// embedder's members table onto store.UserStore +
-// store.UserPasswordStore). The members DDL lives here too so the
-// schema and the projection that depends on it stay co-located —
-// run() in main.go applies the DDL before buildProvider() in op.go
-// stitches MemberUserStore into hybridStore.
+// This file holds the type that makes BYO-userstore concrete:
+// MemberUserStore, the projection from the embedder's members table
+// onto store.UserStore + store.UserPasswordStore. The members DDL
+// lives here too so the schema and the projection that depends on it
+// stay co-located — run() in main.go applies the DDL before
+// buildProvider() in op.go passes MemberUserStore to
+// op.WithUserStore.
+//
+// There is no wrapper type around the bundled store. Replacing one
+// substore is what op.WithUserStore is for; replacing several is what
+// op/storeadapter/composite is for. Hand-writing a wrapper that embeds
+// the store.Store interface is the shape to avoid — it compiles, and
+// it silently drops every optional capability the backend implements.
 
 package main
 
@@ -22,7 +27,6 @@ import (
 	"time"
 
 	"github.com/libraz/go-oidc-provider/op/store"
-	oidcsql "github.com/libraz/go-oidc-provider/op/storeadapter/sql"
 )
 
 // membersDDL is the embedder-owned schema. Column names deliberately
@@ -42,30 +46,6 @@ CREATE TABLE IF NOT EXISTS members (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS members_email ON members (email_address);
 `
-
-// hybridStore wraps an oidcsql.Store and replaces only the Users()
-// substore with an embedder-supplied implementation. Every other
-// substore method (Clients, AuthorizationCodes, RefreshTokens,
-// Grants, Sessions, PushedAuthRequests, Interactions, ConsumedJTIs,
-// InitialAccessTokens, RegistrationAccessTokens, AccessTokens,
-// OpaqueAccessTokens, GrantRevocations) is provided by the embedded
-// *oidcsql.Store via Go method promotion.
-//
-// The store.Transactional capability is also inherited from the
-// embedded oidcsql.Store, so the transactional cluster
-// (authorization-code exchange, refresh-token rotation, PAR
-// consumption) commits atomically against the same SQLite database.
-// Users is intentionally outside the cluster (store.Tx has no
-// Users() accessor), so routing it to a different backend cannot
-// break atomicity.
-type hybridStore struct {
-	*oidcsql.Store
-	users store.UserPasswordStore
-}
-
-// Users overrides oidcsql.Store.Users() so the OP reads end-user
-// records from the embedder-owned members table.
-func (h *hybridStore) Users() store.UserStore { return h.users }
 
 // MemberUserStore projects the members table onto store.User and
 // satisfies store.UserPasswordStore. The struct holds only the

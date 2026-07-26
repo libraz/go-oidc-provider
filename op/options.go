@@ -40,6 +40,7 @@ func (f optionFunc) apply(c *config) error { return f(c) }
 type config struct {
 	issuer               string
 	store                store.Store
+	userStore            store.UserStore
 	clock                Clock
 	logger               *slog.Logger
 	auditLogger          *slog.Logger
@@ -781,6 +782,38 @@ func WithStore(s store.Store) Option {
 	})
 }
 
+// WithUserStore replaces the source of end-user records the OP reads claims
+// from, leaving every other substore of the [store.Store] given to [WithStore]
+// exactly as it is.
+//
+// Projecting an application's own users table onto OIDC is the ordinary case,
+// and this is the seam for it: implement [store.UserStore] over whatever
+// schema already exists and pass it here. Without the option the same effect
+// requires a wrapper type that shadows Users() on the backend store, which is
+// easy to get subtly wrong — a wrapper that embeds the [store.Store] interface
+// instead of the concrete backend silently drops every optional capability the
+// backend implemented, and the features built on those capabilities disable
+// themselves. Nothing is wrapped here, so nothing can be dropped.
+//
+// The store is read-only from the library's perspective: it supplies the
+// claims released through the ID Token and /userinfo, projected by the scopes
+// the grant carries. Authentication is a separate wiring — [PrimaryPassword]
+// carries its own store — and the two are meant to be the same records. [New]
+// warns when they are not, because a login that resolves a subject from one
+// set of records and then serves claims from another fails silently.
+//
+// Omitting the option leaves claim reads on [store.Store.Users].
+// Stable since v1.0.
+func WithUserStore(s store.UserStore) Option {
+	return optionFunc(func(c *config) error {
+		if isNilLike(s) {
+			return ErrUserStoreRequired
+		}
+		c.userStore = s
+		return nil
+	})
+}
+
 // WithKeyset registers the OP signing keys. The first entry is the active
 // signer; subsequent entries are kept in JWKS so RPs can verify tokens
 // issued under previous keys during a rotation window.
@@ -989,6 +1022,16 @@ func WithEndpoints(e Endpoints) Option {
 // token endpoint. Calling this option replaces the default
 // (authorization_code + refresh_token) entirely; pass every grant the
 // deployment needs in a single call.
+//
+// The grants that own a dedicated option — [WithCIBA] and
+// [WithDeviceCodeGrant], which also wire the collaborators those
+// grants need — compose on top of this list rather than competing
+// with it. Enabling one of them adds its grant to whatever this
+// option selected, in either option order, and naming the same grant
+// here as well is a no-op rather than a duplicate. A deployment that
+// wants a grant this option lists to be the ONLY way into the token
+// endpoint therefore must not also call the dedicated option.
+//
 // Stable since v1.0.
 func WithGrants(grants ...grant.Type) Option {
 	return optionFunc(func(c *config) error {
