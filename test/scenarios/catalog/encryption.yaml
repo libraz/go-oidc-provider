@@ -62,7 +62,7 @@ rows:
       Symmetric JWE algorithms (A*KW, dir) are not in the v0.9.1
       closed allow-list. With no client_secret-derived encryption
       path, the expired-secret branch the row asserts never fires.
-      The error wording is also panva-specific and not part of our
+      The error wording is also upstream-specific and not part of our
       wire format.
 
   - id: ENC-010
@@ -103,7 +103,7 @@ rows:
     status: out-of-scope
     out_of_scope_reason: |
       Duplicating iss / aud onto the JWE protected header is a
-      panva-specific extension. OIDC Core §16 leaves header iss / aud
+      upstream-specific extension. OIDC Core §16 leaves header iss / aud
       as MAY-clauses; we route by kid alone. RPs needing the
       duplicated headers can pre-process via a wrapper.
 
@@ -118,7 +118,7 @@ rows:
     out_of_scope_reason: |
       The wire-shape half of this row (Content-Type, 5-part JWE,
       decrypted body) is now exercised by ENC-110. The header iss /
-      aud duplication remains panva-specific (see ENC-021).
+      aud duplication remains upstream-specific (see ENC-021).
 
   - id: ENC-023
     severity: P0
@@ -213,7 +213,7 @@ rows:
       accepted (the client takes the unencrypted, signed-only path);
       both set to an alg/enc on the closed JOSE allow-list is accepted.
       OIDC Core §6.1 permits negotiating the missing half from the
-      discovery list, but the v0.9.x OP does not implement that
+      discovery list, but the v1.0 OP does not implement that
       negotiation.
     status: active
 
@@ -251,7 +251,7 @@ rows:
     status: out-of-scope
     out_of_scope_reason: |
       The exact error code and wording on the missing-EC-key path is
-      panva-specific. Our resolver surfaces ErrNoMatchingKey at id_token
+      upstream-specific. Our resolver surfaces ErrNoMatchingKey at id_token
       issuance time as a fail-closed 500 / token-endpoint error rather
       than a fragment redirect with invalid_client_metadata. The same
       wire-level invariant (encryption-failure does not silently
@@ -290,7 +290,7 @@ rows:
     status: out-of-scope
     out_of_scope_reason: |
       Symmetric JWE not in the v0.9.1 allow-list (see ENC-001).
-      Header iss / aud duplication is panva-specific (see ENC-021).
+      Header iss / aud duplication is upstream-specific (see ENC-021).
 
   - id: ENC-070
     severity: P1
@@ -324,7 +324,7 @@ rows:
     status: out-of-scope
     out_of_scope_reason: |
       dir JWE not in the v0.9.1 allow-list (see ENC-001).
-      Header iss / aud duplication is panva-specific (see ENC-021).
+      Header iss / aud duplication is upstream-specific (see ENC-021).
 
   - id: ENC-100
     severity: P0
@@ -429,7 +429,7 @@ rows:
 
   - id: ENC-141
     severity: P0
-    spec: ADR 0030 §S.5 (fail-closed)
+    spec: the encryption fail-closed design
     behaviour: |
       When the encryption-enrolled client's registered enc-use key
       cannot be resolved at id_token / userinfo / JARM /

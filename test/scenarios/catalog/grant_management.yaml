@@ -13,7 +13,7 @@ description: |
   parameters (create / replace / merge), returns grant_id on the token
   response, and exposes a confidential-client grant management endpoint for
   query (GET) and revoke (DELETE). A grant_id is only ever usable by the
-  client that owns it. Tracks an IETF draft (ADR 0006); the surface is
+  client that owns it. Tracks an IETF draft; the surface is
   experimental.
 
 rows:

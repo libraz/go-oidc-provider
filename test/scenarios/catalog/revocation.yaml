@@ -35,7 +35,7 @@ rows:
       hint receives 200 with an empty body and the access token is
       destroyed (subsequent /userinfo calls fail with WWW-Authenticate
       error="invalid_token"). The underlying grant is preserved: the
-      paired refresh token still rotates at /token. Per ADR 0025,
+      paired refresh token still rotates at /token. Per the grant-tombstone revocation design,
       single-AT revocation never cascades to a grant tombstone.
     status: active
 
@@ -46,7 +46,7 @@ rows:
       With revokeGrantPolicy=true, revoking an access token returns
       200 and destroys both the access token and its grant.
     status: out-of-scope
-    out_of_scope_reason: "v1.0 explicitly does NOT cascade single-AT revocation to grant tombstone (ADR 0025 Alternatives). The runtime 'revokeGrantPolicy' flag is vendor-specific. Grant cascade in v1.0 is triggered by refresh-token revocation, not access-token revocation. Reconsider when grant-revocation-on-AT-revoke becomes a v1.x option."
+    out_of_scope_reason: "v1.0 explicitly does NOT cascade single-AT revocation to grant tombstone (a deliberate choice: revoking one access token must not log the user out everywhere). The runtime 'revokeGrantPolicy' flag is vendor-specific. Grant cascade in v1.0 is triggered by refresh-token revocation, not access-token revocation. Reconsider when grant-revocation-on-AT-revoke becomes a v1.x option."
 
   - id: REV-004
     severity: P1
@@ -170,7 +170,7 @@ rows:
       "Structured JWT Tokens cannot be revoked via the
       revocation_endpoint".
     status: out-of-scope
-    out_of_scope_reason: "v1.0 does NOT emit unsupported_token_type at /revoke. RFC 9068 §6 says JWT access tokens are revocable via the revocation endpoint, and v1.0 implements this by writing a JTI denylist row (ADR 0025 GrantTombstone). The upstream 'JWT cannot be revoked, return 400 unsupported_token_type' shape is the opposite of what v1.0 does. Reconsider only if the OP is reconfigured to RevocationStrategyNone, in which case the current silent-200 path is still correct, never 400."
+    out_of_scope_reason: "v1.0 does NOT emit unsupported_token_type at /revoke. RFC 9068 §6 says JWT access tokens are revocable via the revocation endpoint, and v1.0 implements this by writing a JTI denylist row (the GrantTombstone strategy). The upstream 'JWT cannot be revoked, return 400 unsupported_token_type' shape is the opposite of what v1.0 does. Reconsider only if the OP is reconfigured to RevocationStrategyNone, in which case the current silent-200 path is still correct, never 400."
 
   - id: REV-018
     severity: P0

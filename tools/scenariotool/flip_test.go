@@ -61,21 +61,21 @@ rows:
 	})
 
 	t.Run("flip to out-of-scope adds plain reason", func(t *testing.T) {
-		got, err := flipStatusInYAML([]byte(base), "DIS-003", "out-of-scope", "embedder concern see ADR 0042")
+		got, err := flipStatusInYAML([]byte(base), "DIS-003", "out-of-scope", "embedder concern, see the design notes")
 		if err != nil {
 			t.Fatalf("flipStatusInYAML: %v", err)
 		}
-		if !strings.Contains(string(got), "    status: out-of-scope\n    out_of_scope_reason: embedder concern see ADR 0042\n") {
+		if !strings.Contains(string(got), "    status: out-of-scope\n    out_of_scope_reason: embedder concern, see the design notes\n") {
 			t.Errorf("expected adjacent status + plain reason line, got:\n%s", got)
 		}
 	})
 
 	t.Run("flip to out-of-scope quotes risky reason", func(t *testing.T) {
-		got, err := flipStatusInYAML([]byte(base), "DIS-003", "out-of-scope", "covered by spec: see ADR 0042")
+		got, err := flipStatusInYAML([]byte(base), "DIS-003", "out-of-scope", "covered by spec: see the design notes")
 		if err != nil {
 			t.Fatalf("flipStatusInYAML: %v", err)
 		}
-		if !strings.Contains(string(got), `out_of_scope_reason: "covered by spec: see ADR 0042"`) {
+		if !strings.Contains(string(got), `out_of_scope_reason: "covered by spec: see the design notes"`) {
 			t.Errorf("expected double-quoted reason (contains colon), got:\n%s", got)
 		}
 	})

@@ -12,13 +12,13 @@ specs:
 description: |
   RFC 8628 device-authorization endpoint (POST /device_authorization)
   and the device_code grant at the token endpoint
-  (urn:ietf:params:oauth:grant-type:device_code). v0.9.x ships an
+  (urn:ietf:params:oauth:grant-type:device_code). v1.0 ships an
   HTTP-only OP: the user-facing /device verification UI, charset/mask
   configuration, and per-flow consent ceremony are delegated to the
   embedder via [interaction.Driver] (see CLAUDE.md §ライブラリ性の核).
   The active rows pin the wire surface this OP owns; the OOS rows
   enumerate vendor-specific behaviour inherited from a reference
-  catalogue that v0.9.x does NOT promise.
+  catalogue that v1.0 does NOT promise.
 
 rows:
   # ---------------------------------------------------------------
@@ -63,7 +63,7 @@ rows:
       /device_authorization rejects a request parameter (signed
       Request Object) with 400 request_not_supported.
     status: out-of-scope
-    out_of_scope_reason: "RFC 8628 §3.1 enumerates the parameter set the device-authorization endpoint accepts; signed Request Objects (OIDC Core §6.1) are an authorization-endpoint construct and are neither defined nor expected here. v0.9.x's /device_authorization handler validates only the parameters it consumes (client auth, scope, resource) and ignores unknown form keys; it does not synthesise a request_not_supported rejection. Adding the rejection would create a vendor-specific gate that no OIDC profile requires at this endpoint. Revisit only if a future profile (e.g. FAPI Device-Authorization) mandates request-object support."
+    out_of_scope_reason: "RFC 8628 §3.1 enumerates the parameter set the device-authorization endpoint accepts; signed Request Objects (OIDC Core §6.1) are an authorization-endpoint construct and are neither defined nor expected here. v1.0's /device_authorization handler validates only the parameters it consumes (client auth, scope, resource) and ignores unknown form keys; it does not synthesise a request_not_supported rejection. Adding the rejection would create a vendor-specific gate that no OIDC profile requires at this endpoint. Revisit only if a future profile (e.g. FAPI Device-Authorization) mandates request-object support."
 
   - id: DEV-005
     severity: P1
@@ -72,7 +72,7 @@ rows:
       /device_authorization rejects a request_uri parameter with
       400 request_uri_not_supported.
     status: out-of-scope
-    out_of_scope_reason: "Same posture as DEV-004: request_uri (OIDC Core §6.2) is not in the RFC 8628 §3.1 parameter set, and v0.9.x's handler ignores unknown form keys rather than synthesising a request_uri_not_supported rejection."
+    out_of_scope_reason: "Same posture as DEV-004: request_uri (OIDC Core §6.2) is not in the RFC 8628 §3.1 parameter set, and v1.0's handler ignores unknown form keys rather than synthesising a request_uri_not_supported rejection."
 
   - id: DEV-006
     severity: P1
@@ -81,7 +81,7 @@ rows:
       /device_authorization rejects a registration parameter with
       400 registration_not_supported.
     status: out-of-scope
-    out_of_scope_reason: "Same posture as DEV-004 / DEV-005: the registration parameter (OIDC Core §7.2.1) is not in the RFC 8628 §3.1 parameter set; v0.9.x's handler ignores unknown form keys."
+    out_of_scope_reason: "Same posture as DEV-004 / DEV-005: the registration parameter (OIDC Core §7.2.1) is not in the RFC 8628 §3.1 parameter set; v1.0's handler ignores unknown form keys."
 
   - id: DEV-007
     severity: P0
@@ -93,7 +93,7 @@ rows:
       interval. verification_uri_complete equals
       "${verification_uri}?user_code=${user_code}". expires_in and
       interval are positive integers (seconds). user_code is the
-      Crockford Base32 canonical form documented in ADR 0031 §Q1.
+      Crockford Base32 canonical form documented in the device-code user-code design.
     status: active
 
   - id: DEV-008
@@ -103,11 +103,11 @@ rows:
       Successful device-authorization persists a DeviceCodeStore
       record bound to the requesting client. The persisted record
       carries client_id, scope, resource (RFC 8707 normalised), and
-      a Pending status. v0.9.x's handler accepts only the §3.1
+      a Pending status. v1.0's handler accepts only the §3.1
       parameter set, so there are no redirect_uri / response_type /
       state values to strip.
     status: out-of-scope
-    out_of_scope_reason: "The 'strip redirect_uri / response_type / state / response_mode' assertion is vendor-specific: v0.9.x's /device_authorization handler reads only the parameters RFC 8628 §3.1 names (client auth, scope, resource) and never accepts the authorization-endpoint parameters in the first place, so there is nothing to strip. Persistence shape is covered indirectly by DEV-091 (approve→consume mints AT against the persisted record); a row that asserts the absence of an assignment that never happens is not load-bearing."
+    out_of_scope_reason: "The 'strip redirect_uri / response_type / state / response_mode' assertion is vendor-specific: v1.0's /device_authorization handler reads only the parameters RFC 8628 §3.1 names (client auth, scope, resource) and never accepts the authorization-endpoint parameters in the first place, so there is nothing to strip. Persistence shape is covered indirectly by DEV-091 (approve→consume mints AT against the persisted record); a row that asserts the absence of an assignment that never happens is not load-bearing."
 
   - id: DEV-009
     severity: P1
@@ -118,7 +118,7 @@ rows:
       PAR is not enforced at the device-authorization endpoint
       because the device flow predates PAR.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x does not surface the per-client require_pushed_authorization_requests setting on the /device_authorization handler — there is no PAR gate to bypass. The OP's PAR gate (RFC 9126) lives on /authorize only. Revisit if a profile begins requiring PAR-style enrolment for device flow (no spec text mandates it today)."
+    out_of_scope_reason: "v1.0 does not surface the per-client require_pushed_authorization_requests setting on the /device_authorization handler — there is no PAR gate to bypass. The OP's PAR gate (RFC 9126) lives on /authorize only. Revisit if a profile begins requiring PAR-style enrolment for device flow (no spec text mandates it today)."
 
   - id: DEV-010
     severity: P2
@@ -139,7 +139,7 @@ rows:
       Client and the DeviceCode entities for downstream
       observability.
     status: out-of-scope
-    out_of_scope_reason: "'Resolve entities into request context' is a vendor-framework idiom (request-scoped DI). v0.9.x emits structured audit events (device_authorization.issued / device_authorization.rejected) carrying client_id, scope, audience, and binding label; that is the OP's observability contract. Pinning a context-bag layout would lock embedders into a non-standard middleware shape this library does not provide."
+    out_of_scope_reason: "'Resolve entities into request context' is a vendor-framework idiom (request-scoped DI). v1.0 emits structured audit events (device_authorization.issued / device_authorization.rejected) carrying client_id, scope, audience, and binding label; that is the OP's observability contract. Pinning a context-bag layout would lock embedders into a non-standard middleware shape this library does not provide."
 
   # ---------------------------------------------------------------
   # device_code grant at /token
@@ -152,7 +152,7 @@ rows:
       redemption embeds profile claims (e.g. given_name) directly
       in the id_token rather than gating them behind UserInfo.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x does not expose a 'conformIdTokenClaims' knob; the id_token issued on device_code redemption follows the canonical OIDC Core §3.1.3 / §5.4 shape (sub, aud, exp, iat, at_hash) without an embedder-toggleable profile-claim payload. Embedders that want extended claims attach them via the existing claim-source / claims_supported plumbing on the authorization-code path and reuse the same claim source here. Revisit if a profile mandates a per-grant id_token claim policy."
+    out_of_scope_reason: "v1.0 does not expose a 'conformIdTokenClaims' knob; the id_token issued on device_code redemption follows the canonical OIDC Core §3.1.3 / §5.4 shape (sub, aud, exp, iat, at_hash) without an embedder-toggleable profile-claim payload. Embedders that want extended claims attach them via the existing claim-source / claims_supported plumbing on the authorization-code path and reuse the same claim source here. Revisit if a profile mandates a per-grant id_token claim policy."
 
   - id: DEV-021
     severity: P1
@@ -162,7 +162,7 @@ rows:
       id_token issued on device_code redemption MUST NOT include
       profile claims; clients call UserInfo for those.
     status: out-of-scope
-    out_of_scope_reason: "Same as DEV-020: v0.9.x has no conformIdTokenClaims knob. The id_token shape is fixed and matches the conforming posture by construction; pinning a row that asserts 'a knob this OP does not expose is set to its default value' adds no signal."
+    out_of_scope_reason: "Same as DEV-020: v1.0 has no conformIdTokenClaims knob. The id_token shape is fixed and matches the conforming posture by construction; pinning a row that asserts 'a knob this OP does not expose is set to its default value' adds no signal."
 
   - id: DEV-022
     severity: P2
@@ -172,7 +172,7 @@ rows:
       the issued access token; without offline_access scope the
       response MUST NOT include refresh_token.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x does not stamp a 'gty' claim on access tokens — RFC 9068 (JWT Profile for OAuth 2.0 Access Tokens) does not register that claim, and the OP follows the registered claim catalogue. The 'no refresh_token without offline_access' rule IS enforced (DEV-095 covers it); the gty assertion is the vendor-specific framing that must drop."
+    out_of_scope_reason: "v1.0 does not stamp a 'gty' claim on access tokens — RFC 9068 (JWT Profile for OAuth 2.0 Access Tokens) does not register that claim, and the OP follows the registered claim catalogue. The 'no refresh_token without offline_access' rule IS enforced (DEV-095 covers it); the gty assertion is the vendor-specific framing that must drop."
 
   - id: DEV-023
     severity: P2
@@ -181,7 +181,7 @@ rows:
       With offline_access scope the redemption issues both an
       access_token and a refresh_token, both stamped gty=device_code.
     status: out-of-scope
-    out_of_scope_reason: "Same as DEV-022: gty is not a v0.9.x claim. The 'refresh_token issued when offline_access is granted' positive case is pinned by DEV-095."
+    out_of_scope_reason: "Same as DEV-022: gty is not a v1.0 claim. The 'refresh_token issued when offline_access is granted' positive case is pinned by DEV-095."
 
   - id: DEV-024
     severity: P1
@@ -199,7 +199,7 @@ rows:
       A well-formed but non-existent device_code value is rejected
       with 400 invalid_grant ("device code not found").
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x maps a missing device_code (store.ErrNotFound on FindByDeviceCode) to expired_token rather than invalid_grant. RFC 8628 §3.5 reserves expired_token for 'device_code has expired or has been consumed', which is observationally indistinguishable from 'device_code never existed' to a polling client and avoids leaking a presence oracle to a bearer-secret guesser. The replay→expired_token framing is pinned by DEV-096; a row that asserts a different wire code on the same not-found state would conflict with that decision."
+    out_of_scope_reason: "v1.0 maps a missing device_code (store.ErrNotFound on FindByDeviceCode) to expired_token rather than invalid_grant. RFC 8628 §3.5 reserves expired_token for 'device_code has expired or has been consumed', which is observationally indistinguishable from 'device_code never existed' to a polling client and avoids leaking a presence oracle to a bearer-secret guesser. The replay→expired_token framing is pinned by DEV-096; a row that asserts a different wire code on the same not-found state would conflict with that decision."
 
   - id: DEV-026
     severity: P0
@@ -209,7 +209,7 @@ rows:
       a resolved DeviceCode names, the response is 400 invalid_grant
       ("referenced account not found").
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x does not have a findAccount hook on the device_code redemption path: the substore record persists Subject at Approve time, and the token endpoint trusts that value verbatim. Embedders that need a post-Approve account-presence check enforce it on their interaction.Driver before calling Approve. Revisit only if the substore contract grows a 're-resolve subject at consume' phase."
+    out_of_scope_reason: "v1.0 does not have a findAccount hook on the device_code redemption path: the substore record persists Subject at Approve time, and the token endpoint trusts that value verbatim. Embedders that need a post-Approve account-presence check enforce it on their interaction.Driver before calling Approve. Revisit only if the substore contract grows a 're-resolve subject at consume' phase."
 
   - id: DEV-027
     severity: P0
@@ -238,7 +238,7 @@ rows:
       The first valid token redemption persists the DeviceCode with
       a consumed timestamp less than or equal to now.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x's substore models consumption as a status transition (Approved → Consumed) rather than as a 'consumed timestamp' column; the single-use guarantee comes from the atomic Consume CAS, not from a wall-clock value. The replay→expired_token assertion (DEV-096) covers the observable consequence; pinning the internal storage shape would constrain SQL/Redis adapter authors without serving a wire contract."
+    out_of_scope_reason: "v1.0's substore models consumption as a status transition (Approved → Consumed) rather than as a 'consumed timestamp' column; the single-use guarantee comes from the atomic Consume CAS, not from a wall-clock value. The replay→expired_token assertion (DEV-096) covers the observable consequence; pinning the internal storage shape would constrain SQL/Redis adapter authors without serving a wire contract."
 
   - id: DEV-030
     severity: P0
@@ -248,7 +248,7 @@ rows:
       return 400 invalid_grant ("device code already consumed") and
       emit grant.error.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x maps Consume's ErrAlreadyConsumed to expired_token (not invalid_grant), per RFC 8628 §3.5's reservation of expired_token for 'already consumed'. The replay assertion is pinned with the actual wire code by DEV-096; this row's invalid_grant framing is the vendor-specific divergence."
+    out_of_scope_reason: "v1.0 maps Consume's ErrAlreadyConsumed to expired_token (not invalid_grant), per RFC 8628 §3.5's reservation of expired_token for 'already consumed'. The replay assertion is pinned with the actual wire code by DEV-096; this row's invalid_grant framing is the vendor-specific divergence."
 
   - id: DEV-031
     severity: P0
@@ -269,7 +269,7 @@ rows:
       custom error code and description, the token endpoint returns
       400 with the resolved code and description verbatim.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x's substore exposes a closed lifecycle (Pending / Approved / Denied / Consumed) and a DenyReason string. There is no 'custom error / errorDescription' column on the record, and the token endpoint does not pass-through arbitrary embedder-supplied wire codes — that would let an embedder synthesise wire codes outside RFC 6749 §5.2 / RFC 8628 §3.5. The standard-error-on-Deny case is pinned by DEV-033."
+    out_of_scope_reason: "v1.0's substore exposes a closed lifecycle (Pending / Approved / Denied / Consumed) and a DenyReason string. There is no 'custom error / errorDescription' column on the record, and the token endpoint does not pass-through arbitrary embedder-supplied wire codes — that would let an embedder synthesise wire codes outside RFC 6749 §5.2 / RFC 8628 §3.5. The standard-error-on-Deny case is pinned by DEV-033."
 
   - id: DEV-033
     severity: P0
@@ -291,7 +291,7 @@ rows:
     behaviour: |
       Provider construction accepts charset="digits".
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x fixes the user_code alphabet to Crockford Base32 (8 characters, 40 bits of entropy) per ADR 0031 §Q1. Configurable charsets ('digits', 'base-20') are a vendor extension; making the alphabet pluggable would weaken the brute-force margin on accidentally narrow alphabets and would force every storage backend to canonicalise dynamically. RFC 8628 §6.1 lists alphabet choice as a deployment concern, not a normative knob."
+    out_of_scope_reason: "v1.0 fixes the user_code alphabet to Crockford Base32 (8 characters, 40 bits of entropy) per the device-code user-code design. Configurable charsets ('digits', 'base-20') are a vendor extension; making the alphabet pluggable would weaken the brute-force margin on accidentally narrow alphabets and would force every storage backend to canonicalise dynamically. RFC 8628 §6.1 lists alphabet choice as a deployment concern, not a normative knob."
 
   - id: DEV-041
     severity: P2
@@ -299,7 +299,7 @@ rows:
     behaviour: |
       Provider construction accepts charset="base-20".
     status: out-of-scope
-    out_of_scope_reason: "Same as DEV-040: v0.9.x's user_code alphabet is fixed Crockford Base32."
+    out_of_scope_reason: "Same as DEV-040: v1.0's user_code alphabet is fixed Crockford Base32."
 
   - id: DEV-042
     severity: P1
@@ -316,7 +316,7 @@ rows:
     behaviour: |
       Provider construction accepts the user_code mask "*** *** ***".
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x does not expose a user_code mask option. The wire user_code is always 8 unmasked Crockford Base32 characters; the verification UI (delegated to interaction.Driver) is free to format the displayed value however it wants. Pinning a server-side mask would constrain UI choices without affecting the wire contract."
+    out_of_scope_reason: "v1.0 does not expose a user_code mask option. The wire user_code is always 8 unmasked Crockford Base32 characters; the verification UI (delegated to interaction.Driver) is free to format the displayed value however it wants. Pinning a server-side mask would constrain UI choices without affecting the wire contract."
 
   - id: DEV-044
     severity: P2
@@ -360,7 +360,7 @@ rows:
       and renders an end-user input form whose action posts to
       /device with a CSRF secret stored on session.state.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x ships an HTTP-only OP and explicitly does NOT mount a /device verification page (CLAUDE.md §ライブラリ性の核: 'UI は interaction.Driver で完全に委譲可能'). Embedders own the verification ceremony — the form template, the CSRF cookie shape, the session storage, the displayed branding — through the interaction.Driver hook the OP exposes. Pinning the page's wire shape would force every embedder to ship the library's HTML, which the project's library posture rejects."
+    out_of_scope_reason: "v1.0 ships an HTTP-only OP and explicitly does NOT mount a /device verification page (CLAUDE.md §ライブラリ性の核: 'UI は interaction.Driver で完全に委譲可能'). Embedders own the verification ceremony — the form template, the CSRF cookie shape, the session storage, the displayed branding — through the interaction.Driver hook the OP exposes. Pinning the page's wire shape would force every embedder to ship the library's HTML, which the project's library posture rejects."
 
   - id: DEV-061
     severity: P1
@@ -378,7 +378,7 @@ rows:
       GET /device?user_code values containing HTML-special characters
       MUST be HTML-escaped in the rendered output.
     status: out-of-scope
-    out_of_scope_reason: "Same as DEV-060: v0.9.x does not render the /device page, so there is no XSS surface owned by the library. The embedder's interaction.Driver implementation is responsible for output-encoding (the OP recommends Go's html/template auto-escape posture in its docs)."
+    out_of_scope_reason: "Same as DEV-060: v1.0 does not render the /device page, so there is no XSS surface owned by the library. The embedder's interaction.Driver implementation is responsible for output-encoding (the OP recommends Go's html/template auto-escape posture in its docs)."
 
   - id: DEV-063
     severity: P1
@@ -471,7 +471,7 @@ rows:
       accountId, authTime, scope, and claims drawn from the
       DeviceCode params.
     status: out-of-scope
-    out_of_scope_reason: "The APPROVE transition is part of the public substore contract (DeviceCodeStore.Approve with subject) and is consumed by DEV-091 (token endpoint mints tokens against an Approved record). The HTML-form / confirm-button surface that triggers Approve is delegated to the embedder per DEV-060. v0.9.x does not retain a separate auth_time column on the substore; the id_token's auth_time claim is omitted on the device_code path until the substore contract grows the column."
+    out_of_scope_reason: "The APPROVE transition is part of the public substore contract (DeviceCodeStore.Approve with subject) and is consumed by DEV-091 (token endpoint mints tokens against an Approved record). The HTML-form / confirm-button surface that triggers Approve is delegated to the embedder per DEV-060. v1.0 does not retain a separate auth_time column on the substore; the id_token's auth_time claim is omitted on the device_code path until the substore contract grows the column."
 
   - id: DEV-073
     severity: P1
@@ -480,7 +480,7 @@ rows:
       Confirming a code for a client whose backchannel logout
       configuration requires sid persists sid on the DeviceCode.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x's DeviceCode record does not carry a sid column. SID propagation is on the authorization-code path only; revisit when device_code interplay with backchannel logout is wired."
+    out_of_scope_reason: "v1.0's DeviceCode record does not carry a sid column. SID propagation is on the authorization-code path only; revisit when device_code interplay with backchannel logout is wired."
 
   - id: DEV-074
     severity: P1
@@ -489,7 +489,7 @@ rows:
       Confirming a code whose claims request asks for sid in
       id_token persists sid on the DeviceCode.
     status: out-of-scope
-    out_of_scope_reason: "Same as DEV-073: device flow does not propagate sid in v0.9.x."
+    out_of_scope_reason: "Same as DEV-073: device flow does not propagate sid in v1.0."
 
   - id: DEV-075
     severity: P1
@@ -498,7 +498,7 @@ rows:
       User-friendly user_code entry (whitespace stripped, lower-case
       upper-cased) MUST normalise prior to lookup.
     status: out-of-scope
-    out_of_scope_reason: "Normalisation IS implemented (internal/devicecode.NormaliseUserCode handles whitespace strip, separator strip, lower→upper, Crockford visual-confusion folding 0/O and 1/I/L). v0.9.x's normaliser is consumed by the embedder's /device page before calling FindByUserCode, and pure-function tests for the normaliser already live in internal/devicecode/usercode_test.go. A scenario row that re-tests the same pure helper through an HTTP surface this OP does not own would duplicate that coverage."
+    out_of_scope_reason: "Normalisation IS implemented (internal/devicecode.NormaliseUserCode handles whitespace strip, separator strip, lower→upper, Crockford visual-confusion folding 0/O and 1/I/L). v1.0's normaliser is consumed by the embedder's /device page before calling FindByUserCode, and pure-function tests for the normaliser already live in internal/devicecode/usercode_test.go. A scenario row that re-tests the same pure helper through an HTTP surface this OP does not own would duplicate that coverage."
 
   # ---------------------------------------------------------------
   # /device/:uid resume / interaction-session paths
@@ -511,7 +511,7 @@ rows:
       returns 400 and re-renders userCodeInputSource with
       SessionNotFound.
     status: out-of-scope
-    out_of_scope_reason: "v0.9.x does not own /device/:uid — the resume URL shape is part of the embedder's verification flow (delegated per DEV-060). The library's interaction.Driver provides hooks the embedder calls when handling its own resume URL; the cookie / session/storage layer is entirely embedder-owned."
+    out_of_scope_reason: "v1.0 does not own /device/:uid — the resume URL shape is part of the embedder's verification flow (delegated per DEV-060). The library's interaction.Driver provides hooks the embedder calls when handling its own resume URL; the cookie / session/storage layer is entirely embedder-owned."
 
   - id: DEV-081
     severity: P1
@@ -603,7 +603,7 @@ rows:
     out_of_scope_reason: "Same as DEV-080."
 
   # ---------------------------------------------------------------
-  # New v0.9.x behaviour rows (RFC 8628 wire surface this OP owns)
+  # New behaviour rows (RFC 8628 wire surface this OP owns)
   # ---------------------------------------------------------------
   - id: DEV-091
     severity: P0
@@ -648,7 +648,7 @@ rows:
       matching the issued access token. The id_token MUST NOT carry
       c_hash (no authorization code in this flow) and MUST NOT
       carry a nonce (the device cannot commit one across the
-      verification ceremony in v0.9.x).
+      verification ceremony in v1.0).
     status: active
 
   - id: DEV-095
@@ -722,7 +722,7 @@ rows:
 
   - id: DEV-100
     severity: P0
-    spec: RFC 8628 §5.2 / ADR 0031 §S.1
+    spec: RFC 8628 §5.2 / the device-code user-code design
     behaviour: |
       The user_code brute-force gate the verification page calls
       (op/devicecodekit.VerifyUserCode) records a strike on every
@@ -769,7 +769,7 @@ rows:
     severity: P0
     spec: RFC 8707 §2 / RFC 8628 §3.1
     behaviour: |
-      v0.9.x's issuance pipeline encodes a single audience entry on
+      v1.0's issuance pipeline encodes a single audience entry on
       the access-token aud claim, so a /device_authorization request
       carrying more than one resource= form value (RFC 8707 §2
       permits the parameter to repeat) MUST be rejected with 400

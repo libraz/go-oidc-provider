@@ -487,7 +487,7 @@ rows:
     spec: CIBA Core §7.1
     behaviour: |
       The OP advertises backchannel_user_code_parameter_supported as
-      false (the v0.9.x default; the option to flip the flag is
+      false (the v1.0 default; the option to flip the flag is
       reserved for a future release). CIBA Core §7.1 requires the
       client to refrain from sending parameters the OP has not
       advertised, so any non-empty user_code on /bc-authorize MUST
@@ -513,7 +513,7 @@ rows:
     severity: P0
     spec: RFC 8707 §2 / CIBA Core §7.1
     behaviour: |
-      v0.9.x's issuance pipeline encodes a single audience entry on
+      v1.0's issuance pipeline encodes a single audience entry on
       the access-token aud claim, so a /bc-authorize request
       carrying more than one resource= form value (RFC 8707 §2
       permits the parameter to repeat) MUST be rejected with 400
@@ -531,7 +531,7 @@ rows:
       when non-empty, and MUST NOT synthesise amr by copying the
       same slice. acr names the authentication context class and
       amr names the authentication methods used; the two are not
-      synonymous, and the v0.9.x CIBARequest substore does not
+      synonymous, and the v1.0 CIBARequest substore does not
       retain a real authentication-method signal. The previous
       "amr := acr_values" plumbing was a wire-shape mismatch and
       let the OP misrepresent the methods the authentication device

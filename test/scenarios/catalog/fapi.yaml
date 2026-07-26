@@ -33,7 +33,7 @@ rows:
       Authorization header (Bearer) and form-encoded access_token body
       remain valid.
     status: out-of-scope
-    out_of_scope_reason: "non-spec residue: catalog asserts a 400 invalid_request envelope with the panva-style description 'access tokens must not be provided via query parameter'; v1.0 instead follows RFC 9700 §2.4 by silently dropping URL query credentials at /userinfo (internal/userinfo/handler.go extractBearer never consults r.URL.Query()), so an ?access_token=X request resolves to the bare 'missing access token' 401 challenge with no leaked detail. The defensive posture is the stronger one — the query channel is unreachable rather than rejected — but it does not produce the catalog's specific 400 envelope."
+    out_of_scope_reason: "non-spec residue: catalog asserts a 400 invalid_request envelope with the upstream-style description 'access tokens must not be provided via query parameter'; v1.0 instead follows RFC 9700 §2.4 by silently dropping URL query credentials at /userinfo (internal/userinfo/handler.go extractBearer never consults r.URL.Query()), so an ?access_token=X request resolves to the bare 'missing access token' 401 challenge with no leaked detail. The defensive posture is the stronger one — the query channel is unreachable rather than rejected — but it does not produce the catalog's specific 400 envelope."
 
   - id: FAPI-002
     severity: P1

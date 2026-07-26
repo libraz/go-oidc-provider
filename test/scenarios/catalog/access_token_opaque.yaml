@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=./schema.json
 feature: access_token_opaque
 prefix: ATO
-title: Opaque access-token format (ADR 0024)
+title: Opaque access-token format
 specs:
   - RFC 6749 §4 — OAuth 2.0 grant exchanges
   - RFC 6750 §2.1 — Bearer Token Usage (b64token wire shape)
@@ -11,12 +11,10 @@ specs:
   - RFC 8705 §3 — mTLS-bound access tokens
   - RFC 8707 §2.2 — Resource indicator immutability across rotation
   - RFC 9449 §6 — DPoP-bound access tokens
-  - ADR 0013 — Access-token revocation registry (sibling)
-  - ADR 0024 — Opaque access-token format opt-in
 
 description: |
   End-to-end coverage of the opt-in opaque access-token format that
-  ADR 0024 added to the v1.0 surface. The catalog rows exercise the
+  the opaque access-token format adds to the v1.0 surface. The catalog rows exercise the
   /token issuance dispatch, the /oidc/introspect projection, the
   /oidc/userinfo bearer path, the /oidc/revocation idempotency, the
   refresh-rotation revocation of the prior AT, the code-replay
@@ -36,7 +34,7 @@ description: |
 rows:
   - id: ATO-001
     severity: P0
-    spec: ADR 0024 §"Wire format" / §"Issuance plumbing"
+    spec: the opaque access-token design
     behaviour: |
       With WithAccessTokenFormat(AccessTokenFormatOpaque) configured,
       a successful authorization_code exchange returns an access_token
@@ -52,7 +50,7 @@ rows:
 
   - id: ATO-002
     severity: P0
-    spec: RFC 7662 §2.1 / ADR 0024 §"Verification plumbing"
+    spec: RFC 7662 §2.1 / the opaque access-token design
     behaviour: |
       An opaque access token presented at /oidc/introspect by the
       same client that requested it returns 200 with
@@ -66,7 +64,7 @@ rows:
 
   - id: ATO-003
     severity: P0
-    spec: RFC 6750 §2.1 / ADR 0024 §"Verification plumbing"
+    spec: RFC 6750 §2.1 / the opaque access-token design
     behaviour: |
       An opaque access token presented at /oidc/userinfo through
       Authorization: Bearer returns 200 with the user's claims
@@ -77,7 +75,7 @@ rows:
 
   - id: ATO-004
     severity: P0
-    spec: RFC 7009 §2.2 / ADR 0024 §"Refresh-rotation revocation of prior AT"
+    spec: RFC 7009 §2.2 / the opaque access-token design
     behaviour: |
       A POST /oidc/revocation with token=<opaque AT> and the
       issuing client's credentials returns 200 with an empty body.
@@ -89,7 +87,7 @@ rows:
 
   - id: ATO-005
     severity: P0
-    spec: ADR 0024 §S.8 / RFC 7662 §2.2
+    spec: the opaque access-token design / RFC 7662 §2.2
     behaviour: |
       Cross-client introspection of an opaque AT collapses onto
       {"active": false}: the introspecting client authenticates
@@ -100,7 +98,7 @@ rows:
 
   - id: ATO-006
     severity: P0
-    spec: ADR 0024 §"Refresh-rotation revocation of prior AT (opaque only)"
+    spec: the opaque access-token design
     behaviour: |
       A refresh exchange that mints a fresh opaque AT atomically
       revokes the prior opaque AT. After the rotation:
@@ -111,7 +109,7 @@ rows:
 
   - id: ATO-007
     severity: P0
-    spec: RFC 6749 §4.1.2 / §10.5 / ADR 0024 §"Code-replay cascade"
+    spec: RFC 6749 §4.1.2 / §10.5 / the opaque access-token design
     behaviour: |
       Replaying a consumed authorization code triggers the
       revokeChainForCode cascade: every opaque AT whose GrantID
@@ -123,7 +121,7 @@ rows:
 
   - id: ATO-008
     severity: P1
-    spec: ADR 0024 §"Public API surface"
+    spec: the opaque access-token design
     behaviour: |
       With WithAccessTokenFormatPerAudience(map{
         "https://api.opaque": AccessTokenFormatOpaque,
@@ -138,7 +136,7 @@ rows:
 
   - id: ATO-009
     severity: P1
-    spec: ADR 0024 §S.3 / RFC 9449 §5.1
+    spec: the opaque access-token design / RFC 9449 §5.1
     behaviour: |
       An opaque AT bound to a DPoP key thumbprint, presented at
       /oidc/userinfo with a DPoP proof signed by a different key,
@@ -150,7 +148,7 @@ rows:
 
   - id: ATO-010
     severity: P1
-    spec: ADR 0024 §S.3 / RFC 8705 §3
+    spec: the opaque access-token design / RFC 8705 §3
     behaviour: |
       An opaque AT bound to an mTLS certificate thumbprint, presented
       at /oidc/userinfo over a TLS connection that did not present
@@ -163,7 +161,7 @@ rows:
 
   - id: ATO-011
     severity: P1
-    spec: ADR 0024 §S.9 / RFC 7515 §3
+    spec: the opaque access-token design / RFC 7515 §3
     behaviour: |
       An opaque AT contains 43 base64url characters with no "."
       separator, so a resource server attempting JWS Compact
