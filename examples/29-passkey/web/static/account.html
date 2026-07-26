@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Account — passkeys</title>
+<link rel="stylesheet" href="/account/assets/main.css">
+</head>
+<body>
+<main id="app">
+  <div class="card">
+    <h1>Register a passkey</h1>
+    <p class="muted">
+      This page belongs to the application, not to the OP. It signs the
+      user in the way the application already does, then runs the
+      WebAuthn registration ceremony through op/passkeykit.
+    </p>
+    <form id="enrol-form">
+      <label>
+        <span>Username</span>
+        <input name="username" type="text" autocomplete="username" required value="demo">
+      </label>
+      <label>
+        <span>Password</span>
+        <input name="password" type="password" autocomplete="current-password" required value="demo">
+      </label>
+      <button type="submit">Register a passkey</button>
+    </form>
+    <p id="status"></p>
+  </div>
+</main>
+<script src="/account/assets/enrol.js" type="module"></script>
+</body>
+</html>

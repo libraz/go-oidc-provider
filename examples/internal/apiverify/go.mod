@@ -6,10 +6,22 @@
 //
 // It is the API-level counterpart of internal/browserverify: where that
 // harness drives an HTML/SPA login with headless Chrome, this one speaks
-// plain HTTP, so it needs nothing beyond the standard library and stays a
-// dependency-free sub-module. Nothing in the published library imports it.
+// plain HTTP. Its only dependency is the library itself, for the
+// test-only WebAuthn authenticator in internal/testutil/softkey — a
+// passkey ceremony cannot be driven without something that signs, and
+// that is an authenticator rather than a browser. Nothing in the
+// published library imports this module.
 module github.com/libraz/go-oidc-provider/examples/internal/apiverify
 
 go 1.26
 
 toolchain go1.26.5
+
+require github.com/libraz/go-oidc-provider v0.0.0-00010101000000-000000000000
+
+require (
+	github.com/fxamacker/cbor/v2 v2.9.2 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
+)
+
+replace github.com/libraz/go-oidc-provider => ../../..
