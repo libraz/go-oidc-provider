@@ -473,31 +473,29 @@ func issueRefreshResponse(
 		writeError(w, http.StatusInternalServerError, errServerError, "required auth_time is unavailable")
 		return
 	}
-	// Opaque-format chains revoke the prior access token atomically
-	// with the new mint (ADR 0024 §"Refresh-rotation revocation of
-	// prior AT"). Resource servers calling /oidc/introspect on every
+	// Opaque-format chains revoke the prior access token atomically with
+	// the new mint. Resource servers calling /oidc/introspect on every
 	// request observe the revocation immediately, so the
 	// stolen-but-still-valid window collapses to clock-skew. The JWT
-	// path deliberately leaves prior tokens alive: doing otherwise
-	// would force every JWT verification through introspection,
-	// defeating the JWT optimisation that motivated the registry
-	// design (ADR 0013). Revocation runs BEFORE the new mint so a
-	// colliding hash on Save (impossible-by-construction with 256-bit
-	// entropy) cannot leave the chain in a half-revoked state.
+	// path deliberately leaves prior tokens alive: doing otherwise would
+	// force every JWT verification through introspection, defeating the
+	// JWT optimisation that motivated the registry design. Revocation
+	// runs BEFORE the new mint so a colliding hash on Save
+	// (impossible-by-construction with 256-bit entropy) cannot leave the
+	// chain in a half-revoked state.
 	if err := revokePriorOpaqueAT(ctx, deps, exchanged.Resource, exchanged.GrantID); err != nil {
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return
 	}
-	// ADR 0025 §"Mint refusal under tombstoned grant": under the
-	// grant-tombstone strategy, refuse to mint a fresh access token
-	// when the underlying grant has already been tombstoned. Without
-	// this check a refresh racing a /end_session or code-replay
-	// cascade could slip a fresh AT through ahead of the tombstone's
-	// observable effect on resource-server lookups. The check
-	// surfaces as invalid_grant per RFC 6749 §5.2 because the grant
-	// was legitimately revoked, the refresh token is no longer
-	// usable, and the failure is a property of the grant rather than
-	// of the request shape.
+	// Mint refusal under a tombstoned grant: under the
+	// grant-tombstone strategy, refuse to mint a fresh access token when
+	// the underlying grant has already been tombstoned. Without this
+	// check a refresh racing a /end_session or code-replay cascade could
+	// slip a fresh AT through ahead of the tombstone's observable effect
+	// on resource-server lookups. The check surfaces as invalid_grant
+	// per RFC 6749 §5.2 because the grant was legitimately revoked, the
+	// refresh token is no longer usable, and the failure is a property
+	// of the grant rather than of the request shape.
 	if !enforceGrantTombstoneMintRefusal(ctx, w, deps, exchanged) {
 		return
 	}
@@ -829,20 +827,19 @@ func loadRefreshRetryResponse(ctx context.Context, deps Deps, predecessor string
 	return openRefreshRetryResponse(deps.RefreshRetryEncryptionKeys, predecessor, sealed)
 }
 
-// enforceGrantTombstoneMintRefusal implements the ADR 0025 mint-
-// refusal check on the refresh path: under
-// [store.RevocationStrategyGrantTombstone] the OP refuses to sign a
-// fresh access token when the underlying grant has already been
-// tombstoned. The lookup uses the consumed refresh token's
-// IssuedAt (its [store.RefreshToken.CreatedAt]) so the verifier's
-// "iat <= RevokedAt" rule is honoured: a chain that was minted
-// strictly before the tombstone is rejected even if the wall-clock
-// race produced an iat of "RevokedAt".
+// enforceGrantTombstoneMintRefusal implements the mint- refusal check
+// on the refresh path: under [store.RevocationStrategyGrantTombstone]
+// the OP refuses to sign a fresh access token when the underlying
+// grant has already been tombstoned. The lookup uses the consumed
+// refresh token's IssuedAt (its [store.RefreshToken.CreatedAt]) so
+// the verifier's "iat <= RevokedAt" rule is honoured: a chain that
+// was minted strictly before the tombstone is rejected even if the
+// wall-clock race produced an iat of "RevokedAt".
 //
 // The function is a no-op when:
 //
 //   - The strategy is not [store.RevocationStrategyGrantTombstone].
-//     [store.RevocationStrategyJTIRegistry] preserves the ADR 0013
+//     [store.RevocationStrategyJTIRegistry] preserves the per-JTI
 //     behaviour where the next refresh attempt is blocked by the RT
 //     cascade hitting the chain root, not by a per-mint check.
 //     [store.RevocationStrategyNone] disables server-side JWT
@@ -872,12 +869,11 @@ func enforceGrantTombstoneMintRefusal(
 	}
 	revoked, err := deps.GrantRevocations.IsRevoked(ctx, exchanged.GrantID, "", exchanged.IssuedAt)
 	if err != nil {
-		// Substore transport fault on the verify path: ADR 0025
-		// §Error handling treats this as fatal because silently
-		// allowing the request would re-introduce a cascade gap.
-		// Surface as server_error rather than invalid_grant so the
-		// embedder's monitoring distinguishes a substore outage from a
-		// legitimate revocation.
+		// Substore transport fault on the verify path: handling treats this
+		// as fatal because silently allowing the request would re-introduce
+		// a cascade gap. Surface as server_error rather than invalid_grant
+		// so the embedder's monitoring distinguishes a substore outage from
+		// a legitimate revocation.
 		writeError(w, http.StatusInternalServerError, errServerError, "")
 		return false
 	}
@@ -889,9 +885,8 @@ func enforceGrantTombstoneMintRefusal(
 }
 
 // revokePriorOpaqueAT revokes every opaque access token tied to
-// grantID when the rotation issues an opaque-format token (ADR 0024
-// §"Refresh-rotation revocation of prior AT"). The function is a
-// no-op when:
+// grantID when the rotation issues an opaque-format token. The
+// function is a no-op when:
 //
 //   - The deployment runs JWT-only (no OpaqueAccessTokens substore
 //     wired). The JWT path leaves prior tokens alive on rotation by
@@ -924,14 +919,14 @@ func revokePriorOpaqueAT(ctx context.Context, deps Deps, resource, grantID strin
 	return err
 }
 
-// refreshChainRevocationStore returns the [store.GrantRevocationStore]
-// the refresh exchanger uses to tombstone replayed chains. The hook
-// fires only when the active strategy is
-// [store.RevocationStrategyGrantTombstone] AND the embedder wired a
-// non-nil substore. Other strategies leave the JWT-AT cascade to the
-// per-token JTI denylist (legacy ADR 0013 path) or skip JWT
-// revocation entirely; both keep the refresh-chain revoke alive but
-// suppress the tombstone write so the wire shape matches the
+// refreshChainRevocationStore returns the
+// [store.GrantRevocationStore] the refresh exchanger uses to
+// tombstone replayed chains. The hook fires only when the active
+// strategy is [store.RevocationStrategyGrantTombstone] AND the
+// embedder wired a non-nil substore. Other strategies leave the
+// JWT-AT cascade to the per-token JTI denylist (legacy path) or skip
+// JWT revocation entirely; both keep the refresh-chain revoke alive
+// but suppress the tombstone write so the wire shape matches the
 // strategy's documented behaviour.
 func refreshChainRevocationStore(deps Deps) store.GrantRevocationStore {
 	if deps.RevocationStrategy != store.RevocationStrategyGrantTombstone {

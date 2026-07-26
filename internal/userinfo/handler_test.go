@@ -514,7 +514,7 @@ func assertNoClaimLeak(tb testing.TB, resp *http.Response) {
 var _ interface{ Now() time.Time } = fixedClock{}
 
 // saveOpaqueAccessToken seeds the testkit's opaque-access-token
-// substore with a live record (ADR 0024). The token's raw
+// substore with a live record. The token's raw
 // [store.OpaqueAccessToken.ID] is the bearer string the test posts at
 // /userinfo; the substore hashes it on Save and matches the digest on
 // Find.
@@ -526,10 +526,10 @@ func (f *userInfoFixture) saveOpaqueAccessToken(tb testing.TB, rec *store.Opaque
 }
 
 // TestHandler_OpaqueAccessToken_HappyPath confirms /userinfo accepts
-// a non-JWS bearer when the opaque substore (ADR 0024) holds a live
-// record. The handler hashes the presented token on lookup, projects
-// the record's Subject onto a synthetic [tokens.AccessTokenClaims],
-// and runs the same claim-assembly path the JWT branch uses.
+// a non-JWS bearer when the opaque substore holds a live record. The
+// handler hashes the presented token on lookup, projects the record's
+// Subject onto a synthetic [tokens.AccessTokenClaims], and runs the
+// same claim-assembly path the JWT branch uses.
 func TestHandler_OpaqueAccessToken_HappyPath(t *testing.T) {
 	t.Parallel()
 

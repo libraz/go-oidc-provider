@@ -10,8 +10,8 @@ import (
 	"github.com/libraz/go-oidc-provider/op/interaction"
 )
 
-// TestTick_AAL3WithoutUVRejected covers M-AUTHN-3: an authenticator
-// that reports [op.AAL3] but completes a Continue with
+// TestTick_AAL3WithoutUVRejected covers the rule that an
+// authenticator reporting [op.AAL3] but completing a Continue with
 // [interaction.Result.UserVerified] = false MUST be rejected by the
 // orchestrator with [authn.ErrAAL3RequiresUV]. NIST SP 800-63B AAL3
 // requires user verification; allowing the chain to advance under a

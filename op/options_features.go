@@ -18,7 +18,7 @@ import (
 // `WithProfile(FAPI2Baseline)` plus `WithFeature(feature.PAR)` —
 // either order, before or after — without the second call failing
 // because the profile already activated the flag.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithFeature(f feature.Flag) Option {
 	return optionFunc(func(c *config) error {
 		if !f.IsValid() {
@@ -63,7 +63,7 @@ var MaxAccessTokenTTL = timex.AccessTokenTTLMax
 // [profile.MaxAccessTokenTTL] — FAPI 2.0 §3.1.9 caps at 10 minutes).
 // Stricter-than-profile values are accepted; a value above the bound
 // fails [New].
-// Stable since v0.1.
+// Stable since v1.0.
 func WithAccessTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		if ttl < 0 {
@@ -98,7 +98,7 @@ func WithAccessTokenTTL(ttl time.Duration) Option {
 // when "offline_access" is granted — pass [WithStrictOfflineAccess].
 // To disable refresh tokens entirely, remove "refresh_token" from
 // the per-client GrantTypes or from the global [WithGrants] set.
-// Stable since v0.2.
+// Stable since v1.0.
 func WithRefreshTokenTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		if ttl < 0 {
@@ -125,7 +125,7 @@ func WithRefreshTokenTTL(ttl time.Duration) Option {
 // operationally observable: under the lax reading it lengthens the
 // refresh-token lifetime; under [WithStrictOfflineAccess] it is the
 // only path that issues a refresh token at all.
-// Stable since v0.x.
+// Stable since v1.0.
 func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		if ttl < 0 {
@@ -154,7 +154,7 @@ func WithRefreshTokenOfflineTTL(ttl time.Duration) Option {
 // only redirect the browser some time later can raise this to widen the
 // presentation window; RFC 9126 §2.2 suggests a short value (typically
 // 60 seconds).
-// Stable since v0.x.
+// Stable since v1.0.
 func WithPARLifetime(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		if ttl < 0 {
@@ -190,12 +190,14 @@ func WithPARLifetime(ttl time.Duration) Option {
 // silently disable every refresh issuance. [op.New] returns
 // `op.Error{Code: codeConfiguration}` on the conflict.
 //
-// Default false. The lax reading (refresh issued whenever
-// `refresh_token` grant is registered and scope contains "openid")
-// is the historical library posture and matches Auth0 / Okta /
-// Keycloak; the strict reading matches panva/node-oidc-provider and
-// ory/hydra defaults.
-// Stable since v0.x.
+// Default false. The lax reading — a refresh token issued whenever the
+// `refresh_token` grant is registered and the scope contains "openid" —
+// is what this library has always done, and it is the majority posture
+// among deployed providers. The strict reading is the minority one, and
+// a relying party written against a provider that takes it will not
+// notice the difference until it asks for offline access and gets a
+// refresh token it did not request.
+// Stable since v1.0.
 func WithStrictOfflineAccess() Option {
 	return optionFunc(func(c *config) error {
 		c.strictOfflineAccess = true
@@ -203,10 +205,10 @@ func WithStrictOfflineAccess() Option {
 	})
 }
 
-// WithAccessTokenFormat selects the global access-token format
-// (ADR 0024). Default [AccessTokenFormatJWT]; passing
-// [AccessTokenFormatOpaque] switches every issued access token onto
-// the opaque-bearer path described in [store.OpaqueAccessToken].
+// WithAccessTokenFormat selects the global access-token format.
+// Default [AccessTokenFormatJWT]; passing [AccessTokenFormatOpaque]
+// switches every issued access token onto the opaque-bearer path
+// described in [store.OpaqueAccessToken].
 //
 // When the opaque format is selected the configured [Store] MUST
 // return a non-nil [store.OpaqueAccessTokenStore] from
@@ -218,7 +220,7 @@ func WithStrictOfflineAccess() Option {
 // supplies the fallback for any RFC 8707 resource indicator absent
 // from the map.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
 	return optionFunc(func(c *config) error {
 		if !f.IsValid() {
@@ -233,11 +235,11 @@ func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
 }
 
 // WithAccessTokenFormatPerAudience binds an access-token format to
-// each RFC 8707 resource indicator (ADR 0024). Tokens minted for a
-// request whose resource value matches a key in the map use the
-// mapped format; tokens for any other resource (including the empty
-// default audience) fall back to [WithAccessTokenFormat] or, if that
-// option is also absent, [AccessTokenFormatJWT].
+// each RFC 8707 resource indicator. Tokens minted for a request whose
+// resource value matches a key in the map use the mapped format;
+// tokens for any other resource (including the empty default
+// audience) fall back to [WithAccessTokenFormat] or, if that option
+// is also absent, [AccessTokenFormatJWT].
 //
 // Map keys MUST be valid resource indicators per RFC 8707 §2 and
 // RFC 3986 §6:
@@ -270,7 +272,7 @@ func WithAccessTokenFormat(f store.AccessTokenFormat) Option {
 // The supplied map is defensive-copied so a later mutation of the
 // caller's map cannot silently change the OP's policy at runtime.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAccessTokenFormatPerAudience(m map[string]store.AccessTokenFormat) Option {
 	return optionFunc(func(c *config) error {
 		if len(m) == 0 {

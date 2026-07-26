@@ -303,7 +303,7 @@ func TestLoadPublicJWKS_RejectsEmptyKeyset(t *testing.T) {
 	}
 }
 
-// TestLoadPublicJWKS_DoesNotLeakAbsolutePath pins the F-4 contract:
+// TestLoadPublicJWKS_DoesNotLeakAbsolutePath pins the contract that
 // the error description MUST identify the bad file by its base name
 // only, never by its absolute filesystem path. A leaked path lets an
 // attacker who reads error_description / audit logs map the host's

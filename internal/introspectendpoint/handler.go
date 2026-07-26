@@ -162,29 +162,26 @@ type Deps struct {
 	AccessTokens store.AccessTokenRegistry
 
 	// OpaqueAccessTokens is the [store.OpaqueAccessTokenStore] the
-	// opaque-format introspection branch consults (ADR 0024). When
-	// the presented bearer is not JWS-shaped the handler hashes it,
-	// looks the digest up here, and projects the resulting record
-	// onto the RFC 7662 §2.2 wire shape (revoked / expired /
-	// cross-client → {"active": false}). A nil value disables the
-	// opaque branch; opaque tokens then always project onto
-	// inactive, mirroring the JWT-only legacy posture.
+	// opaque-format introspection branch consults. When the presented
+	// bearer is not JWS-shaped the handler hashes it, looks the digest
+	// up here, and projects the resulting record onto the RFC 7662 §2.2
+	// wire shape (revoked / expired / cross-client → {"active": false}).
+	// A nil value disables the opaque branch; opaque tokens then always
+	// project onto inactive, mirroring the JWT-only legacy posture.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
 
-	// GrantRevocations is the [store.GrantRevocationStore] consulted
-	// by the grant-tombstone JWT access-token revocation strategy
-	// (ADR 0025). The introspection handler uses it to collapse a
-	// tombstoned access token onto the RFC 7662 §2.2
-	// {"active": false} wire shape; the lookup is keyed by the AT's
-	// "gid" private claim. A nil value disables the lookup and the
-	// handler falls back to whichever legacy behaviour
-	// [RevocationStrategy] selects.
+	// GrantRevocations is the [store.GrantRevocationStore] consulted by
+	// the grant-tombstone JWT access-token revocation strategy. The
+	// introspection handler uses it to collapse a tombstoned access
+	// token onto the RFC 7662 §2.2 {"active": false} wire shape; the
+	// lookup is keyed by the AT's "gid" private claim. A nil value
+	// disables the lookup and the handler falls back to whichever legacy
+	// behaviour [RevocationStrategy] selects.
 	GrantRevocations store.GrantRevocationStore
 
-	// RevocationStrategy selects the JWT access-token revocation
-	// shape (ADR 0025). The zero value is
-	// [store.RevocationStrategyGrantTombstone], which is the
-	// documented default; the library wires this from
+	// RevocationStrategy selects the JWT access-token revocation shape.
+	// The zero value is [store.RevocationStrategyGrantTombstone], which
+	// is the documented default; the library wires this from
 	// [op.WithAccessTokenRevocationStrategy].
 	RevocationStrategy store.AccessTokenRevocationStrategy
 

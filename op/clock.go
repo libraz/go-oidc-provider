@@ -9,7 +9,7 @@ import "time"
 //
 // Implementations MUST be safe for concurrent use by multiple goroutines.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 type Clock interface {
 	Now() time.Time
 }

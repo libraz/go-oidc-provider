@@ -196,7 +196,7 @@ func (r *flakyReader) Read(p []byte) (int, error) {
 }
 
 // TestNewInMemoryDPoPNonceSource_LogsAndCountsRotationFailures pins the
-// F-1 contract: when the configured entropy source fails on a rotation
+// contract that when the configured entropy source fails on a rotation
 // tick, the helper increments [InMemoryDPoPNonceSource.RotationFailures]
 // and emits a WARN line through the logger threaded in via
 // [WithInMemoryDPoPNonceLogger]. The previous nonce stays serviceable
@@ -263,7 +263,7 @@ func TestNewInMemoryDPoPNonceSource_LogsAndCountsRotationFailures(t *testing.T) 
 }
 
 // TestInMemoryDPoPNonceSource_ValidateUsesConstantTimeCompare pins the
-// F-2 contract: a bad input MUST NOT short-circuit through a fast
+// contract that a bad input MUST NOT short-circuit through a fast
 // `nonce == s.current` mismatch. The test cannot directly observe the
 // ConstantTimeCompare call (that would require unsafe reflection) but
 // it pins the behavioural symptom — every accepted/rejected branch

@@ -9,8 +9,6 @@ package scenarios_test
 //   - RFC 7662 §2.2 — OAuth 2.0 Token Introspection
 //   - RFC 9068 §2.2.3 — JWT AT extension claims
 //   - FAPI 2.0 SP §5.3.2.2
-//   - ADR 0013 — JTI registry (legacy strategy, preserved as opt-in)
-//   - ADR 0025 — JWT access-token revocation via grant-tombstone
 
 import (
 	"context"

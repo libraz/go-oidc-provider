@@ -948,7 +948,7 @@ func TestUserStore_FindBySubject_Missing(t *testing.T) {
 	}
 }
 
-// TestAuthCode_HashOnStore_RawValueAbsent pins M-STORE-1 for the
+// TestAuthCode_HashOnStore_RawValueAbsent pins for the
 // authorization-code substore: the raw bearer value the OP issues
 // MUST NOT live in the underlying map. Find with the raw value still
 // hits and a Find with a tampered value misses. The black-box
@@ -983,10 +983,10 @@ func TestAuthCode_HashOnStore_RawValueAbsent(t *testing.T) {
 	}
 }
 
-// TestRefresh_HashOnStore_RawValueAbsent pins M-STORE-1 for the
-// refresh-token substore. ParentID is also hashed at Save time so a
-// chain walk through the underlying map sees only digests; this test
-// confirms RevokeChain still walks descendants correctly under the
+// TestRefresh_HashOnStore_RawValueAbsent pins for the refresh-token
+// substore. ParentID is also hashed at Save time so a chain walk
+// through the underlying map sees only digests; this test confirms
+// RevokeChain still walks descendants correctly under the
 // hashed-pointer regime.
 func TestRefresh_HashOnStore_RawValueAbsent(t *testing.T) {
 	t.Parallel()
@@ -1066,8 +1066,7 @@ func TestPAR_SaveSweepsExpiredRecords(t *testing.T) {
 	}
 }
 
-// TestPAR_HashOnStore_RawValueAbsent pins M-STORE-1 for the PAR
-// substore.
+// TestPAR_HashOnStore_RawValueAbsent pins for the PAR substore.
 func TestPAR_HashOnStore_RawValueAbsent(t *testing.T) {
 	t.Parallel()
 	now := contract.Reference
@@ -1093,13 +1092,13 @@ func TestPAR_HashOnStore_RawValueAbsent(t *testing.T) {
 	}
 }
 
-// TestIATStore_GetByHash_FastPath pins M-STORE-2: GetByHash is a
-// keyed lookup, not a linear scan. The test inserts a deliberately
-// large set of records and asserts the GetByHash call returns the
-// right record for one specific hash; the original linear scan would
-// silently pass too. The structural intent of the audit fix is captured
-// by the Delete-then-GetByHash check that confirms the byHash index
-// stays in sync.
+// TestIATStore_GetByHash_FastPath pins that GetByHash is a keyed
+// lookup, not a linear scan. The test inserts a deliberately large set of
+// records and asserts the GetByHash call returns the right record for
+// one specific hash; the original linear scan would silently pass
+// too. The structural intent of the audit fix is captured by the
+// Delete-then-GetByHash check that confirms the byHash index stays in
+// sync.
 func TestIATStore_GetByHash_FastPath(t *testing.T) {
 	t.Parallel()
 	s := inmem.New()
@@ -1183,7 +1182,7 @@ func TestSessionStore_BatchListMatches(t *testing.T) {
 	contract.AssertSessionBatchListMatches(t, s.Sessions(), 16, now)
 }
 
-// TestTx_Rollback_ClearsStaging pins F-11: Rollback drops every
+// TestTx_Rollback_ClearsStaging pins that Rollback drops every
 // staged record so a buggy caller cannot mutate the freed staging
 // pointers into the next transaction. The test races several
 // transactions through Rollback and asserts the second tx observes a

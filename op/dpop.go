@@ -18,9 +18,9 @@ package op
 //   - Every challenge response stamps a fresh value from
 //     [IssueNonce] into the `DPoP-Nonce` response header.
 //
-// When [WithDPoPNonceSource] is not called, the provider preserves
-// the v0.x posture: proofs without a nonce claim are accepted and
-// the challenge is never emitted.
+// When [WithDPoPNonceSource] is not called the gate is off: proofs
+// without a nonce claim are accepted and the challenge is never
+// emitted.
 //
 // Implementations MUST be safe for concurrent use; the provider
 // invokes both methods from every request goroutine. An empty
@@ -29,7 +29,7 @@ package op
 // can still see the gate fired. Implementations SHOULD never return
 // empty in normal operation.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 type DPoPNonceSource interface {
 	// IssueNonce returns a fresh nonce value to stamp into the
 	// `DPoP-Nonce` response header. Implementations typically

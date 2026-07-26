@@ -324,48 +324,45 @@ type Deps struct {
 	AccessTokens store.AccessTokenRegistry
 
 	// OpaqueAccessTokens is the [store.OpaqueAccessTokenStore] the
-	// opaque-format issuance path persists shadow rows in (ADR 0024).
-	// A nil value disables the opaque path; combined with a non-nil
+	// opaque-format issuance path persists shadow rows in. A nil value
+	// disables the opaque path; combined with a non-nil
 	// AccessTokenFormatFor that returns [store.AccessTokenFormatOpaque]
-	// for some audience, the issuance call site is expected to fall
-	// back onto the JWT path so a partial wiring cannot panic at
-	// runtime. The library wires a non-nil substore from the
-	// configured [op.Store] only when [op.WithAccessTokenFormat]
-	// (or [op.WithAccessTokenFormatPerAudience]) selects opaque; the
+	// for some audience, the issuance call site is expected to fall back
+	// onto the JWT path so a partial wiring cannot panic at runtime. The
+	// library wires a non-nil substore from the configured [op.Store]
+	// only when [op.WithAccessTokenFormat] (or
+	// [op.WithAccessTokenFormatPerAudience]) selects opaque; the
 	// fail-fast validator at op.New rejects opaque-without-substore
 	// configurations.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
 
-	// AccessTokenFormatFor resolves the access-token format the
-	// issuance path applies to a request whose RFC 8707 resource
-	// indicator is resource (ADR 0024). The empty resource string
-	// signals "no resource parameter on the request"; callers pass
-	// it through and the function MUST return the global default in
-	// that case. A nil function defers to [store.AccessTokenFormatJWT]
-	// for every audience so the legacy behaviour (RFC 9068 JWT
-	// access tokens) is preserved when the wiring layer omits the
-	// dependency.
+	// AccessTokenFormatFor resolves the access-token format the issuance
+	// path applies to a request whose RFC 8707 resource indicator is
+	// resource. The empty resource string signals "no resource parameter
+	// on the request"; callers pass it through and the function MUST
+	// return the global default in that case. A nil function defers to
+	// [store.AccessTokenFormatJWT] for every audience so the legacy
+	// behaviour (RFC 9068 JWT access tokens) is preserved when the
+	// wiring layer omits the dependency.
 	AccessTokenFormatFor func(resource string) store.AccessTokenFormat
 
-	// GrantRevocations is the [store.GrantRevocationStore] consulted
-	// by the grant-tombstone JWT access-token revocation strategy
-	// (ADR 0025). Cascades write a per-grant tombstone here rather
-	// than one shadow row per AT under that grant; the issuance path
-	// also consults the substore to refuse minting under a
-	// tombstoned grant. A nil value disables the substore entirely;
-	// the strategy then falls back to whichever legacy behaviour
-	// [RevocationStrategy] selects. The library wires a non-nil
-	// substore from the configured [op.Store] when the embedder pins
-	// [op.RevocationStrategyGrantTombstone] (default).
+	// GrantRevocations is the [store.GrantRevocationStore] consulted by
+	// the grant-tombstone JWT access-token revocation strategy. Cascades
+	// write a per-grant tombstone here rather than one shadow row per AT
+	// under that grant; the issuance path also consults the substore to
+	// refuse minting under a tombstoned grant. A nil value disables the
+	// substore entirely; the strategy then falls back to whichever
+	// legacy behaviour [RevocationStrategy] selects. The library wires a
+	// non-nil substore from the configured [op.Store] when the embedder
+	// pins [op.RevocationStrategyGrantTombstone] (default).
 	GrantRevocations store.GrantRevocationStore
 
-	// RevocationStrategy selects the JWT access-token revocation
-	// shape (ADR 0025). The zero value is
-	// [store.RevocationStrategyGrantTombstone], which is the
-	// documented default; the library wires this from
-	// [op.WithAccessTokenRevocationStrategy]. The opaque path
-	// (ADR 0024) is unaffected because opaque tokens are
-	// intrinsically per-token in storage.
+	// RevocationStrategy selects the JWT access-token revocation shape.
+	// The zero value is [store.RevocationStrategyGrantTombstone], which
+	// is the documented default; the library wires this from
+	// [op.WithAccessTokenRevocationStrategy]. The opaque path is
+	// unaffected because opaque tokens are intrinsically per-token in
+	// storage.
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
 	// Audit is the structured audit-event sink. A nil Emitter falls

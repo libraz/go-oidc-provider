@@ -263,11 +263,11 @@ func TestSignAccessToken_ScopeJoinAndJTI(t *testing.T) {
 	}
 }
 
-// TestSignAccessToken_GrantIDEmbedsGidClaim pins ADR 0025's wire
-// contract: when AccessTokenClaims.GrantID is non-empty the encoded
-// payload carries the "gid" private claim verbatim. The claim is
-// meaningful only to the issuing OP (RFC 7519 §4.3); resource servers
-// MUST ignore it.
+// TestSignAccessToken_GrantIDEmbedsGidClaim pins the wire contract:
+// when AccessTokenClaims.GrantID is non-empty the encoded payload
+// carries the "gid" private claim verbatim. The claim is meaningful
+// only to the issuing OP (RFC 7519 §4.3); resource servers MUST
+// ignore it.
 func TestSignAccessToken_GrantIDEmbedsGidClaim(t *testing.T) {
 	t.Parallel()
 
@@ -289,14 +289,14 @@ func TestSignAccessToken_GrantIDEmbedsGidClaim(t *testing.T) {
 	}
 	payload := decodePayload(t, jws)
 	if payload["gid"] != "g123" {
-		t.Errorf("gid=%v want \"g123\" (ADR 0025 wire contract)", payload["gid"])
+		t.Errorf("gid=%v want \"g123\" (gid wire contract)", payload["gid"])
 	}
 }
 
 // TestSignAccessToken_GrantIDOmitemptyWhenEmpty pins the omitempty
 // equivalent for the map-based merge: a zero-value GrantID MUST NOT
 // appear on the wire so legacy / RevocationStrategyJTIRegistry
-// deployments emit unchanged bytes (ADR 0025 §Wire change).
+// deployments emit unchanged bytes.
 func TestSignAccessToken_GrantIDOmitemptyWhenEmpty(t *testing.T) {
 	t.Parallel()
 

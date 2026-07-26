@@ -130,28 +130,26 @@ type Deps struct {
 	AccessTokens store.AccessTokenRegistry
 
 	// OpaqueAccessTokens is the [store.OpaqueAccessTokenStore] the
-	// opaque-format revocation branch consults (ADR 0024). When the
-	// presented bearer is not JWS-shaped the handler hashes it and
-	// calls RevokeByID; the call is idempotent so a missing row
-	// preserves the RFC 7009 §2.2 "always 200" posture. A nil value
-	// disables the opaque branch; non-JWS tokens then silently
-	// resolve to 200 without state change, mirroring the JWT-only
-	// legacy posture.
+	// opaque-format revocation branch consults. When the presented
+	// bearer is not JWS-shaped the handler hashes it and calls
+	// RevokeByID; the call is idempotent so a missing row preserves the
+	// RFC 7009 §2.2 "always 200" posture. A nil value disables the
+	// opaque branch; non-JWS tokens then silently resolve to 200 without
+	// state change, mirroring the JWT-only legacy posture.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
 
-	// GrantRevocations is the [store.GrantRevocationStore] consulted
-	// by the grant-tombstone JWT access-token revocation strategy
-	// (ADR 0025). The /revoke handler writes a JTI denylist row when
-	// an access token is revoked by jti per RFC 7009; cascades that
-	// flow through this endpoint write a per-grant tombstone instead.
-	// A nil value disables the substore and the handler falls back to
-	// whichever legacy behaviour [RevocationStrategy] selects.
+	// GrantRevocations is the [store.GrantRevocationStore] consulted by
+	// the grant-tombstone JWT access-token revocation strategy. The
+	// /revoke handler writes a JTI denylist row when an access token is
+	// revoked by jti per RFC 7009; cascades that flow through this
+	// endpoint write a per-grant tombstone instead. A nil value disables
+	// the substore and the handler falls back to whichever legacy
+	// behaviour [RevocationStrategy] selects.
 	GrantRevocations store.GrantRevocationStore
 
-	// RevocationStrategy selects the JWT access-token revocation
-	// shape (ADR 0025). The zero value is
-	// [store.RevocationStrategyGrantTombstone], which is the
-	// documented default; the library wires this from
+	// RevocationStrategy selects the JWT access-token revocation shape.
+	// The zero value is [store.RevocationStrategyGrantTombstone], which
+	// is the documented default; the library wires this from
 	// [op.WithAccessTokenRevocationStrategy].
 	RevocationStrategy store.AccessTokenRevocationStrategy
 

@@ -147,8 +147,9 @@ func (r *Registry) IsPublic(name string) bool {
 //     not registered here are not subject to a per-client allowlist
 //     and pass through. Callers that need to reject unregistered
 //     scopes outright SHOULD consult [Registry.IsRegistered] before
-//     calling Allows (closes audit F-5: the contract is now explicit
-//     and tested rather than relying on caller defence-in-depth).
+//     calling Allows. Splitting the two questions is deliberate: a
+//     single method answering both would have to guess which one the
+//     caller meant, and the guess that fails open is unrecoverable.
 //   - Registered scope with empty AllowedClients: returns true. An
 //     empty allowlist means "every client may request the scope".
 //   - Registered scope with non-empty AllowedClients: returns true

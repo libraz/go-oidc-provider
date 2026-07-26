@@ -20,7 +20,7 @@ import (
 // A nil Validate is rejected at [New]: registering a type without a
 // validator would accept arbitrary payloads under that type.
 //
-// Stable since v0.x. The type is experimental until v1.0.
+// Stable since v1.0.
 type AuthorizationDetailType struct {
 	// Type is the RFC 9396 §2 "type" identifier (for example
 	// "payment_initiation"). It MUST be non-empty and unique across all
@@ -52,7 +52,7 @@ type AuthorizationDetailType struct {
 // Repeated calls append, so embedders MAY layer a base set with a
 // deployment-specific overlay.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAuthorizationDetailTypes(types ...AuthorizationDetailType) Option {
 	return optionFunc(func(c *config) error {
 		if len(types) == 0 {

@@ -42,10 +42,10 @@ func TestScenario_ITX_011_InteractionPageEscapesEchoedParams(t *testing.T) {
 
 // TestScenario_ITX_012_LoginPostResumesAndRedirectsToClient pins the
 // interaction-completion observable: after the SPA submits the
-// authentication factor (the v1.0 wire equivalent of panva's
+// authentication factor (the v1.0 wire equivalent of the upstream OP's
 // `prompt=login` POST), the next response MUST be the 302/303 redirect
 // to the client's redirect_uri carrying a fresh authorization code and
-// the original state. v1.0 collapses panva's two-hop /interaction →
+// the original state. v1.0 collapses the upstream OP's two-hop /interaction →
 // /auth/{uid} → callback into a single redirect; the wire-observable
 // end state is identical.
 func TestScenario_ITX_012_LoginPostResumesAndRedirectsToClient(t *testing.T) {
@@ -107,10 +107,10 @@ func TestScenario_ITX_022_ConsentPrincipalChangedBeforePost(t *testing.T) {
 
 // TestScenario_ITX_023_ConsentPostResumesAndRedirectsToClient pins the
 // post-consent completion observable. RunCodeFlow drives the consent
-// prompt to approval (the v1.0 wire-equivalent of panva's "successful
+// prompt to approval (the v1.0 wire-equivalent of the upstream OP's "successful
 // consent POST") and the helper asserts the end state is a redirect
 // back to the RP carrying the authorization code and state. v1.0
-// collapses panva's POST → /auth → callback into a single 302; the
+// collapses the upstream OP's POST → /auth → callback into a single 302; the
 // observable end state is identical.
 func TestScenario_ITX_023_ConsentPostResumesAndRedirectsToClient(t *testing.T) {
 	t.Parallel()
@@ -168,7 +168,7 @@ func TestScenario_ITX_030_UnknownPromptNameReturns501(t *testing.T) {
 // end-user aborts the in-progress interaction, the OP MUST redirect to
 // the RP carrying error=access_denied and the original state. v1.0
 // exposes the cancel surface as DELETE on /oidc/interaction/{uid}
-// rather than panva's GET on {interaction_url}/abort; the wire verb /
+// rather than the upstream OP's GET on {interaction_url}/abort; the wire verb /
 // route differ but the §4.1.2.1-mandated end state is identical.
 func TestScenario_ITX_040_AbortReturnsAccessDeniedToClient(t *testing.T) {
 	t.Parallel()

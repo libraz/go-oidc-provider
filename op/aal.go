@@ -7,7 +7,7 @@ import "github.com/libraz/go-oidc-provider/internal/authn"
 // re-exports it so embedders write `op.AAL` without reaching into
 // internal/.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 type AAL = authn.AAL
 
 // AAL constants re-exported from the authn package. See

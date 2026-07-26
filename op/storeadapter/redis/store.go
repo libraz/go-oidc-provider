@@ -456,21 +456,21 @@ func (s *Store) RegistrationAccessTokens() store.RegistrationAccessTokenStore { 
 // or JWT revocation strategy is active without a backing substore.
 func (s *Store) AccessTokens() store.AccessTokenRegistry { return nil }
 
-// OpaqueAccessTokens implements [store.Store] (ADR 0024). Redis cannot
-// host the transactional cluster on its own — the opaque-AT save must
-// commit atomically alongside the grant write — so the accessor returns
-// nil. The library detects the nil at op.New time when an embedder
-// enables [op.WithAccessTokenFormat] (.../Opaque) without routing the
+// OpaqueAccessTokens implements [store.Store]. Redis cannot host the
+// transactional cluster on its own — the opaque-AT save must commit
+// atomically alongside the grant write — so the accessor returns nil.
+// The library detects the nil at op.New time when an embedder enables
+// [op.WithAccessTokenFormat] (.../Opaque) without routing the
 // substore to a transactional backend through composite, and surfaces
 // a fail-fast configuration error instead of crashing on the first
 // issuance. Embedders that want opaque tokens compose this adapter
 // with op/storeadapter/composite + a SQL anchor.
 func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return nil }
 
-// GrantRevocations implements [store.Store] (ADR 0025). Redis cannot
-// host the transactional cluster on its own — the tombstone /
-// denylist write must commit atomically alongside the matching grant
-// or refresh-token write — so the accessor returns nil. The library
+// GrantRevocations implements [store.Store]. Redis cannot host the
+// transactional cluster on its own — the tombstone / denylist write
+// must commit atomically alongside the matching grant or
+// refresh-token write — so the accessor returns nil. The library
 // detects the nil at op.New time when an embedder selects the
 // grant-tombstone strategy without routing the substore to a
 // transactional backend through composite, and surfaces a fail-fast

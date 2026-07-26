@@ -102,11 +102,11 @@ func RequireVouchedAttestationForTest(attestationType string) error {
 	return requireVouchedAttestation(attestationType)
 }
 
-// CheckAAGUIDOnAssertionForTest exposes the M-AUTHN-2 helper so
-// tests can drive the AAGUID re-check without standing up a soft
-// authenticator. The seam invokes the same helper [Verifier.FinishLogin]
-// calls before [webauthn.ValidateLogin], so a green test here means
-// production callers see the same verdict.
+// CheckAAGUIDOnAssertionForTest exposes the helper so tests can drive
+// the AAGUID re-check without standing up a soft authenticator. The
+// seam invokes the same helper [Verifier.FinishLogin] calls before
+// [webauthn.ValidateLogin], so a green test here means production
+// callers see the same verdict.
 func (v *Verifier) CheckAAGUIDOnAssertionForTest(credentials []Credential, rawID []byte) error {
 	return v.checkAAGUIDOnAssertion(credentials, rawID)
 }

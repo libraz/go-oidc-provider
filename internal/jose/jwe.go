@@ -48,7 +48,7 @@ const MaxJOSENestingDepth = 10
 
 // JWE-related sentinel errors. Callers branch on these via
 // [errors.Is]; the wrapped detail is safe to log but MUST NOT be
-// returned to clients (per ADR 0030 §S.8).
+// returned to clients.
 var (
 	// ErrJWEMalformed indicates the input was not a syntactically
 	// valid compact-serialised JWE: wrong number of parts, invalid
@@ -185,7 +185,7 @@ type jweProtectedHeader struct {
 
 // Decrypt parses, validates, and decrypts a compact-serialised JWE.
 //
-// Validation order (mirroring ADR 0030 §Q4):
+// Validation order:
 //
 //  1. Compact form syntax — exactly five base64url-encoded segments
 //     separated by ".".
@@ -200,10 +200,10 @@ type jweProtectedHeader struct {
 //     wall-clock timing cannot leak which key matched.
 //  7. Decrypt; reject if plaintext exceeds [MaxJWEPlaintextSize].
 //
-// The hardening posture is "fail uniformly": every decryption
-// failure returns [ErrJWEDecryptFailed] with a generic description.
-// The detailed cause is wrapped via fmt.Errorf and is safe to log,
-// but MUST NOT be echoed back to clients (ADR 0030 §S.8).
+// The hardening posture is "fail uniformly": every decryption failure
+// returns [ErrJWEDecryptFailed] with a generic description. The
+// detailed cause is wrapped via fmt.Errorf and is safe to log, but
+// MUST NOT be echoed back to clients.
 //
 // Decrypt does NOT verify nested JWS content (the `cty=JWT` case).
 // The caller inspects [DecryptedJWE.ContentType] and routes the

@@ -358,7 +358,7 @@ func TestScenario_FAPI_V1_017_HybridSignedRequestProducesIDToken(t *testing.T) {
 // before any /authorize hop.
 //
 // The error_description is the v1.0 wire-form "code_challenge is
-// required" — the catalog's panva-style "Authorization Server policy
+// required" — the catalog's upstream-style "Authorization Server policy
 // requires PKCE" text is non-spec residue, but the error code and
 // the rejection point are identical.
 //

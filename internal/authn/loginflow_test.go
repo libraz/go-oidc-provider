@@ -611,9 +611,8 @@ func TestLoginFlowExternalStepFactorContribution(t *testing.T) {
 		},
 		continueFn: func(_ context.Context, _ op.ContinueInput) (interaction.Step, error) {
 			// AAL3 authenticators MUST report UserVerified=true; the
-			// orchestrator's M-AUTHN-3 gate (guardAAL3RequiresUV)
-			// rejects AAL3 factors that did not perform UV per
-			// NIST SP 800-63B.
+			// orchestrator's gate (guardAAL3RequiresUV) rejects AAL3 factors
+			// that did not perform UV per NIST SP 800-63B.
 			return interaction.Step{Result: &interaction.Result{
 				Subject:      "user-9",
 				AuthTime:     fakeNow(),

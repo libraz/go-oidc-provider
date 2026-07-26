@@ -8,10 +8,17 @@
 //
 // # Status
 //
-// go-oidc-provider is pre-v1.0. Public API may change in any minor release
-// until v1.0.0. Breaking changes are documented in CHANGELOG.md. APIs whose
-// godoc starts with "Experimental:" may change without a major bump even
-// after v1.0.
+// The public API follows Semantic Versioning: a breaking change to anything
+// documented here requires a major version, and every such change is recorded
+// in CHANGELOG.md.
+//
+// There is one exemption, and it is enumerated rather than described. A symbol
+// whose godoc begins with "Experimental:" may change in a minor release. The
+// complete set is generated from those markers into api/experimental.txt and
+// diffed by the build, so the exemption cannot grow without the diff showing
+// it. Everything absent from that file is stable. The exempt surface today is
+// the authentication-step seam ([LoginFlow] and the options that populate it),
+// the interaction UI hooks, and Grant Management, which tracks an IETF draft.
 //
 // # Quickstart
 //
@@ -33,8 +40,11 @@
 // the loopback interface:
 //
 //   - [WithAllowLocalhostLoopback] admits the textual "localhost" host in
-//     redirect_uri values (the IP literals 127.0.0.1 and [::1] are always
-//     admitted on the http loopback carve-out).
+//     redirect_uri values and in the issuer (the IP literals 127.0.0.1 and
+//     [::1] are always admitted on the http loopback carve-out). A local
+//     WebAuthn deployment needs the issuer half: a Relying Party ID must
+//     be a domain, so an http issuer on an IP literal has none to pair
+//     with.
 //   - [WithAllowInsecureBackchannelLogoutForDev] admits http:// loopback
 //     URLs for backchannel_logout_uri at registration time and disables
 //     the deliverer's SSRF gate so a stub RP on 127.0.0.1 can receive the

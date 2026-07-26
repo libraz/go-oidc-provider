@@ -24,7 +24,8 @@
 //
 // # Stability
 //
-// testkit follows the same pre-v1.0 stability posture as the rest of the
-// public surface: minor versions may rearrange options before v1.0. Once
-// v1.0 ships, breaking changes are reserved for the next major.
+// testkit follows the same SemVer promise as the rest of the public
+// surface: breaking changes are reserved for a major version. Helpers
+// that construct an [op.Provider] around an experimental option inherit
+// that option's exemption — see the op package godoc.
 package testkit

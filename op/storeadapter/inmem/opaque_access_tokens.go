@@ -11,26 +11,26 @@ import (
 )
 
 // opaqueAccessTokenStore is the inmem implementation of
-// [store.OpaqueAccessTokenStore] (ADR 0024). Records are keyed by the
-// SHA-256 hash of the raw bearer id; the raw value is never retained
-// inside the OP process so a heap dump cannot reconstruct an issued
+// [store.OpaqueAccessTokenStore]. Records are keyed by the SHA-256
+// hash of the raw bearer id; the raw value is never retained inside
+// the OP process so a heap dump cannot reconstruct an issued
 // credential.
 //
-// The store mirrors the shape of [accessTokenStore] (ADR 0013) and
-// layers hash-on-store on top: Save hashes the raw id before persisting
-// and clears the stored record's ID field; Find hashes the presented id
+// The store mirrors the shape of [accessTokenStore] and layers
+// hash-on-store on top: Save hashes the raw id before persisting and
+// clears the stored record's ID field; Find hashes the presented id
 // and looks the digest up.
 type opaqueAccessTokenStore struct {
 	mu sync.RWMutex
 	m  map[string]*store.OpaqueAccessToken
 
 	// pepper is reserved for an HMAC pepper applied to the SHA-256
-	// digest before storage (ADR 0024 §S.2). The reference impl does
-	// not currently apply one; the field exists today so the type
-	// signature does not break when the wiring is added in a follow-up
-	// commit. TestOpaqueAccessToken_PepperFieldExists pins the
-	// reservation against a rename.
-	pepper []byte //nolint:unused // reserved for ADR 0024 §S.2 wiring; pinned by TestOpaqueAccessToken_PepperFieldExists.
+	// digest before storage. The reference impl does not currently apply
+	// one; the field exists today so the type signature does not break
+	// when the wiring is added in a follow-up commit.
+	// TestOpaqueAccessToken_PepperFieldExists pins the reservation
+	// against a rename.
+	pepper []byte //nolint:unused // reserved for the pepper wiring; pinned by TestOpaqueAccessToken_PepperFieldExists.
 }
 
 func newOpaqueAccessTokenStore() *opaqueAccessTokenStore {

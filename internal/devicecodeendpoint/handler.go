@@ -33,7 +33,7 @@ import (
 const auditClientAuthnFailure = clientauthhttp.EventClientAuthnFailure
 
 // Tunables the handler uses when [Deps] omits the corresponding
-// field. The defaults match the values documented in ADR 0031 §Q3.
+// field. The defaults match the values.
 const (
 	// deviceCodeByteLength is the entropy of the wire device_code.
 	// 32 bytes (256 bits) is the same posture the library uses for

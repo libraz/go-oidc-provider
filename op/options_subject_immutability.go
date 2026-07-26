@@ -86,8 +86,8 @@ func (c *config) enforceSubjectModeGate(ctx context.Context) error {
 		}
 	}
 	// SubjectModeKey is absent. Two paths reach here legitimately —
-	// a truly fresh install, and a v0.9.0 → v0.9.x upgrade with grants
-	// already in the store — and one path reaches here illegitimately:
+	// a truly fresh install, and an upgrade from a release that predates
+	// the marker, with grants already in the store — and one path reaches here illegitimately:
 	// a previously-used store whose SubjectModeKey row was wiped while
 	// other artifacts (or the OpInitKey sentinel itself) remain. The
 	// OpInitKey probe distinguishes the two: presence means the store

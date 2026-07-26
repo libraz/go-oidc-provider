@@ -136,10 +136,10 @@ type Deps struct {
 	AccessTokens store.AccessTokenRegistry
 
 	// OpaqueAccessTokens cascades the per-grant opaque-format access
-	// tokens (ADR 0024) alongside the JWT cascade. The two cascades
-	// run independently because they belong to different substores;
-	// failures are returned to the logout path for accurate auditing
-	// while remaining non-blocking for the browser response. A nil value
+	// tokens alongside the JWT cascade. The two cascades run
+	// independently because they belong to different substores; failures
+	// are returned to the logout path for accurate auditing while
+	// remaining non-blocking for the browser response. A nil value
 	// disables the opaque cascade — the embedder either has no opaque-AT
 	// deployments or has not wired the substore.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
@@ -153,19 +153,18 @@ type Deps struct {
 	// default AccessTokenTTL).
 	AccessTokenTTL time.Duration
 
-	// GrantRevocations is the [store.GrantRevocationStore] consulted
-	// by the grant-tombstone JWT access-token revocation strategy
-	// (ADR 0025). The /end_session handler writes a per-grant
-	// tombstone here for each affected grant so the cascade is one
-	// row per grant rather than one row per AT under that grant. A
-	// nil value disables the substore and the handler falls back to
-	// whichever legacy behaviour [RevocationStrategy] selects.
+	// GrantRevocations is the [store.GrantRevocationStore] consulted by
+	// the grant-tombstone JWT access-token revocation strategy. The
+	// /end_session handler writes a per-grant tombstone here for each
+	// affected grant so the cascade is one row per grant rather than one
+	// row per AT under that grant. A nil value disables the substore and
+	// the handler falls back to whichever legacy behaviour
+	// [RevocationStrategy] selects.
 	GrantRevocations store.GrantRevocationStore
 
-	// RevocationStrategy selects the JWT access-token revocation
-	// shape (ADR 0025). The zero value is
-	// [store.RevocationStrategyGrantTombstone], which is the
-	// documented default; the library wires this from
+	// RevocationStrategy selects the JWT access-token revocation shape.
+	// The zero value is [store.RevocationStrategyGrantTombstone], which
+	// is the documented default; the library wires this from
 	// [op.WithAccessTokenRevocationStrategy].
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
@@ -504,7 +503,7 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 // reject the outstanding bearer tokens immediately rather than waiting
 // for their exp claim to elapse.
 //
-// The JWT branch dispatches on [Deps.RevocationStrategy] (ADR 0025):
+// The JWT branch dispatches on [Deps.RevocationStrategy]:
 //
 //   - [store.RevocationStrategyGrantTombstone] (default): write a
 //     [store.GrantTombstone] row per grant. Tokens issued before
@@ -512,13 +511,13 @@ func terminateSession(w http.ResponseWriter, r *http.Request, deps Deps) {
 //     the same grant are refused at the token endpoint.
 //   - [store.RevocationStrategyJTIRegistry]: flip every shadow row
 //     under the grant via [store.AccessTokenRegistry.RevokeByGrant]
-//     (the ADR 0013 path).
+//     (the per-JTI path).
 //   - [store.RevocationStrategyNone]: skip the JWT cascade; the
 //     embedder accepted the RFC 6749 §4.1.2 wiggle.
 //
-// The opaque branch ([Deps.OpaqueAccessTokens]) runs independently for
-// every strategy when the substore is wired (ADR 0024) — opaque tokens
-// have their own per-token state and the JWT-strategy switch does not
+// The opaque branch ([Deps.OpaqueAccessTokens]) runs independently
+// for every strategy when the substore is wired — opaque tokens have
+// their own per-token state and the JWT-strategy switch does not
 // apply to them.
 //
 // A nil [Deps.Grants] short-circuits both branches — the embedder
@@ -569,8 +568,8 @@ func revokeJWTAccessTokensForGrant(
 }
 
 // tombstoneRetention returns the period a grant tombstone must live
-// after [store.RevocationStrategyGrantTombstone] writes it. The window
-// is "AT TTL + 5-minute clock-skew grace" per ADR 0025 §GC; a zero
+// after [store.RevocationStrategyGrantTombstone] writes it. The
+// window is "AT TTL + 5-minute clock-skew grace"; a zero
 // AccessTokenTTL falls back to one hour, which is the project's
 // default AT TTL ceiling.
 func tombstoneRetention(ttl time.Duration) time.Duration {

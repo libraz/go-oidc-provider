@@ -62,12 +62,11 @@ func (c *config) applyDefaults() {
 		}
 	}
 	// Wrap the resolved driver with [interaction.TemplateOverlayDriver]
-	// when the embedder configured a consent or chooser template and
-	// SPA mode is not active. The overlay degrades to a passthrough
-	// for prompt types whose template field is nil, so wrapping is
-	// safe even when only one of the two templates is provided. Under
-	// SPA mode the JSON state envelope owns both surfaces (per ADR
-	// 0015 §SPA mode and ADR 0008 §3.5), so the overlay is not
+	// when the embedder configured a consent or chooser template and SPA
+	// mode is not active. The overlay degrades to a passthrough for
+	// prompt types whose template field is nil, so wrapping is safe even
+	// when only one of the two templates is provided. Under SPA mode the
+	// JSON state envelope owns both surfaces, so the overlay is not
 	// composed in that path.
 	if !c.spaUISet && (c.consentUISet || c.chooserUISet) {
 		c.interactionD = interaction.TemplateOverlayDriver{
@@ -80,7 +79,7 @@ func (c *config) applyDefaults() {
 		c.logger.Warn(
 			"WithChooserUI is configured but WithSPAUI is active; "+
 				"the chooser template will not be rendered "+
-				"(SPA owns chooser UI per ADR 0015)",
+				"(SPA owns the chooser UI)",
 			"option", "WithChooserUI",
 		)
 	}

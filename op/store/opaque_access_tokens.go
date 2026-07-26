@@ -5,11 +5,10 @@ import (
 	"time"
 )
 
-// OpaqueAccessToken is the persistent record of an opaque access token
-// (ADR 0024). It mirrors the shape of [AccessTokenRecord] (ADR 0013) and
-// adds the cnf thumbprints required to re-verify sender-constrained
-// proofs at the boundaries the OP serves (userinfo, introspection,
-// revocation).
+// OpaqueAccessToken is the persistent record of an opaque access
+// token. It mirrors the shape of [AccessTokenRecord] and adds the cnf
+// thumbprints required to re-verify sender-constrained proofs at the
+// boundaries the OP serves (userinfo, introspection, revocation).
 //
 // Backends MUST treat [OpaqueAccessToken.ID] as a bearer secret: persist
 // a SHA-256 digest, never the raw bytes. The hash-on-store contract
@@ -36,8 +35,8 @@ type OpaqueAccessToken struct {
 	Subject string
 
 	// ClientID identifies the issuing client. Same-client-only
-	// introspection is enforced by the wiring layer (ADR 0024 §S.8) so
-	// the ClientID stored here is the gate.
+	// introspection is enforced by the wiring layer so the ClientID
+	// stored here is the gate.
 	ClientID string
 
 	// Scope lists the scopes bound at issuance.
@@ -101,12 +100,12 @@ type OpaqueAccessToken struct {
 	Revoked bool
 }
 
-// OpaqueAccessTokenStore is the substore for opaque access tokens
-// (ADR 0024). It belongs to the atomic-routing cluster so opaque-token
-// persistence, grants, refresh tokens, and revocation cascades share one
-// backend consistency domain in composite deployments. Save itself MUST be
-// atomic for a single opaque-token ID; the OP runtime does not require a
-// cross-substore [Transactional] transaction.
+// OpaqueAccessTokenStore is the substore for opaque access tokens. It
+// belongs to the atomic-routing cluster so opaque-token persistence,
+// grants, refresh tokens, and revocation cascades share one backend
+// consistency domain in composite deployments. Save itself MUST be
+// atomic for a single opaque-token ID; the OP runtime does not
+// require a cross-substore [Transactional] transaction.
 //
 // Backends MAY satisfy this interface with a positive list (revocation
 // removes the row) or a marked-revoked list (revocation flips a

@@ -5,13 +5,13 @@ import (
 	"time"
 )
 
-// GrantTombstone is the persistent record of a revoked grant (ADR 0025).
-// The OP writes one row the moment a grant is revoked; verification of a
-// JWT access token consults the row keyed by the access token's "gid"
-// private claim. The rule "revoked iff iat <= RevokedAt" defends against
-// the tombstone-after-mint race where a fresh access token minted in the
-// same wall-clock instant as the [GrantRevocationStore.RevokeGrant] call
-// must still be rejected.
+// GrantTombstone is the persistent record of a revoked grant. The OP
+// writes one row the moment a grant is revoked; verification of a JWT
+// access token consults the row keyed by the access token's "gid"
+// private claim. The rule "revoked iff iat <= RevokedAt" defends
+// against the tombstone-after-mint race where a fresh access token
+// minted in the same wall-clock instant as the
+// [GrantRevocationStore.RevokeGrant] call must still be rejected.
 //
 // The struct is defensively cloned on every Save / Find roundtrip in the
 // reference implementation so callers cannot mutate the stored row by
@@ -45,8 +45,8 @@ type GrantTombstone struct {
 }
 
 // RevokedJTI records a single JWT access token revoked through the
-// RFC 7009 /revocation endpoint by jti (ADR 0025). The store keeps one
-// row per direct access-token revocation (rare in practice; cascades use
+// RFC 7009 /revocation endpoint by jti. The store keeps one row per
+// direct access-token revocation (rare in practice; cascades use
 // [GrantTombstone]).
 //
 // The struct is defensively cloned on every Save / Find roundtrip in the
@@ -76,11 +76,12 @@ type RevokedJTI struct {
 }
 
 // GrantRevocationStore is the substore for the grant-tombstone JWT
-// access-token revocation strategy (ADR 0025). It belongs to the
-// atomic-routing cluster so tombstones, denylist rows, grants, and refresh
-// tokens share one backend consistency domain in composite deployments.
-// RevokeGrant and RevokeJTI MUST be idempotent single-operation writes; the OP
-// runtime does not require a cross-substore [Transactional] transaction.
+// access-token revocation strategy. It belongs to the atomic-routing
+// cluster so tombstones, denylist rows, grants, and refresh tokens
+// share one backend consistency domain in composite deployments.
+// RevokeGrant and RevokeJTI MUST be idempotent single-operation
+// writes; the OP runtime does not require a cross-substore
+// [Transactional] transaction.
 //
 // Backends MAY satisfy this interface with two physical tables (one per
 // row shape) or a unified table with a discriminator column; either

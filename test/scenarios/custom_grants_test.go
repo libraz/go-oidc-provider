@@ -185,7 +185,7 @@ func TestScenario_CG_002_RegisterGrantTypeWithoutParamNames(t *testing.T) {
 
 // TestScenario_CG_003_RegisterGrantTypeAcceptsNullOrString confirms a
 // handler with a single-element Allowed list (the moral equivalent of
-// the panva "null OR single-string" admission rule) is accepted.
+// the upstream "null OR single-string" admission rule) is accepted.
 //
 // Spec: RFC 6749 §4.5.
 func TestScenario_CG_003_RegisterGrantTypeAcceptsNullOrString(t *testing.T) {
@@ -367,7 +367,7 @@ func TestScenario_CG_008_ClientOptInExecutesHandler(t *testing.T) {
 
 // TestScenario_CG_009_HandlerReceivesClientEntityOnly is OOS — the
 // "ctx.oidc.entities" model the row presupposes is a vendor-specific
-// shape (panva/node-oidc-provider) the library does not adopt.
+// shape (the upstream JS reference OP) the library does not adopt.
 // CustomGrantRequest already projects only the data the handler
 // needs (Client + Subject + Form + DPoP/MTLS) — no ambient entity
 // graph exists to leak.

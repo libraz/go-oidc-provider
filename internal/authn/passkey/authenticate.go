@@ -52,11 +52,11 @@ var (
 	ErrCredentialNotRegistered = errors.New("passkey: credential not registered")
 
 	// ErrAAGUIDDisallowed is returned when the matched credential's
-	// AAGUID is not in the verifier's allowlist (M-AUTHN-2). The check
-	// runs at assertion time when [Verifier.AAGUIDReCheckOnAssertion]
-	// is true so an embedder that narrows the allowlist after
-	// registration can revoke previously-issued credentials whose
-	// authenticator model has fallen out of policy.
+	// AAGUID is not in the verifier's allowlist. The check runs at
+	// assertion time when [Verifier.AAGUIDReCheckOnAssertion] is true so
+	// an embedder that narrows the allowlist after registration can
+	// revoke previously-issued credentials whose authenticator model has
+	// fallen out of policy.
 	ErrAAGUIDDisallowed = errors.New("passkey: AAGUID not in allowlist")
 )
 
@@ -82,13 +82,12 @@ func (v *Verifier) BeginLogin(_ context.Context, subject, name string, credentia
 		return nil, nil, fmt.Errorf("%w: subject has no registered credentials", ErrCredentialNotRegistered)
 	}
 
-	// AAGUID re-check at the start of the assertion ceremony
-	// (M-AUTHN-2). Filter the credential list so the upstream
-	// library's allowCredentials projection cannot surface a
-	// credential whose authenticator model has fallen out of policy.
-	// An empty allowlist short-circuits the filter (every AAGUID is
-	// accepted); the toggle defaults off so embedders that have not
-	// opted in see no behaviour change.
+	// AAGUID re-check at the start of the assertion ceremony. Filter the
+	// credential list so the upstream library's allowCredentials
+	// projection cannot surface a credential whose authenticator model
+	// has fallen out of policy. An empty allowlist short-circuits the
+	// filter (every AAGUID is accepted); the toggle defaults off so
+	// embedders that have not opted in see no behaviour change.
 	if v.aaguidReCheckOnAssertion && len(v.aaguidAllowlist) > 0 {
 		filtered := make([]Credential, 0, len(credentials))
 		for _, c := range credentials {
@@ -179,15 +178,14 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	}
 	stored := credentials[matchedIndex]
 
-	// AAGUID re-check at assertion time (M-AUTHN-2). When enabled,
-	// reject the assertion if the matched credential's AAGUID is no
-	// longer in the configured allowlist. The check uses the AAGUID
-	// persisted at registration (carried on the stored Credential),
-	// not a value extracted from the assertion: assertions do not
-	// reliably carry AAGUID, and even if they did the registration-
-	// time value is the trust anchor — an attacker who somehow
-	// flipped the assertion's AAGUID still cannot satisfy the
-	// allowlist gate.
+	// AAGUID re-check at assertion time. When enabled, reject the
+	// assertion if the matched credential's AAGUID is no longer in the
+	// configured allowlist. The check uses the AAGUID persisted at
+	// registration (carried on the stored Credential), not a value
+	// extracted from the assertion: assertions do not reliably carry
+	// AAGUID, and even if they did the registration- time value is the
+	// trust anchor — an attacker who somehow flipped the assertion's
+	// AAGUID still cannot satisfy the allowlist gate.
 	if rerr := v.checkAAGUIDOnAssertion(credentials, parsed.RawID); rerr != nil {
 		return nil, rerr
 	}
@@ -220,8 +218,8 @@ func (v *Verifier) FinishLogin(_ context.Context, session *Session, subject, nam
 	return &out, nil
 }
 
-// checkAAGUIDOnAssertion enforces the M-AUTHN-2 re-check gate against
-// the stored credential whose ID matches rawID. Returns
+// checkAAGUIDOnAssertion enforces the re-check gate against the
+// stored credential whose ID matches rawID. Returns
 // [ErrAAGUIDDisallowed] when the verifier's
 // [Config.AAGUIDReCheckOnAssertion] is true, the configured allowlist
 // is non-empty, and the matched credential's AAGUID is not in it. An

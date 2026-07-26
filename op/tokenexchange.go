@@ -14,7 +14,7 @@ import (
 // admission control or telemetry can compare without duplicating the
 // literal.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 const TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange" //nolint:gosec // URN, not a credential
 
 // TokenExchangePolicy decides which subject / actor combinations may
@@ -33,7 +33,7 @@ const TokenExchangeGrantType = "urn:ietf:params:oauth:grant-type:token-exchange"
 // isolation, client-pair allowlists, rate-of-exchange budgets,
 // request-context risk scoring.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type TokenExchangePolicy interface {
 	// Allow is invoked once per token-exchange request after the
 	// provider has resolved both tokens, normalised the audience,
@@ -65,7 +65,7 @@ type TokenExchangePolicy interface {
 // NOT mutate any embedded slice or map; the provider retains the
 // references for audit emission.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type TokenExchangeRequest struct {
 	// Client is the authenticated calling client — the principal
 	// that submitted the token-exchange request. Non-nil; the
@@ -132,7 +132,7 @@ type TokenExchangeRequest struct {
 // policy returns explicit overrides — the values supplied here may
 // only narrow, never broaden.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type TokenExchangeDecision struct {
 	// GrantedScope, when non-empty, replaces the provider-computed
 	// scope set. The supplied entries MUST be a subset of
@@ -201,7 +201,7 @@ type TokenExchangeDecision struct {
 // scope, audience, and binding metadata without re-implementing
 // verification.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type SubjectTokenView struct {
 	// Type is the URN that named this token in the wire request:
 	// urn:ietf:params:oauth:token-type:access_token,
@@ -263,7 +263,7 @@ type SubjectTokenView struct {
 // The helper is intentionally generic in name so future *bool fields
 // across the public API can reuse it.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func PtrBool(v bool) *bool { return &v }
 
 // ConfirmationProof is the public projection of an RFC 7800 cnf
@@ -271,7 +271,7 @@ func PtrBool(v bool) *bool { return &v }
 // of [JKT] and [X5tS256] is non-empty; both empty means the token
 // was unbound (the cnf claim was absent).
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type ConfirmationProof struct {
 	// JKT is the RFC 7638 SHA-256 thumbprint of the DPoP key the
 	// original token was bound to, base64url-no-pad. Empty when

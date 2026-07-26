@@ -11,8 +11,7 @@
 //
 // # Status
 //
-// Experimental: the Driver interface and surrounding types are subject to
-// change in any minor release before v1.0. The intent is locked, but the
-// signatures will evolve as the SPA endpoints are wired in a future
-// release.
+// Experimental: the Driver interface and surrounding types MAY change in
+// a minor release. The intent is locked; the signatures will evolve as
+// the SPA endpoints are wired in a future release.
 package interaction

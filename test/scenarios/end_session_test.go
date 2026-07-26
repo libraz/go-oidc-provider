@@ -586,7 +586,7 @@ func TestScenario_ES_023_PerClientLogoutDefaultSuccessPage(t *testing.T) {
 // wire: state=foobar arriving with a valid id_token_hint and a
 // registered post_logout_redirect_uri MUST be echoed verbatim on the
 // 302 redirect's query (`?state=foobar`). v1.0 emits 302 (Found), not
-// the panva 303.
+// the upstream 303.
 //
 // Spec: OIDC RP-Initiated Logout 1.0 §2 (`state`).
 func TestScenario_ES_024_StateForwardedToRP(t *testing.T) {

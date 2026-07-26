@@ -1082,8 +1082,8 @@ func (u *uvReportingAuthenticator) LastUserVerified(_ string) bool { return u.uv
 
 // TestTickPasskeyUVThreading asserts the orchestrator's appendFactor
 // path reads the assertion's real UV bit when the authenticator
-// implements [authn.UserVerificationReporter] (M-AUTHN-7) rather than
-// deriving UV from the static AMR string.
+// implements [authn.UserVerificationReporter] rather than deriving UV
+// from the static AMR string.
 func TestTickPasskeyUVThreading(t *testing.T) {
 	t.Parallel()
 

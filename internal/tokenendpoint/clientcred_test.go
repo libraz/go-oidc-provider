@@ -438,15 +438,15 @@ func clientCredsMTLSClient(tb testing.TB, prov *testkit.Provider) (*store.Client
 	return client, secret
 }
 
-// TestClientCredentials_GidClaim_AbsentForSyntheticGrant pins the
-// ADR 0025 / RFC 7519 §4.3 wire invariant on the client_credentials
-// path: the issuance call site passes an empty GrantID (RFC 6749
-// §4.4 has no authorize-side grant, so the library does not allocate
-// one). The wire-form encoder applies omitempty to the "gid" claim,
-// so the issued AT MUST NOT carry a "gid" key when the grant id is
-// empty. This keeps the wire bytes unchanged for client_credentials
-// callers under all three strategies and avoids advertising a
-// synthetic grant to resource servers that have no use for it.
+// TestClientCredentials_GidClaim_AbsentForSyntheticGrant pins the /
+// RFC 7519 §4.3 wire invariant on the client_credentials path: the
+// issuance call site passes an empty GrantID (RFC 6749 §4.4 has no
+// authorize-side grant, so the library does not allocate one). The
+// wire-form encoder applies omitempty to the "gid" claim, so the
+// issued AT MUST NOT carry a "gid" key when the grant id is empty.
+// This keeps the wire bytes unchanged for client_credentials callers
+// under all three strategies and avoids advertising a synthetic grant
+// to resource servers that have no use for it.
 func TestClientCredentials_GidClaim_AbsentForSyntheticGrant(t *testing.T) {
 	t.Parallel()
 
@@ -476,10 +476,10 @@ func TestClientCredentials_GidClaim_AbsentForSyntheticGrant(t *testing.T) {
 }
 
 // TestClientCredentials_OpaqueFormat_PersistsRow exercises the
-// client_credentials path under the opaque-format option (ADR 0024).
-// The wire response carries a 43-character base64url string with no
-// '.' separator, the [store.OpaqueAccessTokenStore] holds a matching
-// row, and the row's GrantID column carries the empty grant id the
+// client_credentials path under the opaque-format option. The wire
+// response carries a 43-character base64url string with no '.'
+// separator, the [store.OpaqueAccessTokenStore] holds a matching row,
+// and the row's GrantID column carries the empty grant id the
 // client_credentials grant synthesises (RFC 6749 §4.4 has no
 // authorize-side grant). The wire token_type stays "Bearer" because
 // no DPoP / mTLS proof is presented in this test.
@@ -524,9 +524,8 @@ func TestClientCredentials_OpaqueFormat_PersistsRow(t *testing.T) {
 		t.Fatalf("OpaqueAccessTokens.Find: %v", err)
 	}
 	// client_credentials synthesises no authorize-side grant; the
-	// substore stores the empty string verbatim. RevokeByGrant("") is
-	// a no-op so the cascade behaviour is unchanged from the JWT path
-	// (ADR 0013 §"Code-replay cascade").
+	// substore stores the empty string verbatim. RevokeByGrant("") is a
+	// no-op so the cascade behaviour is unchanged from the JWT path.
 	if rec.GrantID != "" {
 		t.Errorf("rec.GrantID=%q want empty (client_credentials synthesises no grant)", rec.GrantID)
 	}

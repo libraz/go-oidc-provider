@@ -7,9 +7,10 @@ import (
 )
 
 // TestClientPermitsRefresh_PolicyMatrix pins the complete
-// authorization-code refresh-token issuance policy documented by ADR 0017.
-// The global op.WithGrants gate is validated separately at Provider
-// construction; this matrix covers the per-client and per-request predicate.
+// authorization-code refresh-token issuance policy. The global
+// op.WithGrants gate is validated separately at Provider
+// construction; this matrix covers the per-client and per-request
+// predicate.
 func TestClientPermitsRefresh_PolicyMatrix(t *testing.T) {
 	t.Parallel()
 

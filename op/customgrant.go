@@ -36,7 +36,7 @@ import (
 // RFC 6749 server_error with the stack trace routed to the audit
 // log only — the response body never leaks the panic message.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type CustomGrantHandler interface {
 	// Name returns the grant_type URN this handler answers to. The
 	// value is matched byte-for-byte against the request's
@@ -99,7 +99,7 @@ type CustomGrantHandler interface {
 // a misbehaving peer cannot exhaust memory by sending the same
 // allowed-duplicate parameter thousands of times.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type ParamPolicy struct {
 	// Allowed is the closed list of handler-specific parameters
 	// the OP exposes in [CustomGrantRequest.Form]. The names are
@@ -120,7 +120,7 @@ type ParamPolicy struct {
 // name thousands of times; 32 is two orders of magnitude above the
 // realistic upper bound for token-exchange-style multi-actor flows.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 const CustomGrantDupCap = 32
 
 // CustomGrantRequest is the input the OP hands the handler. The struct
@@ -128,7 +128,7 @@ const CustomGrantDupCap = 32
 // values; the OP retains references to [Client] and [Form] for audit
 // emission and may observe later mutations as racy reads.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type CustomGrantRequest struct {
 	// Client is the authenticated client record. Non-nil; the OP
 	// has already verified credentials and policy gates by the time
@@ -199,7 +199,7 @@ type CustomGrantRequest struct {
 //     copied to the response verbatim — [Subject] / [AuthTime] /
 //     [ExtraClaims] are ignored on that path.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type CustomGrantResponse struct {
 	// AccessToken is the opaque or JWT-shape access token the OP
 	// writes verbatim. Non-empty when [BoundAccessToken] is nil;
@@ -217,7 +217,7 @@ type CustomGrantResponse struct {
 	// no out-of-band signing key and wants the OP to enforce the
 	// FAPI 2.0 §3.1.4 binding contract on its behalf.
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	BoundAccessToken *BoundAccessToken
 
 	// AccessTokenTTL is the lifetime the OP advertises in the
@@ -257,7 +257,7 @@ type CustomGrantResponse struct {
 	// token is dropped and the consent/refresh-dropped audit event
 	// fires.
 	//
-	// Stable since v0.9.2.
+	// Stable since v1.0.
 	IssueRefreshToken bool
 
 	// IDToken, when non-empty, is the embedder-signed JWT the OP
@@ -321,7 +321,7 @@ type CustomGrantResponse struct {
 // [CustomGrantResponse.AccessToken] and [CustomGrantResponse.BoundAccessToken]
 // are mutually exclusive — setting both yields server_error.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type BoundAccessToken struct {
 	// Subject is the "sub" claim. When the zero value, the OP
 	// defaults to the request's Subject; a request whose Subject is
@@ -356,7 +356,7 @@ type BoundAccessToken struct {
 // the OP; handlers receive only the values they need to bind the
 // issued access token themselves.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type DPoPProof struct {
 	// JKT is the RFC 7638 SHA-256 thumbprint of the proof's JWK,
 	// base64url-no-pad. The handler MUST embed cnf.jkt = JKT in any

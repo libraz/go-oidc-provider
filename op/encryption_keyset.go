@@ -13,7 +13,7 @@ import (
 // EncryptionKey carries a private key; callers MUST treat instances
 // as secret and never log them.
 //
-// Stable since v0.9.1 (added with Wave T1).
+// Stable since v1.0.
 type EncryptionKey struct {
 	// KeyID is the "kid" header advertised in JWKS and inspected on
 	// inbound JWE protected headers to route to the right private
@@ -78,5 +78,5 @@ type EncryptionKey struct {
 // keyset and calling [op.New] again from supervisor code; the
 // library does not mutate the slice in place.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 type EncryptionKeyset []EncryptionKey

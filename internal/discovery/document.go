@@ -113,7 +113,7 @@ type Document struct {
 	BackchannelAuthenticationEndpoint string `json:"backchannel_authentication_endpoint,omitempty"`
 
 	// BackchannelTokenDeliveryModesSupported lists the CIBA Core 1.0
-	// §4 token delivery modes the OP supports. v0.9.x ships poll mode
+	// §4 token delivery modes the OP supports. The OP ships poll mode
 	// only; the field is emitted only when the CIBA grant is
 	// configured. Values are "poll", "ping", or "push"; this OP
 	// advertises ["poll"] exclusively.

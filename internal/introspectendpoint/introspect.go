@@ -155,11 +155,10 @@ func resolveJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVeri
 }
 
 // isJWTAccessTokenRevoked dispatches the revoked-state check by
-// [Deps.RevocationStrategy] (ADR 0025). The bool return is `revoked`;
-// the second bool reports whether the lookup succeeded. A failed
-// lookup ((false, false)) collapses onto {"active": false} per
-// RFC 7662 §2.2 — the introspection endpoint never exposes a 5xx for
-// a credential check.
+// [Deps.RevocationStrategy]. The bool return is `revoked`; the second
+// bool reports whether the lookup succeeded. A failed lookup ((false,
+// false)) collapses onto {"active": false} per RFC 7662 §2.2 — the
+// introspection endpoint never exposes a 5xx for a credential check.
 func isJWTAccessTokenRevoked(
 	ctx context.Context,
 	deps Deps,
@@ -207,12 +206,12 @@ func projectAccessTokenClaims(c *tokens.AccessTokenClaims) response {
 	return out
 }
 
-// resolveOpaque looks token up as either an opaque access token (ADR
-// 0024) or a refresh token in the configured stores and projects a
-// live record onto the introspection response. The bool return reports
-// success; false means neither store had a live record (not found,
-// revoked / consumed, expired, cross-client, or store fault) and the
-// caller MUST fall through.
+// resolveOpaque looks token up as either an opaque access token or a
+// refresh token in the configured stores and projects a live record
+// onto the introspection response. The bool return reports success;
+// false means neither store had a live record (not found, revoked /
+// consumed, expired, cross-client, or store fault) and the caller
+// MUST fall through.
 //
 // The opaque-access-token substore is consulted first. The two stores
 // have disjoint id spaces (opaque ATs descend from a [Grant] minted at
@@ -265,10 +264,10 @@ func resolveOpaque(ctx context.Context, deps Deps, authenticatedClientID, token 
 }
 
 // resolveOpaqueAccessToken looks token up in the opaque-access-token
-// substore (ADR 0024) and projects a live record onto the introspection
+// substore and projects a live record onto the introspection
 // response. The bool return reports success; false means the lookup
-// missed, the record was revoked / expired, or another client owns it,
-// and the caller MUST fall through to the refresh-token branch.
+// missed, the record was revoked / expired, or another client owns
+// it, and the caller MUST fall through to the refresh-token branch.
 //
 // Every miss path returns the zero response so the caller cannot
 // observe which sub-class produced the rejection — RFC 7662 §2.2
@@ -291,8 +290,8 @@ func resolveOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClien
 		return response{}, false
 	}
 	if rec.ClientID != authenticatedClientID {
-		// Same-client-only (ADR 0024 §S.8): a token issued to another
-		// client is inactive from this client's point of view.
+		// Same-client-only: a token issued to another client is inactive
+		// from this client's point of view.
 		return response{}, false
 	}
 	publicSubject, ok := projectIntrospectionSubject(ctx, deps, rec.Subject, rec.ClientID)

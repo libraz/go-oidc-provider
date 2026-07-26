@@ -17,7 +17,7 @@ var (
 	_ op.Decision = op.Deny{}
 )
 
-// TestAuditDenyReasonKey_IsStable pins the F-6 sentinel: the slog
+// TestAuditDenyReasonKey_IsStable pins the sentinel: the slog
 // attribute key under which [op.Deny.Reason] flows into the audit
 // stream MUST stay "audit.deny.reason" so the redact substring
 // matcher (configured in internal/redact and tested in op-store

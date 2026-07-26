@@ -15,10 +15,10 @@ import (
 // freely, and every successful CompareAndSwap clones the supplied pointer
 // so a later mutation by the caller does not leak into the map.
 //
-// The version comparison and replacement happen while holding the same
-// mutex. This makes every lockout transition atomic, including races
-// between failure increments, window rollover, and success reset
-// (M-AUTHN-4).
+// The version comparison and replacement happen while holding the
+// same mutex. This makes every lockout transition atomic, including
+// races between failure increments, window rollover, and success
+// reset.
 type authnLockoutStore struct {
 	mu sync.Mutex
 	m  map[string]*store.AuthnLockoutRecord

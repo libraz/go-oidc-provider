@@ -671,9 +671,9 @@ func (f *fixture) saveOpaqueAccessToken(tb testing.TB, rec *store.OpaqueAccessTo
 }
 
 // TestHandler_OpaqueAccessToken_Active returns active=true with the
-// projected claims for a live opaque-format access token (ADR 0024).
-// The test pins the cnf, scope, audience, and ACR / AMR projections
-// so a future refactor that drops a field surfaces here.
+// projected claims for a live opaque-format access token. The test
+// pins the cnf, scope, audience, and ACR / AMR projections so a
+// future refactor that drops a field surfaces here.
 func TestHandler_OpaqueAccessToken_Active(t *testing.T) {
 	t.Parallel()
 
@@ -788,7 +788,7 @@ func TestHandler_OpaqueAccessToken_Expired(t *testing.T) {
 
 // TestHandler_OpaqueAccessToken_DifferentClient returns inactive when
 // the authenticated client_id does not match the record's ClientID.
-// Same-client-only is the v1.0 authorization posture (ADR 0024 §S.8).
+// Same-client-only is the v1.0 authorization posture.
 //
 // Tracks: CVE-2026-37979 (Keycloak; OIDC token introspection audience
 // bypass). Opaque access-token introspection follows the same inactive

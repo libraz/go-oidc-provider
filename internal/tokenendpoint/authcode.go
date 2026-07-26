@@ -213,10 +213,10 @@ func emitCodeReplayDetected(ctx context.Context, deps Deps, grantID string) {
 // the implementation of that MUST.
 //
 // The JWT-AT half of the cascade dispatches on
-// [Deps.RevocationStrategy] (ADR 0025):
+// [Deps.RevocationStrategy]:
 //
 //   - [store.RevocationStrategyJTIRegistry] flips Revoked on every per-AT
-//     shadow row keyed by GrantID (the ADR 0013 model: O(N) writes per
+//     shadow row keyed by GrantID (O(N) writes per
 //     cascade where N is the number of live ATs under the grant).
 //   - [store.RevocationStrategyGrantTombstone] writes a single
 //     [store.GrantTombstone] keyed on GrantID. Verifiers consult the
@@ -257,13 +257,12 @@ func revokeChainForCode(ctx context.Context, deps Deps, code, replayGrantID stri
 	// Register which is a fresh row, leaving the next refresh attempt
 	// blocked once the RT half of the cascade lands.
 	revokeJWTAccessTokensForGrant(ctx, deps, grantID)
-	// Mirror the cascade onto the opaque-AT substore (ADR 0024
-	// §"Code-replay cascade"). The substore is nil for embedders who
-	// stay on the JWT-only default; calling RevokeByGrant on a nil
-	// substore would panic, so guard the call. The order is
-	// JWT registry → opaque store → refresh chain; each substore is
-	// idempotent so the cascade is order-independent, but we keep the
-	// symmetric ordering so log lines / tx audit trails stay
+	// Mirror the cascade onto the opaque-AT substore. The substore is
+	// nil for embedders who stay on the JWT-only default; calling
+	// RevokeByGrant on a nil substore would panic, so guard the call.
+	// The order is JWT registry → opaque store → refresh chain; each
+	// substore is idempotent so the cascade is order-independent, but we
+	// keep the symmetric ordering so log lines / tx audit trails stay
 	// predictable.
 	if deps.OpaqueAccessTokens != nil {
 		_, _ = deps.OpaqueAccessTokens.RevokeByGrant(ctx, grantID)
@@ -279,10 +278,10 @@ func revokeChainForCode(ctx context.Context, deps Deps, code, replayGrantID stri
 // code-replay cascade against the configured
 // [Deps.RevocationStrategy]. The function is a strategy dispatcher:
 //
-//   - [store.RevocationStrategyJTIRegistry] preserves the ADR 0013
+//   - [store.RevocationStrategyJTIRegistry] preserves the per-JTI
 //     behaviour and flips Revoked on every per-AT shadow row.
 //   - [store.RevocationStrategyGrantTombstone] writes a single
-//     [store.GrantTombstone] (ADR 0025). The tombstone's RevokedAt is
+//     [store.GrantTombstone]. The tombstone's RevokedAt is
 //     stamped at the wall-clock instant the cascade runs and the
 //     ExpiresAt outlives the longest possible JWT AT under the grant
 //     (now + AccessTokenTTL + 5m grace) so a verifier consulting
@@ -530,8 +529,8 @@ func projectPublicSubject(ctx context.Context, deps Deps, raw string, client *st
 }
 
 // mintAccessToken issues an access token in the wire format the
-// configured policy (ADR 0024) selects for the request's RFC 8707
-// resource indicator. The function is a thin format-dispatch shim:
+// configured policy selects for the request's RFC 8707 resource
+// indicator. The function is a thin format-dispatch shim:
 // [store.AccessTokenFormatJWT] routes through [mintJWTAccessToken]
 // (RFC 9068) and [store.AccessTokenFormatOpaque] routes through
 // [mintOpaqueAccessToken] (32-byte random + hashed shadow row). The
@@ -593,11 +592,11 @@ func mintAccessToken(
 // userinfo / introspection / revocation paths can reject the token
 // after a future revocation (RFC 6749 §4.1.2).
 //
-// Under the default [store.RevocationStrategyGrantTombstone] (ADR
-// 0025) the issuance path is purely compute-bound: the access token
-// carries the originating GrantID in its "gid" private claim and the
-// verifier consults the per-grant tombstone substore at use, so no
-// shadow row is written here.
+// Under the default [store.RevocationStrategyGrantTombstone] the
+// issuance path is purely compute-bound: the access token carries the
+// originating GrantID in its "gid" private claim and the verifier
+// consults the per-grant tombstone substore at use, so no shadow row
+// is written here.
 //
 // Under [store.RevocationStrategyNone] no shadow row is written and
 // the verifier skips the revocation check entirely; JWT access tokens
@@ -672,7 +671,7 @@ func mintJWTAccessToken(
 }
 
 // mintOpaqueAccessToken mints a 32-byte random opaque access token
-// (ADR 0024) and persists a matching shadow row so verification at the
+// and persists a matching shadow row so verification at the
 // boundaries the OP serves (userinfo, introspection, revocation) has
 // the metadata it needs to project. The wire bytes carry no claims;
 // the row carries every field the JWT path encodes so introspection

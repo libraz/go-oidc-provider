@@ -122,28 +122,25 @@ type HandlerDeps struct {
 	AccessTokens store.AccessTokenRegistry
 
 	// OpaqueAccessTokens is the [store.OpaqueAccessTokenStore] the
-	// opaque-format /userinfo branch consults (ADR 0024). When the
-	// presented bearer is not JWS-shaped the handler hashes it,
-	// looks the digest up here, and applies the same revoked /
-	// expired / cnf-mismatch checks as the JWT path before releasing
-	// claims. A nil value disables the opaque branch; non-JWS tokens
-	// then collapse onto the existing invalid_token response,
-	// mirroring the JWT-only legacy posture.
+	// opaque-format /userinfo branch consults. When the presented bearer
+	// is not JWS-shaped the handler hashes it, looks the digest up here,
+	// and applies the same revoked / expired / cnf-mismatch checks as
+	// the JWT path before releasing claims. A nil value disables the
+	// opaque branch; non-JWS tokens then collapse onto the existing
+	// invalid_token response, mirroring the JWT-only legacy posture.
 	OpaqueAccessTokens store.OpaqueAccessTokenStore
 
-	// GrantRevocations is the [store.GrantRevocationStore] consulted
-	// by the grant-tombstone JWT access-token revocation strategy
-	// (ADR 0025). The /userinfo handler uses it to reject access
-	// tokens whose grant has been tombstoned; the lookup is keyed by
-	// the AT's "gid" private claim. A nil value disables the lookup
-	// and the handler falls back to whichever legacy behaviour
-	// [RevocationStrategy] selects.
+	// GrantRevocations is the [store.GrantRevocationStore] consulted by
+	// the grant-tombstone JWT access-token revocation strategy. The
+	// /userinfo handler uses it to reject access tokens whose grant has
+	// been tombstoned; the lookup is keyed by the AT's "gid" private
+	// claim. A nil value disables the lookup and the handler falls back
+	// to whichever legacy behaviour [RevocationStrategy] selects.
 	GrantRevocations store.GrantRevocationStore
 
-	// RevocationStrategy selects the JWT access-token revocation
-	// shape (ADR 0025). The zero value is
-	// [store.RevocationStrategyGrantTombstone], which is the
-	// documented default; the library wires this from
+	// RevocationStrategy selects the JWT access-token revocation shape.
+	// The zero value is [store.RevocationStrategyGrantTombstone], which
+	// is the documented default; the library wires this from
 	// [op.WithAccessTokenRevocationStrategy].
 	RevocationStrategy store.AccessTokenRevocationStrategy
 
@@ -196,11 +193,11 @@ func serveUserInfo(w http.ResponseWriter, r *http.Request, deps HandlerDeps, ver
 		return
 	}
 	// Opaque first: a presented bearer that is not JWS-shaped resolves
-	// through the opaque substore (ADR 0024). The JWT verifier would
-	// always reject a non-JWS shape, so taking the opaque branch ahead
-	// of it avoids a spurious "malformed JWT" diagnostic and keeps the
-	// WWW-Authenticate challenges aligned with the format the token
-	// endpoint actually issued.
+	// through the opaque substore. The JWT verifier would always reject
+	// a non-JWS shape, so taking the opaque branch ahead of it avoids a
+	// spurious "malformed JWT" diagnostic and keeps the WWW-Authenticate
+	// challenges aligned with the format the token endpoint actually
+	// issued.
 	if !looksLikeJWT(raw) && deps.OpaqueAccessTokens != nil {
 		serveUserInfoOpaque(w, r, deps, raw)
 		return
@@ -622,19 +619,19 @@ func buildDPoPChallenge(code, description string) string {
 	)
 }
 
-// enforceRevocationStatus rejects the request when the access token has
-// been revoked. The actual lookup shape depends on
-// [HandlerDeps.RevocationStrategy] (ADR 0025):
+// enforceRevocationStatus rejects the request when the access token
+// has been revoked. The actual lookup shape depends on
+// [HandlerDeps.RevocationStrategy]:
 //
 //   - [store.RevocationStrategyGrantTombstone] (default): consult
 //     [store.GrantRevocationStore.IsRevoked] keyed by the AT's "gid"
 //     private claim. Legacy ATs without "gid" fall back to the
-//     [store.AccessTokenRegistry] when one is configured (ADR 0025
+//     [store.AccessTokenRegistry] when one is configured (the
 //     §Migration); embedders that wired neither substore opt out
 //     entirely.
 //   - [store.RevocationStrategyJTIRegistry]: consult the registry by
 //     JTI; the marked-revoked row collapses onto invalid_token. This
-//     is the ADR 0013 behaviour preserved for embedders pinning the
+//     is the per-JTI behaviour preserved for embedders pinning the
 //     legacy strategy.
 //   - [store.RevocationStrategyNone]: no check; the JWT lives until
 //     exp.

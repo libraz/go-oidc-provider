@@ -115,15 +115,14 @@ type AccessTokenClaims struct {
 	Confirmation map[string]string `json:"-"`
 
 	// GrantID is the "gid" private claim (RFC 7519 §4.3 Private Claim
-	// Names) that ADR 0025 introduces to wire grant-tombstone
-	// revocation through the JWT itself. The claim is meaningful only
-	// to the issuing OP — resource servers MUST ignore it per
-	// RFC 7519 §4.3 — so the wire form uses the short, unallocated
-	// name "gid" rather than a URI-form private claim. The field is
-	// indirected through [mergeAccessTokenClaims] (the same pattern
-	// as Scope and Confirmation) and the merge applies omitempty
-	// semantics so legacy strategies that never populate GrantID
-	// emit unchanged wire bytes.
+	// Names) that introduces to wire grant-tombstone revocation through
+	// the JWT itself. The claim is meaningful only to the issuing OP —
+	// resource servers MUST ignore it per RFC 7519 §4.3 — so the wire
+	// form uses the short, unallocated name "gid" rather than a URI-form
+	// private claim. The field is indirected through
+	// [mergeAccessTokenClaims] (the same pattern as Scope and
+	// Confirmation) and the merge applies omitempty semantics so legacy
+	// strategies that never populate GrantID emit unchanged wire bytes.
 	GrantID string `json:"-"`
 
 	// AuthorizationDetails is the RFC 9396 authorization_details claim

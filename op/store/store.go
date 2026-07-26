@@ -80,15 +80,15 @@ type Store interface {
 	OpaqueAccessTokens() OpaqueAccessTokenStore
 
 	// GrantRevocations returns the [GrantRevocationStore] for this
-	// backend (ADR 0025). The substore powers the grant-tombstone JWT
-	// access-token revocation strategy: cascades write one row per
-	// revoked grant rather than one row per access token, and
-	// /revocation by jti writes a single denylist row. Backends that
-	// never enable the grant-tombstone strategy MAY return nil; the
-	// library detects nil at op.New construction time and rejects the
-	// strategy when its substore is missing (fail-fast). Part of the
-	// atomic-routing cluster so tombstone / denylist writes share the
-	// consistency domain of the grants and refresh tokens they protect.
+	// backend. The substore powers the grant-tombstone JWT access-token
+	// revocation strategy: cascades write one row per revoked grant
+	// rather than one row per access token, and /revocation by jti
+	// writes a single denylist row. Backends that never enable the
+	// grant-tombstone strategy MAY return nil; the library detects nil
+	// at op.New construction time and rejects the strategy when its
+	// substore is missing (fail-fast). Part of the atomic-routing
+	// cluster so tombstone / denylist writes share the consistency
+	// domain of the grants and refresh tokens they protect.
 	GrantRevocations() GrantRevocationStore
 
 	// Metadata returns the [MetadataStore] for OP-internal key/value

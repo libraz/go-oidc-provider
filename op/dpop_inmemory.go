@@ -45,7 +45,7 @@ import (
 // stops advancing. Pass a request-scoped or test-scoped context if
 // you need deterministic shutdown / GC.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func NewInMemoryDPoPNonceSource(ctx context.Context, rotate time.Duration, opts ...InMemoryDPoPNonceOption) (*InMemoryDPoPNonceSource, error) {
 	if rotate <= 0 {
 		return nil, errors.New("op: NewInMemoryDPoPNonceSource requires a positive rotation interval")

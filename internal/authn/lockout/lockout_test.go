@@ -324,12 +324,12 @@ type outcomeResult struct {
 	err   error
 }
 
-// TestCounter_AtomicIncrementUnderConcurrency exercises M-AUTHN-4. Two
-// or more goroutines each call RecordFailure; the post-increment counts
-// MUST be a unique permutation of [1..N], and the final FailedCount on
-// any subsequent read MUST equal N. A lost-update race would surface
-// either as repeated counts (e.g. two goroutines both reporting count=1)
-// or as a final count below N.
+// TestCounter_AtomicIncrementUnderConcurrency exercises. Two or more
+// goroutines each call RecordFailure; the post-increment counts MUST
+// be a unique permutation of [1..N], and the final FailedCount on any
+// subsequent read MUST equal N. A lost-update race would surface
+// either as repeated counts (e.g. two goroutines both reporting
+// count=1) or as a final count below N.
 func TestCounter_AtomicIncrementUnderConcurrency(t *testing.T) {
 	t.Parallel()
 	c, _ := newFixture(t)
@@ -372,8 +372,8 @@ func TestCounter_AtomicIncrementUnderConcurrency(t *testing.T) {
 	}
 }
 
-// TestCounter_CrossFactorAggregation exercises M-AUTHN-1 directly: a
-// caller pretending to be email-OTP records 3 failures, then a caller
+// TestCounter_CrossFactorAggregation exercises directly: a caller
+// pretending to be email-OTP records 3 failures, then a caller
 // pretending to be TOTP records 2 more — the lockout helper must
 // observe the cumulative count across factors. The test does NOT mock
 // the per-factor authenticators; it exercises the shared counter so a

@@ -219,7 +219,7 @@ func WithCIBAMaxPollViolations(n uint8) CIBAOption {
 // `backchannel_token_delivery_modes_supported: ["poll"]` exclusively
 // so a client cannot negotiate an unsupported delivery mode.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithCIBA(opts ...CIBAOption) Option {
 	return optionFunc(func(c *config) error {
 		c.cibaGrantEnabled = true

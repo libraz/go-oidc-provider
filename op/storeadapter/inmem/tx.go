@@ -153,7 +153,8 @@ func (t *tx) releaseLocks() {
 // rolled-back tx surrenders its temporary pointers eagerly. The
 // helper runs both on Rollback (where staging would otherwise be
 // reachable through the tx struct itself until GC sweeps the closed
-// transaction) and as part of the race-test surface for F-11.
+// transaction) and from the race tests that pin the same property
+// under concurrent commits.
 func (t *tx) clearStaging() {
 	if t.acStaging != nil {
 		clear(t.acStaging.added)

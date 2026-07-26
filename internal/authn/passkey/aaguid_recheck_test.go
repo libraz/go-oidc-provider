@@ -10,9 +10,9 @@ import (
 	"github.com/libraz/go-oidc-provider/internal/authn/passkey"
 )
 
-// allowedAAGUID is a canonical UUID the M-AUTHN-2 tests use to seed
-// allowlists. The bytes are arbitrary; the test exercises the gate's
-// allow / deny logic, not any particular vendor mapping.
+// allowedAAGUID is a canonical UUID the tests use to seed allowlists.
+// The bytes are arbitrary; the test exercises the gate's allow / deny
+// logic, not any particular vendor mapping.
 var (
 	allowedAAGUIDStr   = "fbfc3007-154e-4ecc-8c0b-6e020557d7bd"
 	allowedAAGUIDBytes = []byte{
@@ -63,9 +63,9 @@ func TestAAGUIDRecheck_AllowedCredentialPassesThrough(t *testing.T) {
 }
 
 // TestAAGUIDRecheck_NarrowedAllowlistRejectsExistingCredential is the
-// M-AUTHN-2 happy-path-of-defence: a credential that registered under a
-// permissive allowlist is rejected at assertion time when the embedder
-// narrows the allowlist below the credential's AAGUID.
+// happy-path-of-defence: a credential that registered under a
+// permissive allowlist is rejected at assertion time when the
+// embedder narrows the allowlist below the credential's AAGUID.
 func TestAAGUIDRecheck_NarrowedAllowlistRejectsExistingCredential(t *testing.T) {
 	t.Parallel()
 	// Allowlist no longer includes the credential's AAGUID — embedder

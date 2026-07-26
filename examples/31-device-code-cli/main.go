@@ -95,7 +95,7 @@ const (
 	tokenPath      = "/oidc/token"
 
 	// Demo cadence values. The CLI honours the OP's advertised
-	// `interval` (5s by default per RFC 8628 §3.5 / ADR 0031 §Q3),
+	// `interval` (5s by default per RFC 8628 §3.5),
 	// so the approval is scheduled to land between the first and
 	// second poll and the timeout sits comfortably above one full
 	// poll cycle. A real CLI MUST observe the advertised interval

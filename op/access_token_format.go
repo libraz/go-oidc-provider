@@ -2,8 +2,8 @@ package op
 
 import "github.com/libraz/go-oidc-provider/op/store"
 
-// AccessTokenFormat selects the wire encoding of issued access tokens
-// (ADR 0024). It is a type alias of [store.AccessTokenFormat] so the
+// AccessTokenFormat selects the wire encoding of issued access
+// tokens. It is a type alias of [store.AccessTokenFormat] so the
 // public option layer and the internal handlers can converge on a
 // single enum without internal/* taking a dependency on op/.
 //
@@ -12,7 +12,7 @@ import "github.com/libraz/go-oidc-provider/op/store"
 // [WithAccessTokenFormatPerAudience] (RFC 8707 per-resource). When
 // neither option is invoked the OP issues RFC 9068 JWT-shaped tokens.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 type AccessTokenFormat = store.AccessTokenFormat
 
 // AccessTokenFormatJWT issues RFC 9068 JWT-shaped access tokens. This

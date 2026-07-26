@@ -198,14 +198,13 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 	}
 
 	if matched, ok := v.matchStepValue(secret, code, now); ok {
-		// Reject a code whose step value has already been accepted by
-		// a prior successful verify. Without this guard a network-level
-		// replay (or a leaked code from the SPA buffer) could redeem
-		// twice within the same 30-second window. The check runs
-		// before mutating counters so a replay does not advance the
-		// brute-force counter either; the orchestrator's own attempt
-		// counter still observes the failure through the surfacing
-		// ErrWrongCode (M-AUTHN-5).
+		// Reject a code whose step value has already been accepted by a
+		// prior successful verify. Without this guard a network-level
+		// replay (or a leaked code from the SPA buffer) could redeem twice
+		// within the same 30-second window. The check runs before mutating
+		// counters so a replay does not advance the brute-force counter
+		// either; the orchestrator's own attempt counter still observes the
+		// failure through the surfacing ErrWrongCode.
 		if rec.LastAcceptedStep != 0 && matched <= rec.LastAcceptedStep {
 			// Treat as a wrong-code outcome WITHOUT incrementing the
 			// brute-force counter (a replay should not punish the
@@ -239,12 +238,11 @@ func (v *Verifier) Verify(_ context.Context, rec *store.TOTPRecord, code string)
 }
 
 // matchStepValue reports whether code equals the TOTP value at any
-// step within the configured skew window AND returns the matched
-// step counter. The step value is fed into
+// step within the configured skew window AND returns the matched step
+// counter. The step value is fed into
 // [store.TOTPRecord.LastAcceptedStep] so a subsequent verify against
-// the same step is rejected as a replay (M-AUTHN-5). The boolean is
-// the success flag; the int64 is meaningful only when the boolean
-// is true.
+// the same step is rejected as a replay. The boolean is the success
+// flag; the int64 is meaningful only when the boolean is true.
 //
 // The comparison is byte-wise constant-time per match attempt; the
 // loop itself short-circuits on success, which leaks at most one bit

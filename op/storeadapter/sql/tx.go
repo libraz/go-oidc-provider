@@ -72,18 +72,19 @@ func (t *sqlTx) PushedAuthRequests() store.PushedAuthRequestStore { return t.par
 // transaction.
 func (t *sqlTx) AccessTokens() store.AccessTokenRegistry { return t.accessTokens }
 
-// OpaqueAccessTokens returns the tx-bound opaque-AT substore (ADR 0024).
-// As with [sqlTx.AccessTokens], [store.Tx] does not expose this method
+// OpaqueAccessTokens returns the tx-bound opaque-AT substore. As with
+// [sqlTx.AccessTokens], [store.Tx] does not expose this method
 // directly; callers that hold a concrete *sqlTx may use it for manual
 // cross-substore transactions.
 func (t *sqlTx) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return t.opaqueAccessTokens
 }
 
-// GrantRevocations returns the tx-bound grant-revocation substore
-// (ADR 0025). As with [sqlTx.AccessTokens] and [sqlTx.OpaqueAccessTokens],
-// [store.Tx] does not expose this method directly; callers that hold a
-// concrete *sqlTx may use it for manual cross-substore transactions.
+// GrantRevocations returns the tx-bound grant-revocation substore. As
+// with [sqlTx.AccessTokens] and [sqlTx.OpaqueAccessTokens],
+// [store.Tx] does not expose this method directly; callers that hold
+// a concrete *sqlTx may use it for manual cross-substore
+// transactions.
 func (t *sqlTx) GrantRevocations() store.GrantRevocationStore {
 	return t.grantRevocations
 }

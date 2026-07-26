@@ -683,7 +683,7 @@ func TestScenario_RI_070_UserInfoAcceptsAudienceLessTokens(t *testing.T) {
 // cannot read end-user claims even though it shares the OP's signing
 // key.
 //
-// The wire shape diverges from panva's panva-residue framing: v1.0
+// The wire shape diverges from the upstream OP's framing: v1.0
 // emits the bare RFC 6750 §3.1 invalid_token challenge with no
 // "error_detail" extension. The privacy posture (do not name the
 // sub-cause) matches every other userinfo failure path.

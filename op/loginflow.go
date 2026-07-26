@@ -11,11 +11,13 @@ import "github.com/libraz/go-oidc-provider/internal/authn"
 // orchestration of factors (Rules + Decider) from their implementation
 // (Step values). Embedders who need finer control fall back to the
 // low-level [Authenticator] / [Interaction] surface, which remains
-// supported for the duration of v0.x and into v1.0. See the package
-// godoc on [Rule] / [Decider] for the evaluation order the
-// orchestrator applies on each pass.
-// Experimental: the LoginFlow seam is being introduced in v0.x. Field
-// names and evaluation order MAY change before v1.0.
+// supported. See the package godoc on [Rule] / [Decider] for the
+// evaluation order the orchestrator applies on each pass.
+//
+// Experimental: field names and evaluation order MAY change in a minor
+// release. The seam is young and the shape of a step-ordering policy is
+// the part of this library most likely to be wrong in a way only
+// deployments will reveal; freezing it now would lock in that guess.
 type LoginFlow struct {
 	// Primary is the first step the orchestrator runs. It is the step
 	// that establishes the [Identity] consumed by every subsequent

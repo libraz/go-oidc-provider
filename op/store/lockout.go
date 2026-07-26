@@ -18,11 +18,11 @@ import (
 // is that this row is keyed only by Subject, so every factor backed by a
 // per-subject counter contributes to and reads from the same row.
 //
-// Backends MUST persist the state fields verbatim and manage Version as
-// described by [AuthnLockoutStore.CompareAndSwap]. Every mutation is a
-// versioned transition so a window rollover, successful-authentication
-// reset, or lock stamp cannot overwrite a concurrently recorded failure
-// (M-AUTHN-4).
+// Backends MUST persist the state fields verbatim and manage Version
+// as described by [AuthnLockoutStore.CompareAndSwap]. Every mutation
+// is a versioned transition so a window rollover,
+// successful-authentication reset, or lock stamp cannot overwrite a
+// concurrently recorded failure.
 type AuthnLockoutRecord struct {
 	// Subject is the OP-internal stable user identifier this counter
 	// belongs to. It is the primary key of the record.

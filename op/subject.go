@@ -65,10 +65,9 @@ type Identity struct {
 
 // defaultSubjectGenerator returns the [SubjectGenerator] the library
 // installs implicitly when neither [WithSubjectGenerator] nor
-// [WithPairwiseSubject] is supplied. It is the v0.x default
-// (UUIDv7 passthrough) so embedders that do not opt into pairwise
-// keep the historical behaviour where the OP-internal user
-// identifier flows through to the "sub" claim verbatim.
+// [WithPairwiseSubject] is supplied: UUIDv7 passthrough, so an
+// embedder that does not opt into pairwise gets the OP-internal user
+// identifier flowing through to the "sub" claim verbatim.
 func defaultSubjectGenerator() SubjectGenerator { //nolint:ireturn // sealed-sum interface return is the contract.
 	return subject.UUIDv7()
 }

@@ -322,7 +322,7 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 		// only the deterministic credential identifier + sign
 		// counter. The full *Credential remains internal so
 		// embedders cannot pivot off the unparsed COSE_Key bytes
-		// the upstream library exposes through it (H-E5).
+		// the upstream library exposes through it.
 		hook := s.CloneDetectionHandler
 		auth = auth.WithCloneDetectionHandler(passkey.CloneDetectionHandlerFunc(func(ctx context.Context, subject string, cred *passkey.Credential) error {
 			if cred == nil {
@@ -343,10 +343,10 @@ func buildPrimaryPasskey(s PrimaryPasskey, clock timex.Clock) (authn.Authenticat
 // library never retains the bytes beyond the codec instance.
 //
 // The authenticator inherits the cross-factor brute-force counter
-// (M-AUTHN-1) when one has been wired through [WithAuthnLockoutStore];
-// the call-site reads the counter off the [config] before invoking
-// the builder so the function signature remains stable across
-// deployments that opt out of the cross-factor defence.
+// when one has been wired through [WithAuthnLockoutStore]; the
+// call-site reads the counter off the [config] before invoking the
+// builder so the function signature remains stable across deployments
+// that opt out of the cross-factor defence.
 func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, clock timex.Clock) (authn.Authenticator, error) { //nolint:ireturn,nolintlint // authn.Authenticator is the orchestrator's contract; concrete factor types are constructor-specific.
 	if isNilLike(s.Store) {
 		return nil, &Error{
@@ -379,14 +379,14 @@ func buildStepTOTP(s StepTOTP, fallbackCurrent []byte, fallbackPrev [][]byte, cl
 
 // attachLockoutCounter returns auth wrapped with the cross-factor
 // lockout counter when one has been wired on the [config] through
-// [WithAuthnLockoutStore] (M-AUTHN-1). When the option is not set the
-// wrapper is a no-op and auth is returned as-is. The function is
-// internal to the op package and consumed by the orchestrator wiring
-// layer when a built-in second-factor [Step] is compiled into its
-// authenticator. Embedders constructing factors directly through
-// [ExternalStep] reach the same invariant by wrapping their
-// authenticator with the per-package WithLockout helper before
-// passing it to [ExternalStep.Authenticator].
+// [WithAuthnLockoutStore]. When the option is not set the wrapper is
+// a no-op and auth is returned as-is. The function is internal to the
+// op package and consumed by the orchestrator wiring layer when a
+// built-in second-factor [Step] is compiled into its authenticator.
+// Embedders constructing factors directly through [ExternalStep]
+// reach the same invariant by wrapping their authenticator with the
+// per-package WithLockout helper before passing it to
+// [ExternalStep.Authenticator].
 //
 // The [Clock] interface in op/ is structurally identical to
 // [internal/timex.Clock]; the [clockShim] adapter forwards the

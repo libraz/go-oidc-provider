@@ -129,10 +129,11 @@ func TestVerify_RejectsJWEWithoutResolver(t *testing.T) {
 	}
 }
 
-// TestVerify_RejectsJWEWithUnknownKID pins the kid-resolver leg: a JWE
-// whose kid is not on the resolver MUST surface [ErrDecryptFailed] so
-// an attacker probing for OP keysets via wire codes learns nothing.
-// The class-collapsing mirrors ADR 0030 §S.3 (kid-oracle defence).
+// TestVerify_RejectsJWEWithUnknownKID pins the kid-resolver leg: a
+// JWE whose kid is not on the resolver MUST surface
+// [ErrDecryptFailed] so an attacker probing for OP keysets via wire
+// codes learns nothing. The class-collapsing mirrors (kid-oracle
+// defence).
 func TestVerify_RejectsJWEWithUnknownKID(t *testing.T) {
 	t.Parallel()
 

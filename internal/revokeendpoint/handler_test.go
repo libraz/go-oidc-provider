@@ -631,7 +631,7 @@ func assertConsumedOrGone(tb testing.TB, f *fixture, id string) {
 }
 
 // saveOpaqueAccessToken seeds the testkit's opaque-access-token
-// substore with a live record (ADR 0024). The token's raw
+// substore with a live record. The token's raw
 // [store.OpaqueAccessToken.ID] is the bearer string the test posts at
 // /revoke; the substore hashes it on Save and matches the digest on
 // RevokeByID.
@@ -696,7 +696,7 @@ func TestHandler_OpaqueAccessToken_NotFound(t *testing.T) {
 // TestHandler_OpaqueAccessToken_DifferentClient returns HTTP 200 +
 // empty body and leaves the original record untouched when a
 // different client presents the token. Cross-client revocation is
-// silently ignored (ADR 0024 §S.8).
+// silently ignored.
 func TestHandler_OpaqueAccessToken_DifferentClient(t *testing.T) {
 	t.Parallel()
 

@@ -95,7 +95,7 @@ func (r *rotatingIssuer) IssueNonce() string {
 // Tracks:
 //   - RFC 9449 §9 "Nonce Mechanism" — the server-generated nonce is
 //     a one-time-use freshness token; rotation is the whole point.
-//   - panva node-oidc-provider commit 1b073c0 ("issue dpop-nonce on
+//   - upstream JS reference OP commit 1b073c0 ("issue dpop-nonce on
 //     proof iat skew failure") and 4d635e2 ("avoid emitting stale
 //     dpop-nonce on freshness failure") which fixed exactly the
 //     "echo the value the client showed" failure mode in another

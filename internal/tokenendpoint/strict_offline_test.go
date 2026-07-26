@@ -13,10 +13,10 @@ import (
 )
 
 // strictFixture builds a fixture whose Provider was constructed with
-// op.WithStrictOfflineAccess() so the strict-mode gate is active. The
+// op.WithStrictOfflineAccess so the strict-mode gate is active. The
 // helper exists because the suite-default newFixture wires the lax
-// reading; ADR 0017's strict-mode tests need to drive the same
-// endpoints with one extra option.
+// reading; 's strict-mode tests need to drive the same endpoints with
+// one extra option.
 func strictFixture(tb testing.TB) *fixture {
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
@@ -54,8 +54,8 @@ func strictConfidentialClient(tb testing.TB, f *fixture) (*store.Client, string)
 }
 
 // TestStrictOfflineAccess_RefreshExchangeRejectsNonOfflineToken pins
-// the §"Error handling" row in ADR 0017: under WithStrictOfflineAccess,
-// a refresh request whose originating grant did NOT carry
+// the §"Error handling" row in: under WithStrictOfflineAccess, a
+// refresh request whose originating grant did NOT carry
 // "offline_access" fails with invalid_grant before the token is
 // consumed, even though the bound scope still contains "openid". The
 // error description names the policy so an operator can correlate the

@@ -1161,10 +1161,10 @@ func TestRefresh_IDTokenOmitsACRWhenClaimsRequestDisallowsStoredACR(t *testing.T
 }
 
 // opaqueRefreshFixture builds a refresh-token fixture wired with the
-// opaque access-token format option (ADR 0024). Tests use it to verify
-// that rotation revokes the prior opaque AT atomically with the new
-// mint, and to pin that the JWT-path regression test below sees no
-// such revocation.
+// opaque access-token format option. Tests use it to verify that
+// rotation revokes the prior opaque AT atomically with the new mint,
+// and to pin that the JWT-path regression test below sees no such
+// revocation.
 func opaqueRefreshFixture(tb testing.TB) *fixture {
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
@@ -1179,9 +1179,9 @@ func opaqueRefreshFixture(tb testing.TB) *fixture {
 	}
 }
 
-// TestRefresh_OpaqueFormat_RotationRevokesPriorAT pins the ADR 0024
-// §"Refresh-rotation revocation of prior AT" contract: when the chain
-// is opaque-format, rotation revokes every opaque AT bound to the
+// TestRefresh_OpaqueFormat_RotationRevokesPriorAT pins the
+// Refresh-rotation revocation of prior AT contract: when the chain is
+// opaque-format, rotation revokes every opaque AT bound to the
 // originating GrantID atomically with the new mint, so the
 // stolen-but-still-valid window collapses to clock-skew. The JWT path
 // is covered by the regression test below to confirm the new
@@ -1355,14 +1355,15 @@ func TestRefresh_OpaqueRevokeFailureDoesNotMintFreshAT(t *testing.T) {
 	}
 }
 
-// TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT is the regression
-// pin: ADR 0024 §"Refresh-rotation revocation of prior AT" deliberately
-// keeps the JWT path's "prior AT alive on rotation" behaviour because
-// revoking it would force resource servers to call introspection on
-// every JWT — defeating the registry-driven JWT optimisation that
-// motivated ADR 0013. The test seeds a registry row, runs a refresh
-// rotation under the JWT default, and asserts the prior row's
-// Revoked flag stayed false.
+// TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT is the
+// regression pin for the asymmetry in refresh-rotation revocation:
+// only the opaque path revokes the prior access token. The JWT path
+// deliberately leaves it alive, because revoking it would force
+// resource servers to call introspection on every JWT — defeating the
+// registry-driven optimisation that is the whole reason to issue JWT
+// access tokens. The test seeds a registry row, runs a refresh
+// rotation under the JWT default, and asserts the prior row's Revoked
+// flag stayed false.
 func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
 	t.Parallel()
 
@@ -1414,14 +1415,13 @@ func TestRefresh_JWTFormat_RotationDoesNotRevokePriorAT(t *testing.T) {
 	}
 }
 
-// TestRefresh_GrantTombstoned_MintRefused pins the ADR 0025 mint-
-// refusal contract: under [op.RevocationStrategyGrantTombstone]
-// (the default) a refresh request whose underlying grant has been
-// tombstoned MUST fail with invalid_grant BEFORE a fresh access
-// token is signed. This closes the ADR 0013 race window where a
-// refresh racing a code-replay or end-session cascade could slip a
-// fresh AT through ahead of the tombstone's observable effect on
-// resource-server lookups.
+// TestRefresh_GrantTombstoned_MintRefused pins the mint- refusal
+// contract: under [op.RevocationStrategyGrantTombstone] (the default)
+// a refresh request whose underlying grant has been tombstoned MUST
+// fail with invalid_grant BEFORE a fresh access token is signed. This
+// closes the race window where a refresh racing a code-replay or
+// end-session cascade could slip a fresh AT through ahead of the
+// tombstone's observable effect on resource-server lookups.
 //
 // The test seeds a refresh token whose CreatedAt anchors the chain's
 // IssuedAt, writes a tombstone whose RevokedAt is at-or-after that
@@ -1519,10 +1519,10 @@ func TestRefresh_GrantNotTombstoned_MintAllowed(t *testing.T) {
 	}
 }
 
-// TestRefresh_GidClaim_PresentOnRotatedAT pins the ADR 0025 wire
-// invariant on the refresh path: the rotated access token carries
-// the originating GrantID in its "gid" private claim, identically
-// to the authorization_code-derived AT (see
+// TestRefresh_GidClaim_PresentOnRotatedAT pins the wire invariant on
+// the refresh path: the rotated access token carries the originating
+// GrantID in its "gid" private claim, identically to the
+// authorization_code-derived AT (see
 // TestAuthCode_GidClaim_PresentOnIssuedAT). The claim survives
 // rotation because the strategy controls Register / cascade behaviour
 // only, not the claim, and the originating GrantID is preserved on

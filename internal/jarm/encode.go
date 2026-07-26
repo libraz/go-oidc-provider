@@ -130,10 +130,10 @@ func NewSigner(cfg SignerConfig) (*Signer, error) {
 }
 
 // deriveJWSAlgorithm picks the JWS "alg" header for a [tokens.SigningKey]
-// based on the public key shape. v0.x ships ECDSA P-256 only because
-// [internal/keys.NewSet] rejects every other key shape on construction
-// (see internal/jose F-4); a key reaching this function therefore
-// MUST be a P-256 ECDSA key. Delegating to [jose.KeyShape] keeps the
+// based on the public key shape. The library signs with ECDSA P-256
+// only, and [internal/keys.NewSet] rejects every other key shape on
+// construction, so a key reaching this function MUST be a P-256 ECDSA
+// key. Delegating to [jose.KeyShape] keeps the
 // alg/key matrix in one place — the wrapper here surfaces "unknown key
 // shape" as a fail-fast [ErrEncode] at [NewSigner] time rather than
 // silently returning ES256 for the wrong key, while preserving the

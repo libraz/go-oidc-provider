@@ -14,15 +14,14 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// TestAuthenticator_CrossFactorLockoutSurfacesAsErrLocked covers
-// M-AUTHN-1 from the TOTP authenticator's perspective: the
-// authenticator MUST surface the cross-factor [lockout.Counter]
-// verdict as [totp.ErrLocked] so the orchestrator dispatches the
-// same way it does for the per-factor lock. The test pre-saturates
-// the cross-factor counter with 30 failures (the short threshold)
-// against an external subject, then asserts the next TOTP Continue
-// returns ErrLocked even though the per-record FailedCount sits at
-// zero.
+// TestAuthenticator_CrossFactorLockoutSurfacesAsErrLocked covers the
+// cross-factor budget from the TOTP side: the authenticator MUST
+// surface the cross-factor [lockout.Counter] verdict as
+// [totp.ErrLocked] so the orchestrator dispatches the same way it
+// does for the per-factor lock. The test pre-saturates the
+// cross-factor counter with 30 failures (the short threshold) against
+// an external subject, then asserts the next TOTP Continue returns
+// ErrLocked even though the per-record FailedCount sits at zero.
 func TestAuthenticator_CrossFactorLockoutSurfacesAsErrLocked(t *testing.T) {
 	t.Parallel()
 

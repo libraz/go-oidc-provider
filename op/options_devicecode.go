@@ -33,7 +33,7 @@ import (
 // defaults to `<issuer>/device`; embedders override it via
 // [WithDeviceVerificationURI].
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithDeviceCodeGrant() Option {
 	return optionFunc(func(c *config) error {
 		c.deviceCodeGrantEnabled = true
@@ -58,7 +58,7 @@ func WithDeviceCodeGrant() Option {
 // reachable; embedders SHOULD ensure their verification page is
 // served at the supplied URL before activating the option.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithDeviceVerificationURI(uri string) Option {
 	return optionFunc(func(c *config) error {
 		trimmed := strings.TrimSpace(uri)
@@ -102,7 +102,7 @@ func WithDeviceVerificationURI(uri string) Option {
 //
 // A non-positive duration is rejected at the option site.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithDeviceCodeExpiry(ttl time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		if ttl <= 0 {
@@ -125,7 +125,7 @@ func WithDeviceCodeExpiry(ttl time.Duration) Option {
 //
 // A non-positive duration is rejected at the option site.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithDeviceCodePollInterval(interval time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		if interval <= 0 {
@@ -170,7 +170,7 @@ func (c *config) effectiveDeviceCodePollInterval() time.Duration {
 // substore on the first request, and the token endpoint's poll path
 // would dispatch to a grant whose backing store cannot resolve the
 // presented device_code. Surfacing the gap at construction time is
-// the same posture the rest of the v0.x options take.
+// the same posture every other option takes.
 func (c *config) validateDeviceCodeGrant() error {
 	if !c.deviceCodeGrantConfiguredOrEnabled() {
 		return nil

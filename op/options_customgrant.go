@@ -51,7 +51,7 @@ var secretLikeFormParameters = map[string]struct{}{
 // values cryptographically; access-token / refresh-token / id_token
 // shaping, scope intersection, and TTL bounds are all OP-side.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func WithCustomGrant(g CustomGrantHandler) Option {
 	return optionFunc(func(c *config) error {
 		name, err := validateCustomGrantIdentity(g)
@@ -134,7 +134,7 @@ func (c *config) customGrantHandlers() []CustomGrantHandler {
 //     invoked. The grant_type has a single canonical URN; a second
 //     registration would shadow the first silently.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func RegisterTokenExchange(policy TokenExchangePolicy) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(policy) {

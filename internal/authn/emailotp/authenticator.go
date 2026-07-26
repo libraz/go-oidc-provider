@@ -203,7 +203,7 @@ type Message struct {
 // factor. Construct through [NewAuthenticator]; the zero value is
 // not usable.
 //
-// The cross-factor brute-force counter (M-AUTHN-1) is opt-in through
+// The cross-factor brute-force counter is opt-in through
 // [Authenticator.WithLockout]; the zero value here observes only the
 // per-record FailedCount.
 type Authenticator struct {
@@ -299,10 +299,10 @@ func NewAuthenticator(cfg Config) (*Authenticator, error) {
 
 // WithLockout returns a copy of a with the supplied [lockout.Counter]
 // wired so the authenticator consults the cross-factor brute-force
-// counter (M-AUTHN-1) on every Begin / Continue. A nil counter
-// disables the cross-factor gate (the per-record FailedCount continues
-// to apply). The receiver is not mutated; the caller MUST use the
-// returned pointer.
+// counter on every Begin / Continue. A nil counter disables the
+// cross-factor gate (the per-record FailedCount continues to apply).
+// The receiver is not mutated; the caller MUST use the returned
+// pointer.
 func (a *Authenticator) WithLockout(c *lockout.Counter) *Authenticator {
 	cp := *a
 	cp.lockout = c

@@ -60,7 +60,7 @@ func (e *Error) Unwrap() error { return e.Cause }
 // reference). Returns the empty string when the receiver is nil so
 // callers can guard with a single zero-value check.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func (e *Error) OAuthCode() string {
 	if e == nil {
 		return ""
@@ -77,7 +77,7 @@ func (e *Error) OAuthCode() string {
 // failures, 401 for invalid_client (RFC 6749 §5.2 normative shape),
 // 400 for every other client-class code.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func (e *Error) WriteOAuthError(w http.ResponseWriter) {
 	if e == nil {
 		http.Error(w, "", http.StatusInternalServerError)
@@ -122,7 +122,7 @@ func httpStatusFor(code string) int {
 // IsClientError reports whether err is a 4xx-class [*Error] caused by client
 // input (invalid_request, invalid_grant, unauthorized_client, etc.).
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func IsClientError(err error) bool {
 	var e *Error
 	if !errors.As(err, &e) {
@@ -146,7 +146,7 @@ func IsClientError(err error) bool {
 // IsServerError reports whether err is a 5xx-class [*Error] caused by server
 // or configuration faults.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func IsServerError(err error) bool {
 	var e *Error
 	if !errors.As(err, &e) {

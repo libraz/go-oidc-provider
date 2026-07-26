@@ -25,7 +25,7 @@ import (
 // client is expected to retry authorization with the advertised acr_values
 // / max_age, which the OP honours at the authorization endpoint.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func StepUpChallenge(realm string, acrValues []string, maxAge *int64) string {
 	params := make([]string, 0, 4)
 	if realm != "" {

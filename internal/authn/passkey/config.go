@@ -94,17 +94,16 @@ type Config struct {
 	// entry so a typo cannot silently widen the policy.
 	AAGUIDAllowlist []string
 
-	// AAGUIDReCheckOnAssertion enables the M-AUTHN-2 defence: when
-	// true the verifier re-checks the matched credential's AAGUID
-	// against the configured [AAGUIDAllowlist] at assertion time so
-	// an embedder that narrows the allowlist after registration can
-	// revoke credentials whose authenticator model has fallen out
-	// of policy. The default (false) preserves the v0.x behaviour
-	// where AAGUID was enforced only at registration; embedders
-	// that want defence-in-depth flip the bit on. The allowlist
-	// itself is shared with the registration check; an empty
-	// allowlist short-circuits the assertion-time check (every
-	// AAGUID is accepted, mirroring the registration behaviour).
+	// AAGUIDReCheckOnAssertion enables the defence: when true the
+	// verifier re-checks the matched credential's AAGUID against the
+	// configured [AAGUIDAllowlist] at assertion time so an embedder that
+	// narrows the allowlist after registration can revoke credentials
+	// whose authenticator model has fallen out of policy. The default
+	// (false) preserves the v0.x behaviour where AAGUID was enforced
+	// only at registration; embedders that want defence-in-depth flip
+	// the bit on. The allowlist itself is shared with the registration
+	// check; an empty allowlist short-circuits the assertion-time check
+	// (every AAGUID is accepted, mirroring the registration behaviour).
 	AAGUIDReCheckOnAssertion bool
 }
 

@@ -16,7 +16,7 @@ import (
 // login surface — unless [WithSPAUI] is configured, in which case the
 // default falls away and the embedder's SPA owns rendering over the JSON
 // state endpoints. SSR or framework-specific Drivers replace it.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithInteractionDriver(d interaction.Driver) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(d) {
@@ -34,7 +34,7 @@ func WithInteractionDriver(d interaction.Driver) Option {
 // Each call replaces any keys configured by a previous WithCookieKeys
 // call. Pass every active and rotated key (single key in the typical
 // case) in a single call.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithCookieKeys(keys ...[]byte) Option {
 	return optionFunc(func(c *config) error {
 		if len(keys) == 0 {
@@ -67,7 +67,7 @@ func WithCookieKeys(keys ...[]byte) Option {
 // a per-step EncryptionKey overrides the global value when present
 // (more-specific-wins). Retain previous keys until every persisted
 // TOTP record has been re-sealed under the active key.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithMFAEncryptionKeys(keys ...[]byte) Option {
 	return optionFunc(func(c *config) error {
 		if len(keys) == 0 {
@@ -97,13 +97,13 @@ func WithMFAEncryptionKeys(keys ...[]byte) Option {
 // codec.
 const mfaEncryptionKeyLen = 32
 
-// WithAuthnLockoutStore wires the cross-factor brute-force counter
-// (M-AUTHN-1). When a non-nil store is supplied, every built-in
-// second-factor [Step] (StepTOTP, StepEmailOTP, StepRecoveryCode)
-// consults the same per-subject counter so an attacker pivoting between
-// factors cannot double their guess budget. The store backs the rolling
-// 24-hour window described in 002-product-design.md §M.6: a 1-hour lockout
-// at 30 cumulative failures, 24-hour at 90.
+// WithAuthnLockoutStore wires the cross-factor brute-force counter.
+// When a non-nil store is supplied, every built-in second-factor
+// [Step] (StepTOTP, StepEmailOTP, StepRecoveryCode) consults the same
+// per-subject counter so an attacker pivoting between factors cannot
+// double their guess budget. The store backs the rolling 24-hour
+// window described in 002-product-design.md §M.6: a 1-hour lockout at
+// 30 cumulative failures, 24-hour at 90.
 //
 // Scope — the counter attaches ONLY to the built-in possession/recovery
 // factors above. It is deliberately NOT attached to the primary
@@ -140,7 +140,7 @@ const mfaEncryptionKeyLen = 32
 // At most one store may be registered; a second [WithAuthnLockoutStore]
 // call fails [New] with a structured configuration error.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(s) {
@@ -173,7 +173,7 @@ func WithAuthnLockoutStore(s store.AuthnLockoutStore) Option {
 // AllowedClients is enforced at the authorize and token endpoints: a
 // non-empty list restricts the scope to the listed client_id values
 // and any other client receives invalid_scope per RFC 6749 §5.2.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithScope(s Scope) Option {
 	return optionFunc(func(c *config) error {
 		if s.Name == "" {
@@ -197,8 +197,9 @@ func WithScope(s Scope) Option {
 // to mount /authorize. The orchestrator surfaces the empty-set case
 // as a construction error at [New] time; this option only stores the
 // registered values.
-// Experimental: the option name and contract are stable but per-
-// authenticator semantics may still evolve before v1.0.
+// Experimental: the option name and contract are settled; what MAY
+// change in a minor release is per-authenticator semantics, which are
+// still accumulating cases from real factor implementations.
 func WithAuthenticators(a ...Authenticator) Option {
 	return optionFunc(func(c *config) error {
 		if len(a) == 0 {
@@ -226,8 +227,8 @@ func WithAuthenticators(a ...Authenticator) Option {
 // configuration error so duplicate registrations surface as
 // misconfigurations rather than silently overwriting the earlier
 // value.
-// Experimental: the verifier contract is stable but the orchestrator
-// trigger points around it may still evolve before v1.0.
+// Experimental: the verifier contract is settled; the orchestrator
+// trigger points around it MAY change in a minor release.
 func WithCaptchaVerifier(v CaptchaVerifier) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(v) {
@@ -251,8 +252,8 @@ func WithCaptchaVerifier(v CaptchaVerifier) Option {
 // [RiskStage]. At most one assessor is permitted; a second
 // [WithRiskAssessor] call fails [New] with a structured configuration
 // error.
-// Experimental: the assessor contract is stable but the orchestrator
-// trigger points around it may still evolve before v1.0.
+// Experimental: the assessor contract is settled; the orchestrator
+// trigger points around it MAY change in a minor release.
 func WithRiskAssessor(a RiskAssessor) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(a) {
@@ -277,8 +278,8 @@ func WithRiskAssessor(a RiskAssessor) Option {
 // each registered observer in registration order. This is the brute-
 // force / risk-counter feed; general audit events are emitted by the
 // library to slog and observers MUST NOT duplicate them here.
-// Experimental: the observer contract is stable but the orchestrator
-// emission points around it may still evolve before v1.0.
+// Experimental: the observer contract is settled; the orchestrator
+// emission points around it MAY change in a minor release.
 func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(o) {
@@ -300,8 +301,8 @@ func WithLoginAttemptObserver(o LoginAttemptObserver) Option {
 // The library-built-in consent screen is registered automatically by
 // the orchestrator; user extensions ship with a unique dotted
 // [Interaction.Name] (e.g., "myorg.tos.accept").
-// Experimental: the contract is stable but per-interaction semantics
-// may still evolve before v1.0.
+// Experimental: the contract is settled; per-interaction semantics MAY
+// change in a minor release.
 func WithInteractions(i ...Interaction) Option {
 	return optionFunc(func(c *config) error {
 		if len(i) == 0 {
@@ -332,10 +333,9 @@ func WithInteractions(i ...Interaction) Option {
 // deliberately limited to login / consent / RP-Initiated Logout:
 // front-channel logout and session management iframes are out of
 // scope, so [SPAUI] does not carry mounts for those surfaces.
-// Experimental: the field set is being introduced in v0.x and MAY
-// gain optional fields before v1.0. Embedders SHOULD construct
-// [SPAUI] with named field initialisation so future additions
-// remain source-compatible.
+// Experimental: the field set MAY gain optional members in a minor
+// release. Embedders SHOULD construct [SPAUI] with named field
+// initialisation so future additions remain source-compatible.
 type SPAUI struct {
 	// LoginMount is the URL path the SPA's login entry HTML lives
 	// under (typically "/login"). MUST be non-empty and MUST start
@@ -370,10 +370,10 @@ type SPAUI struct {
 // The struct field set is intentionally narrow: the consent ceremony
 // has a fixed data model (client metadata + scope list + CSRF token)
 // and the embedder supplies an [*template.Template] that consumes it.
-// Experimental: the field set is being introduced in v0.x. The plan
-// reserves a Strings field for an i18n bundle once the public i18n
-// surface stabilises; the field is omitted today so embedders are
-// not pinned to a placeholder type.
+// Experimental: the field set MAY gain members in a minor release. A
+// Strings field for an i18n bundle is reserved for once the public
+// i18n surface stabilises; it is omitted today so embedders are not
+// pinned to a placeholder type.
 type ConsentUI struct {
 	// Template is the [html/template.Template] the consent screen
 	// renders. The library passes the canonical consent context
@@ -386,15 +386,14 @@ type ConsentUI struct {
 // ChooserUI declares the template the [Provider] uses to render the
 // account chooser screen when prompt=select_account fires for a
 // session that already has a chooser group. Composes with [WithSPAUI]
-// per ADR 0015 §SPA mode — the chooser template is silently shadowed
-// by the SPA's JSON state envelope and [op.New] emits a single
-// structured warning. The struct field set is intentionally narrow:
-// the chooser screen has a fixed data model (Accounts, AddAccountURL,
-// CSRFToken) and the embedder supplies an [*template.Template] that
-// consumes it.
-// Experimental: the field set is being introduced in v0.x. Future
-// revisions may add a Strings field for an i18n bundle once the
-// public i18n surface stabilises.
+// mode — the chooser template is silently shadowed by the SPA's JSON
+// state envelope and [op.New] emits a single structured warning. The
+// struct field set is intentionally narrow: the chooser screen has a
+// fixed data model (Accounts, AddAccountURL, CSRFToken) and the
+// embedder supplies an [*template.Template] that consumes it.
+// Experimental: the field set MAY gain members in a minor release — a
+// Strings field for an i18n bundle once the public i18n surface
+// stabilises.
 type ChooserUI struct {
 	// Template is the [html/template.Template] the chooser screen
 	// renders. The library passes the canonical chooser context
@@ -428,8 +427,8 @@ type ChooserUI struct {
 // which wraps an already-constructed [Authenticator]. Passing a
 // built-in Step directly fails [New] with a clear pointer to the
 // workaround.
-// Experimental: the LoginFlow seam is being introduced in v0.x.
-// Field names and evaluation order MAY change before v1.0.
+// Experimental: field names and evaluation order MAY change in a
+// minor release; see [LoginFlow] for why the seam is not frozen.
 func WithLoginFlow(flow LoginFlow) Option {
 	return optionFunc(func(c *config) error {
 		if c.loginFlowSet {
@@ -493,12 +492,11 @@ func WithSPAUI(ui SPAUI) Option {
 		}
 		c.spaUI = ui
 		c.spaUISet = true
-		// ADR 0015 §SPA mode: the SPA owns the chooser surface via
-		// the JSON state envelope, so a chooser template configured
-		// alongside SPA mode is silently ignored. Stash the intent
-		// here so applyDefaults can emit a structured warning once
-		// the logger is materialised, regardless of the option
-		// invocation order.
+		// In SPA mode the SPA owns the chooser surface via the JSON state
+		// envelope, so a chooser template configured alongside it is
+		// silently ignored. Stash the intent here so applyDefaults can emit
+		// a structured warning once the logger is materialised, regardless
+		// of the option invocation order.
 		if c.chooserUISet {
 			c.chooserUIShadowedBySPA = true
 		}
@@ -511,9 +509,9 @@ func WithSPAUI(ui SPAUI) Option {
 // stays under the gocognit ceiling now that mount / StaticDir checks
 // also live in helpers.
 //
-// The chooser↔SPA combination is permitted: ADR 0015 §SPA mode treats
-// the chooser HTML template as silently shadowed by the SPA's JSON
-// state envelope. [WithSPAUI] / [WithChooserUI] coordinate the
+// The chooser↔SPA combination is permitted: mode treats the chooser
+// HTML template as silently shadowed by the SPA's JSON state
+// envelope. [WithSPAUI] / [WithChooserUI] coordinate the
 // `chooserUIShadowedBySPA` flag so [config.applyDefaults] can emit a
 // single structured warning regardless of option order.
 func checkSPAUIPrecondition(c *config) error {
@@ -620,12 +618,11 @@ func WithConsentUI(ui ConsentUI) Option {
 
 // WithChooserUI registers the [ChooserUI] template the HTML driver
 // uses for the account chooser screen. The option composes with
-// [WithSPAUI] per ADR 0015 §SPA mode: when both are configured the
-// chooser template is silently shadowed (the SPA's JSON state
-// envelope renders the chooser surface) and [op.New] emits a single
-// structured warning. The chooser↔consent relationship is unchanged
-// — both can be set together, both render through the overlay.
-// Validation:
+// [WithSPAUI] mode: when both are configured the chooser template is
+// silently shadowed (the SPA's JSON state envelope renders the
+// chooser surface) and [op.New] emits a single structured warning.
+// The chooser↔consent relationship is unchanged — both can be set
+// together, both render through the overlay. Validation:
 //   - Template MUST be non-nil.
 //   - Repeated [WithChooserUI] calls are rejected.
 func WithChooserUI(ui ChooserUI) Option {
@@ -644,10 +641,9 @@ func WithChooserUI(ui ChooserUI) Option {
 		}
 		c.chooserUI = ui
 		c.chooserUISet = true
-		// ADR 0015 §SPA mode: SPA owns the chooser surface via the
-		// JSON state envelope when [WithSPAUI] is also active. Stash
-		// the intent for applyDefaults regardless of which option was
-		// called first.
+		// In SPA mode the SPA owns the chooser surface via the JSON state
+		// envelope when [WithSPAUI] is also active. Stash the intent for
+		// applyDefaults regardless of which option was called first.
 		if c.spaUISet {
 			c.chooserUIShadowedBySPA = true
 		}

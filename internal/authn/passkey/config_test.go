@@ -176,9 +176,9 @@ func TestNew_RejectsHTTPNonLoopback(t *testing.T) {
 	}
 }
 
-// TestNew_RejectsMalformedAAGUID asserts the allowlist parser surfaces
-// typos at construction time rather than silently widening policy
-// (M-AUTHN-2).
+// TestNew_RejectsMalformedAAGUID asserts the allowlist parser
+// surfaces typos at construction time rather than silently widening
+// policy.
 func TestNew_RejectsMalformedAAGUID(t *testing.T) {
 	t.Parallel()
 

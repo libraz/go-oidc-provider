@@ -154,11 +154,11 @@ func (c *Counter) IsLocked(ctx context.Context, subject string) (bool, time.Time
 	return false, time.Time{}, nil
 }
 
-// RecordFailure advances the complete cross-factor lockout state with a
-// versioned compare-and-swap. Increment, window rollover, and lock stamping
-// are one transition, so none can overwrite a concurrently committed
-// failure. A stale transition is recomputed from the latest record until it
-// commits (M-AUTHN-4).
+// RecordFailure advances the complete cross-factor lockout state with
+// a versioned compare-and-swap. Increment, window rollover, and lock
+// stamping are one transition, so none can overwrite a concurrently
+// committed failure. A stale transition is recomputed from the latest
+// record until it commits.
 func (c *Counter) RecordFailure(ctx context.Context, subject string) (Outcome, error) {
 	if subject == "" {
 		return Outcome{}, errors.New("lockout: subject required")

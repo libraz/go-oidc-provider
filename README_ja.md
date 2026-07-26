@@ -24,7 +24,12 @@ Go 向けの OpenID Connect Provider（Authorization Server）ライブラリで
 > 唯一の例外は godoc に `Experimental:` マーカーを持つシンボルで、その一覧は
 > [`api/experimental.txt`](api/experimental.txt) に機械生成されます。
 > `make verify` が再生成して差分を検査するため、例外の範囲がレビューを
-> 経ずに広がることはありません。[`CHANGELOG.md`](CHANGELOG.md) は
+> 経ずに広がることはありません。採用前に把握しておくべき点として、例外に
+> あたるのは認証ステップのシーム（`LoginFlow` / `WithLoginFlow` /
+> `WithAuthenticators` とその周辺フック）、interaction の UI 型、および
+> IETF ドラフトを追随している Grant Management です。プロトコル面・
+> ストレージインタフェース・その他のオプションはすべて安定扱いです。
+> [`CHANGELOG.md`](CHANGELOG.md) は
 > `v0.9.0` の次のリリース以降の変更点を記録します。
 >
 > 本プロジェクトは個人が余暇で開発しているものであり、ベンダー製品では

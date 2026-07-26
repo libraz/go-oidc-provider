@@ -56,9 +56,9 @@ var ErrRetry = fmt.Errorf("totp: wrong code: %w", authn.ErrFactorRetry)
 // TOTP math + brute-force counter) to a [store.TOTPStore] (the
 // persisted record) so the orchestrator can drive the factor without
 // knowing about either. The optional [lockout.Counter] adds the
-// cross-factor brute-force counter (M-AUTHN-1) so an attacker pivoting
-// between TOTP and email-OTP cannot double their budget.
-// Construct through [NewAuthenticator]; the zero value is not usable.
+// cross-factor brute-force counter so an attacker pivoting between
+// TOTP and email-OTP cannot double their budget. Construct through
+// [NewAuthenticator]; the zero value is not usable.
 type Authenticator struct {
 	verifier *Verifier
 	store    store.TOTPStore
@@ -81,7 +81,7 @@ var (
 // first Begin / Continue otherwise, which is harder to diagnose than
 // the construction-time error returned here.
 //
-// The cross-factor brute-force counter (M-AUTHN-1) is opt-in through
+// The cross-factor brute-force counter is opt-in through
 // [Authenticator.WithLockout]; the zero value here observes only the
 // per-record FailedCount.
 func NewAuthenticator(verifier *Verifier, totpStore store.TOTPStore) (*Authenticator, error) {
@@ -96,10 +96,10 @@ func NewAuthenticator(verifier *Verifier, totpStore store.TOTPStore) (*Authentic
 
 // WithLockout returns a copy of a with the supplied [lockout.Counter]
 // wired so the authenticator consults the cross-factor brute-force
-// counter (M-AUTHN-1) on every Begin / Continue. A nil counter
-// disables the cross-factor gate (the per-record FailedCount continues
-// to apply). The receiver is not mutated; the caller MUST use the
-// returned pointer.
+// counter on every Begin / Continue. A nil counter disables the
+// cross-factor gate (the per-record FailedCount continues to apply).
+// The receiver is not mutated; the caller MUST use the returned
+// pointer.
 func (a *Authenticator) WithLockout(c *lockout.Counter) *Authenticator {
 	cp := *a
 	cp.lockout = c

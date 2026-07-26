@@ -16,7 +16,7 @@ import "github.com/libraz/go-oidc-provider/internal/auditevent"
 // metrics bridge — a single emission updates both the slog audit
 // stream and the matching counter.
 //
-// Stable since v0.1. New events MAY be added in a minor release;
+// Stable since v1.0. New events MAY be added in a minor release;
 // existing event names are part of the API surface and only renamed
 // in a major release with a deprecation notice.
 type AuditEvent string
@@ -113,7 +113,7 @@ const (
 // surface so SOC tooling can distinguish "chain successfully revoked"
 // from "chain revoke silently failed" — the latter leaves the
 // rotation chain intact even though the wire response indicated
-// rejection, which is the audit gap H-A2 closes.
+// rejection, which is the audit gap these events close.
 const (
 	AuditCodeIssued               = AuditEvent(auditevent.AuditCodeIssued)
 	AuditCodeConsumed             = AuditEvent(auditevent.AuditCodeConsumed)

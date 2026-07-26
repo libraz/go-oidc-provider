@@ -2,12 +2,12 @@ package devicecode
 
 import "time"
 
-// Default polling discipline parameters per RFC 8628 §3.5 and ADR
-// 0031 §Q3. The token endpoint clamps incoming polls below
-// [DefaultInterval] to slow_down, doubles the effective interval on
-// each violation (no upper cap; the record's TTL is the hard stop),
-// and rejects sub-[FastPollFloor] repeats once per offence even when
-// the previous response was authorization_pending.
+// Default polling discipline parameters, per RFC 8628 §3.5. The token
+// endpoint clamps incoming polls below [DefaultInterval] to slow_down,
+// doubles the effective interval on each violation (no upper cap; the
+// record's TTL is the hard stop), and rejects sub-[FastPollFloor]
+// repeats once per offence even when the previous response was
+// authorization_pending.
 const (
 	// DefaultInterval is the seed value of the slow_down doubling
 	// rule and the value the OP advertises in the
@@ -23,11 +23,10 @@ const (
 	FastPollFloor = 500 * time.Millisecond
 
 	// DefaultExpiresIn is the device_code lifetime advertised on the
-	// device-authorization response and stamped on the substore
-	// record. RFC 8628 §3.4 leaves the value unspecified; ADR 0031
-	// §Q3 picks 600 s (10 minutes) as the smallest interval that
-	// still accommodates a distracted user finding a secondary
-	// device.
+	// device-authorization response and stamped on the substore record.
+	// RFC 8628 §3.4 leaves the value unspecified; 600 s (10 minutes)
+	// is the smallest interval that still accommodates a distracted
+	// user finding a secondary device.
 	DefaultExpiresIn = 600 * time.Second
 
 	// MaxPollViolations is the default number of slow_down offences
@@ -164,8 +163,8 @@ type PollOutput struct {
 	CountThisAsViolation bool
 }
 
-// DecidePoll applies the polling discipline documented in ADR 0031
-// §Q3. The decision tree:
+// DecidePoll applies the polling discipline described on the default
+// parameters above. The decision tree:
 //
 //  1. Consumed → expired_token (token-replay guard).
 //  2. ExpiresAt ≤ Now → expired_token (TTL hard stop).
@@ -216,9 +215,9 @@ func DecidePoll(in PollInput) PollOutput {
 	return PollOutput{Decision: PollDecisionAuthorizationPending}
 }
 
-// nextInterval doubles current per ADR 0031 §Q3. A zero or negative
-// current value falls back to [DefaultInterval] so the discipline
-// recovers from an embedder that mis-seeded the substore record.
+// nextInterval doubles current. A zero or negative current value
+// falls back to [DefaultInterval] so the discipline recovers from an
+// embedder that mis-seeded the substore record.
 func nextInterval(current time.Duration) time.Duration {
 	if current <= 0 {
 		return DefaultInterval

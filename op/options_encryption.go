@@ -15,7 +15,7 @@ import (
 // The slice is freshly allocated on every call so callers cannot
 // mutate the package-internal allow-list.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func SupportedEncryptionAlgs() []string {
 	algs := jose.AllowedJWEAlgs()
 	out := make([]string, len(algs))
@@ -28,9 +28,9 @@ func SupportedEncryptionAlgs() []string {
 // SupportedEncryptionEncs returns the closed v0.9.1 list of JWE `enc`
 // values the OP can negotiate. As of v0.9.1 the set is `A128GCM` and
 // `A256GCM`; symmetric AES-CBC-HS variants and `A192*` are
-// intentionally excluded (ADR 0030 §Q1).
+// intentionally excluded.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func SupportedEncryptionEncs() []string {
 	encs := jose.AllowedJWEEncs()
 	out := make([]string, len(encs))
@@ -70,7 +70,7 @@ func SupportedEncryptionEncs() []string {
 // arrays and decryption attempts fail with
 // `invalid_request_object`.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 	return optionFunc(func(c *config) error {
 		if len(ks) == 0 {
@@ -100,7 +100,7 @@ func WithEncryptionKeyset(ks EncryptionKeyset) Option {
 // encryption keyset (a deliberate "advertise keys but no negotiated
 // algorithms" posture is unusual but not forbidden).
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func WithSupportedEncryptionAlgs(algs, encs []string) Option {
 	return optionFunc(func(c *config) error {
 		if err := applyAlgNarrowing(c, algs); err != nil {

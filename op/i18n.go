@@ -73,7 +73,7 @@ func (b LocaleBundle) Locale() Locale {
 // be one of the seed locales — en / ja). A default that is not
 // registered is rejected at construction time.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func WithDefaultLocale(locale Locale) Option {
 	return optionFunc(func(c *config) error {
 		if locale == "" {
@@ -97,7 +97,7 @@ func WithDefaultLocale(locale Locale) Option {
 // result locally; a slow PreferredLocale call adds latency to every
 // login screen render.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 type PreferredLocaleStore interface {
 	PreferredLocale(ctx context.Context, sub string) (Locale, error)
 }
@@ -113,7 +113,7 @@ type PreferredLocaleStore interface {
 // disable the chain. Embedders that want to opt out simply omit the
 // option — the resolver falls back to the next layer in the chain.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func WithPreferredLocaleStore(store PreferredLocaleStore) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(store) {
@@ -295,7 +295,7 @@ func injectHTMLTranslator(driver interaction.Driver, translator interaction.Mess
 // [WithDefaultLocale]) MUST be registered — either via this option
 // or implicitly through the seed library bundles.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func WithLocale(bundle LocaleBundle) Option {
 	return optionFunc(func(c *config) error {
 		if bundle.internal == nil {

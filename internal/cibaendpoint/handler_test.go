@@ -767,7 +767,7 @@ func TestServe_AcceptsACRValueAdvertised(t *testing.T) {
 
 // TestServe_RejectsUserCodeWhenUnsupported pins the discovery
 // consistency gate for `backchannel_user_code_parameter_supported`:
-// the v0.9.x default discovery shape advertises the parameter as
+// the default discovery shape advertises the parameter as
 // unsupported, and CIBA Core 1.0 §7.1 mandates the client refrain
 // from sending parameters the OP has not advertised. Any non-empty
 // `user_code` MUST therefore surface as 400 invalid_request.

@@ -10,8 +10,8 @@ import (
 )
 
 // grantRevocationStore is the SQL implementation of
-// [store.GrantRevocationStore] (ADR 0025). The substore fronts two
-// physical tables under one Go type:
+// [store.GrantRevocationStore]. The substore fronts two physical
+// tables under one Go type:
 //
 //   - oidc_grant_revocations holds per-grant tombstones written when a
 //     cascade fires (logout, code-replay, refresh rotation). The PK is
@@ -82,9 +82,9 @@ func (s *grantRevocationStore) RevokeJTI(ctx context.Context, r store.RevokedJTI
 // who measure tombstone-read pressure can add a denormalised cache in
 // front of this method without changing the contract.
 //
-// An empty grantID skips the tombstone check (the legacy fallback path
-// from ADR 0025 §Migration); an empty jti skips the denylist check
-// (the mint-refusal path where the OP has not yet allocated a JTI).
+// An empty grantID skips the tombstone check (the legacy fallback
+// path); an empty jti skips the denylist check (the mint-refusal path
+// where the OP has not yet allocated a JTI).
 func (s *grantRevocationStore) IsRevoked(ctx context.Context, grantID, jti string, iat time.Time) (bool, error) {
 	if jti != "" {
 		// A row exists if and only if the jti is denylisted; the SELECT

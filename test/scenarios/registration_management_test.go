@@ -151,7 +151,7 @@ func rmAssertNoStore(t *testing.T, resp *http.Response) {
 
 // TestScenario_RM_FF_01_RequiresDCREnabled documents v1.0's bundled
 // registration management gating: there is no separate
-// registrationManagement toggle, so the panva error path "registration
+// registrationManagement toggle, so the upstream error path "registration
 // management enabled without registration" has no equivalent.
 //
 // Spec: RFC 7592 §1; v1.0 design (mountRegistrationEndpoint mounts
@@ -543,7 +543,7 @@ func TestScenario_RM_PUT_12_RATRotationDestroysOld(t *testing.T) {
 }
 
 // TestScenario_RM_PUT_13_EntitiesCarryRotationPair documents that
-// v1.0 has no panva-style ctx.oidc.entities surface; rotation
+// v1.0 has no upstream-style ctx.oidc.entities surface; rotation
 // observability lives in the audit stream instead (see RM-EVT-01).
 //
 // Spec: OP design (no entities surface in v1.0).
@@ -893,7 +893,7 @@ func TestScenario_RM_DEL_06_DeleteAuditEmitted(t *testing.T) {
 }
 
 // TestScenario_RM_CTX_01_HandlersPopulateEntities documents that
-// v1.0 has no panva-style ctx.oidc.entities surface. The internal
+// v1.0 has no upstream-style ctx.oidc.entities surface. The internal
 // request-scoped state (resolved client + RAT record) is not
 // wire-visible.
 //

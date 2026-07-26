@@ -4,10 +4,11 @@ Thanks for considering a contribution to `go-oidc-provider`.
 
 ## Ground rules
 
-- The library is in **pre-v1.0** (`v0.9.0` is the initial public release).
-  Breaking changes are allowed in any minor release until `v1.0.0`; every
-  break must be called out in `CHANGELOG.md` (which begins tracking from
-  the first release after `v0.9.0`).
+- The public API follows **Semantic Versioning** from `v1.0.0` on. A breaking
+  change to anything in `op/` needs a major release and a `CHANGELOG.md`
+  entry. The one exemption is enumerated rather than described: a symbol
+  whose godoc begins with `Experimental:` may change in a minor release,
+  and the complete set is generated into `api/experimental.txt`.
 - Public API lives in `op/` and its sub-packages. The `internal/` tree is not
   part of the API surface and may change without notice.
 - Run `make verify` locally before opening a pull request.

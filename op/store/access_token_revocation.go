@@ -3,15 +3,15 @@ package store
 import "fmt"
 
 // AccessTokenRevocationStrategy selects the persistence shape behind
-// JWT access-token revocation (ADR 0025). The type lives in the
-// [store] package so internal handlers can reference it without taking
-// a dependency on the [op] public package; the public alias
+// JWT access-token revocation. The type lives in the [store] package
+// so internal handlers can reference it without taking a dependency
+// on the [op] public package; the public alias
 // [op.AccessTokenRevocationStrategy] re-exports it for embedders.
 //
 // The strategy is fixed at op.New time and applies uniformly to every
 // JWT access token minted by that provider. The opaque access-token
-// path (ADR 0024) is intrinsically per-token in storage and is
-// unaffected by this enum.
+// path is intrinsically per-token in storage and is unaffected by
+// this enum.
 //
 // The primary axis the strategy controls is **whether the OP writes a
 // row to its store on every JWT AT issuance**. Embedders who want to
@@ -39,7 +39,7 @@ const (
 	// §5. Conformant with FAPI 2.0 SP §5.3.2.2.
 	RevocationStrategyGrantTombstone AccessTokenRevocationStrategy = iota
 
-	// RevocationStrategyJTIRegistry preserves the ADR 0013 model.
+	// RevocationStrategyJTIRegistry preserves the model.
 	//
 	//   Writes per AT issuance:    1 (shadow row)
 	//   Writes per grant revoke:   N (one per AT in grant — UPDATE)

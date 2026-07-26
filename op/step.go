@@ -217,7 +217,7 @@ type PrimaryPasskey struct {
 	// (sign counter did not strictly increase, W3C WebAuthn L3 §7.2
 	// step 17). Embedders use the hook to disable the affected
 	// credential in their account-management UI so the user does not
-	// loop on the "suspicious activity detected" surface (H-E5).
+	// loop on the "suspicious activity detected" surface.
 	//
 	// The hook is best-effort: a non-nil error is dropped, the
 	// orchestrator still surfaces the clone signal to the chain
@@ -241,19 +241,18 @@ type PrimaryPasskey struct {
 	// leave the field empty if that disclosure is not wanted.
 	AAGUIDAllowlist []string
 
-	// AAGUIDReCheckOnAssertion enables M-AUTHN-2: the verifier
-	// re-checks the matched credential's AAGUID against
-	// [AAGUIDAllowlist] at assertion time so an embedder that
-	// narrows the allowlist after registration can revoke
-	// credentials whose authenticator model has fallen out of
-	// policy. The default (false) preserves the v0.x posture where
-	// AAGUID was enforced only at registration.
+	// AAGUIDReCheckOnAssertion makes the verifier re-check the matched
+	// credential's AAGUID against [AAGUIDAllowlist] at assertion time,
+	// so an embedder that narrows the allowlist after registration can
+	// revoke credentials whose authenticator model has fallen out of
+	// policy. The default (false) enforces the AAGUID at registration
+	// only.
 	AAGUIDReCheckOnAssertion bool
 }
 
 // PasskeyCloneDetectionHandler is the embedder hook
 // [PrimaryPasskey.CloneDetectionHandler] uses to receive clone-warning
-// signals (H-E5). Implementations decide the policy: disable the
+// signals. Implementations decide the policy: disable the
 // credential, page the SOC, force a re-enrolment. The hook is
 // invoked with the persisted [store.PasskeyRecord]'s public fields so
 // the embedder can correlate the credential against the row in the
@@ -367,7 +366,7 @@ type StepEmailOTP struct {
 	// SendLatencyPad is the minimum wall-clock duration the send step
 	// waits before returning regardless of whether the supplied email
 	// matched the subject's bound address. The pad closes the user-
-	// enumeration timing channel (H-E3): the matched and unmatched
+	// enumeration timing channel: the matched and unmatched
 	// branches both return after the same floor so an attacker cannot
 	// infer registration state from the response time. A zero value
 	// falls back to the library's default (currently 750 ms — long

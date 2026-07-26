@@ -45,12 +45,13 @@ func newVerifierWithNonces(t testing.TB, now time.Time, nv dpop.NonceVerifier) *
 	return v
 }
 
-// TestVerify_MarksJTIAfterNonceCheck closes the M-FAPI-1 vector: a
-// proof that fails the nonce gate MUST NOT consume its jti slot, and
-// the same jti MUST be rejected as a replay only after a nonce-passing
-// proof actually marks it. Without the property, an attacker who
-// observes a proof whose nonce went stale (legitimate retry path) can
-// resubmit the same jti with a fresh nonce and have it accepted.
+// TestVerify_MarksJTIAfterNonceCheck closes the nonce/jti ordering
+// vector: a proof that
+// fails the nonce gate MUST NOT consume its jti slot, and the same
+// jti MUST be rejected as a replay only after a nonce-passing proof
+// actually marks it. Without the property, an attacker who observes a
+// proof whose nonce went stale (legitimate retry path) can resubmit
+// the same jti with a fresh nonce and have it accepted.
 func TestVerify_MarksJTIAfterNonceCheck(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)

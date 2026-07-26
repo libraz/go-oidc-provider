@@ -11,11 +11,11 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// serveUserInfoOpaque implements the ADR 0024 opaque-format /userinfo
-// branch. The bearer is hashed inside [resolveOpaqueAccessTokenAt],
-// which also runs the revoked / expired / cnf-mismatch checks; this
-// wrapper hands the projected claims to [assembleClaims] verbatim so
-// the JWT and opaque paths share their tail half.
+// serveUserInfoOpaque implements the opaque-format /userinfo branch.
+// The bearer is hashed inside [resolveOpaqueAccessTokenAt], which
+// also runs the revoked / expired / cnf-mismatch checks; this wrapper
+// hands the projected claims to [assembleClaims] verbatim so the JWT
+// and opaque paths share their tail half.
 func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDeps, raw string) {
 	claims, ok := resolveOpaqueAccessTokenAt(r.Context(), w, r, deps, raw)
 	if !ok {
@@ -28,14 +28,15 @@ func serveUserInfoOpaque(w http.ResponseWriter, r *http.Request, deps HandlerDep
 	dispatchUserInfoResponse(r, w, deps, claims.ClientID, out, client)
 }
 
-// resolveOpaqueAccessTokenAt handles the ADR 0024 opaque-format path
-// at /userinfo. The substore lookup is hashed inside the
-// implementation; this function applies the revoked / expired /
-// cnf-mismatch checks and projects a successful record onto an
-// [*tokens.AccessTokenClaims] so the caller can reuse [assembleClaims]
-// verbatim. The projection preserves the originating grant ID because
-// pairwise subject configurations recover the OP-internal subject through
-// that lineage before looking the user up.
+// resolveOpaqueAccessTokenAt handles the opaque-format path at
+// /userinfo. The substore lookup is hashed inside the implementation;
+// this function applies the revoked / expired / cnf-mismatch checks
+// and projects a successful record onto an
+// [*tokens.AccessTokenClaims] so the caller can reuse
+// [assembleClaims] verbatim. The projection preserves the originating
+// grant ID because pairwise subject configurations recover the
+// OP-internal subject through that lineage before looking the user
+// up.
 //
 // Every failure path emits the appropriate WWW-Authenticate challenge
 // and returns ok=false so the caller stops without writing an

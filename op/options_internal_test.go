@@ -65,13 +65,12 @@ func TestApplyDefaults_SPAUISuppressesDefaultDriver(t *testing.T) {
 }
 
 // TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet pins the
-// overlay wiring contract from plan 016 §3.2.2: when WithConsentUI
-// or WithChooserUI is configured (and SPA is not), applyDefaults
-// wraps the resolved interaction.Driver with TemplateOverlayDriver
-// composed against the HTMLDriver default. With WithSPAUI the
-// overlay is NOT composed — SPA mode owns the consent / chooser
-// surface via the JSON envelope per ADR 0015 §SPA mode and ADR 0008
-// §3.5.
+// overlay wiring contract from plan 016 §3.2.2: when WithConsentUI or
+// WithChooserUI is configured (and SPA is not), applyDefaults wraps
+// the resolved interaction.Driver with TemplateOverlayDriver composed
+// against the HTMLDriver default. With WithSPAUI the overlay is NOT
+// composed — SPA mode owns the consent / chooser surface via the JSON
+// envelope mode and
 func TestApplyDefaults_WrapsOverlayWhenConsentOrChooserSet(t *testing.T) {
 	t.Parallel()
 

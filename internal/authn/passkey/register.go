@@ -159,9 +159,9 @@ func (v *Verifier) FinishRegistration(_ context.Context, session *Session, subje
 		}
 	}
 
-	// Enforce the AAGUID allowlist (M-AUTHN-2). An empty allowlist on
-	// the Verifier short-circuits to "any AAGUID allowed" so embedders
-	// that did not configure [Config.AAGUIDAllowlist] are unaffected.
+	// Enforce the AAGUID allowlist. An empty allowlist on the Verifier
+	// short-circuits to "any AAGUID allowed" so embedders that did not
+	// configure [Config.AAGUIDAllowlist] are unaffected.
 	//
 	// When an allowlist IS configured the AAGUID must first be shown to
 	// be authentic. Requesting "direct" conveyance only asks for an

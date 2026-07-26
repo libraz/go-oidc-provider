@@ -121,20 +121,20 @@ const (
 	// one backend consistency domain.
 	AccessTokens
 
-	// OpaqueAccessTokens routes [store.OpaqueAccessTokenStore] calls
-	// (ADR 0024). Used by the userinfo, introspection, revocation
-	// endpoints, and by the code-replay cascade when opt-in opaque
-	// access tokens are enabled. Member of the atomic-routing cluster
-	// for the same reason as [AccessTokens].
+	// OpaqueAccessTokens routes [store.OpaqueAccessTokenStore] calls.
+	// Used by the userinfo, introspection, revocation endpoints, and by
+	// the code-replay cascade when opt-in opaque access tokens are
+	// enabled. Member of the atomic-routing cluster for the same reason
+	// as [AccessTokens].
 	OpaqueAccessTokens
 
-	// GrantRevocations routes [store.GrantRevocationStore] calls
-	// (ADR 0025). Used by the userinfo, introspection, and revocation
-	// endpoints to enforce JWT access-token revocation under the
-	// grant-tombstone strategy, and written by the code-replay /
-	// logout cascades. Member of the atomic-routing cluster so
-	// tombstone / denylist writes share the same backend consistency
-	// domain as the grants and refresh tokens they protect.
+	// GrantRevocations routes [store.GrantRevocationStore] calls. Used
+	// by the userinfo, introspection, and revocation endpoints to
+	// enforce JWT access-token revocation under the grant-tombstone
+	// strategy, and written by the code-replay / logout cascades. Member
+	// of the atomic-routing cluster so tombstone / denylist writes share
+	// the same backend consistency domain as the grants and refresh
+	// tokens they protect.
 	GrantRevocations
 
 	// Metadata routes [store.MetadataStore] calls. Outside the
@@ -496,28 +496,27 @@ func (s *Store) AccessTokens() store.AccessTokenRegistry {
 	return s.routes[AccessTokens].AccessTokens()
 }
 
-// OpaqueAccessTokens implements [store.Store] (ADR 0024) by routing the
-// call through the atomic-routing anchor. The substore belongs to the
-// same consistency cluster as [AccessTokens] for the same reason:
+// OpaqueAccessTokens implements [store.Store] by routing the call
+// through the atomic-routing anchor. The substore belongs to the same
+// consistency cluster as [AccessTokens] for the same reason:
 // opaque-token writes and revocation reads must share a backend with
-// the grant and refresh-token records they protect. The routed backend MAY
-// return nil from its own [store.Store.OpaqueAccessTokens] accessor
-// when opaque format is not enabled; the library checks the resulting
-// nil at op.New time and rejects opaque-format options that have no
-// place to persist.
+// the grant and refresh-token records they protect. The routed
+// backend MAY return nil from its own
+// [store.Store.OpaqueAccessTokens] accessor when opaque format is not
+// enabled; the library checks the resulting nil at op.New time and
+// rejects opaque-format options that have no place to persist.
 func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore {
 	return s.routes[OpaqueAccessTokens].OpaqueAccessTokens()
 }
 
-// GrantRevocations implements [store.Store] (ADR 0025) by routing the
-// call through the atomic-routing anchor. The substore belongs to the
-// same consistency cluster as [Grants] and [RefreshTokens] so cascade
-// revocations and subsequent grant / token checks see the same backend
-// state. The routed backend MAY
-// return nil from its own [store.Store.GrantRevocations] accessor when
-// the grant-tombstone strategy is not enabled; the library checks the
-// resulting nil at op.New time and rejects the strategy when its
-// substore is missing.
+// GrantRevocations implements [store.Store] by routing the call
+// through the atomic-routing anchor. The substore belongs to the same
+// consistency cluster as [Grants] and [RefreshTokens] so cascade
+// revocations and subsequent grant / token checks see the same
+// backend state. The routed backend MAY return nil from its own
+// [store.Store.GrantRevocations] accessor when the grant-tombstone
+// strategy is not enabled; the library checks the resulting nil at
+// op.New time and rejects the strategy when its substore is missing.
 func (s *Store) GrantRevocations() store.GrantRevocationStore {
 	return s.routes[GrantRevocations].GrantRevocations()
 }

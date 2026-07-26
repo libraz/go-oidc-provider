@@ -3,16 +3,15 @@ package op
 import "github.com/libraz/go-oidc-provider/op/store"
 
 // AccessTokenRevocationStrategy selects the persistence shape behind
-// JWT access-token revocation (ADR 0025). It is a type alias of
+// JWT access-token revocation. It is a type alias of
 // [store.AccessTokenRevocationStrategy] so the public option layer
 // and the internal handlers can converge on a single enum without
 // internal/* taking a dependency on op/.
 //
 // The strategy is fixed at [New] time and applies uniformly to every
 // JWT access token minted by that provider. The opaque access-token
-// path ([WithAccessTokenFormat] with [AccessTokenFormatOpaque],
-// ADR 0024) is intrinsically per-token in storage and is unaffected
-// by this enum.
+// path ([WithAccessTokenFormat] with [AccessTokenFormatOpaque]) is
+// intrinsically per-token in storage and is unaffected by this enum.
 //
 // The primary axis the strategy controls is **whether the OP writes a
 // row to its store on every JWT AT issuance**. Embedders who want to
@@ -21,7 +20,7 @@ import "github.com/libraz/go-oidc-provider/op/store"
 // [RevocationStrategyNone]; embedders who want a per-AT audit trail
 // pick [RevocationStrategyJTIRegistry].
 //
-// Stable since v0.x.
+// Stable since v1.0.
 type AccessTokenRevocationStrategy = store.AccessTokenRevocationStrategy
 
 // RevocationStrategyGrantTombstone is the default JWT access-token
@@ -43,8 +42,7 @@ type AccessTokenRevocationStrategy = store.AccessTokenRevocationStrategy
 // §5.3.2.2.
 const RevocationStrategyGrantTombstone = store.RevocationStrategyGrantTombstone
 
-// RevocationStrategyJTIRegistry preserves the ADR 0013 per-JTI
-// registry model.
+// RevocationStrategyJTIRegistry preserves the per-JTI registry model.
 //
 //	Writes per AT issuance:    1 (shadow row)
 //	Writes per grant revoke:   N (one per AT in grant — UPDATE)
@@ -76,21 +74,21 @@ const RevocationStrategyJTIRegistry = store.RevocationStrategyJTIRegistry
 const RevocationStrategyNone = store.RevocationStrategyNone
 
 // WithAccessTokenRevocationStrategy selects how the OP persists JWT
-// access-token revocation state (ADR 0025). The default is
+// access-token revocation state. The default is
 // [RevocationStrategyGrantTombstone] (no store writes at issuance,
 // O(revoked grants) at the rest).
 //
 // The opaque AT path ([WithAccessTokenFormat] with
-// [AccessTokenFormatOpaque], ADR 0024) is unaffected: opaque tokens
-// are intrinsically per-token in storage because verification needs
-// the row.
+// [AccessTokenFormatOpaque]) is unaffected: opaque tokens are
+// intrinsically per-token in storage because verification needs the
+// row.
 //
 // Unknown values are rejected at construction time. FAPI profiles
 // reject [RevocationStrategyNone] at [New] (FAPI 2.0 Security Profile
 // §5.3.2.2 mandates server-side revocation); see
 // [profile.RequiresAccessTokenRevocation].
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAccessTokenRevocationStrategy(s AccessTokenRevocationStrategy) Option {
 	return optionFunc(func(c *config) error {
 		if !s.IsValid() {

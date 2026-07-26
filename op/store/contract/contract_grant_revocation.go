@@ -10,7 +10,7 @@ import (
 
 // --- GrantRevocationStore ---------------------------------------------------
 //
-// The contract subgroup pins the substore semantics that ADR 0025 requires
+// The contract subgroup pins the substore semantics that requires
 // across every backend that ships op/storeadapter:
 //
 //   - tombstone insert is idempotent: a second RevokeGrant against the same

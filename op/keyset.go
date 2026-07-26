@@ -48,7 +48,7 @@ type SigningKey struct {
 	// is expected to swap the active entry by rebuilding the [Keyset]
 	// rather than letting the runtime mutate selection mid-flight.
 	//
-	// Stable since v0.x.
+	// Stable since v1.0.
 	NotAfter time.Time
 }
 

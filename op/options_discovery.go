@@ -42,7 +42,7 @@ import (
 // both cases) so the option doubles as an "explicitly no claims"
 // declaration when an embedder needs that posture.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithClaimsSupported(claims ...string) Option {
 	return optionFunc(func(c *config) error {
 		if c.claimsSupported != nil {
@@ -88,7 +88,7 @@ func WithClaimsSupported(claims ...string) Option {
 // because OIDC Discovery 1.0 §3 leaves the value format open but an
 // empty class reference cannot be matched against a request.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithACRValuesSupported(values ...string) Option {
 	return optionFunc(func(c *config) error {
 		if c.acrValuesSupported != nil {
@@ -137,7 +137,7 @@ func WithACRValuesSupported(values ...string) Option {
 // the parser also services the FAPI 2.0 conformance flow which
 // expects a uniform invalid_request shape.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithClaimsParameterSupported(enabled bool) Option {
 	return optionFunc(func(c *config) error {
 		c.claimsParameterSupportedSet = true
@@ -243,7 +243,7 @@ type DiscoveryMetadata struct {
 //
 // Spec: RFC 8414 §2.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithDiscoveryMetadata(meta DiscoveryMetadata) Option {
 	return optionFunc(func(c *config) error {
 		if c.discoveryMetadataSet {
@@ -400,7 +400,7 @@ func opControlledKeySet() map[string]struct{} {
 // OIDC semantics (FAPI 2.0 Baseline / Message Signing); op.New
 // rejects the combination at construction time.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithOpenIDScopeOptional() Option {
 	return optionFunc(func(c *config) error {
 		c.openIDScopeOptional = true
@@ -419,7 +419,7 @@ func WithOpenIDScopeOptional() Option {
 // The default installation is intentional: a deployment that omits
 // the option gets the OFCS-passing wire shape automatically.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithACRPolicy(p ACRPolicy) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(p) {
@@ -450,7 +450,7 @@ func WithACRPolicy(p ACRPolicy) Option {
 // [WithFeature](feature.MTLS) and the auto-enable steps aside (the
 // AnyOf is already satisfied). The defaulting is order-independent:
 // it runs after every option has been applied.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithProfile(p profile.Profile) Option {
 	return optionFunc(func(c *config) error {
 		if !p.IsValid() {

@@ -133,8 +133,8 @@ func TestDecrypt_ZipBombResistance(t *testing.T) {
 // TestDecrypt_FailureUniformity asserts that 500 random ciphertext
 // mutations all fail with [jose.ErrJWEDecryptFailed] (or a parse
 // failure) — never panicking, never leaking partial plaintext, and
-// never bypassing the alg / enc gates. This is the smoke-test for
-// the "fail uniformly" posture per ADR 0030 §S.2.
+// never bypassing the alg / enc gates. This is the smoke-test for the
+// "fail uniformly" posture.2.
 //
 // The full ±10% wall-clock variance budget the ADR specifies is a
 // CI flake risk in shared environments; the smoke-test here pins

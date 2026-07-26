@@ -11,7 +11,7 @@ import (
 
 // --- OpaqueAccessTokenStore --------------------------------------------------
 //
-// The contract subgroup pins the substore semantics that ADR 0024 requires
+// The contract subgroup pins the substore semantics that requires
 // across every backend that ships op/storeadapter:
 //
 //   - hash-on-store: the raw bearer ID round-trips through Save / Find but

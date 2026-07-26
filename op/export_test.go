@@ -29,7 +29,7 @@ func WithInMemoryDPoPNonceTicksForTest(ticks <-chan time.Time) InMemoryDPoPNonce
 }
 
 // ValidateProfileFeatureSetForTest exercises [config.validateProfile]
-// with an arbitrary feature set so the F-7 add-only invariant ("a
+// with an arbitrary feature set so the add-only invariant ("a
 // profile whose required features are missing must be rejected by
 // validate") can be tested through the unexported path. The public
 // [WithProfile] option auto-enables every required flag, so this

@@ -524,7 +524,7 @@ func TestScenario_DPOP_002_AccessTokenRejectsDualBinding(t *testing.T) {
 // TestScenario_DPOP_003_BearerSchemeRejectedForDPoPToken is out-of-
 // scope for v1.0. The catalog row demands a 401 invalid_token whose
 // WWW-Authenticate enumerates the allowed DPoP algs — that "algs="
-// challenge parameter is panva-residue (panva's userinfo handler
+// challenge parameter is upstream residue (the upstream OP's userinfo handler
 // stamps it; v1.0 emits the bare DPoP scheme + error_description).
 // The wire-level "Bearer scheme on a DPoP-bound token is rejected"
 // behaviour IS exercised by the cnf-binding suite in
@@ -540,7 +540,7 @@ func TestScenario_DPOP_003_BearerSchemeRejectedForDPoPToken(t *testing.T) {
 // presented with Authorization: DPoP and no proof header. v1.0's
 // userinfo handler returns 401 invalid_token "DPoP proof required"
 // (the WWW-Authenticate uses the DPoP scheme but the wire code is
-// invalid_token, not invalid_request) — the panva-residue "400
+// invalid_token, not invalid_request) — the upstream residue "400
 // invalid_request" wire shape is not what the OP emits. Failure-to-
 // present-proof at the resource server is still covered by the
 // internal/dpop/end_to_end_test.go suite. Out-of-scope per
@@ -556,7 +556,7 @@ func TestScenario_DPOP_004_MissingProofHeaderRejected(t *testing.T) {
 // alongside a DPoP proof. v1.0's userinfo handler accepts access_token
 // via either channel but rejects "both channels" with
 // `Bearer error="invalid_request"` and status 400. The catalog text
-// mandates the DPoP-scheme challenge, which is panva-residue. The
+// mandates the DPoP-scheme challenge, which is upstream residue. The
 // observable "two channels rejected" behaviour stays covered by the
 // bearer-extraction tests in userinfo_test.go. Out-of-scope per
 // scripts/scenario.sh flip.
@@ -570,8 +570,8 @@ func TestScenario_DPOP_005_TokenInFormBodyRejected(t *testing.T) {
 // is paired with Authorization: Bearer. v1.0's userinfo handler
 // happily accepts the bearer scheme on a DPoP-bound token but fails
 // the cnf binding check with 401 invalid_token (the proof key still
-// has to match the bound jkt). The panva-style "scheme name MUST be
-// DPoP whenever the proof header is present" rule is panva-residue.
+// has to match the bound jkt). The upstream-style "scheme name MUST be
+// DPoP whenever the proof header is present" rule is upstream residue.
 // Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_006_BearerSchemeWithDPoPHeaderRejected(t *testing.T) {
 	t.Parallel()
@@ -584,7 +584,7 @@ func TestScenario_DPOP_006_BearerSchemeWithDPoPHeaderRejected(t *testing.T) {
 //
 // v1.0 surfaces this on the wire as 400 invalid_request "DPoP proof
 // malformed" at /token (the catalog originally cited 401
-// invalid_dpop_proof + a panva-specific error_description; the OP
+// invalid_dpop_proof + an upstream-specific error_description; the OP
 // collapses the malformed-proof family onto the OAuth invalid_request
 // envelope per [internal/tokenendpoint/dpop.go]).
 //
@@ -598,7 +598,7 @@ func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
 	proof := makeDPoPProof(t, key, dpopProofOpts{
 		method: http.MethodPost,
 		htu:    f.tokenURL(),
-		typ:    "JWT", // panva-style typ that the OP MUST reject.
+		typ:    "JWT", // upstream-style typ that the OP MUST reject.
 	})
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -618,8 +618,8 @@ func TestScenario_DPOP_007_ProofTypMustBeDpopJwt(t *testing.T) {
 // or "alg=HS256" through go-jose's signer requires forging the header
 // bytes manually because the library refuses to issue those
 // signatures. The defensive coverage already exists in
-// internal/dpop/proof_test.go (white-box) and the panva-style
-// "401 invalid_dpop_proof" wire code is panva-residue (v1.0 emits 400
+// internal/dpop/proof_test.go (white-box) and the upstream-style
+// "401 invalid_dpop_proof" wire code is upstream residue (v1.0 emits 400
 // invalid_request). Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_008_ProofAlgWhitelistEnforced(t *testing.T) {
 	t.Parallel()
@@ -627,7 +627,7 @@ func TestScenario_DPOP_008_ProofAlgWhitelistEnforced(t *testing.T) {
 }
 
 // TestScenario_DPOP_009_ProofJwkHeaderMustBeObject is out-of-scope.
-// Catalog text mandates a panva-specific error_description ("jwk
+// Catalog text mandates an upstream-specific error_description ("jwk
 // header parameter must be a JSON object") and 401 invalid_dpop_proof.
 // v1.0 collapses every malformed-jwk failure onto 400 invalid_request
 // "DPoP proof malformed". The structural rule (jwk MUST be a JSON
@@ -641,7 +641,7 @@ func TestScenario_DPOP_009_ProofJwkHeaderMustBeObject(t *testing.T) {
 // TestScenario_DPOP_010_ProofJwkMustBePublic is out-of-scope. Same
 // rationale as DPOP-009: the rule (jwk MUST be public) is enforced
 // inside [internal/dpop/proof.go] (`!jwk.IsPublic()`), but the wire
-// shape diverges from the catalog's panva-quoted code/description.
+// shape diverges from the catalog's upstream-quoted code/description.
 // Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_010_ProofJwkMustBePublic(t *testing.T) {
 	t.Parallel()
@@ -651,7 +651,7 @@ func TestScenario_DPOP_010_ProofJwkMustBePublic(t *testing.T) {
 // TestScenario_DPOP_011_ProofJwkRejectsSymmetricKey is out-of-scope.
 // Same rationale as DPOP-009 / DPOP-010: oct-kty rejection is
 // enforced in [internal/dpop/proof.go] (`assertSupportedKeyType`),
-// but the catalog text wants panva's exact wire string. Out-of-scope
+// but the catalog text wants the upstream OP's exact wire string. Out-of-scope
 // per scripts/scenario.sh flip.
 func TestScenario_DPOP_011_ProofJwkRejectsSymmetricKey(t *testing.T) {
 	t.Parallel()
@@ -662,7 +662,7 @@ func TestScenario_DPOP_011_ProofJwkRejectsSymmetricKey(t *testing.T) {
 // a DPoP proof body MUST contain a "jti" claim. Omitting it is
 // rejected with 400 invalid_request "DPoP proof malformed" at /token.
 //
-// (The catalog row originally cited a panva-specific error_description
+// (The catalog row originally cited an upstream-specific error_description
 // "DPoP proof must have a jti string property"; v1.0 collapses every
 // parse-stage failure onto a single description to keep the surface
 // opaque per [internal/dpop/proof.go].)
@@ -791,7 +791,7 @@ func TestScenario_DPOP_015_IatFreshnessWindowEnforced(t *testing.T) {
 // [internal/dpop/verify.go]'s `withinIatWindow` call before
 // `checkNonce`), so an out-of-window proof always surfaces as
 // invalid_request irrespective of the nonce source. The "stale-iat
-// becomes nonce challenge" coupling is panva-specific behaviour;
+// becomes nonce challenge" coupling is upstream-specific behaviour;
 // v1.0 keeps the two gates orthogonal because the iat window is the
 // first defence and a nonce challenge cannot recover from a clock-
 // skewed client. Out-of-scope per scripts/scenario.sh flip.
@@ -862,7 +862,7 @@ func TestScenario_DPOP_017_ProofReplayDetected(t *testing.T) {
 // presented. v1.0 emits 401 invalid_token "DPoP proof key does not
 // match the bound thumbprint" (see [internal/userinfo/handler.go]
 // `enforceDPoPCnf`). The wire code is identical; the catalog
-// description "failed jkt verification" is panva wording. The
+// description "failed jkt verification" is upstream wording. The
 // observable behaviour (different-key proof rejected at /userinfo) is
 // exercised end-to-end by [internal/dpop/end_to_end_test.go]
 // `TestE2E_DPoP_FullFlow`. Out-of-scope per scripts/scenario.sh flip.
@@ -874,7 +874,7 @@ func TestScenario_DPOP_018_JktVerificationAtResource(t *testing.T) {
 // TestScenario_DPOP_019_JktVerificationFailsUnderBearer is out-of-
 // scope. The catalog row asserts that a DPoP-bound AT under
 // Authorization: Bearer at /userinfo returns 401 invalid_token with
-// a WWW-Authenticate DPoP challenge AND the panva-specific "failed
+// a WWW-Authenticate DPoP challenge AND the upstream-specific "failed
 // jkt verification" description. v1.0's userinfo handler accepts the
 // Bearer scheme as a token-extraction prefix (see
 // [internal/userinfo/handler.go] `bearerFromHeader`), then runs the
@@ -889,7 +889,7 @@ func TestScenario_DPOP_019_JktVerificationFailsUnderBearer(t *testing.T) {
 }
 
 // TestScenario_DPOP_020_AthClaimMismatchRejected is out-of-scope.
-// Catalog text demands 401 invalid_dpop_proof + panva description.
+// Catalog text demands 401 invalid_dpop_proof + upstream description.
 // v1.0's userinfo handler emits 401 invalid_token "DPoP proof
 // rejected" (the description is collapsed to avoid leaking the
 // sub-cause; see [internal/userinfo/handler.go] `respondDPoPInvalid`).
@@ -913,7 +913,7 @@ func TestScenario_DPOP_021_AthClaimRequiredAtResource(t *testing.T) {
 
 // TestScenario_DPOP_022_MalformedHeaderAtTokenRejected verifies that
 // a malformed DPoP header value at /token is rejected. The catalog
-// originally cited 400 invalid_dpop_proof + a panva description; v1.0
+// originally cited 400 invalid_dpop_proof + an upstream description; v1.0
 // surfaces this as 400 invalid_request "DPoP proof malformed" via
 // [internal/tokenendpoint/dpop.go] (the wire code is collapsed onto
 // the OAuth invalid_request envelope, which is what every other
@@ -947,7 +947,7 @@ func TestScenario_DPOP_022_MalformedHeaderAtTokenRejected(t *testing.T) {
 // /userinfo when the proof carries a nonce the server does not
 // recognise, plus a fresh DPoP-Nonce response header. v1.0 honours
 // this on the wire (see [internal/userinfo/handler.go]
-// `respondUseDPoPNonce`), but the catalog also pins a panva-style
+// `respondUseDPoPNonce`), but the catalog also pins an upstream-style
 // "invalid nonce in DPoP proof" error_description; v1.0 emits a
 // generic message keyed off the use_dpop_nonce code. The observable
 // use_dpop_nonce + DPoP-Nonce header behaviour stays covered by the
@@ -961,7 +961,7 @@ func TestScenario_DPOP_023_InvalidNonceAtUserinfoChallenge(t *testing.T) {
 // TestScenario_DPOP_024_InvalidNonceAtTokenChallenge is out-of-scope.
 // Same rationale as DPOP-023: v1.0 emits the use_dpop_nonce challenge
 // at /token (see [internal/tokenendpoint/dpop.go] `writeUseDPoPNonce`),
-// but the catalog requires a panva-specific description string.
+// but the catalog requires an upstream-specific description string.
 // Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_024_InvalidNonceAtTokenChallenge(t *testing.T) {
 	t.Parallel()
@@ -970,12 +970,12 @@ func TestScenario_DPOP_024_InvalidNonceAtTokenChallenge(t *testing.T) {
 
 // TestScenario_DPOP_025_RequiredNonceAtPAR is out-of-scope. The
 // catalog row asserts that a "nonce-required policy" rejects a
-// nonce-less /par submission with 400 use_dpop_nonce + a panva
+// nonce-less /par submission with 400 use_dpop_nonce + an upstream
 // description. v1.0's nonce-required policy is gated on a configured
 // [op.DPoPNonceSource]: when one is wired the verifier rejects
 // nonce-less proofs (covered by internal/parendpoint white-box tests).
 // The catalog row's exact "nonce is required in the DPoP proof"
-// wording is panva-residue. Out-of-scope per scripts/scenario.sh flip.
+// wording is upstream residue. Out-of-scope per scripts/scenario.sh flip.
 func TestScenario_DPOP_025_RequiredNonceAtPAR(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: DPOP-025 (see catalog out_of_scope_reason)")
@@ -983,7 +983,7 @@ func TestScenario_DPOP_025_RequiredNonceAtPAR(t *testing.T) {
 
 // TestScenario_DPOP_026_RequiredNonceAtUserinfo is out-of-scope. Same
 // rationale as DPOP-025: nonce-required behaviour is implemented but
-// the catalog requires panva's specific description. Out-of-scope per
+// the catalog requires the upstream OP's specific description. Out-of-scope per
 // scripts/scenario.sh flip.
 func TestScenario_DPOP_026_RequiredNonceAtUserinfo(t *testing.T) {
 	t.Parallel()
@@ -1462,7 +1462,7 @@ func TestScenario_DPOP_039_CodeGrantWithDpopJktMatch(t *testing.T) {
 // TestScenario_DPOP_040_CodeGrantKeyMismatch verifies RFC 9449 §10:
 // when /authorize committed a dpop_jkt and the /token DPoP proof is
 // signed by a different key, the redemption is rejected with 400
-// invalid_grant. (The catalog originally pinned an exact panva
+// invalid_grant. (The catalog originally pinned an exact upstream
 // description; v1.0 emits a generic message tied to the bound
 // thumbprint per [internal/tokenendpoint] dispatch — the wire code is
 // what matters.)
@@ -1968,7 +1968,7 @@ func TestScenario_DPOP_046_ClientCredentialsBinding(t *testing.T) {
 // §5.2: an invalid DPoP header value at /token is rejected with a
 // 400 JSON envelope. v1.0 collapses the malformed-proof family onto
 // the OAuth invalid_request envelope (per [internal/tokenendpoint/dpop.go];
-// the catalog originally cited invalid_dpop_proof + a panva
+// the catalog originally cited invalid_dpop_proof + an upstream
 // description, but the wire shape on v1.0 is invalid_request +
 // "DPoP proof malformed"). The row's hard contract is the JSON
 // envelope at /token; the exact code/description divergence is

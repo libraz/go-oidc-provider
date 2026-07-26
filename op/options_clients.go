@@ -17,7 +17,7 @@ import "strconv"
 // has succeeded. Existing equivalent static clients are accepted unchanged;
 // metadata or secret differences return a configuration conflict rather than
 // overwriting an operator-managed record.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithStaticClients(seeds ...ClientSeed) Option {
 	return optionFunc(func(c *config) error {
 		if len(seeds) == 0 {
@@ -95,7 +95,7 @@ func staticClientPlaintext(seed ClientSeed) (string, bool) {
 //     [WithFirstPartyClients] with [WithProfile(profile.FAPI2*)]
 //     fails [New].
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func WithFirstPartyClients(ids ...string) Option {
 	return optionFunc(func(c *config) error {
 		if len(ids) == 0 {

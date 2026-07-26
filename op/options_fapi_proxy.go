@@ -49,7 +49,7 @@ import (
 // share or leak each other's proxy configuration, and the state is
 // collected along with the Provider once it becomes unreachable.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithMTLSProxy(headerName string, trustedCIDRs []string) Option {
 	return optionFunc(func(c *config) error {
 		if headerName == "" {

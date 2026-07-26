@@ -24,7 +24,7 @@ package op
 // may be supplied per construction; the second invocation fails with
 // a configuration error.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func WithSubjectGenerator(g SubjectGenerator) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(g) {
@@ -96,7 +96,7 @@ func WithSubjectGenerator(g SubjectGenerator) Option {
 // may be supplied; the second invocation fails with a configuration
 // error.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func WithPairwiseSubject(salt []byte) Option {
 	return optionFunc(func(c *config) error {
 		if len(salt) < 32 {

@@ -12,7 +12,6 @@
 // [github.com/libraz/go-oidc-provider/internal/grants/devicecode] reuses
 // the polling discipline at /token poll time.
 //
-// The package targets the design contract documented in ADR 0031 §Q1
-// (user_code), §Q3 (polling), §Q5 (sender-constraint) and §S.1 (brute-
-// force gate).
+// The package targets the design contract (user_code), §Q3 (polling),
+// §Q5 (sender-constraint) and §S.1 (brute- force gate).
 package devicecode

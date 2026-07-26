@@ -60,10 +60,12 @@ func TestScenario_REV_001_DiscoveryAdvertisesRevocationEndpoint(t *testing.T) {
 // token_type_hint. The endpoint MUST return 200 with an empty body and
 // the access token MUST stop verifying at /userinfo (challenge carries
 // error="invalid_token"). The paired refresh token, however, MUST still
-// rotate at /token: ADR 0025 explicitly rejects cascading single-AT
-// revocation onto a grant tombstone.
+// rotate at /token: revoking one access token does not cascade onto
+// the grant tombstone, because a client that discards a leaked access
+// token must not thereby log the user out of every other session on
+// the same grant.
 //
-// Spec: RFC 7009 §2 / ADR 0025 §Alternatives.
+// Spec: RFC 7009 §2.
 func TestScenario_REV_002_AccessTokenRevokeNoHint(t *testing.T) {
 	t.Parallel()
 
@@ -390,12 +392,12 @@ func TestScenario_REV_011_RefreshTokenRevokeUnrecognisedHint(t *testing.T) {
 // and asserts 200 + empty body. The token MUST then be inactive at
 // /oidc/introspect (client_credentials tokens have no end-user subject
 // so /userinfo is not the right verification surface). The OP runs in
-// the ADR 0024 opaque-AT format so the substore that backs introspect
+// the opaque access-token format so the substore that backs introspect
 // observes the revoked row directly; the JWT-AT path for
 // client_credentials tokens lacks a "gid" claim so the GrantTombstone
 // branch cannot pin a denylist row to it.
 //
-// Spec: RFC 7009 §2 / RFC 6749 §4.4 / ADR 0024.
+// Spec: RFC 7009 §2 / RFC 6749 §4.4.
 func TestScenario_REV_012_ClientCredentialsRevokeNoHint(t *testing.T) {
 	t.Parallel()
 

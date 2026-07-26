@@ -384,7 +384,7 @@ func TestScenario_DEV_003_DeviceAuthRejectsUnknownClient(t *testing.T) {
 
 // TestScenario_DEV_004_DeviceAuthRejectsRequestParameter is OOS — the
 // request parameter (OIDC Core §6.1) is not in the RFC 8628 §3.1
-// parameter set; v0.9.x ignores unknown form keys. See
+// parameter set; v1.0 ignores unknown form keys. See
 // catalog out_of_scope_reason.
 func TestScenario_DEV_004_DeviceAuthRejectsRequestParameter(t *testing.T) {
 	t.Parallel()
@@ -470,7 +470,7 @@ func TestScenario_DEV_008_DeviceCodePersistedWithStrippedParams(t *testing.T) {
 }
 
 // TestScenario_DEV_009_DeviceAuthBypassesPARRequirement is OOS — no
-// per-client PAR gate on /device_authorization in v0.9.x. See catalog
+// per-client PAR gate on /device_authorization in v1.0. See catalog
 // out_of_scope_reason.
 func TestScenario_DEV_009_DeviceAuthBypassesPARRequirement(t *testing.T) {
 	t.Parallel()
@@ -500,7 +500,7 @@ func TestScenario_DEV_010_DeviceAuthAcceptsHTTPBasicClientAuth(t *testing.T) {
 }
 
 // TestScenario_DEV_011_DeviceAuthSuccessResolvesEntities is OOS —
-// vendor framework idiom, no analog in v0.9.x. See catalog
+// vendor framework idiom, no analog in v1.0. See catalog
 // out_of_scope_reason.
 func TestScenario_DEV_011_DeviceAuthSuccessResolvesEntities(t *testing.T) {
 	t.Parallel()
@@ -512,7 +512,7 @@ func TestScenario_DEV_011_DeviceAuthSuccessResolvesEntities(t *testing.T) {
 // ---------------------------------------------------------------------
 
 // TestScenario_DEV_020_DeviceCodeGrantNonConformIDTokenClaims is OOS —
-// no conformIdTokenClaims knob in v0.9.x. See catalog out_of_scope_reason.
+// no conformIdTokenClaims knob in v1.0. See catalog out_of_scope_reason.
 func TestScenario_DEV_020_DeviceCodeGrantNonConformIDTokenClaims(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: DEV-020 (see catalog out_of_scope_reason)")
@@ -526,7 +526,7 @@ func TestScenario_DEV_021_DeviceCodeGrantConformIDTokenClaims(t *testing.T) {
 }
 
 // TestScenario_DEV_022_DeviceCodeGrantWithoutOfflineAccess is OOS — no
-// gty stamp in v0.9.x. See catalog out_of_scope_reason.
+// gty stamp in v1.0. See catalog out_of_scope_reason.
 func TestScenario_DEV_022_DeviceCodeGrantWithoutOfflineAccess(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: DEV-022 (see catalog out_of_scope_reason)")
@@ -559,7 +559,7 @@ func TestScenario_DEV_024_TokenRequestMissingDeviceCode(t *testing.T) {
 	expectError(t, body, "invalid_request")
 }
 
-// TestScenario_DEV_025_TokenRequestUnknownDeviceCode is OOS — v0.9.x
+// TestScenario_DEV_025_TokenRequestUnknownDeviceCode is OOS — v1.0
 // maps not-found to expired_token, not invalid_grant. See catalog
 // out_of_scope_reason; the not-found→expired_token path is exercised
 // via DEV-028 (expired record) which surfaces the same wire code.
@@ -683,7 +683,7 @@ func TestScenario_DEV_029_FirstRedemptionMarksDeviceCodeConsumed(t *testing.T) {
 }
 
 // TestScenario_DEV_030_TokenRequestReplayConsumedDeviceCode is OOS —
-// v0.9.x maps replay to expired_token, not invalid_grant. See catalog
+// v1.0 maps replay to expired_token, not invalid_grant. See catalog
 // out_of_scope_reason; DEV-096 pins the actual wire code.
 func TestScenario_DEV_030_TokenRequestReplayConsumedDeviceCode(t *testing.T) {
 	t.Parallel()
@@ -713,7 +713,7 @@ func TestScenario_DEV_031_TokenRequestAuthorizationPending(t *testing.T) {
 }
 
 // TestScenario_DEV_032_TokenRequestCustomResolvedError is OOS — no
-// custom error pass-through in v0.9.x. See catalog out_of_scope_reason.
+// custom error pass-through in v1.0. See catalog out_of_scope_reason.
 func TestScenario_DEV_032_TokenRequestCustomResolvedError(t *testing.T) {
 	t.Parallel()
 	t.Skip("out-of-scope: DEV-032 (see catalog out_of_scope_reason)")
@@ -743,7 +743,7 @@ func TestScenario_DEV_033_TokenRequestStandardResolvedError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// Charset / mask configuration — all OOS (v0.9.x fixes Crockford Base32)
+// Charset / mask configuration — all OOS (v1.0 fixes Crockford Base32)
 // ---------------------------------------------------------------------
 
 // TestScenario_DEV_040_CharsetDigitsAccepted is OOS — see catalog out_of_scope_reason.
@@ -976,7 +976,7 @@ func TestScenario_DEV_090_ResumeAfterInteractionAbortError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
-// New v0.9.x behaviour rows
+// New behaviour rows
 // ---------------------------------------------------------------------
 
 // TestScenario_DEV_091_DeviceCodeApprovedRedeemsTokens pins the happy
@@ -1569,7 +1569,7 @@ func TestScenario_DEV_099_DiscoveryGrantTypesIncludesDeviceCode(t *testing.T) {
 // the wire posture on the polling channel is access_denied (covered
 // by the substore's Denied → access_denied mapping at /token).
 //
-// Spec: RFC 8628 §5.2, ADR 0031 §S.1.
+// Spec: RFC 8628 §5.2.
 func TestScenario_DEV_100_UserCodeBruteForceLockout(t *testing.T) {
 	t.Parallel()
 	p := newDevProvider(t, []string{"openid"})

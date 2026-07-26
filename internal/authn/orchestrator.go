@@ -455,8 +455,8 @@ const ChooserSessionIDField = "session_id"
 // screen.
 const ChooserPromptType = "interaction.chooser"
 
-// guardAAL3RequiresUV enforces M-AUTHN-3: an authenticator that
-// reports [AAL3] MUST have completed user verification (the
+// guardAAL3RequiresUV enforces the rule that an authenticator
+// reporting [AAL3] MUST have completed user verification (the
 // [interaction.Result.UserVerified] bit is true). NIST SP 800-63B
 // AAL3 requires UV; a passkey assertion that did not perform UV
 // cannot satisfy AAL3, and trusting the chain to "round up" through

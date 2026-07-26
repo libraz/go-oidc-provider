@@ -906,8 +906,8 @@ func TestAuthCode_MissingVerifier(t *testing.T) {
 	}
 }
 
-// opaqueFormatFixture builds a fixture whose op.Provider is configured
-// with [op.WithAccessTokenFormat] selecting opaque tokens (ADR 0024).
+// opaqueFormatFixture builds a fixture whose op.Provider is
+// configured with [op.WithAccessTokenFormat] selecting opaque tokens.
 // The clock is the same anchor used by [newFixture] so tests that
 // inherit time-sensitive assertions stay aligned.
 func opaqueFormatFixture(tb testing.TB) *fixture {
@@ -925,12 +925,12 @@ func opaqueFormatFixture(tb testing.TB) *fixture {
 	}
 }
 
-// TestAuthCode_OpaqueFormat_HappyPath pins the ADR 0024 issuance plumbing:
-// when the OP is configured for opaque access tokens the wire response
-// carries a 43-character base64url string with no '.' separator, the
-// shadow row in [store.OpaqueAccessTokenStore] mirrors the issuance
-// metadata, and the same DPoP / mTLS bindings the JWT path would have
-// recorded land on the row's cnf-thumbprint columns.
+// TestAuthCode_OpaqueFormat_HappyPath pins the issuance plumbing:
+// when the OP is configured for opaque access tokens the wire
+// response carries a 43-character base64url string with no '.'
+// separator, the shadow row in [store.OpaqueAccessTokenStore] mirrors
+// the issuance metadata, and the same DPoP / mTLS bindings the JWT
+// path would have recorded land on the row's cnf-thumbprint columns.
 func TestAuthCode_OpaqueFormat_HappyPath(t *testing.T) {
 	t.Parallel()
 
@@ -1002,11 +1002,11 @@ func TestAuthCode_OpaqueFormat_HappyPath(t *testing.T) {
 	}
 }
 
-// TestAuthCode_OpaqueFormat_DPoPBindingPersisted verifies that when the
-// /token request carries a DPoP proof the opaque substore row records
-// the matching JKT (ADR 0024 §S.3). Without this, a stolen opaque
-// token would not be checkable against the proof at userinfo /
-// introspection time.
+// TestAuthCode_OpaqueFormat_DPoPBindingPersisted verifies that when
+// the /token request carries a DPoP proof the opaque substore row
+// records the matching JKT. Without this, a stolen opaque token would
+// not be checkable against the proof at userinfo / introspection
+// time.
 func TestAuthCode_OpaqueFormat_DPoPBindingPersisted(t *testing.T) {
 	t.Parallel()
 
@@ -1094,9 +1094,9 @@ func decodeIDTokenClaims(tb testing.TB, jws string) map[string]any {
 }
 
 // jtiRegistryFixture builds a fixture whose op.Provider is pinned to
-// [op.RevocationStrategyJTIRegistry] (ADR 0013 model). The mintAccessToken
-// path is expected to call AccessTokens.Register on every issuance under
-// this strategy; the GrantTombstone default does not.
+// [op.RevocationStrategyJTIRegistry]. The mintAccessToken path is
+// expected to call AccessTokens.Register on every issuance under this
+// strategy; the GrantTombstone default does not.
 func jtiRegistryFixture(tb testing.TB) *fixture {
 	tb.Helper()
 	clock := fixedClock{now: time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)}
@@ -1112,10 +1112,10 @@ func jtiRegistryFixture(tb testing.TB) *fixture {
 	}
 }
 
-// TestAuthCode_GrantTombstone_NoRegisterAtIssuance pins the ADR 0025
-// hot-path contract: under [op.RevocationStrategyGrantTombstone]
-// (the default) the issuance path writes ZERO access-token shadow
-// rows. The substore is consulted only on revocation cascades, so a
+// TestAuthCode_GrantTombstone_NoRegisterAtIssuance pins the hot-path
+// contract: under [op.RevocationStrategyGrantTombstone] (the default)
+// the issuance path writes ZERO access-token shadow rows. The
+// substore is consulted only on revocation cascades, so a
 // freshly-issued AT MUST NOT have a row in
 // [store.AccessTokenRegistry].
 //
@@ -1124,10 +1124,9 @@ func jtiRegistryFixture(tb testing.TB) *fixture {
 // implementation returns (nil, nil) for an absent record (the
 // sentinel-free contract documented on
 // [store.AccessTokenRegistry.Find]); observing a non-nil row would
-// mean Register fired on the hot path, which is exactly what
-// ADR 0025 removes. The companion test
-// TestAuthCode_JTIRegistry_RegisterAtIssuance pins the opposite
-// direction.
+// mean Register fired on the hot path, which is exactly what removes.
+// The companion test TestAuthCode_JTIRegistry_RegisterAtIssuance pins
+// the opposite direction.
 func TestAuthCode_GrantTombstone_NoRegisterAtIssuance(t *testing.T) {
 	t.Parallel()
 
@@ -1183,10 +1182,9 @@ func TestAuthCode_GrantTombstone_NoRegisterAtIssuance(t *testing.T) {
 // TestAuthCode_JTIRegistry_RegisterAtIssuance is the positive
 // counterpart to TestAuthCode_GrantTombstone_NoRegisterAtIssuance:
 // when the embedder pins [op.RevocationStrategyJTIRegistry] the
-// issuance path MUST write a shadow row per AT (ADR 0013 model). The
-// row's JTI / GrantID / Subject / ClientID columns mirror the encoded
-// claims so a future RevokeByGrant cascade can flip exactly the
-// matching record.
+// issuance path MUST write a shadow row per AT. The row's JTI /
+// GrantID / Subject / ClientID columns mirror the encoded claims so a
+// future RevokeByGrant cascade can flip exactly the matching record.
 func TestAuthCode_JTIRegistry_RegisterAtIssuance(t *testing.T) {
 	t.Parallel()
 
@@ -1251,12 +1249,12 @@ func TestAuthCode_JTIRegistry_RegisterAtIssuance(t *testing.T) {
 	}
 }
 
-// TestAuthCode_GidClaim_PresentOnIssuedAT pins the ADR 0025 wire
-// invariant: every issued JWT access token under the default
-// strategy carries the originating GrantID in its "gid" private
-// claim (RFC 7519 §4.3). The verifier-side decoder maps the wire
-// "gid" claim onto [tokens.AccessTokenClaims.GrantID]; asserting on
-// the decoded value is equivalent to asserting on the encoded JSON.
+// TestAuthCode_GidClaim_PresentOnIssuedAT pins the wire invariant:
+// every issued JWT access token under the default strategy carries
+// the originating GrantID in its "gid" private claim (RFC 7519 §4.3).
+// The verifier-side decoder maps the wire "gid" claim onto
+// [tokens.AccessTokenClaims.GrantID]; asserting on the decoded value
+// is equivalent to asserting on the encoded JSON.
 //
 // The claim is populated unconditionally (the strategy controls
 // Register / cascade behaviour, not the claim) so the same assertion
@@ -1311,14 +1309,13 @@ func TestAuthCode_GidClaim_PresentOnIssuedAT(t *testing.T) {
 	}
 }
 
-// TestAuthCode_Replay_GrantTombstone_WritesTombstone pins the ADR
-// 0025 cascade contract: under
-// [op.RevocationStrategyGrantTombstone] a code-replay revocation
-// MUST write a single [store.GrantTombstone] keyed on the originating
-// grant id, NOT one shadow-row update per AT. The tombstone's
-// RevokedAt MUST be set so the verifier's "iat <= RevokedAt" rule
-// rejects every AT issued before the cascade; ExpiresAt MUST outlive
-// the longest possible JWT AT under the grant.
+// TestAuthCode_Replay_GrantTombstone_WritesTombstone pins the cascade
+// contract: under [op.RevocationStrategyGrantTombstone] a code-replay
+// revocation MUST write a single [store.GrantTombstone] keyed on the
+// originating grant id, NOT one shadow-row update per AT. The
+// tombstone's RevokedAt MUST be set so the verifier's "iat <=
+// RevokedAt" rule rejects every AT issued before the cascade;
+// ExpiresAt MUST outlive the longest possible JWT AT under the grant.
 //
 // The companion authcode-replay test
 // (TestAuthCode_Replay_RevokesIssuedRefreshToken) covers the
@@ -1583,12 +1580,13 @@ func TestAuthCode_GrantTombstoneMintRefusalRevokesOpaqueAccessToken(t *testing.T
 }
 
 // TestAuthCode_Replay_GrantTombstone_NoPerATFlips pins the storage-
-// shape contract of ADR 0025: the GrantTombstone cascade replaces
-// the per-AT row updates of ADR 0013. Under
-// [op.RevocationStrategyGrantTombstone] the AccessTokens registry
-// MUST NOT see any row writes from the cascade — the issued AT was
-// never registered (no Register on issuance under the default
-// strategy) and the cascade does not retroactively register it.
+// shape contract: the GrantTombstone cascade replaces the per-AT row
+// updates the JTI registry performs. Under
+// [op.RevocationStrategyGrantTombstone] the
+// AccessTokens registry MUST NOT see any row writes from the cascade
+// — the issued AT was never registered (no Register on issuance under
+// the default strategy) and the cascade does not retroactively
+// register it.
 func TestAuthCode_Replay_GrantTombstone_NoPerATFlips(t *testing.T) {
 	t.Parallel()
 

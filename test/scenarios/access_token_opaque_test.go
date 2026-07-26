@@ -7,8 +7,6 @@ package scenarios_test
 //   - RFC 7009 §2.2 — OAuth 2.0 Token Revocation (idempotency)
 //   - RFC 7662 §2.1 / §2.2 — OAuth 2.0 Token Introspection
 //   - RFC 7800 / RFC 8705 / RFC 8707 / RFC 9449 — cnf / mTLS / resource / DPoP
-//   - ADR 0013 — Access-token revocation registry (sibling)
-//   - ADR 0024 — Opaque access-token format opt-in
 
 import (
 	"context"
@@ -40,7 +38,7 @@ const (
 const opaqueClientSecret = "rp-ato-secret"
 
 // opaqueATLength pins the wire length of an opaque access token
-// (RawURLEncoding of 32 random bytes; ADR 0024 §"Wire format").
+// (RawURLEncoding of 32 random bytes).
 const opaqueATLength = 43
 
 // newOpaqueProvider stands up a testkit Provider configured for the
@@ -107,7 +105,7 @@ func runOpaqueCodeFlow(t *testing.T, tk *testkit.Provider, rp *store.Client, sco
 	return tok
 }
 
-// assertOpaqueShape asserts that v matches the ADR 0024 wire format:
+// assertOpaqueShape asserts that v matches the opaque wire format:
 // 43 base64url characters and no "." separator (so a JWS Compact
 // Serialisation parser would reject it at the parse step).
 func assertOpaqueShape(t *testing.T, v string) {
@@ -207,7 +205,7 @@ func decodeJSONBody(t *testing.T, resp *http.Response) map[string]any {
 }
 
 // TestScenario_ATO_001_OpaqueAccessTokenIssuedAndPersisted exercises
-// the §"Wire format" / §"Issuance plumbing" of ADR 0024: the global
+// the wire format and the issuance plumbing together: the global
 // opaque option produces a 43-char dot-free access_token and writes a
 // matching shadow row in OpaqueAccessTokens.
 func TestScenario_ATO_001_OpaqueAccessTokenIssuedAndPersisted(t *testing.T) {
@@ -343,8 +341,8 @@ func TestScenario_ATO_004_OpaqueRevocationCycle(t *testing.T) {
 	}
 }
 
-// TestScenario_ATO_005_CrossClientIntrospectionInactive pins ADR 0024
-// §S.8: an authenticated client cannot inspect another client's
+// TestScenario_ATO_005_CrossClientIntrospectionInactive pins that an
+// authenticated client cannot inspect another client's
 // opaque AT, and the response is the canonical inactive shape.
 func TestScenario_ATO_005_CrossClientIntrospectionInactive(t *testing.T) {
 	t.Parallel()

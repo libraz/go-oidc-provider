@@ -299,10 +299,10 @@ func TestDecrypt_KidAbsentTrialCapEnforced(t *testing.T) {
 }
 
 // TestDecrypt_ErrorRedaction asserts that the decryption error
-// message returned to a caller does NOT include alg / enc / key
-// / plaintext detail beyond the sentinel. The detailed cause goes
-// to the audit log only (per ADR 0030 §S.8); leaking it through
-// the returned error is a padding-oracle vector.
+// message returned to a caller does NOT include alg / enc / key /
+// plaintext detail beyond the sentinel. The detailed cause goes to
+// the audit log only; leaking it through the returned error is a
+// padding-oracle vector.
 func TestDecrypt_ErrorRedaction(t *testing.T) {
 	t.Parallel()
 

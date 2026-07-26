@@ -459,8 +459,8 @@ func TestNew_WithInteractionDriverWinsOverDefault(t *testing.T) {
 	// op.New error is the assertion.
 }
 
-// TestWithChooserUI_AcceptsAlongsideSPAUI pins the ADR 0015 §SPA mode
-// posture: WithChooserUI composes with WithSPAUI without rejection;
+// TestWithChooserUI_AcceptsAlongsideSPAUI pins the SPA-mode posture:
+// WithChooserUI composes with WithSPAUI without rejection;
 // applyDefaults emits a single structured slog.Warn that records the
 // shadowed-template intent. The order-independence assertion (chooser
 // first vs SPA first) defends against a regression where only one of

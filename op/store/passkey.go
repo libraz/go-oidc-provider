@@ -43,10 +43,11 @@ type PasskeyRecord struct {
 
 	// AAGUID is the 16-byte authenticator-model identifier
 	// (W3C WebAuthn L3 §6.5.4). It is fixed at the device level and
-	// identifies the authenticator vendor / model. v1.0 does not
-	// enforce an AAGUID allow-list; the field is persisted so a
-	// future v1.x policy can read it back without re-prompting the
-	// user.
+	// identifies the authenticator vendor / model. It is persisted so
+	// an allowlist narrowed after registration can be re-applied to
+	// existing credentials at assertion time without re-prompting the
+	// user; see op.PrimaryPasskey's AAGUIDAllowlist and
+	// AAGUIDReCheckOnAssertion.
 	AAGUID []byte
 
 	// SignCount is the authenticator-supplied signature counter

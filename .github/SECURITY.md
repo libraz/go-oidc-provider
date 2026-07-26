@@ -22,14 +22,16 @@ mitigation timeline within 14 days for confirmed issues.
 
 ## Supported Versions
 
-`go-oidc-provider` is in pre-v1.0 development; `v0.9.0` is the initial
-public release. Only the latest minor release receives security fixes
-during the `v0.9.x` series.
+`v1.0.0` is the first release under the SemVer promise. Security fixes go
+to the latest minor of the current major line and to the minor before it,
+so a deployment has one minor release of room to upgrade before it is
+unsupported. Releases in the `v0.x` series predate the stability promise
+and receive no fixes.
 
 | Version | Supported |
 |---------|-----------|
-| v0.9.x  | latest minor only |
-| v1.x    | latest minor + previous minor (planned, post-v1.0) |
+| v1.x    | latest minor + previous minor |
+| v0.x    | unsupported |
 
 ## Disclosure
 

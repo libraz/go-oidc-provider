@@ -241,14 +241,14 @@ type ClientMetadata struct {
 	// encryption keyset, so the registered value is recorded for the
 	// metadata round-trip rather than enforced per-client.
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	RequestObjectEncryptionAlg string
 
 	// RequestObjectEncryptionEnc mirrors [RequestObjectEncryptionAlg]
 	// for the JWE content-encryption (`enc`) advertisement. Allowed
 	// values are listed by [SupportedEncryptionEncs].
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	RequestObjectEncryptionEnc string
 
 	// IDTokenEncryptedResponseAlg, when non-empty, signals that the
@@ -259,14 +259,14 @@ type ClientMetadata struct {
 	// the registration round-trip; outbound encryption is wired in a
 	// later step.
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	IDTokenEncryptedResponseAlg string
 
 	// IDTokenEncryptedResponseEnc mirrors [IDTokenEncryptedResponseAlg]
 	// for the JWE content-encryption (`enc`) advertisement. Allowed
 	// values are listed by [SupportedEncryptionEncs].
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	IDTokenEncryptedResponseEnc string
 
 	// UserInfoEncryptedResponseAlg, when non-empty, signals that the
@@ -275,7 +275,7 @@ type ClientMetadata struct {
 	// Registration 1.0 §2). The value must be on the OP allow-list
 	// (see [SupportedEncryptionAlgs]).
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	UserInfoEncryptedResponseAlg string
 
 	// UserInfoEncryptedResponseEnc mirrors
@@ -283,7 +283,7 @@ type ClientMetadata struct {
 	// (`enc`) advertisement. Allowed values are listed by
 	// [SupportedEncryptionEncs].
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	UserInfoEncryptedResponseEnc string
 
 	// AuthorizationEncryptedResponseAlg, when non-empty, signals that
@@ -292,7 +292,7 @@ type ClientMetadata struct {
 	// Registration 1.0 §2). The value must be on the OP allow-list
 	// (see [SupportedEncryptionAlgs]).
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	AuthorizationEncryptedResponseAlg string
 
 	// AuthorizationEncryptedResponseEnc mirrors
@@ -300,7 +300,7 @@ type ClientMetadata struct {
 	// content-encryption (`enc`) advertisement. Allowed values are
 	// listed by [SupportedEncryptionEncs].
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	AuthorizationEncryptedResponseEnc string
 
 	// IntrospectionEncryptedResponseAlg, when non-empty, signals that
@@ -310,7 +310,7 @@ type ClientMetadata struct {
 	// 1.0 §2). The value must be on the OP allow-list (see
 	// [SupportedEncryptionAlgs]).
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	IntrospectionEncryptedResponseAlg string
 
 	// IntrospectionEncryptedResponseEnc mirrors
@@ -318,7 +318,7 @@ type ClientMetadata struct {
 	// content-encryption (`enc`) advertisement. Allowed values are
 	// listed by [SupportedEncryptionEncs].
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	IntrospectionEncryptedResponseEnc string
 
 	// PostLogoutRedirectURIs lists the candidate URIs the client wants
@@ -336,7 +336,7 @@ type ClientMetadata struct {
 	// fires for the registered client. Empty means the client did not
 	// register for back-channel logout delivery.
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	BackchannelLogoutURI string
 
 	// BackchannelLogoutSessionRequired requests a "sid" claim on the
@@ -345,7 +345,7 @@ type ClientMetadata struct {
 	// session lineage. Back-channel delivery remains available through
 	// [ClientMetadata.BackchannelLogoutURI] with sub-only tokens.
 	//
-	// Stable since v0.9.1.
+	// Stable since v1.0.
 	BackchannelLogoutSessionRequired bool
 }
 
@@ -437,7 +437,7 @@ type InitialAccessTokenIssued struct {
 // example) are rejected by [New] with a clear error rather than
 // failing the first POST /register.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func WithDynamicRegistration(o RegistrationOption) Option {
 	return optionFunc(func(c *config) error {
 		if c.dcr != nil {

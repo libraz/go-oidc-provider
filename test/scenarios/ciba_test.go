@@ -1440,7 +1440,7 @@ func TestScenario_CIBA_045_BackchannelRejectsUnadvertisedACRValue(t *testing.T) 
 // TestScenario_CIBA_046_BackchannelRejectsUserCodeWhenUnsupported
 // pins the discovery-consistency gate for
 // backchannel_user_code_parameter_supported. The library advertises
-// the parameter as unsupported in v0.9.x (the option to flip the
+// the parameter as unsupported in v1.0 (the option to flip the
 // flag is reserved for a future release); CIBA Core §7.1 requires
 // the client to refrain from sending parameters the OP has not
 // advertised, so any non-empty user_code MUST surface as 400

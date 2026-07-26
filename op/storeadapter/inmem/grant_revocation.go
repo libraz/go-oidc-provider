@@ -9,12 +9,12 @@ import (
 )
 
 // grantRevocationStore is the inmem implementation of
-// [store.GrantRevocationStore] (ADR 0025). It keeps two maps under one
-// mutex: one keyed by GrantID for grant tombstones and one keyed by JTI
-// for the denylist of single-AT revocations. The split mirrors how
+// [store.GrantRevocationStore]. It keeps two maps under one mutex:
+// one keyed by GrantID for grant tombstones and one keyed by JTI for
+// the denylist of single-AT revocations. The split mirrors how
 // production backends are expected to lay the rows out (two physical
-// tables) so the contract test exercises the same semantics that a SQL
-// adapter satisfies.
+// tables) so the contract test exercises the same semantics that a
+// SQL adapter satisfies.
 //
 // The reference implementation does not hash the keys: GrantID is an
 // internal identifier (never exposed on the wire) and JTI is a

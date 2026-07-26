@@ -411,11 +411,10 @@ type Exchanged struct {
 	// IssuedAt is the wall-clock time at which the consumed refresh
 	// token was first persisted (its [store.RefreshToken.CreatedAt]).
 	// The token endpoint reads it under
-	// [store.RevocationStrategyGrantTombstone] to enforce the ADR 0025
-	// "iat <= RevokedAt" mint-refusal rule before signing the rotated
-	// access token: a tombstoned grant whose tombstone post-dates the
-	// chain's first issuance MUST refuse a fresh AT, closing the ADR
-	// 0013 race window.
+	// [store.RevocationStrategyGrantTombstone] to enforce the "iat <=
+	// RevokedAt" mint-refusal rule before signing the rotated access
+	// token: a tombstoned grant whose tombstone post-dates the chain's
+	// first issuance MUST refuse a fresh AT, closing the race window.
 	IssuedAt time.Time
 
 	// DPoPJKT is the RFC 7638 thumbprint the chain was bound to at

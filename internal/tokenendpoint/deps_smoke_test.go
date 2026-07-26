@@ -7,13 +7,14 @@ import (
 	"github.com/libraz/go-oidc-provider/op/store"
 )
 
-// TestDeps_WaveTwoPlumbing pins the ADR 0025 Wave 2 plumbing surface:
-// the new GrantRevocations and RevocationStrategy fields on
-// [tokenendpoint.Deps] must be reachable so Waves 4 / 5 can land their
-// handler logic without re-touching the wiring layer in op.go. The
-// test is a build-time smoke check; the zero values are intentional
-// because Wave 2 does not yet consume the fields.
-func TestDeps_WaveTwoPlumbing(t *testing.T) {
+// TestDeps_GrantRevocationFieldsAreReachable pins the revocation
+// plumbing surface: the GrantRevocations and RevocationStrategy fields
+// on [tokenendpoint.Deps] must stay assignable from outside the
+// package, because the wiring layer in op.go is the only thing that
+// populates them and a field that quietly loses its export breaks that
+// wiring without failing any handler test. This is a build-time check;
+// the zero values are the point, not an omission.
+func TestDeps_GrantRevocationFieldsAreReachable(t *testing.T) {
 	t.Parallel()
 
 	var deps tokenendpoint.Deps

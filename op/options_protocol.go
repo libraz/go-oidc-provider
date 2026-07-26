@@ -109,7 +109,7 @@ func (c *config) BackchannelAllowsPrivateNetwork() bool {
 // grant private-network access for one fetcher without widening the
 // other.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithBackchannelAllowPrivateNetwork(allow bool) Option {
 	return optionFunc(func(c *config) error {
 		mutateProtocolState(c, func(st *protocolOptionState) {

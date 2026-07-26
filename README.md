@@ -23,8 +23,12 @@ Message Signing.
 > on. The one exemption is symbols documented with an `Experimental:` marker;
 > they are inventoried in [`api/experimental.txt`](api/experimental.txt), which
 > is regenerated and diffed by `make verify` so the exempt set cannot grow
-> without review. [`CHANGELOG.md`](CHANGELOG.md) tracks notable changes from
-> the release that follows `v0.9.0`.
+> without review. Worth knowing before you build on it: the exempt set is the
+> authentication-step seam (`LoginFlow`, `WithLoginFlow`, `WithAuthenticators`
+> and the hooks around them), the interaction UI types, and Grant Management,
+> which tracks an IETF draft. Protocol surface, storage interfaces, and every
+> other option are stable. [`CHANGELOG.md`](CHANGELOG.md) tracks notable
+> changes from the release that follows `v0.9.0`.
 >
 > This is a spare-time project, not a vendor product. It is regressed against
 > the OpenID Foundation conformance suite on every release, but it carries no

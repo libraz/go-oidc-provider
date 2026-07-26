@@ -297,11 +297,11 @@ func TestVerify_NilRecord(t *testing.T) {
 	}
 }
 
-// TestVerify_ReplaysSameStepRejected asserts the M-AUTHN-5 replay
-// defence: a second verify with the same code within the same 30s
-// window is rejected as ErrWrongCode without incrementing the
-// brute-force counter, while a code computed at a strictly later
-// step is accepted normally.
+// TestVerify_ReplaysSameStepRejected asserts the replay defence: a
+// second verify with the same code within the same 30s window is
+// rejected as ErrWrongCode without incrementing the brute-force
+// counter, while a code computed at a strictly later step is accepted
+// normally.
 //
 // Tracks: CVE-2026-33473 (Vikunja), and the same class in
 // CVE-2025-43798 (Liferay) and CVE-2021-43177 (devise-two-factor) — a

@@ -11,8 +11,8 @@ import (
 )
 
 // opaqueAccessTokenStore is the SQL implementation of
-// [store.OpaqueAccessTokenStore] (ADR 0024). The substore keys rows on
-// the SHA-256 digest of the raw bearer ID, never the raw value, so a
+// [store.OpaqueAccessTokenStore]. The substore keys rows on the
+// SHA-256 digest of the raw bearer ID, never the raw value, so a
 // database leak alone does not yield usable tokens.
 type opaqueAccessTokenStore struct {
 	parent *Store

@@ -15,7 +15,7 @@ import (
 // authorization server; it does not validate the resource's bearer
 // tokens — that remains the resource server's responsibility.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 type ProtectedResource struct {
 	// Resource is the resource identifier (RFC 8707 form: an absolute
 	// URI with no fragment). It is validated at [New] time and also
@@ -57,7 +57,7 @@ type ProtectedResource struct {
 // Repeated calls append, so embedders MAY layer a base set with a
 // deployment-specific overlay.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithProtectedResources(resources ...ProtectedResource) Option {
 	return optionFunc(func(c *config) error {
 		if len(resources) == 0 {

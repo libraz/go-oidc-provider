@@ -9,9 +9,9 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// TestCrossFactorPivotTriggersLockout exercises M-AUTHN-1: callers
-// representing email-OTP and TOTP failures share one budget against
-// the cross-factor counter. The test issues 3 failures attributed to
+// TestCrossFactorPivotTriggersLockout exercises the property that
+// callers representing email-OTP and TOTP failures share one budget
+// against the cross-factor counter. The test issues 3 failures attributed to
 // "email-OTP" and 2 attributed to "TOTP" (total 5 < the short
 // threshold), then asserts an additional 25 spread across the two
 // adds up to 30 — the short-lock threshold — and the resulting
@@ -21,7 +21,7 @@ import (
 // it exercises the [lockout.Counter] directly. The counter is the
 // shared point of authority for both factors; any future refactor
 // that splits the counter into per-factor instances (which would
-// defeat M-AUTHN-1) breaks this test.
+// defeat) breaks this test.
 //
 // Tracks: CVE-2026-9798 (Keycloak) — a CIBA authentication flow bypassed
 // the brute-force account lockout that interactive login enforces, i.e.

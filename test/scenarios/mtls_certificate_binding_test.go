@@ -295,7 +295,7 @@ func TestScenario_MTLS_001_DiscoveryAdvertisesCertBoundFlag(t *testing.T) {
 // TestScenario_MTLS_002_AccessTokenRejectsDualBinding is OOS: the
 // catalog claim that "setting both x5t#S256 and jkt thumbprints on a
 // single AT MUST fail with a construction error" describes a
-// panva-style policy that v1.0 deliberately does not implement. The
+// upstream-style policy that v1.0 deliberately does not implement. The
 // token endpoint instead prefers DPoP over mTLS at issuance (DPoP
 // wins; the access token then carries cnf.jkt and skips the
 // cert-thumbprint lookup), so a single token never carries both
@@ -538,7 +538,7 @@ func TestScenario_MTLS_013_CIBABindingPublic(t *testing.T) {
 // canonical RFC 8705 §3 happy path and is covered by MTLS-018 (the
 // public-client variant exercises the same issuance path) and by
 // MTLS-007 (which pins the thumbprint encoding); half (b) is a
-// panva-style policy that v1.0 deliberately rejects. The
+// upstream-style policy that v1.0 deliberately rejects. The
 // implementation propagates the cert binding onto the rotated
 // refresh-token record for both confidential AND public clients
 // (internal/tokenendpoint/authcode.go MTLSCertThumbprint:
@@ -569,7 +569,7 @@ func TestScenario_MTLS_015_AuthCodeRequiresMTLS(t *testing.T) {
 
 // TestScenario_MTLS_016_RefreshTokenBindingConfidential is OOS for
 // the same reason as MTLS-014: the catalog claim that "the refresh
-// token remains unbound" describes panva's loose-binding policy and
+// token remains unbound" describes the upstream OP's loose-binding policy and
 // not v1.0's posture. The implementation always inherits the cert
 // binding onto the rotated RT record, regardless of the client's
 // auth method. Whether this is the right policy is debated upstream

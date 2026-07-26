@@ -6,19 +6,18 @@ import "context"
 // id_token, given the LoginContext at grant time and the internal
 // [AAL] the authentication ceremony achieved. The policy seam exists
 // because OIDC Core 1.0 §3.1.2.1 leaves the satisfaction predicate to
-// the OP: reference products diverge on whether any MFA event satisfies
-// any acr_values entry (Auth0, Okta), require a configured per-acr
-// table (Keycloak), or delegate the call wholesale to the embedder
-// (panva).
+// the OP. Deployed providers land in three places: any MFA event
+// satisfies any acr_values entry, a configured per-acr table decides,
+// or the call is delegated wholesale to the embedder. None of the three
+// is more correct than the others — which is why this is a seam rather
+// than a built-in rule.
 //
 // The library default is [DefaultACRPolicy], which echoes the first
 // requested acr_values entry whenever the ceremony reached at least
 // [AAL1]. Embedders that need a stricter mapping (e.g. a NIST SP
 // 800-63 binding) supply their own policy via [WithACRPolicy].
 //
-// Stable since v0.x. The interface is experimental until v1.0; the
-// parameter list MAY grow in a backward-compatible way (additive
-// arguments) before SemVer freezes it.
+// Stable since v1.0.
 type ACRPolicy interface {
 	// Resolve returns the acr / amr / ok triple for the id_token. ok =
 	// false instructs the issuer to omit the acr claim entirely; amr is
@@ -53,7 +52,7 @@ type ACRPolicy interface {
 //     intentionally lax: strict deployments install their own
 //     [ACRPolicy] via [WithACRPolicy].
 //
-// Stable since v0.x.
+// Stable since v1.0.
 type DefaultACRPolicy struct{}
 
 // Resolve implements [ACRPolicy].

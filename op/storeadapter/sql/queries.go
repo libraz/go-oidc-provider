@@ -65,7 +65,7 @@ type queries struct {
 	opaqueAccessTokenRevokeByClient string
 	opaqueAccessTokenGC             string
 
-	// grant revocation (ADR 0025)
+	// grant revocation
 	grantTombstoneUpsert string
 	grantTombstoneFind   string
 	grantTombstoneGC     string
@@ -264,9 +264,9 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		accessTokenGC: d.rebind(
 			"DELETE FROM " + n.accessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
 
-		// opaque access tokens (ADR 0024). The PK is the SHA-256 digest
-		// of the raw bearer ID; callers hash before binding so the raw
-		// secret never touches the wire to the database.
+		// opaque access tokens. The PK is the SHA-256 digest of the raw
+		// bearer ID; callers hash before binding so the raw secret never
+		// touches the wire to the database.
 		opaqueAccessTokenSave: d.rebind(
 			"INSERT INTO " + n.opaqueAccessTokens +
 				" (token_hash, grant_id, subject, client_id, audience, scope, acr, amr, auth_time, dpop_jkt, mtls_cert_thumb, issued_at, expires_at, revoked)" +
@@ -283,15 +283,14 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 		opaqueAccessTokenGC: d.rebind(
 			"DELETE FROM " + n.opaqueAccessTokens + " WHERE expires_at > 0 AND expires_at < ?"),
 
-		// grant revocation (ADR 0025). Two physical tables share one
-		// substore: oidc_grant_revocations holds per-grant tombstones,
+		// grant revocation. Two physical tables share one substore:
+		// oidc_grant_revocations holds per-grant tombstones,
 		// oidc_revoked_jtis holds the per-JTI denylist for RFC 7009
-		// single-AT revocation. RevokeGrant is idempotent — a second
-		// call against the same grant_id extends expires_at to
-		// max(existing, supplied) and leaves revoked_at unchanged so
-		// the verifier's iat <= revoked_at rule keeps its meaning
-		// across retries. RevokeJTI is idempotent in the simpler shape
-		// (a second insert is a no-op).
+		// single-AT revocation. RevokeGrant is idempotent — a second call
+		// against the same grant_id extends expires_at to max(existing,
+		// supplied) and leaves revoked_at unchanged so the verifier's iat
+		// <= revoked_at rule keeps its meaning across retries. RevokeJTI is
+		// idempotent in the simpler shape (a second insert is a no-op).
 		grantTombstoneUpsert: d.rebind(
 			"INSERT INTO " + n.grantTombstones +
 				" (grant_id, revoked_at, expires_at, reason)" +

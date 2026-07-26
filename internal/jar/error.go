@@ -121,10 +121,10 @@ var (
 	// log readers see the wrapped detail via [errors.Unwrap].
 	ErrEncryptionAlgNotAllowed = errors.New("jar: request object enc/alg not allowed")
 
-	// ErrDecryptFailed signals that JWE decryption failed for a
-	// reason the OP MUST NOT distinguish on the wire — wrong key,
-	// modified ciphertext, mismatched tag, or unknown kid all
-	// converge here so timing / oracle leaks cannot help an
-	// attacker enumerate the OP's encryption keyset (ADR 0030 §S.3).
+	// ErrDecryptFailed signals that JWE decryption failed for a reason
+	// the OP MUST NOT distinguish on the wire — wrong key, modified
+	// ciphertext, mismatched tag, or unknown kid all converge here so
+	// timing / oracle leaks cannot help an attacker enumerate the OP's
+	// encryption keyset.
 	ErrDecryptFailed = errors.New("jar: request object decryption failed")
 )

@@ -73,8 +73,8 @@ func TestRegistry_IsPublic(t *testing.T) {
 }
 
 // TestRegistry_Allows enumerates the AllowedClients allowlist semantics.
-// The "unknown scope" branch must fail-closed (audit finding F-5:
-// admission gates default-deny); "empty AllowedClients" must mean every
+// The "unknown scope" branch must fail-closed — an admission gate
+// defaults to deny; "empty AllowedClients" must mean every
 // client; "non-empty AllowedClients" must enforce membership.
 func TestRegistry_Allows(t *testing.T) {
 	t.Parallel()
@@ -117,7 +117,7 @@ func TestRegistry_Allows(t *testing.T) {
 	}
 }
 
-// TestRegistry_New_PanicsOnPaddedScopeName pins F-6: the constructor
+// TestRegistry_New_PanicsOnPaddedScopeName pins that the constructor
 // surfaces whitespace-padded scope names as panics rather than
 // silently storing entries that can never match a wire request.
 func TestRegistry_New_PanicsOnPaddedScopeName(t *testing.T) {

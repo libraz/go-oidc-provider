@@ -60,8 +60,7 @@
 // Why "act" matters: RFC 8693 §4.1 makes the act claim the
 // delegation chain's primary auditing artifact. A resource server
 // that ignores act sees a token whose sub is the original user and
-// silently participates in delegation it cannot observe — see
-// [ADR 0028] for the project's discussion of this posture. The
+// silently participates in delegation it cannot observe. The
 // Service-B verifier in this example explicitly walks the chain so
 // the read pattern is observable next to the write.
 //
@@ -108,7 +107,7 @@ const (
 	// exchange. The OP authenticates it via client_secret_post. The
 	// impersonation chain names this client as act.sub on the issued
 	// token (the OP injects the calling client when no actor_token is
-	// supplied, per RFC 8693 §1.3 and ADR 0028).
+	// supplied, per RFC 8693 §1.3).
 	serviceAID     = "service-a"
 	serviceASecret = "tx-svc-a-secret-rotate-me"
 

@@ -524,7 +524,7 @@ func prepareCIBAResponse(
 // project's parameter-count cap; CIBA poll mode does not have a
 // code for c_hash and does not preserve a nonce across the
 // authentication-device interaction (the embedder MAY surface
-// one, but the v0.9.x substore does not retain it), so those
+// one, but the substore does not retain it), so those
 // fields are absent.
 type cibaIDTokenInput struct {
 	Subject     string
@@ -541,7 +541,7 @@ type cibaIDTokenInput struct {
 // redemption and matches the spec's "ID Token issued from a
 // Token Endpoint" shape. c_hash is omitted because CIBA has no
 // authorization code to bind. nonce is omitted because the
-// v0.9.x substore does not retain one. auth_time is populated
+// substore does not retain one. auth_time is populated
 // when the substore stamped a non-zero value at Approve time;
 // the encoder omits the claim on zero.
 func mintCIBAIDToken(deps Deps, in cibaIDTokenInput) (string, error) {

@@ -137,7 +137,7 @@ func TestValidateRedirectURIs_ErrorMessageMentionsLoopback(t *testing.T) {
 }
 
 // TestValidateRedirectURIs_NativeApplicationType covers the
-// application_type=native carve-outs introduced by ADR-0026 §4: the
+// application_type=native carve-outs: the
 // loopback "localhost" textual host is admitted unconditionally
 // (no AllowLocalhostLoopback gate, per OIDC Registration §2), https
 // targets are accepted (RFC 8252 §7.2 claimed https), reverse-DNS

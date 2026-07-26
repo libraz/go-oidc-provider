@@ -128,10 +128,10 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 		return false
 	}
 	// Persist the revocation so a subsequent userinfo / introspection
-	// call against the same token returns invalid_token /
-	// {"active": false}. The shape depends on the configured ADR 0025
-	// strategy; every branch is idempotent (missing row → nil) and
-	// keeps the endpoint on the RFC 7009 §2.2 "always 200" path.
+	// call against the same token returns invalid_token / {"active":
+	// false}. The shape depends on the configured strategy; every branch
+	// is idempotent (missing row → nil) and keeps the endpoint on the
+	// RFC 7009 §2.2 "always 200" path.
 	if err := endpointsupport.RevokeJWTAccessTokenByJTI(ctx, endpointsupport.JWTGrantCascadeOpts{
 		AccessTokens:       deps.AccessTokens,
 		GrantRevocations:   deps.GrantRevocations,
@@ -160,10 +160,10 @@ func revokeJWT(ctx context.Context, deps Deps, verifier *tokens.AccessTokenVerif
 // so the caller writes 200 unconditionally and the bool exists purely
 // to short-circuit the JWT fallthrough.
 //
-// The opaque-access-token substore is consulted first because the
-// token endpoint's most-recent issuance for an embedder that opted
-// into ADR 0024 is an opaque AT; the refresh-token branch is the
-// long-standing path. Both nil substores collapse onto the no-op
+// The opaque-access-token substore is consulted first because for an
+// embedder that opted into the opaque format, the token endpoint's
+// most-recent issuance is an opaque AT; the refresh-token branch is
+// the long-standing path. Both nil substores collapse onto the no-op
 // fallback.
 func revokeOpaque(ctx context.Context, deps Deps, authenticatedClientID, token string) bool {
 	if deps.OpaqueAccessTokens != nil {
@@ -261,14 +261,14 @@ func revokeNow(deps Deps) time.Time {
 	return timex.SystemClock.Now().UTC()
 }
 
-// revokeOpaqueAccessToken handles the ADR 0024 opaque-format branch.
-// The substore is asked to flip the row to revoked; the call is
+// revokeOpaqueAccessToken handles the opaque-format branch. The
+// substore is asked to flip the row to revoked; the call is
 // idempotent so a missing row returns nil. The function returns true
 // when a live row matched the authenticated client and was flipped,
 // false otherwise (miss, cross-client, store fault). Cross-client
 // revocation attempts collapse onto false — RFC 7009 §2.2 forbids
-// leaking the failure mode through the wire response, but the bool
-// is consumed only by the dispatcher to short-circuit the JWT
+// leaking the failure mode through the wire response, but the bool is
+// consumed only by the dispatcher to short-circuit the JWT
 // fallthrough; the cross-client revoker still sees the same 200 a
 // legitimate revoker would.
 func revokeOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClientID, token string) bool {
@@ -280,9 +280,9 @@ func revokeOpaqueAccessToken(ctx context.Context, deps Deps, authenticatedClient
 		return false
 	}
 	if rec.ClientID != authenticatedClientID {
-		// Same-client-only (ADR 0024 §S.8): a token issued to
-		// another client is silently ignored. The cross-client
-		// revoker sees the same 200 a legitimate revoker would.
+		// Same-client-only: a token issued to another client is silently
+		// ignored. The cross-client revoker sees the same 200 a legitimate
+		// revoker would.
 		return false
 	}
 	if err := deps.OpaqueAccessTokens.RevokeByID(ctx, token); err != nil {

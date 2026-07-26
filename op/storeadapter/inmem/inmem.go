@@ -195,12 +195,12 @@ func (s *Store) AccessTokens() store.AccessTokenRegistry { return s.accessTokens
 
 // OpaqueAccessTokens implements [store.Store]. The reference
 // implementation keys rows by the SHA-256 digest of the raw bearer id
-// (ADR 0024 §S.2) so a heap dump cannot reconstruct an issued
-// credential. Revocation flips a flag rather than deleting the row so
-// audit metadata remains recoverable.
+// so a heap dump cannot reconstruct an issued credential. Revocation
+// flips a flag rather than deleting the row so audit metadata remains
+// recoverable.
 func (s *Store) OpaqueAccessTokens() store.OpaqueAccessTokenStore { return s.opaqueAccessTokens }
 
-// GrantRevocations implements [store.Store] (ADR 0025). The reference
+// GrantRevocations implements [store.Store]. The reference
 // implementation keeps two maps under one mutex: tombstones keyed by
 // GrantID and a JTI denylist; the lookup order honours the contract's
 // "denylist first, tombstone second" precedence. Both row shapes are
@@ -217,12 +217,11 @@ func (s *Store) Metadata() store.MetadataStore { return s.metadata }
 
 // DeviceCodes implements [store.Store]. The reference implementation
 // keys the primary map on the SHA-256 digest of the wire device_code
-// (per ADR 0024 §S.2 hash-on-store contract) and maintains a
-// secondary user_code → digest index so the verification page's
-// FindByUserCode lookup runs without scanning the primary map.
-// Outside the transactional cluster: the approve→consume CAS in
-// [DeviceCodeStore.Consume] supplies the single-use guarantee on
-// its own.
+// and maintains a secondary user_code → digest index so the
+// verification page's FindByUserCode lookup runs without scanning the
+// primary map. Outside the transactional cluster: the approve→consume
+// CAS in [DeviceCodeStore.Consume] supplies the single-use guarantee
+// on its own.
 func (s *Store) DeviceCodes() store.DeviceCodeStore { return s.deviceCodes }
 
 // CIBARequests implements [store.Store].
@@ -259,12 +258,12 @@ func (s *Store) Passkeys() store.PasskeyStore { return s.passkeys }
 func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailotps }
 
 // AuthnLockouts returns the [store.AuthnLockoutStore] backed by this
-// Store. The cross-factor brute-force counter (M-AUTHN-1) is not part
-// of the aggregate [store.Store] interface — the wiring lives behind
-// the lockout helper consumed by the per-factor authenticators — but
-// the accessor is exposed here so the authn package and its tests
-// can reach the reference implementation without forking the
-// in-memory backend.
+// Store. The cross-factor brute-force counter is not part of the
+// aggregate [store.Store] interface — the wiring lives behind the
+// lockout helper consumed by the per-factor authenticators — but the
+// accessor is exposed here so the authn package and its tests can
+// reach the reference implementation without forking the in-memory
+// backend.
 func (s *Store) AuthnLockouts() store.AuthnLockoutStore { return s.authnLockouts }
 
 // PutUser seeds the in-memory user store with u so tests can drive

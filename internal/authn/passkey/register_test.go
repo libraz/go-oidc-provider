@@ -150,8 +150,7 @@ func TestFinishRegistration_RejectsNilSession(t *testing.T) {
 // TestBeginRegistration_ExcludeCredentialsForwarded asserts the
 // caller-supplied existing credentials reach the SPA as
 // excludeCredentials so a CTAP2 authenticator already bound to the
-// user refuses a duplicate registration at the device level
-// (M-AUTHN-1).
+// user refuses a duplicate registration at the device level.
 func TestBeginRegistration_ExcludeCredentialsForwarded(t *testing.T) {
 	t.Parallel()
 

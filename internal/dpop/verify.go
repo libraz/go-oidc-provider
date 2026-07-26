@@ -341,18 +341,17 @@ func (v *Verifier) Verify(ctx context.Context, in VerifyInput) (*VerifyResult, e
 	return &VerifyResult{JKT: jkt, JTI: parsed.claims.JTI}, nil
 }
 
-// checkNonce runs the optional RFC 9449 §8 / §9 nonce gate. The
-// check sits ahead of the replay mark in [Verifier.Verify] so a
-// stale-nonce proof does not consume a jti slot the legitimate retry
-// would need: the client is expected to retry with a fresh proof
-// (new jti, new nonce), and burning the failed jti would force the
-// retry to surface as a spurious replay. A nonce-passing proof DOES
-// mark its jti immediately afterwards (see the M-FAPI-1 reorder
-// note in [Verifier.Verify]) so the same jti cannot be reused
-// against a fresh nonce.
+// checkNonce runs the optional RFC 9449 §8 / §9 nonce gate. The check
+// sits ahead of the replay mark in [Verifier.Verify] so a stale-nonce
+// proof does not consume a jti slot the legitimate retry would need:
+// the client is expected to retry with a fresh proof (new jti, new
+// nonce), and burning the failed jti would force the retry to surface
+// as a spurious replay. A nonce-passing proof DOES mark its jti
+// immediately afterwards (see the reorder note in [Verifier.Verify])
+// so the same jti cannot be reused against a fresh nonce.
 //
-// A nil [Verifier.nonces] disables the gate; this matches the v0.x
-// posture where proofs without a nonce claim were always accepted.
+// A nil [Verifier.nonces] disables the gate: proofs without a nonce
+// claim are then always accepted.
 func (v *Verifier) checkNonce(nonce string) error {
 	if v.nonces == nil {
 		return nil

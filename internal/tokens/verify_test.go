@@ -574,9 +574,9 @@ func TestVerify_LeewayAcceptsSlightlyExpired(t *testing.T) {
 	}
 }
 
-// TestVerify_RoundTripGrantID pins ADR 0025's decode side: a token
-// minted with a non-empty GrantID survives encode → decode and the
-// "gid" private claim re-projects onto AccessTokenClaims.GrantID.
+// TestVerify_RoundTripGrantID pins the decode side: a token minted
+// with a non-empty GrantID survives encode → decode and the "gid"
+// private claim re-projects onto AccessTokenClaims.GrantID.
 func TestVerify_RoundTripGrantID(t *testing.T) {
 	t.Parallel()
 
@@ -603,15 +603,15 @@ func TestVerify_RoundTripGrantID(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	if got.GrantID != "g123" {
-		t.Errorf("GrantID=%q want %q (ADR 0025 round trip)", got.GrantID, "g123")
+		t.Errorf("GrantID=%q want %q (gid round trip)", got.GrantID, "g123")
 	}
 }
 
 // TestVerify_LegacyTokenWithoutGidDecodesEmpty pins the verifier's
 // non-enforcement contract: a token with no "gid" claim still verifies
 // cleanly and surfaces an empty GrantID. The consumer (userinfo /
-// introspection) decides what to do with the empty value — that is
-// Wave 5's concern, not the verifier's.
+// introspection) decides what to do with the empty value; that is
+// not the verifier's concern.
 func TestVerify_LegacyTokenWithoutGidDecodesEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -619,7 +619,8 @@ func TestVerify_LegacyTokenWithoutGidDecodesEmpty(t *testing.T) {
 	now := time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC)
 	// GrantID intentionally left zero-value: the SignAccessToken merge
 	// drops "gid" from the wire under omitempty equivalence, so the
-	// resulting JWT models a legacy / pre-ADR-0025 access token.
+	// resulting JWT models an access token issued before grant
+	// tombstones existed.
 	jws := signed(t, entry, tokens.AccessTokenClaims{
 		Issuer:    "https://op.example.com",
 		Subject:   "user-1",

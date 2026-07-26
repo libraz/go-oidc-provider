@@ -139,7 +139,7 @@ func isNilPrivateKey(key crypto.PrivateKey) bool {
 //
 //   - RSA: must be at least [jose.MinRSAKeyBits]; alg defaults to
 //     "RSA-OAEP-256" (the v0.9.1 ship list does not include 384/512
-//     for dependency reasons; see ADR 0030 §Q1 amendment).
+//     for dependency reasons).
 //   - ECDSA: must be on P-256 / P-384 / P-521; alg defaults to
 //     "ECDH-ES". Embedders may pin "ECDH-ES+A128KW" / "ECDH-ES+A256KW"
 //     explicitly via [EncryptionEntry.Algorithm].

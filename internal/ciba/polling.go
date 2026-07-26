@@ -128,7 +128,7 @@ type PollInput struct {
 
 	// EffectiveInterval is the interval the client is currently
 	// expected to observe. It starts at the value the bc-authorize
-	// response advertised ([DefaultInterval] in v0.9.x) and doubles
+	// response advertised ([DefaultInterval]) and doubles
 	// each time [DecidePoll] returns [PollDecisionSlowDown].
 	// Callers persist the doubled value alongside the record; the
 	// substore keeps it in [CIBARequest.Interval] so a later poll

@@ -25,7 +25,7 @@ import (
 //
 // CIDRs may be IPv4 or IPv6; both notations are accepted. Each call
 // replaces the previous list — pass every trusted CIDR in a single call.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithTrustedProxies(cidrs ...string) Option {
 	return optionFunc(func(c *config) error {
 		if len(cidrs) == 0 {
@@ -53,7 +53,7 @@ func WithTrustedProxies(cidrs ...string) Option {
 // option appends to any prior call so a deployment with multiple
 // public hostnames can layer entries.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithTrustedProxyHosts(hosts ...string) Option {
 	return optionFunc(func(c *config) error {
 		if len(hosts) == 0 {
@@ -77,7 +77,7 @@ func WithTrustedProxyHosts(hosts ...string) Option {
 // Origins MUST be absolute URLs with non-empty scheme and host. The path,
 // query, and fragment are stripped. Each call appends to the configured
 // list; duplicates are deduplicated at allowlist build time.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithCORSOrigins(origins ...string) Option {
 	return optionFunc(func(c *config) error {
 		if len(origins) == 0 {
@@ -103,7 +103,7 @@ func WithCORSOrigins(origins ...string) Option {
 // with URL-time and dial-time SSRF checks. This keeps instrumentation, proxy
 // resolution, and custom dialers available without allowing a full client
 // override to weaken delivery integrity.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 	return optionFunc(func(c *config) error {
 		c.backchannelLogoutHTTPClient = client
@@ -136,7 +136,7 @@ func WithBackchannelLogoutHTTPClient(client *http.Client) Option {
 // surfaces the gap when it actually fires. Declare the chosen
 // posture through [WithSessionDurabilityPosture] so the audit
 // signal carries the embedder's intent.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithBackchannelLogoutTimeout(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		c.backchannelLogoutTimeout = d
@@ -186,7 +186,7 @@ const (
 // SessionStore to a durable backend (the SQL adapter, an
 // embedder-supplied store with WAL semantics) flip the declaration
 // to [SessionDurabilityDurable].
-// Stable since v0.x.
+// Stable since v1.0.
 func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 	return optionFunc(func(c *config) error {
 		c.sessionDurabilityPosture = p
@@ -219,7 +219,7 @@ func WithSessionDurabilityPosture(p SessionDurabilityPosture) Option {
 // `use_dpop_nonce` retries forever. The library deliberately ships no
 // distributed implementation today; embedders supply one that matches
 // their deployment topology.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithDPoPNonceSource(source DPoPNonceSource) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(source) {
@@ -254,7 +254,7 @@ func WithDPoPNonceSource(source DPoPNonceSource) Option {
 // Negative values are rejected at the option site; the API treats
 // "no grace" as the explicit zero so accidental sign-flip cannot
 // silently widen the window.
-// Stable since v0.x.
+// Stable since v1.0.
 func WithRefreshGracePeriod(d time.Duration) Option {
 	return optionFunc(func(c *config) error {
 		if d < 0 {
@@ -306,7 +306,7 @@ func (c *config) effectiveRefreshGrace() time.Duration {
 // option. The opt-in is JWKS-specific so the analogous JAR
 // request_uri fetcher remains independently gated by
 // [WithAllowPrivateNetworkJAR].
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAllowPrivateNetworkJWKS() Option {
 	return optionFunc(func(c *config) error {
 		c.allowPrivateNetworkJWKS = true
@@ -321,7 +321,7 @@ func WithAllowPrivateNetworkJWKS() Option {
 // embedders can grant private-network access to one fetcher without
 // widening the other. The default false posture is the safe choice
 // for production deployments.
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAllowPrivateNetworkJAR() Option {
 	return optionFunc(func(c *config) error {
 		c.allowPrivateNetworkJAR = true
@@ -338,7 +338,7 @@ func WithAllowPrivateNetworkJAR() Option {
 // private network without widening the other two fetchers. The
 // default false posture is the safe choice for production
 // deployments.
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAllowPrivateNetworkSector() Option {
 	return optionFunc(func(c *config) error {
 		c.allowPrivateNetworkSector = true
@@ -356,11 +356,18 @@ func WithAllowPrivateNetworkSector() Option {
 // to the textual "localhost" hostname (the most common default) opt
 // in via this option.
 //
+// The option also admits "localhost" in the issuer itself. That half
+// exists for WebAuthn: a Relying Party ID must be a domain and browsers
+// reject an IP literal for it, so an http issuer on 127.0.0.1 has no
+// valid RP ID to pair with and a local passkey deployment has nowhere to
+// stand. The DNS-rebinding reasoning above does not stop applying — the
+// carve-out is acceptable on a developer's machine and nowhere else.
+//
 // Many of the example demos under examples/ register
 // http://127.0.0.1 redirect URIs and refuse to start without this
 // opt-in; production embedders typically leave it off and instead
 // front their RPs over https.
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAllowLocalhostLoopback() Option {
 	return optionFunc(func(c *config) error {
 		c.allowLocalhostLoopback = true
@@ -389,7 +396,7 @@ func WithAllowLocalhostLoopback() Option {
 // CI fixtures that bind a stub RP on a loopback port; never combine
 // it with a non-development WithIssuer.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithAllowInsecureBackchannelLogoutForDev() Option {
 	return optionFunc(func(c *config) error {
 		c.allowInsecureBackchannelLogoutForDev = true
@@ -417,7 +424,7 @@ func WithAllowInsecureBackchannelLogoutForDev() Option {
 //
 // At most one transport may be registered; a second
 // [WithJWKSHTTPTransport] call fails [New].
-// Stable since v0.x.
+// Stable since v1.0.
 func WithJWKSHTTPTransport(rt http.RoundTripper) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(rt) {
