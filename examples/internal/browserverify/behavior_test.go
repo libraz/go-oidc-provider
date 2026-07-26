@@ -4,6 +4,7 @@ package browserverify
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -89,13 +90,37 @@ func TestBehavior01MinimalSSO(t *testing.T) {
 			if err := chromedp.Run(ctx, chromedp.Submit(`input[name="approved_scopes"]`, chromedp.ByQuery)); err != nil {
 				t.Fatalf("second authorize consent: %v", err)
 			}
+			// Submitting starts a navigation, and until it lands the
+			// browser still shows the consent form. Without this wait the
+			// loop reads the outgoing document and submits the same page
+			// again, whose form is by then detached — which is why this
+			// case used to spin to the deadline rather than fail on the
+			// page that actually went wrong.
+			if err := awaitHTMLStateChange(ctx, "consent"); err != nil {
+				t.Fatalf("second authorize consent: %v", err)
+			}
 		case "password":
 			t.Fatal("SSO failed: the second authorization re-prompted for a password despite an active session")
 		case "wait":
 			time.Sleep(150 * time.Millisecond)
 		}
 	}
-	t.Fatal("timeout waiting for the second authorization to complete")
+	href, body := spaDump(ctx)
+	t.Fatalf("timeout waiting for the second authorization to complete; at %q with body:\n%s", href, body)
+}
+
+// awaitHTMLStateChange blocks until the browser shows something other than
+// the page just answered, so a caller cannot act twice on one document.
+func awaitHTMLStateChange(ctx context.Context, answered string) error {
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if htmlState(ctx) != answered {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	href, body := spaDump(ctx)
+	return fmt.Errorf("the %s page did not advance; at %q with body:\n%s", answered, href, body)
 }
 
 // TestBehavior01MinimalLogout would assert that RP-Initiated Logout

@@ -87,6 +87,22 @@ type exampleSpec struct {
 	// here uses the SPA driver). The SPA loop auto-detects captcha and
 	// consent prompts, so no separate flags are needed for those.
 	totp bool
+	// emailAddress is what the driver submits at an e-mail OTP send
+	// prompt. Non-empty also enables scraping the mailed code out of the
+	// example's log, which is where a demo delivery hook puts it — a
+	// real one puts it in an inbox the harness cannot reach, so an
+	// example that mails for real cannot be driven here at all.
+	emailAddress string
+	// recovery marks an example that can fall back to a printed recovery
+	// code. The harness scrapes the batch from the startup banner and
+	// spends one code per prompt, so a driver that reached the fallback
+	// twice in one run would use two distinct codes — which is the
+	// single-use property, exercised rather than asserted around.
+	recovery bool
+	// failCode is how many wrong one-time codes the driver submits before
+	// the correct one, to trip an after-N-failures fallback. Zero means
+	// answer every code prompt correctly on the first try.
+	failCode int
 	// loginLink overrides the RP landing-page selector used to start the
 	// flow. Defaults to a[href="/login"]; risk-based-mfa exposes
 	// per-risk links such as a[href="/login-high"].
@@ -122,16 +138,26 @@ func runRoundTrip(t *testing.T, spec exampleSpec) {
 		totpSecret = scrapeTOTPSecret(t, logPath)
 	}
 
+	// Codes that only exist in the running example's output — the recovery
+	// sheet from the startup banner, the e-mail codes the demo delivery
+	// hook prints as it sends them.
+	codes := &codeScraper{logPath: logPath}
+	if spec.recovery {
+		codes.recovery = scrapeRecoveryCodes(t, logPath)
+	}
+
 	// Driving a real Chrome occasionally drops a CDP navigation event, so
 	// retry the round-trip once against the same running example. A genuine
 	// regression fails both attempts; a one-off browser hiccup is absorbed,
-	// keeping the gate deterministic.
+	// keeping the gate deterministic. The scraper outlives both attempts on
+	// purpose: a recovery code the first attempt spent is consumed for
+	// good, so the retry has to continue from the next unused one.
 	drive := func() (string, error) { return driveLogin(chrome, spec) }
 	switch {
 	case spec.stepUp:
-		drive = func() (string, error) { return driveStepUp(chrome, spec, totpSecret) }
+		drive = func() (string, error) { return driveStepUp(chrome, spec, totpSecret, codes) }
 	case spec.spa:
-		drive = func() (string, error) { return driveSPALogin(chrome, spec, totpSecret) }
+		drive = func() (string, error) { return driveSPALogin(chrome, spec, totpSecret, codes) }
 	}
 
 	var body string
@@ -318,7 +344,7 @@ func driveLogin(chrome string, spec exampleSpec) (string, error) {
 // stays on /login/{uid} until the terminal redirect. The prompt set and
 // order vary by example (password, TOTP, captcha, consent, in rule order),
 // so spaLoop detects whichever prompt is showing and answers it.
-func driveSPALogin(chrome string, spec exampleSpec, totpSecret string) (string, error) {
+func driveSPALogin(chrome string, spec exampleSpec, totpSecret string, codes *codeScraper) (string, error) {
 	ctx, cancel := newBrowserCtx(chrome)
 	defer cancel()
 
@@ -333,7 +359,7 @@ func driveSPALogin(chrome string, spec exampleSpec, totpSecret string) (string, 
 	); err != nil {
 		return "", fmt.Errorf("spa start: %w", err)
 	}
-	return spaLoop(ctx, spec, totpSecret)
+	return spaLoop(ctx, spec, totpSecret, codes)
 }
 
 // driveStepUp drives the two-leg step-up example: an initial password
@@ -342,8 +368,11 @@ func driveSPALogin(chrome string, spec exampleSpec, totpSecret string) (string, 
 // legs share one browser (and its session cookies) so the second leg
 // re-uses the established session; the returned body is the stepped-up /me
 // whose acr claim the test asserts.
-func driveStepUp(chrome string, spec exampleSpec, totpSecret string) (string, error) {
-	ctx, cancel := newBrowserCtx(chrome)
+func driveStepUp(chrome string, spec exampleSpec, totpSecret string, codes *codeScraper) (string, error) {
+	// Two legs, and the second may have to sit out a TOTP window before it
+	// can answer — see codeScraper.freshTOTPCode. That does not fit the
+	// minute a single-leg round-trip gets.
+	ctx, cancel := newBrowserCtxWithin(chrome, 3*time.Minute)
 	defer cancel()
 
 	if err := chromedp.Run(ctx,
@@ -353,7 +382,7 @@ func driveStepUp(chrome string, spec exampleSpec, totpSecret string) (string, er
 	); err != nil {
 		return "", fmt.Errorf("step-up leg 1 start: %w", err)
 	}
-	if _, err := spaLoop(ctx, spec, totpSecret); err != nil {
+	if _, err := spaLoop(ctx, spec, totpSecret, codes); err != nil {
 		return "", fmt.Errorf("step-up leg 1 (initial login): %w", err)
 	}
 
@@ -363,7 +392,7 @@ func driveStepUp(chrome string, spec exampleSpec, totpSecret string) (string, er
 	); err != nil {
 		return "", fmt.Errorf("step-up leg 2 start: %w", err)
 	}
-	body, err := spaLoop(ctx, spec, totpSecret)
+	body, err := spaLoop(ctx, spec, totpSecret, codes)
 	if err != nil {
 		return "", fmt.Errorf("step-up leg 2 (re-auth): %w", err)
 	}
@@ -372,9 +401,12 @@ func driveStepUp(chrome string, spec exampleSpec, totpSecret string) (string, er
 
 // spaLoop answers SPA prompts until the flow lands on /me. It assumes the
 // caller has navigated so that #prompt-form is visible.
-func spaLoop(ctx context.Context, spec exampleSpec, totpSecret string) (string, error) {
+func spaLoop(ctx context.Context, spec exampleSpec, totpSecret string, codes *codeScraper) (string, error) {
 	pwAttempts := 0
-	deadline := time.Now().Add(45 * time.Second)
+	codeAttempts := 0
+	// Generous because a TOTP prompt can spend most of a 30-second window
+	// waiting for a code the store has not already seen.
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		switch spaState(ctx) {
 		case "me":
@@ -404,7 +436,7 @@ func spaLoop(ctx context.Context, spec exampleSpec, totpSecret string) (string, 
 				return "", fmt.Errorf("spa password prompt: %w", err)
 			}
 		case "totp":
-			code, err := totpCode(totpSecret, time.Now())
+			code, err := codes.freshTOTPCode(totpSecret)
 			if err != nil {
 				return "", fmt.Errorf("spa totp prompt: %w", err)
 			}
@@ -413,12 +445,57 @@ func spaLoop(ctx context.Context, spec exampleSpec, totpSecret string) (string, 
 			); err != nil {
 				return "", fmt.Errorf("spa totp prompt: %w", err)
 			}
+		case "email":
+			if spec.emailAddress == "" {
+				return "", fmt.Errorf("spa e-mail prompt: the example asked for an address but the spec supplies none")
+			}
+			if err := chromedp.Run(ctx,
+				chromedp.SendKeys(`#prompt-form input[name="email"]`, spec.emailAddress, chromedp.ByQuery),
+			); err != nil {
+				return "", fmt.Errorf("spa e-mail prompt: %w", err)
+			}
+		case "email_code":
+			// The demo delivery hook writes the code as it sends, so it is
+			// in the log by the time the prompt renders — but the write and
+			// the render race, so the scraper waits for a code newer than
+			// the last one it handed out.
+			code, err := codes.mailedCode()
+			if err != nil {
+				return "", fmt.Errorf("spa e-mail code prompt: %w", err)
+			}
+			// A wrong code exercises the fallback the example exists to
+			// show; the quota is spent before the real code is offered.
+			if codeAttempts < spec.failCode {
+				code = wrongOTP(code)
+			}
+			codeAttempts++
+			if err := chromedp.Run(ctx,
+				chromedp.SendKeys(`#prompt-form input[name="code"]`, code, chromedp.ByQuery),
+			); err != nil {
+				return "", fmt.Errorf("spa e-mail code prompt: %w", err)
+			}
+		case "recovery":
+			code, err := codes.nextRecoveryCode()
+			if err != nil {
+				return "", fmt.Errorf("spa recovery prompt: %w", err)
+			}
+			if err := chromedp.Run(ctx,
+				chromedp.SendKeys(`#prompt-form input[name="code"]`, code, chromedp.ByQuery),
+			); err != nil {
+				return "", fmt.Errorf("spa recovery prompt: %w", err)
+			}
 		case "captcha":
 			if err := chromedp.Run(ctx,
 				chromedp.SendKeys(`#prompt-form input[name="captcha_token"]`, "browserverify-stub-token", chromedp.ByQuery),
 			); err != nil {
 				return "", fmt.Errorf("spa captcha prompt: %w", err)
 			}
+		case "passkey":
+			// Nothing to fill: the credential comes from the browser's
+			// authenticator, and the bundle runs the ceremony from the
+			// submit handler because a get() has to be user-activated.
+			// A test reaches it by having a virtual authenticator
+			// installed before the click — see installVirtualAuthenticator.
 		case "consent":
 			// Nothing to fill; the Approve button posts approved_scopes.
 		}
@@ -462,17 +539,41 @@ func spaSubmit(ctx context.Context) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("prompt did not advance after submit")
+	// The bundle hides the form and writes the reason into #status when a
+	// submission is refused outright rather than re-prompted, and a hidden
+	// form still holds the marked button — so without the status text this
+	// failure is indistinguishable from a prompt that merely rendered slowly.
+	var status string
+	_ = chromedp.Run(ctx, chromedp.Evaluate(
+		`(document.querySelector('#status')||{}).textContent||''`, &status))
+	href, body := spaDump(ctx)
+	return fmt.Errorf("prompt did not advance after submit; status=%q at %q with body:\n%s", status, href, body)
 }
 
-// spaState reports which prompt the SPA is currently showing, keyed off
-// the field the active prompt renders into #prompt-form. A transient
-// evaluate error (the document is mid-navigation) is reported as "wait".
+// spaState reports which prompt the SPA is currently showing. A bundle
+// that stamps the prompt type onto the form (data-prompt-type) is taken
+// at its word; otherwise the field the prompt renders into #prompt-form
+// identifies it. The stamp exists because field names stopped being
+// unique the moment one flow could ask for two different kinds of code:
+// an e-mail code and a recovery code are both an input called "code",
+// and answering one with the other's value looks exactly like a wrong
+// credential. A transient evaluate error (the document is
+// mid-navigation) is reported as "wait".
 func spaState(ctx context.Context) string {
 	const js = `(function () {
   if (location.href.indexOf('/me') >= 0) return 'me';
   var f = document.querySelector('#prompt-form');
   if (!f || f.hidden) return 'wait';
+  switch (f.dataset.promptType) {
+    case 'auth.password':         return 'password';
+    case 'auth.totp':             return 'totp';
+    case 'auth.email_otp.send':   return 'email';
+    case 'auth.email_otp.verify': return 'email_code';
+    case 'auth.recovery_code':    return 'recovery';
+    case 'auth.passkey':          return 'passkey';
+    case 'captcha':               return 'captcha';
+    case 'consent.scope':         return 'consent';
+  }
   if (f.querySelector('input[name="code"]')) return 'totp';
   if (f.querySelector('input[name="captcha_token"]')) return 'captcha';
   if (f.querySelector('ul.scopes')) return 'consent';
