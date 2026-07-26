@@ -161,6 +161,128 @@ type queries struct {
 	cibaViolationIncr string
 	cibaViolationRead string
 	cibaGC            string
+
+	// TOTP enrolments (RFC 6238)
+	totpGet            string
+	totpPut            string
+	totpCompareAndSwap string
+	totpAccept         string
+	totpDelete         string
+
+	// passkeys (W3C WebAuthn Level 3)
+	passkeyGet           string
+	passkeyGetForUpdate  string
+	passkeyListBySubject string
+	passkeyPut           string
+	passkeyUpdate        string
+	passkeyDelete        string
+
+	// recovery codes
+	recoveryList      string
+	recoveryDeleteAll string
+	recoveryInsert    string
+	recoveryConsume   string
+
+	// email OTP challenges
+	emailOTPGet            string
+	emailOTPPut            string
+	emailOTPCompareAndSwap string
+	emailOTPConsume        string
+	emailOTPDelete         string
+
+	// cross-factor brute-force counters
+	lockoutGet    string
+	lockoutInsert string
+	lockoutUpdate string
+}
+
+// The authentication-factor column lists are declared once so the
+// SELECT projection, the INSERT column list, and the compare-and-swap
+// predicate cannot drift apart. Every CAS in this group matches on the
+// full stored tuple rather than on a version counter, because the
+// records the library hands over carry no version field of their own.
+//
+//nolint:gochecknoglobals // immutable column manifests.
+var (
+	totpValueColumns = []string{
+		"secret_ciphertext",
+		"failed_count",
+		"last_accepted_step",
+		"confirmed_at",
+		"first_failure_at",
+		"locked_until",
+	}
+
+	emailOTPValueColumns = []string{
+		"code_salt",
+		"code_hash",
+		"failed_count",
+		"send_count",
+		"sent_at",
+		"expires_at",
+		"retain_until",
+		"first_failure_at",
+		"locked_until",
+		"consumed_at",
+		"send_window_start",
+		"last_send_attempt_at",
+	}
+
+	passkeyValueColumns = []string{
+		"subject",
+		"public_key",
+		"aaguid",
+		"sign_count",
+		"attestation_type",
+		"transports",
+		"attachment",
+		"user_present",
+		"user_verified",
+		"backup_eligible",
+		"backup_state",
+		"clone_warning",
+		"created_at",
+	}
+)
+
+// assignExcluded renders the "col = EXCLUDED.col" assignment list an
+// upsert applies on conflict.
+func assignExcluded(d Dialect, cols []string) string {
+	parts := make([]string, len(cols))
+	for i, col := range cols {
+		parts[i] = col + " = " + d.excludedRef(col)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// assignPlaceholders renders the "col = ?" assignment list an UPDATE
+// applies.
+func assignPlaceholders(cols []string) string {
+	parts := make([]string, len(cols))
+	for i, col := range cols {
+		parts[i] = col + " = ?"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// matchPlaceholders renders the "col = ? AND ..." predicate a
+// full-tuple compare-and-swap matches the stored row against.
+func matchPlaceholders(cols []string) string {
+	parts := make([]string, len(cols))
+	for i, col := range cols {
+		parts[i] = col + " = ?"
+	}
+	return strings.Join(parts, " AND ")
+}
+
+// bindPlaceholders renders the "?, ?, ..." VALUES tail for cols plus
+// the leading key column.
+func bindPlaceholders(n int) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = "?"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // buildQueries assembles every SQL template the adapter needs for the
@@ -553,6 +675,114 @@ func buildQueries(d Dialect, n nameMap) (queries, error) {
 			"SELECT poll_violations FROM " + n.cibaRequests + " WHERE id = ?" + notExpiredGuard),
 		cibaGC: d.rebind(
 			"DELETE FROM " + n.cibaRequests + " WHERE expires_at > 0 AND expires_at < ?"),
+
+		// TOTP enrolments (RFC 6238)
+		totpGet: d.rebind(
+			"SELECT subject, " + joinColumns(totpValueColumns) +
+				" FROM " + n.totpSecrets + " WHERE subject = ?"),
+		totpPut: d.rebind(
+			"INSERT INTO " + n.totpSecrets +
+				" (subject, " + joinColumns(totpValueColumns) + ")" +
+				" VALUES (" + bindPlaceholders(1+len(totpValueColumns)) + ")" + d.upsertAlias() +
+				d.upsertOnConflict("subject", assignExcluded(d, totpValueColumns))),
+		// The predicate carries the whole stored tuple: a snapshot that
+		// no longer describes the row loses, which is what keeps a stale
+		// wrong-code write from rewinding LastAcceptedStep.
+		totpCompareAndSwap: d.rebind(
+			"UPDATE " + n.totpSecrets +
+				" SET " + assignPlaceholders(totpValueColumns) +
+				" WHERE subject = ? AND " + matchPlaceholders(totpValueColumns)),
+		// Accept is the single-use success transition: it only applies
+		// when the stored step is strictly behind the one being redeemed,
+		// so a replay inside the same 30-second window cannot win twice.
+		totpAccept: d.rebind(
+			"UPDATE " + n.totpSecrets +
+				" SET " + assignPlaceholders(totpValueColumns) +
+				" WHERE subject = ? AND last_accepted_step < ?"),
+		totpDelete: d.rebind(
+			"DELETE FROM " + n.totpSecrets + " WHERE subject = ?"),
+
+		// passkeys (W3C WebAuthn Level 3)
+		passkeyGet: d.rebind(
+			"SELECT credential_id, " + joinColumns(passkeyValueColumns) +
+				" FROM " + n.passkeys + " WHERE credential_id = ?"),
+		passkeyGetForUpdate: d.rebind(
+			"SELECT credential_id, " + joinColumns(passkeyValueColumns) +
+				" FROM " + n.passkeys + " WHERE credential_id = ?" + d.forUpdate()),
+		passkeyListBySubject: d.rebind(
+			"SELECT credential_id, " + joinColumns(passkeyValueColumns) +
+				" FROM " + n.passkeys + " WHERE subject = ? ORDER BY created_at, credential_id"),
+		passkeyPut: d.rebind(
+			"INSERT INTO " + n.passkeys +
+				" (credential_id, " + joinColumns(passkeyValueColumns) + ")" +
+				" VALUES (" + bindPlaceholders(1+len(passkeyValueColumns)) + ")" + d.upsertAlias() +
+				d.upsertOnConflict("credential_id", assignExcluded(d, passkeyValueColumns))),
+		// Only the assertion-mutable fields are written; registration
+		// state (subject, public_key, aaguid, backup_eligible,
+		// created_at) is untouched by design.
+		passkeyUpdate: d.rebind(
+			"UPDATE " + n.passkeys +
+				" SET sign_count = ?, user_present = ?, user_verified = ?," +
+				" backup_state = ?, clone_warning = ?" +
+				" WHERE credential_id = ?"),
+		passkeyDelete: d.rebind(
+			"DELETE FROM " + n.passkeys + " WHERE credential_id = ?"),
+
+		// recovery codes (one row per slot)
+		recoveryList: d.rebind(
+			"SELECT slot_index, code_hash, consumed_at, generated_at" +
+				" FROM " + n.recoveryCodes + " WHERE subject = ? ORDER BY slot_index"),
+		recoveryDeleteAll: d.rebind(
+			"DELETE FROM " + n.recoveryCodes + " WHERE subject = ?"),
+		recoveryInsert: d.rebind(
+			"INSERT INTO " + n.recoveryCodes +
+				" (subject, slot_index, code_hash, consumed_at, generated_at)" +
+				" VALUES (?, ?, ?, ?, ?)"),
+		// The hash predicate is what makes regenerating a batch revoke
+		// the codes it replaced: a slot whose hash has moved on refuses
+		// the redemption instead of burning a fresh slot.
+		recoveryConsume: d.rebind(
+			"UPDATE " + n.recoveryCodes +
+				" SET consumed_at = ?" +
+				" WHERE subject = ? AND slot_index = ? AND code_hash = ? AND consumed_at = 0"),
+
+		// email OTP challenges
+		emailOTPGet: d.rebind(
+			"SELECT subject, " + joinColumns(emailOTPValueColumns) +
+				" FROM " + n.emailOTPs + " WHERE subject = ?"),
+		emailOTPPut: d.rebind(
+			"INSERT INTO " + n.emailOTPs +
+				" (subject, " + joinColumns(emailOTPValueColumns) + ")" +
+				" VALUES (" + bindPlaceholders(1+len(emailOTPValueColumns)) + ")" + d.upsertAlias() +
+				d.upsertOnConflict("subject", assignExcluded(d, emailOTPValueColumns))),
+		emailOTPCompareAndSwap: d.rebind(
+			"UPDATE " + n.emailOTPs +
+				" SET " + assignPlaceholders(emailOTPValueColumns) +
+				" WHERE subject = ? AND " + matchPlaceholders(emailOTPValueColumns)),
+		// Consume matches on the code material and on the record still
+		// being unconsumed and unexpired, so a stale success cannot
+		// redeem the challenge that replaced it.
+		emailOTPConsume: d.rebind(
+			"UPDATE " + n.emailOTPs +
+				" SET " + assignPlaceholders(emailOTPValueColumns) +
+				" WHERE subject = ? AND code_salt = ? AND code_hash = ? AND consumed_at = 0" +
+				" AND (expires_at = 0 OR expires_at >= ?)"),
+		emailOTPDelete: d.rebind(
+			"DELETE FROM " + n.emailOTPs + " WHERE subject = ?"),
+
+		// cross-factor brute-force counters (version-guarded)
+		lockoutGet: d.rebind(
+			"SELECT subject, failed_count, record_version, first_failure_at, locked_until" +
+				" FROM " + n.authnLockouts + " WHERE subject = ?"),
+		lockoutInsert: d.rebind(
+			"INSERT INTO " + n.authnLockouts +
+				" (subject, failed_count, record_version, first_failure_at, locked_until)" +
+				" VALUES (?, ?, ?, ?, ?)" + d.upsertAlias() +
+				d.upsertDoNothingQualified("subject", n.authnLockouts)),
+		lockoutUpdate: d.rebind(
+			"UPDATE " + n.authnLockouts +
+				" SET failed_count = ?, record_version = ?, first_failure_at = ?, locked_until = ?" +
+				" WHERE subject = ? AND record_version = ?"),
 	}
 
 	// Layer 6: scan every produced query for SQL-injection

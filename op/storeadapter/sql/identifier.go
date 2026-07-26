@@ -72,6 +72,11 @@ type nameMap struct {
 	metadata           string
 	deviceCodes        string
 	cibaRequests       string
+	totpSecrets        string
+	passkeys           string
+	recoveryCodes      string
+	emailOTPs          string
+	authnLockouts      string
 }
 
 // defaultNames returns the canonical table names. Embedders that
@@ -99,6 +104,11 @@ func defaultNames() nameMap {
 		metadata:           "oidc_op_metadata",
 		deviceCodes:        "oidc_device_codes",
 		cibaRequests:       "oidc_ciba_requests",
+		totpSecrets:        "oidc_totp_secrets",
+		passkeys:           "oidc_passkeys",
+		recoveryCodes:      "oidc_recovery_codes",
+		emailOTPs:          "oidc_email_otps",
+		authnLockouts:      "oidc_authn_lockouts",
 	}
 }
 
@@ -106,7 +116,7 @@ func defaultNames() nameMap {
 // field on n. Unknown logical keys cause an error; this catches typos
 // at construction time rather than silently ignoring them.
 //
-//nolint:cyclop // 18-arm switch is irreducibly complex; one arm per nameMap field.
+//nolint:cyclop // flat switch is irreducibly complex; one arm per nameMap field.
 func (n *nameMap) applyOverrides(overrides map[string]string) error {
 	for logical, physical := range overrides {
 		if err := validateIdentifier(physical); err != nil {
@@ -149,6 +159,16 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 			n.deviceCodes = physical
 		case "ciba_requests":
 			n.cibaRequests = physical
+		case "totp_secrets":
+			n.totpSecrets = physical
+		case "passkeys":
+			n.passkeys = physical
+		case "recovery_codes":
+			n.recoveryCodes = physical
+		case "email_otps":
+			n.emailOTPs = physical
+		case "authn_lockouts":
+			n.authnLockouts = physical
 		default:
 			return fmt.Errorf("oidcsql: unknown WithNaming key %q (valid keys: %s)",
 				logical, strings.Join(knownNamingKeys, ", "))
@@ -157,7 +177,7 @@ func (n *nameMap) applyOverrides(overrides map[string]string) error {
 	return n.checkCollisions()
 }
 
-// checkCollisions rejects a nameMap whose 18 resolved physical names
+// checkCollisions rejects a nameMap whose resolved physical names
 // are not pairwise distinct. WithNaming lets an embedder rename any
 // subset of tables; without this check, two overrides that resolve to
 // the same physical name — or an override that collides with a
@@ -220,6 +240,11 @@ func (n nameMap) all() []string {
 		n.metadata,
 		n.deviceCodes,
 		n.cibaRequests,
+		n.totpSecrets,
+		n.passkeys,
+		n.recoveryCodes,
+		n.emailOTPs,
+		n.authnLockouts,
 	}
 }
 
@@ -257,6 +282,11 @@ var knownNamingKeys = []string{
 	"op_metadata",
 	"device_codes",
 	"ciba_requests",
+	"totp_secrets",
+	"passkeys",
+	"recovery_codes",
+	"email_otps",
+	"authn_lockouts",
 }
 
 // rewriteSchema swaps every default table name in the embedded DDL
@@ -300,6 +330,11 @@ func rewriteSchema(raw []byte, n nameMap) string {
 		defaults.metadata:           n.metadata,
 		defaults.deviceCodes:        n.deviceCodes,
 		defaults.cibaRequests:       n.cibaRequests,
+		defaults.totpSecrets:        n.totpSecrets,
+		defaults.passkeys:           n.passkeys,
+		defaults.recoveryCodes:      n.recoveryCodes,
+		defaults.emailOTPs:          n.emailOTPs,
+		defaults.authnLockouts:      n.authnLockouts,
 	}
 	names := make([]string, 0, len(replacements))
 	for from := range replacements {

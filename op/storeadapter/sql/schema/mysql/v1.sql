@@ -311,3 +311,91 @@ CREATE TABLE IF NOT EXISTS oidc_ciba_requests (
     issued_at BIGINT NOT NULL,
     INDEX idx_oidc_ciba_requests_expires (expires_at)
 );
+
+-- Authentication-factor substores.
+--
+-- These five tables back the factor stores a login flow requires
+-- (op.StepTOTP, op.PrimaryPasskey, recovery codes, email OTP, and the
+-- cross-factor brute-force counter). They are keyed by subject rather
+-- than by a token identifier and carry no foreign key to the embedder's
+-- user table: the adapter never joins against it.
+--
+-- Secret material is stored exactly as the library hands it over.
+-- oidc_totp_secrets.secret_ciphertext is an AES-256-GCM blob, the
+-- recovery code_hash values are argon2id modular-crypt encodings, and
+-- the email-OTP salt / hash are the authenticator's opaque bytes.
+-- Nothing here may be logged or parsed by the backend.
+
+CREATE TABLE IF NOT EXISTS oidc_totp_secrets (
+    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    secret_ciphertext VARBINARY(512) NOT NULL,
+    failed_count INT NOT NULL DEFAULT 0,
+    last_accepted_step BIGINT NOT NULL DEFAULT 0,
+    confirmed_at BIGINT NOT NULL DEFAULT 0,
+    first_failure_at BIGINT NOT NULL DEFAULT 0,
+    locked_until BIGINT NOT NULL DEFAULT 0
+);
+
+-- credential_id is VARBINARY rather than a BLOB so it can carry the
+-- primary key; 512 bytes is well beyond the sizes authenticators
+-- actually emit while staying inside InnoDB's index-length ceiling.
+CREATE TABLE IF NOT EXISTS oidc_passkeys (
+    credential_id VARBINARY(512) NOT NULL PRIMARY KEY,
+    subject VARCHAR(255) NOT NULL,
+    public_key VARBINARY(1024) NOT NULL,
+    aaguid VARBINARY(64) NOT NULL,
+    sign_count BIGINT NOT NULL DEFAULT 0,
+    attestation_type VARCHAR(64) NOT NULL DEFAULT '',
+    transports JSON NOT NULL,
+    attachment VARCHAR(32) NOT NULL DEFAULT '',
+    user_present TINYINT(1) NOT NULL DEFAULT 0,
+    user_verified TINYINT(1) NOT NULL DEFAULT 0,
+    backup_eligible TINYINT(1) NOT NULL DEFAULT 0,
+    backup_state TINYINT(1) NOT NULL DEFAULT 0,
+    clone_warning TINYINT(1) NOT NULL DEFAULT 0,
+    created_at BIGINT NOT NULL DEFAULT 0,
+    INDEX idx_oidc_passkeys_subject (subject)
+);
+
+-- One row per recovery-code slot rather than one row per batch: the
+-- single-use guarantee is then a conditional UPDATE on the slot itself,
+-- so two concurrent redemptions of the same code cannot both win.
+-- generated_at is denormalised across the batch's rows because the
+-- library reads and writes the batch as a unit.
+CREATE TABLE IF NOT EXISTS oidc_recovery_codes (
+    subject VARCHAR(255) NOT NULL,
+    slot_index INT NOT NULL,
+    code_hash VARCHAR(255) NOT NULL,
+    consumed_at BIGINT NOT NULL DEFAULT 0,
+    generated_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (subject, slot_index)
+);
+
+-- retain_until governs row retention independently of expires_at: the
+-- rate-limit and brute-force counters have to outlive the code they
+-- were accumulated against, otherwise pacing sends to the code TTL
+-- silently resets them.
+CREATE TABLE IF NOT EXISTS oidc_email_otps (
+    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    code_salt VARBINARY(64) NOT NULL,
+    code_hash VARBINARY(64) NOT NULL,
+    failed_count INT NOT NULL DEFAULT 0,
+    send_count INT NOT NULL DEFAULT 0,
+    sent_at BIGINT NOT NULL DEFAULT 0,
+    expires_at BIGINT NOT NULL DEFAULT 0,
+    retain_until BIGINT NOT NULL DEFAULT 0,
+    first_failure_at BIGINT NOT NULL DEFAULT 0,
+    locked_until BIGINT NOT NULL DEFAULT 0,
+    consumed_at BIGINT NOT NULL DEFAULT 0,
+    send_window_start BIGINT NOT NULL DEFAULT 0,
+    last_send_attempt_at BIGINT NOT NULL DEFAULT 0,
+    INDEX idx_oidc_email_otps_retain (retain_until)
+);
+
+CREATE TABLE IF NOT EXISTS oidc_authn_lockouts (
+    subject VARCHAR(255) NOT NULL PRIMARY KEY,
+    failed_count INT NOT NULL DEFAULT 0,
+    record_version BIGINT NOT NULL DEFAULT 0,
+    first_failure_at BIGINT NOT NULL DEFAULT 0,
+    locked_until BIGINT NOT NULL DEFAULT 0
+);

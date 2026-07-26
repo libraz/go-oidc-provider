@@ -55,7 +55,9 @@ func WithClock(c Clock) Option {
 // "grants", "sessions", "par_records", "interactions",
 // "consumed_jtis", "users", "initial_access_tokens",
 // "registration_access_tokens", "op_metadata", "device_codes",
-// "ciba_requests"); values are the physical identifiers to use.
+// "ciba_requests", "totp_secrets", "passkeys", "recovery_codes",
+// "email_otps", "authn_lockouts"); values are the physical identifiers
+// to use.
 // Unknown logical keys cause [New] to return an error so typos surface
 // at construction time. Each physical identifier is validated against
 // the SQL standard regular identifier grammar before any query is
@@ -100,6 +102,12 @@ type Store struct {
 	deviceCodesImpl        *deviceCodeStore
 	cibaRequestsImpl       *cibaRequestStore
 	metadataImpl           *metadataStore
+
+	totpsImpl         *totpStore
+	passkeysImpl      *passkeyStore
+	recoveryCodesImpl *recoveryStore
+	emailOTPsImpl     *emailOTPStore
+	authnLockoutsImpl *authnLockoutStore
 }
 
 // New constructs a Store backed by the supplied *sql.DB. The caller is
@@ -164,7 +172,40 @@ func (s *Store) attachSubstores() {
 	s.deviceCodesImpl = newDeviceCodeStore(s)
 	s.cibaRequestsImpl = newCIBARequestStore(s)
 	s.metadataImpl = newMetadataStore(s, nil)
+	s.totpsImpl = newTOTPStore(s)
+	s.passkeysImpl = newPasskeyStore(s)
+	s.recoveryCodesImpl = newRecoveryStore(s)
+	s.emailOTPsImpl = newEmailOTPStore(s)
+	s.authnLockoutsImpl = newAuthnLockoutStore(s)
 }
+
+// The authentication-factor substores are deliberately absent from
+// [store.Store]: the login flow receives them directly, and a
+// deployment that never enables a second factor should not have to
+// provision their tables. Each accessor mirrors the name the inmem
+// reference adapter uses so the two are drop-in interchangeable.
+
+// TOTPs returns the [store.TOTPStore] backed by the totp_secrets table.
+// Wire it into a login flow through op.StepTOTP.
+func (s *Store) TOTPs() store.TOTPStore { return s.totpsImpl }
+
+// Passkeys returns the [store.PasskeyStore] backed by the passkeys
+// table. Wire it into a login flow through op.PrimaryPasskey or
+// op.StepPasskey.
+func (s *Store) Passkeys() store.PasskeyStore { return s.passkeysImpl }
+
+// RecoveryCodes returns the [store.RecoveryStore] backed by the
+// recovery_codes table.
+func (s *Store) RecoveryCodes() store.RecoveryStore { return s.recoveryCodesImpl }
+
+// EmailOTPs returns the [store.EmailOTPStore] backed by the email_otps
+// table.
+func (s *Store) EmailOTPs() store.EmailOTPStore { return s.emailOTPsImpl }
+
+// AuthnLockouts returns the [store.AuthnLockoutStore] backed by the
+// authn_lockouts table. Wire it through op.WithAuthnLockoutStore to
+// give the cross-factor brute-force counter a durable home.
+func (s *Store) AuthnLockouts() store.AuthnLockoutStore { return s.authnLockoutsImpl }
 
 // Schema returns the dialect-specific DDL the adapter expects, with
 // any [WithNaming] overrides applied. Embedders typically copy the
@@ -181,6 +222,12 @@ func (s *Store) Schema() string {
 // tooling. Migrate splits on ";" so the embedded SQL must use
 // statement-terminating semicolons exclusively (which the bundled DDL
 // does).
+//
+// After applying the DDL, Migrate re-reads the refresh-token table and
+// fails when a required column is absent, which catches a database
+// still carrying a hand-rolled schema from an earlier version. The
+// check covers that one table; it is a staleness guard rather than a
+// full audit of the applied schema.
 func (s *Store) Migrate(ctx context.Context) error {
 	stmts := splitStatements(s.Schema())
 	for _, stmt := range stmts {

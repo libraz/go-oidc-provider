@@ -97,7 +97,7 @@ func newMySQLFactory(t *testing.T) contract.Factory {
 		if err := s.Migrate(t.Context()); err != nil {
 			t.Fatalf("Migrate: %v", err)
 		}
-		return contract.Backend{Store: s, Now: clock.Now}
+		return contract.Backend{Store: s, Now: clock.Now, SeedUser: seedContractUser(s)}
 	}
 }
 
@@ -108,5 +108,7 @@ func newMySQLFactory(t *testing.T) contract.Factory {
 // `go test -tags=testcontainers ./...` when Docker is available.
 func TestMySQL_Contract(t *testing.T) {
 	t.Parallel()
-	contract.Run(t, newMySQLFactory(t))
+	factory := newMySQLFactory(t)
+	contract.Run(t, factory)
+	runMFAContracts(t, factory)
 }

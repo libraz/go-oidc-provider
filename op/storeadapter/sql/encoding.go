@@ -153,8 +153,10 @@ func isExpired(t time.Time, clock Clock) bool {
 }
 
 // boolToInt64 maps a Go bool to the integer 0/1 the schema stores.
-// MySQL TINYINT(1), SQLite INTEGER, and PostgreSQL BOOLEAN all accept
-// integer-typed bind parameters via database/sql.
+// Every dialect's boolean-shaped column is declared as an integer type
+// (MySQL TINYINT(1), SQLite INTEGER, PostgreSQL SMALLINT) so one bind
+// shape works everywhere. PostgreSQL BOOLEAN is deliberately not used:
+// pgx refuses an integer bind parameter for OID 16.
 func boolToInt64(b bool) int64 {
 	if b {
 		return 1

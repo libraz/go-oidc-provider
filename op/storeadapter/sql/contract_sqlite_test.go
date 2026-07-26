@@ -63,6 +63,7 @@ func newSQLiteFactory(t *testing.T) contract.Factory {
 			Advance: func(delta time.Duration) {
 				clock.now = clock.now.Add(delta)
 			},
+			SeedUser: seedContractUser(s),
 		}
 	}
 }
@@ -72,7 +73,9 @@ func newSQLiteFactory(t *testing.T) contract.Factory {
 // adapter change has broken the documented store semantics.
 func TestSQLite_Contract(t *testing.T) {
 	t.Parallel()
-	contract.Run(t, newSQLiteFactory(t))
+	factory := newSQLiteFactory(t)
+	contract.Run(t, factory)
+	runMFAContracts(t, factory)
 }
 
 func TestSQLite_MigrateDetectsLegacyRefreshSchema(t *testing.T) {
