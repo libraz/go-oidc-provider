@@ -46,6 +46,7 @@ dependencies stay out of your `go.sum` until you opt in:
 ```sh
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.0.0
 ```
 
 ## Quickstart

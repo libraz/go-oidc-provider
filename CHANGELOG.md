@@ -10,14 +10,16 @@ series) may carry breaking changes — see the `Changed` / `Removed`
 sections of each release for the migration notes.
 
 The main module and the storage-adapter sub-modules
-(`op/storeadapter/sql`, `op/storeadapter/redis`) share the same release
-tag. Embedders pull each sub-module independently:
+(`op/storeadapter/sql`, `op/storeadapter/redis`, and from `v1.0.0`
+`op/storeadapter/dynamodb`) share the same release tag. Embedders pull
+each sub-module independently:
 
 ```
 # v1.0.0 (latest)
 go get github.com/libraz/go-oidc-provider@v1.0.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v1.0.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
+go get github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb@v1.0.0
 
 # v0.9.5
 go get github.com/libraz/go-oidc-provider@v0.9.5
@@ -50,7 +52,7 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/sql@v0.9.0
 go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v0.9.0
 ```
 
-## [v1.0.0] — 2026-07-25
+## [v1.0.0] — 2026-07-27
 
 The first release under strict Semantic Versioning. From here the public `op`
 surface changes only on a major version, with one stated exception: symbols
@@ -65,6 +67,10 @@ ceremony survives a signing or persistence fault; back-channel logout fans out
 through keyset-paginated grant lookups; and `op.New` rejects a far wider class
 of misconfiguration up front. No new protocol surface.
 
+Two things do widen: the security posture becomes something a deployment
+declares rather than inherits by omission, and the storage layer gains a third
+adapter plus durable homes for every authentication factor.
+
 Several store-interface and construction changes are breaking for custom store
 implementations — see `Changed` for the migration notes. They are the last such
 changes that can land outside a major version.
@@ -75,6 +81,66 @@ not adopt this release.
 
 ### Added
 
+- `profile.Baseline`, the OAuth 2.1 / RFC 9700 posture, so a deployment can
+  state it instead of inheriting the permissive OIDC Core 1.0 shape by leaving
+  the profile unset. Its only mandate beyond the library default is PKCE on
+  every authorization-code request, including confidential clients — the case
+  the OIDC Core shape admits without a `code_challenge`. Declaring a profile was
+  already possible; what was missing was a name for the posture most deployments
+  actually want, which meant the common case was expressed as an absence and
+  read as one.
+- `profile.RequiredGrants`, which fails `op.New` when a declared profile names a
+  grant the OP was not wired to serve, with the error naming the option that
+  activates it. Features a profile demands are switched on for the embedder;
+  grants are not, because activating one pulls in collaborators only the
+  embedder can supply — FAPI-CIBA needs the CIBA grant and everything behind it.
+  Silently serving a profile minus its central grant is the failure this
+  replaces.
+- A `startup.profile` audit event emitted once per successful `op.New`, carrying
+  the declared profiles, features, and grants alongside the policy they resolved
+  to: PKCE / PAR / nonce mandates, sender constraint, token TTLs and formats,
+  signing algorithm, and the DPoP-nonce requirement. The resolved posture is
+  what an operator needs to read, and until now it existed only as the sum of
+  the option set.
+- `op/storeadapter/dynamodb`, a third storage adapter covering every `op/store`
+  substore, published as its own module so the AWS SDK stays out of the main
+  module's `go.sum` until an embedder opts in. Each substore gets one table with
+  its key, index, and TTL attributes projected alongside the record as a JSON
+  document, so a record-shape change needs no table migration. Expiry is
+  enforced on read against the injected clock rather than trusting the TTL
+  attribute — DynamoDB reclaims expired items asynchronously, so an expired code
+  would otherwise stay redeemable for as long as the sweep lags. `store.Transactional`
+  is backed by a write buffer that collapses repeated writes per item and commits
+  as one `TransactWriteItems`, with each buffered action carrying the condition
+  its read justified and reads consulting the buffer first; every security
+  decision reads through a strongly consistent `GetItem`. `CreateTables`
+  provisions for development while `TableDefinitions` exposes the same key
+  schemas to infrastructure tooling. The adapter's `Store` is listed in
+  `api/experimental.txt`: its construction and option surface may change in a
+  minor release.
+- The SQL adapter implements every authentication-factor substore —
+  `store.TOTPStore`, `PasskeyStore`, `RecoveryStore`, `EmailOTPStore`, and
+  `AuthnLockoutStore`, reached through `TOTPs()`, `Passkeys()`,
+  `RecoveryCodes()`, `EmailOTPs()`, and `AuthnLockouts()`. They stay off
+  `store.Store`, so a deployment enabling no second factor need not provision
+  their tables, and the accessor names mirror the in-memory reference. The
+  `totp_secrets`, `passkeys`, `recovery_codes`, `email_otps`, and
+  `authn_lockouts` DDL ships for SQLite, MySQL, and PostgreSQL, renameable
+  through the same `WithNaming` keys as the rest. PostgreSQL declares the
+  boolean-shaped columns as `SMALLINT` because pgx refuses an integer bind
+  parameter for OID 16 and one bind shape has to work across all three dialects.
+- `examples/00-security-profile`, which boots two OPs from an otherwise
+  identical option set — one with no profile, one declaring `profile.Baseline` —
+  and sends the same confidential-client authorization request without
+  `code_challenge` to each. The OIDC Core shape admits it; the baseline refuses
+  it with `error=invalid_request`. Both route through one audit logger, so the
+  `startup.profile` records show the resolved posture before the first request.
+- `examples/18-dynamodb-store`, the DynamoDB adapter driving a browser
+  authorization-code flow with every durable and volatile substore on it. It
+  reads `DYNAMODB_ENDPOINT` to choose its wiring — placeholder static
+  credentials against an emulator, the ambient AWS configuration otherwise — and
+  ships a compose stack that keeps the emulator off the host network. It is its
+  own sub-module so the AWS SDK stays out of the main module's `go.sum`.
 - `op.WithUserStore`, which points claim reads at an embedder-owned user store
   while leaving every other substore of the `WithStore` backend untouched.
   Projecting an application's existing users table onto OIDC is the ordinary
@@ -299,6 +365,16 @@ not adopt this release.
   (`DefaultMaxConcurrentDeliveries`) with the deduplicated audience capped at
   `DefaultMaxTargets`; the HTTP deliverer adopts only an embedder client's
   `Transport`, keeping redirect, timeout, and dial-time SSRF policy mandatory.
+- `examples/27-durable-mfa-store` reads `storage.TOTPs()` from the SQL adapter
+  instead of carrying a hand-written substore with its own DDL and migration
+  step, and wires the cross-factor lockout counter to the same database through
+  `op.WithAuthnLockoutStore(storage.AuthnLockouts())`, so the guess budget is
+  one budget across restarts and replicas. The example existed to fill an
+  adapter gap that no longer exists; what it demonstrates now is durable factor
+  persistence, with examples 28 and 29 covering the sibling factors. Its test
+  narrows to the one claim it still adds — that factors survive a restart —
+  since replay rejection, compare-and-swap, and error spellings are pinned by
+  the adapter's own contract run.
 
 - **BREAKING — `op.Require` names a step kind instead of carrying a step.**
   The field changes from `Step Step` to `Kind StepKind`. `Require` never
@@ -503,6 +579,14 @@ not adopt this release.
   same-origin request and the CORS allowlist derived from the same value.
 - Redis adapter: `WithKeyPrefix` and `WithMaxValueBytes` now surface an option
   error at construction instead of being silently dropped.
+- The examples' relying-party kit encoded EC JWK coordinates in the minimal form
+  `big.Int.Bytes` returns instead of left-padding to the 32 octets RFC 7518
+  §6.2.1.2 requires. A coordinate starting with a zero byte — roughly one
+  ephemeral key in 256 — produced a 31-octet value, and a conforming parser
+  rejects the resulting JWK as malformed, so a FAPI 2.0 example failed at a rate
+  low enough to read as a flake. Fixed-width encoding now applies to the DPoP
+  proof header, its thumbprint, and the published JWK set alike, so all three
+  agree.
 - Corrected the public `grant.RefreshToken` and `ScopeNameOfflineAccess`
   documentation to match the historical issuance default: `openid` plus the
   client's `refresh_token` grant is sufficient, while requiring `offline_access`
