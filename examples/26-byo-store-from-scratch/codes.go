@@ -155,10 +155,14 @@ INSERT INTO vault_renewal_slips
   (token_secret_digest, relying_party, principal, ledger_id, requested_scope,
    resource_hint, principal_is_wire, origin_kind, auth_epoch, acr_value,
    amr_values, authorization_detail, access_token_extra, parent_secret_digest,
-   parent_secret_raw,
+   parent_secret_raw, retry_sealed,
    dpop_thumb, mtls_thumb, nonce_echo, is_void, expires_epoch, consumed_epoch,
    issued_epoch)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	refreshRetrySelect = `
+SELECT retry_sealed FROM vault_renewal_slips
+WHERE parent_secret_digest = ? AND retry_sealed IS NOT NULL`
 
 	refreshSelect = `
 SELECT token_secret_digest, relying_party, principal, ledger_id, requested_scope,
@@ -184,12 +188,48 @@ UPDATE vault_renewal_slips SET consumed_epoch = ?, is_void = 1 WHERE ledger_id =
 )
 
 func (s *refreshStore) Save(ctx context.Context, t *store.RefreshToken) error {
+	return s.save(ctx, t, nil)
+}
+
+// SaveRotationWithRetry implements [store.RefreshRetryResponseStore]. The
+// sealed response rides along in the successor's INSERT, which is what
+// makes the pair atomic: there is no window in which the successor exists
+// without its retry copy, so a client that retries a rotation whose
+// response it never received cannot be answered with a second branch of
+// the chain. A store that could not write both in one operation is
+// required not to expose this interface at all.
+func (s *refreshStore) SaveRotationWithRetry(ctx context.Context, successor *store.RefreshToken, sealed []byte) error {
+	if successor == nil || successor.ParentID == nil {
+		// A root token has no predecessor to key the response by, so
+		// there is nothing a retry could present.
+		return errors.New("refreshes.SaveRotationWithRetry: successor has no parent")
+	}
+	return s.save(ctx, successor, sealed)
+}
+
+// LoadRetryResponse implements [store.RefreshRetryResponseStore]. The
+// lookup is by digest, never by the raw predecessor id: that id is a
+// bearer credential and this store never holds one in a form a database
+// reader could present.
+func (s *refreshStore) LoadRetryResponse(ctx context.Context, predecessorID string) ([]byte, error) {
+	var sealed []byte
+	err := s.q.QueryRowContext(ctx, refreshRetrySelect, digest(predecessorID)).Scan(&sealed)
+	if errors.Is(err, databasesql.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("refreshes.LoadRetryResponse: %w", err)
+	}
+	return sealed, nil
+}
+
+func (s *refreshStore) save(ctx context.Context, t *store.RefreshToken, sealed []byte) error {
 	_, err := s.q.ExecContext(ctx, refreshInsert,
 		digest(t.ID), t.ClientID, t.Subject, t.GrantID,
 		encodeStrings(t.Scope), t.Resource, boolToInt(t.SubjectPublic),
 		string(t.Origin), epochOf(t.AuthTime), t.ACR, encodeStrings(t.AMR),
 		encodeObjectArray(t.AuthorizationDetails), encodeMap(t.AccessTokenExtra),
-		digestNullable(t.ParentID), t.ParentID,
+		digestNullable(t.ParentID), t.ParentID, sealed,
 		t.DPoPJKT, t.MTLSCertThumbprint, t.Nonce, boolToInt(t.Revoked),
 		epochOf(t.ExpiresAt), epochPtr(t.ConsumedAt), epochOf(t.CreatedAt))
 	if err != nil {

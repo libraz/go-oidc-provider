@@ -93,6 +93,14 @@ CREATE TABLE IF NOT EXISTS vault_renewal_slips (
     access_token_extra   TEXT NOT NULL,
     parent_secret_digest TEXT,
     parent_secret_raw    TEXT,
+    -- The sealed token response the OP re-emits when a client retries a
+    -- rotation it never received. It lives on the successor row, keyed by
+    -- the predecessor's digest, so the successor insert and the cache
+    -- write are one statement — which is the condition
+    -- store.RefreshRetryResponseStore attaches to exposing the interface
+    -- at all. The bytes are already encrypted by the token endpoint and
+    -- this store never looks inside them.
+    retry_sealed         BLOB,
     dpop_thumb           TEXT NOT NULL,
     mtls_thumb           TEXT NOT NULL,
     nonce_echo           TEXT NOT NULL,

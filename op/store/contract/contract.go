@@ -12,6 +12,7 @@
 package contract
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -483,6 +484,7 @@ var refreshCases = []subtest{
 	{"RevokeChainMissing", refreshRevokeChainMissing},
 	{"RevokeByGrant", refreshRevokeByGrant},
 	{"RevokeByClient", refreshRevokeByClient},
+	{"RetryResponse", refreshRetryResponse},
 	{"Expired", refreshExpired},
 }
 
@@ -686,6 +688,62 @@ func refreshRevokeByClient(t *testing.T, f Factory) {
 	assertRefreshLive(t, b.Store, other.ID)
 	if err := revoke.RevokeByClient(ctx, "client-absent"); err != nil {
 		t.Fatalf("RevokeByClient absent: %v", err)
+	}
+}
+
+// refreshRetryResponse exercises [store.RefreshRetryResponseStore], the
+// durable half of the RFC 9700 delivery grace window. The extension is
+// skippable here for the same reason every extension is — a backend that
+// cannot make the successor insert and the cache write one operation is
+// required not to expose it — but it is not optional in practice: with
+// the refresh grant enabled and cookie keys configured, [op.New] refuses
+// a store that lacks it.
+//
+// What the case pins is the association, not the bytes: the sealed
+// response is reachable by the *predecessor* the client would present on
+// a retry, and a predecessor that never had one reads as ErrNotFound
+// rather than as an empty response. A backend that keyed the cache by
+// the successor instead would pass every other refresh case and then
+// answer a genuine retry with "no retry response", sending the client
+// down the replay-revocation path with a token it legitimately holds.
+func refreshRetryResponse(t *testing.T, f Factory) {
+	b := f(t)
+	retry, ok := b.Store.RefreshTokens().(store.RefreshRetryResponseStore)
+	if !ok {
+		t.Skipf("backend %T does not implement store.RefreshRetryResponseStore", b.Store.RefreshTokens())
+	}
+	ctx := context.Background()
+
+	predecessor := newRefresh(b.Now(), "rt-retry-parent", nil)
+	if err := b.Store.RefreshTokens().Save(ctx, predecessor); err != nil {
+		t.Fatalf("Save predecessor: %v", err)
+	}
+	if _, err := b.Store.RefreshTokens().Consume(ctx, predecessor.ID); err != nil {
+		t.Fatalf("Consume predecessor: %v", err)
+	}
+
+	sealed := []byte("sealed-token-response")
+	successor := newRefresh(b.Now(), "rt-retry-child", &predecessor.ID)
+	if err := retry.SaveRotationWithRetry(ctx, successor, sealed); err != nil {
+		t.Fatalf("SaveRotationWithRetry: %v", err)
+	}
+
+	// The successor is an ordinary refresh token; storing the retry copy
+	// alongside it must not change that.
+	if _, err := b.Store.RefreshTokens().Find(ctx, successor.ID); err != nil {
+		t.Fatalf("Find successor after SaveRotationWithRetry: %v", err)
+	}
+
+	got, err := retry.LoadRetryResponse(ctx, predecessor.ID)
+	if err != nil {
+		t.Fatalf("LoadRetryResponse: %v", err)
+	}
+	if !bytes.Equal(got, sealed) {
+		t.Errorf("LoadRetryResponse = %q, want %q", got, sealed)
+	}
+
+	if _, err := retry.LoadRetryResponse(ctx, "rt-retry-absent"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("LoadRetryResponse for an unknown predecessor: want ErrNotFound, got %v", err)
 	}
 }
 
