@@ -1,0 +1,47 @@
+# Local stack for example 18-dynamodb-store.
+#
+# Boots two services on a private docker network:
+#
+#   * dynamodb — every substore backed by DynamoDB, one table each
+#   * op       — the OP example paired with a rpkit-driven RP
+#
+# The emulator is not exposed to the host; the OP container reaches it
+# by service name on the compose-internal network. Only the OP container
+# publishes 8080 (the OP) and 9090 (the RP) so the developer's browser
+# can drive the login round-trip.
+#
+# Bring it all up:
+#
+#   docker compose -f examples/18-dynamodb-store/compose.yaml up -d --build
+#   open http://127.0.0.1:9090/
+#   # sign in as demo / demo, approve consent, /me shows the ID Token
+#   docker compose -f examples/18-dynamodb-store/compose.yaml down -v
+#
+# The emulator image is pinned to the version the adapter's contract
+# harness runs against (op/storeadapter/dynamodb, -tags=testcontainers)
+# so adapter-level and example-level integration share a single matrix.
+# It is distributed under the Amazon Software License rather than an
+# open-source licence: it is a development container only, is not a
+# module dependency, and nothing it contains is redistributed here.
+#
+# -inMemory keeps the dataset in the emulator's heap, so `down` leaves
+# nothing behind and every `up` starts from empty tables. Swap it for
+# -dbPath if you want the demo's records to survive a restart.
+
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:2.5.2
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory", "-sharedDb"]
+
+  op:
+    build:
+      context: ../..
+      dockerfile: examples/18-dynamodb-store/Dockerfile
+    environment:
+      DYNAMODB_ENDPOINT: http://dynamodb:8000
+      AWS_REGION: us-east-1
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    depends_on:
+      - dynamodb

@@ -93,45 +93,13 @@ func requireCompose(t *testing.T) string {
 	return "" // unreachable; keeps the compiler aware that t.Skipf returns.
 }
 
-// startSampleStack brings the compose project up and returns its teardown.
-// The teardown removes the volume as well as the containers: the next run
-// must start from an empty schema, or a members row left by a failed run
-// changes what signup does.
+// startSampleStack brings the reference application's compose project up
+// and returns its teardown. Removing the volume matters more here than for
+// the numbered examples: the next run must start from an empty schema, or
+// a members row left by a failed run changes what signup does.
 func startSampleStack(t *testing.T, docker string) func() {
 	t.Helper()
-
-	composeFile := filepath.Join(repoRoot(t), "sample", "compose.yaml")
-	// A dedicated project name keeps this stack from adopting containers a
-	// developer started by hand from the same file.
-	base := []string{"compose", "-f", composeFile, "-p", "goidc-sample-verify"}
-
-	run := func(timeout time.Duration, args ...string) ([]byte, error) {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		defer cancel()
-		return exec.CommandContext(ctx, docker, append(base, args...)...).CombinedOutput()
-	}
-
-	down := func() {
-		if out, err := run(2*time.Minute, "down", "-v", "--remove-orphans"); err != nil {
-			t.Logf("compose down: %v\n%s", err, out)
-		}
-	}
-	// Clear anything an interrupted run left behind before building, so the
-	// new containers cannot come up onto a stale volume.
-	down()
-
-	if out, err := run(10*time.Minute, "up", "-d", "--build"); err != nil {
-		down()
-		t.Fatalf("compose up: %v\n%s", err, out)
-	}
-	return func() {
-		if t.Failed() {
-			if out, err := run(time.Minute, "logs", "--no-color", "app"); err == nil {
-				t.Logf("application log:\n%s", out)
-			}
-		}
-		down()
-	}
+	return startComposeStack(t, docker, "sample/compose.yaml", "goidc-sample-verify", "app")
 }
 
 // repoRoot walks up from the test's working directory to the checkout that
