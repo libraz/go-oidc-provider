@@ -155,7 +155,14 @@ type EmailOTPStore interface {
 	// when another caller has already consumed it. Backends SHOULD
 	// verify that the stored challenge still matches r.CodeSalt /
 	// r.CodeHash before stamping ConsumedAt so a stale success cannot
-	// consume a newer code issued for the same subject.
+	// consume a newer code issued for the same subject; a mismatch is
+	// reported as [ErrAlreadyConsumed] because the code the caller holds
+	// has been superseded.
+	//
+	// A challenge whose [EmailOTPRecord.ExpiresAt] has passed MUST be
+	// rejected with [ErrNotFound] even while the record is still
+	// retained for its counters: from the redemption path's point of
+	// view the code no longer exists.
 	Consume(ctx context.Context, r *EmailOTPRecord) error
 
 	// Delete removes the pending challenge for subject. It MUST return
