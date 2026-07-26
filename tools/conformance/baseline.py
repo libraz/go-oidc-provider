@@ -138,12 +138,19 @@ def cmd_baseline(label: str = "snapshot") -> int:
             sys.stdout.write(f"---- {m} ----\n")
             out = runner.run_one(plan_id, m)
             sys.stdout.write(f"result={out.status}/{out.result} ({out.elapsed_ms}ms)\n")
-            plan_entry["modules"][m] = {
+            entry = {
                 "status": out.status,
                 "result": out.result,
                 "runner_id": out.runner_id,
                 "elapsed_ms": out.elapsed_ms,
             }
+            # Only recorded when a retry actually happened, so an
+            # ordinary run diffs clean against earlier snapshots while a
+            # module that needed a second attempt says so in the artifact
+            # rather than only in the console the run scrolled past.
+            if out.attempts > 1:
+                entry["attempts"] = out.attempts
+            plan_entry["modules"][m] = entry
             # Persist incrementally so a Ctrl-C mid-run leaves a
             # partial baseline rather than an empty file.
             out_file.write_text(

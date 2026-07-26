@@ -19,6 +19,22 @@ class ModuleOutcome:
     result: str = ""
     elapsed_ms: int = 0
     error: str = ""
+    # How many times the module had to be run to reach this outcome. More
+    # than one means an earlier attempt was interrupted; see run_one.
+    attempts: int = 1
+
+
+# OFCS reports INTERRUPTED when a call the suite itself makes fails —
+# fetching the OP's JWKS, posting to PAR — rather than when the OP
+# answered wrongly. Docker's host bridge drops such a connection often
+# enough that a 271-module baseline run sees one or two, and recording a
+# transport blip as a verdict turns the release gate into a coin flip.
+#
+# So retry, but only once and only on INTERRUPTED: a module that is
+# genuinely broken fails both attempts and is still reported, while the
+# retry itself is logged and counted so a rising retry rate stays visible
+# rather than being absorbed into a green run.
+_INTERRUPT_RETRIES = 1
 
 
 def _drive_flags_for(module: str) -> dict[str, str]:
@@ -114,6 +130,26 @@ def _make_drive_opts(runner_id: str) -> drive.DriveOptions:
 
 
 def run_one(plan: str, module: str) -> ModuleOutcome:
+    """Drive one OFCS module to a terminal state, retrying an interrupt.
+
+    The retry exists because INTERRUPTED is not a verdict about the OP —
+    see _INTERRUPT_RETRIES. Every other outcome is returned as-is on the
+    first attempt.
+    """
+    out = _run_once(plan, module)
+    for attempt in range(1, _INTERRUPT_RETRIES + 1):
+        if out.status != "INTERRUPTED":
+            break
+        sys.stdout.write(
+            f"  [runner] INTERRUPTED (a suite-side call failed); "
+            f"retry {attempt}/{_INTERRUPT_RETRIES}\n"
+        )
+        out = _run_once(plan, module)
+        out.attempts = attempt + 1
+    return out
+
+
+def _run_once(plan: str, module: str) -> ModuleOutcome:
     """Drive one OFCS module to a terminal state.
 
     Returns ModuleOutcome with empty runner_id and `error` populated only
@@ -223,6 +259,7 @@ def run_one(plan: str, module: str) -> ModuleOutcome:
 def cmd_batch(plan: str, modules: list[str]) -> int:
     pass_n = fail_n = skip_n = err_n = stuck_n = 0
     stuck: list[str] = []
+    retried: list[str] = []
     for m in modules:
         sys.stdout.write(f"\n==== {m} ====\n")
         out = run_one(plan, m)
@@ -232,6 +269,8 @@ def cmd_batch(plan: str, modules: list[str]) -> int:
             continue
         sys.stdout.write(f"id={out.runner_id}\n")
         sys.stdout.write(f"result={out.status}/{out.result}\n")
+        if out.attempts > 1:
+            retried.append(f"{m} ({out.attempts} attempts)")
         key = f"{out.status}/{out.result}"
         if key.endswith("/PASSED"):
             pass_n += 1
@@ -249,8 +288,10 @@ def cmd_batch(plan: str, modules: list[str]) -> int:
             fail_n += 1
     sys.stdout.write(
         f"\n==== summary: pass={pass_n} skip={skip_n} fail={fail_n} "
-        f"stuck={stuck_n} err={err_n} ====\n"
+        f"stuck={stuck_n} err={err_n} retried={len(retried)} ====\n"
     )
     for m in stuck:
         sys.stdout.write(f"  stuck (no verdict): {m}\n")
+    for m in retried:
+        sys.stdout.write(f"  retried after an interrupt: {m}\n")
     return 0
