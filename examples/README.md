@@ -51,6 +51,7 @@ it boots with `(cd examples/08-composite-hot-cold && go run -tags example .)`.
 | Goal | Start with |
 |---|---|
 | stand up the smallest possible OP | [`01-minimal`](01-minimal/main.go) |
+| declare which security posture the OP runs (OAuth 2.1 vs plain OIDC) | [`00-security-profile`](00-security-profile/main.go) |
 | see every option a typical embedder reaches for | [`02-bundle`](02-bundle/main.go) |
 | run a FAPI 2.0 Baseline OP (PAR + JAR + DPoP) | [`03-fapi2`](03-fapi2/main.go), [`50-fapi-tls-jwks`](50-fapi-tls-jwks/main.go) |
 | issue tokens to backend services (no end user) | [`05-client-credentials`](05-client-credentials/main.go) |
