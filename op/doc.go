@@ -27,11 +27,22 @@
 //	    op.WithKeyset(myKeyset),
 //	    op.WithStore(myStore),
 //	    op.WithCookieKeys(myAES256GCMKey),
+//	    op.WithLoginFlow(op.LoginFlow{
+//	        Primary: op.PrimaryPassword{Store: myUserPasswordStore},
+//	    }),
 //	)
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
 //	http.ListenAndServe(":8080", handler)
+//
+// [WithLoginFlow] declares how a browser session authenticates. It is outside
+// the required set because an OP serving only client_credentials has no user
+// to authenticate. A provider that mounts the authorize endpoint without one
+// still constructs, but it has no credential to prompt for: the first request
+// that needs an interaction answers server_error ("interaction is not
+// configured"). [PrimaryPassword] is the usual starting point; further factors
+// attach as [Rule] entries.
 //
 // # Local development
 //

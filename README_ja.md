@@ -62,15 +62,27 @@ go get github.com/libraz/go-oidc-provider/op/storeadapter/redis@v1.0.0
 ```go
 handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
-    op.WithStore(inmem.New()),
+    op.WithStore(st),
     op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
     op.WithCookieKeys(cookieKey), // 32 バイト, AES-256-GCM
+    op.WithLoginFlow(op.LoginFlow{
+        Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+    }),
 )
 if err != nil {
     log.Fatal(err)
 }
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
+
+`WithLoginFlow` はブラウザセッションの認証方法を宣言するオプションです。
+`client_credentials` だけを提供する OP には認証すべきユーザーがいないため必須
+オプションではありません。ただし認可エンドポイントを持つ構成でこれを省くと、
+構築自体は成功する一方で要求すべき資格情報が無く、対話を必要とする最初の
+リクエストが `server_error` を返します。まず `op.PrimaryPassword` から始め、
+追加の要素はルールとして重ねてください
+（[`examples/20-mfa-totp`](examples/20-mfa-totp/main.go) が同じフローに第二要素を
+合成する例です）。
 
 鍵生成・ストア接続・グレースフルシャットダウンまで含めた起動例は
 [`examples/01-minimal`](examples/01-minimal/main.go) にあります。詳しくは
@@ -174,6 +186,7 @@ OpenID Connect Core §15.1 は RS256 の実装を必須としているため、�
 | `inmem` | `op/storeadapter/inmem` | リファレンス実装。開発・テスト向け。[`op/store/contract`](op/store/contract) のコントラクトハーネスはこれに対して走る。 |
 | `sql` | `op/storeadapter/sql` | SQLite / MySQL 8.0+ / PostgreSQL 14+ 向けの `database/sql` アダプタ。**別モジュール。** `go test -tags=testcontainers` で全サブストアを実エンジン（testcontainers）に対して走らせる。 |
 | `redis` | `op/storeadapter/redis` | 揮発性のサブストア（`InteractionStore` / `ConsumedJTIStore` / `SessionStore`）向け。**別モジュール。** Session は Redis TTL に従うため、grant / credential は durable backend と合成する。TLS（`rediss://`）と AUTH が無いと起動を拒否する（明示的な `WithDevModeAllowPlaintext` のみ例外）。 |
+| `dynamodb` | `op/storeadapter/dynamodb` | DynamoDB アダプタ。サブストアごとに 1 テーブル。書き込みをバッファし `TransactWriteItems` 1 回でコミットすることで `store.Transactional` を満たすため、ブラウザ認可コードフローを DynamoDB 単体で提供できる。**別モジュール。** コントラクトハーネスは `amazon/dynamodb-local` に対して走る（`go test -tags=testcontainers`）。`Experimental:` マーカー付き。 |
 | `composite` | `op/storeadapter/composite` | ホット/コールドの振り分け役。永続サブストアを一方のバックエンド、揮発性を他方へ振り分けつつ、トランザクショナルクラスタの不変条件を強制する。 |
 
 **自作バックエンドはコントラクトスイートで検証できます。**
@@ -186,22 +199,42 @@ OP がどの拡張を要求し、その要求が何によって有効になる�
 に表としてまとめてあります。必須拡張が欠けている場合はリクエスト時ではなく
 `op.New` が構築時に拒否します。
 
-**認証ファクタのストアは組み込み側が所有します。** 上記のアダプタが永続化
-するのは OIDC/OAuth のサブストアです。ログインフローが要求しうるファクタ
-（TOTP・パスキー・リカバリコード・メール OTP・ブルートフォース対策の
-ロックアウトカウンタ）は別のサブストア（`store.TOTPStore` /
+**認証ファクタのストア。** ログインフローが要求しうるファクタ（TOTP・
+パスキー・リカバリコード・メール OTP・要素横断のブルートフォースロック
+アウトカウンタ）は別のサブストア（`store.TOTPStore` /
 `store.PasskeyStore` / `store.RecoveryStore` / `store.EmailOTPStore` /
-`store.AuthnLockoutStore`）で、認証コンポーネントの設定を通じて注入します。
-スキーマと暗号鍵の管理がデプロイごとの判断になるためです。これらを実装
-しているのは `inmem` リファレンスだけなので、本番デプロイでは独自の永続実装
-を用意します。
-[`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go) は
-コピーして流用できるテンプレートで、コアアダプタと 1 つの DB を共有する
-SQL バックエンドの `store.TOTPStore` 実装です。
+`store.AuthnLockoutStore`）で、`store.Store` 経由ではなく認証コンポーネントの
+設定を通じて注入します。第二要素を一切使わないデプロイに、これらのテーブルの
+用意を強いないためです。`inmem` / `sql` / `dynamodb` の 3 アダプタがいずれも
+実装しており、アクセサ名も揃えてあるので（`TOTPs()` / `Passkeys()` /
+`RecoveryCodes()` / `EmailOTPs()` / `AuthnLockouts()`）、そのまま差し替え
+られます。
 
-DynamoDB アダプタは v1.x で別モジュールとして提供予定です。背景は
-[Operations — multi-instance](https://go-oidc-provider.libraz.net/ja/operations/multi-instance)
-を参照してください。
+```go
+op.WithAuthnLockoutStore(st.AuthnLockouts())
+op.StepTOTP{Store: st.TOTPs(), EncryptionKey: mfaKey}
+```
+
+これらの契約も他と同じハーネス（`contract.RunTOTPs` / `RunPasskeys` /
+`RunRecoveryCodes` / `RunEmailOTPs` / `RunAuthnLockouts`）で固定してあるため、
+自作実装も同じ手順で検証できます。同梱していないバックエンドを使う場合の
+テンプレートとして
+[`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go)
+が引き続き利用できます。
+
+**スキーマの適用。** `sql` アダプタはエンジンごとのリファレンス DDL を
+[`op/storeadapter/sql/schema/{sqlite,mysql,postgres}/v1.sql`](op/storeadapter/sql/schema)
+に同梱しています。ライブラリ採用前に DBA にレビューさせたい場合は、
+リポジトリから直接読めます。`Store.Schema()` は設定中の方言の DDL を
+`WithNaming` によるテーブル名変更を適用した状態で返すので、手元の
+マイグレーションツールに流し込んだり、既存スキーマとの差分を取ったりできます。
+`Store.Migrate(ctx)` は同じ DDL を接続中の DB に直接適用しますが、これは
+サンプルとテストが使う開発用の近道であり、本番のマイグレーションは利用者側の
+ツールで管理する想定です。認証ファクタのテーブルも同じ DDL に含まれるため、
+第二要素を有効にするために別途マイグレーションを足す必要はありません。
+DynamoDB も同じ二段構えで、`TableDefinitions()` が CloudFormation や
+Terraform に渡すキースキーマを返し、`CreateTables(ctx)` が開発・テスト用に
+テーブルを作成します。
 
 ## サンプル
 

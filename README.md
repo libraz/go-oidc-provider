@@ -58,15 +58,27 @@ configuration, so partial setups fail fast.
 ```go
 handler, err := op.New(
     op.WithIssuer("https://idp.example.com"),
-    op.WithStore(inmem.New()),
+    op.WithStore(st),
     op.WithKeyset(op.Keyset{{KeyID: "k1", Signer: priv}}),
     op.WithCookieKeys(cookieKey), // 32 bytes, AES-256-GCM
+    op.WithLoginFlow(op.LoginFlow{
+        Primary: op.PrimaryPassword{Store: st.UserPasswords()},
+    }),
 )
 if err != nil {
     log.Fatal(err)
 }
 log.Fatal(http.ListenAndServe(":8080", handler))
 ```
+
+`WithLoginFlow` declares how a browser session authenticates. It is not part
+of the required set — an OP serving only `client_credentials` has no user to
+authenticate — but a provider that mounts the authorize endpoint without one
+has no credential to prompt for, and the first request that needs an
+interaction answers `server_error`. Start from `op.PrimaryPassword` and add
+factors as rules
+([`examples/20-mfa-totp`](examples/20-mfa-totp/main.go) composes a second
+factor onto the same flow).
 
 End-to-end startup (key generation, store wiring, graceful shutdown) lives in
 [`examples/01-minimal`](examples/01-minimal/main.go); see also
@@ -160,6 +172,7 @@ Bring your own backend by implementing the substore interfaces in
 | `inmem` | `op/storeadapter/inmem` | Reference / dev / test store. The contract harness in [`op/store/contract`](op/store/contract) runs against it. |
 | `sql` | `op/storeadapter/sql` | `database/sql` adapter for SQLite, MySQL 8.0+, PostgreSQL 14+. **Sub-module.** Contract harness exercises every substore against a real engine via testcontainers (`go test -tags=testcontainers`). |
 | `redis` | `op/storeadapter/redis` | Volatile substores (`InteractionStore`, `ConsumedJTIStore`, `SessionStore`). **Sub-module.** Redis TTL governs sessions; compose with a durable backend for grants and credentials. Refuses to start without TLS (`rediss://`) and AUTH unless `WithDevModeAllowPlaintext` is set explicitly. |
+| `dynamodb` | `op/storeadapter/dynamodb` | DynamoDB adapter, one table per substore. Implements `store.Transactional` by buffering writes and committing them as one `TransactWriteItems`, so the browser authorization-code flow runs on DynamoDB alone. **Sub-module.** Contract harness runs against `amazon/dynamodb-local` (`go test -tags=testcontainers`). Marked `Experimental:` — see below. |
 | `composite` | `op/storeadapter/composite` | Hot/cold splitter — durable substores to one backend, volatile to another, while enforcing the transactional-cluster invariant. |
 
 **Verify your backend against the contract suite.**
@@ -172,20 +185,42 @@ requires, and what turns each requirement on, is tabulated in the
 [`op/store` package documentation](https://pkg.go.dev/github.com/libraz/go-oidc-provider/op/store);
 a missing required extension is rejected by `op.New` rather than at request time.
 
-**Authentication-factor stores are embedder-owned.** The adapters above persist
-the OIDC/OAuth substores. The factors a login flow can require — TOTP, passkey,
-recovery codes, email OTP, and the brute-force lockout counter — are separate
-substores (`store.TOTPStore`, `store.PasskeyStore`, `store.RecoveryStore`,
-`store.EmailOTPStore`, `store.AuthnLockoutStore`) injected through the
-authenticator config, because their schema and encryption-key management are
-deployment decisions. Only the `inmem` reference implements them, so a
-production deployment supplies its own durable versions.
-[`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go) is a
-copy-and-adapt template: a SQL-backed `store.TOTPStore` sharing one database
-with the core adapter.
+**Authentication-factor stores.** The factors a login flow can require — TOTP,
+passkey, recovery codes, email OTP, and the cross-factor brute-force lockout
+counter — are separate substores (`store.TOTPStore`, `store.PasskeyStore`,
+`store.RecoveryStore`, `store.EmailOTPStore`, `store.AuthnLockoutStore`)
+injected through the authenticator config rather than reached through
+`store.Store`: a deployment that never enables a second factor should not have
+to provision their tables. The `inmem`, `sql`, and `dynamodb` adapters all
+implement them, under accessors of the same name (`TOTPs()`, `Passkeys()`,
+`RecoveryCodes()`, `EmailOTPs()`, `AuthnLockouts()`), so the three are drop-in
+interchangeable:
 
-DynamoDB is planned for v1.x as an additional sub-module. Background:
-[Operations — multi-instance](https://go-oidc-provider.libraz.net/operations/multi-instance).
+```go
+op.WithAuthnLockoutStore(st.AuthnLockouts())
+op.StepTOTP{Store: st.TOTPs(), EncryptionKey: mfaKey}
+```
+
+Their contracts are pinned by the same harness as everything else
+(`contract.RunTOTPs`, `RunPasskeys`, `RunRecoveryCodes`, `RunEmailOTPs`,
+`RunAuthnLockouts`), so a bring-your-own implementation can be verified the
+same way. [`examples/27-durable-mfa-store`](examples/27-durable-mfa-store/main.go)
+remains the copy-and-adapt template for a backend the repository does not ship.
+
+**Provisioning the schema.** The `sql` adapter embeds reference DDL for each
+engine under
+[`op/storeadapter/sql/schema/{sqlite,mysql,postgres}/v1.sql`](op/storeadapter/sql/schema)
+— readable straight from the repository if you want your DBA to review it
+before adopting the library. `Store.Schema()` returns the DDL for the
+configured dialect with any `WithNaming` table renames already applied, so it
+can be fed to your migration tooling or diffed against the schema you already
+run. `Store.Migrate(ctx)` applies it to the live connection instead; it is a
+development convenience used by the examples and tests, and production
+deployments are expected to keep migrations under their own tooling. The
+authentication-factor tables are part of the same DDL, so enabling a second
+factor needs no separate migration. DynamoDB mirrors the split:
+`TableDefinitions()` returns the key schemas for CloudFormation or Terraform,
+`CreateTables(ctx)` provisions them for development and tests.
 
 ## Examples
 
