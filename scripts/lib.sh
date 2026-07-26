@@ -49,6 +49,9 @@ public_modules() {
   if [ -f "$REPO_ROOT/op/storeadapter/redis/go.mod" ]; then
     printf '%s\t\n' "$REPO_ROOT/op/storeadapter/redis"
   fi
+  if [ -f "$REPO_ROOT/op/storeadapter/dynamodb/go.mod" ]; then
+    printf '%s\t\n' "$REPO_ROOT/op/storeadapter/dynamodb"
+  fi
   # op-demo is its own module so the storage drivers it links for
   # -store=composite stay out of the library's dependency list. It carries
   # no build tag: the conformance harness builds it unconditionally.

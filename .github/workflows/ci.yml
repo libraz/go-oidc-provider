@@ -38,6 +38,7 @@ jobs:
             tools/scenariotool/go.sum
             op/storeadapter/sql/go.sum
             op/storeadapter/redis/go.sum
+            op/storeadapter/dynamodb/go.sum
             cmd/op-demo/go.sum
 
       # A release commit pins adapter go.mod files to the new root tag, which
@@ -106,6 +107,7 @@ jobs:
             go.sum
             op/storeadapter/sql/go.sum
             op/storeadapter/redis/go.sum
+            op/storeadapter/dynamodb/go.sum
             cmd/op-demo/go.sum
 
       # See the matching lint-job note: release commits need a local root only
@@ -138,6 +140,19 @@ jobs:
         run: |
           go test -race \
             -coverprofile="$GITHUB_WORKSPACE/cover.redis.out" \
+            -covermode=atomic \
+            -count=1 -timeout=5m \
+            ./...
+
+      # The DynamoDB adapter's own suite sits entirely behind the
+      # testcontainers tag because it needs the emulator, so this step
+      # only compiles it. The tagged run lives with the other
+      # container-backed suites.
+      - name: Test op/storeadapter/dynamodb (race + coverage)
+        working-directory: op/storeadapter/dynamodb
+        run: |
+          go test -race \
+            -coverprofile="$GITHUB_WORKSPACE/cover.dynamodb.out" \
             -covermode=atomic \
             -count=1 -timeout=5m \
             ./...
@@ -176,7 +191,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: cover.root.out,cover.sql.out,cover.redis.out
+          files: cover.root.out,cover.sql.out,cover.redis.out,cover.dynamodb.out
           flags: unit
           fail_ci_if_error: false
           disable_search: true
@@ -194,6 +209,7 @@ jobs:
             go.sum
             op/storeadapter/sql/go.sum
             op/storeadapter/redis/go.sum
+            op/storeadapter/dynamodb/go.sum
 
       - name: make verify-examples
         run: make verify-examples

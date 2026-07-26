@@ -39,6 +39,7 @@ run_contracts() {
 
 run_contracts "$REPO_ROOT/op/storeadapter/sql"
 run_contracts "$REPO_ROOT/op/storeadapter/redis"
+run_contracts "$REPO_ROOT/op/storeadapter/dynamodb"
 
 # The composite RFC 7592 HTTP E2E additionally imports the root module's
 # internal endpoint, which the shared workspace above already provides.
