@@ -1,18 +1,25 @@
 //go:build example
 
-// Example 27 shows the production shape of an authentication-factor
-// store. The SQL storage adapter (op/storeadapter/sql) persists the
-// OIDC core tables, but it does NOT bundle factor stores — TOTP,
-// passkey, recovery-code, email-OTP, and lockout persistence are the
-// embedder's responsibility. This example fills that gap with a
-// hand-written [store.TOTPStore] (see totpstore.go) and, crucially,
-// puts its table in the SAME *sql.DB as the core adapter so one
-// connection pool and one set of migrations serve both.
+// Example 27 shows the production shape of authentication-factor
+// persistence: the factors live on the same database as the OIDC core
+// tables, so a login survives a process restart and a replica other
+// than the one that enrolled the user can verify against it.
 //
-// TOTP is used as the representative factor. The sqliteTOTPStore in
-// totpstore.go is the file you copy for TOTP and adapt for the sibling
-// factor stores your login flow requires; the store contracts differ
-// only in their columns and their single-use rules.
+// Nothing here is hand-written. The SQL storage adapter
+// (op/storeadapter/sql) implements every factor store next to the core
+// ones — [oidcsql.Store.TOTPs], [oidcsql.Store.Passkeys],
+// [oidcsql.Store.RecoveryCodes], [oidcsql.Store.EmailOTPs], and
+// [oidcsql.Store.AuthnLockouts] — so one *sql.DB, one connection pool,
+// and one Migrate call serve the whole provider.
+//
+// TOTP is the factor this demo exercises end to end. The cross-factor
+// lockout counter is wired alongside it ([op.WithAuthnLockoutStore]),
+// because that is the store durability actually changes the security
+// of: a process-local counter hands every replica its own guess budget
+// and forgets it on restart, which is exactly the budget an attacker
+// wants. Examples 28 and 29 drive email-OTP / recovery codes and
+// passkeys; swapping their in-memory store for the accessors above is
+// the only change needed to make those durable too.
 //
 // Run with the example build tag, from this directory so
 // ./web/static resolves:
@@ -22,7 +29,7 @@
 // Two listeners come up in the same process:
 //
 //   - :8080 — the OP, with the SPA bundle at /login and a SQL-backed
-//     store (core tables + the mfa_totp_enrolments factor table).
+//     store (core tables + the adapter's factor tables).
 //   - :9090 — the RP, exposing /, /login, /callback, /me.
 //
 // Ephemeral vs. durable mode is chosen by the OIDC_EXAMPLE_DB
@@ -69,13 +76,13 @@
 //   - Keys: ephemeral; load signing / cookie / TOTP keys from a vault
 //     or KMS so both the core tables and the sealed factor secrets
 //     survive process restart.
-//   - Factor store: the sql adapter does NOT bundle factor stores;
-//     this example's sqliteTOTPStore is the pattern you copy for TOTP
-//     and adapt for passkey / recovery / email-OTP / lockout. Run its
-//     DDL through your own migration tooling alongside the core schema.
+//   - Migrations: Migrate is a development shortcut. Production runs
+//     storage.Schema() — which covers the factor tables as well as the
+//     core ones — through its own migration tooling.
 //   - Store: sqlite here for a zero-dependency demo; production uses
-//     Postgres / MySQL via op/storeadapter/sql, with the factor table
-//     living in the same database.
+//     Postgres / MySQL via op/storeadapter/sql, or DynamoDB via
+//     op/storeadapter/dynamodb, which exposes the same factor
+//     accessors.
 //   - Listener: plain HTTP; front behind TLS-terminating ingress.
 //   - Demo seed: the enrolment is pre-confirmed at seed time, skipping
 //     the round-trip "user types code back" step a production
@@ -150,8 +157,8 @@ func run() error {
 	}
 	defer func() { _ = db.Close() }()
 
-	// The core adapter and the factor store share this one *sql.DB, so
-	// both persist to the same file and are migrated together. Migrate
+	// One adapter covers the core tables and the factor tables, so a
+	// single Migrate brings up both against this one *sql.DB. Migrate
 	// is a development shortcut; production deployments run
 	// storage.Schema() through their own migration tooling instead.
 	storage, err := oidcsql.New(db, oidcsql.SQLite())
@@ -159,14 +166,11 @@ func run() error {
 		return fmt.Errorf("oidcsql.New: %w", err)
 	}
 	if err := storage.Migrate(ctx); err != nil {
-		return fmt.Errorf("migrate core: %w", err)
+		return fmt.Errorf("migrate: %w", err)
 	}
 
-	totpStore := newSQLiteTOTPStore(db)
-	if err := totpStore.migrate(ctx); err != nil {
-		return fmt.Errorf("migrate factor store: %w", err)
-	}
-	log.Printf("sqlite store at %s (durable=%t) — core tables + mfa_totp_enrolments", dbPath, durable)
+	totpStore := storage.TOTPs()
+	log.Printf("sqlite store at %s (durable=%t) — core tables + factor tables", dbPath, durable)
 
 	keys := devkeys.MustEphemeral("durable-mfa-1")
 
@@ -194,6 +198,10 @@ func run() error {
 		op.WithKeyset(keys.Keyset()),
 		op.WithCookieKeys(keys.CookieKey),
 		op.WithLoginFlow(flow),
+		// The cross-factor brute-force counter shares the same database
+		// as everything else, so the guess budget is one budget across
+		// restarts and across replicas.
+		op.WithAuthnLockoutStore(storage.AuthnLockouts()),
 		op.WithSPAUI(op.SPAUI{
 			LoginMount: "/login",
 			StaticDir:  staticDir,
@@ -288,7 +296,7 @@ func seedUser(ctx context.Context, storage *oidcsql.Store) error {
 // record and prints the operator banner; on a durable database that
 // already holds the enrolment it prints a short note and leaves the
 // previously scanned secret in place.
-func seedTOTP(ctx context.Context, totpStore *sqliteTOTPStore, codec *totpkit.Codec) error {
+func seedTOTP(ctx context.Context, totpStore store.TOTPStore, codec *totpkit.Codec) error {
 	_, err := totpStore.Get(ctx, demoSubject)
 	switch {
 	case err == nil:

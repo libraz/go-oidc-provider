@@ -121,20 +121,21 @@ const mfaEncryptionKeyLen = 32
 // success reset so none of those paths can overwrite a concurrently
 // recorded failure.
 //
-// Persistence is the embedder's responsibility: the shipped SQL
-// adapter does not implement [store.AuthnLockoutStore] (there is no
-// authn-factor lockout table in its schema). Embedders that want
-// this counter to survive a restart or be shared across replicas
-// supply their own [store.AuthnLockoutStore] backed by their SQL
-// schema (or another durable backend); the in-memory reference
-// ([inmem.Store.AuthnLockouts]) is process-local only.
+// Durability follows the backend. The SQL adapter implements
+// [store.AuthnLockoutStore] over its own lockout table
+// ([sql.Store.AuthnLockouts]), as does the DynamoDB adapter
+// ([dynamodb.Store.AuthnLockouts]), so a counter wired to either
+// survives a restart and is shared across replicas. The in-memory
+// reference ([inmem.Store.AuthnLockouts]) is process-local: it resets
+// on restart and gives each replica its own guess budget, which is
+// the wrong shape for anything but a single-process demo. An embedder
+// on another backend supplies its own implementation.
 //
 // The default (nil store, option unset) preserves the per-factor
 // counters that ship in [internal/authn/totp] and
 // [internal/authn/emailotp]; embedders who want defence-in-depth
 // against pivot attacks set this option and route the supplied store
-// to a shared backend (the inmem reference exposes
-// [inmem.Store.AuthnLockouts]).
+// to a backend every replica shares.
 //
 // At most one store may be registered; a second [WithAuthnLockoutStore]
 // call fails [New] with a structured configuration error.
