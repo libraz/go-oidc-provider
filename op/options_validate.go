@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/libraz/go-oidc-provider/internal/csrf"
+	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/protectedresource"
 	"github.com/libraz/go-oidc-provider/internal/proxy"
 	"github.com/libraz/go-oidc-provider/internal/registrationendpoint"
@@ -32,7 +33,6 @@ func (c *config) validate() error {
 	}
 	for _, fn := range []func() error{
 		c.validateScopes,
-		c.validateSupportedProfiles,
 		c.validateProfiles,
 		c.validateRegistration,
 		c.validateAuthenticators,
@@ -59,25 +59,6 @@ func (c *config) validate() error {
 	return nil
 }
 
-// validateSupportedProfiles rejects profile enum values whose option
-// surface has been reserved publicly but whose runtime constraints and
-// endpoint wiring have not landed yet. Keeping the enum exported lets
-// documentation and future planning refer to the identifier stably, but
-// op.New must fail fast so callers cannot believe they booted into a
-// hardened profile that the library does not actually enforce.
-func (c *config) validateSupportedProfiles() error {
-	for _, p := range c.profiles {
-		if p != profile.IGovHigh {
-			continue
-		}
-		return &Error{
-			Code:        codeConfiguration,
-			Description: "WithProfile(" + p.String() + ") is not implemented yet",
-		}
-	}
-	return nil
-}
-
 // validateRequired enforces the four-argument boot contract (Issuer +
 // Store + Keyset + cookie keys) plus keyset shape. Split out so
 // [validate] stays under the gocognit ceiling and so a future "what
@@ -85,6 +66,11 @@ func (c *config) validateSupportedProfiles() error {
 func (c *config) validateRequired() error {
 	if c.issuer == "" {
 		return ErrIssuerRequired
+	}
+	// Deferred from WithIssuer: the localhost carve-out depends on an
+	// opt-in that may have been registered by a later option.
+	if err := discovery.ValidateIssuerWithLocalhostName(c.issuer, c.allowLocalhostLoopback); err != nil {
+		return ErrIssuerInvalid
 	}
 	if isNilLike(c.store) {
 		return ErrStoreRequired
@@ -468,12 +454,12 @@ func (c *config) validateStrictOfflineAccess() error {
 	return nil
 }
 
-// validateAccessTokenFormat enforces the ADR 0024 fail-fast contract:
-// when the global format or any per-audience override selects
+// validateAccessTokenFormat enforces the fail-fast contract: when the
+// global format or any per-audience override selects
 // [AccessTokenFormatOpaque], the configured [Store] MUST expose a
-// non-nil [store.OpaqueAccessTokenStore]. Embedders who request opaque
-// tokens with no place to persist them get a build-time error rather
-// than a runtime crash on the first issuance.
+// non-nil [store.OpaqueAccessTokenStore]. Embedders who request
+// opaque tokens with no place to persist them get a build-time error
+// rather than a runtime crash on the first issuance.
 //
 // The check intentionally walks the per-audience map even when the
 // global default is [AccessTokenFormatJWT]: a single opaque entry
@@ -503,8 +489,8 @@ func (c *config) validateAccessTokenFormat() error {
 	return nil
 }
 
-// validateAccessTokenRevocation enforces the ADR 0025 fail-fast
-// contract on the JWT access-token revocation strategy:
+// validateAccessTokenRevocation enforces the fail-fast contract on
+// the JWT access-token revocation strategy:
 //
 //   - Out-of-range enum values are rejected at construction time so
 //     a regression in the option-layer validator surfaces at startup.
@@ -659,7 +645,7 @@ func isFAPI2Profile(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
 		return true
-	case profile.FAPICIBA, profile.IGovHigh:
+	case profile.FAPICIBA:
 		return false
 	}
 	return false
@@ -778,14 +764,12 @@ func (c *config) validateProfile(p profile.Profile, enabled map[feature.Flag]str
 // profileForcesDPoPNonce reports whether p mandates the RFC 9449 §8/§9
 // nonce challenge flow. FAPI 2.0 Message Signing §5.3.4 requires the
 // AS to issue a server-side DPoP nonce; FAPI-CIBA inherits the same
-// posture by reference (FAPI-CIBA-ID1 §5). The future iGov High
-// profile is still a placeholder and will land here when its
-// constraint table graduates.
+// posture by reference (FAPI-CIBA-ID1 §5).
 func profileForcesDPoPNonce(p profile.Profile) bool {
 	switch p {
 	case profile.FAPI2MessageSigning, profile.FAPICIBA:
 		return true
-	case profile.FAPI2Baseline, profile.IGovHigh:
+	case profile.FAPI2Baseline:
 		return false
 	}
 	return false
@@ -1153,9 +1137,9 @@ func (c *config) validateAuthorizeEndpointStoreCapabilities() error {
 }
 
 // needsGrantStore reports whether the configured grant set requires a
-// non-nil [store.GrantStore]. Every interactive grant in the v0.x
-// matrix issues a grant record, so the predicate is "any grant other
-// than client_credentials".
+// non-nil [store.GrantStore]. Every interactive grant issues a grant
+// record, so the predicate is "any grant other than
+// client_credentials".
 func needsGrantStore(grants []grant.Type) bool {
 	for _, g := range grants {
 		if g == grant.ClientCredentials {

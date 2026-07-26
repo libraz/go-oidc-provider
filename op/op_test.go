@@ -607,6 +607,82 @@ func TestWithIssuer_AcceptsLoopbackHTTP(t *testing.T) {
 	}
 }
 
+// TestWithIssuer_LocalhostNeedsTheOptIn pins both sides of the textual
+// "localhost" carve-out. The default posture refuses it — the host can be
+// DNS-hijacked where an IP literal cannot — and
+// [op.WithAllowLocalhostLoopback] admits it, which is the only way to run
+// a local WebAuthn deployment without TLS: a Relying Party ID must be a
+// domain, so an http issuer on an IP literal has none to pair with.
+//
+// Both option orders are exercised because the check runs in the
+// validation pass rather than at the WithIssuer call site, and an
+// order-sensitive rule here would be a configuration that boots or fails
+// depending on how the call was formatted.
+func TestWithIssuer_LocalhostNeedsTheOptIn(t *testing.T) {
+	t.Parallel()
+
+	const issuer = "http://localhost:8080"
+
+	t.Run("refused-by-default", func(t *testing.T) {
+		t.Parallel()
+		_, err := op.New(append(validBaseOpts(t), op.WithIssuer(issuer))...)
+		if !errors.Is(err, op.ErrIssuerInvalid) {
+			t.Fatalf("op.New(%q): want ErrIssuerInvalid, got %v", issuer, err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		opts func(*testing.T) []op.Option
+	}{
+		{
+			name: "opt-in-after-issuer",
+			opts: func(t *testing.T) []op.Option {
+				return append(validBaseOpts(t), op.WithIssuer(issuer), op.WithAllowLocalhostLoopback())
+			},
+		},
+		{
+			name: "opt-in-before-issuer",
+			opts: func(t *testing.T) []op.Option {
+				return append(validBaseOpts(t), op.WithAllowLocalhostLoopback(), op.WithIssuer(issuer))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			provider, err := op.New(tc.opts(t)...)
+			if err != nil {
+				t.Fatalf("op.New(%q) unexpected error: %v", issuer, err)
+			}
+			if provider == nil {
+				t.Fatalf("op.New(%q) returned nil provider", issuer)
+			}
+		})
+	}
+}
+
+// TestWithIssuer_OptInDoesNotAdmitPublicHosts confirms the carve-out is
+// scoped to the one host it names. Widening it to any http host would
+// turn a development affordance into a way to publish an issuer no RP can
+// verify the origin of.
+func TestWithIssuer_OptInDoesNotAdmitPublicHosts(t *testing.T) {
+	t.Parallel()
+
+	for _, issuer := range []string{
+		"http://idp.example.com",
+		"http://localhost.example.com:8080",
+		"http://notlocalhost:8080",
+	} {
+		t.Run(issuer, func(t *testing.T) {
+			t.Parallel()
+			_, err := op.New(append(validBaseOpts(t), op.WithIssuer(issuer), op.WithAllowLocalhostLoopback())...)
+			if !errors.Is(err, op.ErrIssuerInvalid) {
+				t.Fatalf("op.New(%q): want ErrIssuerInvalid, got %v", issuer, err)
+			}
+		})
+	}
+}
+
 func TestWithStore_RejectsNil(t *testing.T) {
 	t.Parallel()
 

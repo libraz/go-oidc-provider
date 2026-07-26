@@ -10,7 +10,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/libraz/go-oidc-provider/internal/audit"
-	"github.com/libraz/go-oidc-provider/internal/discovery"
 	"github.com/libraz/go-oidc-provider/internal/metrics"
 	"github.com/libraz/go-oidc-provider/internal/redact"
 	"github.com/libraz/go-oidc-provider/internal/resourceindicator"
@@ -329,14 +328,13 @@ type config struct {
 	chooserUISet bool
 
 	// chooserUIShadowedBySPA records that both [WithSPAUI] and
-	// [WithChooserUI] are configured. The combination is permitted
-	// per ADR 0015 §SPA mode (SPA owns the chooser surface via the
-	// JSON state envelope); the chooser HTML template is silently
-	// ignored. The flag is set in either order — by [WithChooserUI]
-	// when SPA is already configured, or by [WithSPAUI] when the
-	// chooser is already configured — so [config.applyDefaults]
-	// can emit a single structured warning regardless of option
-	// invocation order.
+	// [WithChooserUI] are configured. The combination is permitted mode
+	// (SPA owns the chooser surface via the JSON state envelope); the
+	// chooser HTML template is silently ignored. The flag is set in
+	// either order — by [WithChooserUI] when SPA is already configured,
+	// or by [WithSPAUI] when the chooser is already configured — so
+	// [config.applyDefaults] can emit a single structured warning
+	// regardless of option invocation order.
 	chooserUIShadowedBySPA bool
 
 	// staticClients carries the [store.Client] records produced by
@@ -457,11 +455,11 @@ type config struct {
 	metricsCollector *metrics.Collector
 
 	// accessTokenFormat selects the wire encoding the OP applies to
-	// access tokens issued by every grant type (ADR 0024). Default
+	// access tokens issued by every grant type. Default
 	// [AccessTokenFormatJWT] (RFC 9068); embedders flip the value via
 	// [WithAccessTokenFormat]. The opaque path requires
-	// [store.Store.OpaqueAccessTokens] to return a non-nil substore;
-	// the construction-time validator enforces that invariant.
+	// [store.Store.OpaqueAccessTokens] to return a non-nil substore; the
+	// construction-time validator enforces that invariant.
 	accessTokenFormat store.AccessTokenFormat
 
 	// accessTokenFormatPerAudience binds an access-token format to
@@ -473,14 +471,14 @@ type config struct {
 	// construction time.
 	accessTokenFormatPerAudience map[string]store.AccessTokenFormat
 
-	// atRevocation selects the JWT access-token revocation strategy
-	// the OP applies (ADR 0025). The zero value is
+	// atRevocation selects the JWT access-token revocation strategy the
+	// OP applies. The zero value is
 	// [store.RevocationStrategyGrantTombstone], which is the documented
 	// default; embedders flip the value via
-	// [WithAccessTokenRevocationStrategy]. The opaque AT path
-	// (ADR 0024) is unaffected because opaque tokens are intrinsically
-	// per-token in storage. Out-of-range values and FAPI-incompatible
-	// combinations are rejected at construction time.
+	// [WithAccessTokenRevocationStrategy]. The opaque AT path is
+	// unaffected because opaque tokens are intrinsically per-token in
+	// storage. Out-of-range values and FAPI-incompatible combinations
+	// are rejected at construction time.
 	atRevocation store.AccessTokenRevocationStrategy
 
 	// discoveryMetadata carries the static RFC 8414 §2 metadata fields
@@ -745,17 +743,22 @@ func newConfig(opts []Option) (*config, error) {
 // DNS-hijacked (RFC 8252 §7.3 reasoning); a development boot binding
 // loopback uses the IP literal directly.
 //
-// The validation is delegated to [discovery.ValidateIssuer] so the option
-// site and the metadata-build pass share a single rule. Malformed values
-// fail [New] rather than the first request.
-// Stable since v0.1.
+// [WithAllowLocalhostLoopback] additionally admits the textual
+// "localhost" host over http. It is the only way to run a WebAuthn
+// deployment locally without TLS: a Relying Party ID must be a domain
+// and browsers reject an IP literal for it, so an http issuer on
+// 127.0.0.1 has no valid RP ID to pair with.
+//
+// The rule is shared with the metadata-build pass so the option site and
+// the wire document cannot disagree. Malformed values fail [New] rather
+// than the first request; the check runs during [New]'s validation pass
+// rather than at this call site, so it sees the opt-in whichever order
+// the options were given in.
+// Stable since v1.0.
 func WithIssuer(issuer string) Option {
 	return optionFunc(func(c *config) error {
 		if issuer == "" {
 			return ErrIssuerRequired
-		}
-		if err := discovery.ValidateIssuer(issuer); err != nil {
-			return ErrIssuerInvalid
 		}
 		c.issuer = issuer
 		return nil
@@ -767,7 +770,7 @@ func WithIssuer(issuer string) Option {
 // Callers MUST supply a non-nil [store.Store]; the library does not provide a
 // default backend at this layer because the choice of persistence is part of
 // the deployment shape rather than the library configuration.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithStore(s store.Store) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(s) {
@@ -784,7 +787,7 @@ func WithStore(s store.Store) Option {
 // Every entry MUST be ECDSA on curve P-256: the OP signs with ES256 and
 // only ES256, permanently. Supplying any other key shape causes [New] to
 // fail at construction time. See [SigningKey] for the rationale.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithKeyset(ks Keyset) Option {
 	return optionFunc(func(c *config) error {
 		if len(ks) == 0 {
@@ -799,7 +802,7 @@ func WithKeyset(ks Keyset) Option {
 // audit timestamps, and rate-limit windows. If unset, the [Provider] uses a
 // real wall clock backed by [time.Now()]. Tests SHOULD inject a deterministic
 // clock so the whole flow shares the same fake time.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithClock(clock Clock) Option {
 	return optionFunc(func(c *config) error {
 		if isNilLike(clock) {
@@ -824,7 +827,7 @@ func WithClock(clock Clock) Option {
 // authorization, cookie, set-cookie — are masked before they reach
 // the underlying handler. The wrapping is idempotent: passing a
 // logger whose handler is already redact-wrapped is a no-op.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
 		if logger != nil {
@@ -874,7 +877,7 @@ func (c *config) effectiveAuditEmitter() audit.Emitter {
 // The registry's lifecycle is the embedder's responsibility — the
 // library calls Register but never Unregister.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func WithPrometheus(registry *prometheus.Registry) Option {
 	return optionFunc(func(c *config) error {
 		if registry == nil {
@@ -905,7 +908,7 @@ func WithPrometheus(registry *prometheus.Registry) Option {
 // Repeated calls are last-wins so a supervisor can swap predicates
 // without rebuilding earlier option lists.
 //
-// Stable since v0.x.
+// Stable since v1.0.
 func WithJWKSRotationActive(predicate func() bool) Option {
 	return optionFunc(func(c *config) error {
 		c.jwksRotationActive = predicate
@@ -926,7 +929,7 @@ func WithJWKSRotationActive(predicate func() bool) Option {
 // The supplied logger's handler is wrapped with the same redaction
 // hook as [WithLogger] so a regression that puts a token into an
 // [AuditEvent] extras map cannot escape the wire posture.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithAuditLogger(logger *slog.Logger) Option {
 	return optionFunc(func(c *config) error {
 		if logger != nil {
@@ -945,7 +948,7 @@ func WithAuditLogger(logger *slog.Logger) Option {
 // "/" and MUST NOT contain a query, fragment, wildcard, percent-encoding, or
 // trailing slash. Empty values reject; the empty-prefix case (mounting at
 // root) is supported by passing "/" explicitly.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithMountPrefix(prefix string) Option {
 	return optionFunc(func(c *config) error {
 		if prefix == "" {
@@ -974,7 +977,7 @@ func WithMountPrefix(prefix string) Option {
 // WithEndpoints overrides individual endpoint paths. Empty fields in e
 // retain the library default; populated fields replace the corresponding
 // path. The discovery document reflects every override automatically.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithEndpoints(e Endpoints) Option {
 	return optionFunc(func(c *config) error {
 		c.endpoints = c.endpoints.merge(e)
@@ -986,7 +989,7 @@ func WithEndpoints(e Endpoints) Option {
 // token endpoint. Calling this option replaces the default
 // (authorization_code + refresh_token) entirely; pass every grant the
 // deployment needs in a single call.
-// Stable since v0.1.
+// Stable since v1.0.
 func WithGrants(grants ...grant.Type) Option {
 	return optionFunc(func(c *config) error {
 		// Reject a second call rather than silently replacing the first

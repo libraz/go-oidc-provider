@@ -244,13 +244,29 @@ type Features struct {
 // boot can use a plain-text scheme; production deployments are
 // still required to publish the issuer over TLS. The textual host
 // "localhost" is NOT in the carve-out because it can be DNS-hijacked
-// (RFC 8252 §7.3 reasoning).
+// (RFC 8252 §7.3 reasoning); [ValidateIssuerWithLocalhostName] admits it
+// for callers that opted in explicitly.
 //
 // The validator is invoked by [Build] (defense in depth: op.WithIssuer
 // performs the same check at the option site, but a future regression
 // that loosens the option-layer rule must not silently land in the
 // wire metadata).
 func ValidateIssuer(raw string) error {
+	return ValidateIssuerWithLocalhostName(raw, false)
+}
+
+// ValidateIssuerWithLocalhostName is [ValidateIssuer] with the textual
+// host "localhost" admitted alongside the loopback IP literals when
+// allowLocalhostName is true. The caller is expected to gate that on an
+// explicit opt-in, because the DNS-hijack reasoning the default rests on
+// does not stop being true — it is only acceptable on a developer's
+// machine.
+//
+// The carve-out exists because two rules that are each correct do not
+// leave a local passkey deployment anywhere to stand: WebAuthn requires
+// a Relying Party ID that is a domain, browsers reject an IP literal for
+// it, and the strict issuer rule rejects every http host that is not one.
+func ValidateIssuerWithLocalhostName(raw string, allowLocalhostName bool) error {
 	if raw == "" {
 		return fmt.Errorf("%w: empty issuer", ErrIssuerInvalid)
 	}
@@ -264,7 +280,7 @@ func ValidateIssuer(raw string) error {
 	if err := validateIssuerCanonicalForm(raw, u); err != nil {
 		return err
 	}
-	return validateIssuerScheme(u)
+	return validateIssuerScheme(u, allowLocalhostName)
 }
 
 // validateIssuerStructure enforces the URL-shape rules: absolute,
@@ -323,8 +339,9 @@ func validateIssuerCanonicalForm(raw string, u *url.URL) error {
 }
 
 // validateIssuerScheme enforces the scheme-specific rules: https with
-// no default port, or http restricted to loopback IP literals.
-func validateIssuerScheme(u *url.URL) error {
+// no default port, or http restricted to loopback IP literals — plus the
+// textual "localhost" when the caller opted in.
+func validateIssuerScheme(u *url.URL, allowLocalhostName bool) error {
 	switch u.Scheme {
 	case "https":
 		if u.Port() == "443" {
@@ -336,6 +353,9 @@ func validateIssuerScheme(u *url.URL) error {
 			return fmt.Errorf("%w: must omit the default http port (:80)", ErrIssuerInvalid)
 		}
 		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+		if allowLocalhostName && u.Hostname() == "localhost" {
 			return nil
 		}
 		return fmt.Errorf("%w: http scheme is permitted only for loopback IP literals (127.0.0.0/8 / [::1])", ErrIssuerInvalid)
@@ -404,7 +424,7 @@ func Build(in Input) Document {
 // the OP is configured to accept the CIBA grant. The
 // backchannel_authentication_endpoint URL is built from the issuer +
 // mount prefix + endpoint path the same way the other endpoints are.
-// The token delivery modes list is fixed at ["poll"] because v0.9.x
+// The token delivery modes list is fixed at ["poll"] because the OP
 // implements poll mode only; ping and push are reserved for a future
 // release. The user-code support flag is false because the library
 // accepts the parameter on the wire but does not pre-validate against
