@@ -8,8 +8,8 @@ import (
 
 // ClientSource identifies how the client record reached the OP. The library
 // uses it to gate behaviours that are only valid for statically-provisioned
-// clients (for example the FirstParty auto-consent path documented in
-// plans/002-product-design.md §A.6) and to differentiate audit events that
+// clients (for example the FirstParty auto-consent path) and to
+// differentiate audit events that
 // would otherwise look identical (RFC 7591 self-registration vs. an
 // embedder-built admin UI calling [ClientRegistry] directly).
 //

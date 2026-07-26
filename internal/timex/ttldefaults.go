@@ -8,8 +8,8 @@ import "time"
 // change to the operational posture moves through one diff and the pin
 // test in [ttldefaults_test.go] catches a silent regression.
 //
-// Each constant documents the spec / 002-product-design.md rationale
-// it inherits. The values are intentionally small, well-known
+// Each constant documents the spec or operational rationale it
+// inherits. The values are intentionally small, well-known
 // durations (24 h, 14 days, 30 days) chosen so an operator who reads
 // the boot log can map a TTL back to its source without consulting
 // the source tree.
@@ -18,8 +18,8 @@ import "time"
 // refresh tokens when the embedder does not override the value through
 // [op.WithRefreshTokenTTL]. Thirty days mirrors the typical
 // "long-lived but bounded" posture for authorization-code-derived
-// refresh tokens (002-product-design.md §Token TTLs); embedders facing
-// stricter risk profiles shorten the value through the public option.
+// refresh tokens; embedders facing stricter risk profiles shorten the
+// value through the public option.
 const RefreshTokenTTLDefault = 30 * 24 * time.Hour
 
 // AccessTokenTTLMax is the implementation-defined upper bound the
@@ -50,9 +50,8 @@ const SectorURICacheTTLDefault = 24 * time.Hour
 
 // SessionIdleTTLDefault is the default idle window applied to the
 // __Host-oidc_session cookie when no override is configured. Fourteen
-// days matches the operational baseline documented in
-// 002-product-design.md §Session lifetimes; activity refreshes the
-// expiry up to [SessionAbsoluteTTLDefault].
+// days matches the library's operational baseline; activity refreshes
+// the expiry up to [SessionAbsoluteTTLDefault].
 const SessionIdleTTLDefault = 14 * 24 * time.Hour
 
 // SessionAbsoluteTTLDefault caps the total wall-clock lifetime of an
@@ -60,6 +59,5 @@ const SessionIdleTTLDefault = 14 * 24 * time.Hour
 // CreatedAt+SessionAbsoluteTTLDefault is in the past the session is
 // torn down so a hijacked cookie cannot be kept alive indefinitely by
 // a busy client. Thirty days matches the upper bound mass-market RPs
-// expect from a stay-signed-in cookie (002-product-design.md §Session
-// lifetimes).
+// expect from a stay-signed-in cookie.
 const SessionAbsoluteTTLDefault = 30 * 24 * time.Hour

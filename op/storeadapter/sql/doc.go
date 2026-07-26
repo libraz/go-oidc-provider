@@ -1,9 +1,9 @@
 // Package oidcsql is the SQL storage adapter for go-oidc-provider. It
 // implements every substore declared in
 // [github.com/libraz/go-oidc-provider/op/store] against a [database/sql]
-// handle, supports the three engines documented in 003 §7.2 (SQLite,
-// MySQL, PostgreSQL), and is published as a sub-module so its driver
-// dependencies do not bleed into the host module's go.sum.
+// handle, supports SQLite, MySQL 8.0+ and PostgreSQL 14+, and is
+// published as a sub-module so its driver dependencies do not bleed
+// into the host module's go.sum.
 //
 // # Backends
 //

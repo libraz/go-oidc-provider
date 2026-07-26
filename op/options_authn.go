@@ -101,9 +101,8 @@ const mfaEncryptionKeyLen = 32
 // When a non-nil store is supplied, every built-in second-factor
 // [Step] (StepTOTP, StepEmailOTP, StepRecoveryCode) consults the same
 // per-subject counter so an attacker pivoting between factors cannot
-// double their guess budget. The store backs the rolling 24-hour
-// window described in 002-product-design.md §M.6: a 1-hour lockout at
-// 30 cumulative failures, 24-hour at 90.
+// double their guess budget. The store backs a rolling 24-hour
+// window: a 1-hour lockout at 30 cumulative failures, 24-hour at 90.
 //
 // Scope — the counter attaches ONLY to the built-in possession/recovery
 // factors above. It is deliberately NOT attached to the primary

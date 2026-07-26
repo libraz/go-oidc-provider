@@ -9,7 +9,7 @@ import (
 // brute-force counter the library uses to defend against an attacker
 // pivoting between authentication factors (TOTP, email-OTP, ...) on the
 // same subject. The struct is the storage projection of the rolling
-// 24-hour window described in 002-product-design.md §M.6: a single counter
+// 24-hour window: a single counter
 // that aggregates failures across every factor so the attacker's budget
 // cannot be doubled by trying TOTP after exhausting email-OTP attempts.
 //
@@ -44,8 +44,8 @@ type AuthnLockoutRecord struct {
 	// is rejected with a lockout error regardless of which factor is
 	// being driven. The library stamps a 1-hour lock at the short
 	// threshold and a 24-hour lock at the long threshold (the values
-	// match the per-factor thresholds documented at 002-product-design.md
-	// §M.6 so an embedder reading either record sees the same numbers).
+	// match the per-factor thresholds so an embedder reading either
+	// record sees the same numbers).
 	// A zero value means "not locked".
 	LockedUntil time.Time
 

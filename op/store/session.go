@@ -45,8 +45,7 @@ type Session struct {
 	// ChooserGroupID groups sessions that belong to the same browser-side
 	// account chooser. Multiple sessions sharing a ChooserGroupID
 	// represent the accounts a user has signed in to in this browser; the
-	// library exposes the group via the multi-account chooser flow
-	// described in 002-product-design §A.9.
+	// library exposes the group via the multi-account chooser flow.
 	ChooserGroupID string
 
 	// ExpiresAt is the absolute wall-clock expiry of the session.
@@ -131,9 +130,9 @@ type SessionStore interface {
 
 	// ListByChooserGroup returns every non-expired session whose
 	// ChooserGroupID matches groupID. It is the lookup the multi-account
-	// flow needs to enumerate the accounts in a browser's chooser
-	// (002-product-design §A.9). Order is unspecified; callers that need
-	// stable ordering MUST sort the result themselves.
+	// flow needs to enumerate the accounts in a browser's chooser.
+	// Order is unspecified; callers that need stable ordering MUST sort
+	// the result themselves.
 	//
 	// Returning an empty slice (with a nil error) is the correct response
 	// when no sessions exist for groupID. Backends MUST NOT include
