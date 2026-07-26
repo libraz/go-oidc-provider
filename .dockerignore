@@ -1,0 +1,18 @@
+# The reference application builds with the repository root as its context
+# (sample/go.mod replaces the library and both storage adapters with sibling
+# directories), so everything below is reachable from a container build and
+# has to be kept out deliberately.
+
+# A go.work is a local development convenience and, during a release, a
+# generated file that pins the storage adapters. Either way it names a member
+# set that does not include sample/, so a build that sees it fails with
+# "directory prefix . does not contain modules listed in go.work" — on the
+# release commit, and only there, which is the worst time to find out.
+go.work
+go.work.sum
+
+.git
+.github
+backup
+conformance
+tools/conformance
