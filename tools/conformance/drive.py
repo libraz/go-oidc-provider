@@ -89,6 +89,24 @@ _FORM_ACTION_RE = re.compile(rb'<form[^>]*action="([^"]+)"', re.IGNORECASE)
 _HIDDEN_INPUT_RE = re.compile(rb'name="([^"]+)" value="([^"]*)"')
 
 
+def _is_ofcs_form_post(body: bytes) -> bool:
+    """Report whether body is a form_post response aimed at OFCS.
+
+    Distinguishes the auto-submit document of OIDC Core Form Post
+    Response Mode 1.0 from the OP's own interaction and error pages,
+    which also contain forms. Only a form whose action is the OFCS
+    callback is an authorization response; anything else is a page the
+    driver is supposed to fill in and submit itself.
+    """
+    if not body:
+        return False
+    m = _FORM_ACTION_RE.search(body)
+    if not m:
+        return False
+    action = m.group(1).decode("utf-8", "replace").replace("&amp;", "&")
+    return bool(_OFCS_CALLBACK_RE.match(action))
+
+
 def _forward_form_post(body: bytes, cookies: CookieJar) -> None:
     """Process an OIDC Core Form Post Response Mode 1.0 body.
 
@@ -173,6 +191,20 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         _forward_implicit_bridge(final_url, body)
         return
 
+    if _is_ofcs_form_post(body):
+        # The same "no prompt to walk" case as the branch above, in
+        # form_post response mode. There is no redirect to recognise
+        # here because a form_post response never leaves the OP's own
+        # URL: /authorize answers 200 with the auto-submit document
+        # that a browser would post to the callback. Without this the
+        # driver falls through to the interaction-page parser, finds no
+        # state_ref, and gives up — which is how prompt=none,
+        # id_token_hint, and max_age re-authorization legs stall in
+        # WAITING under form_post while passing in redirect mode.
+        sys.stdout.write("[drive 1/3] /authorize returned a form_post response (no prompt)\n")
+        _forward_form_post(body, cookies)
+        return
+
     if b'"error":' in body or b'id="op-error"' in body:
         # Either the JSON envelope or the HTMLDriver's data-attribute
         # error page. Both signal "OP refused before redirect" — leave
@@ -228,7 +260,7 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
             cookies=cookies,
         )
         sys.stdout.write(f"[drive 2/2] response={reuse_status} {reuse_location or ''}\n")
-        if reuse_status == 200 and reuse_body and _FORM_ACTION_RE.search(reuse_body):
+        if reuse_status == 200 and _is_ofcs_form_post(reuse_body):
             _forward_form_post(reuse_body, cookies)
             return
         if not reuse_location or not _OFCS_CALLBACK_RE.match(reuse_location):
@@ -253,7 +285,7 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         sys.stdout.write(f"[drive 2/3] OP skipped consent (silent approval) — redirect={pwd_location}\n")
         _forward_implicit_bridge(pwd_location, None)
         return
-    if pwd_status == 200 and pwd_body and _FORM_ACTION_RE.search(pwd_body) and not _extract_field(pwd_body, "state_ref"):
+    if pwd_status == 200 and _is_ofcs_form_post(pwd_body):
         sys.stdout.write("[drive 2/3] OP skipped consent (silent approval) — form_post body\n")
         _forward_form_post(pwd_body, cookies)
         return
@@ -281,7 +313,7 @@ def drive(auth_url: str, opts: DriveOptions) -> None:
         cookies=cookies,
     )
     sys.stdout.write(f"[drive 3/3] response={final_status} {final_location or ''}\n")
-    if final_status == 200 and final_body and _FORM_ACTION_RE.search(final_body):
+    if final_status == 200 and _is_ofcs_form_post(final_body):
         # Form Post Response Mode 1.0 — the OP returned the auto-submit
         # body instead of a redirect.
         _forward_form_post(final_body, cookies)

@@ -1,0 +1,16 @@
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v2",
+  "exclusions": [],
+  "accepted_outcomes": [],
+  "unreachable_verdicts": [
+    {
+      "plan": "plan-a",
+      "module": "module-persistent",
+      "status": "WAITING",
+      "reason": "Fixture for a module the harness cannot drive to a verdict.",
+      "evidence": "Ran standalone; the suite waits for a callback the OP must not send.",
+      "owner": "conformance-maintainers",
+      "expires": "2026-01-01"
+    }
+  ]
+}

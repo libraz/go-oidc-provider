@@ -1,0 +1,12 @@
+{
+  "schema": "go-oidc-provider/baseline/v1",
+  "captured_at": "2026-07-24T00-00-00Z",
+  "plans": {
+    "plan-a": {
+      "modules": {
+        "module-pass": {"status": "FINISHED", "result": "PASSED"},
+        "module-persistent": {"status": "FINISHED", "result": "REVIEW"}
+      }
+    }
+  }
+}

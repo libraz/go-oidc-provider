@@ -169,8 +169,12 @@ conformance-baseline-diff:
 	@scripts/conformance.sh baseline-diff "$(BASELINE_OLD)" "$(BASELINE_NEW)"
 
 # Strict release gate. The candidate must have exactly the reference module
-# catalog, with every result PASSED or exactly matched by the checked-in
-# exclusion manifest.
+# catalog, and every module must have PASSED, matched an exact per-module
+# entry in the checked-in exclusion manifest, or fallen under one of that
+# manifest's class-level accepted_outcomes rules (REVIEW / SKIPPED families
+# only). A module with no verdict at all needs an entry in the manifest's
+# separate unreachable_verdicts section, which requires evidence of what was
+# tried; no ordinary exclusion can cover one.
 conformance-release-verify:
 	@scripts/conformance.sh release-verify \
 		"$(BASELINE_REFERENCE)" "$(BASELINE_CANDIDATE)" \

@@ -1,0 +1,13 @@
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v2",
+  "exclusions": [],
+  "accepted_outcomes": [
+    {
+      "result": "REVIEW",
+      "module": "module-*",
+      "reason": "Fixture for a rule that must be renewed or removed.",
+      "owner": "conformance-maintainers",
+      "expires": "2026-01-01"
+    }
+  ]
+}

@@ -26,7 +26,14 @@ class BaselineDiffTest(unittest.TestCase):
         self.assertIn("regressions: 0", stdout.getvalue())
 
 
-class StrictReleaseVerifyTest(unittest.TestCase):
+class _VerifyHarness(unittest.TestCase):
+    """Drives cmd_release_verify against the fixture pair.
+
+    The checked-in guard is patched out because the fixtures live under
+    testdata and are deliberately not the repository's own manifest; the
+    guard itself has its own test below.
+    """
+
     def verify(
         self,
         candidate: str,
@@ -47,6 +54,8 @@ class StrictReleaseVerifyTest(unittest.TestCase):
         guard.assert_called_once_with(_FIXTURES / exclusions)
         return result, output.getvalue()
 
+
+class StrictReleaseVerifyTest(_VerifyHarness):
     def test_all_pass_is_accepted(self) -> None:
         result, output = self.verify("candidate-all-pass.json")
         self.assertEqual(result, 0, output)
@@ -80,7 +89,7 @@ class StrictReleaseVerifyTest(unittest.TestCase):
             "exclusions-empty-result.json",
         )
         self.assertEqual(result, 1)
-        self.assertIn("empty status/result", output)
+        self.assertIn("no verdict", output)
 
     def test_expired_exclusion_is_rejected(self) -> None:
         result, output = self.verify(
@@ -105,6 +114,107 @@ class StrictReleaseVerifyTest(unittest.TestCase):
         )
         self.assertEqual(result, 1)
         self.assertIn("stale exclusion", output)
+
+
+class AcceptedOutcomeTest(_VerifyHarness):
+    """A class rule admits a REVIEW / SKIPPED family, and nothing else.
+
+    The rules exist so a forty-module REVIEW family needs one owned,
+    expiring justification instead of forty. Each test below pins one
+    edge of that bargain: it must cover the family, it must not cover a
+    failure, it must not survive its own expiry, and it must not linger
+    once the family it named is gone.
+    """
+
+    def test_class_rule_admits_a_review_family(self) -> None:
+        result, output = self.verify("candidate-review.json", "rules-review.json")
+        self.assertEqual(result, 0, output)
+        self.assertIn("1 outcome rules", output)
+
+    def test_class_rule_cannot_admit_a_failure(self) -> None:
+        result, output = self.verify("candidate-persistent-fail.json", "rules-failed.json")
+        self.assertEqual(result, 2, output)
+        self.assertIn("result must be one of", output)
+
+    def test_review_family_without_a_rule_is_rejected(self) -> None:
+        result, output = self.verify("candidate-review.json")
+        self.assertEqual(result, 1, output)
+        self.assertIn("unexcluded non-pass", output)
+
+    def test_rule_matching_nothing_is_rejected(self) -> None:
+        result, output = self.verify("candidate-review.json", "rules-stale.json")
+        self.assertEqual(result, 1, output)
+        self.assertIn("accepted outcome matches no module", output)
+
+    def test_expired_rule_is_rejected(self) -> None:
+        result, output = self.verify("candidate-review.json", "rules-expired.json")
+        self.assertEqual(result, 1, output)
+        self.assertIn("expired accepted outcome", output)
+
+
+class UnreachableVerdictTest(_VerifyHarness):
+    """A module with no verdict is admissible only under its own section.
+
+    The point of the separate section is that "the harness could not make
+    this module answer" stays countable and re-argued on a schedule,
+    instead of blending into the exclusion list. These tests pin that it
+    cannot be reached by any other route, that it has to describe the
+    shape it actually observed, and that it disappears the moment the
+    module starts answering.
+    """
+
+    def test_no_verdict_without_an_entry_is_rejected(self) -> None:
+        result, output = self.verify("candidate-no-verdict.json")
+        self.assertEqual(result, 1, output)
+        self.assertIn("no verdict", output)
+
+    def test_ordinary_exclusion_cannot_cover_a_missing_verdict(self) -> None:
+        result, output = self.verify(
+            "candidate-no-verdict.json",
+            "exclusions-empty-result.json",
+        )
+        self.assertEqual(result, 1, output)
+        self.assertIn("no verdict", output)
+
+    def test_matching_entry_is_accepted(self) -> None:
+        result, output = self.verify(
+            "candidate-no-verdict.json",
+            "unreachable-current.json",
+        )
+        self.assertEqual(result, 0, output)
+        self.assertIn("1 without a reachable verdict", output)
+
+    def test_entry_must_match_the_observed_status(self) -> None:
+        result, output = self.verify(
+            "candidate-no-verdict.json",
+            "unreachable-wrong-status.json",
+        )
+        self.assertEqual(result, 1, output)
+        self.assertIn("unreachable verdict changed shape", output)
+
+    def test_entry_is_rejected_once_the_module_answers(self) -> None:
+        result, output = self.verify(
+            "candidate-all-pass.json",
+            "unreachable-current.json",
+        )
+        self.assertEqual(result, 1, output)
+        self.assertIn("no longer applies", output)
+
+    def test_evidence_is_mandatory(self) -> None:
+        result, output = self.verify(
+            "candidate-no-verdict.json",
+            "unreachable-no-evidence.json",
+        )
+        self.assertEqual(result, 2, output)
+        self.assertIn("is missing evidence", output)
+
+    def test_expired_entry_is_rejected(self) -> None:
+        result, output = self.verify(
+            "candidate-no-verdict.json",
+            "unreachable-expired.json",
+        )
+        self.assertEqual(result, 1, output)
+        self.assertIn("expired unreachable verdict", output)
 
 
 class ExclusionManifestGuardTest(unittest.TestCase):

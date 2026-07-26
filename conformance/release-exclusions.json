@@ -1,5 +1,5 @@
 {
-  "schema": "go-oidc-provider/conformance-exclusions/v1",
+  "schema": "go-oidc-provider/conformance-exclusions/v2",
   "exclusions": [
     {
       "plan": "oidcc-backchannel-rp-initiated-logout-certification-test-plan",
@@ -52,6 +52,126 @@
       "status": "INTERRUPTED",
       "result": "FAILED",
       "reason": "The module registers a client requesting userinfo_signed_response_alg RS256, which dynamic client registration rejects for the same reason as oidcc-idtoken-rs256 above.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    }
+  ],
+  "accepted_outcomes": [
+    {
+      "result": "SKIPPED",
+      "module": "*RS256-fails",
+      "reason": "These modules assert that an RS256-signed client assertion or request object is REJECTED. The suite skips them when the OP advertises no RS256 support at all, which is the case here: signing is ES256 only, permanently for the 1.x line. There is nothing for the module to send that the OP would even parse, so a skip is the correct outcome rather than a gap.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "SKIPPED",
+      "module": "*request-object*",
+      "reason": "Request-object modules under the OIDC basic / formpost / dynamic plans. Those plans run op-demo in its non-FAPI profile, which does not enable JAR, so request= and request_uri= are not advertised and the suite skips the modules that would exercise them. JAR is covered by the FAPI 2.0 plans, where it is mandatory and every request-object module runs.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "SKIPPED",
+      "module": "oidcc-request-uri-unsigned",
+      "reason": "Same cause as the request-object family: the OIDC dynamic plan runs the non-FAPI profile, which does not advertise request_uri support.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "SKIPPED",
+      "module": "oidcc-idtoken-unsigned",
+      "reason": "The module asks for an unsigned (alg=none) id_token. The OP signs every id_token and does not advertise none, so the suite skips rather than running an assertion the configuration cannot reach. Refusing to issue an unsigned id_token is the intended posture, not a missing feature.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "SKIPPED",
+      "module": "oidcc-registration-sector-*",
+      "reason": "sector_identifier_uri modules under the dynamic plan. Pairwise subjects are an opt-in configuration (WithPairwiseSubject) and op-demo runs the dynamic plan with the public subject type, so the suite skips the sector-identifier tests. The pairwise path itself is covered by the library's own tests and by examples/34-pairwise-saas.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "fapi2-security-profile-id2-par-attempt-*",
+      "reason": "PAR request_uri refusals: reuse, expiry, and cross-client presentation. The OP correctly refuses before redirecting, so there is no callback for the suite to assert on and it asks a human to confirm the rendered error instead. The refusals themselves are pinned by the library's own tests, so the REVIEW is about the page a user sees, not about whether the refusal happened.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "fapi2-security-profile-id2-ensure-*request-object*",
+      "reason": "JAR parameter-mismatch refusals: a state or nonce that differs inside and outside the request object, or is over-long. The OP refuses before redirecting, so as with the PAR family the suite can only ask a human to confirm the rendered error page.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "fapi2-security-profile-id2-state-only-outside-request-object-not-used",
+      "reason": "Same shape as the request-object mismatch family: a state supplied only outside the request object must be ignored, the request refused pre-redirect, and the resulting error page reviewed by a human.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "fapi2-security-profile-id2-ensure-unsigned-authorization-request-without-using-par-fails",
+      "reason": "An unsigned bare-wire authorization request under a FAPI 2.0 profile is refused before redirect (PAR and JAR are both mandatory there), leaving an error page for a human to confirm.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "oidcc-rp-initiated-logout-*",
+      "reason": "RP-Initiated Logout modules. Every one of them ends on a screen the OP renders itself — the logout confirmation prompt, or the error page for a bad id_token_hint / unregistered post_logout_redirect_uri — because a logout the OP refuses must not redirect back to the RP. The suite has no callback to assert on and asks a human to look.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "oidcc-registration-*-uri",
+      "reason": "logo_uri / policy_uri / tos_uri modules. The suite registers a client carrying those URIs and asks a human to confirm the consent screen presents them. Whether they render is a property of the interaction driver the embedder supplies, not of the library, so no automated assertion could stand in for the reviewer here.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "oidcc-*redirect-uri*",
+      "reason": "Redirect-URI validation modules: unregistered, absent, or query-mismatched redirect_uri values. The OP must refuse without redirecting — sending the error to an unvalidated URI is the open-redirect the check exists to prevent — so the outcome is a rendered error page and the suite asks a human to confirm it.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "oidcc-max-age-1",
+      "reason": "max_age=1 must force re-authentication. The suite cannot see the OP's login screen, so it asks a human to confirm the second authorization request actually prompted rather than reusing the session. The auth_time claim that backs the decision is pinned by the library's own tests.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
+      "module": "oidcc-prompt-login",
+      "reason": "Same shape as max-age-1: prompt=login must re-prompt an already-authenticated browser, and only a human can confirm the login screen was shown again.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    }
+  ],
+  "unreachable_verdicts": [
+    {
+      "plan": "oidcc-dynamic-certification-test-plan",
+      "module": "oidcc-server-rotate-keys",
+      "status": "CONFIGURED",
+      "reason": "The module asks the operator to rotate the authorization server's signing keys and then press Start. The library takes its keyset at op.New and exposes no runtime rotation API, so a deployment rotates by constructing a new provider — which the harness cannot do mid-module without dropping the in-memory store the dynamic plan's registered client lives in. Nothing about this is a defect in what the OP serves: the JWKS endpoint publishes every configured key and the kid selection is exercised by the library's own tests. It is a capability the harness cannot trigger.",
+      "evidence": "Ran standalone against a live suite: the module logs 'Please rotate the keys on the authorization server then press the Start button' and stays CONFIGURED until the runner's idle bound. Driving Start without an actual rotation would assert nothing.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "plan": "oidcc-dynamic-certification-test-plan",
+      "module": "oidcc-request-uri-signed-rs256",
+      "status": "WAITING",
+      "reason": "The module pushes an RS256-signed request object and expects the authorization request to succeed. Signing is ES256 only, permanently for the 1.x line, so the OP refuses before redirecting — which is the correct behaviour and the same policy the oidcc-idtoken-rs256 and oidcc-userinfo-rs256 exclusions cover. Those two reach INTERRUPTED/FAILED because dynamic registration rejects them outright; this one registers fine and only fails at request time, leaving the suite waiting for a callback the OP must not send.",
+      "evidence": "Ran standalone against a live suite: /authorize returns the pre-redirect error page and the suite's last log line is 'Redirecting to authorization endpoint' with no REVIEW placeholder to resolve. Stopping the runner over the REST API moves it to INTERRUPTED but still leaves the result empty, so there is no verdict to record either way.",
       "owner": "@libraz",
       "expires": "2027-01-31"
     }

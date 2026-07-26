@@ -1,12 +1,11 @@
 {
   "schema": "go-oidc-provider/conformance-exclusions/v2",
-  "exclusions": [
+  "exclusions": [],
+  "accepted_outcomes": [
     {
-      "plan": "plan-a",
-      "module": "module-persistent",
-      "status": "FINISHED",
       "result": "REVIEW",
-      "reason": "An exclusion cannot make an empty result valid.",
+      "module": "no-such-module-*",
+      "reason": "Fixture for a rule whose glob matches nothing.",
       "owner": "conformance-maintainers",
       "expires": "2999-01-01"
     }

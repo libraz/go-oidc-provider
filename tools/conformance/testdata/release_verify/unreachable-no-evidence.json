@@ -1,12 +1,13 @@
 {
   "schema": "go-oidc-provider/conformance-exclusions/v2",
-  "exclusions": [
+  "exclusions": [],
+  "accepted_outcomes": [],
+  "unreachable_verdicts": [
     {
       "plan": "plan-a",
       "module": "module-persistent",
-      "status": "FINISHED",
-      "result": "REVIEW",
-      "reason": "An exclusion cannot make an empty result valid.",
+      "status": "WAITING",
+      "reason": "Fixture for a module the harness cannot drive to a verdict.",
       "owner": "conformance-maintainers",
       "expires": "2999-01-01"
     }

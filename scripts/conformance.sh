@@ -46,8 +46,11 @@
 #               non-zero on regressions. (delegates to Python)
 #   release-verify <reference.json> <candidate.json> [--exclusions <file>]
 #               Strict release gate: require an unchanged module catalog
-#               and PASSED results except for exact, unexpired entries in
-#               a checked-in exclusion manifest. (delegates to Python)
+#               and PASSED results, except where a checked-in, unexpired
+#               manifest entry accounts for the outcome — an exact
+#               per-module exclusion, or a class rule covering a REVIEW /
+#               SKIPPED family. A module with no verdict is never
+#               admissible. (delegates to Python)
 #   help        Show this help text.
 #
 # OFCS runs from conformance/docker-compose.yml against pinned image

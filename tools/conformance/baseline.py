@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -33,7 +34,19 @@ _PLAN_PROFILE: dict[str, str] = {
 
 _DISCOVERY_URL = "https://127.0.0.1:9443/.well-known/openid-configuration"
 _BASELINE_SCHEMA = "go-oidc-provider/baseline/v1"
-_EXCLUSIONS_SCHEMA = "go-oidc-provider/conformance-exclusions/v1"
+_EXCLUSIONS_SCHEMA = "go-oidc-provider/conformance-exclusions/v2"
+
+# The results a class-level accepted-outcome rule may cover. FAILED is
+# excluded on purpose: a failing module is a specific claim about this
+# OP and deserves a specific, individually-owned justification. REVIEW
+# and SKIPPED are properties of how the suite is driven — "a human must
+# look at this screen", "this module does not apply to the advertised
+# configuration" — and they arrive in families of a dozen at a time, so
+# a per-module entry for each is boilerplate that rots rather than
+# documentation anyone reads. An empty result is covered by neither: a
+# module the harness could not drive to a verdict is a gap in the
+# harness, and no amount of prose makes it a known-good outcome.
+_RULE_RESULTS = ("REVIEW", "SKIPPED")
 _DEFAULT_EXCLUSIONS_FILE = ROOT / "conformance" / "release-exclusions.json"
 
 
@@ -324,6 +337,68 @@ def _load_exclusions(
     return exclusions, issues
 
 
+class _AcceptedOutcome:
+    """One class-level rule admitting a REVIEW / SKIPPED family."""
+
+    __slots__ = ("result", "plan", "module", "owner", "reason")
+
+    def __init__(self, rule: dict[str, Any]) -> None:
+        self.result: str = rule["result"]
+        self.plan: str = rule.get("plan", "*")
+        self.module: str = rule.get("module", "*")
+        self.owner: str = rule["owner"]
+        self.reason: str = rule["reason"]
+
+    def matches(self, plan: str, module: str, result: str) -> bool:
+        return (
+            result == self.result
+            and fnmatch.fnmatchcase(plan, self.plan)
+            and fnmatch.fnmatchcase(module, self.module)
+        )
+
+    def label(self) -> str:
+        return f"{self.result} [{self.plan}] {self.module}"
+
+
+def _load_accepted_outcomes(
+    manifest: dict[str, Any], source: str, as_of: date
+) -> tuple[list[_AcceptedOutcome], list[str]]:
+    raw = manifest.get("accepted_outcomes", [])
+    if not isinstance(raw, list):
+        raise _ReleaseInputError(f"{source} accepted_outcomes must be an array")
+
+    rules: list[_AcceptedOutcome] = []
+    issues: list[str] = []
+    required = ("result", "reason", "owner", "expires")
+    for index, rule in enumerate(raw):
+        label = f"{source} accepted_outcomes[{index}]"
+        if not isinstance(rule, dict):
+            raise _ReleaseInputError(f"{label} must be an object")
+        missing = [field for field in required if field not in rule]
+        if missing:
+            raise _ReleaseInputError(f"{label} is missing {', '.join(missing)}")
+        for field in (*required, *(k for k in ("plan", "module") if k in rule)):
+            if not isinstance(rule[field], str) or not rule[field].strip():
+                raise _ReleaseInputError(f"{label}.{field} must be a non-empty string")
+        if rule["result"] not in _RULE_RESULTS:
+            raise _ReleaseInputError(
+                f"{label}.result must be one of {', '.join(_RULE_RESULTS)}; "
+                f"got {rule['result']!r}"
+            )
+        try:
+            expires = date.fromisoformat(rule["expires"])
+        except ValueError as exc:
+            raise _ReleaseInputError(f"{label}.expires must use YYYY-MM-DD") from exc
+        if as_of >= expires:
+            issues.append(
+                f"expired accepted outcome {rule['result']} "
+                f"[{rule.get('plan', '*')}] {rule.get('module', '*')} "
+                f"(expired {expires.isoformat()}, owner={rule['owner']})"
+            )
+        rules.append(_AcceptedOutcome(rule))
+    return rules, issues
+
+
 def _ensure_checked_in(path: Path) -> None:
     try:
         resolved = path.resolve()
@@ -353,11 +428,64 @@ def _ensure_checked_in(path: Path) -> None:
         )
 
 
+def _load_unreachable(
+    manifest: dict[str, Any], source: str, as_of: date
+) -> tuple[dict[tuple[str, str], str], list[str]]:
+    """Load the modules that cannot be driven to any verdict at all.
+
+    Deliberately its own section rather than an ordinary exclusion. An
+    exclusion says "this OP fails this module, and here is why that is
+    acceptable" — a claim about the OP. An entry here says "nobody can
+    make this module answer", which is a claim about the harness and a
+    much weaker position to ship from. Keeping the two apart means the
+    count of modules with no verdict is a number a reader sees rather
+    than something buried among sixty rows, and the required evidence
+    field forces whoever adds one to record what they actually tried.
+    """
+    raw = manifest.get("unreachable_verdicts", [])
+    if not isinstance(raw, list):
+        raise _ReleaseInputError(f"{source} unreachable_verdicts must be an array")
+
+    entries: dict[tuple[str, str], str] = {}
+    issues: list[str] = []
+    required = ("plan", "module", "status", "reason", "evidence", "owner", "expires")
+    for index, entry in enumerate(raw):
+        label = f"{source} unreachable_verdicts[{index}]"
+        if not isinstance(entry, dict):
+            raise _ReleaseInputError(f"{label} must be an object")
+        missing = [field for field in required if field not in entry]
+        if missing:
+            raise _ReleaseInputError(f"{label} is missing {', '.join(missing)}")
+        for field in required:
+            if not isinstance(entry[field], str) or not entry[field].strip():
+                raise _ReleaseInputError(f"{label}.{field} must be a non-empty string")
+        key = (entry["plan"], entry["module"])
+        if key in entries:
+            raise _ReleaseInputError(
+                f"{source} has duplicate unreachable verdict {key[0]}/{key[1]}"
+            )
+        try:
+            expires = date.fromisoformat(entry["expires"])
+        except ValueError as exc:
+            raise _ReleaseInputError(f"{label}.expires must use YYYY-MM-DD") from exc
+        if as_of >= expires:
+            issues.append(
+                f"expired unreachable verdict [{key[0]}] {key[1]} "
+                f"(expired {expires.isoformat()}, owner={entry['owner']})"
+            )
+        entries[key] = entry["status"]
+    return entries, issues
+
+
 def _strict_release_issues(
     reference: dict[tuple[str, str], tuple[str, str]],
     candidate: dict[tuple[str, str], tuple[str, str]],
     exclusions: dict[tuple[str, str], tuple[str, str]],
+    accepted: list[_AcceptedOutcome] | None = None,
+    unreachable: dict[tuple[str, str], str] | None = None,
 ) -> list[str]:
+    accepted = accepted or []
+    unreachable = unreachable or {}
     issues: list[str] = []
     reference_keys = set(reference)
     candidate_keys = set(candidate)
@@ -367,35 +495,68 @@ def _strict_release_issues(
         issues.append(f"dropped module [{plan}] {module}")
 
     matched_exclusions: set[tuple[str, str]] = set()
+    matched_rules: set[int] = set()
+    matched_unreachable: set[tuple[str, str]] = set()
     for key in sorted(candidate_keys):
         status, result = candidate[key]
         plan, module = key
         if not status or not result:
-            issues.append(
-                f"empty status/result [{plan}] {module}: "
-                f"status={status or '(empty)'} result={result or '(empty)'}"
-            )
+            expected_status = unreachable.get(key)
+            if expected_status is None:
+                issues.append(
+                    f"no verdict [{plan}] {module}: "
+                    f"status={status or '(empty)'} result={result or '(empty)'}"
+                )
+            elif expected_status != status:
+                # The module still has no verdict but got there a
+                # different way. Whatever the entry documented is no
+                # longer what is happening, so it has to be re-read.
+                issues.append(
+                    f"unreachable verdict changed shape [{plan}] {module}: "
+                    f"expected status {expected_status}, got {status or '(empty)'}"
+                )
+            else:
+                matched_unreachable.add(key)
             continue
         if status == "FINISHED" and result == "PASSED":
             if key in exclusions:
                 issues.append(f"stale exclusion for passing module [{plan}] {module}")
             continue
         expected = exclusions.get(key)
-        if expected is None:
-            issues.append(
-                f"unexcluded non-pass [{plan}] {module}: {status}/{result}"
-            )
+        if expected is not None:
+            matched_exclusions.add(key)
+            if expected != (status, result):
+                issues.append(
+                    f"exclusion mismatch [{plan}] {module}: "
+                    f"expected {expected[0]}/{expected[1]}, got {status}/{result}"
+                )
             continue
-        matched_exclusions.add(key)
-        if expected != (status, result):
-            issues.append(
-                f"exclusion mismatch [{plan}] {module}: "
-                f"expected {expected[0]}/{expected[1]}, got {status}/{result}"
-            )
+        # A per-module entry is the strongest claim and is checked
+        # first. Falling through to the class rules is what keeps a
+        # forty-module REVIEW family from needing forty entries.
+        covering = [i for i, rule in enumerate(accepted) if rule.matches(plan, module, result)]
+        if covering:
+            matched_rules.update(covering)
+            continue
+        issues.append(f"unexcluded non-pass [{plan}] {module}: {status}/{result}")
 
     for plan, module in sorted(set(exclusions) - matched_exclusions):
         if (plan, module) not in candidate_keys:
             issues.append(f"exclusion names absent module [{plan}] {module}")
+    # A rule that matches nothing is either a leftover from a fixed
+    # module or a typo in its glob. Both read as "this family is
+    # accounted for" while accounting for nothing, so both are blockers.
+    for index, rule in enumerate(accepted):
+        if index not in matched_rules:
+            issues.append(f"accepted outcome matches no module: {rule.label()}")
+    # An unreachable entry that stopped applying is the good news case:
+    # the module now answers. It still blocks, because leaving the entry
+    # behind would let the module go quiet again unnoticed.
+    for plan, module in sorted(set(unreachable) - matched_unreachable):
+        issues.append(
+            f"unreachable verdict no longer applies [{plan}] {module}: "
+            "the module now reaches a result, so the entry must go"
+        )
     return issues
 
 
@@ -421,20 +582,30 @@ def cmd_release_verify(
             _read_json(candidate_file, "candidate snapshot"),
             str(candidate_file),
         )
-        exclusions, issues = _load_exclusions(
-            _read_json(exclusions_file, "exclusion manifest"),
-            str(exclusions_file),
-            as_of or date.today(),
+        manifest = _read_json(exclusions_file, "exclusion manifest")
+        today = as_of or date.today()
+        exclusions, issues = _load_exclusions(manifest, str(exclusions_file), today)
+        accepted, rule_issues = _load_accepted_outcomes(
+            manifest, str(exclusions_file), today
         )
+        issues.extend(rule_issues)
+        unreachable, unreachable_issues = _load_unreachable(
+            manifest, str(exclusions_file), today
+        )
+        issues.extend(unreachable_issues)
     except _ReleaseInputError as exc:
         sys.stderr.write(f"[release-verify] input error: {exc}\n")
         return 2
 
-    issues.extend(_strict_release_issues(reference, candidate, exclusions))
+    issues.extend(
+        _strict_release_issues(reference, candidate, exclusions, accepted, unreachable)
+    )
     sys.stdout.write(
         f"reference: {reference_file} ({len(reference)} modules)\n"
         f"candidate: {candidate_file} ({len(candidate)} modules)\n"
-        f"exclusions: {exclusions_file} ({len(exclusions)} entries)\n"
+        f"exclusions: {exclusions_file} "
+        f"({len(exclusions)} module entries, {len(accepted)} outcome rules, "
+        f"{len(unreachable)} without a reachable verdict)\n"
     )
     if issues:
         sys.stdout.write(f"release blockers: {len(issues)}\n")

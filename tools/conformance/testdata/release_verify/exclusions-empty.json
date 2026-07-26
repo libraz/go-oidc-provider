@@ -1,4 +1,4 @@
 {
-  "schema": "go-oidc-provider/conformance-exclusions/v1",
+  "schema": "go-oidc-provider/conformance-exclusions/v2",
   "exclusions": []
 }

@@ -1,0 +1,13 @@
+{
+  "schema": "go-oidc-provider/conformance-exclusions/v2",
+  "exclusions": [],
+  "accepted_outcomes": [
+    {
+      "result": "FAILED",
+      "module": "module-*",
+      "reason": "Fixture for a rule that tries to admit a failing module wholesale.",
+      "owner": "conformance-maintainers",
+      "expires": "2999-01-01"
+    }
+  ]
+}

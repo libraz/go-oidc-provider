@@ -221,7 +221,8 @@ def run_one(plan: str, module: str) -> ModuleOutcome:
 
 
 def cmd_batch(plan: str, modules: list[str]) -> int:
-    pass_n = fail_n = skip_n = err_n = 0
+    pass_n = fail_n = skip_n = err_n = stuck_n = 0
+    stuck: list[str] = []
     for m in modules:
         sys.stdout.write(f"\n==== {m} ====\n")
         out = run_one(plan, m)
@@ -234,11 +235,22 @@ def cmd_batch(plan: str, modules: list[str]) -> int:
         key = f"{out.status}/{out.result}"
         if key.endswith("/PASSED"):
             pass_n += 1
-        elif key.endswith("/SKIPPED") or key.endswith("/REVIEW") or key == "WAITING/" or key.endswith("/WARNING"):
+        elif not out.result:
+            # The module never reached a verdict: the runner abandoned it
+            # on the idle or wall-clock bound. Counting these as skips
+            # reads as "not applicable", which is exactly wrong — a
+            # module the harness could not drive is a gap in the harness,
+            # and it has to be visible to be fixed.
+            stuck_n += 1
+            stuck.append(f"{m} ({out.status or 'no status'})")
+        elif key.endswith("/SKIPPED") or key.endswith("/REVIEW") or key.endswith("/WARNING"):
             skip_n += 1
         else:
             fail_n += 1
     sys.stdout.write(
-        f"\n==== summary: pass={pass_n} skip={skip_n} fail={fail_n} err={err_n} ====\n"
+        f"\n==== summary: pass={pass_n} skip={skip_n} fail={fail_n} "
+        f"stuck={stuck_n} err={err_n} ====\n"
     )
+    for m in stuck:
+        sys.stdout.write(f"  stuck (no verdict): {m}\n")
     return 0
