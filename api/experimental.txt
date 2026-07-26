@@ -14,3 +14,4 @@ github.com/libraz/go-oidc-provider/op	WithInteractions
 github.com/libraz/go-oidc-provider/op	WithLoginAttemptObserver
 github.com/libraz/go-oidc-provider/op	WithLoginFlow
 github.com/libraz/go-oidc-provider/op	WithRiskAssessor
+github.com/libraz/go-oidc-provider/op/storeadapter/dynamodb	Store
