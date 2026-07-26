@@ -965,7 +965,7 @@ func truncateUserAgent(ua string) string {
 //
 // The brute-force counter and audit-log fields downstream consume the
 // returned value, so honouring the forwarded header behind a trusted
-// proxy closes the fingerprinting gap H-C5 surfaced (without the
+// proxy closes the fingerprinting gap (without the
 // trust every authenticated request would attribute to the proxy IP,
 // hiding the real client from the rate limiter).
 func clientIPFromRequest(r *http.Request, deps resolved) netip.Addr {

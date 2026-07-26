@@ -51,7 +51,7 @@ func (*fakePasskeyStore) Delete(_ context.Context, _ []byte) error {
 	return store.ErrNotFound
 }
 
-// TestCloneDetectionHandler_ReceivesCredentialOnClone asserts H-E5: a
+// TestCloneDetectionHandler_ReceivesCredentialOnClone asserts that a
 // CloneDetectionHandler installed via WithCloneDetectionHandler is
 // invoked with the rotated [Credential] when the verifier reports a
 // clone-warning, so the embedder can disable the affected credential
@@ -122,7 +122,7 @@ func TestCloneDetectionHandler_ReceivesCredentialOnClone(t *testing.T) {
 }
 
 // TestCloneDetectionHandler_NilHandlerSkipped asserts the adapter
-// tolerates an absent handler — the H-E5 hook is opt-in and Continue
+// tolerates an absent handler — the hook is opt-in and Continue
 // must still surface ErrCloneDetected verbatim.
 func TestCloneDetectionHandler_NilHandlerSkipped(t *testing.T) {
 	t.Parallel()

@@ -10,7 +10,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// TestRevokeByClient_RefreshTokens pins H-G5: every refresh token
+// TestRevokeByClient_RefreshTokens pins the cascade: every refresh token
 // belonging to the deleted client_id is stamped consumed + revoked.
 func TestRevokeByClient_RefreshTokens(t *testing.T) {
 	t.Parallel()

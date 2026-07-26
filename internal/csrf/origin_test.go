@@ -215,7 +215,7 @@ func TestCheckOrigin_RejectsForeignReferer(t *testing.T) {
 	}
 }
 
-// TestCheckOrigin_RejectsRefererWithoutFetchMetadata pins the H-C2
+// TestCheckOrigin_RejectsRefererWithoutFetchMetadata pins the
 // hardening: a request that supplies Referer alone — no Origin header,
 // no Sec-Fetch-Site — is rejected. Modern browsers emit Origin on every
 // state-changing fetch, so the Referer-only path is the legacy

@@ -182,7 +182,7 @@ type Result struct {
 	// leaves it false. The orchestrator reads it on the way to
 	// [authn.Factor.UserVerified] so the RFC 8176 "hwk" / "swk"
 	// choice in [authn.Factor.AMRValue] reflects the assertion's
-	// real UV bit rather than a process-local cache (H-E4). The
+	// real UV bit rather than a process-local cache. The
 	// field is request-scoped: it is meaningful only on the Step
 	// that produces it and is dropped once the orchestrator records
 	// the [authn.Factor].

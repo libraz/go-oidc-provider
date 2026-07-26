@@ -273,7 +273,7 @@ func TestVerify_IssuerMismatch(t *testing.T) {
 	}
 }
 
-// TestVerify_RetiredKidReturnsSignatureError pins the H-F1 contract on
+// TestVerify_RetiredKidReturnsSignatureError pins the retirement contract on
 // the JWT access-token verify path: a token whose kid header names an
 // [keys.Entry] whose [keys.Entry.NotAfter] has elapsed surfaces as
 // [tokens.ErrAccessTokenSignature], indistinguishable from an unknown
@@ -285,8 +285,6 @@ func TestVerify_IssuerMismatch(t *testing.T) {
 // The test also checks the observer fires exactly once per Verify
 // call, since a regression that loses the observer wiring would let
 // the gate flip silent.
-//
-// Tracks H-F1.
 func TestVerify_RetiredKidReturnsSignatureError(t *testing.T) {
 	t.Parallel()
 

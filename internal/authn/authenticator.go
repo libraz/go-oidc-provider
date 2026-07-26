@@ -239,7 +239,7 @@ type Authenticator interface {
 // [interaction.Result.UserVerified] instead. The Result-borne path is
 // request-scoped and replica-safe (no shared cache); the legacy
 // reporter required a process-local cache that lost coverage in
-// multi-replica deployments without sticky sessions (H-E4). The
+// multi-replica deployments without sticky sessions. The
 // built-in passkey adapter no longer implements this interface; the
 // orchestrator continues to consult it only for embedder-supplied
 // adapters that have not migrated, and only when the matching

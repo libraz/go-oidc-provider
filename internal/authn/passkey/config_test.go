@@ -262,7 +262,7 @@ func TestNew_RejectsUnsupportedAttestationPreference(t *testing.T) {
 	}
 }
 
-// TestNew_TimeoutsEnforceFalse asserts H-E6: the library hard-codes
+// TestNew_TimeoutsEnforceFalse asserts the freeze: the library hard-codes
 // Timeouts.Enforce=false on both the registration and login configs
 // so the upstream library's wall-clock timeout path never executes
 // (the OP drives freshness through [timex.Clock] and zeroes Expires
@@ -282,10 +282,10 @@ func TestNew_TimeoutsEnforceFalse(t *testing.T) {
 		t.Fatal("webauthn.WebAuthn.Config is nil")
 	}
 	if cfg.Timeouts.Registration.Enforce {
-		t.Errorf("Timeouts.Registration.Enforce = true, want false (H-E6)")
+		t.Errorf("Timeouts.Registration.Enforce = true, want false")
 	}
 	if cfg.Timeouts.Login.Enforce {
-		t.Errorf("Timeouts.Login.Enforce = true, want false (H-E6)")
+		t.Errorf("Timeouts.Login.Enforce = true, want false")
 	}
 	// Timeout values are still populated so the user agent renders
 	// a sensible UX; the library just does not enforce them.

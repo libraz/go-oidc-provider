@@ -101,7 +101,7 @@ func assertVerifierAudiences(
 	}
 }
 
-// TestBuildProxyTrust_AutoIncludesIssuerHost pins the H-C3 default:
+// TestBuildProxyTrust_AutoIncludesIssuerHost pins the trusted-proxy default:
 // when [WithTrustedProxies] is configured, the runtime allowlist auto-
 // includes the canonical issuer host so the typical single-hostname
 // deployment requires no further configuration.

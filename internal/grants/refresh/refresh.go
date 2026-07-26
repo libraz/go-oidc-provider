@@ -629,7 +629,7 @@ func (e *Exchanger) graceExchange(rec *store.RefreshToken, in ExchangeInput) (*E
 	// grace path runs against a Find-only record so we must apply the
 	// same gate explicitly. Without it, a refresh whose ExpiresAt has
 	// elapsed inside the grace window would still mint a fresh access
-	// token — the original audit concern (H-A1): the grace window
+	// token — which the grace window must not permit: it
 	// extends rotation idempotency, not record lifetime.
 	if e.clock().UTC().After(rec.ExpiresAt) {
 		return nil, ErrTokenExpired

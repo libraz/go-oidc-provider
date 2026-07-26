@@ -11,7 +11,7 @@
 // preflight branch answers an OPTIONS+ACRM probe with 204 directly
 // and never calls into next, so any audit / rate-limit / metrics
 // middleware mounted *inside* the CORS wrapper would silently miss
-// the request. The H-C6 hardening pairs this constraint with the
+// the request. The hardening pairs this constraint with the
 // `cors.preflight.allowed` audit event ([op.AuditCORSPreflightAllowed])
 // so SOC tooling sees the short-circuit even when the embedder's
 // middleware order is wrong.

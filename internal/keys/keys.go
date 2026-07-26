@@ -179,7 +179,7 @@ func (s *Set) Active() Entry { return s.entries[0] }
 // as an unknown-kid signal and MUST NOT fall back to the active key —
 // doing so would defeat key rotation auditing.
 //
-// Retirement gate (H-F1): an entry whose [Entry.NotAfter] is non-zero
+// Retirement gate: an entry whose [Entry.NotAfter] is non-zero
 // and lies on or before the [Set]'s configured clock reading is
 // rejected as if the kid were unknown. The configured
 // [RetiredKidObserver] is notified so the audit pipeline can fire

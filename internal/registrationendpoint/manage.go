@@ -333,7 +333,7 @@ func handleDelete(w http.ResponseWriter, r *http.Request, deps Deps, clientID st
 		// fully removed.
 		deps.logger().Error("dcr.rat.delete_failed_orphan", "err", err, "client_id", clientID)
 	}
-	// In-tree cascade (H-G5): probe optional [store.RevokeByClient]
+	// In-tree cascade: probe optional [store.RevokeByClient]
 	// implementations on the supplied refresh / grant substores so a
 	// deleted client takes its outstanding tokens / consent with it
 	// without requiring the embedder to hand-roll the cascade.

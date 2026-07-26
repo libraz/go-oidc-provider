@@ -30,7 +30,7 @@ func newSeededPasskeyStore(t *testing.T, subject string, credentialID []byte) st
 	return st
 }
 
-// TestAuthenticator_NoLongerImplementsUVReporter asserts H-E4: the
+// TestAuthenticator_NoLongerImplementsUVReporter asserts that the
 // process-local UV cache and its [authn.UserVerificationReporter]
 // type-assertion target are gone. Multi-replica deployments without
 // sticky sessions used to lose the UV bit when the appendFactor read
@@ -51,11 +51,11 @@ func TestAuthenticator_NoLongerImplementsUVReporter(t *testing.T) {
 	}
 
 	// Probe the deprecated UserVerificationReporter on purpose: the
-	// H-E4 regression we pin asserts the built-in adapter dropped the
+	// regression we pin asserts the built-in adapter dropped the
 	// process-local cache and no longer satisfies the legacy
 	// reporter.
 	if _, ok := any(a).(authn.UserVerificationReporter); ok { //nolint:staticcheck // deprecated probe is the assertion shape.
-		t.Errorf("Authenticator still satisfies UserVerificationReporter; H-E4 fix regressed")
+		t.Errorf("Authenticator still satisfies UserVerificationReporter")
 	}
 }
 

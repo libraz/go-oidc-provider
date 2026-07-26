@@ -66,7 +66,7 @@ func newFixture(t *testing.T, now time.Time) (*emailotp.Authenticator, *recordin
 		Store:  st.EmailOTPs(),
 		Users:  users,
 		Clock:  clock,
-		// Disable the H-E3 latency pad: the FakeClock never moves
+		// Disable the latency pad: the FakeClock never moves
 		// during a real-time time.Sleep, so a non-zero pad would
 		// inflate every test run by the configured duration.
 		SendLatencyPad: -1,

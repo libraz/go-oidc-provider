@@ -13,7 +13,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// TestSend_LatencyPadEqualisesMatchedAndUnmatched asserts H-E3: the
+// TestSend_LatencyPadEqualisesMatchedAndUnmatched asserts that the
 // matched-email branch (mailer invoked) and the unmatched-email branch
 // (mailer skipped) both return after at least the configured floor so
 // an attacker cannot enumerate registered subjects from response

@@ -210,7 +210,7 @@ func New(cfg Config) (*Verifier, error) {
 		// helpers. Setting the flag would skip the encoding and
 		// produce a raw UTF-8 string that older browser libraries
 		// would mishandle.
-		// Timeouts.Enforce is hard-coded to false (H-E6): the library
+		// Timeouts.Enforce is hard-coded to false: the library
 		// drives the freshness check through its own clock-aware
 		// [Verifier.checkSessionFresh] / [Session.Expires] path and
 		// then zeroes Expires before handing the decoded session to

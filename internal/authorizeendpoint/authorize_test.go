@@ -1042,7 +1042,7 @@ func TestAuthorize_ScopeAllowedClients_RedirectsInvalidScope(t *testing.T) {
 	}
 }
 
-// TestAuthorize_TrustedProxy_HonoursXFFForRemoteIP pins the H-C5
+// TestAuthorize_TrustedProxy_HonoursXFFForRemoteIP pins the
 // hardening: when [Deps.ProxyTrust] is configured and the request
 // arrives from a CIDR inside the trust, the persisted authn state
 // records the X-Forwarded-For client IP rather than the proxy IP.

@@ -269,15 +269,13 @@ func TestAuditEvent_DPoPLooseMethodCaseMirror(t *testing.T) {
 	}
 }
 
-// TestAuditEvent_KeyRetiredKidValuePin pins the wire form of the H-F1
-// audit event. The constant is emitted from op.go directly (not from
-// an internal package) so there is no internal-vs-public drift hazard,
+// TestAuditEvent_KeyRetiredKidValuePin pins the wire form of the
+// key-retirement audit event. The constant is emitted from op.go
+// directly (not from an internal package) so there is no internal-vs-public drift hazard,
 // but pinning the string here keeps SOC dashboards / log queries
 // stable across renames: a future contributor who renames the constant
 // without updating the wire form sees a loud test failure rather than
 // silent breakage of the operator's saved searches.
-//
-// Tracks H-F1.
 func TestAuditEvent_KeyRetiredKidValuePin(t *testing.T) {
 	t.Parallel()
 

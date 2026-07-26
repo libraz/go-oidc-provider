@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestDecodeProofClaims_RejectsOversizedJTI pins H-G2: jti is capped
+// TestDecodeProofClaims_RejectsOversizedJTI pins the cap: jti is capped
 // at 256 bytes before the verifier touches the replay store. RFC 9449
 // sets no upper bound; the cap closes an unbounded-allocation surface
 // at the verifier boundary.

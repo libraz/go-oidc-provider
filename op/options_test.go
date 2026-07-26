@@ -232,8 +232,8 @@ func TestWithAccessTokenTTL_AcceptsCustomValue(t *testing.T) {
 	}
 }
 
-// TestWithAccessTokenTTL_RejectsAboveImplementationMax pins H-A3:
-// the option layer enforces an implementation-defined upper bound
+// TestWithAccessTokenTTL_RejectsAboveImplementationMax pins the
+// ceiling: the option layer enforces an implementation-defined upper bound
 // (24h) so a typo cannot produce a token whose practical
 // invalidation requires per-grant revocation. The bound composes
 // with profile-supplied caps; this test exercises the bare
@@ -478,7 +478,7 @@ func TestWithTrustedProxies_RejectsEmpty(t *testing.T) {
 	}
 }
 
-// TestWithTrustedProxyHosts_AcceptsHosts pins the H-C3 happy path: an
+// TestWithTrustedProxyHosts_AcceptsHosts pins the happy path: an
 // embedder running a multi-hostname OP can register additional XFH
 // allowlist entries alongside the auto-derived issuer host.
 func TestWithTrustedProxyHosts_AcceptsHosts(t *testing.T) {

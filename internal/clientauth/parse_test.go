@@ -155,7 +155,7 @@ func TestParse_BasicAndBodyClientIDMismatch(t *testing.T) {
 }
 
 // TestParse_AssertionWithoutClientID_OversizedAssertionRejected pins
-// H-A5: when client_id is omitted from the form and the parser falls
+// the cap: when client_id is omitted from the form and the parser falls
 // back to the unverified assertion lookup, an oversized assertion
 // (typical signed JWTs are 1-4 KB; 32 KiB is far past the 8 KiB
 // hard cap) MUST NOT be parsed for its unverified body. The cap

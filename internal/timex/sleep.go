@@ -8,7 +8,7 @@ import (
 // PadUntil blocks until at least target has elapsed since start as
 // reported by clock. It is the constant-latency primitive the email-OTP
 // authenticator uses to defend against the user-enumeration timing
-// channel (H-E3): the matched branch (which invokes the mailer) and
+// channel: the matched branch (which invokes the mailer) and
 // the unmatched branch (which skips it) must both return after the
 // same wall-clock floor regardless of the subject's bound state.
 //

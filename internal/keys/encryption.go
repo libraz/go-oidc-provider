@@ -45,7 +45,7 @@ type EncryptionEntry struct {
 	// NotAfter is the optional retirement deadline. Zero means
 	// "never retires"; a non-zero value pins the rotation gate so
 	// [EncryptionSet.Resolve] rejects the kid on or after the
-	// deadline (mirroring the signing keyset's H-F1 posture).
+	// deadline (mirroring the signing keyset's posture).
 	NotAfter time.Time
 }
 

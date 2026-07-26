@@ -513,7 +513,7 @@ func (o *Orchestrator) appendFactor(st State, auth Authenticator, result interac
 // using the precedence chain documented at [appendFactor]:
 //
 //  1. [interaction.Result.UserVerified] (request-scoped, replica-safe;
-//     the built-in passkey adapter populates this since H-E4).
+//     the built-in passkey adapter populates it).
 //  2. The deprecated [UserVerificationReporter] interface (legacy
 //     embedder-supplied adapters that have not migrated; the
 //     orchestrator consults the hook only when the Result is silent).

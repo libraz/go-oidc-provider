@@ -875,7 +875,7 @@ func (s *alwaysAliveRefreshStore) RevokeByGrant(_ context.Context, grantID strin
 	return nil
 }
 
-// TestExchange_GraceWindow_ExpiredTokenSurfacesExpired pins H-A1: a
+// TestExchange_GraceWindow_ExpiredTokenSurfacesExpired pins the gate: a
 // refresh token whose ExpiresAt has elapsed but whose ConsumedAt is
 // inside the grace window MUST surface ErrTokenExpired rather than
 // minting a fresh access token via the grace path. The audit concern
@@ -927,7 +927,7 @@ func TestExchange_GraceWindow_ExpiredTokenSurfacesExpired(t *testing.T) {
 		t.Fatalf("Exchange#1: %v", err)
 	}
 	// Advance past expiry but well inside the grace window. Without
-	// the H-A1 gate, the grace path would mint a fresh access token
+	// the expiry gate, the grace path would mint a fresh access token
 	// idempotently; with the gate, it surfaces invalid_grant via
 	// ErrTokenExpired.
 	cur = cur.Add(10 * time.Second)
@@ -983,8 +983,9 @@ func (r *recordingEmitter) snapshot() []audit.Event {
 
 // failingChainStore wraps a [store.RefreshTokenStore] and substitutes
 // a synthetic transport fault for [RefreshTokenStore.RevokeChain]
-// while passing every other call through. Used to drive the H-A2
-// audit signal without breaking the rest of the cascade contract.
+// while passing every other call through. Used to drive the
+// chain-revoke audit signal without breaking the rest of the
+// cascade contract.
 type failingChainStore struct {
 	store.RefreshTokenStore
 	err error
@@ -1041,7 +1042,7 @@ func (s *rootLookupFaultStore) RevokeChain(context.Context, string) error {
 
 func (s *rootLookupFaultStore) RevokeByGrant(context.Context, string) error { return nil }
 
-// TestExchange_ChainRevokeFailure_EmitsAuditEvent pins H-A2: when the
+// TestExchange_ChainRevokeFailure_EmitsAuditEvent pins the signal: when the
 // post-replay chain revoke encounters a transport fault the
 // exchanger MUST emit a warn-level audit event so SOC tooling can
 // distinguish a successful cascade from a silent failure. The wire
@@ -1238,7 +1239,7 @@ func (s *stubGrantRevocationStore) snapshot() []store.GrantTombstone {
 	return out
 }
 
-// TestExchange_ChainRevoke_TombstonesGrant pins H-A6: a refresh
+// TestExchange_ChainRevoke_TombstonesGrant pins the cascade: a refresh
 // replay MUST cascade onto the grant-tombstone substore so JWT
 // access tokens descended from the chain are blocked at userinfo /
 // introspection / mint time. Without the cascade, the chain revoke
@@ -1299,7 +1300,7 @@ func TestExchange_ChainRevoke_TombstonesGrant(t *testing.T) {
 }
 
 // TestExchange_ChainRevoke_GrantTombstoneFailure_EmitsAudit pins the
-// H-A2 audit signal for the grant tombstone branch: when the
+// audit signal for the grant tombstone branch: when the
 // tombstone substore returns an error the exchanger MUST emit a
 // warn-level audit event so SOC tooling can spot the half-cascade.
 func TestExchange_ChainRevoke_GrantTombstoneFailure_EmitsAudit(t *testing.T) {

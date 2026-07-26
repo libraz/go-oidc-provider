@@ -14,7 +14,7 @@ import (
 )
 
 // spyEmitter records every event the wrapper emits. It is the
-// minimum surface a test needs to assert on the H-C6 short-circuit
+// minimum surface a test needs to assert on the short-circuit
 // (the strict preflight returns 204 directly and bypasses every
 // inner handler / outer middleware below the wrapper).
 type spyEmitter struct {
@@ -348,7 +348,7 @@ func TestStrict_Preflight_AllRequestedHeadersUnsupported(t *testing.T) {
 	}
 }
 
-// TestStrict_Preflight_AllowedFiresAuditEvent pins the H-C6 audit
+// TestStrict_Preflight_AllowedFiresAuditEvent pins the audit
 // emission. The strict preflight short-circuit returns 204 directly
 // and skips every handler / middleware mounted under the CORS
 // wrapper; the audit signal makes the bypass visible to SOC tooling

@@ -379,7 +379,7 @@ func (s *refreshStore) Consume(ctx context.Context, id string) (*store.RefreshTo
 // compares parent_id against those stored digest values, keeping the graph
 // internally consistent without ever persisting raw parent secrets.
 //
-// Atomicity (H-G3): when the substore is not already running inside a
+// Atomicity: when the substore is not already running inside a
 // caller-owned transaction the BFS auto-wraps itself in a fresh
 // transaction so a concurrent rotation cannot interleave a refresh
 // Save between the parent's mark and its children-lookup. The chain

@@ -10,7 +10,7 @@ import (
 )
 
 // WebauthnForTest exposes the underlying [webauthn.WebAuthn] so tests
-// can read the upstream configuration directly (e.g., the H-E6 freeze
+// can read the upstream configuration directly (e.g., the freeze
 // on Timeouts.Enforce=false) without re-deriving the value through
 // the public surface.
 func (v *Verifier) WebauthnForTest() *webauthn.WebAuthn {
@@ -44,7 +44,7 @@ func (a *Authenticator) ForceCloneDetectedForTest(ctx context.Context, subject s
 // ContinueResultForTest invokes continueResult with the supplied
 // credential as if FinishLogin returned (cred, nil). The seam exists
 // so tests can assert the adapter's request-scoped UV propagation
-// (H-E4) without standing up a soft authenticator. The wrapped
+// without standing up a soft authenticator. The wrapped
 // helper persists the credential through the configured store; tests
 // that want to skip the persist must inject a no-op store via
 // fakePasskeyStore.

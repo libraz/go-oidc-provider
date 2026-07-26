@@ -11,7 +11,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/patterns"
 )
 
-// TestConsumedJTIs_HashesRawValueOnStore pins the H-G2 invariant: a
+// TestConsumedJTIs_HashesRawValueOnStore pins the hashing invariant: a
 // raw "jti" handed to Mark must never appear verbatim as a map key.
 // The store keys on the SHA-256 digest so a heap dump or memory leak
 // reveals only one-way digests, matching the redis adapter's posture.

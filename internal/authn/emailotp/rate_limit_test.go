@@ -14,7 +14,7 @@ import (
 	"github.com/libraz/go-oidc-provider/op/storeadapter/inmem"
 )
 
-// TestSend_RejectsResendBeforeMinInterval asserts H-E2: a second send
+// TestSend_RejectsResendBeforeMinInterval asserts that a second send
 // within [resendMinInterval] is rejected as ErrTooManyOutstanding so an
 // attacker cannot flood the SMTP path.
 func TestSend_RejectsResendBeforeMinInterval(t *testing.T) {
@@ -71,7 +71,7 @@ func TestSend_AllowsResendAfterMinInterval(t *testing.T) {
 	}
 }
 
-// TestSend_RejectsAfterWindowCap asserts H-E2: more than
+// TestSend_RejectsAfterWindowCap asserts the window cap: more than
 // [resendWindowCap] sends within the rolling window are rejected.
 func TestSend_RejectsAfterWindowCap(t *testing.T) {
 	t.Parallel()
@@ -140,7 +140,7 @@ func TestSend_WindowRollsOverAfterOneHour(t *testing.T) {
 	}
 }
 
-// TestSend_WindowCapAppliesToUnmatchedEmail asserts H-E1 / H-E2: the
+// TestSend_WindowCapAppliesToUnmatchedEmail asserts that the
 // unmatched-email branch (which skips the mailer) still increments the
 // counter so an attacker cannot trivially circumvent the rate limit by
 // sending wrong emails.
@@ -173,7 +173,7 @@ func TestSend_WindowCapAppliesToUnmatchedEmail(t *testing.T) {
 	}
 }
 
-// TestSend_MinIntervalAppliesToUnmatchedEmail asserts H-E1 / H-E2:
+// TestSend_MinIntervalAppliesToUnmatchedEmail asserts that
 // the minimum-interval gate fires regardless of whether the prior
 // send hit the matched (mailer-invoked) or unmatched (mailer-skipped)
 // branch. The unmatched branch leaves SentAt zero by design, but the
@@ -207,7 +207,7 @@ func TestSend_MinIntervalAppliesToUnmatchedEmail(t *testing.T) {
 	}
 }
 
-// TestSend_PriorRecordIsNotOverwrittenByQuickResend asserts H-E1: a
+// TestSend_PriorRecordIsNotOverwrittenByQuickResend asserts that a
 // resend within the rate-limit floor does NOT overwrite the prior
 // record. The prior CodeHash and SentAt must survive so the verify
 // endpoint cannot race a fresh code against the old one.

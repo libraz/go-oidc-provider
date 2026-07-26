@@ -134,7 +134,7 @@ const (
 	// constantSendLatency is the minimum total elapsed wall time
 	// [handleSend] returns after, regardless of whether the supplied
 	// email matched the subject's bound address. The pad defends
-	// against [H-E3]: an attacker that times the send response would
+	// against user enumeration: an attacker that times the send response would
 	// otherwise observe a faster reply when the subject has no bound
 	// address (the mailer call is skipped) and enumerate registered
 	// addresses. The value is the order of an SMTP submission round
@@ -401,7 +401,7 @@ func (a *Authenticator) handleSend(ctx context.Context, in authn.ContinueInput) 
 }
 
 // handleSendInner drives the send step's per-record bookkeeping
-// without the H-E3 latency pad; [handleSend] wraps it with the pad so
+// without the latency pad; [handleSend] wraps it with the pad so
 // the matched / unmatched branches share a single exit point.
 func (a *Authenticator) handleSendInner(ctx context.Context, in authn.ContinueInput, now time.Time) (interaction.Step, error) {
 	email, ok := in.Submission.Values[EmailFieldName]
@@ -503,8 +503,8 @@ func (a *Authenticator) loadPriorRecord(ctx context.Context, subject string) (*s
 	return prior, nil
 }
 
-// checkResendRate enforces the per-subject resend rate limit (H-E1 /
-// H-E2). The two gates are:
+// checkResendRate enforces the per-subject resend rate limit. The
+// two gates are:
 //
 //  1. Minimum interval between consecutive sends:
 //     [resendMinInterval]. Defends against an attacker who triggers

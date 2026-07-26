@@ -237,15 +237,13 @@ func TestSet_JWKSIsDefensiveCopy(t *testing.T) {
 	}
 }
 
-// TestSet_Find_RejectsRetiredKey pins H-F1: an [Entry] whose
+// TestSet_Find_RejectsRetiredKey pins the retirement gate: an [Entry] whose
 // [Entry.NotAfter] has elapsed by the configured clock reading MUST
 // surface as a [Set.Find] miss, even though the kid still matches a
 // physical entry. The retirement gate is the audit anchor for the
 // "rotation-after-leak token forge" attempt — an attacker who captured
 // the old private key before the rotation reuses the same kid against
 // the OP, hoping to ride past the JWKS grace window.
-//
-// Tracks H-F1.
 func TestSet_Find_RejectsRetiredKey(t *testing.T) {
 	t.Parallel()
 
@@ -282,8 +280,6 @@ func TestSet_Find_RejectsRetiredKey(t *testing.T) {
 // kid reachable; reaching the deadline (or stepping past it) flips the
 // gate. The two tests pin both edges of the boundary so a future
 // regression that swaps the comparator surfaces.
-//
-// Tracks H-F1.
 func TestSet_Find_AcceptsKeyBeforeNotAfter(t *testing.T) {
 	t.Parallel()
 
@@ -333,8 +329,6 @@ func TestSet_Find_AcceptsKeyBeforeNotAfter(t *testing.T) {
 // Unknown-kid lookups MUST NOT trigger the observer — the rotation
 // audit signal would lose meaning if an attacker probing arbitrary
 // kid strings could amplify it.
-//
-// Tracks H-F1.
 func TestSet_Find_NotifiesObserverOnRetiredKid(t *testing.T) {
 	t.Parallel()
 
@@ -386,8 +380,6 @@ func TestSet_Find_NotifiesObserverOnRetiredKid(t *testing.T) {
 // callback. The observer is optional (the discard sink is the
 // caller-side default), and a regression that drops the nil-check
 // would crash the request hot path.
-//
-// Tracks H-F1.
 func TestSet_Find_NoObserverDoesNotPanic(t *testing.T) {
 	t.Parallel()
 
@@ -408,9 +400,7 @@ func TestSet_Find_NoObserverDoesNotPanic(t *testing.T) {
 // TestSet_Find_ZeroNotAfterNeverRetires pins the back-compat contract:
 // an [Entry] left at the zero-value [Entry.NotAfter] never retires, no
 // matter how far the clock advances. Embedders that have not opted
-// into rotation deadlines see the pre-H-F1 behaviour unchanged.
-//
-// Tracks H-F1.
+// into rotation deadlines see the original behaviour unchanged.
 func TestSet_Find_ZeroNotAfterNeverRetires(t *testing.T) {
 	t.Parallel()
 
@@ -435,8 +425,6 @@ func TestSet_Find_ZeroNotAfterNeverRetires(t *testing.T) {
 // out of JWKS the moment the gate flips would strand RPs whose cache
 // TTL has not elapsed; the audit warning on the verification side
 // already covers the post-deadline forge attempt.
-//
-// Tracks H-F1.
 func TestSet_JWKS_AdvertisesRetiredEntries(t *testing.T) {
 	t.Parallel()
 
