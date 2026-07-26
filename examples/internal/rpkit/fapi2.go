@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -456,6 +457,23 @@ func signJWT(key *ecdsa.PrivateKey, kid, typ string, claims any, extraHeaders ma
 	return jwt.Signed(signer).Claims(claims).Serialize()
 }
 
+// p256CoordLen is the fixed octet length RFC 7518 §6.2.1.2 requires of
+// a P-256 coordinate.
+const p256CoordLen = 32
+
+// ecCoord encodes an EC coordinate the way RFC 7518 §6.2.1.2 demands:
+// zero-padded on the left to the full size of a coordinate for the
+// curve. big.Int.Bytes returns the minimal representation instead, so a
+// key whose coordinate happens to start with a zero byte — roughly one
+// generated key in 256, per coordinate — would encode to 31 octets and
+// produce a JWK that a conforming parser rejects as malformed. Every
+// caller here feeds a freshly generated ephemeral key, which is exactly
+// the shape that turns the defect into an occasional startup failure
+// rather than a reproducible one.
+func ecCoord(v *big.Int) string {
+	return base64.RawURLEncoding.EncodeToString(v.FillBytes(make([]byte, p256CoordLen)))
+}
+
 // ecPublicJWK returns the JSON Web Key form of pub. The DPoP proof
 // embeds this in its protected header so the OP can verify the proof
 // signature without prior key registration.
@@ -463,8 +481,8 @@ func ecPublicJWK(pub *ecdsa.PublicKey) map[string]string {
 	return map[string]string{
 		"kty": "EC",
 		"crv": "P-256",
-		"x":   base64.RawURLEncoding.EncodeToString(pub.X.Bytes()),
-		"y":   base64.RawURLEncoding.EncodeToString(pub.Y.Bytes()),
+		"x":   ecCoord(pub.X),
+		"y":   ecCoord(pub.Y),
 	}
 }
 
@@ -473,8 +491,7 @@ func ecPublicJWK(pub *ecdsa.PublicKey) map[string]string {
 // can confirm DPoP binding worked end-to-end.
 func jwkThumbprint(pub *ecdsa.PublicKey) string {
 	canon := fmt.Sprintf(`{"crv":"P-256","kty":"EC","x":%q,"y":%q}`,
-		base64.RawURLEncoding.EncodeToString(pub.X.Bytes()),
-		base64.RawURLEncoding.EncodeToString(pub.Y.Bytes()))
+		ecCoord(pub.X), ecCoord(pub.Y))
 	sum := sha256.Sum256([]byte(canon))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
@@ -498,8 +515,8 @@ func PublicJWKSetJSON(pub *ecdsa.PublicKey, kid string) ([]byte, error) {
 	return json.Marshal(set{Keys: []jwk{{
 		KTY: "EC",
 		Crv: "P-256",
-		X:   base64.RawURLEncoding.EncodeToString(pub.X.Bytes()),
-		Y:   base64.RawURLEncoding.EncodeToString(pub.Y.Bytes()),
+		X:   ecCoord(pub.X),
+		Y:   ecCoord(pub.Y),
 		Use: "sig",
 		KID: kid,
 		Alg: "ES256",
