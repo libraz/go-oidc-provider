@@ -24,10 +24,6 @@ import (
 //     sender-constrained-token requirement is inherited from the
 //     FAPI 2.0 family and lives on [RequiredAnyOf] like Baseline /
 //     Message Signing.
-//
-// [IGovHigh] returns nil because its option surface is scheduled for
-// v2+; returning nil keeps the switch exhaustive without the library
-// claiming requirements it cannot yet enforce.
 func RequiredFeatures(p Profile) []feature.Flag {
 	switch p {
 	case FAPI2Baseline:
@@ -36,7 +32,7 @@ func RequiredFeatures(p Profile) []feature.Flag {
 		return []feature.Flag{feature.PAR, feature.JAR, feature.JARM}
 	case FAPICIBA:
 		return []feature.Flag{feature.JAR}
-	case IGovHigh, profileUnspecified:
+	case profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -65,7 +61,7 @@ func RequiredAnyOf(p Profile) [][]feature.Flag {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return [][]feature.Flag{{feature.DPoP, feature.MTLS}}
-	case IGovHigh, profileUnspecified:
+	case profileUnspecified:
 		return nil
 	default:
 		return nil
@@ -79,13 +75,12 @@ func RequiredAnyOf(p Profile) [][]feature.Flag {
 //
 // FAPI 2.0 Baseline and Message Signing cap access tokens at 10
 // minutes (FAPI 2.0 §3.1.9); FAPI-CIBA inherits the same cap by
-// reference (FAPI-CIBA-ID1 §5). [IGovHigh] returns 0 because its
-// option surface is scheduled for v2+.
+// reference (FAPI-CIBA-ID1 §5).
 func MaxAccessTokenTTL(p Profile) time.Duration {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return 10 * time.Minute
-	case IGovHigh, profileUnspecified:
+	case profileUnspecified:
 		return 0
 	default:
 		return 0
@@ -105,15 +100,14 @@ func MaxAccessTokenTTL(p Profile) time.Duration {
 //
 // [FAPICIBA] returns false because the CIBA flow has no /authorize
 // redirect — the client posts directly to /bc-authorize and there is
-// no code_challenge step the gate could attach to. [IGovHigh] returns
-// false because its option surface is scheduled for v2+; the helper
-// is intentionally conservative — a future profile that needs PKCE
-// will be added here rather than relied on as the default.
+// no code_challenge step the gate could attach to. The helper is
+// intentionally conservative: a future profile that needs PKCE will be
+// added here rather than relied on as the default.
 func RequiresPKCE(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case FAPICIBA, IGovHigh, profileUnspecified:
+	case FAPICIBA, profileUnspecified:
 		return false
 	default:
 		return false
@@ -143,11 +137,10 @@ func RequiresPKCE(p Profile) bool {
 // it will be added here rather than relied on as the default.
 //
 // [FAPICIBA] returns false because the CIBA flow has no /authorize
-// redirect — there is no nonce parameter on the wire. [IGovHigh]
-// returns false because its option surface is scheduled for v2+.
+// redirect — there is no nonce parameter on the wire.
 func RequiresNonce(p Profile) bool {
 	switch p {
-	case FAPICIBA, IGovHigh, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
+	case FAPICIBA, profileUnspecified, FAPI2Baseline, FAPI2MessageSigning:
 		return false
 	default:
 		return false
@@ -162,13 +155,11 @@ func RequiresNonce(p Profile) bool {
 //
 // [FAPICIBA] returns false because the CIBA flow has no /authorize
 // redirect — there is no state or nonce parameter on the wire.
-// [IGovHigh] returns false because its option surface is scheduled
-// for v2+.
 func RequiresStateOrNonce(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case FAPICIBA, IGovHigh, profileUnspecified:
+	case FAPICIBA, profileUnspecified:
 		return false
 	default:
 		return false
@@ -187,13 +178,12 @@ func RequiresStateOrNonce(p Profile) bool {
 // /authorize path stays functional.
 //
 // [FAPICIBA] returns false because the CIBA flow does not exercise
-// /authorize at all — there is no PAR push step in CIBA. [IGovHigh]
-// returns false because its option surface is scheduled for v2+.
+// /authorize at all — there is no PAR push step in CIBA.
 func RequiresPAR(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning:
 		return true
-	case FAPICIBA, IGovHigh, profileUnspecified:
+	case FAPICIBA, profileUnspecified:
 		return false
 	default:
 		return false
@@ -221,7 +211,7 @@ func AllowedClientAuthMethods(p Profile) []string {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return []string{"private_key_jwt", "tls_client_auth", "self_signed_tls_client_auth"}
-	case IGovHigh, profileUnspecified:
+	case profileUnspecified:
 		return nil
 	default:
 		return nil

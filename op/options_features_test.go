@@ -97,22 +97,32 @@ func TestWithProfile_RejectsDuplicate(t *testing.T) {
 	}
 }
 
-func TestWithProfile_RejectsUnsupportedIGovHigh(t *testing.T) {
+// TestWithProfile_RejectsUnrecognisedValue pins that a profile value
+// outside the exported constants cannot boot. [profile.Profile] is a
+// uint8, so nothing stops a caller from handing op.New an arbitrary
+// number; every constraint predicate answers such a value with its
+// permissive arm, so the provider would come up enforcing none of the
+// profile's MUST clauses while the configuration reads as though a
+// profile were active. The zero value is included because an
+// uninitialised struct field is the way this arrives in practice.
+func TestWithProfile_RejectsUnrecognisedValue(t *testing.T) {
 	t.Parallel()
 
-	_, err := op.New(append(validBaseOpts(t),
-		op.WithProfile(profile.IGovHigh),
-	)...)
-	if err == nil {
-		t.Fatal("expected error for unsupported IGovHigh profile, got nil")
-	}
-	if !strings.Contains(err.Error(), "not implemented yet") {
-		t.Errorf("err = %v, want not-implemented diagnostic", err)
+	for _, p := range []profile.Profile{profile.Profile(0), profile.Profile(99), profile.Profile(200)} {
+		_, err := op.New(append(validBaseOpts(t),
+			op.WithProfile(p),
+		)...)
+		if err == nil {
+			t.Fatalf("op.New accepted profile value %d", uint8(p))
+		}
+		if !strings.Contains(err.Error(), "unknown profile") {
+			t.Errorf("profile %d: err = %v, want an unknown-profile diagnostic", uint8(p), err)
+		}
 	}
 }
 
 // TestValidateProfile_NoFalsePositiveWithoutProfile pins the
-// contrapositive of the F-7 add-only invariant: when no profile is
+// contrapositive of the add-only invariant: when no profile is
 // active the validator MUST NOT demand any profile-required flag be
 // present. Features may be added without a matching profile (the
 // "stricter-than-default" posture documented on validateProfiles).
@@ -126,7 +136,7 @@ func TestValidateProfile_NoFalsePositiveWithoutProfile(t *testing.T) {
 	}
 }
 
-// TestValidateProfile_RejectsMissingRequiredFeature pins the F-7
+// TestValidateProfile_RejectsMissingRequiredFeature pins the
 // add-only invariant directly through the unexported validate path:
 // a profile whose conjunctive required features are absent from
 // c.features MUST be rejected with a configuration error that names

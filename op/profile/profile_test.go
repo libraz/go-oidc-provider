@@ -17,7 +17,6 @@ func TestProfile_String(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, "fapi2-baseline"},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, "fapi2-message-signing"},
 		{"fapi-ciba", profile.FAPICIBA, "fapi-ciba"},
-		{"igov-high", profile.IGovHigh, "igov-high"},
 		{"zero", profile.Profile(0), ""},
 		{"unknown", profile.Profile(99), ""},
 	}
@@ -39,7 +38,6 @@ func TestProfile_IsValid(t *testing.T) {
 		profile.FAPI2Baseline,
 		profile.FAPI2MessageSigning,
 		profile.FAPICIBA,
-		profile.IGovHigh,
 	}
 	for _, p := range all {
 		if !p.IsValid() {
@@ -65,7 +63,6 @@ func TestRequiresAccessTokenRevocation(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, true},
-		{"igov-high", profile.IGovHigh, false},
 		{"zero", profile.Profile(0), false},
 		{"unknown", profile.Profile(99), false},
 	}

@@ -32,7 +32,6 @@ func TestRequiredFeatures(t *testing.T) {
 			profile.FAPICIBA,
 			[]feature.Flag{feature.JAR},
 		},
-		{"igov-high", profile.IGovHigh, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
 	}
@@ -58,7 +57,6 @@ func TestRequiresPKCE(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},
-		{"igov-high", profile.IGovHigh, false},
 		{"zero", profile.Profile(0), false},
 		{"unknown", profile.Profile(99), false},
 	}
@@ -102,9 +100,9 @@ func TestRequiredAnyOf(t *testing.T) {
 		}
 	})
 
-	t.Run("zero-and-deferred-profiles-have-no-anyof", func(t *testing.T) {
+	t.Run("unrecognised-profiles-have-no-anyof", func(t *testing.T) {
 		t.Parallel()
-		for _, p := range []profile.Profile{profile.Profile(0), profile.IGovHigh, profile.Profile(99)} {
+		for _, p := range []profile.Profile{profile.Profile(0), profile.Profile(99)} {
 			if got := profile.RequiredAnyOf(p); got != nil {
 				t.Errorf("RequiredAnyOf(%v) = %v, want nil", p, got)
 			}
@@ -133,7 +131,6 @@ func TestMaxAccessTokenTTL(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, 10 * time.Minute},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, 10 * time.Minute},
 		{"fapi-ciba", profile.FAPICIBA, 10 * time.Minute},
-		{"igov-high", profile.IGovHigh, 0},
 		{"zero", profile.Profile(0), 0},
 		{"unknown", profile.Profile(99), 0},
 	}
@@ -161,7 +158,6 @@ func TestAllowedClientAuthMethods(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, fapi2Allowed},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, fapi2Allowed},
 		{"fapi-ciba", profile.FAPICIBA, fapi2Allowed},
-		{"igov-high", profile.IGovHigh, nil},
 		{"zero", profile.Profile(0), nil},
 		{"unknown", profile.Profile(99), nil},
 	}
@@ -197,7 +193,6 @@ func TestRequiresNonce(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, false},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, false},
 		{"fapi-ciba", profile.FAPICIBA, false},
-		{"igov-high", profile.IGovHigh, false},
 		{"zero", profile.Profile(0), false},
 		{"unknown", profile.Profile(99), false},
 	}
@@ -222,7 +217,6 @@ func TestRequiresStateOrNonce(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},
-		{"igov-high", profile.IGovHigh, false},
 		{"zero", profile.Profile(0), false},
 		{"unknown", profile.Profile(99), false},
 	}
@@ -247,7 +241,6 @@ func TestRequiresPAR(t *testing.T) {
 		{"fapi2-baseline", profile.FAPI2Baseline, true},
 		{"fapi2-message-signing", profile.FAPI2MessageSigning, true},
 		{"fapi-ciba", profile.FAPICIBA, false},
-		{"igov-high", profile.IGovHigh, false},
 		{"zero", profile.Profile(0), false},
 		{"unknown", profile.Profile(99), false},
 	}

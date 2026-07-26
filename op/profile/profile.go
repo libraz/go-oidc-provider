@@ -34,9 +34,6 @@ const (
 	//   - server-side access-token revocation
 	//     (FAPI 2.0 §5.3.2.2).
 	FAPICIBA
-
-	// IGovHigh selects the OpenID iGov High profile. v2+.
-	IGovHigh
 )
 
 // String returns the canonical lower-case identifier used in discovery
@@ -50,8 +47,6 @@ func (p Profile) String() string {
 		return "fapi2-message-signing"
 	case FAPICIBA:
 		return "fapi-ciba"
-	case IGovHigh:
-		return "igov-high"
 	case profileUnspecified:
 		return ""
 	default:
@@ -62,7 +57,7 @@ func (p Profile) String() string {
 // IsValid reports whether p is one of the recognised exported constants.
 func (p Profile) IsValid() bool {
 	switch p {
-	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA, IGovHigh:
+	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
 	case profileUnspecified:
 		return false
@@ -71,15 +66,13 @@ func (p Profile) IsValid() bool {
 	}
 }
 
-// RequiresAccessTokenRevocation reports whether p mandates server-side
-// JWT access-token revocation (ADR 0025). FAPI 2.0 Security Profile
+// RequiresAccessTokenRevocation reports whether p mandates
+// server-side JWT access-token revocation. FAPI 2.0 Security Profile
 // §5.3.2.2 imposes the requirement on the FAPI 2.0 family (Baseline,
 // Message Signing); FAPI-CIBA inherits the same posture by reference
-// (FAPI-CIBA-ID1 §5). The future iGov High profile is still a
-// placeholder and will land here when its constraint table graduates.
-// Non-FAPI profiles return false so embedders deploying plain
-// OAuth 2.0 / OIDC can opt into [op.RevocationStrategyNone] without
-// tripping the gate.
+// (FAPI-CIBA-ID1 §5). Non-FAPI profiles return false so embedders
+// deploying plain OAuth 2.0 / OIDC can opt into
+// [op.RevocationStrategyNone] without tripping the gate.
 //
 // The op.New validator consults this predicate to reject the
 // combination of a FAPI profile with [op.RevocationStrategyNone]: the
@@ -89,9 +82,7 @@ func RequiresAccessTokenRevocation(p Profile) bool {
 	switch p {
 	case FAPI2Baseline, FAPI2MessageSigning, FAPICIBA:
 		return true
-	case IGovHigh, profileUnspecified:
-		// IGovHigh is a placeholder today; it will land here when
-		// its constraint table graduates.
+	case profileUnspecified:
 		return false
 	}
 	return false

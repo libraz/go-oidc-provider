@@ -265,7 +265,7 @@ func TestWithAccessTokenRevocationStrategy_RejectsMissingAccessTokens(t *testing
 }
 
 // TestWithAccessTokenRevocationStrategy_FAPIRejectsNone pins the
-// ADR 0025 §Profile interaction gate: under any FAPI profile
+// Profile interaction gate: under any FAPI profile
 // [op.RevocationStrategyNone] is rejected at [op.New] time because
 // FAPI 2.0 SP §5.3.2.2 mandates server-side access-token revocation.
 // The test exercises FAPI 2.0 Baseline, but the gate covers every
@@ -332,10 +332,10 @@ func TestWithAccessTokenRevocationStrategy_FAPIAcceptsGrantTombstone(t *testing.
 	}
 }
 
-// TestWithAccessTokenRevocationStrategy_FAPIAcceptsJTIRegistry confirms
-// the second FAPI-conformant strategy is admitted: JTIRegistry preserves
-// the ADR 0013 per-AT shadow row model, which also satisfies FAPI 2.0
-// SP §5.3.2.2.
+// TestWithAccessTokenRevocationStrategy_FAPIAcceptsJTIRegistry
+// confirms the second FAPI-conformant strategy is admitted:
+// JTIRegistry preserves the per-AT shadow row model, which also
+// satisfies FAPI 2.0 SP §5.3.2.2.
 func TestWithAccessTokenRevocationStrategy_FAPIAcceptsJTIRegistry(t *testing.T) {
 	t.Parallel()
 
@@ -356,8 +356,7 @@ func TestWithAccessTokenRevocationStrategy_FAPIAcceptsJTIRegistry(t *testing.T) 
 // classification consumed by the validator. Adding a FAPI variant to
 // the profile package without updating this predicate would surface
 // here as a missing FAPI entry. FAPICIBA inherits the FAPI 2.0 §5.3.2.2
-// posture so it returns true; IGovHigh remains a placeholder until its
-// constraint table graduates.
+// posture so it returns true.
 func TestProfile_RequiresAccessTokenRevocation(t *testing.T) {
 	t.Parallel()
 
@@ -368,7 +367,6 @@ func TestProfile_RequiresAccessTokenRevocation(t *testing.T) {
 		{profile.FAPI2Baseline, true},
 		{profile.FAPI2MessageSigning, true},
 		{profile.FAPICIBA, true},
-		{profile.IGovHigh, false},
 		{profile.Profile(0), false},
 		{profile.Profile(99), false},
 	}
