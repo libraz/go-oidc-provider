@@ -88,7 +88,7 @@ func (p *Provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // either inspect [store.Client.SubjectType] themselves or invoke the
 // per-client projector through a /authorize round-trip.
 //
-// Stable since v0.9.1.
+// Stable since v1.0.
 func (p *Provider) SubjectGenerator() SubjectGenerator { //nolint:ireturn,nolintlint // sealed-sum interface return is the contract.
 	if p == nil || p.cfg == nil {
 		return nil
@@ -102,7 +102,7 @@ func (p *Provider) SubjectGenerator() SubjectGenerator { //nolint:ireturn,nolint
 // other out-of-band surfaces in the same locale the OP picks for
 // /authorize prompts. The resolver is safe for concurrent use.
 //
-// Stable since v0.1.
+// Stable since v1.0.
 func (p *Provider) LocaleResolver() *Resolver {
 	if p == nil || p.locales == nil {
 		return nil
@@ -114,7 +114,7 @@ func (p *Provider) LocaleResolver() *Resolver {
 // every required option is present and that the combination of enabled
 // grants, features, and profiles is internally consistent.
 //
-// Stable since v0.1. New returns a non-nil error if construction fails; the
+// Stable since v1.0. New returns a non-nil error if construction fails; the
 // returned Provider is nil in that case. Callers must treat construction
 // failure as fatal during program start-up.
 func New(opts ...Option) (*Provider, error) {
@@ -236,8 +236,6 @@ func wrapWithProfileMiddleware(mux http.Handler, cfg *config) http.Handler {
 			// UUID. Other profiles will add their own middlewares
 			// here as the constraint set grows.
 			return handler
-		case profile.IGovHigh:
-			// v2+; no middleware contribution today.
 		}
 	}
 	return handler
@@ -345,7 +343,7 @@ func keysetClock(cfg *config) func() time.Time {
 
 // retiredKidObserver builds the [keys.RetiredKidObserver] that fires
 // [AuditKeyRetiredKidPresented] when the verifier rejects a kid whose
-// retirement deadline has elapsed (H-F1). The observer rides on the
+// retirement deadline has elapsed. The observer rides on the
 // configured [audit.Emitter] chain so the event lands on every sink
 // (slog audit logger + the Prometheus bridge when [WithPrometheus] is
 // active). [config.effectiveAuditEmitter] never returns nil — an
@@ -562,9 +560,6 @@ func (c *config) requireSenderConstrainedTokens() bool {
 		switch p {
 		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.FAPICIBA:
 			return true
-		case profile.IGovHigh:
-			// IGovHigh is a placeholder today; it will land here
-			// when its constraint table graduates.
 		}
 	}
 	return false
@@ -650,14 +645,12 @@ func (c *config) requireSignedRequestObject() bool {
 		switch p {
 		case profile.FAPI2MessageSigning:
 			return true
-		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+		case profile.FAPI2Baseline, profile.FAPICIBA:
 			// Baseline does not mandate signed_non_repudiation;
 			// FAPI-CIBA mandates signed authentication requests
 			// at /bc-authorize but not at /authorize / /par
 			// (CIBA does not exercise either endpoint), so its
 			// gate lives on [config.requireSignedBackchannelRequest].
-			// IGovHigh is a placeholder today and will land here
-			// when its constraint table graduates.
 		}
 	}
 	return false
@@ -679,12 +672,10 @@ func (c *config) requireSignedBackchannelRequest() bool {
 		switch p {
 		case profile.FAPICIBA:
 			return true
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.IGovHigh:
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
 			// FAPI 2.0 Baseline / Message Signing do not mount a
 			// backchannel-authentication endpoint; the signed-
-			// request mandate is specific to FAPI-CIBA. IGovHigh
-			// is a placeholder today and will land here when its
-			// constraint table graduates.
+			// request mandate is specific to FAPI-CIBA.
 		}
 	}
 	return false
@@ -704,10 +695,9 @@ func (c *config) fapiCIBAProfileActive() bool {
 		switch p {
 		case profile.FAPICIBA:
 			return true
-		case profile.FAPI2Baseline, profile.FAPI2MessageSigning, profile.IGovHigh:
+		case profile.FAPI2Baseline, profile.FAPI2MessageSigning:
 			// FAPI 2.0 Baseline / Message Signing do not mount the
-			// backchannel-authentication endpoint; IGovHigh is a
-			// placeholder today.
+			// backchannel-authentication endpoint.
 		}
 	}
 	return false
@@ -727,11 +717,10 @@ func (c *config) requireJARMResponseMode() bool {
 		switch p {
 		case profile.FAPI2MessageSigning:
 			return true
-		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+		case profile.FAPI2Baseline, profile.FAPICIBA:
 			// Baseline does not require response signing;
 			// FAPI-CIBA does not exercise /authorize so JARM does
-			// not apply. IGovHigh is a placeholder today and will
-			// land here when its constraint table graduates.
+			// not apply.
 		}
 	}
 	return false
@@ -750,13 +739,11 @@ func (c *config) requireSignedIntrospection() bool {
 		switch p {
 		case profile.FAPI2MessageSigning:
 			return true
-		case profile.FAPI2Baseline, profile.FAPICIBA, profile.IGovHigh:
+		case profile.FAPI2Baseline, profile.FAPICIBA:
 			// Baseline does not require introspection signing;
 			// FAPI-CIBA inherits the FAPI 2.0 Baseline posture for
 			// /introspect (the profile only adds backchannel-
-			// authentication mandates). IGovHigh is a placeholder
-			// today and will land here when its constraint table
-			// graduates.
+			// authentication mandates).
 		}
 	}
 	return false
@@ -1026,12 +1013,11 @@ type deciderAdapter struct {
 // Decide implements [authn.LoginFlowDecider]. The adapter rebuilds the
 // public LoginContext from the internal projection, calls the
 // embedder's Decider, and translates the returned Decision back. A
-// Require{Step} decision projects the wrapped Step back through
-// projectStepToFlow so a Decider that returns an unwrapped built-in
-// Step surfaces as ErrInvalidStep at the orchestrator (the
-// dynamic-compile path is intentionally absent: a Decider that needs
-// to introduce a previously-unregistered Step must register it on the
-// LoginFlow up front).
+// Require carries only a kind: the orchestrator resolves it against the
+// steps the flow declared, and a kind that is not among them surfaces as
+// ErrInvalidStep. Introducing a step at decision time is deliberately
+// not possible — the factors a login can demand stay readable off the
+// LoginFlow, which a Decider that could conjure one would undo.
 func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) authn.LoginFlowDecision { //nolint:ireturn,nolintlint // sealed-sum LoginFlowDecision is the contract.
 	d := a.inner.Decide(ctx, toPublicLoginContext(lc))
 	switch v := d.(type) {
@@ -1042,15 +1028,14 @@ func (a *deciderAdapter) Decide(ctx context.Context, lc authn.LoginFlowContext) 
 	case Deny:
 		return authn.LoginFlowDeny{Reason: v.Reason}
 	case Require:
-		// Project the Decider-returned Step lazily. If the Step is
-		// not registered in the compiled flow's byKind map, the
-		// orchestrator surfaces ErrInvalidStep rather than
-		// dynamically extending the flow.
-		if v.Step == nil {
+		// An empty kind names nothing, so there is nothing to require;
+		// deferring to the rules is the only reading that does not
+		// invent a factor.
+		if v.Kind == "" {
 			return authn.LoginFlowPass{}
 		}
 		return authn.LoginFlowRequire{
-			Step: authn.LoginFlowStep{Kind: string(v.Step.Kind())},
+			Step: authn.LoginFlowStep{Kind: string(v.Kind)},
 		}
 	default:
 		return authn.LoginFlowPass{}

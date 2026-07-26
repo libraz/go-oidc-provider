@@ -65,16 +65,38 @@ type Pass struct{}
 func (Pass) isDecision() {}
 
 // Require short-circuits the evaluation loop with a step the
-// orchestrator MUST run before the next pass. The orchestrator
-// appends [Step.Kind] to [LoginContext.CompletedSteps] after the step
-// completes and re-enters the loop, so a Decider can drive arbitrary
-// step-up chains by returning Require repeatedly.
+// orchestrator MUST run before the next pass. The orchestrator appends
+// the kind to [LoginContext.CompletedSteps] once the step completes and
+// re-enters the loop, so a Decider can drive a step-up chain by
+// returning Require repeatedly.
 //
-// Step MUST be non-nil; the orchestrator rejects a Require with a nil
-// Step.
+// Require selects a step; it does not introduce one. The named kind MUST
+// already be declared on the flow, as [LoginFlow.Primary] or as some
+// [Rule]'s Then — a Decider cannot conjure a factor that reading the
+// [LoginFlow] would not reveal, which is what keeps the set of factors a
+// login can ever demand enumerable from the construction site alone. A
+// step the Decider is the only one to ask for is still declared as a
+// rule; give it a predicate that never fires, and the Decider decides
+// when it runs:
+//
+//	Rules: []op.Rule{
+//	    op.RuleWhen(func(op.LoginContext) bool { return false }, recovery),
+//	    op.RuleAlways(emailOTP),
+//	},
+//	Decider: myDecider{}, // returns Require{Kind: op.StepKindRecoveryCode}
+//
+// A Kind that is not declared is a configuration error the orchestrator
+// can only discover on the request that hits it: the login fails and the
+// reason is logged. An empty Kind is read as [Pass].
+//
+// Requiring a kind that has already completed is not an error — the
+// orchestrator falls through to the rules rather than running it twice.
+// A Decider whose condition still holds after the step completes will
+// therefore keep passing to the rules, so it has to say what happens
+// next itself, usually by returning [Allow].
 type Require struct {
-	// Step is the next [Step] to run.
-	Step Step
+	// Kind names the declared [Step] to run next.
+	Kind StepKind
 }
 
 // isDecision implements [Decision].
