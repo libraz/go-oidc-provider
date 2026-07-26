@@ -143,6 +143,13 @@
     },
     {
       "result": "REVIEW",
+      "module": "oidcc-response-type-missing",
+      "reason": "An authorization request with no response_type. The module carries a mandatory 'upload a screenshot of the error page showing a missing response type error' step, so an unattended run cannot take it past REVIEW. Every other entry in the module records SUCCESS: the OP returned the error rather than a code, echoed the original state, sent a matching iss, and included no parameters beyond the expected ones. The suite sometimes concludes the module before it raises the screenshot step, which is why this same OP has recorded PASSED on some runs and REVIEW on others; admitting REVIEW is what makes the gate independent of that race.",
+      "owner": "@libraz",
+      "expires": "2027-01-31"
+    },
+    {
+      "result": "REVIEW",
       "module": "oidcc-max-age-1",
       "reason": "max_age=1 must force re-authentication. The suite cannot see the OP's login screen, so it asks a human to confirm the second authorization request actually prompted rather than reusing the session. The auth_time claim that backs the decision is pinned by the library's own tests.",
       "owner": "@libraz",
