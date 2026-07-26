@@ -392,7 +392,10 @@ func buildProviderOn(
 	if err := seedDemoUser(ctx, backend.seed); err != nil {
 		return nil, fmt.Errorf("seed demo user: %w", err)
 	}
-	opStore := buildOPStore(ctx, cfg, backend.store, logger)
+	opStore, err := buildOPStore(ctx, cfg, backend.store, logger)
+	if err != nil {
+		return nil, err
+	}
 	opts, err := buildOptions(ctx, cfg, backend.users, opStore, priv, cookieKey, logger)
 	if err != nil {
 		return nil, err
@@ -602,9 +605,14 @@ func profileOptions(ctx context.Context, cfg runConfig, logger *slog.Logger) ([]
 // For non-CIBA profiles this is the bare [*inmem.Store]; for the
 // fapi-ciba profile it is wrapped so Save schedules an out-of-band
 // approval — see [wrapStoreForCIBA] in profile_fapi_ciba.go.
-func buildOPStore(ctx context.Context, cfg runConfig, base store.Store, logger *slog.Logger) store.Store {
+func buildOPStore(
+	ctx context.Context,
+	cfg runConfig,
+	base store.Store,
+	logger *slog.Logger,
+) (store.Store, error) {
 	if !isCIBAProfile(cfg.profile) {
-		return base
+		return base, nil
 	}
 	return wrapStoreForCIBA(ctx, cfg, base, logger)
 }

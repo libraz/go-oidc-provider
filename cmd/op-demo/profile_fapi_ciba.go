@@ -122,9 +122,41 @@ func fapiCIBAClientSeeds(cfg runConfig) ([]op.ClientSeed, error) {
 // device-side outcomes per module via /_test/ciba-mode. With no
 // override posted the behaviour matches [scheduleApprove] — the
 // production-shaped reference an embedder would copy.
-func wrapStoreForCIBA(ctx context.Context, cfg runConfig, base store.Store, logger *slog.Logger) store.Store {
+// The wrapper embeds store.Store, whose method set is only the
+// mandatory contract. Every optional capability — dynamic
+// registration, static-client reconciliation, transactions — is
+// discovered by op.New through a type assertion against the concrete
+// store, so anything the wrapper does not re-declare vanishes the
+// moment the store is wrapped. Two of those failures are silent
+// (op.New quietly drops transaction staging and the atomic seed path)
+// and one is loud (dynamic registration refuses to boot), which is the
+// only reason this was ever noticed. Rather than enumerate the
+// combinations an arbitrary backend might support, op-demo requires
+// the full set: both backends it can be built with provide it, and a
+// missing one is a wiring mistake worth failing on.
+func wrapStoreForCIBA(
+	ctx context.Context,
+	cfg runConfig,
+	base store.Store,
+	logger *slog.Logger,
+) (store.Store, error) {
+	registry, ok := base.(store.ClientRegistry)
+	if !ok {
+		return nil, errors.New("op-demo: CIBA store wrapper requires a store.ClientRegistry backend")
+	}
+	reconciler, ok := base.(store.StaticClientReconciler)
+	if !ok {
+		return nil, errors.New("op-demo: CIBA store wrapper requires a store.StaticClientReconciler backend")
+	}
+	transactional, ok := base.(store.Transactional)
+	if !ok {
+		return nil, errors.New("op-demo: CIBA store wrapper requires a store.Transactional backend")
+	}
 	return &cibaAutoApproveStore{
-		Store: base,
+		Store:         base,
+		registry:      registry,
+		reconciler:    reconciler,
+		transactional: transactional,
 		auto: &autoApprovingCIBA{
 			inner:    base.CIBARequests(),
 			delay:    cfg.cibaAutoApproveDelay,
@@ -132,7 +164,7 @@ func wrapStoreForCIBA(ctx context.Context, cfg runConfig, base store.Store, logg
 			log:      logger,
 			postSave: scheduleHarness,
 		},
-	}
+	}, nil
 }
 
 // isCIBAProfile reports whether the profile name selects FAPI-CIBA.
@@ -170,12 +202,54 @@ func demoHintResolver() op.HintResolver {
 type cibaAutoApproveStore struct {
 	store.Store
 	auto *autoApprovingCIBA
+
+	// Re-declared so the optional capabilities survive the wrap; see
+	// the comment on [wrapStoreForCIBA] for why embedding alone loses
+	// them.
+	registry      store.ClientRegistry
+	reconciler    store.StaticClientReconciler
+	transactional store.Transactional
 }
 
 // CIBARequests overrides the embedded store's method so the op.Store
 // interface receives the wrapped substore.
 func (s *cibaAutoApproveStore) CIBARequests() store.CIBARequestStore {
 	return s.auto
+}
+
+// GetClient forwards to the backend's [store.ClientStore]. Both
+// [store.ClientRegistry] and [store.StaticClientReconciler] embed it,
+// so without this the wrapper satisfies neither.
+func (s *cibaAutoApproveStore) GetClient(ctx context.Context, id string) (*store.Client, error) {
+	return s.registry.GetClient(ctx, id)
+}
+
+// RegisterClient forwards to the backend's [store.ClientRegistry].
+func (s *cibaAutoApproveStore) RegisterClient(ctx context.Context, c *store.Client) error {
+	return s.registry.RegisterClient(ctx, c)
+}
+
+// UpdateClient forwards to the backend's [store.ClientRegistry].
+func (s *cibaAutoApproveStore) UpdateClient(ctx context.Context, c *store.Client) error {
+	return s.registry.UpdateClient(ctx, c)
+}
+
+// DeleteClient forwards to the backend's [store.ClientRegistry].
+func (s *cibaAutoApproveStore) DeleteClient(ctx context.Context, id string) error {
+	return s.registry.DeleteClient(ctx, id)
+}
+
+// ReconcileStaticClients forwards to the backend's
+// [store.StaticClientReconciler] so op.WithStaticClients keeps its
+// atomic seed path.
+func (s *cibaAutoApproveStore) ReconcileStaticClients(ctx context.Context, clients []*store.Client) error {
+	return s.reconciler.ReconcileStaticClients(ctx, clients)
+}
+
+// BeginTx forwards to the backend's [store.Transactional] so the token
+// endpoint keeps staging its mutations behind a transaction.
+func (s *cibaAutoApproveStore) BeginTx(ctx context.Context) (store.Tx, error) {
+	return s.transactional.BeginTx(ctx)
 }
 
 // autoApprovingCIBA wraps store.CIBARequestStore. Save delegates to the

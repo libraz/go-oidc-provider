@@ -211,9 +211,26 @@ func TestBuildOPStore_WrapsForCIBAProfile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	got := buildOPStore(ctx, cfg, st, logger)
+	got, err := buildOPStore(ctx, cfg, st, logger)
+	if err != nil {
+		t.Fatalf("buildOPStore: %v", err)
+	}
 	if _, ok := got.(*cibaAutoApproveStore); !ok {
 		t.Fatalf("buildOPStore for fapi-ciba returned %T; want *cibaAutoApproveStore", got)
+	}
+	// The wrapper hides everything it does not re-declare, and the
+	// capabilities below are discovered by op.New through exactly this
+	// assertion. Losing one takes dynamic registration, the atomic
+	// static-client seed, or transaction staging off the conformance
+	// binary — two of those without any error at all.
+	if _, ok := got.(store.ClientRegistry); !ok {
+		t.Error("wrapped store no longer implements store.ClientRegistry; dynamic registration cannot boot")
+	}
+	if _, ok := got.(store.StaticClientReconciler); !ok {
+		t.Error("wrapped store no longer implements store.StaticClientReconciler; the atomic seed path is gone")
+	}
+	if _, ok := got.(store.Transactional); !ok {
+		t.Error("wrapped store no longer implements store.Transactional; the token endpoint stops staging")
 	}
 }
 
@@ -226,7 +243,10 @@ func TestBuildOPStore_BareForNonCIBAProfile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	got := buildOPStore(ctx, cfg, st, logger)
+	got, err := buildOPStore(ctx, cfg, st, logger)
+	if err != nil {
+		t.Fatalf("buildOPStore: %v", err)
+	}
 	if got != store.Store(st) {
 		t.Errorf("buildOPStore for fapi2-baseline returned a wrapper; want bare *inmem.Store")
 	}
