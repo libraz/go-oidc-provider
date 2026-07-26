@@ -75,6 +75,40 @@ not adopt this release.
 
 ### Added
 
+- `op/recoverykit`, the enrolment half of recovery codes. `StepRecoveryCode`
+  could spend a code but nothing public could mint one: the code alphabet, the
+  batch size, and the argon2id parameters are fixed by the verifier and live
+  behind `internal/`, so an embedder had no way to build a `RecoveryBatch` the
+  login flow would accept. `Generate` returns the batch for a caller that wants
+  to persist it inside its own transaction; `Replace` writes it and only then
+  hands back the plaintext, so a storage failure cannot leave a user holding
+  codes that will never verify. The plaintext is returned separately from the
+  persisted batch and is display-once.
+- `op/passkeykit`, the enrolment half of passkeys. `op.PrimaryPasskey` could
+  assert an existing credential but nothing public could create one — the
+  registration ceremony, the WebAuthn session, and the credential projection
+  all lived behind `internal/`, so a login flow could demand a factor no
+  embedder could enrol a user in. `Registrar.Begin` returns the creation
+  options and the ceremony session as separate values so a handler cannot leak
+  the session to the browser along with the challenge; `Finish` returns the
+  record for a caller that owns the transaction, and `Register` persists it and
+  only then reports success. `New` takes the very `op.PrimaryPasskey` value the
+  login flow installs, so the Relying Party identity a credential is registered
+  under and the one it is later checked against cannot drift.
+- `examples/29-passkey`, the passkey lifecycle end to end: enrolment on a page
+  the example owns, then a login whose second factor appears only once a device
+  is registered. It binds `localhost` rather than the `127.0.0.1` every other
+  example uses, because a WebAuthn Relying Party ID must be a domain and
+  browsers reject an IP literal for it.
+- `examples/28-email-otp-recovery`, the two factors that need no hardware and
+  no authenticator app: a mailed one-time code with a printed recovery sheet
+  behind it. It also shows the `Decider` seam being used for the fallback,
+  because the flow has no notion of the *user* asking for a different factor —
+  policy decides, and "the user keeps failing the mailed code" is the signal.
+- `examples/17-spa-composite-store`, the SPA interaction seam running against
+  MySQL durable + Redis volatile storage. Both halves already had examples and
+  they are genuinely independent, but the combination is what gets deployed and
+  neither example showed it. Ships a `compose.yaml` like `07` and `09`.
 - `Provider.LocaleResolver().Message(...)` exposes read-only lookup of the
   merged message catalogue for custom server-rendered pages and out-of-band
   UI. Missing keys fall back to the configured default locale; the returned
@@ -135,6 +169,17 @@ not adopt this release.
   keeps both drivers out of every library consumer's dependency graph.
 
 ### Changed
+
+- `WithAllowLocalhostLoopback` now also admits the textual `localhost` host in
+  the issuer, not only in redirect URIs. Two rules that are each correct left a
+  local WebAuthn deployment nowhere to stand: a Relying Party ID must be a
+  domain and browsers reject an IP literal for it, while the issuer rule
+  restricted plain http to loopback IP literals — so no local http issuer had a
+  usable RP ID to pair with. The default posture is unchanged and still refuses
+  `localhost`. As a consequence the issuer is validated during `op.New`'s
+  validation pass rather than inside `WithIssuer`, so the carve-out is seen
+  whichever order the options are given in; a malformed issuer still fails
+  `op.New` with the same error.
 
 - **BREAKING — `op.New` now rejects a configuration where the `refresh_token`
   grant is enabled and cookie keys are set but `Store.RefreshTokens()` does not
@@ -236,6 +281,32 @@ not adopt this release.
   `DefaultMaxTargets`; the HTTP deliverer adopts only an embedder client's
   `Transport`, keeping redirect, timeout, and dial-time SSRF policy mandatory.
 
+- **BREAKING — `op.Require` names a step kind instead of carrying a step.**
+  The field changes from `Step Step` to `Kind StepKind`. `Require` never
+  introduced a step: the orchestrator resolved it by kind against the steps the
+  flow declared and read nothing else off the value, so a `Decider` that
+  returned a fully-configured `Require{Step: op.StepRecoveryCode{Store: st}}`
+  had its store silently ignored, and a kind the flow had not declared failed
+  the login at request time. The godoc promised the opposite ("a Decider can
+  drive arbitrary step-up chains"), which is how the shipped
+  `examples/28-email-otp-recovery` walked into it. Selection-only is the
+  intended semantics — it is what keeps the factors a login can demand readable
+  off the `LoginFlow` — so the type now says so. *Migration:* replace
+  `op.Require{Step: s}` with `op.Require{Kind: s.Kind()}`, and declare the step
+  on the flow if it is not there already; a step only the `Decider` schedules
+  is declared as a `Rule` whose predicate never fires.
+
+### Removed
+
+- **BREAKING — `profile.IGovHigh`.** The constant named a profile whose
+  constraint table was never written: `op.New` rejected it unconditionally, and
+  every profile predicate answered it with the permissive arm. An exported
+  identifier that cannot be constructed with is not a reservation, it is a
+  promise the library was not keeping, and after this release it could not be
+  withdrawn without a major version. *Migration:* none — no configuration that
+  named it could ever boot. It was the last enumerator, so the values of the
+  remaining constants are unchanged.
+
 ### Security
 
 - Passkey `AAGUIDAllowlist` is enforced against an authenticated AAGUID.
@@ -299,6 +370,56 @@ not adopt this release.
 
 ### Fixed
 
+- Passkey registration could never succeed. The WebAuthn session ferried
+  between the two halves of the ceremony dropped the list of credential
+  algorithms announced at the start, and the verifier checks the new
+  credential's algorithm against that list — an empty list matches nothing, so
+  every registration was rejected as an invalid attestation. The list is now
+  re-derived when the session is decoded. The gap survived because no test ran
+  a registration to completion; the ceremony is now exercised end to end
+  against a real ES256 authenticator, including the login that follows it.
+- `examples/26-byo-store-from-scratch` did not implement
+  `store.RefreshRetryResponseStore`, so the example that exists to teach the
+  store contract could not boot against the version of the contract this
+  release ships. The store contract suite gained a case for the extension,
+  which is what found it: the interface is required whenever the refresh grant
+  runs with cookie keys, yet nothing in the suite exercised it, so any backend
+  could implement it wrongly — or not at all — and still come up green. The
+  case pins the association a retry depends on, that the sealed response is
+  reachable by the predecessor the client presents.
+- The reference application's container built on a Go release older than the
+  module requires, and its build context reached the repository root, where a
+  `go.work` naming a member set without `sample/` stops the build outright. The
+  base image tracks the toolchain and a `.dockerignore` keeps workspace files
+  out of the context — the failure only appeared on a release commit, which is
+  where the workspace file is generated.
+- `examples/28-email-otp-recovery` required a recovery step the flow had not
+  declared, so the fallback it exists to demonstrate ended in HTTP 500 with
+  nothing logged. The example now declares the step and its `Decider` ends the
+  login itself once the recovery code is accepted; without that last part the
+  failure count that opened the fallback keeps re-selecting a completed step
+  and the flow asks for the unreachable mailed code again. The browser harness
+  gained cases for both paths, which is what surfaced this.
+- Documentation and comments across the tree cited internal design notes,
+  audit-finding identifiers, and work-phase labels that do not ship with the
+  repository, and named other OpenID Connect implementations by project. Each
+  now states the constraint or the divergence itself. Stability markers claimed
+  the API had been stable since a `v0.x` release — a promise that did not exist
+  before this one — or carried an unfilled `v0.x` placeholder; all of them now
+  read `v1.0`. `SECURITY.md` states the supported-version window for a 1.x
+  line.
+- Conformance harness: an authorization response in `form_post` mode with no
+  prompt to walk — the second leg of `prompt=none`, `id_token_hint`, and
+  `max_age` — left the driver looking for an interaction page that was never
+  going to arrive, so four modules stalled without a verdict while the same
+  modules passed in redirect mode. The strict release gate now refuses to treat
+  a module that reached no verdict as a skip, and reports the two that remain
+  genuinely undrivable in a section of their own with the evidence for each.
+- Conformance binary: wrapping the store for the FAPI-CIBA profile hid every
+  optional capability the concrete store exposes, because the wrapper embedded
+  the `store.Store` interface rather than re-declaring them. Dynamic
+  registration refused to boot under that profile; static-client reconciliation
+  and transaction staging turned themselves off with no error at all.
 - Refresh exchange (RFC 9700 grace path): post-preflight mutations are staged
   behind a transaction and the buffered response is forwarded only after commit,
   so a signing, JWE, cache, or write failure rolls `Consume` back instead of
