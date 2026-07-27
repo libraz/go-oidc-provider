@@ -12,6 +12,12 @@ source "$SCRIPT_DIR/lib.sh"
 
 require_cmd go
 
+# The tool module is deliberately outside the shipping inventory, so it is
+# also outside any workspace a release or CI run creates. In workspace mode
+# `go install` resolves against the workspace module graph, which does not
+# contain these packages, and reports them as provided by no required module.
+export GOWORK=off
+
 log "Installing tools pinned in tools/go.mod"
 cd "$REPO_ROOT/tools"
 
