@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -65,6 +66,12 @@ type CodeFlow struct {
 	verifier      *oidc.IDTokenVerifier
 	claimsRequest string // JSON-encoded §5.5 claims param, "" to omit
 
+	// issRequired mirrors the OP's
+	// authorization_response_iss_parameter_supported metadata. When the
+	// OP advertises RFC 9207 support, an authorization response that
+	// arrives without "iss" is itself a failure — see [checkResponseIssuer].
+	issRequired bool
+
 	mu      sync.Mutex
 	pending map[string]pendingAuth // state -> per-request PKCE verifier + nonce
 	last    map[string]any         // last verified id_token claims (single-user demo)
@@ -101,11 +108,23 @@ func New(ctx context.Context, opts Options) (*CodeFlow, error) {
 		Scopes:       scopes,
 	}
 
+	// RFC 9207 §3: the OP announces that it stamps "iss" on every
+	// authorization response through this metadata member. The RP records
+	// it at discovery time so the callback can treat a missing parameter
+	// as a failure rather than as an OP that never supported it.
+	var meta struct {
+		IssParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
+	}
+	if err := provider.Claims(&meta); err != nil {
+		return nil, fmt.Errorf("rpkit: decode discovery doc: %w", err)
+	}
+
 	cf := &CodeFlow{
-		issuer:   opts.Issuer,
-		cfg:      cfg,
-		verifier: provider.Verifier(&oidc.Config{ClientID: opts.ClientID}),
-		pending:  make(map[string]pendingAuth),
+		issuer:      opts.Issuer,
+		cfg:         cfg,
+		verifier:    provider.Verifier(&oidc.Config{ClientID: opts.ClientID}),
+		pending:     make(map[string]pendingAuth),
+		issRequired: meta.IssParameterSupported,
 	}
 	if opts.ClaimsRequest != nil {
 		raw, err := json.Marshal(opts.ClaimsRequest)
@@ -227,6 +246,13 @@ func (cf *CodeFlow) StepUpHandler(acrValues string) http.HandlerFunc {
 
 func (cf *CodeFlow) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// Checked before anything else is read out of the response: RFC 9207
+	// covers error responses too, and the whole point of the parameter is
+	// to establish which OP answered before the RP acts on what it sent.
+	if err := checkResponseIssuer(cf.issuer, q.Get("iss"), cf.issRequired); err != nil {
+		http.Error(w, "rpkit: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	if errCode := q.Get("error"); errCode != "" {
 		http.Error(w, "rpkit: OP returned error="+errCode+" desc="+q.Get("error_description"),
 			http.StatusBadGateway)
@@ -305,6 +331,33 @@ func (cf *CodeFlow) me(w http.ResponseWriter, _ *http.Request) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(claims)
+}
+
+// checkResponseIssuer applies the RFC 9207 §2.4 client rule to an
+// authorization response: the "iss" parameter MUST identify the OP the
+// request was sent to, and a mismatch means the response came from
+// somewhere else. Skipping the comparison is what makes an RP exploitable
+// by the mix-up attack RFC 9207 §1 describes — an attacker who can steer
+// the authorization request to an OP under their control gets the honest
+// OP's callback to accept a code they can redeem.
+//
+// required reports whether an absent parameter is a failure in its own
+// right. It is true whenever the OP advertises
+// authorization_response_iss_parameter_supported, and unconditionally true
+// in the FAPI 2.0 profile, where the parameter is mandated.
+func checkResponseIssuer(expected, got string, required bool) error {
+	if got == "" {
+		if required {
+			return errors.New("authorization response has no iss parameter, " +
+				"which RFC 9207 requires of this OP")
+		}
+		return nil
+	}
+	if got != expected {
+		return fmt.Errorf("authorization response iss %q is not the expected issuer %q "+
+			"(RFC 9207 §2.4)", got, expected)
+	}
+	return nil
 }
 
 func randURL(n int) (string, error) {

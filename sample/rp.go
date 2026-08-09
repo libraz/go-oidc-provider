@@ -27,6 +27,16 @@ type relyingParty struct {
 	oauth    oauth2.Config
 	verifier *oidc.IDTokenVerifier
 	pending  *pendingFlows
+
+	// issuer is the provider this client discovered. The callback compares
+	// it against the authorization response's iss parameter.
+	issuer string
+
+	// issRequired mirrors the provider's
+	// authorization_response_iss_parameter_supported metadata: when the
+	// provider says it stamps iss on every response, a response without
+	// one is a failure rather than an older provider.
+	issRequired bool
 }
 
 // pendingFlow holds the per-attempt values that must survive the redirect
@@ -70,6 +80,15 @@ func newRelyingParty(ctx context.Context, cfg config) (*relyingParty, error) {
 	if err != nil {
 		return nil, fmt.Errorf("discovery: %w", err)
 	}
+	// RFC 9207 §3: the provider announces that it identifies itself in
+	// every authorization response. Read once here so the callback knows
+	// whether a response without iss is one this provider could have sent.
+	var meta struct {
+		IssParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
+	}
+	if err := provider.Claims(&meta); err != nil {
+		return nil, fmt.Errorf("discovery metadata: %w", err)
+	}
 	return &relyingParty{
 		oauth: oauth2.Config{
 			ClientID:    cfg.ClientID,
@@ -77,8 +96,10 @@ func newRelyingParty(ctx context.Context, cfg config) (*relyingParty, error) {
 			RedirectURL: cfg.RedirectURI,
 			Scopes:      []string{oidc.ScopeOpenID, "profile", "email"},
 		},
-		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
-		pending:  newPendingFlows(),
+		verifier:    provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		pending:     newPendingFlows(),
+		issuer:      cfg.Issuer,
+		issRequired: meta.IssParameterSupported,
 	}, nil
 }
 
@@ -125,10 +146,20 @@ func (rp *relyingParty) login(w http.ResponseWriter, r *http.Request) {
 }
 
 // callback completes the flow. Every check below is one an embedder has to
-// perform: the state must match a flow this client started, the code
+// perform: the response must come from the provider this client sent the
+// request to, the state must match a flow this client started, the code
 // exchange must carry the PKCE verifier, the ID token must verify against
 // the OP's JWKS, and the nonce inside it must be the one sent.
 func (rp *relyingParty) callback(w http.ResponseWriter, r *http.Request) {
+	// The issuer check comes first, and covers the error branch below with
+	// it: RFC 9207 §2.4 has the client establish which provider answered
+	// before it acts on anything the response carries. Skipping it leaves
+	// the client open to the mix-up attack, where a response minted by a
+	// provider the attacker controls is redeemed against this one.
+	if message, ok := rp.checkResponseIssuer(r.URL.Query().Get("iss")); !ok {
+		rp.fail(w, http.StatusBadRequest, message)
+		return
+	}
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		rp.fail(w, http.StatusBadRequest, "The provider returned an error: "+errParam)
 		return
@@ -175,6 +206,25 @@ func (rp *relyingParty) callback(w http.ResponseWriter, r *http.Request) {
 <pre class="blob">%s</pre>
 <nav class="links"><a href="/">Start over</a></nav>`,
 		html.EscapeString(idToken.Subject), html.EscapeString(string(pretty))))
+}
+
+// checkResponseIssuer compares the authorization response's iss parameter
+// against the provider this client discovered, per RFC 9207 §2.4. It
+// reports whether the response may be used, and the message to show when
+// it may not.
+//
+// An absent parameter fails only when the provider advertised that it
+// sends one; a provider that never announced support is not expected to,
+// and a value that names a different provider fails either way.
+func (rp *relyingParty) checkResponseIssuer(iss string) (message string, ok bool) {
+	switch {
+	case iss == "" && rp.issRequired:
+		return "The provider did not identify itself in that response.", false
+	case iss != "" && iss != rp.issuer:
+		return "That response came from a different provider than the one this sign-in went to.", false
+	default:
+		return "", true
+	}
 }
 
 func (rp *relyingParty) fail(w http.ResponseWriter, status int, message string) {

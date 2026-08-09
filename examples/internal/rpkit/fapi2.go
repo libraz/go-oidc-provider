@@ -213,6 +213,14 @@ func (f *FAPI2Flow) login(w http.ResponseWriter, r *http.Request) {
 
 func (f *FAPI2Flow) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// FAPI 2.0 Baseline mandates RFC 9207 as its mix-up defence, so "iss"
+	// is required here rather than conditional on OP metadata: a response
+	// that omits it is not a FAPI 2.0 response and is rejected on the same
+	// footing as one carrying a foreign issuer.
+	if err := checkResponseIssuer(f.issuer, q.Get("iss"), true); err != nil {
+		http.Error(w, "rpkit: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	if errCode := q.Get("error"); errCode != "" {
 		http.Error(w, "rpkit: OP returned error="+errCode+" desc="+q.Get("error_description"),
 			http.StatusBadGateway)

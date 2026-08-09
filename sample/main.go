@@ -69,7 +69,7 @@ func run(logger *slog.Logger) error {
 	}
 	ctx := context.Background()
 
-	backend, closeBackend, err := openBackend(ctx, cfg)
+	backend, closeBackend, err := openBackend(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -190,7 +190,7 @@ type backend struct {
 // transactional cluster stays on MySQL, and only substores whose records
 // are short-lived and reconstructible go to Redis. composite.New rejects a
 // configuration that would split that cluster across backends.
-func openBackend(ctx context.Context, cfg config) (backend, func(), error) {
+func openBackend(ctx context.Context, cfg config, logger *slog.Logger) (backend, func(), error) {
 	db, err := databasesql.Open("mysql", cfg.MySQLDSN)
 	if err != nil {
 		return backend{}, nil, fmt.Errorf("open mysql: %w", err)
@@ -228,7 +228,7 @@ func openBackend(ctx context.Context, cfg config) (backend, func(), error) {
 		return backend{}, nil, err
 	}
 
-	volatile, err := newRedis(ctx, cfg)
+	volatile, err := newRedis(ctx, cfg, logger)
 	if err != nil {
 		closeDB()
 		return backend{}, nil, fmt.Errorf("connect redis: %w", err)
@@ -334,7 +334,7 @@ func waitForIssuer(ctx context.Context, issuer string, timeout time.Duration) er
 	}
 }
 
-func newRedis(ctx context.Context, cfg config) (*oidcredis.Store, error) {
+func newRedis(ctx context.Context, cfg config, logger *slog.Logger) (*oidcredis.Store, error) {
 	opts := []oidcredis.Option{
 		oidcredis.WithDSN(cfg.RedisDSN),
 		oidcredis.WithRedisAuth(os.Getenv("REDIS_USERNAME"), os.Getenv("REDIS_PASSWORD")),
@@ -343,11 +343,27 @@ func newRedis(ctx context.Context, cfg config) (*oidcredis.Store, error) {
 		// The adapter refuses plaintext Redis unless the caller says so
 		// explicitly. The demo stack keeps Redis on a private compose
 		// network; a deployment uses rediss:// and drops this.
-		opts = append(opts, oidcredis.WithDevModeAllowPlaintext(func(string) {}))
+		//
+		// The warning the adapter emits is logged rather than dropped: the
+		// sink is a required argument so that an operator learns the link
+		// carries session and interaction records in the clear, and an
+		// embedder copying this file inherits that.
+		opts = append(opts, oidcredis.WithDevModeAllowPlaintext(plaintextRedisWarning(cfg, logger)))
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, cfg.StartupTimeout)
 	defer cancel()
 	return oidcredis.New(dialCtx, opts...)
+}
+
+// plaintextRedisWarning returns the sink the Redis adapter calls when it
+// admits an unencrypted link. The endpoint is logged alongside the
+// warning through the adapter's own redaction, which strips credentials
+// and query parameters, so the record names the host without leaking the
+// password the DSN may carry.
+func plaintextRedisWarning(cfg config, logger *slog.Logger) func(string) {
+	return func(warning string) {
+		logger.Warn(warning, "redis", oidcredis.RedactedDSN(cfg.RedisDSN))
+	}
 }
 
 // ensure the driver satisfies the interface at compile time rather than

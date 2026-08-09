@@ -21,21 +21,32 @@ import (
 // against the URL the discovery doc names but stop short of the OP
 // actually rendering a login page; the redirect chain is enough to
 // inspect the URL shape rpkit produces.
-func fakeOP(t *testing.T) (issuer string, cleanup func()) {
+//
+// The document mirrors what this library's OP publishes, including the
+// RFC 9207 authorization_response_iss_parameter_supported flag and the
+// PAR endpoint the FAPI 2.0 flow requires. Each tweak runs over the
+// document before it is served, so a test that needs a different OP
+// posture edits the one member it cares about.
+func fakeOP(t *testing.T, tweaks ...func(doc map[string]any)) (issuer string, cleanup func()) {
 	t.Helper()
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
 		doc := map[string]any{
-			"issuer":                                srv.URL,
-			"authorization_endpoint":                srv.URL + "/authorize",
-			"token_endpoint":                        srv.URL + "/token",
-			"jwks_uri":                              srv.URL + "/jwks",
-			"response_types_supported":              []string{"code"},
-			"subject_types_supported":               []string{"public"},
-			"id_token_signing_alg_values_supported": []string{"RS256"},
-			"code_challenge_methods_supported":      []string{"S256"},
+			"issuer":                                         srv.URL,
+			"authorization_endpoint":                         srv.URL + "/authorize",
+			"token_endpoint":                                 srv.URL + "/token",
+			"jwks_uri":                                       srv.URL + "/jwks",
+			"pushed_authorization_request_endpoint":          srv.URL + "/par",
+			"response_types_supported":                       []string{"code"},
+			"subject_types_supported":                        []string{"public"},
+			"id_token_signing_alg_values_supported":          []string{"RS256"},
+			"code_challenge_methods_supported":               []string{"S256"},
+			"authorization_response_iss_parameter_supported": true,
+		}
+		for _, tweak := range tweaks {
+			tweak(doc)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(doc)
