@@ -22,6 +22,11 @@ var ErrAlreadyExists = errors.New("store: record already exists")
 // requests (RFC 9126 §2.2). Backends MUST distinguish ErrAlreadyConsumed
 // from [ErrNotFound]: the former proves the record existed and was used,
 // while the latter is silent on prior usage.
+//
+// [RefreshTokenStore.Save] reuses the same sentinel to refuse a rotation
+// onto an already-revoked chain, because the caller's response is
+// identical: the presented credential belongs to a chain that has been
+// retired.
 var ErrAlreadyConsumed = errors.New("store: record already consumed")
 
 // ErrConflict is returned when an optimistic-locking or compare-and-swap

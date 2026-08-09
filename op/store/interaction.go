@@ -9,9 +9,7 @@ import (
 // Interaction is the persistent record of an in-progress UI interaction:
 // the server-side state that survives across the redirects between the OP
 // and the user's browser while consent, account-chooser, or step-up
-// authentication screens are presented. The library never inspects RawState;
-// it is opaque content owned by the [github.com/libraz/go-oidc-provider/op/interaction.Driver]
-// implementation.
+// authentication screens are presented.
 //
 // Interactions are explicitly NOT part of the atomic-routing cluster. They
 // are recoverable single-operation state -- losing a row means the user is
@@ -34,9 +32,31 @@ type Interaction struct {
 	// browser.
 	Step string
 
-	// RawState is the serialised state owned by the Driver implementation.
-	// It is opaque to the library. Drivers MAY use any encoding (JSON,
-	// gob, protobuf) provided they round-trip safely.
+	// RawState is the library's serialised authorization-request state.
+	// The library is its sole producer and consumer: it encodes the
+	// validated request, the progress of the authentication chain, and
+	// the completion intent, and it is never handed to an
+	// [github.com/libraz/go-oidc-provider/op/interaction.Driver] hook.
+	// The encoding is a library implementation detail and MAY change
+	// between releases.
+	//
+	// RawState is opaque TO THE STORE — which is not the same as
+	// unread by the library. A backend MUST persist the byte slice
+	// verbatim and MUST return exactly those bytes from Find, because
+	// the value doubles as the optimistic-concurrency version that
+	// [InteractionStateEqual] compares on behalf of
+	// [InteractionStoreCAS.CompareAndSwap] and
+	// [InteractionStoreCAS.DeleteIfUnchanged]. Any transformation that
+	// preserves meaning but not bytes — re-encoding the JSON,
+	// reordering object members, adding or stripping whitespace, a
+	// lossy character-set round trip — makes every compare-and-swap
+	// fail with [ErrConflict] and strands the authorization request.
+	// A backend whose column type cannot hold arbitrary bytes MUST
+	// apply a byte-exact reversible encoding (base64, hex) rather than
+	// re-serialising the content.
+	//
+	// A nil slice and an empty slice denote the same version: the
+	// comparison treats them as equal.
 	RawState []byte
 
 	// ExpiresAt is the wall-clock time at which the interaction becomes
@@ -70,13 +90,24 @@ type InteractionStore interface {
 	// Find returns the interaction identified by id, or [ErrNotFound]
 	// when no such interaction exists. Find MUST NOT return expired
 	// interactions; a record whose ExpiresAt has passed MUST be treated
-	// as absent.
+	// as absent. The returned [Interaction.RawState] MUST be the bytes
+	// that were persisted, unchanged. A successful return MUST carry a
+	// non-nil record: (nil, nil) is not a legal result (see the package
+	// doc's "Find-style methods never return (nil, nil)").
 	Find(ctx context.Context, id string) (*Interaction, error)
 
 	// Delete removes the interaction identified by id. It MUST return
-	// [ErrNotFound] when no such interaction exists. Backends MAY
-	// hard-delete or mark the row deleted as long as subsequent Find
-	// calls return [ErrNotFound].
+	// [ErrNotFound] when no such interaction exists or when the record
+	// has expired, applying the same absent-or-expired rule as
+	// [InteractionStore.Find] and [InteractionStoreCAS.DeleteIfUnchanged].
+	// Naming the expired case is what keeps the result independent of
+	// reclamation: a backend answering from physical presence alone
+	// returns nil for a record whose ExpiresAt has passed and
+	// [ErrNotFound] for that same record once a sweep or a TTL eviction
+	// has removed it, so the caller observes collection timing rather
+	// than interaction state. Backends MAY hard-delete or mark the row
+	// deleted as long as subsequent Find calls return [ErrNotFound], and
+	// MAY reclaim an expired record while reporting [ErrNotFound] for it.
 	Delete(ctx context.Context, id string) error
 }
 

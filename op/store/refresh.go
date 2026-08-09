@@ -171,8 +171,10 @@ const (
 //
 //   - Rotation: Consume MUST be a single-record compare-and-set, and Save
 //     with a non-nil ParentID MUST preserve the parent/root links supplied by
-//     the caller so replay cascades can later revoke the whole chain. The OP
-//     runtime does not require a cross-substore [Transactional] transaction.
+//     the caller so replay cascades can later revoke the whole chain, and MUST
+//     refuse to extend a chain whose parent is already revoked (see
+//     [RefreshTokenStore.Save]). The OP runtime does not require a
+//     cross-substore [Transactional] transaction.
 //   - Replay detection: if a Consume call observes a ConsumedAt that is
 //     already non-nil, the backend MUST return [ErrAlreadyConsumed]. The
 //     library will then call [RefreshTokenStore.RevokeChain] with the
@@ -184,6 +186,27 @@ type RefreshTokenStore interface {
 	// value; see the package doc for the hash-on-store contract. Save
 	// MUST return [ErrAlreadyExists] if a record whose hashed ID
 	// collides with an existing row already exists.
+	//
+	// A rotation Save — one whose ParentID is non-nil — MUST NOT
+	// produce a redeemable descendant of an already-revoked chain. RFC
+	// 9700 §2.2.2 requires the entire chain to die the moment a replay
+	// is detected, and a descendant that lands after the cascade has
+	// scanned would keep the attacker's chain alive until natural
+	// expiry. Implementations MUST therefore make the parent-still-live
+	// check and the insert one atomic operation, and MUST return
+	// [ErrAlreadyConsumed] when the parent named by ParentID exists and
+	// carries [RefreshToken.Revoked]. Returning nil in that case is a
+	// contract violation even if the backend independently neutralises
+	// the row. A parent that cannot be found at all proves no
+	// revocation (it may simply have been garbage-collected), so the
+	// rotation is kept and Save returns nil.
+	//
+	// When Save returns [ErrAlreadyConsumed] the descendant MUST NOT be
+	// redeemable afterwards. Implementations satisfy this by refusing
+	// the insert, by undoing it, or — inside a caller-owned
+	// transaction — by relying on the caller aborting. Callers MUST
+	// treat any non-nil Save error as a failed rotation and MUST NOT
+	// hand the successor token to the client.
 	Save(ctx context.Context, token *RefreshToken) error
 
 	// Find returns the refresh token identified by id without consuming
@@ -201,7 +224,9 @@ type RefreshTokenStore interface {
 	// no such record exists OR when the record's ExpiresAt has already
 	// passed: an expired refresh token MUST read identically to an
 	// absent one, never as a live record, so callers cannot mistake
-	// natural expiry for replay evidence.
+	// natural expiry for replay evidence. A nil error MUST be
+	// accompanied by a non-nil record; (nil, nil) is not a legal
+	// result.
 	Find(ctx context.Context, id string) (*RefreshToken, error)
 
 	// Consume atomically marks the refresh token as consumed and returns
@@ -215,8 +240,11 @@ type RefreshTokenStore interface {
 	// than triggering a false replay-revocation cascade. When returning
 	// ErrAlreadyConsumed, implementations MUST also return the consumed
 	// record if it is still available so callers can recover the chain
-	// root for replay revocation. The returned record's ConsumedAt MUST
-	// be non-nil on success.
+	// root for replay revocation; the transactional and
+	// non-transactional variants of one backend MUST agree on this.
+	// The returned record's ConsumedAt MUST be non-nil on success, and
+	// a nil error MUST be accompanied by a non-nil record — (nil, nil)
+	// is not a legal result.
 	Consume(ctx context.Context, id string) (*RefreshToken, error)
 
 	// RevokeChain revokes every refresh token in the rotation chain whose
@@ -225,6 +253,16 @@ type RefreshTokenStore interface {
 	// choose between deleting the rows and marking them consumed; either
 	// approach satisfies the contract as long as subsequent Find calls
 	// return [ErrNotFound] or records whose ConsumedAt is non-nil.
+	// Revoked rows SHOULD additionally carry [RefreshToken.Revoked] so
+	// the grace window can tell "consumed by rotation" from "retired by
+	// cascade"; inside a [Tx] that flag MUST already be visible to
+	// reads made through the same transaction, not only after Commit.
+	//
+	// RevokeChain MUST return [ErrNotFound] when rootID names no
+	// record. Unlike [RefreshTokenStore.RevokeByGrant], where a grant
+	// with no rows is an ordinary no-op, an unresolvable chain root
+	// means the caller's replay evidence could not be acted on, and the
+	// caller needs to distinguish that from a completed cascade.
 	RevokeChain(ctx context.Context, rootID string) error
 
 	// RevokeByGrant revokes every refresh token whose [RefreshToken.GrantID]
@@ -257,7 +295,8 @@ type RefreshChainResolver interface {
 	// result. The handle is NOT a bearer credential — it is an internal
 	// chain pointer surfaced only to the OP's own revocation walk — so the
 	// implementation MAY match the stored digest directly. It MUST return
-	// [ErrNotFound] when no record matches.
+	// [ErrNotFound] when no record matches, and MUST NOT return
+	// (nil, nil).
 	FindByStoredHandle(ctx context.Context, handle string) (*RefreshToken, error)
 }
 

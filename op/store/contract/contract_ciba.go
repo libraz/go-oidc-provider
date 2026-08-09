@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -52,6 +53,7 @@ var cibaRequestCases = []subtest{
 	{"ConsumeConflictWhenDenied", cibaConsumeConflictWhenDenied},
 	{"RecordPollStampsTimestamp", cibaRecordPollStamps},
 	{"PollViolationsIncrement", cibaPollViolationsIncrement},
+	{"ConcurrentPollViolationsRecordEveryIncrement", cibaConcurrentPollViolations},
 	{"Expired", cibaExpired},
 	{"ExpiredSaveReleasesID", cibaExpiredSaveReleasesID},
 	{"TransitionMissing", cibaTransitionMissing},
@@ -212,6 +214,53 @@ func cibaPollViolationsIncrement(t *testing.T, f Factory) {
 	}
 	if _, err := cr.IncrementPollViolation(ctx, "absent"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("IncrementPollViolation missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// cibaConcurrentPollViolations pins the poll-violation counter under
+// the traffic it is meant to catch: a client that ignores the backoff
+// polls concurrently, so every violation MUST be recorded. A backend
+// that reads the counter, increments it in application code and writes
+// the record back collapses a burst into one violation, and the lockout
+// the counter arms never triggers.
+func cibaConcurrentPollViolations(t *testing.T, f Factory) {
+	b := f(t)
+	cr := requireCIBA(t, b.Store)
+	ctx := context.Background()
+	const (
+		id     = "ar-concurrent"
+		racers = 8
+	)
+	if err := cr.Save(ctx, newCIBARequest(b.Now(), id)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	seen := make([]uint8, racers)
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	wg.Add(racers)
+	for i := range racers {
+		go func() {
+			defer wg.Done()
+			seen[i], errs[i] = cr.IncrementPollViolation(ctx, id)
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent IncrementPollViolation %d: %v", i, err)
+		}
+	}
+	assertCounterRange(t, "IncrementPollViolation", seen, racers)
+
+	got, err := cr.FindByAuthReqID(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByAuthReqID: %v", err)
+	}
+	if got.PollViolations != racers {
+		t.Errorf("PollViolations = %d after %d concurrent violations, want %d",
+			got.PollViolations, racers, racers)
 	}
 }
 

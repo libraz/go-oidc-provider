@@ -100,6 +100,16 @@ type GrantStore interface {
 	// return [ErrAlreadyExists] if used in insert mode and the ID is
 	// already present; backends that perform upsert MAY treat Save as
 	// idempotent.
+	//
+	// A grant is amended rather than replaced: a repeat authorization
+	// adds scopes, authorization details, and a fresh authentication
+	// context to what the record already holds, so the OP reads the
+	// grant and writes it back inside one transaction. Backends MUST
+	// make that cycle safe against a concurrent one — by locking the
+	// row for the duration, or by rejecting a write whose basis has
+	// changed with [ErrConflict]. A backend that does neither lets one
+	// authorization drop the scope the other just recorded, while both
+	// users are told their consent was stored.
 	Save(ctx context.Context, g *Grant) error
 
 	// Find returns the grant identified by id. It MUST return

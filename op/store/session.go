@@ -123,9 +123,17 @@ type SessionStore interface {
 	Touch(ctx context.Context, id string, expiresAt, updatedAt time.Time) error
 
 	// Delete removes the session identified by id. It MUST return
-	// [ErrNotFound] when no such session exists. Backends MAY hard-delete
-	// or mark the row deleted as long as subsequent Find calls return
-	// [ErrNotFound].
+	// [ErrNotFound] when no such session exists or when the record has
+	// expired, applying the same absent-or-expired rule as
+	// [SessionStore.Touch]. Naming the expired case is what keeps the
+	// result independent of reclamation: a backend answering from
+	// physical presence alone returns nil for a record whose ExpiresAt
+	// has passed and [ErrNotFound] for that same record once a sweep or
+	// a TTL eviction has removed it, so the caller observes collection
+	// timing rather than session state. Backends MAY hard-delete or mark
+	// the row deleted as long as subsequent Find calls return
+	// [ErrNotFound], and MAY reclaim an expired record while reporting
+	// [ErrNotFound] for it.
 	Delete(ctx context.Context, id string) error
 
 	// ListByChooserGroup returns every non-expired session whose

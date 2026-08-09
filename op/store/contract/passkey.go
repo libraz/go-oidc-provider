@@ -31,6 +31,8 @@ func RunPasskeys(t *testing.T, f PasskeyFactory) {
 		{"UpdateAssertionPreservesRegistrationFields", passkeyPreservesRegistration},
 		{"UpdateAssertionReturnsClone", passkeyReturnsClone},
 		{"UpdateAssertionNotFound", passkeyUpdateNotFound},
+		{"PutRefusesCrossSubjectCredential", passkeyCrossSubjectPut},
+		{"PutRewritesOwnCredential", passkeyOwnCredentialPut},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -215,6 +217,81 @@ func passkeyUpdateNotFound(t *testing.T, s store.PasskeyStore) {
 	)
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("error = %v, want ErrNotFound", err)
+	}
+}
+
+// passkeyCrossSubjectPut drives the takeover a credential ID makes
+// possible. The record is keyed on the credential ID alone, so an upsert
+// that accepted a different Subject would not add a credential — it
+// would move one, and the subject that held it would lose the
+// authenticator it logs in with, with nothing in the account-management
+// surface to undo it (W3C WebAuthn Level 3 §7.1 step 27).
+func passkeyCrossSubjectPut(t *testing.T, s store.PasskeyStore) {
+	t.Helper()
+	ctx := context.Background()
+	victim := passkeyContractRecord()
+	seedPasskey(t, ctx, s)
+
+	stolen := passkeyContractRecord()
+	stolen.Subject = "other-subject"
+	stolen.PublicKey = []byte("attacker-public-key")
+	stolen.SignCount = 0
+	if err := s.Put(ctx, stolen); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("Put err=%v want ErrAlreadyExists", err)
+	}
+
+	got, err := s.Get(ctx, victim.CredentialID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Subject != victim.Subject {
+		t.Errorf("Subject=%q want %q — the credential changed hands", got.Subject, victim.Subject)
+	}
+	if !bytes.Equal(got.PublicKey, victim.PublicKey) {
+		t.Errorf("PublicKey=%x want %x — the refused write still landed", got.PublicKey, victim.PublicKey)
+	}
+
+	held, err := s.ListBySubject(ctx, victim.Subject)
+	if err != nil {
+		t.Fatalf("ListBySubject: %v", err)
+	}
+	if len(held) != 1 {
+		t.Fatalf("victim holds %d credentials, want 1 — the passkey was unlinked", len(held))
+	}
+	taken, err := s.ListBySubject(ctx, stolen.Subject)
+	if err != nil {
+		t.Fatalf("ListBySubject: %v", err)
+	}
+	if len(taken) != 0 {
+		t.Errorf("other subject holds %d credentials, want 0", len(taken))
+	}
+}
+
+// passkeyOwnCredentialPut is the regression guard on the check above:
+// re-writing a record under the subject that already holds it is the
+// ordinary account-management update and must still be an upsert.
+func passkeyOwnCredentialPut(t *testing.T, s store.PasskeyStore) {
+	t.Helper()
+	ctx := context.Background()
+	seedPasskey(t, ctx, s)
+
+	updated := passkeyContractRecord()
+	updated.SignCount = 11
+	updated.Attachment = "platform"
+	updated.Transports = []string{"hybrid"}
+	if err := s.Put(ctx, updated); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := s.Get(ctx, updated.CredentialID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.SignCount != updated.SignCount {
+		t.Errorf("SignCount=%d want %d", got.SignCount, updated.SignCount)
+	}
+	if got.Attachment != updated.Attachment {
+		t.Errorf("Attachment=%q want %q", got.Attachment, updated.Attachment)
 	}
 }
 

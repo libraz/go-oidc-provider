@@ -3,6 +3,7 @@ package contract
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +54,7 @@ var deviceCodeCases = []subtest{
 	{"RecordPollEscalatesInterval", deviceCodeRecordPollEscalates},
 	{"StrikesIncrement", deviceCodeStrikesIncrement},
 	{"PollViolationsIncrement", deviceCodePollViolationsIncrement},
+	{"ConcurrentCountersRecordEveryIncrement", deviceCodeConcurrentCounters},
 	{"Expired", deviceCodeExpired},
 	{"ExpiredSaveReleasesUserCode", deviceCodeExpiredSaveReleasesUserCode},
 	{"DuplicateUserCode", deviceCodeDuplicateUserCode},
@@ -354,6 +356,83 @@ func deviceCodePollViolationsIncrement(t *testing.T, f Factory) {
 	}
 	if _, err := dc.IncrementPollViolation(ctx, "absent"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("IncrementPollViolation missing: want ErrNotFound, got %v", err)
+	}
+}
+
+// deviceCodeConcurrentCounters pins the brute-force counters under the
+// access pattern they exist for. A verification page under attack sees
+// user_code guesses arrive in parallel, and a token endpoint sees a
+// misbehaving device poll in parallel; every increment MUST be
+// recorded, because the counters are what arm the lockout.
+//
+// A backend that reads the counter, increments it in application code
+// and writes the record back collapses a burst of N increments into
+// one, so the lockout never triggers against exactly the traffic it
+// defends. Both counters are driven at once so an implementation that
+// rewrites the whole record cannot pass by clobbering the other one.
+func deviceCodeConcurrentCounters(t *testing.T, f Factory) {
+	b := f(t)
+	dc := requireDeviceCodes(t, b.Store)
+	ctx := context.Background()
+	const (
+		id       = "dc-concurrent"
+		userCode = "AAAA-0301"
+		racers   = 8
+	)
+	if err := dc.Save(ctx, newDeviceCode(b.Now(), id, userCode)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	strikes := make([]uint8, racers)
+	violations := make([]uint8, racers)
+	errs := make([]error, 2*racers)
+	var wg sync.WaitGroup
+	wg.Add(2 * racers)
+	for i := range racers {
+		go func() {
+			defer wg.Done()
+			strikes[i], errs[i] = dc.IncrementUserCodeStrike(ctx, id)
+		}()
+		go func() {
+			defer wg.Done()
+			violations[i], errs[racers+i] = dc.IncrementPollViolation(ctx, id)
+		}()
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent increment %d: %v", i, err)
+		}
+	}
+	// Every increment observes a value in range; the exact value a racer
+	// sees is not pinned, since a backend that increments and re-reads
+	// may legitimately report a later racer's total.
+	assertCounterRange(t, "IncrementUserCodeStrike", strikes, racers)
+	assertCounterRange(t, "IncrementPollViolation", violations, racers)
+
+	got, err := dc.FindByDeviceCode(ctx, id)
+	if err != nil {
+		t.Fatalf("FindByDeviceCode: %v", err)
+	}
+	if got.UserCodeStrikes != racers {
+		t.Errorf("UserCodeStrikes = %d after %d concurrent strikes, want %d",
+			got.UserCodeStrikes, racers, racers)
+	}
+	if got.PollViolations != racers {
+		t.Errorf("PollViolations = %d after %d concurrent violations, want %d",
+			got.PollViolations, racers, racers)
+	}
+}
+
+// assertCounterRange checks that every value a concurrent increment
+// reported names a real intermediate state of the counter.
+func assertCounterRange(t *testing.T, op string, got []uint8, racers uint8) {
+	t.Helper()
+	for i, v := range got {
+		if v < 1 || v > racers {
+			t.Errorf("%s racer %d returned %d, want 1..%d", op, i, v, racers)
+		}
 	}
 }
 

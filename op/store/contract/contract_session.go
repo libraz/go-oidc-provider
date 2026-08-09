@@ -11,9 +11,10 @@ import (
 )
 
 // This file groups the contract sub-tests for the substores that come after
-// GrantStore: SessionStore, PushedAuthRequestStore, InteractionStore,
-// ConsumedJTIStore, and the Transactional extension. They are split off from
-// contract.go to keep the per-file size budget below 800 lines.
+// GrantStore: SessionStore, PushedAuthRequestStore, InteractionStore, and
+// ConsumedJTIStore. They are split off from contract.go to keep the per-file
+// size budget below 800 lines; the Transactional extension has its own file
+// for the same reason.
 
 // --- SessionStore ------------------------------------------------------------
 
@@ -24,6 +25,7 @@ var sessionCases = []subtest{
 	{"TouchMissing", sessionTouchMissing},
 	{"TouchAfterDelete", sessionTouchAfterDelete},
 	{"Delete", sessionDelete},
+	{"DeleteExpired", sessionDeleteExpired},
 	{"Expired", sessionExpired},
 	{"ListByChooserGroup", sessionListByChooserGroup},
 	{"ListByChooserGroupSkipsExpired", sessionListByChooserGroupSkipsExpired},
@@ -121,6 +123,54 @@ func sessionDelete(t *testing.T, f Factory) {
 	err := b.Store.Sessions().Delete(ctx, "s-del")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("repeat Delete: want ErrNotFound, got %v", err)
+	}
+}
+
+// sessionDeleteExpired pins the absent-or-expired rule declared on
+// [store.SessionStore.Delete]. [sessionDelete] only covers live-then-repeat,
+// which every backend answers correctly from physical presence alone; the
+// case that discriminates is a record still resident but past its ExpiresAt.
+// A presence-based backend returns nil for it and [store.ErrNotFound] for
+// the same record once a sweep or a TTL eviction reclaimed the row, so the
+// caller's observation would turn on collection timing rather than on the
+// session's state.
+//
+// Two shapes are exercised because backends differ in where the expired
+// record can come from: a write that was already past-dated (some backends
+// legitimately drop it, which satisfies the post-condition) and a record
+// stored live and then expired in place by moving the backend clock. Only
+// the second guarantees the row is physically there, so it runs wherever
+// [Backend.Advance] exists.
+func sessionDeleteExpired(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+
+	dead := newSession(b.Now(), "s-del-past-dated")
+	dead.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := b.Store.Sessions().Save(ctx, dead); err != nil {
+		t.Fatalf("Save past-dated: %v", err)
+	}
+	if err := b.Store.Sessions().Delete(ctx, dead.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Delete past-dated session: want ErrNotFound, got %v", err)
+	}
+
+	if b.Advance == nil {
+		return
+	}
+	const ttl = time.Minute
+	resident := newSession(b.Now(), "s-del-expired-in-place")
+	resident.ExpiresAt = b.Now().Add(ttl)
+	if err := b.Store.Sessions().Save(ctx, resident); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Overshoot the expiry rather than landing on it: backends differ on
+	// whether the boundary instant itself counts as expired.
+	b.Advance(2 * ttl)
+	if err := b.Store.Sessions().Delete(ctx, resident.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Delete expired-but-resident session: want ErrNotFound, got %v", err)
+	}
+	if _, err := b.Store.Sessions().Find(ctx, resident.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find after Delete of an expired session: want ErrNotFound, got %v", err)
 	}
 }
 
@@ -279,6 +329,7 @@ var interactionCases = []subtest{
 	{"SaveFind", interactionSaveFind},
 	{"CompareAndSwap", interactionCompareAndSwap},
 	{"Delete", interactionDelete},
+	{"DeleteExpired", interactionDeleteExpired},
 	{"Expired", interactionExpired},
 }
 
@@ -420,6 +471,45 @@ func interactionDelete(t *testing.T, f Factory) {
 	}
 }
 
+// interactionDeleteExpired is [sessionDeleteExpired] for
+// [store.InteractionStore.Delete], which carries the identical
+// absent-or-expired rule. The two substores are the volatile pair most
+// likely to be routed to a backend with its own reclamation schedule, so
+// each needs its own case: an adapter can easily fix one Delete and leave
+// the other answering from presence.
+func interactionDeleteExpired(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+
+	dead := newInteraction(b.Now(), "i-del-past-dated")
+	dead.ExpiresAt = b.Now().Add(-time.Hour)
+	if err := b.Store.Interactions().Save(ctx, dead); err != nil {
+		t.Fatalf("Save past-dated: %v", err)
+	}
+	if err := b.Store.Interactions().Delete(ctx, dead.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Delete past-dated interaction: want ErrNotFound, got %v", err)
+	}
+
+	if b.Advance == nil {
+		return
+	}
+	const ttl = time.Minute
+	resident := newInteraction(b.Now(), "i-del-expired-in-place")
+	resident.ExpiresAt = b.Now().Add(ttl)
+	if err := b.Store.Interactions().Save(ctx, resident); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	// Overshoot the expiry rather than landing on it: backends differ on
+	// whether the boundary instant itself counts as expired.
+	b.Advance(2 * ttl)
+	if err := b.Store.Interactions().Delete(ctx, resident.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Delete expired-but-resident interaction: want ErrNotFound, got %v", err)
+	}
+	if _, err := b.Store.Interactions().Find(ctx, resident.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Find after Delete of an expired interaction: want ErrNotFound, got %v", err)
+	}
+}
+
 func interactionExpired(t *testing.T, f Factory) {
 	b := f(t)
 	ctx := context.Background()
@@ -441,7 +531,43 @@ var jtiCases = []subtest{
 	{"HasMissing", jtiHasMissing},
 	{"Replay", jtiReplay},
 	{"ExpiredMarkerCanBeReplaced", jtiExpiredMarkerCanBeReplaced},
+	{"ExpiryBoundIsInclusive", jtiExpiryBoundIsInclusive},
 	{"ZeroExpiryPersists", jtiZeroExpiryPersists},
+}
+
+// jtiExpiryBoundIsInclusive pins the single expiry boundary declared on
+// [store.ConsumedJTIStore]: a marker is expired from its expiresAt onwards,
+// and Mark and Has apply that bound identically. A backend that expires the
+// marker for one method but not the other lets a caller read a jti as
+// consumed and then successfully consume it again — or, in the other
+// direction, read it as free and be rejected as a replay.
+//
+// The case advances the backend clock to the marker's own expiry instant, so
+// it discriminates only on backends that expose [Backend.Advance]; without
+// one there is no way to land exactly on the boundary.
+func jtiExpiryBoundIsInclusive(t *testing.T, f Factory) {
+	b := f(t)
+	if b.Advance == nil {
+		t.Skip("backend has no mutable clock; cannot land on the expiry boundary")
+	}
+	ctx := context.Background()
+	const ttl = time.Hour
+	expiresAt := b.Now().Add(ttl)
+	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-boundary", expiresAt); err != nil {
+		t.Fatalf("Mark: %v", err)
+	}
+	b.Advance(ttl)
+
+	got, err := b.Store.ConsumedJTIs().Has(ctx, "jti-boundary")
+	if err != nil {
+		t.Fatalf("Has at the expiry instant: %v", err)
+	}
+	if got {
+		t.Fatal("Has reported a marker live at its own expiresAt; the bound is inclusive")
+	}
+	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-boundary", b.Now().Add(ttl)); err != nil {
+		t.Fatalf("Mark at the expiry instant: want the stale marker replaced, got %v", err)
+	}
 }
 
 func jtiMarkHas(t *testing.T, f Factory) {
@@ -523,151 +649,4 @@ func jtiZeroExpiryPersists(t *testing.T, f Factory) {
 	if err := b.Store.ConsumedJTIs().Mark(ctx, "jti-zero", time.Time{}); !errors.Is(err, store.ErrAlreadyConsumed) {
 		t.Fatalf("replay of zero-expiry marker: want ErrAlreadyConsumed, got %v", err)
 	}
-}
-
-// --- Transactional ----------------------------------------------------------
-
-//nolint:gochecknoglobals // sub-test table; declared once so [Run] can iterate.
-var transactionalCases = []subtest{
-	{"BeginCommit", txBeginCommit},
-	{"BeginRollback", txBeginRollback},
-	{"RollbackAfterCommitNoOp", txRollbackAfterCommitNoOp},
-	{"CrossSubstore", txCrossSubstore},
-	{"PARConsumeExpiredStillRedeems", txPARConsumeExpiredStillRedeems},
-}
-
-// txPARConsumeExpiredStillRedeems mirrors [parConsumeExpiredStillRedeems] on
-// the transactional path: an embedder that consumes the request_uri inside a
-// BeginTx transaction (so the consume is atomic with the authorization code's
-// existence) MUST see the same single-use-only Consume contract — expiry is
-// gated at presentation by Find, not at Consume. This pins the two Consume
-// implementations against drift.
-func txPARConsumeExpiredStillRedeems(t *testing.T, f Factory) {
-	b := f(t)
-	txr := requireTransactional(t, b.Store)
-	ctx := context.Background()
-	par := newPAR(b.Now(), "urn:par:tx-exp-consume")
-	par.ExpiresAt = b.Now().Add(-time.Hour)
-	if err := b.Store.PushedAuthRequests().Save(ctx, par); err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	tx, err := txr.BeginTx(ctx)
-	if err != nil {
-		t.Fatalf("BeginTx: %v", err)
-	}
-	t.Cleanup(func() { _ = tx.Rollback() })
-	got, err := tx.PushedAuthRequests().Consume(ctx, "urn:par:tx-exp-consume")
-	if err != nil {
-		t.Fatalf("tx Consume expired-but-unconsumed: want success, got %v", err)
-	}
-	if got.ConsumedAt == nil {
-		t.Fatal("tx Consume returned ConsumedAt=nil")
-	}
-	if _, err := tx.PushedAuthRequests().Consume(ctx, "urn:par:tx-exp-consume"); !errors.Is(err, store.ErrAlreadyConsumed) {
-		t.Fatalf("second tx Consume: want ErrAlreadyConsumed, got %v", err)
-	}
-}
-
-func txBeginCommit(t *testing.T, f Factory) {
-	b := f(t)
-	txr := requireTransactional(t, b.Store)
-	ctx := context.Background()
-	tx, err := txr.BeginTx(ctx)
-	if err != nil {
-		t.Fatalf("BeginTx: %v", err)
-	}
-	t.Cleanup(func() { _ = tx.Rollback() })
-	requireSubstoresNonNil(t, tx)
-	code := newAuthCode(b.Now(), "tx-ac")
-	if err := tx.AuthorizationCodes().Save(ctx, code); err != nil {
-		t.Fatalf("Save in tx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
-	got, err := b.Store.AuthorizationCodes().Find(ctx, "tx-ac")
-	if err != nil {
-		t.Fatalf("Find after Commit: %v", err)
-	}
-	if got.ID != "tx-ac" {
-		t.Fatalf("unexpected committed record: %+v", got)
-	}
-}
-
-func requireSubstoresNonNil(t *testing.T, tx store.Tx) {
-	t.Helper()
-	if tx.AuthorizationCodes() == nil || tx.RefreshTokens() == nil ||
-		tx.Grants() == nil || tx.PushedAuthRequests() == nil {
-		t.Fatal("Tx returned nil substore handle")
-	}
-}
-
-func txBeginRollback(t *testing.T, f Factory) {
-	b := f(t)
-	txr := requireTransactional(t, b.Store)
-	ctx := context.Background()
-	tx, err := txr.BeginTx(ctx)
-	if err != nil {
-		t.Fatalf("BeginTx: %v", err)
-	}
-	code := newAuthCode(b.Now(), "tx-rb")
-	if err := tx.AuthorizationCodes().Save(ctx, code); err != nil {
-		t.Fatalf("Save in tx: %v", err)
-	}
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("Rollback: %v", err)
-	}
-	_, err = b.Store.AuthorizationCodes().Find(ctx, "tx-rb")
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("Find after Rollback: want ErrNotFound, got %v", err)
-	}
-}
-
-func txRollbackAfterCommitNoOp(t *testing.T, f Factory) {
-	b := f(t)
-	txr := requireTransactional(t, b.Store)
-	ctx := context.Background()
-	tx, err := txr.BeginTx(ctx)
-	if err != nil {
-		t.Fatalf("BeginTx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("Rollback after Commit must be a no-op, got %v", err)
-	}
-}
-
-func txCrossSubstore(t *testing.T, f Factory) {
-	b := f(t)
-	txr := requireTransactional(t, b.Store)
-	ctx := context.Background()
-	tx, err := txr.BeginTx(ctx)
-	if err != nil {
-		t.Fatalf("BeginTx: %v", err)
-	}
-	t.Cleanup(func() { _ = tx.Rollback() })
-	if err := saveCrossSubstore(ctx, tx, b.Now()); err != nil {
-		t.Fatalf("save in tx: %v", err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
-	if _, err := b.Store.Grants().Find(ctx, "tx-g"); err != nil {
-		t.Fatalf("Find grant: %v", err)
-	}
-	if _, err := b.Store.AuthorizationCodes().Find(ctx, "tx-c"); err != nil {
-		t.Fatalf("Find code: %v", err)
-	}
-}
-
-func saveCrossSubstore(ctx context.Context, tx store.Tx, now time.Time) error {
-	grant := newGrant(now, "tx-g", "sub", "client")
-	if err := tx.Grants().Save(ctx, grant); err != nil {
-		return err
-	}
-	code := newAuthCode(now, "tx-c")
-	code.GrantID = "tx-g"
-	return tx.AuthorizationCodes().Save(ctx, code)
 }

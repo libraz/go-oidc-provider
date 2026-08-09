@@ -17,6 +17,21 @@ import (
 // already-consumed") and the store is safe to lose: the worst outcome of a
 // total cache flush is a window of attacker-controlled replay equal to the
 // JWT's remaining lifetime, which the cnf binding limits in practice.
+//
+// # Marker lifetime
+//
+// The expiry bound is inclusive and applies to both methods: a marker whose
+// expiresAt is E is live while the backend's clock reads strictly before E,
+// and expired from E onwards. A zero expiresAt means the marker never
+// expires. [ConsumedJTIStore.Mark] and [ConsumedJTIStore.Has] MUST agree on
+// that boundary — a backend where
+// Has still reports a marker that Mark would overwrite lets a caller observe
+// a jti as consumed and then consume it again.
+//
+// Anchoring at "expired from E onwards" is safe because callers derive E
+// from the JWT's own exp claim, and RFC 7519 §4.1.4 already rejects a JWT
+// once the current time reaches exp: the marker is discarded only for a JWT
+// that can no longer be redeemed on its own merits.
 type ConsumedJTIStore interface {
 	// Mark records jti as consumed. It MUST return [ErrAlreadyConsumed]
 	// if the same jti is already marked and that marker has not expired.
@@ -30,8 +45,9 @@ type ConsumedJTIStore interface {
 
 	// Has reports whether jti has previously been marked. It MUST return
 	// (false, nil) for unknown JTIs and (true, nil) for known ones; an
-	// error return is reserved for transport faults. Backends MAY treat
-	// expired entries as absent so that stale evictions are observable
-	// to the caller.
+	// error return is reserved for transport faults. Backends MUST
+	// treat an expired marker as absent, on the same inclusive boundary
+	// [ConsumedJTIStore.Mark] uses, so the two methods cannot disagree
+	// about whether a jti is still consumed.
 	Has(ctx context.Context, jti string) (bool, error)
 }

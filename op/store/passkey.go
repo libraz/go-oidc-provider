@@ -161,6 +161,17 @@ type PasskeyStore interface {
 	// r.CredentialID. Backends implement upsert semantics. The
 	// library uses Put for registration and account-management
 	// writes, never for post-assertion security-state updates.
+	//
+	// A credential ID belongs to one subject for its lifetime. When a
+	// record already exists under r.CredentialID and its Subject
+	// differs from r.Subject, the backend MUST leave the stored
+	// record untouched and return [ErrAlreadyExists]; overwriting it
+	// would move the credential onto the writing subject and unlink
+	// the authenticator of whoever held it. The comparison and the
+	// write MUST be one atomic backend operation, so a registration
+	// racing the check cannot land between them. Re-writing a record
+	// under its own subject is the ordinary update path and MUST
+	// succeed.
 	Put(ctx context.Context, r *PasskeyRecord) error
 
 	// UpdateAssertion atomically applies a verified assertion's

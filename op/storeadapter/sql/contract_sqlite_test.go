@@ -21,7 +21,11 @@ import (
 // stamped with.
 type fixedClock struct{ now time.Time }
 
-func (c fixedClock) Now() time.Time { return c.now }
+// Now reads through the pointer so a Now method value bound once —
+// as the contract harness does — still observes later mutations. A
+// value receiver would copy the struct at bind time and freeze the
+// harness clock while the store's own clock kept moving.
+func (c *fixedClock) Now() time.Time { return c.now }
 
 // openSQLite returns a fresh in-process SQLite database. Each call
 // produces an isolated database via the file::memory:?cache=shared

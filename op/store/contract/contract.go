@@ -101,6 +101,7 @@ func Run(t *testing.T, f Factory) {
 		{"MetadataStore", metadataStoreCases},
 		{"UserStore", userStoreCases},
 		{"Transactional", transactionalCases},
+		{"Concurrency", concurrencyCases},
 		{"SubstoreNamespace", namespaceCases},
 	}
 
@@ -179,26 +180,55 @@ func runGroup(t *testing.T, f Factory, cases []subtest) {
 	}
 }
 
-// requireRegistry skips the current test when the backend does not implement
-// [store.ClientRegistry].
+// clientRegistryProvider and staticClientReconcilerProvider are the
+// conditional capability accessors a composite store exposes instead of the
+// plain interfaces: its concrete method set cannot honestly claim a
+// capability that depends on which backend is routed for Clients.
+//
+// The harness has to probe them for the same reason the library does. A
+// bare type assertion reports "not implemented" for a composite and skips
+// the group, so a store shape the library fully supports would go through
+// the contract suite untested — silently, since a skip reads as a pass.
+type (
+	clientRegistryProvider interface {
+		ClientRegistry() (store.ClientRegistry, bool)
+	}
+	staticClientReconcilerProvider interface {
+		StaticClientReconciler() (store.StaticClientReconciler, bool)
+	}
+)
+
+// requireRegistry skips the current test when the backend provides no
+// [store.ClientRegistry], through either the interface or the accessor.
 func requireRegistry(t *testing.T, s store.Store) store.ClientRegistry {
 	t.Helper()
-	registry, ok := s.(store.ClientRegistry)
-	if !ok {
-		t.Skipf("backend %T does not implement store.ClientRegistry", s)
+	if registry, ok := s.(store.ClientRegistry); ok {
+		return registry
 	}
-	return registry
+	if provider, ok := s.(clientRegistryProvider); ok {
+		if registry, ok := provider.ClientRegistry(); ok {
+			return registry
+		}
+	}
+	t.Skipf("backend %T provides no store.ClientRegistry", s)
+	return nil
 }
 
-// requireStaticClientReconciler skips the current test when the backend does
-// not implement [store.StaticClientReconciler].
+// requireStaticClientReconciler skips the current test when the backend
+// provides no [store.StaticClientReconciler], through either the interface
+// or the accessor.
 func requireStaticClientReconciler(t *testing.T, s store.Store) store.StaticClientReconciler {
 	t.Helper()
-	reconciler, ok := s.(store.StaticClientReconciler)
-	if !ok {
-		t.Skipf("backend %T does not implement store.StaticClientReconciler", s)
+	if reconciler, ok := s.(store.StaticClientReconciler); ok {
+		return reconciler
 	}
-	return reconciler
+	if provider, ok := s.(staticClientReconcilerProvider); ok {
+		if reconciler, ok := provider.StaticClientReconciler(); ok {
+			return reconciler
+		}
+	}
+	t.Skipf("backend %T provides no store.StaticClientReconciler", s)
+	return nil
 }
 
 // requireTransactional skips the current test when the backend does not
@@ -499,6 +529,32 @@ var refreshCases = []subtest{
 	{"RevokeByClient", refreshRevokeByClient},
 	{"RetryResponse", refreshRetryResponse},
 	{"Expired", refreshExpired},
+	{"SaveOntoRevokedParent", refreshSaveOntoRevokedParent},
+}
+
+// refreshSaveOntoRevokedParent pins the rule declared on
+// [store.RefreshTokenStore.Save]: a rotation whose parent has already been
+// tombstoned by a replay cascade MUST be refused with
+// [store.ErrAlreadyConsumed], and the descendant MUST NOT be redeemable
+// afterwards. A backend that answered nil here would hand the client a
+// refresh token belonging to a chain RFC 9700 §2.2.2 requires to be dead,
+// and the caller has no way to notice.
+func refreshSaveOntoRevokedParent(t *testing.T, f Factory) {
+	b := f(t)
+	ctx := context.Background()
+	root := newRefresh(b.Now(), "revoked-parent-root", nil)
+	if err := b.Store.RefreshTokens().Save(ctx, root); err != nil {
+		t.Fatalf("Save root: %v", err)
+	}
+	if err := b.Store.RefreshTokens().RevokeChain(ctx, root.ID); err != nil {
+		t.Fatalf("RevokeChain: %v", err)
+	}
+	child := newRefresh(b.Now(), "revoked-parent-child", &root.ID)
+	err := b.Store.RefreshTokens().Save(ctx, child)
+	if !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("Save onto revoked parent: want ErrAlreadyConsumed, got %v", err)
+	}
+	assertRevoked(t, b.Store, child.ID)
 }
 
 func refreshSaveFindConsume(t *testing.T, f Factory) {

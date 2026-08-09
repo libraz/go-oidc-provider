@@ -67,7 +67,7 @@ func newMySQLFactory(t *testing.T) contract.Factory {
 	t.Cleanup(func() { _ = admin.Close() })
 
 	var seq atomic.Uint64
-	clock := fixedClock{now: contract.Reference}
+	clock := &fixedClock{now: contract.Reference}
 
 	return func(t *testing.T) contract.Backend {
 		t.Helper()

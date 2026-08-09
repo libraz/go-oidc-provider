@@ -88,6 +88,13 @@ type UserPasswordStore interface {
 	// submits verbatim; implementations are responsible for any
 	// case-folding or trimming. It MUST return [ErrNotFound] when no
 	// such user exists.
+	//
+	// The lookup MUST be single-valued: a username resolves to at most
+	// one subject, and the directory is responsible for enforcing that
+	// on the write path. Two entries sharing a username make a login
+	// non-deterministic — the same credentials would issue tokens for
+	// one subject or the other depending on which row the lookup
+	// surfaced.
 	FindByUsername(ctx context.Context, username string) (*User, error)
 
 	// ReadPasswordHash returns the PHC-encoded password hash for the

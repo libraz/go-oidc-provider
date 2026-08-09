@@ -7,20 +7,24 @@ import "context"
 // remember coarse construction-time decisions across process restarts
 // without inventing new tables for one-off facts.
 //
-// v0.9.1 uses the substore for a single key, [SubjectModeKey], which
-// the pairwise immutability gate consults at op.New: the gate writes
-// the active subject-issuance mode on first construction and refuses
-// to start when a subsequent construction asks for a different mode
-// against a non-empty grant store. Future keys (generator name,
-// salt fingerprint, schema version markers) compose on the same
-// surface without further interface change.
+// The OP currently uses the substore for a single key,
+// [SubjectModeKey], which the pairwise immutability gate consults at
+// op.New: the gate writes the active subject-issuance mode on first
+// construction and refuses to start when a subsequent construction
+// asks for a different mode against a non-empty grant store. Further
+// keys (generator name, salt fingerprint, schema version markers)
+// compose on the same surface without an interface change.
 //
 // Backends MAY return nil from [Store.Metadata] when the persistence
 // layer has not yet provisioned the substore; the library detects
 // nil at op.New and skips the gate with a startup warning so the
-// process boots. The compiled-in [github.com/libraz/go-oidc-provider/op/storeadapter/inmem]
-// adapter implements MetadataStore in full; v0.9.1 sql / redis
-// adapters return nil and document the gap in their package godoc.
+// process boots. Every adapter in this repository — inmem, sql,
+// redis, and dynamodb — implements MetadataStore in full, so the nil
+// path exists for bespoke backends rather than for the bundled ones.
+// Note what skipping the gate costs: with no place to record the
+// subject-issuance mode, nothing detects a switch between public and
+// pairwise subjects against an existing grant store, and every
+// affected user's sub changes silently.
 type MetadataStore interface {
 	// Get returns the value stored under key. Implementations MUST
 	// return [ErrNotFound] when the key is absent; callers

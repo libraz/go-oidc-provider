@@ -33,6 +33,15 @@ type Transactional interface {
 // transaction; mutations performed through them become visible to other
 // readers only after [Tx.Commit] succeeds.
 //
+// A transaction MUST read its own writes. Every lookup made through a
+// substore handle of this Tx sees the mutations already performed through
+// this Tx, down to individual fields: after
+// [RefreshTokenStore.RevokeChain], a Find issued on the same Tx MUST
+// report the affected records with [RefreshToken.Revoked] set, not merely
+// with ConsumedAt stamped. Deferring part of the effect to Commit lets a
+// handler that revokes and then re-reads inside one transaction act on
+// state the store has already invalidated.
+//
 // Note that [SessionStore], [InteractionStore], and [ConsumedJTIStore] are
 // intentionally absent from Tx. Sessions because the OP tolerates session
 // loss as a re-login event and does not pair Session writes with
@@ -64,8 +73,12 @@ type Tx interface {
 
 	// Commit finalises every change made through the substore handles
 	// returned by this Tx. After Commit returns successfully the Tx
-	// MUST NOT be used; further calls return an implementation-defined
-	// error (commonly [ErrTxRequired]).
+	// MUST NOT be used; every further call through it — including a
+	// second Commit — MUST fail with an error satisfying
+	// errors.Is(err, [ErrTxRequired]). The message MAY name the
+	// backend; the sentinel is what callers match on, so a bare
+	// backend-specific error leaves an embedder unable to tell a closed
+	// handle from a transport fault.
 	Commit() error
 
 	// Rollback discards every change made through the substore handles

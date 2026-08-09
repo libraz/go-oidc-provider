@@ -211,6 +211,14 @@ type DeviceCodeStore interface {
 	// [DeviceCode.UserCode] collides with an existing pending or
 	// approved record by returning [ErrAlreadyExists]; the library
 	// retries with a fresh user_code in that case.
+	//
+	// A backend that enforces the user_code collision check MUST make
+	// it atomic with the write it guards — a unique constraint, or a
+	// conditional write onto the code itself. Looking the code up and
+	// then inserting leaves a window in which two device authorization
+	// requests both find it free, and the verification page would then
+	// approve whichever record its lookup happened to return while the
+	// other device polls a record nobody can approve.
 	Save(ctx context.Context, code *DeviceCode) error
 
 	// FindByDeviceCode returns the record identified by deviceCode.
@@ -286,8 +294,8 @@ type DeviceCodeStore interface {
 	// [DeviceCode.Interval] to nextInterval when nextInterval is
 	// greater than the current value. The library calls RecordPoll on
 	// every poll arrival so later polls observe the latest timestamp;
-	// on a slow_down decision it passes the doubled interval per RFC
-	// 8628 §3.5. A nextInterval value less than or equal to the
+	// on a slow_down decision it passes the interval raised by the
+	// five-second increment RFC 8628 §3.5 specifies. A nextInterval value less than or equal to the
 	// record's current Interval is taken as "no escalation this poll"
 	// and the existing Interval is preserved.
 	//

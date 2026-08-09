@@ -69,9 +69,8 @@ type EmailOTPRecord struct {
 	FailedCount int
 
 	// FirstFailureAt is the wall-clock time of the first failed verify
-	// in the current window. It anchors the 24-hour rollover (see
-	// 02-product-design.md §M.6). A zero value means "no
-	// failures recorded yet".
+	// in the current window. It anchors the 24-hour rollover. A zero
+	// value means "no failures recorded yet".
 	FirstFailureAt time.Time
 
 	// LockedUntil is the wall-clock time until which verify is rejected
@@ -147,6 +146,17 @@ type EmailOTPStore interface {
 	// Authenticators use it for every failure counter update and resend
 	// reservation so stale read-modify-write snapshots can never erase a
 	// successful Consume or a newer challenge.
+	//
+	// A nil previous means "insert only if absent" and is how the first
+	// send for a subject reserves its record. Backends MUST apply next
+	// when no record exists for next.Subject, or when the record that
+	// exists has passed its retention horizon (the same condition Get
+	// reports as [ErrNotFound]), and MUST return [ErrAlreadyConsumed]
+	// otherwise. Treating a nil previous as an unconditional upsert
+	// would defeat the reservation: two concurrent first sends would
+	// both succeed, and the second would reset the send counter the
+	// first had just established — which is the rate limit the
+	// reservation exists to hold.
 	CompareAndSwap(ctx context.Context, previous, next *EmailOTPRecord) error
 
 	// Consume atomically marks the pending challenge represented by r

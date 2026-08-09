@@ -108,6 +108,13 @@ type GrantRevocationStore interface {
 	// the cascade once per request, and concurrent cascades against
 	// the same GrantID converge on the latest RevokedAt rather than
 	// drift backwards.
+	//
+	// Convergence MUST hold under parallel cascades, so the widening
+	// has to be atomic — a row lock, GREATEST(), or a conditional
+	// write — rather than a read followed by a write of what the caller
+	// decided. Reading and writing back lets the cascade that read
+	// first land last, and a rewound RevokedAt restores every access
+	// token the other cascade had just killed.
 	RevokeGrant(ctx context.Context, t GrantTombstone) error
 
 	// RevokeJTI denylists a single JWT access token by its jti. The call

@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awsdynamodb "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	dynamodbmod "github.com/testcontainers/testcontainers-go/modules/dynamodb"
 
 	"github.com/libraz/go-oidc-provider/op/store"
@@ -27,7 +28,11 @@ const dynamoImage = "amazon/dynamodb-local:2.5.2"
 
 type fixedClock struct{ now time.Time }
 
-func (c fixedClock) Now() time.Time { return c.now }
+// Now reads through the pointer so a Now method value bound once —
+// as the contract harness does — still observes later mutations. A
+// value receiver would copy the struct at bind time and freeze the
+// harness clock while the store's own clock kept moving.
+func (c *fixedClock) Now() time.Time { return c.now }
 
 // newEmulatorClient boots one dynamodb-local container for the calling
 // test and returns a client pointed at it. Tests isolate themselves
@@ -60,6 +65,37 @@ func newEmulatorClient(t *testing.T) *awsdynamodb.Client {
 	})
 }
 
+// disableEmulatorTTL turns the emulator's TTL janitor back off for every
+// table s just created.
+//
+// Fixtures are stamped from [contract.Reference], a fixed instant that is
+// already in the past in real time, so every record lands with an expiry
+// epoch the janitor considers due. It then deletes them at a moment nothing
+// in the test controls, which surfaces as a record that existed a line
+// earlier reporting ErrNotFound. Expiry semantics are enforced by the
+// adapter's own condition expressions against the injected clock — the
+// sweeper is a storage-cost optimisation the tests do not assert on — so
+// switching it off removes the race without removing coverage.
+func disableEmulatorTTL(t *testing.T, client *awsdynamodb.Client, s *oidcdynamo.Store) {
+	t.Helper()
+
+	for _, def := range s.TableDefinitions() {
+		if def.TTLAttribute == "" {
+			continue
+		}
+		_, err := client.UpdateTimeToLive(t.Context(), &awsdynamodb.UpdateTimeToLiveInput{
+			TableName: aws.String(def.Name),
+			TimeToLiveSpecification: &types.TimeToLiveSpecification{
+				AttributeName: aws.String(def.TTLAttribute),
+				Enabled:       aws.Bool(false),
+			},
+		})
+		if err != nil {
+			t.Fatalf("disable ttl on %s: %v", def.Name, err)
+		}
+	}
+}
+
 // newDynamoFactory boots one emulator for the whole suite and hands out
 // a fresh, isolated table set per sub-test. Isolation comes from a
 // per-sub-test table prefix rather than a per-sub-test container:
@@ -70,7 +106,7 @@ func newDynamoFactory(t *testing.T) contract.Factory {
 	client := newEmulatorClient(t)
 
 	var seq atomic.Uint64
-	clock := fixedClock{now: contract.Reference}
+	clock := &fixedClock{now: contract.Reference}
 
 	return func(t *testing.T) contract.Backend {
 		t.Helper()
@@ -85,6 +121,7 @@ func newDynamoFactory(t *testing.T) contract.Factory {
 		if err := s.CreateTables(t.Context()); err != nil {
 			t.Fatalf("CreateTables: %v", err)
 		}
+		disableEmulatorTTL(t, client, s)
 		return contract.Backend{
 			Store: s,
 			Now:   clock.Now,

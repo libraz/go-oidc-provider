@@ -103,6 +103,19 @@
 // contract: a backend that returns a different error for one of the listed
 // failure modes does not satisfy the interface even if it compiles.
 //
+// # Find-style methods never return (nil, nil)
+//
+// Every method that returns a (*Record, error) pair MUST return either a
+// non-nil record and a nil error, or a nil record and a non-nil error. A
+// (nil, nil) return is a contract violation, not a spelling of "absent":
+// absent is [ErrNotFound]. The library guards against it defensively and
+// treats it exactly as [ErrNotFound] — a violating backend does not crash
+// the OP, but it silently loses records it does in fact hold, so the
+// symptom is a user whose session, code or refresh token intermittently
+// stops existing rather than an error anyone can trace back to the store.
+// The same rule applies to the record a Consume-style method returns
+// alongside [ErrAlreadyConsumed] when it returns one.
+//
 // # Hash-on-store contract for opaque bearer tokens
 //
 // Authorization codes ([AuthorizationCode.ID]), refresh tokens
@@ -117,17 +130,29 @@
 // SHOULD be performed in constant time so a database leak compounded
 // by a timing oracle still fails closed.
 //
-// The contract is enforced by every backend in this repository (the
+// Every backend in this repository honours the contract: the SQL and
+// DynamoDB adapters key their rows on
+// [github.com/libraz/go-oidc-provider/op/storeadapter/patterns.Digest],
+// and the
 // reference [github.com/libraz/go-oidc-provider/op/storeadapter/inmem]
 // implementation hashes via SHA-256 without a pepper, intentionally
-// trading the additional defence for transparency in tests). External
-// backends — SQL, Redis, DynamoDB — are responsible for honouring the
-// same invariant.
+// trading the additional defence for transparency in tests. A bespoke
+// backend is on its own here — nothing in the library can detect that
+// one stores raw values, so the invariant holds only where its author
+// implements it.
 //
 // # Stability
 //
 // The store package is part of the public API of go-oidc-provider and follows
 // the same SemVer policy as the root [github.com/libraz/go-oidc-provider/op]
-// package. Until v1.0 minor releases may evolve the surface; CHANGELOG.md
-// records every break.
+// package: a breaking change to any interface declared here requires a major
+// release, and CHANGELOG.md records it.
+//
+// Adding a method to an existing substore interface is a breaking change,
+// because every backend that satisfies it stops compiling. That is why new
+// capabilities arrive as opt-in extension interfaces under the placement rule
+// above rather than as methods on the core substores. What a minor release
+// may change is the godoc on an existing method — the semantics are carried
+// by that godoc, so a backend author should re-read the contract of any
+// substore they implement when upgrading, not only the signatures.
 package store

@@ -28,7 +28,11 @@ const redisImage = "redis:7.4-alpine"
 // harness builds.
 type fixedClock struct{ now time.Time }
 
-func (c fixedClock) Now() time.Time { return c.now }
+// Now reads through the pointer so a Now method value bound once —
+// as the contract harness does — still observes later mutations. A
+// value receiver would copy the struct at bind time and freeze the
+// harness clock while the store's own clock kept moving.
+func (c *fixedClock) Now() time.Time { return c.now }
 
 // newRedisFactory boots a single Redis container with AUTH enabled and
 // returns a [contract.Factory] that creates an isolated keyspace per

@@ -49,6 +49,10 @@ func RunEmailOTPs(t *testing.T, f EmailOTPFactory) {
 		{"RetentionFallsBackToExpiresAt", emailOTPRetentionFallback},
 		{"CompareAndSwapAppliesNext", emailOTPCASApplies},
 		{"CompareAndSwapStaleSnapshotRejected", emailOTPCASStale},
+		{"NilPreviousReservesFirstSend", emailOTPCASReserves},
+		{"NilPreviousRejectsLiveRecord", emailOTPCASReserveOccupied},
+		{"NilPreviousReclaimsRecordPastRetention", emailOTPCASReserveReclaims},
+		{"ConcurrentFirstSendHasOneWinner", emailOTPConcurrentReserve},
 		{"ConsumeStampsConsumedAt", emailOTPConsume},
 		{"ConsumeTwiceRejected", emailOTPConsumeTwice},
 		{"ConsumeExpiredCodeRejected", emailOTPConsumeExpired},
@@ -449,6 +453,124 @@ func emailOTPConcurrentCAS(t *testing.T, b EmailOTPBackend) {
 	}
 	if got.FailedCount != 8 && got.FailedCount != 9 {
 		t.Fatalf("final FailedCount = %d, want one of the candidate counts", got.FailedCount)
+	}
+}
+
+// emailOTPCASReserves covers the nil-previous form against an empty key,
+// which is how the first send for a subject claims its record.
+func emailOTPCASReserves(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	first := emailOTPContractRecord(b.Now())
+	if err := b.Store.CompareAndSwap(ctx, nil, first); err != nil {
+		t.Fatalf("CompareAndSwap(nil) on an empty key: %v", err)
+	}
+
+	got, err := b.Store.Get(ctx, first.Subject)
+	if err != nil {
+		t.Fatalf("Get after reservation: %v", err)
+	}
+	assertEmailOTPEqual(t, got, first)
+}
+
+// emailOTPCASReserveOccupied is the case that makes the reservation worth
+// having. A backend that treats nil previous as a plain upsert passes
+// every other case here and still lets a second send overwrite the record
+// the first one established — resetting SendCount and FirstFailureAt, and
+// with them the resend cap and the brute-force window. That is a
+// rate-limit bypass reachable by anyone who can ask for a code.
+func emailOTPCASReserveOccupied(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	held := emailOTPContractRecord(b.Now())
+	if err := b.Store.Put(ctx, held); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	intruder := emailOTPContractRecord(b.Now())
+	intruder.SendCount = 1
+	intruder.FailedCount = 0
+	intruder.FirstFailureAt = time.Time{}
+	if err := b.Store.CompareAndSwap(ctx, nil, intruder); !errors.Is(err, store.ErrAlreadyConsumed) {
+		t.Fatalf("CompareAndSwap(nil) over a live record = %v, want ErrAlreadyConsumed", err)
+	}
+
+	got, err := b.Store.Get(ctx, held.Subject)
+	if err != nil {
+		t.Fatalf("Get after rejected reservation: %v", err)
+	}
+	assertEmailOTPEqual(t, got, held)
+}
+
+// emailOTPCASReserveReclaims pins the other half of the boundary: once the
+// stored record is past its retention horizon, Get reports ErrNotFound and
+// the key is free again, so a reservation MUST succeed. A backend that
+// refused here would wedge the subject out of email OTP until whatever
+// sweeper it runs caught up.
+func emailOTPCASReserveReclaims(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+	now := b.Now()
+
+	stale := emailOTPContractRecord(now)
+	stale.ExpiresAt = now.Add(-2 * time.Hour)
+	stale.RetainUntil = now.Add(-time.Minute)
+	if err := b.Store.Put(ctx, stale); err != nil {
+		t.Fatalf("Put stale: %v", err)
+	}
+
+	fresh := emailOTPContractRecord(now)
+	fresh.SendCount = 1
+	if err := b.Store.CompareAndSwap(ctx, nil, fresh); err != nil {
+		t.Fatalf("CompareAndSwap(nil) over a record past retention: %v", err)
+	}
+
+	got, err := b.Store.Get(ctx, fresh.Subject)
+	if err != nil {
+		t.Fatalf("Get after reclaim: %v", err)
+	}
+	assertEmailOTPEqual(t, got, fresh)
+}
+
+// emailOTPConcurrentReserve is the reservation's actual guarantee: two
+// first sends racing on the same empty key must not both deliver a code.
+// A read-then-Put backend passes emailOTPCASReserves and fails this.
+func emailOTPConcurrentReserve(t *testing.T, b EmailOTPBackend) {
+	t.Helper()
+	ctx := context.Background()
+
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for count := 1; count <= 2; count++ {
+		next := emailOTPContractRecord(b.Now())
+		next.SendCount = count
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-release
+			errs <- b.Store.CompareAndSwap(ctx, nil, next)
+		}()
+	}
+	<-ready
+	<-ready
+	close(release)
+	wg.Wait()
+
+	winners := 0
+	for range 2 {
+		switch err := <-errs; {
+		case err == nil:
+			winners++
+		case errors.Is(err, store.ErrAlreadyConsumed):
+		default:
+			t.Fatalf("CompareAndSwap(nil) concurrent: %v", err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("successful concurrent reservations = %d, want 1", winners)
 	}
 }
 

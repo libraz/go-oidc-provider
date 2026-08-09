@@ -39,8 +39,7 @@ type TOTPRecord struct {
 	ConfirmedAt time.Time
 
 	// FailedCount is the cumulative number of wrong codes the user has
-	// entered within the current 24-hour window (see
-	// 02-product-design.md §M.6). It increments on every
+	// entered within the current 24-hour window. It increments on every
 	// [internal/authn/totp.Verifier.Verify] miss and resets on success
 	// or after the 24-hour rollover. Backends MUST persist the field
 	// verbatim; the library updates it through [TOTPStore.CompareAndSwap].

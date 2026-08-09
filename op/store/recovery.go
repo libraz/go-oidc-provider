@@ -58,9 +58,9 @@ type RecoveryBatch struct {
 // batch — but the library accesses it through a non-transactional handle
 // today because the writes are localised to a single row and do not need
 // to be atomic with token issuance.
-// Recovery codes are NOT a primary authentication path: per
-// 02-product-design.md §O.3, full account recovery (lost
-// device AND lost recovery codes) requires out-of-band support and is
+// Recovery codes are NOT a primary authentication path: full account
+// recovery (lost device AND lost recovery codes) requires out-of-band
+// support and is
 // intentionally not automated by the library. Backends MUST NOT log or
 // audit Hash values: they are display-once material and a leak in the
 // log pipeline is equivalent to a credential leak.
